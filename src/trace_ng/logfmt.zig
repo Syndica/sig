@@ -13,7 +13,6 @@ pub const LogMsg = struct {
 };
 
 pub fn createLogMessage(
-    allocator: std.mem.Allocator,
     recycle_fba: *RecycleFBA,
     max_buffer: u64,
     level: Level,
@@ -22,7 +21,7 @@ pub fn createLogMessage(
     maybe_fields: anytype,
     comptime maybe_fmt: ?[]const u8,
     args: anytype,
-) *LogMsg {
+) LogMsg {
     // Allocate memory for formatting messages.
     var maybe_fmt_message: ?[]const u8 = null;
     if (maybe_fmt) |msg_fmt| {
@@ -53,23 +52,20 @@ pub fn createLogMessage(
         }
         maybe_fmt_message = fmt_message.getWritten();
     }
-    const log_msg = allocator.create(LogMsg) catch @panic("could not allocate.Create logfmt.LogMsg");
-    log_msg.* = LogMsg{
+    return LogMsg{
         .level = level,
         .maybe_scope = maybe_scope,
         .maybe_msg = maybe_msg,
         .maybe_fields = fieldsToStr(recycle_fba, max_buffer, maybe_fields),
         .maybe_fmt = maybe_fmt_message,
     };
-
-    return log_msg;
 }
 
 pub fn writeLog(
     writer: anytype,
-    message: *LogMsg,
+    message: LogMsg,
 ) !void {
-    if (message.*.maybe_scope) |scope| {
+    if (message.maybe_scope) |scope| {
         try std.fmt.format(writer, "[{s}] ", .{scope});
     }
 
@@ -79,16 +75,16 @@ pub fn writeLog(
     try std.fmt.format(writer, "time=", .{});
     try now.format(utc_format, .{}, writer);
     try std.fmt.format(writer, "Z ", .{});
-    try std.fmt.format(writer, "level={s} ", .{message.*.level.asText()});
+    try std.fmt.format(writer, "level={s} ", .{message.level.asText()});
 
-    if (message.*.maybe_fields) |kv| {
+    if (message.maybe_fields) |kv| {
         try std.fmt.format(writer, "{s}", .{kv});
     }
 
-    if (message.*.maybe_msg) |msg| {
+    if (message.maybe_msg) |msg| {
         try std.fmt.format(writer, "{s}\n", .{msg});
     }
-    if (message.*.maybe_fmt) |fmt| {
+    if (message.maybe_fmt) |fmt| {
         try std.fmt.format(writer, "{s}\n", .{fmt});
     }
 }

@@ -35,7 +35,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
         allocator: Allocator,
         recycle_fba: RecycleFBA,
         max_buffer: u64,
-        channel: *Channel(*logfmt.LogMsg),
+        channel: *Channel(logfmt.LogMsg),
         handle: ?std.Thread,
 
         pub fn init(config: Config) Self {
@@ -45,7 +45,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 .max_buffer = config.max_buffer,
                 .max_level = config.max_level,
                 .exit_sig = config.exit_sig,
-                .channel = Channel(*logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
+                .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
                 .handle = null,
             };
         }
@@ -84,7 +84,6 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 for (messages) |message| {
                     const writer = std.io.getStdErr().writer();
                     logfmt.writeLog(writer, message) catch @panic("logging failed");
-                    defer self.allocator.destroy(message);
                 }
                 self.recycle_fba.mux.lock();
                 self.recycle_fba.alloc_allocator.reset();
@@ -105,7 +104,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, message, null, null, null);
+            const logMessage = logfmt.createLogMessage(&self.recycle_fba, self.max_buffer, level, maybe_scope, message, null, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -122,7 +121,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, message, fields, null, null);
+            const logMessage = logfmt.createLogMessage(&self.recycle_fba, self.max_buffer, level, maybe_scope, message, fields, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -139,7 +138,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, null, null, fmt, args);
+            const logMessage = logfmt.createLogMessage(&self.recycle_fba, self.max_buffer, level, maybe_scope, null, null, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -156,7 +155,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, null, fields, fmt, args);
+            const logMessage = logfmt.createLogMessage(&self.recycle_fba, self.max_buffer, level, maybe_scope, null, fields, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
     };
@@ -207,8 +206,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, message, null, null, null);
-            defer self.allocator.destroy(logMessage);
+            const logMessage = logfmt.createLogMessage(&self.recycle_fba, self.max_buffer, level, maybe_scope, message, null, null, null);
             const writer = self.log_msg.?.writer();
             logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
         }
@@ -226,8 +224,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, message, fields, null, null);
-            defer self.allocator.destroy(logMessage);
+            const logMessage = logfmt.createLogMessage(&self.recycle_fba, self.max_buffer, level, maybe_scope, message, fields, null, null);
             const writer = self.log_msg.?.writer();
             logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
         }
@@ -245,8 +242,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, null, null, fmt, args);
-            defer self.allocator.destroy(logMessage);
+            const logMessage = logfmt.createLogMessage(&self.recycle_fba, self.max_buffer, level, maybe_scope, null, null, fmt, args);
             const writer = self.log_msg.?.writer();
             logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
         }
@@ -264,8 +260,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, null, fields, fmt, args);
-            defer self.allocator.destroy(logMessage);
+            const logMessage = logfmt.createLogMessage(&self.recycle_fba, self.max_buffer, level, maybe_scope, null, fields, fmt, args);
             const writer = self.log_msg.?.writer();
             logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
         }
