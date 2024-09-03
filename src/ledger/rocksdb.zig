@@ -42,7 +42,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             const cfs: []const rocks.ColumnFamily //
             = try callRocks(
                 logger,
-                rocks.DB.openCf,
+                rocks.DB.open,
                 .{
                     allocator,
                     path,
@@ -128,7 +128,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             );
         }
 
-        pub fn deleteFilesRange(
+        pub fn deleteFilesInRange(
             self: *Self,
             comptime cf: ColumnFamily,
             start: cf.Key,
@@ -142,7 +142,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 
             return try callRocks(
                 self.logger,
-                rocks.DB.deleteFileInRange,
+                rocks.DB.deleteFilesInRange,
                 .{ &self.db, self.cf_handles[cf.find(column_families)], start_bytes.data, end_bytes.data },
             );
         }
@@ -297,7 +297,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             RocksDBPut,
             RocksDBGet,
             RocksDBDelete,
-            RocksDBDeleteFileInRange,
+            RocksDBDeleteFilesInRange,
             RocksDBIterator,
             RocksDBWrite,
         } || Allocator.Error;

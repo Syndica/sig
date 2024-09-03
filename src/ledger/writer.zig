@@ -425,7 +425,7 @@ pub const BlockstoreWriter = struct {
         to_key: cf.Key,
         count: *u32,
     ) !void {
-        try db.deleteFilesRange(cf, from_key, to_key);
+        try db.deleteFilesInRange(cf, from_key, to_key);
         count.* += 1;
     }
 
