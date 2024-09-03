@@ -76,7 +76,7 @@ pub const LeaderInfo = struct {
             defer epoch_info_response.deinit();
             self.epoch_info = try epoch_info_response.result();
             self.leader_schedule.deinit();
-            self.leader_schedule = try LeaderSchedule.fromRpc(allocator, self.epoch_info.absoluteSlot - self.epoch_info.slotIndex, &self.rpc_client);
+            self.leader_schedule = try leaderScheduleFromRpc(allocator, self.epoch_info.absoluteSlot - self.epoch_info.slotIndex, &self.rpc_client);
             try self.updateLeaderAddressesCache(allocator);
         }
 
