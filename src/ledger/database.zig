@@ -57,6 +57,10 @@ pub fn Database(comptime Impl: type) type {
             self.impl.deinit();
         }
 
+        pub fn count(self: *Self, comptime cf: ColumnFamily) anyerror!u64 {
+            return self.impl.count(cf);
+        }
+
         pub fn put(
             self: *Self,
             comptime cf: ColumnFamily,

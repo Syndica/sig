@@ -76,6 +76,20 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             self.allocator.free(self.path);
         }
 
+        pub fn count(self: *Self, comptime cf: ColumnFamily) Allocator.Error!u64 {
+            const live_files = try self.db.liveFiles(self.allocator);
+            defer live_files.deinit();
+
+            var sum: u64 = 0;
+            for (live_files.items) |live_file| {
+                if (std.mem.eql(u8, live_file.column_family_name, cf.name)) {
+                    sum += live_file.num_entries;
+                }
+            }
+
+            return sum;
+        }
+
         pub fn put(
             self: *Self,
             comptime cf: ColumnFamily,

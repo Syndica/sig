@@ -46,6 +46,13 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             self.allocator.free(self.maps);
         }
 
+        pub fn count(self: *Self, comptime cf: ColumnFamily) anyerror!u64 {
+            self.transaction_lock.lockShared();
+            defer self.transaction_lock.unlockShared();
+
+            return self.maps[cf.find(column_families)].count();
+        }
+
         pub fn put(
             self: *Self,
             comptime cf: ColumnFamily,
@@ -263,6 +270,8 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
             shared_map.lock.lockShared();
             defer shared_map.lock.unlockShared();
+            self.transaction_lock.lockShared();
+            defer self.transaction_lock.unlockShared();
 
             const keys, const vals = if (start) |start_| b: {
                 const search_bytes = try key_serializer.serializeAlloc(self.allocator, start_);
@@ -382,6 +391,12 @@ const SharedHashMap = struct {
             self.allocator.free(value);
         }
         self.map.deinit();
+    }
+
+    pub fn count(self: *Self) usize {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        return self.map.count();
     }
 
     pub fn put(self: *Self, key: []const u8, value: []const u8) Allocator.Error!void {
