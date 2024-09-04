@@ -473,7 +473,7 @@ test "VersionedMessage v0 serialization and deserialization" {
 pub const test_v0_transaction = struct {
     pub fn asStruct(allocator: std.mem.Allocator) !VersionedTransaction {
         return VersionedTransaction{
-            .signatures = try allocopy(allocator, Signature, &.{
+            .signatures = try allocator.dupe(Signature, &.{
                 try Signature.fromString("2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw"),
                 try Signature.fromString("4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj"),
             }),
@@ -530,24 +530,24 @@ pub const test_v0_message = struct {
                 .num_readonly_signed_accounts = 12,
                 .num_readonly_unsigned_accounts = 102,
             },
-            .account_keys = try allocopy(allocator, Pubkey, &.{
+            .account_keys = try allocator.dupe(Pubkey, &.{
                 try Pubkey.fromString("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE"),
                 try Pubkey.fromString("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4"),
             }),
             .recent_blockhash = try Hash
                 .parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW"),
-            .instructions = try allocopy(allocator, CompiledInstruction, &.{.{
+            .instructions = try allocator.dupe(CompiledInstruction, &.{.{
                 .program_id_index = 100,
-                .accounts = try allocopy(allocator, u8, &.{ 1, 3 }),
-                .data = try allocopy(allocator, u8, &.{
+                .accounts = try allocator.dupe(u8, &.{ 1, 3 }),
+                .data = try allocator.dupe(u8, &.{
                     104, 232, 42,  254, 46, 48, 104, 89,  101, 211, 253, 161, 65, 155, 204, 89,
                     126, 187, 180, 191, 60, 59, 88,  119, 106, 20,  194, 80,  11, 200, 76,  0,
                 }),
             }}),
-            .address_table_lookups = try allocopy(allocator, MessageAddressTableLookup, &.{.{
+            .address_table_lookups = try allocator.dupe(MessageAddressTableLookup, &.{.{
                 .account_key = try Pubkey.fromString("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD"),
-                .writable_indexes = try allocopy(allocator, u8, &.{ 1, 3, 5, 7, 90 }),
-                .readonly_indexes = try allocopy(allocator, u8, &.{}),
+                .writable_indexes = try allocator.dupe(u8, &.{ 1, 3, 5, 7, 90 }),
+                .readonly_indexes = try allocator.dupe(u8, &.{}),
             }}),
         };
     }
@@ -565,9 +565,3 @@ pub const test_v0_message = struct {
         57,  158, 144, 193, 224, 205, 241, 120, 78,  5,   1,   3,   5,   7,   90,  0,
     };
 };
-
-fn allocopy(allocator: std.mem.Allocator, comptime T: type, source: []const T) ![]T {
-    const new_slice = try allocator.alloc(T, source.len);
-    @memcpy(new_slice, source);
-    return new_slice;
-}
