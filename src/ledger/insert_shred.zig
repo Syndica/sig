@@ -1875,7 +1875,7 @@ const ShredInserterTestState = struct {
     inserter: ShredInserter,
 
     pub fn init(comptime test_name: []const u8) !ShredInserterTestState {
-        return initWithLogger(test_name, (sig.trace.TestLogger{}).logger());
+        return initWithLogger(test_name, sig.trace.TestLogger.default.logger());
     }
 
     fn initWithLogger(comptime test_name: []const u8, logger: sig.trace.Logger) !ShredInserterTestState {
