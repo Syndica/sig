@@ -26,8 +26,8 @@ const LogKind = enum {
     noop,
 };
 
-const UnscopedLogger = StandardLogger(null);
-pub fn StandardLogger(comptime scope: ?[]const u8) type {
+const Logger = ScoppedLogger(null);
+pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
     const StanardErrLogger = struct {
         const Self = @This();
         max_level: Level,
@@ -50,11 +50,11 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
             };
         }
 
-        fn unscoped(self: *Self) *UnscopedLogger {
+        fn unscoped(self: *Self) *Logger {
             return @ptrCast(self);
         }
 
-        fn withScope(self: *Self, comptime new_scope: anytype) *StandardLogger(new_scope) {
+        fn withScope(self: *Self, comptime new_scope: anytype) *ScoppedLogger(new_scope) {
             return @ptrCast(self);
         }
 
@@ -190,11 +190,11 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
             };
         }
 
-        fn unscoped(self: *Self) *UnscopedLogger {
+        fn unscoped(self: *Self) *Logger {
             return @ptrCast(self);
         }
 
-        fn withScope(self: *Self, comptime new_scope: anytype) *StandardLogger(new_scope) {
+        fn withScope(self: *Self, comptime new_scope: anytype) *ScoppedLogger(new_scope) {
             return @ptrCast(self);
         }
 
@@ -339,11 +339,11 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
             }
         }
 
-        pub fn unscoped(self: *Self) *UnscopedLogger {
+        pub fn unscoped(self: *Self) *Logger {
             return @ptrCast(self);
         }
 
-        pub fn withScope(self: *Self, comptime new_scope: []const u8) *StandardLogger(new_scope) {
+        pub fn withScope(self: *Self, comptime new_scope: []const u8) *ScoppedLogger(new_scope) {
             return @ptrCast(self);
         }
 
@@ -404,9 +404,9 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
 test "trace_ng: scope switch" {
     const StuffChild = struct {
         const StuffChild = @This();
-        logger: *StandardLogger(@typeName(StuffChild)),
+        logger: *ScoppedLogger(@typeName(StuffChild)),
 
-        pub fn init(logger: *UnscopedLogger) StuffChild {
+        pub fn init(logger: *Logger) StuffChild {
             return .{ .logger = logger.withScope(@typeName(StuffChild)) };
         }
 
@@ -417,9 +417,9 @@ test "trace_ng: scope switch" {
 
     const Stuff = struct {
         const Stuff = @This();
-        logger: *StandardLogger(@typeName(Stuff)),
+        logger: *ScoppedLogger(@typeName(Stuff)),
 
-        pub fn init(logger: *UnscopedLogger) Stuff {
+        pub fn init(logger: *Logger) Stuff {
             return .{ .logger = logger.withScope(@typeName(Stuff)) };
         }
 
@@ -436,7 +436,7 @@ test "trace_ng: scope switch" {
     defer allocator.destroy(exit);
     exit.* = std.atomic.Value(bool).init(false);
 
-    var logger = StandardLogger(null).init(.{
+    var logger = Logger.init(.{
         .allocator = allocator,
         .exit_sig = exit,
         .max_level = Level.info,
@@ -456,7 +456,7 @@ test "trace_ng: testing.allocator" {
     defer allocator.destroy(exit);
     exit.* = std.atomic.Value(bool).init(false);
 
-    var logger = StandardLogger(null).init(.{
+    var logger = Logger.init(.{
         .allocator = allocator,
         .exit_sig = exit,
         .max_level = Level.info,
@@ -500,7 +500,7 @@ test "trace_ng: level" {
     defer allocator.destroy(exit);
     exit.* = std.atomic.Value(bool).init(false);
 
-    var logger = StandardLogger(null).init(.{
+    var logger = Logger.init(.{
         .allocator = allocator,
         .exit_sig = exit,
         .max_level = Level.err,
@@ -545,7 +545,7 @@ test "trace_ng: format" {
     defer allocator.destroy(exit);
     exit.* = std.atomic.Value(bool).init(false);
 
-    var logger = StandardLogger(null).init(.{
+    var logger = Logger.init(.{
         .allocator = allocator,
         .exit_sig = exit,
         .max_level = Level.debug,
