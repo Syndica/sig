@@ -38,6 +38,5 @@ pub fn valueEncodedAsSlice(
         .serializer = S.serializeImpl,
         .free = config.free,
         .skip = config.skip,
-        .hashmap = config.hashmap,
     };
 }

@@ -1030,11 +1030,9 @@ pub const AccountsDbFields = struct {
     rooted_slots: std.ArrayListUnmanaged(Slot),
     rooted_slot_hashes: std.ArrayListUnmanaged(SlotAndHash),
 
-    pub const @"!bincode-config:file_map" = bincode.FieldConfig(FileMap){
-        .hashmap = .{
-            .value = bincode.list.valueEncodedAsSlice(AccountFileInfo, .{}),
-        },
-    };
+    pub const @"!bincode-config:file_map" = bincode.hashmap.hashMapFieldConfig(FileMap, .{
+        .value = bincode.list.valueEncodedAsSlice(AccountFileInfo, .{}),
+    });
     pub const @"!bincode-config:rooted_slots" = defaultArrayListUnmanagedOnEOFConfig(Slot);
     pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListUnmanagedOnEOFConfig(SlotAndHash);
 

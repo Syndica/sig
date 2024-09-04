@@ -1,9 +1,10 @@
 pub const arraylist = @import("arraylist.zig");
-pub const shortvec = @import("shortvec.zig");
-pub const varint = @import("varint.zig");
-pub const optional = @import("optional.zig");
-pub const list = @import("list.zig");
+pub const hashmap = @import("hashmap.zig");
 pub const int = @import("int.zig");
+pub const list = @import("list.zig");
+pub const optional = @import("optional.zig");
+pub const varint = @import("varint.zig");
+pub const shortvec = @import("shortvec.zig");
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -64,7 +65,7 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
     };
 
     if (getConfig(T)) |type_config| {
-        if (type_config.deserializer) |deserialize_fcn| {
+        if (comptime type_config.deserializer) |deserialize_fcn| {
             return deserialize_fcn(allocator, reader, params);
         }
     }
@@ -104,55 +105,42 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
             return error.UnknownUnionTag;
         },
         .Struct => |info| {
-            if (comptime arrayListInfo(T)) |list_info| {
-                const len = (try readIntAsLength(usize, reader, params)) orelse return error.ArrayListTooBig;
+            var data: T = undefined;
 
-                var data: T = try T.initCapacity(allocator, len);
-                errdefer bincode.free(allocator, data);
-                for (0..len) |_| {
-                    data.appendAssumeCapacity(try bincode.read(allocator, list_info.Elem, reader, params));
-                }
-                return data;
-            } else if (comptime hashMapInfo(T) != null) {
-                return try readHashMap(allocator, reader, params, T, .{});
-            } else {
-                var data: T = undefined;
+            inline for (info.fields, 0..) |field, i| {
+                errdefer inline for (info.fields[0..i]) |prev| {
+                    if (prev.is_comptime) continue;
+                    bincode.free(allocator, @field(data, prev.name));
+                };
 
-                inline for (info.fields, 0..) |field, i| {
-                    errdefer inline for (info.fields[0..i]) |prev| {
-                        if (prev.is_comptime) continue;
-                        bincode.free(allocator, @field(data, prev.name));
-                    };
+                if (field.is_comptime) continue;
+                const field_config: FieldConfig(field.type) = getFieldConfig(T, field) orelse {
+                    // // if we dont want print statements when our tests run we need to comment this out :(
+                    // // specifically, the geyser test fail bincode deser and then recover from it
+                    // errdefer {
+                    //     // TODO(x19): maybe use a logger instead? (sometimes we can recover from this
+                    //     // and so we don't want to print)
+                    //     if (builtin.mode == .Debug) {
+                    //         std.debug.print("failed to deserialize field {s}\n", .{field.name});
+                    //     }
+                    // }
+                    @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
+                    continue;
+                };
 
-                    if (field.is_comptime) continue;
-                    const field_config: FieldConfig(field.type) = getFieldConfig(T, field) orelse {
-                        // // if we dont want print statements when our tests run we need to comment this out :(
-                        // // specifically, the geyser test fail bincode deser and then recover from it
-                        // errdefer {
-                        //     // TODO(x19): maybe use a logger instead? (sometimes we can recover from this
-                        //     // and so we don't want to print)
-                        //     if (builtin.mode == .Debug) {
-                        //         std.debug.print("failed to deserialize field {s}\n", .{field.name});
-                        //     }
-                        // }
-                        @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
-                        continue;
-                    };
-
-                    @field(data, field.name) = try readFieldWithConfig(allocator, reader, params, field, field_config);
-                }
-
-                // TODO: improve implementation of post deserialise method
-                const post_deserialize = "!bincode-config:post-deserialize";
-                if (@hasDecl(T, post_deserialize)) {
-                    const field_config = @field(T, post_deserialize);
-                    if (field_config.post_deserialize_fn) |post_deserialize_fn| {
-                        post_deserialize_fn(&data);
-                    }
-                }
-
-                return data;
+                @field(data, field.name) = try readFieldWithConfig(allocator, reader, params, field, field_config);
             }
+
+            // TODO: improve implementation of post deserialise method
+            const post_deserialize = "!bincode-config:post-deserialize";
+            if (@hasDecl(T, post_deserialize)) {
+                const field_config = @field(T, post_deserialize);
+                if (field_config.post_deserialize_fn) |post_deserialize_fn| {
+                    post_deserialize_fn(&data);
+                }
+            }
+
+            return data;
         },
         .Optional => |info| {
             return switch (try reader.readByte()) {
@@ -342,7 +330,7 @@ pub fn readIntAsLength(comptime T: type, reader: anytype, params: bincode.Params
     return @intCast(len_u64);
 }
 
-fn readFieldWithConfig(
+pub fn readFieldWithConfig(
     allocator: std.mem.Allocator,
     reader: anytype,
     params: bincode.Params,
@@ -357,48 +345,7 @@ fn readFieldWithConfig(
         return try deser_fcn(allocator, reader, params);
     }
 
-    if (hashMapInfo(field.type) != null) {
-        return try readHashMap(allocator, reader, params, field.type, field_config.hashmap);
-    }
-
     return try bincode.read(allocator, field.type, reader, params);
-}
-
-fn readHashMap(
-    allocator: std.mem.Allocator,
-    reader: anytype,
-    params: bincode.Params,
-    comptime T: type,
-    comptime hm_config: HashMapConfig(hashMapInfo(T).?),
-) !T {
-    const hm_info = hashMapInfo(T).?;
-    const Size = if (hm_info.kind == .unordered) T.Size else usize;
-    const len = (try readIntAsLength(Size, reader, params)) orelse return error.HashMapTooBig;
-
-    var data: T = switch (hm_info.management) {
-        .managed => T.init(allocator),
-        .unmanaged => .{},
-    };
-    switch (hm_info.management) {
-        .managed => try data.ensureTotalCapacity(len),
-        .unmanaged => try data.ensureTotalCapacity(allocator, len),
-    }
-
-    const key_field = std.meta.fieldInfo(T.KV, .key);
-    const value_field = std.meta.fieldInfo(T.KV, .value);
-    for (0..len) |_| {
-        const key = try bincode.readFieldWithConfig(allocator, reader, params, key_field, hm_config.key);
-        errdefer bincode.free(allocator, key);
-
-        const value = try bincode.readFieldWithConfig(allocator, reader, params, value_field, hm_config.value);
-        errdefer bincode.free(allocator, value);
-
-        const gop = data.getOrPutAssumeCapacity(key);
-        if (gop.found_existing) return error.DuplicateHashMapEntries;
-        gop.value_ptr.* = value;
-    }
-
-    return data;
 }
 
 pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
@@ -435,17 +382,8 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
             return;
         },
         .Struct => |info| {
-            if (arrayListInfo(T) != null) {
-                try bincode.write(writer, data.items.len, params);
-                for (data.items) |item| {
-                    try bincode.write(writer, item, params);
-                }
-            } else if (hashMapInfo(T) != null) {
-                try writeHashMap(writer, data, params, .{});
-            } else {
-                inline for (info.fields) |field| {
-                    try writeFieldWithConfig(field, getFieldConfig(T, field), writer, @field(data, field.name), params);
-                }
+            inline for (info.fields) |field| {
+                try writeFieldWithConfig(field, getFieldConfig(T, field), writer, @field(data, field.name), params);
             }
             return;
         },
@@ -558,7 +496,7 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
     @compileError("Serializing '" ++ @typeName(T) ++ "' is unsupported.");
 }
 
-fn writeFieldWithConfig(
+pub fn writeFieldWithConfig(
     comptime field: std.builtin.Type.StructField,
     comptime maybe_field_config: ?FieldConfig(field.type),
     writer: anytype,
@@ -573,36 +511,9 @@ fn writeFieldWithConfig(
             try ser_fcn(writer, data, params);
             return;
         }
-        if (hashMapInfo(field.type) != null) {
-            try writeHashMap(writer, data, params, field_config.hashmap);
-            return;
-        }
     }
 
     try bincode.write(writer, data, params);
-}
-
-fn writeHashMap(
-    writer: anytype,
-    data: anytype,
-    params: bincode.Params,
-    comptime hm_config: HashMapConfig(hashMapInfo(@TypeOf(data)).?),
-) !void {
-    const T = @TypeOf(data);
-
-    // NOTE: we need to use unmanaged here because managed requires a mutable reference
-    if (data.count() > std.math.maxInt(u64)) return error.HashMapTooBig;
-    const len: u64 = @intCast(data.count());
-    try bincode.write(writer, len, params);
-
-    const key_info = std.meta.fieldInfo(T.KV, .key);
-    const value_info = std.meta.fieldInfo(T.KV, .value);
-
-    var iter = data.iterator();
-    while (iter.next()) |entry| {
-        try bincode.writeFieldWithConfig(key_info, hm_config.key, writer, entry.key_ptr.*, params);
-        try bincode.writeFieldWithConfig(value_info, hm_config.value, writer, entry.value_ptr.*, params);
-    }
 }
 
 pub fn free(allocator: std.mem.Allocator, value: anytype) void {
@@ -704,26 +615,25 @@ pub fn FieldConfig(comptime T: type) type {
         free: ?FreeFunction = null,
         skip: bool = false,
         post_deserialize_fn: ?fn (self: *T) void = null,
-        hashmap: if (hashMapInfo(T)) |hm_info| bincode.HashMapConfig(hm_info) else void = if (hashMapInfo(T) != null) .{} else {},
-    };
-}
-
-pub fn HashMapConfig(comptime hm_info: sig.utils.types.HashMapInfo) type {
-    return struct {
-        key: FieldConfig(hm_info.Key) = .{},
-        value: FieldConfig(hm_info.Value) = .{},
     };
 }
 
 pub fn getConfig(comptime T: type) ?FieldConfig(T) {
+    // Get the config if defined within the type
     const config_field_name = "!bincode-config";
-    return switch (@typeInfo(T)) {
+    switch (@typeInfo(T)) {
         .Struct, .Enum, .Union, .Opaque => if (@hasDecl(T, config_field_name))
-            @field(T, config_field_name)
-        else
-            null,
-        else => null,
-    };
+            return @field(T, config_field_name),
+        else => {},
+    }
+
+    // Provide default configs for some types
+    return if (comptime hashMapInfo(T) != null)
+        hashmap.hashMapFieldConfig(T, .{})
+    else if (comptime arrayListInfo(T) != null)
+        arraylist.arrayListFieldConfig(T)
+    else
+        null;
 }
 
 pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Type.StructField) ?FieldConfig(field.type) {
