@@ -717,15 +717,13 @@ pub fn HashMapConfig(comptime hm_info: sig.utils.types.HashMapInfo) type {
 
 pub fn getConfig(comptime T: type) ?FieldConfig(T) {
     const config_field_name = "!bincode-config";
-    switch (@typeInfo(T)) {
-        .Struct, .Enum, .Union, .Opaque => {
-            if (@hasDecl(T, config_field_name)) {
-                return @field(T, config_field_name);
-            }
-        },
-        else => return null,
-    }
-    return null;
+    return switch (@typeInfo(T)) {
+        .Struct, .Enum, .Union, .Opaque => if (@hasDecl(T, config_field_name))
+            @field(T, config_field_name)
+        else
+            null,
+        else => null,
+    };
 }
 
 pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Type.StructField) ?FieldConfig(field.type) {
