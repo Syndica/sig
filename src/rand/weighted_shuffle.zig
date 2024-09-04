@@ -72,6 +72,14 @@ pub fn WeightedShuffle(comptime T: type) type {
             self.zeros.deinit();
         }
 
+        pub fn clone(self: *const WeightedShuffle(T)) WeightedShuffle(T) {
+            return .{
+                .tree = self.tree.clone(),
+                .weight = self.weight,
+                .zeros = self.zeros.clone(),
+            };
+        }
+
         // Removes given weight at index k.
         pub fn remove(self: *WeightedShuffle(T), k: usize, weight: T) void {
             std.debug.assert(self.weight >= weight);

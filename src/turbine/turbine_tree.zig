@@ -1,7 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
-
-const Instant = std.time.Instant;
+const sig = @import("../sig.zig");
 
 const IpAddr = sig.net.IpAddr;
 const SocketAddr = sig.net.SocketAddr;
@@ -11,52 +9,54 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const Duration = sig.time.Duration;
+const Instant = sig.time.Instant;
 const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
-const AutoArrayHashSet = sig.gossip.table.AutoArrayHashSet;
 
-const MAX_NODES_PER_IP = 2;
-
-const NodeId = union(enum) {
-    contact_info: ThreadSafeContactInfo,
-    pubkey: Pubkey,
-};
-
-const Node = struct {
-    id: NodeId,
-    stake: u64,
-
-    pub fn pubkey(self: Node) Pubkey {
-        switch (self.id) {
-            .contact_info => |ci| ci.pubkey,
-            .pubkey => |pk| pk,
-        }
-    }
-
-    pub fn contactInfo(self: Node) ?ThreadSafeContactInfo {
-        switch (self.id) {
-            .contact_info => |ci| ci,
-            .pubkey => null,
-        }
-    }
-
-    pub fn fromContactInfo(ci: ThreadSafeContactInfo) Node {
-        return .{ .id = .contact_info(ci), .stake = ci.stake };
-    }
-};
-
-const Tree = struct {
+/// Analogous to [ClusterNodes](https://github.com/anza-xyz/agave/blob/efd47046c1bb9bb027757ddabe408315bc7865cc/turbine/src/cluster_nodes.rs#L65)
+pub const TurbineTree = struct {
     my_pubkey: Pubkey,
     nodes: []const Node,
     index: std.AutoArrayHashMap(Pubkey, usize),
     weighted_shuffle: WeightedShuffle,
+
+    const DATA_PLANE_FANOUT = 200;
+    const MAX_NODES_PER_IP = 2;
+
+    const NodeId = union(enum) {
+        contact_info: ThreadSafeContactInfo,
+        pubkey: Pubkey,
+    };
+
+    const Node = struct {
+        id: NodeId,
+        stake: u64,
+
+        pub fn pubkey(self: Node) Pubkey {
+            switch (self.id) {
+                .contact_info => |ci| ci.pubkey,
+                .pubkey => |pk| pk,
+            }
+        }
+
+        pub fn contactInfo(self: Node) ?ThreadSafeContactInfo {
+            switch (self.id) {
+                .contact_info => |ci| ci,
+                .pubkey => null,
+            }
+        }
+
+        pub fn fromContactInfo(ci: ThreadSafeContactInfo) Node {
+            return .{ .id = .contact_info(ci), .stake = ci.stake };
+        }
+    };
 
     pub fn initForBroadcast(
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
         tvu_peers: []const ThreadSafeContactInfo,
         stakes: *std.AutoArrayHashMap(Pubkey, u64),
-    ) !Tree {
+    ) !TurbineTree {
         var tree = try initForRetransmit(
             allocator,
             my_contact_info,
@@ -72,7 +72,7 @@ const Tree = struct {
         my_contact_info: ThreadSafeContactInfo,
         tvu_peers: []const ThreadSafeContactInfo,
         stakes: *std.AutoArrayHashMap(Pubkey, u64),
-    ) !Tree {
+    ) !TurbineTree {
         const nodes = try getNodes(allocator, my_contact_info, tvu_peers, stakes);
         var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
         for (nodes.items, 0..) |node, i| index.put(node.pubkey(), i);
@@ -89,7 +89,7 @@ const Tree = struct {
     }
 
     pub fn getBroadcastPeer(
-        self: *const Tree,
+        self: *const TurbineTree,
         shred: *ShredId,
     ) ?*ThreadSafeContactInfo {
         const rng = getSeededRng(self.my_pubkey, shred);
@@ -98,7 +98,7 @@ const Tree = struct {
     }
 
     pub fn getRetransmitAddresses(
-        self: *const Tree,
+        self: *const TurbineTree,
         allocator: std.mem.Allocator,
         slot_leader: Pubkey,
         shred: *ShredId,
@@ -118,7 +118,7 @@ const Tree = struct {
     }
 
     pub fn getRetransmitPeers(
-        self: *const Tree,
+        self: *const TurbineTree,
         allocator: std.mem.Allocator,
         slot_leader: *Pubkey,
         shred: *ShredId,
@@ -176,7 +176,7 @@ const Tree = struct {
     }
 
     pub fn getRetransmitParent(
-        self: *const Tree,
+        self: *const TurbineTree,
         allocator: std.mem.Allocator,
         slot_leader: *Pubkey,
         shred: *ShredId,
@@ -202,78 +202,104 @@ const Tree = struct {
         const index = if (index_b == 0) index_b else index_b + offset;
         return nodes.items[index].pubkey();
     }
-};
 
-fn getSeededRng(leader: *Pubkey, shred: *ShredId) std.rand.Random {
-    const seed = shred.seed(leader);
-    return ChaChaRng.fromSeed(seed);
-}
+    /// Agave uses slot and root bank to check for feature activation for
+    /// running fanout experiments. Fine to just use a constant until we
+    /// want to run experiments.
+    pub fn getDataPlaneFanout(
+        // slot: Slot,
+        // root_bank: *Bank,
+    ) usize {
+        return DATA_PLANE_FANOUT;
+    }
 
-fn getNodes(
-    allocator: std.mem.Allocator,
-    my_contact_info: ThreadSafeContactInfo,
-    tvu_peers: []const ThreadSafeContactInfo,
-    stakes: *std.AutoArrayHashMap(Pubkey, u64),
-) ![]Node {
-    var nodes = try std.ArrayList(Node).initCapacity(allocator, stakes.count());
-    defer nodes.deinit();
-    var has_contact_info = AutoArrayHashSet(Pubkey).init(allocator);
+    fn getSeededRng(leader: *Pubkey, shred: *ShredId) std.rand.Random {
+        const seed = shred.seed(leader);
+        return ChaChaRng.fromSeed(seed);
+    }
 
-    try nodes.append(.{
-        .id = .{ .contact_info = my_contact_info },
-        .stake = if (stakes.get(my_contact_info.pubkey())) |stake| stake else 0,
-    });
-    has_contact_info.put(my_contact_info.pubkey());
+    fn getNodes(
+        allocator: std.mem.Allocator,
+        my_contact_info: ThreadSafeContactInfo,
+        tvu_peers: []const ThreadSafeContactInfo,
+        stakes: *std.AutoArrayHashMap(Pubkey, u64),
+    ) ![]Node {
+        var nodes = try std.ArrayList(Node).initCapacity(allocator, stakes.count());
+        defer nodes.deinit();
+        var has_contact_info = std.AutoArrayHashMap(Pubkey, void).init(allocator);
 
-    for (tvu_peers) |peer_contact_info| {
         try nodes.append(.{
-            .id = .{ .contact_info = peer_contact_info },
-            .stake = if (stakes.get(peer_contact_info.pubkey())) |stake| stake else 0,
+            .id = .{ .contact_info = my_contact_info },
+            .stake = if (stakes.get(my_contact_info.pubkey())) |stake| stake else 0,
         });
-        has_contact_info.put(peer_contact_info.pubkey());
-    }
+        has_contact_info.put(my_contact_info.pubkey());
 
-    for (stakes.keys(), stakes.values()) |pubkey, stake| {
-        if (stake > 0 and !has_contact_info.contains(pubkey)) {
-            nodes.append(.{
-                .id = .{ .pubkey = pubkey },
-                .stake = stake,
+        for (tvu_peers) |peer_contact_info| {
+            try nodes.append(.{
+                .id = .{ .contact_info = peer_contact_info },
+                .stake = if (stakes.get(peer_contact_info.pubkey())) |stake| stake else 0,
             });
+            has_contact_info.put(peer_contact_info.pubkey());
         }
-    }
 
-    std.mem.sortUnstable(Node, nodes.items, void, struct {
-        pub fn lt(_: void, lhs: Node, rhs: Node) bool {
-            if (lhs.stake > rhs.stake) return true;
-            if (lhs.stake < rhs.stake) return false;
-            return lhs.pubkey() >= rhs.pubkey();
-        }
-    }.lt);
-
-    var counts = std.AutoArrayHashMap(IpAddr, usize).init(allocator);
-    var result = std.ArrayList(Node).init(allocator);
-    for (nodes.items) |node| {
-        if (node.contactInfo()) |ci| {
-            if (ci.tvu_addr) |addr| {
-                const current = counts.get(addr.ip()) orelse 0;
-                if (current < MAX_NODES_PER_IP) try result.append(node);
-                counts.put(
-                    addr.ip(),
-                    current + 1,
-                );
-                continue;
+        for (stakes.keys(), stakes.values()) |pubkey, stake| {
+            if (stake > 0 and !has_contact_info.contains(pubkey)) {
+                nodes.append(.{
+                    .id = .{ .pubkey = pubkey },
+                    .stake = stake,
+                });
             }
         }
-        if (node.stake > 0) try result.append(node);
+
+        std.mem.sortUnstable(Node, nodes.items, void, struct {
+            pub fn lt(_: void, lhs: Node, rhs: Node) bool {
+                if (lhs.stake > rhs.stake) return true;
+                if (lhs.stake < rhs.stake) return false;
+                return lhs.pubkey() >= rhs.pubkey();
+            }
+        }.lt);
+
+        var counts = std.AutoArrayHashMap(IpAddr, usize).init(allocator);
+        var result = std.ArrayList(Node).init(allocator);
+        for (nodes.items) |node| {
+            if (node.contactInfo()) |ci| {
+                if (ci.tvu_addr) |addr| {
+                    const current = counts.get(addr.ip()) orelse 0;
+                    if (current < MAX_NODES_PER_IP) try result.append(node);
+                    counts.put(
+                        addr.ip(),
+                        current + 1,
+                    );
+                    continue;
+                }
+            }
+            if (node.stake > 0) try result.append(node);
+        }
+
+        return result.toOwnedSlice();
     }
+};
 
-    return result.toOwnedSlice();
-}
-
-// TODO: Implement Testing
-// fn testEnvironment() struct {
+// // TODO: Implement Testing
+// fn createTestEnvironment(
+//     allocator: std.mem.Allocator,
+//     rng: std.Random,
+//     num_nodes: usize,
+//     unstaked_ratio: ?struct { u64, u64 },
+// ) struct {
 //     std.ArrayList(ThreadSafeContactInfo), // Nodes
 //     ThreadSafeContactInfo, // My contact info
 //     []const ThreadSafeContactInfo, // TVU peers
 //     std.AutoArrayHashMap(Pubkey, u64), // Stakes
-// } {}
+// } {
+//     const unstaked_numerator, const unstaked_denominator = unstaked_ratio orelse .{ 1, 7 };
+//     const nodes = try std.ArrayList(ThreadSafeContactInfo).initCapacity(allocator, num_nodes);
+//     errdefer nodes.deinit();
+//     for (0..num_nodes) |i| {
+//         nodes[i] = ThreadSafeContactInfo.fromLegacyContactInfo(sig.gossip.data.LegacyContactInfo.random(rng));
+//     }
+//     // nodes.shuffle(rng);
+//     const keypair = sig.core.Keypair.fromRandom(rng);
+//     nodes[0].pubkey = keypair.pubkey;
+//     const this = nodes[0].clone();
+// }

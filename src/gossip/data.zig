@@ -1349,6 +1349,7 @@ pub const ThreadSafeContactInfo = struct {
     gossip_addr: ?SocketAddr,
     rpc_addr: ?SocketAddr,
     tpu_addr: ?SocketAddr,
+    tvu_addr: ?SocketAddr,
 
     pub fn fromContactInfo(contact_info: ContactInfo) ThreadSafeContactInfo {
         return .{
@@ -1357,6 +1358,7 @@ pub const ThreadSafeContactInfo = struct {
             .gossip_addr = contact_info.getSocket(.gossip),
             .rpc_addr = contact_info.getSocket(.rpc),
             .tpu_addr = contact_info.getSocket(.tpu),
+            .tvu_addr = contact_info.getSocket(.turbine_recv),
         };
     }
 
@@ -1367,6 +1369,7 @@ pub const ThreadSafeContactInfo = struct {
             .gossip_addr = legacy_contact_info.gossip,
             .rpc_addr = legacy_contact_info.rpc,
             .tpu_addr = legacy_contact_info.tpu,
+            .tvu_addr = legacy_contact_info.turbine_recv,
         };
     }
 };
