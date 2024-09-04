@@ -1,6 +1,6 @@
 pub const std = @import("std");
 pub const sig = @import("../sig.zig");
-pub const blockstore = @import("lib.zig");
+pub const ledger = @import("lib.zig");
 
 // std
 const Allocator = std.mem.Allocator;
@@ -18,16 +18,16 @@ const Slot = sig.core.Slot;
 const Registry = sig.prometheus.Registry;
 const Timer = sig.time.Timer;
 
-// blockstore
-const AncestorIterator = blockstore.reader.AncestorIterator;
-const BlockstoreDB = blockstore.blockstore.BlockstoreDB;
-const FrozenHashVersioned = blockstore.meta.FrozenHashVersioned;
-const FrozenHashStatus = blockstore.meta.FrozenHashStatus;
-const SlotMeta = blockstore.meta.SlotMeta;
-const TransactionStatusMeta = blockstore.transaction_status.TransactionStatusMeta;
+// ledger
+const AncestorIterator = ledger.reader.AncestorIterator;
+const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const FrozenHashVersioned = ledger.meta.FrozenHashVersioned;
+const FrozenHashStatus = ledger.meta.FrozenHashStatus;
+const SlotMeta = ledger.meta.SlotMeta;
+const TransactionStatusMeta = ledger.transaction_status.TransactionStatusMeta;
 
-const schema = blockstore.schema.schema;
-const schema_list = blockstore.schema.list;
+const schema = ledger.schema.schema;
+const schema_list = ledger.schema.list;
 
 pub const BlockstoreWriter = struct {
     allocator: Allocator,
@@ -39,6 +39,24 @@ pub const BlockstoreWriter = struct {
     scan_and_fix_roots_metrics: ScanAndFixRootsMetrics,
 
     const Self = @This();
+
+    pub fn init(
+        allocator: Allocator,
+        logger: Logger,
+        db: BlockstoreDB,
+        registry: *sig.prometheus.Registry(.{}),
+        lowest_cleanup_slot: *RwMux(Slot),
+        max_root: *std.atomic.Value(Slot),
+    ) !BlockstoreWriter {
+        return .{
+            .allocator = allocator,
+            .logger = logger,
+            .db = db,
+            .lowest_cleanup_slot = lowest_cleanup_slot,
+            .max_root = max_root,
+            .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+        };
+    }
 
     /// agave: write_transaction_status
     pub fn writeTransactionStatus(
@@ -439,16 +457,15 @@ pub const ScanAndFixRootsMetrics = struct {
     };
 };
 
-const TestState = sig.ledger.insert_shred.TestState;
+const TestDB = sig.ledger.tests.TestDB("writer");
 
 test "purgeSlots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("setRoots");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("setRoots");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -516,9 +533,8 @@ test "setRoots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("setRoots");
-    defer state.deinit();
-    const db = state.db;
+    var db = try TestDB.init("setRoots");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -545,9 +561,8 @@ test "scanAndFixRoots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("scanAndFixRoots");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("scanAndFixRoots");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -587,9 +602,8 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("setAndChainConnectedOnRootAndNextSlots");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("setAndChainConnectedOnRootAndNextSlots");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -656,9 +670,8 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("setAndChainConnectedOnRootAndNextSlots");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("setAndChainConnectedOnRootAndNextSlots");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);

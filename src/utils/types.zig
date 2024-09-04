@@ -276,12 +276,20 @@ pub const EqlConfig = struct {
 
 /// Compare equality of two items with the same type.
 ///
+/// see eqlCustom for more information.
+/// use eqlCustom to customize the behavior.
+pub inline fn eql(a: anytype, b: @TypeOf(a)) bool {
+    return eqlCustom(a, b, .{});
+}
+
+/// Compare equality of two items with the same type.
+///
 /// By default:
 /// - follows pointers
 /// - treats Allocators as equal
 /// - uses an `eql` method if defined for the type
 /// - compares only the `items` field in ArrayLists
-pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
+pub fn eqlCustom(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
     var config = config_;
     const T: type = @TypeOf(a);
 
@@ -290,7 +298,7 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
         return true;
     }
     if (arrayListInfo(@TypeOf(a))) |_| {
-        return eql(a.items, b.items, config);
+        return eqlCustom(a.items, b.items, config);
     }
 
     // use the type's eql method if it exists
@@ -331,7 +339,7 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
     switch (@typeInfo(T)) {
         .Struct => {
             inline for (@typeInfo((T)).Struct.fields) |field| {
-                if (!eql(@field(a, field.name), @field(b, field.name), config)) {
+                if (!eqlCustom(@field(a, field.name), @field(b, field.name), config)) {
                     return false;
                 }
             }
@@ -339,7 +347,7 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
         },
         .ErrorUnion => {
             if (a) |a_p| {
-                if (b) |b_p| return eql(a_p, b_p, config) else |_| return false;
+                if (b) |b_p| return eqlCustom(a_p, b_p, config) else |_| return false;
             } else |a_e| {
                 if (b) |_| return false else |b_e| return a_e == b_e;
             }
@@ -349,7 +357,11 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
                 if (@intFromEnum(a) != @intFromEnum(b)) return false;
                 inline for (info.fields) |field_info| {
                     if (@field(UnionTag, field_info.name) == @as(std.meta.Tag(T), a)) {
-                        return eql(@field(a, field_info.name), @field(b, field_info.name), config);
+                        return eqlCustom(
+                            @field(a, field_info.name),
+                            @field(b, field_info.name),
+                            config,
+                        );
                     }
                 }
                 return false;
@@ -364,13 +376,13 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
                 return a.len == b.len and a.ptr == b.ptr;
             },
             else => if (config.follow_pointers == .yes) {
-                return eql(a.*, b.*, config);
+                return eqlCustom(a.*, b.*, config);
             } else {
                 return a == b;
             },
         },
         .Optional => return a == null and b == null or
-            a != null and b != null and eql(a.?, b.?, config),
+            a != null and b != null and eqlCustom(a.?, b.?, config),
 
         else => return a == b,
     }
@@ -379,35 +391,33 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
 /// copy of `std.mem.eql` except it uses `eql` (above) instead of `==`
 fn sliceEql(comptime T: type, a: []const T, b: []const T, config: EqlConfig) bool {
     if (@sizeOf(T) == 0) return true;
-    const backend_can_use_eql_bytes = switch (@import("builtin").zig_backend) {
-        // The SPIR-V backend does not support the optimized path yet.
-        .stage2_spirv64 => false,
-        // The RISC-V does not support vectors.
-        .stage2_riscv64 => false,
-        else => true,
-    };
+
     if (!@inComptime() and
         std.meta.hasUniqueRepresentation(T) and
         backend_can_use_eql_bytes and
         (config.follow_pointers == .no or !(containsPointer(T) orelse true)))
     {
         // This is a performance optimization. We directly compare the bytes in the slice, instead
-        // of iterating over each item and comparing them for equality. Ideally we could use
-        // `eqlBytes(sliceAsBytes(a), sliceAsBytes(b))` directly from the std library, but those
-        // functions are private. Calling std.mem.eql accomplishes the same thing, as long as
-        // should_use_eqlBytes is true. If should_use_eqlBytes is false, std.mem.eql would have
-        // undesired behavior.
-        return std.mem.eql(T, a, b);
+        // of iterating over each item and comparing them for equality.
+        return eqlBytes(std.mem.sliceAsBytes(a), std.mem.sliceAsBytes(b));
     }
 
     if (a.len != b.len) return false;
     if (a.len == 0 or a.ptr == b.ptr) return true;
 
     for (a, b) |a_elem, b_elem| {
-        if (!eql(a_elem, b_elem, config)) return false;
+        if (!eqlCustom(a_elem, b_elem, config)) return false;
     }
     return true;
 }
+
+const backend_can_use_eql_bytes = switch (@import("builtin").zig_backend) {
+    // The SPIR-V backend does not support the optimized path yet.
+    .stage2_spirv64 => false,
+    // The RISC-V does not support vectors.
+    .stage2_riscv64 => false,
+    else => true,
+};
 
 /// Returns whether a type has any pointers within it, at any level of nesting.
 /// Returns null if the answer cannot be determined.
@@ -415,11 +425,11 @@ pub fn containsPointer(comptime T: type) ?bool {
     return switch (@typeInfo(T)) {
         .Pointer => true,
 
-        .Array, .Optional => |info| containsPointer(info.child),
+        inline .Array, .Optional => |info| containsPointer(info.child),
 
         .ErrorUnion => |info| containsPointer(info.payload),
 
-        .Struct, .Union => |info| for (info.fields) |field| {
+        inline .Struct, .Union => |info| inline for (info.fields) |field| {
             const field_has_pointer = containsPointer(field.type);
             if (field_has_pointer != false) break field_has_pointer;
         } else false,
@@ -431,6 +441,69 @@ pub fn containsPointer(comptime T: type) ?bool {
         .Type, .Void, .Bool, .NoReturn, .Int, .Float, .ComptimeFloat, .ComptimeInt => false,
         .Undefined, .Null, .ErrorSet, .Enum, .Fn, .Vector, .EnumLiteral => false,
     };
+}
+
+/// This is an exact copy of std.mem.eqlBytes because it is private
+fn eqlBytes(a: []const u8, b: []const u8) bool {
+    if (!backend_can_use_eql_bytes) {
+        return eqlCustom(u8, a, b);
+    }
+
+    if (a.len != b.len) return false;
+    if (a.len == 0 or a.ptr == b.ptr) return true;
+
+    if (a.len <= 16) {
+        if (a.len < 4) {
+            const x = (a[0] ^ b[0]) | (a[a.len - 1] ^ b[a.len - 1]) | (a[a.len / 2] ^ b[a.len / 2]);
+            return x == 0;
+        }
+        var x: u32 = 0;
+        for ([_]usize{ 0, a.len - 4, (a.len / 8) * 4, a.len - 4 - ((a.len / 8) * 4) }) |n| {
+            x |= @as(u32, @bitCast(a[n..][0..4].*)) ^ @as(u32, @bitCast(b[n..][0..4].*));
+        }
+        return x == 0;
+    }
+
+    // Figure out the fastest way to scan through the input in chunks.
+    // Uses vectors when supported and falls back to usize/words when not.
+    const Scan = if (std.simd.suggestVectorLength(u8)) |vec_size|
+        struct {
+            pub const size = vec_size;
+            pub const Chunk = @Vector(size, u8);
+            pub inline fn isNotEqual(chunk_a: Chunk, chunk_b: Chunk) bool {
+                return @reduce(.Or, chunk_a != chunk_b);
+            }
+        }
+    else
+        struct {
+            pub const size = @sizeOf(usize);
+            pub const Chunk = usize;
+            pub inline fn isNotEqual(chunk_a: Chunk, chunk_b: Chunk) bool {
+                return chunk_a != chunk_b;
+            }
+        };
+
+    inline for (1..6) |s| {
+        const n = 16 << s;
+        if (n <= Scan.size and a.len <= n) {
+            const V = @Vector(n / 2, u8);
+            var x = @as(V, a[0 .. n / 2].*) ^ @as(V, b[0 .. n / 2].*);
+            x |= @as(V, a[a.len - n / 2 ..][0 .. n / 2].*) ^ @as(V, b[a.len - n / 2 ..][0 .. n / 2].*);
+            const zero: V = @splat(0);
+            return !@reduce(.Or, x != zero);
+        }
+    }
+    // Compare inputs in chunks at a time (excluding the last chunk).
+    for (0..(a.len - 1) / Scan.size) |i| {
+        const a_chunk: Scan.Chunk = @bitCast(a[i * Scan.size ..][0..Scan.size].*);
+        const b_chunk: Scan.Chunk = @bitCast(b[i * Scan.size ..][0..Scan.size].*);
+        if (Scan.isNotEqual(a_chunk, b_chunk)) return false;
+    }
+
+    // Compare the last chunk using an overlapping read (similar to the previous size strategies).
+    const last_a_chunk: Scan.Chunk = @bitCast(a[a.len - Scan.size ..][0..Scan.size].*);
+    const last_b_chunk: Scan.Chunk = @bitCast(b[a.len - Scan.size ..][0..Scan.size].*);
+    return !Scan.isNotEqual(last_a_chunk, last_b_chunk);
 }
 
 test "eql follows slices" {
@@ -445,7 +518,7 @@ test "eql follows slices" {
     b_slice[0] = 1;
     const a = Foo{ .slice = a_slice };
     const b = Foo{ .slice = b_slice };
-    try std.testing.expect(eql(a, b, .{}));
-    try std.testing.expect(!eql(a, b, .{ .follow_pointers = .no }));
+    try std.testing.expect(eql(a, b));
+    try std.testing.expect(!eqlCustom(a, b, .{ .follow_pointers = .no }));
     try std.testing.expect(!std.meta.eql(a, b));
 }

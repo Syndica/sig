@@ -1,6 +1,8 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const Allocator = std.mem.Allocator;
+
 pub const TransactionStatusMeta = struct {
     status: ?TransactionError,
     fee: u64,
@@ -14,6 +16,25 @@ pub const TransactionStatusMeta = struct {
     loaded_addresses: LoadedAddresses,
     return_data: ?TransactionReturnData,
     compute_units_consumed: ?u64,
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        allocator.free(self.pre_balances);
+        allocator.free(self.post_balances);
+        if (self.log_messages) |log_messages| allocator.free(log_messages);
+        inline for (.{
+            self.inner_instructions,
+            self.pre_token_balances,
+            self.post_token_balances,
+            self.rewards,
+        }) |maybe_slice| {
+            if (maybe_slice) |slice| {
+                for (slice) |item| item.deinit(allocator);
+                allocator.free(slice);
+            }
+        }
+        self.loaded_addresses.deinit(allocator);
+        if (self.return_data) |it| it.deinit(allocator);
+    }
 };
 
 pub const InnerInstructions = struct {
@@ -21,6 +42,11 @@ pub const InnerInstructions = struct {
     index: u8,
     /// List of inner instructions
     instructions: []const InnerInstruction,
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        for (self.instructions) |ix| ix.deinit(allocator);
+        allocator.free(self.instructions);
+    }
 };
 
 pub const InnerInstruction = struct {
@@ -28,6 +54,10 @@ pub const InnerInstruction = struct {
     instruction: CompiledInstruction,
     /// Invocation stack height of the instruction,
     stack_height: ?u32,
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        self.instruction.deinit(allocator);
+    }
 };
 
 pub const CompiledInstruction = struct {
@@ -37,6 +67,11 @@ pub const CompiledInstruction = struct {
     accounts: []const u8,
     /// The program input data.
     data: []const u8,
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        allocator.free(self.accounts);
+        allocator.free(self.data);
+    }
 };
 
 pub const TransactionTokenBalance = struct {
@@ -45,6 +80,13 @@ pub const TransactionTokenBalance = struct {
     ui_token_amount: UiTokenAmount,
     owner: []const u8,
     program_id: []const u8,
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        self.ui_token_amount.deinit(allocator);
+        allocator.free(self.mint);
+        allocator.free(self.owner);
+        allocator.free(self.program_id);
+    }
 };
 
 pub const UiTokenAmount = struct {
@@ -52,6 +94,11 @@ pub const UiTokenAmount = struct {
     decimals: u8,
     amount: []const u8,
     ui_amount_string: []const u8,
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        allocator.free(self.amount);
+        allocator.free(self.ui_amount_string);
+    }
 };
 
 pub const Rewards = std.ArrayList(Reward);
@@ -62,6 +109,10 @@ pub const Reward = struct {
     post_balance: u64, // Account balance in lamports after `lamports` was applied
     reward_type: ?RewardType,
     commission: ?u8, // Vote account commission when the reward was credited, only present for voting and staking rewards
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        allocator.free(self.pubkey);
+    }
 };
 
 pub const RewardType = enum {
@@ -73,14 +124,23 @@ pub const RewardType = enum {
 
 pub const LoadedAddresses = struct {
     /// List of addresses for writable loaded accounts
-    writable: []const sig.core.Pubkey,
+    writable: []const sig.core.Pubkey = &.{},
     /// List of addresses for read-only loaded accounts
-    readonly: []const sig.core.Pubkey,
+    readonly: []const sig.core.Pubkey = &.{},
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        allocator.free(self.writable);
+        allocator.free(self.readonly);
+    }
 };
 
 pub const TransactionReturnData = struct {
-    program_id: sig.core.Pubkey,
-    data: []const u8,
+    program_id: sig.core.Pubkey = sig.core.Pubkey.default(),
+    data: []const u8 = &.{},
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        allocator.free(self.data);
+    }
 };
 
 pub const TransactionError = union(enum) {
@@ -204,6 +264,13 @@ pub const TransactionError = union(enum) {
 
     /// Program cache hit max limit.
     ProgramCacheHitMaxLimit,
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        switch (self) {
+            .InstructionError => |it| it[1].deinit(allocator),
+            else => {},
+        }
+    }
 };
 
 pub const InstructionError = union(enum) {
@@ -384,4 +451,11 @@ pub const InstructionError = union(enum) {
     BuiltinProgramsMustConsumeComputeUnits,
     // Note: For any new error added here an equivalent ProgramError and its
     // conversions must also be added
+
+    pub fn deinit(self: @This(), _: Allocator) void {
+        switch (self) {
+            .BorshIoError => |it| it.deinit(),
+            else => {},
+        }
+    }
 };

@@ -1,9 +1,9 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const bs = sig.ledger;
-const meta = bs.meta;
-const schema = bs.schema.schema;
+const ledger = sig.ledger;
+const meta = ledger.meta;
+const schema = ledger.schema.schema;
 const shred_mod = sig.ledger.shred;
 
 const Allocator = std.mem.Allocator;
@@ -22,14 +22,14 @@ const Slot = sig.core.Slot;
 const Shred = sig.ledger.shred.Shred;
 const CodeShred = sig.ledger.shred.CodeShred;
 const DataShred = sig.ledger.shred.DataShred;
-const ReedSolomonCache = bs.recovery.ReedSolomonCache;
+const ReedSolomonCache = ledger.recovery.ReedSolomonCache;
 const ShredId = sig.ledger.shred.ShredId;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 const SortedSet = sig.utils.collections.SortedSet;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
-const BlockstoreDB = bs.blockstore.BlockstoreDB;
+const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const WriteBatch = BlockstoreDB.WriteBatch;
 
 const ErasureMeta = meta.ErasureMeta;
@@ -41,7 +41,7 @@ const SlotMeta = meta.SlotMeta;
 const key_serializer = sig.ledger.database.key_serializer;
 const value_serializer = sig.ledger.database.value_serializer;
 
-const recover = bs.recovery.recover;
+const recover = ledger.recovery.recover;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
@@ -1535,7 +1535,7 @@ pub const ShredInserter = struct {
         chained_merkle_root: ?Hash,
     ) bool {
         return chained_merkle_root == null or // Chained merkle roots have not been enabled yet
-            sig.utils.types.eql(chained_merkle_root, merkle_root, .{});
+            sig.utils.types.eql(chained_merkle_root, merkle_root);
     }
 
     /// For each slot in the slot_meta_working_set which has any change, include
@@ -1861,6 +1861,7 @@ fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
 
 const test_shreds = @import("test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
+const TestState = ledger.tests.TestState("insert_shred");
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
@@ -1868,52 +1869,45 @@ fn assertOk(result: anytype) void {
 
 const test_dir = comptimePrint(sig.TEST_DATA_DIR ++ "blockstore/insert_shred", .{});
 
-pub const TestState = struct {
+const ShredInserterTestState = struct {
+    state: *TestState,
     db: BlockstoreDB,
     inserter: ShredInserter,
-    registry: sig.prometheus.Registry(.{}),
 
-    // if this leaks, you forgot to call `TestState.deinit`
-    _leak_check: []const u8,
-
-    // var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
-    // pub const allocator = gpa.allocator();
-
-    pub const allocator = std.testing.allocator;
-
-    pub fn init(comptime test_name: []const u8) !TestState {
-        return initWithLogger(test_name, (sig.trace.TestLogger{}).logger());
+    pub fn init(comptime test_name: []const u8) !ShredInserterTestState {
+        return initWithLogger(test_name, sig.trace.TestLogger.default.logger());
     }
 
-    fn initWithLogger(comptime test_name: []const u8, logger: sig.trace.Logger) !TestState {
-        const path = comptimePrint("{s}/{s}", .{ test_dir, test_name });
-        try sig.ledger.tests.freshDir(path);
-        const db = try BlockstoreDB.open(allocator, logger, path);
-        var registry = sig.prometheus.Registry(.{}).init(allocator);
-        const inserter = try ShredInserter.init(allocator, logger, &registry, db);
-        return .{
-            .db = db,
-            .inserter = inserter,
-            .registry = registry,
-            ._leak_check = try std.testing.allocator.alloc(u8, 1),
-        };
+    fn initWithLogger(comptime test_name: []const u8, logger: sig.trace.Logger) !ShredInserterTestState {
+        const state = try TestState.init(test_name);
+        const inserter = try ShredInserter.init(
+            state.allocator(),
+            logger,
+            &state.registry,
+            state.db,
+        );
+        return .{ .state = state, .db = state.db, .inserter = inserter };
+    }
+
+    pub fn allocator(self: ShredInserterTestState) Allocator {
+        return self.state.allocator();
     }
 
     /// Test helper to convert raw bytes into shreds and pass them to insertShreds
     fn insertShredBytes(
-        self: *TestState,
+        self: *ShredInserterTestState,
         shred_payloads: []const []const u8,
     ) !ShredInserter.InsertShredsResult {
-        const shreds = try allocator.alloc(Shred, shred_payloads.len);
+        const shreds = try self.allocator().alloc(Shred, shred_payloads.len);
         defer {
             for (shreds) |shred| shred.deinit();
-            allocator.free(shreds);
+            self.allocator().free(shreds);
         }
         for (shred_payloads, 0..) |payload, i| {
-            shreds[i] = try Shred.fromPayload(allocator, payload);
+            shreds[i] = try Shred.fromPayload(self.allocator(), payload);
         }
-        const is_repairs = try allocator.alloc(bool, shreds.len);
-        defer allocator.free(is_repairs);
+        const is_repairs = try self.allocator().alloc(bool, shreds.len);
+        defer self.allocator().free(is_repairs);
         for (0..shreds.len) |i| {
             is_repairs[i] = false;
         }
@@ -1921,17 +1915,17 @@ pub const TestState = struct {
     }
 
     fn checkInsertCodeShred(
-        self: *TestState,
+        self: *ShredInserterTestState,
         shred: Shred,
         write_batch: *WriteBatch,
         merkle_root_metas: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
     ) !struct { bool, ArrayList(PossibleDuplicateShred) } {
-        var just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator);
-        var erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator);
+        var just_inserted_shreds = AutoHashMap(ShredId, Shred).init(self.allocator());
+        var erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(self.allocator());
 
-        var slot_meta_working_set = AutoHashMap(u64, SlotMetaWorkingSetEntry).init(allocator);
-        var index_working_set = AutoHashMap(u64, IndexMetaWorkingSetEntry).init(allocator);
-        var duplicate_shreds = ArrayList(PossibleDuplicateShred).init(allocator);
+        var slot_meta_working_set = AutoHashMap(u64, SlotMetaWorkingSetEntry).init(self.allocator());
+        var index_working_set = AutoHashMap(u64, IndexMetaWorkingSetEntry).init(self.allocator());
+        var duplicate_shreds = ArrayList(PossibleDuplicateShred).init(self.allocator());
         defer just_inserted_shreds.deinit();
         defer erasure_metas.deinit();
         defer deinitMapRecursive(&slot_meta_working_set);
@@ -1957,15 +1951,24 @@ pub const TestState = struct {
     }
 
     pub fn deinit(self: *@This()) void {
-        self.db.deinit(true);
-        self.registry.deinit();
-        std.testing.allocator.free(self._leak_check);
-        // _ = gpa.detectLeaks();
+        self.state.deinit();
     }
 };
 
+pub fn insertShredsForTest(
+    inserter: *ShredInserter,
+    shreds: []const Shred,
+) !ShredInserter.InsertShredsResult {
+    const is_repairs = try inserter.allocator.alloc(bool, shreds.len);
+    defer inserter.allocator.free(is_repairs);
+    for (0..shreds.len) |i| {
+        is_repairs[i] = false;
+    }
+    return inserter.insertShreds(shreds, is_repairs, null, false, null);
+}
+
 test "insertShreds single shred" {
-    var state = try TestState.init("insertShreds single shred");
+    var state = try ShredInserterTestState.init("insertShreds single shred");
     defer state.deinit();
     const allocator = std.testing.allocator;
     const shred = try Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
@@ -1980,7 +1983,7 @@ test "insertShreds single shred" {
 }
 
 test "insertShreds 100 shreds from mainnet" {
-    var state = try TestState.init("insertShreds 32 shreds");
+    var state = try ShredInserterTestState.init("insertShreds 32 shreds");
     defer state.deinit();
 
     const shred_bytes = test_shreds.mainnet_shreds;
@@ -2005,7 +2008,7 @@ test "insertShreds 100 shreds from mainnet" {
 
 // agave: test_handle_chaining_basic
 test "chaining basic" {
-    var state = try TestState.init("handle chaining basic");
+    var state = try ShredInserterTestState.init("handle chaining basic");
     defer state.deinit();
 
     const shreds = test_shreds.handle_chaining_basic_shreds;
@@ -2078,19 +2081,18 @@ test "chaining basic" {
 
 // agave: test_merkle_root_metas_coding
 test "merkle root metas coding" {
-    var state = try TestState.initWithLogger("handle chaining basic", .noop);
+    var state = try ShredInserterTestState.initWithLogger("handle chaining basic", .noop);
     defer state.deinit();
-    const allocator = TestState.allocator;
+    const allocator = state.allocator();
 
     const slot = 1;
     const start_index = 0;
 
     const shreds = try loadShredsFromFile(
         allocator,
-        &[1]usize{1228} ** 3,
         sig.TEST_DATA_DIR ++ "shreds/merkle_root_metas_coding_test_shreds_3_1228.bin",
     );
-    defer for (shreds) |shred| shred.deinit();
+    defer deinitShreds(allocator, shreds);
 
     { // first shred (should succeed)
         var write_batch = try state.db.initWriteBatch();
@@ -2209,16 +2211,15 @@ test "merkle root metas coding" {
 
 // agave: test_recovery
 test "recovery" {
-    var state = try TestState.init("handle chaining basic");
+    var state = try ShredInserterTestState.init("handle chaining basic");
     defer state.deinit();
-    const allocator = TestState.allocator;
+    const allocator = state.allocator();
 
     const shreds = try loadShredsFromFile(
         allocator,
-        &[1]usize{1203} ** 34 ++ &[1]usize{1228} ** 34,
         sig.TEST_DATA_DIR ++ "shreds/recovery_test_shreds_34_data_34_code.bin",
     );
-    defer for (shreds) |s| s.deinit();
+    defer deinitShreds(allocator, shreds);
     const data_shreds = shreds[0..34];
     const code_shreds = shreds[34..68];
 
@@ -2260,4 +2261,5 @@ const OneSlotLeaderProvider = struct {
     }
 };
 
-const loadShredsFromFile = sig.ledger.shred.loadShredsFromFile;
+const loadShredsFromFile = sig.ledger.tests.loadShredsFromFile;
+const deinitShreds = ledger.tests.deinitShreds;

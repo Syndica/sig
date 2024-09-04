@@ -1,6 +1,6 @@
 pub const std = @import("std");
 pub const sig = @import("../sig.zig");
-pub const blockstore = @import("lib.zig");
+pub const ledger = @import("lib.zig");
 
 // std
 const Allocator = std.mem.Allocator;
@@ -9,6 +9,7 @@ const AutoHashMap = std.AutoHashMap;
 
 // sig common
 const Counter = sig.prometheus.Counter;
+const Entry = sig.core.Entry;
 const GetMetricError = sig.prometheus.GetMetricError;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
@@ -29,20 +30,20 @@ const DataShred = sig.ledger.shred.DataShred;
 
 const shred_layout = sig.ledger.shred.layout;
 
-// blockstore
-const BytesRef = blockstore.database.BytesRef;
-const BlockstoreDB = blockstore.blockstore.BlockstoreDB;
-const ColumnFamily = blockstore.database.ColumnFamily;
-const DuplicateSlotProof = blockstore.meta.DuplicateSlotProof;
-const PerfSample = blockstore.meta.PerfSample;
-const SlotMeta = blockstore.meta.SlotMeta;
-const TransactionStatusMeta = blockstore.meta.TransactionStatusMeta;
-const TransactionError = blockstore.transaction_status.TransactionError;
-const UnixTimestamp = blockstore.meta.UnixTimestamp;
+// ledger
+const BytesRef = ledger.database.BytesRef;
+const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const ColumnFamily = ledger.database.ColumnFamily;
+const DuplicateSlotProof = ledger.meta.DuplicateSlotProof;
+const PerfSample = ledger.meta.PerfSample;
+const SlotMeta = ledger.meta.SlotMeta;
+const TransactionStatusMeta = ledger.meta.TransactionStatusMeta;
+const TransactionError = ledger.transaction_status.TransactionError;
+const UnixTimestamp = ledger.meta.UnixTimestamp;
 
-const schema = blockstore.schema.schema;
-const key_serializer = blockstore.database.key_serializer;
-const shredder = blockstore.shredder;
+const schema = ledger.schema.schema;
+const key_serializer = ledger.database.key_serializer;
+const shredder = ledger.shredder;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
@@ -444,19 +445,26 @@ pub const BlockstoreReader = struct {
         populate_entries: bool,
         allow_dead_slots: bool,
     ) !VersionedConfirmedBlockWithEntries {
-        const slot_meta: SlotMeta = try self.db.get(schema.slot_meta, slot) orelse {
+        var slot_meta: SlotMeta = try self.db.get(schema.slot_meta, slot) orelse {
             self.logger.debugf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
             return error.SlotUnavailable;
         };
+        defer slot_meta.deinit();
         if (!slot_meta.isFull()) {
             self.logger.debugf("getCompleteBlockWithEntries failed for slot {} (slot not full)", .{slot});
             return error.SlotUnavailable;
         }
+
         const slot_entries, _, _ = try self.getSlotEntriesWithShredInfo(slot, 0, allow_dead_slots);
+        defer {
+            for (slot_entries.items) |se| se.deinit(self.allocator);
+            slot_entries.deinit();
+        }
         if (slot_entries.items.len == 0) {
             self.logger.debugf("getCompleteBlockWithEntries failed for slot {} (missing slot entries)", .{slot});
             return error.SlotUnavailable;
         }
+
         const blockhash: Hash = slot_entries.items[slot_entries.items.len - 1].hash;
         var starting_transaction_index: usize = 0;
 
@@ -464,9 +472,17 @@ pub const BlockstoreReader = struct {
             try ArrayList(EntrySummary).initCapacity(self.allocator, slot_entries.items.len)
         else
             ArrayList(EntrySummary).init(self.allocator);
+        errdefer entries.deinit();
+
         var slot_transactions = ArrayList(VersionedTransaction).init(self.allocator);
-        defer slot_transactions.deinit();
-        for (slot_entries.items) |entry| {
+        var num_moved_slot_transactions: usize = 0;
+        defer {
+            for (slot_transactions.items[num_moved_slot_transactions..]) |tx| {
+                tx.deinit(self.allocator);
+            }
+            slot_transactions.deinit();
+        }
+        for (slot_entries.items) |*entry| {
             if (populate_entries) {
                 try entries.append(.{
                     .num_hashes = entry.num_hashes,
@@ -477,13 +493,22 @@ pub const BlockstoreReader = struct {
                 starting_transaction_index += entry.transactions.items.len;
             }
             try slot_transactions.appendSlice(entry.transactions.items);
+            entry.transactions.deinit(self.allocator);
+            entry.transactions = .{};
         }
+
         var txns_with_statuses = try ArrayList(VersionedTransactionWithStatusMeta)
             .initCapacity(self.allocator, slot_transactions.items.len);
+        errdefer {
+            for (txns_with_statuses.items) |item| {
+                item.deinit(self.db.allocator);
+            }
+            txns_with_statuses.deinit();
+        }
         for (slot_transactions.items) |transaction| {
             transaction.sanitize() catch |err| {
                 self.logger.warnf(
-                    "Blockstore::get_block sanitize failed: {any}, slot: {any}, {any}",
+                    "getCompleteeBlockWithEntries sanitize failed: {any}, slot: {any}, {any}",
                     .{ err, slot, transaction },
                 );
             };
@@ -493,12 +518,21 @@ pub const BlockstoreReader = struct {
                 .meta = try self.db.get(schema.transaction_status, .{ signature, slot }) orelse
                     return error.MissingTransactionMetadata,
             });
+            num_moved_slot_transactions += 1;
         }
+
+        // TODO perf: seems wasteful to get all of this, only to read the blockhash
         const parent_slot_entries = if (slot_meta.parent_slot) |parent_slot| blk: {
             const parent_entries, _, _ = try self
                 .getSlotEntriesWithShredInfo(parent_slot, 0, allow_dead_slots);
             break :blk parent_entries;
         } else ArrayList(Entry).init(self.allocator);
+        defer {
+            for (parent_slot_entries.items) |entry| {
+                entry.deinit(self.allocator);
+            }
+            parent_slot_entries.deinit();
+        }
         if (parent_slot_entries.items.len == 0 and require_previous_blockhash) {
             return error.ParentEntriesUnavailable;
         }
@@ -525,7 +559,7 @@ pub const BlockstoreReader = struct {
                 .blockhash = try blockhash.base58EncodeAlloc(self.allocator),
                 // If the slot is full it should have parent_slot populated from shreds received.
                 .parent_slot = slot_meta.parent_slot orelse return error.MissingParentSlot,
-                .transactions = txns_with_statuses.items,
+                .transactions = try txns_with_statuses.toOwnedSlice(),
                 .rewards = rewards.rewards,
                 .num_partitions = rewards.num_partitions,
                 .block_time = block_time,
@@ -960,6 +994,7 @@ pub const BlockstoreReader = struct {
     ) !struct { ArrayList(Entry), u64, bool } {
         const completed_ranges, const maybe_slot_meta =
             try self.getCompletedRanges(slot, start_index);
+        defer completed_ranges.deinit();
 
         // Check if the slot is dead *after* fetching completed ranges to avoid a race
         // where a slot is marked dead by another thread before the completed range query finishes.
@@ -976,7 +1011,12 @@ pub const BlockstoreReader = struct {
         _, const end_index = completed_ranges.items[completed_ranges.items.len - 1];
         const num_shreds = @as(u64, @intCast(end_index)) - start_index + 1;
 
-        const entries = try self.getSlotEntriesInBlock(slot, completed_ranges, &slot_meta);
+        const entries = try self.getSlotEntriesInBlock(
+            self.allocator,
+            slot,
+            completed_ranges,
+            &slot_meta,
+        );
         return .{ entries, num_shreds, slot_meta.isFull() };
     }
 
@@ -990,7 +1030,8 @@ pub const BlockstoreReader = struct {
         if (maybe_slot_meta == null) {
             return .{ CompletedRanges.init(self.allocator), null };
         }
-        var slot_meta = maybe_slot_meta.?;
+        var slot_meta: SlotMeta = maybe_slot_meta.?;
+        defer slot_meta.deinit();
 
         // Find all the ranges for the completed data blocks
         const completed_ranges = try getCompletedDataRanges(
@@ -1035,7 +1076,7 @@ pub const BlockstoreReader = struct {
         var fba = std.heap.FixedBufferAllocator.init(&fba_slice);
         var completed_ranges = CompletedRanges.initCapacity(fba.allocator(), 1) catch unreachable;
         completed_ranges.appendAssumeCapacity(.{ start_index, end_index });
-        return self.getSlotEntriesInBlock(slot, completed_ranges, slot_meta);
+        return self.getSlotEntriesInBlock(self.allocator, slot, completed_ranges, slot_meta);
     }
 
     /// Fetch the entries corresponding to all of the shred indices in `completed_ranges`
@@ -1049,26 +1090,30 @@ pub const BlockstoreReader = struct {
     /// Analogous to [get_slot_entries_in_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3614)
     fn getSlotEntriesInBlock(
         self: *Self,
+        allocator: Allocator,
         slot: Slot,
         completed_ranges: CompletedRanges,
         maybe_slot_meta: ?*const SlotMeta,
     ) !ArrayList(Entry) {
         if (completed_ranges.items.len == 0) {
-            return ArrayList(Entry).init(self.allocator);
+            return ArrayList(Entry).init(allocator);
         }
         const all_ranges_start_index = completed_ranges.items[0][0];
         const all_ranges_end_index = completed_ranges.items[completed_ranges.items.len - 1][1];
 
         var data_shreds = try ArrayList(DataShred).initCapacity(
-            self.allocator,
+            allocator,
             all_ranges_end_index - all_ranges_start_index + 1,
         );
-        defer data_shreds.deinit();
+        defer {
+            for (data_shreds.items) |ds| ds.deinit();
+            data_shreds.deinit();
+        }
         for (all_ranges_start_index..all_ranges_end_index + 1) |index| {
             // TODO perf: multi_get_bytes
             if (try self.db.getBytes(schema.data_shred, .{ slot, @intCast(index) })) |shred_bytes| {
                 defer shred_bytes.deinit();
-                const shred = try Shred.fromPayload(self.allocator, shred_bytes.data);
+                const shred = try Shred.fromPayload(allocator, shred_bytes.data);
                 data_shreds.appendAssumeCapacity(shred.data);
             } else {
                 if (maybe_slot_meta) |slot_meta| {
@@ -1097,7 +1142,11 @@ pub const BlockstoreReader = struct {
             }
         }
 
-        var entries = ArrayList(Entry).init(self.allocator);
+        var entries = ArrayList(Entry).init(allocator);
+        errdefer {
+            for (entries.items) |entry| entry.deinit(allocator);
+            entries.deinit();
+        }
         for (completed_ranges.items) |range| {
             const start_index, const end_index = range;
 
@@ -1112,17 +1161,18 @@ pub const BlockstoreReader = struct {
             std.debug.assert(last_shred.dataComplete() or last_shred.isLastInSlot());
             // self.logger.tracef("{any} data shreds in last FEC set", data_shreds.items.len);
 
-            const bytes = shredder.deshred(self.allocator, range_shreds) catch |e| {
+            const bytes = shredder.deshred(allocator, range_shreds) catch |e| {
                 self.logger.errf("failed to deshred entries buffer from shreds: {}", .{e});
                 return e;
             };
             defer bytes.deinit();
             const these_entries = sig.bincode
-                .readFromSlice(self.allocator, []Entry, bytes.items, .{}) catch |e| {
+                .readFromSlice(allocator, []Entry, bytes.items, .{}) catch |e| {
                 self.logger.errf("failed to deserialize entries from shreds: {}", .{e});
                 return e;
             };
-            defer self.allocator.free(these_entries);
+            defer allocator.free(these_entries);
+            errdefer for (these_entries) |e| e.deinit(allocator);
             try entries.appendSlice(these_entries);
         }
         return entries;
@@ -1305,31 +1355,27 @@ pub const BlockstoreReader = struct {
 
 const CompletedRanges = ArrayList(struct { u32, u32 });
 
-const Entry = struct {
-    /// The number of hashes since the previous Entry ID.
-    num_hashes: u64,
-
-    /// The SHA-256 hash `num_hashes` after the previous Entry ID.
-    hash: Hash,
-
-    /// An unordered list of transactions that were observed before the Entry ID was
-    /// generated. They may have been observed before a previous Entry ID but were
-    /// pushed back into this list to ensure deterministic interpretation of the ledger.
-    transactions: ArrayList(VersionedTransaction),
-};
-
 /// Confirmed block with type guarantees that transaction metadata
 /// is always present. Used for uploading to BigTable.
-const VersionedConfirmedBlock = struct {
+pub const VersionedConfirmedBlock = struct {
     allocator: Allocator,
     previous_blockhash: []const u8,
     blockhash: []const u8,
     parent_slot: Slot,
     transactions: []const VersionedTransactionWithStatusMeta,
-    rewards: []const blockstore.meta.Reward,
+    rewards: []const ledger.meta.Reward,
     num_partitions: ?u64,
     block_time: ?UnixTimestamp,
     block_height: ?u64,
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        for (self.transactions) |it| it.deinit(allocator);
+        for (self.rewards) |it| it.deinit(allocator);
+        allocator.free(self.transactions);
+        allocator.free(self.rewards);
+        allocator.free(self.previous_blockhash);
+        allocator.free(self.blockhash);
+    }
 };
 
 /// Confirmed block with type guarantees that transaction metadata is always
@@ -1365,6 +1411,11 @@ const TransactionWithStatusMeta = union(enum) {
 pub const VersionedTransactionWithStatusMeta = struct {
     transaction: VersionedTransaction,
     meta: TransactionStatusMeta,
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        self.transaction.deinit(allocator);
+        self.meta.deinit(allocator);
+    }
 };
 
 const SignatureInfosForAddress = struct {
@@ -1468,9 +1519,9 @@ pub const AncestorIterator = struct {
 };
 
 const bincode = sig.bincode;
-const Blockstore = sig.ledger.BlockstoreDB;
-const CodeShred = sig.ledger.shred.CodeShred;
-const TestState = sig.ledger.insert_shred.TestState;
+const Blockstore = ledger.BlockstoreDB;
+const CodeShred = ledger.shred.CodeShred;
+const TestDB = ledger.tests.TestDB("BlockstoreReader");
 
 const test_shreds = @import("test_shreds.zig");
 
@@ -1484,9 +1535,8 @@ test "getLatestOptimisticSlots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getLatestOptimisticSlots");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("getLatestOptimisticSlots");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1557,7 +1607,7 @@ test "getFirstDuplicateProof" {
     const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_DATA_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
     try sig.ledger.tests.freshDir(path);
     var db = try BlockstoreDB.open(allocator, logger, path);
-    defer db.deinit(true);
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1593,9 +1643,8 @@ test "isDead" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("isDead");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("isDead");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1628,9 +1677,8 @@ test "getBlockHeight" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getBlockHeight");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("getBlockHeight");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1657,9 +1705,8 @@ test "getRootedBlockTime" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getRootedBlockTime");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("getRootedBlockTime");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1695,9 +1742,8 @@ test "slotMetaIterator" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("slotMetaIterator");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("slotMetaIterator");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1757,9 +1803,8 @@ test "rootedSlotIterator" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("rootedSlotIterator");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("rootedSlotIterator");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1793,9 +1838,8 @@ test "slotRangeConnected" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("slotRangeConnected");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("slotRangeConnected");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1851,9 +1895,8 @@ test "highestSlot" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("highestSlot");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("highestSlot");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1909,9 +1952,8 @@ test "lowestSlot" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("lowestSlot");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("lowestSlot");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1955,9 +1997,8 @@ test "isShredDuplicate" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("isShredDuplicate");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("isShredDuplicate");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -2007,9 +2048,8 @@ test "findMissingDataIndexes" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("findMissingDataIndexes");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("findMissingDataIndexes");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -2075,9 +2115,8 @@ test "getCodeShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getCodeShred");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("getCodeShred");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -2155,9 +2194,8 @@ test "getDataShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getDataShred");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("getDataShred");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);

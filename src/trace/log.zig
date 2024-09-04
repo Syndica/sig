@@ -266,7 +266,9 @@ pub const TestLogger = struct {
 
     const Self = @This();
 
-    pub fn logger(self: TestLogger) Logger {
+    pub const default = TestLogger{};
+
+    pub fn logger(self: Self) Logger {
         return .{ .test_logger = self };
     }
 
