@@ -1861,7 +1861,6 @@ fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
 
 const test_shreds = @import("test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
-const TestDB = ledger.tests.TestDB("insert_shred");
 const TestState = ledger.tests.TestState("insert_shred");
 
 fn assertOk(result: anytype) void {
