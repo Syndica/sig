@@ -83,7 +83,7 @@ pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) ty
             return .{ .map = SortedMapCustom(T, void, config).init(allocator) };
         }
 
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: Self) void {
             self.map.deinit();
         }
 
@@ -154,8 +154,9 @@ pub fn SortedMapCustom(
             };
         }
 
-        pub fn deinit(self: *Self) void {
-            self.inner.deinit();
+        pub fn deinit(self: Self) void {
+            var self_mut = self;
+            self_mut.inner.deinit();
         }
 
         pub fn clone(self: Self) !Self {

@@ -55,8 +55,16 @@ pub fn Database(comptime Impl: type) type {
             return try self.impl.put(cf, key, value);
         }
 
-        pub fn get(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?cf.Value {
-            return try self.impl.get(cf, key);
+        // TODO: split into two methods: get and getAlloc, where "get" is used for
+        //       types that do not need an allocator to deserialize them.
+        //       this will need some changes to bincode.
+        pub fn get(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            key: cf.Key,
+            allocator: Allocator,
+        ) anyerror!?cf.Value {
+            return try self.impl.get(cf, key, allocator);
         }
 
         /// Returns a reference to the serialized bytes.
@@ -249,7 +257,10 @@ pub const BytesRef = struct {
 fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     @setEvalBranchQuota(10_000);
     const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
-    const test_dir = std.fmt.comptimePrint(sig.TEST_DATA_DIR ++ "blockstore/database/{s}", .{impl_id.buffer});
+    const test_dir = std.fmt.comptimePrint(
+        sig.TEST_DATA_DIR ++ "blockstore/database/{s}",
+        .{impl_id.buffer},
+    );
 
     return struct {
         pub fn basic() !void {
@@ -273,9 +284,9 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             defer db.deinit();
 
             try db.put(cf1, 123, .{ .hello = 345 });
-            const got = try db.get(cf1, 123);
+            const got = try db.get(cf1, 123, std.testing.allocator);
             try std.testing.expect(345 == got.?.hello);
-            const not = try db.get(cf2, 123);
+            const not = try db.get(cf2, 123, std.testing.allocator);
             try std.testing.expect(null == not);
             const wrong_was_deleted = try db.delete(cf2, 123);
             _ = wrong_was_deleted;
@@ -283,7 +294,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             const was_deleted = try db.delete(cf1, 123);
             _ = was_deleted;
             // try std.testing.expect(was_deleted);
-            const not_now = try db.get(cf1, 123);
+            const not_now = try db.get(cf1, 123, std.testing.allocator);
             try std.testing.expect(null == not_now);
         }
     };

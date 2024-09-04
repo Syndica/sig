@@ -68,6 +68,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             self: *Self,
             comptime cf: ColumnFamily,
             key: cf.Key,
+            allocator: Allocator,
         ) anyerror!?cf.Value {
             const key_bytes = try key_serializer.serializeAlloc(self.allocator, key);
             defer self.allocator.free(key_bytes);
@@ -80,7 +81,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
             const val_bytes = map.getPreLocked(key_bytes) orelse return null;
 
-            return try value_serializer.deserialize(cf.Value, self.allocator, val_bytes);
+            return try value_serializer.deserialize(cf.Value, allocator, val_bytes);
         }
 
         pub fn getBytes(

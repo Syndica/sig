@@ -40,7 +40,11 @@ test "put/get data consistency for merkle root" {
             .first_received_shred_type = .data,
         },
     );
-    const output: sig.ledger.meta.MerkleRootMeta = (try db.get(schema.merkle_root_meta, id)).?;
+    const output: sig.ledger.meta.MerkleRootMeta = (try db.get(
+        schema.merkle_root_meta,
+        id,
+        std.testing.allocator,
+    )).?;
     try std.testing.expectEqualSlices(u8, &root.data, &output.merkle_root.?.data);
 }
 

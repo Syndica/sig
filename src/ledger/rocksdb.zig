@@ -98,10 +98,15 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             );
         }
 
-        pub fn get(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?cf.Value {
+        pub fn get(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            key: cf.Key,
+            allocator: Allocator,
+        ) anyerror!?cf.Value {
             const val_bytes = try self.getBytes(cf, key) orelse return null;
             defer val_bytes.deinit();
-            return try value_serializer.deserialize(cf.Value, self.allocator, val_bytes.data);
+            return try value_serializer.deserialize(cf.Value, allocator, val_bytes.data);
         }
 
         pub fn getBytes(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?BytesRef {
