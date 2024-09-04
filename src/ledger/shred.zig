@@ -7,6 +7,7 @@ const Allocator = std.mem.Allocator;
 
 const BitFlags = sig.utils.bitflags.BitFlags;
 const Hash = sig.core.Hash;
+const Pubkey = sig.core.Pubkey;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Signature = sig.core.Signature;
@@ -530,6 +531,21 @@ pub const ShredId = struct {
     slot: Slot,
     index: u32,
     shred_type: sig.ledger.shred.ShredType,
+
+    pub fn seed(self: *const ShredId, leader: *const Pubkey) [32]u8 {
+        const slot_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, slot_bytes, self.slot, .little);
+        const index_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, index_bytes, self.index, .little);
+        const shred_bytes: [1]u8 = undefined;
+        std.mem.writeInt(u8, shred_bytes, @intCast(self.shred_type), .little);
+        return hashv(&.{
+            slot_bytes,
+            shred_bytes,
+            index_bytes,
+            leader.data,
+        }).data;
+    }
 };
 
 pub const ErasureSetId = struct {
