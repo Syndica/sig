@@ -27,7 +27,7 @@ const LogKind = enum {
 };
 
 const UnscopedLogger = StandardLogger(null);
-pub fn StandardLogger(comptime scope: ?type) type {
+pub fn StandardLogger(comptime scope: ?[]const u8) type {
     const StanardErrLogger = struct {
         const Self = @This();
         max_level: Level,
@@ -98,7 +98,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             }
             const maybe_scope = blk: {
                 if (scope) |s| {
-                    break :blk @typeName(s);
+                    break :blk s;
                 } else {
                     break :blk null;
                 }
@@ -124,7 +124,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             }
             const maybe_scope = blk: {
                 if (scope) |s| {
-                    break :blk @typeName(s);
+                    break :blk s;
                 } else {
                     break :blk null;
                 }
@@ -150,7 +150,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             }
             const maybe_scope = blk: {
                 if (scope) |s| {
-                    break :blk @typeName(s);
+                    break :blk s;
                 } else {
                     break :blk null;
                 }
@@ -176,7 +176,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             }
             const maybe_scope = blk: {
                 if (scope) |s| {
-                    break :blk @typeName(s);
+                    break :blk s;
                 } else {
                     break :blk null;
                 }
@@ -236,7 +236,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             }
             const maybe_scope = blk: {
                 if (scope) |s| {
-                    break :blk @typeName(s);
+                    break :blk s;
                 } else {
                     break :blk null;
                 }
@@ -263,7 +263,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             }
             const maybe_scope = blk: {
                 if (scope) |s| {
-                    break :blk @typeName(s);
+                    break :blk s;
                 } else {
                     break :blk null;
                 }
@@ -290,7 +290,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             }
             const maybe_scope = blk: {
                 if (scope) |s| {
-                    break :blk @typeName(s);
+                    break :blk s;
                 } else {
                     break :blk null;
                 }
@@ -317,7 +317,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             }
             const maybe_scope = blk: {
                 if (scope) |s| {
-                    break :blk @typeName(s);
+                    break :blk s;
                 } else {
                     break :blk null;
                 }
@@ -391,7 +391,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             return @ptrCast(self);
         }
 
-        pub fn withScope(self: *Self, comptime new_scope: anytype) *StandardLogger(new_scope) {
+        pub fn withScope(self: *Self, comptime new_scope: []const u8) *StandardLogger(new_scope) {
             return @ptrCast(self);
         }
 
@@ -452,10 +452,10 @@ pub fn StandardLogger(comptime scope: ?type) type {
 test "trace_ng: scope switch" {
     const StuffChild = struct {
         const StuffChild = @This();
-        logger: *StandardLogger(StuffChild),
+        logger: *StandardLogger(@typeName(StuffChild)),
 
         pub fn init(logger: *UnscopedLogger) StuffChild {
-            return .{ .logger = logger.withScope(StuffChild) };
+            return .{ .logger = logger.withScope(@typeName(StuffChild)) };
         }
 
         pub fn doStuffDetails(self: *StuffChild) void {
@@ -465,10 +465,10 @@ test "trace_ng: scope switch" {
 
     const Stuff = struct {
         const Stuff = @This();
-        logger: *StandardLogger(Stuff),
+        logger: *StandardLogger(@typeName(Stuff)),
 
         pub fn init(logger: *UnscopedLogger) Stuff {
-            return .{ .logger = logger.withScope(Stuff) };
+            return .{ .logger = logger.withScope(@typeName(Stuff)) };
         }
 
         pub fn doStuff(self: *Stuff) void {
@@ -652,7 +652,7 @@ test "trace_ng: format" {
     }
 
     // Add scope.
-    const scoped_logger = logger.withScope(@This());
+    const scoped_logger = logger.withScope(@typeName(@This()));
     scoped_logger.logfWithFields(
         .debug,
         "{s}",
