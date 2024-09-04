@@ -96,14 +96,8 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
                 // noop
                 return;
             }
-            const maybe_scope = blk: {
-                if (scope) |s| {
-                    break :blk s;
-                } else {
-                    break :blk null;
-                }
-            };
 
+            const maybe_scope = if (scope) |s| s else null;
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
@@ -122,14 +116,8 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
                 // noop
                 return;
             }
-            const maybe_scope = blk: {
-                if (scope) |s| {
-                    break :blk s;
-                } else {
-                    break :blk null;
-                }
-            };
 
+            const maybe_scope = if (scope) |s| s else null;
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
@@ -148,13 +136,7 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
                 // noop
                 return;
             }
-            const maybe_scope = blk: {
-                if (scope) |s| {
-                    break :blk s;
-                } else {
-                    break :blk null;
-                }
-            };
+            const maybe_scope = if (scope) |s| s else null;
 
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
@@ -174,13 +156,7 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
                 // noop
                 return;
             }
-            const maybe_scope = blk: {
-                if (scope) |s| {
-                    break :blk s;
-                } else {
-                    break :blk null;
-                }
-            };
+            const maybe_scope = if (scope) |s| s else null;
 
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
@@ -234,14 +210,8 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
                 // noop
                 return;
             }
-            const maybe_scope = blk: {
-                if (scope) |s| {
-                    break :blk s;
-                } else {
-                    break :blk null;
-                }
-            };
 
+            const maybe_scope = if (scope) |s| s else null;
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
@@ -261,14 +231,8 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
                 // noop
                 return;
             }
-            const maybe_scope = blk: {
-                if (scope) |s| {
-                    break :blk s;
-                } else {
-                    break :blk null;
-                }
-            };
 
+            const maybe_scope = if (scope) |s| s else null;
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
@@ -288,14 +252,8 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
                 // noop
                 return;
             }
-            const maybe_scope = blk: {
-                if (scope) |s| {
-                    break :blk s;
-                } else {
-                    break :blk null;
-                }
-            };
 
+            const maybe_scope = if (scope) |s| s else null;
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
@@ -315,14 +273,8 @@ pub fn StandardLogger(comptime scope: ?[]const u8) type {
                 // noop
                 return;
             }
-            const maybe_scope = blk: {
-                if (scope) |s| {
-                    break :blk s;
-                } else {
-                    break :blk null;
-                }
-            };
 
+            const maybe_scope = if (scope) |s| s else null;
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
