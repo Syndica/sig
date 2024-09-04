@@ -38,8 +38,9 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         channel: *Channel(logfmt.LogMsg),
         handle: ?std.Thread,
 
-        pub fn init(config: Config) Self {
-            return .{
+        pub fn init(config: Config) *Self {
+            const self = config.allocator.create(Self) catch @panic("could not allocator.create Logger");
+            self.* = .{
                 .allocator = config.allocator,
                 .recycle_fba = RecycleFBA.init(config.allocator, config.max_buffer) catch @panic("could not create RecycleFBA"),
                 .max_buffer = config.max_buffer,
@@ -48,14 +49,31 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
                 .handle = null,
             };
+            return self;
         }
 
-        fn unscoped(self: *Self) *Logger {
-            return @ptrCast(self);
+        fn unscoped(self: Self) Logger {
+            return .{
+                .allocator = self.allocator,
+                .recycle_fba = self.recycle_fba,
+                .max_buffer = self.max_buffer,
+                .max_level = self.max_level,
+                .exit_sig = self.exit_sig,
+                .channel = self.channel,
+                .handle = self.handle,
+            };
         }
 
-        fn withScope(self: *Self, comptime new_scope: anytype) *ScoppedLogger(new_scope) {
-            return @ptrCast(self);
+        fn withScope(self: Self, comptime new_scope: anytype) ScoppedLogger(new_scope) {
+            return .{
+                .allocator = self.allocator,
+                .recycle_fba = self.recycle_fba,
+                .max_buffer = self.max_buffer,
+                .max_level = self.max_level,
+                .exit_sig = self.exit_sig,
+                .channel = self.channel,
+                .handle = self.handle,
+            };
         }
 
         pub fn spawn(self: *Self) void {
@@ -70,6 +88,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             self.channel.close();
             self.channel.deinit();
             self.recycle_fba.deinit();
+            self.allocator.destroy(self);
         }
 
         pub fn run(self: *Self) void {
@@ -180,14 +199,16 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         max_buffer: u64,
         log_msg: ?std.ArrayList(u8),
 
-        pub fn init(config: Config) Self {
-            return .{
+        pub fn init(config: Config) *Self {
+            const self = config.allocator.create(Self) catch @panic("could not allocator.create Logger");
+            self.* = .{
                 .max_level = config.max_level,
                 .allocator = config.allocator,
                 .recycle_fba = RecycleFBA.init(config.allocator, 2048) catch @panic("could not create RecycleFBA"),
                 .max_buffer = config.max_buffer,
                 .log_msg = std.ArrayList(u8).init(config.allocator),
             };
+            return self;
         }
 
         fn unscoped(self: *Self) *Logger {
@@ -203,6 +224,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             if (self.log_msg) |log_msg| {
                 log_msg.deinit();
             }
+            self.allocator.destroy(self);
         }
 
         pub fn log(self: *Self, level: Level, message: []const u8) void {
@@ -295,8 +317,8 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
 
     return union(LogKind) {
         const Self = @This();
-        standard: StanardErrLogger,
-        testing: TestingLogger,
+        standard: *StanardErrLogger,
+        testing: *TestingLogger,
         noop: void,
         pub fn init(config: Config) Self {
             switch (config.kind) {
@@ -333,9 +355,9 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             }
         }
 
-        pub fn spawn(self: *Self) void {
-            switch (self.*) {
-                .standard => |*logger| {
+        pub fn spawn(self: Self) void {
+            switch (self) {
+                .standard => |logger| {
                     logger.spawn();
                 },
                 .noop, .testing => {},
@@ -353,28 +375,28 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         pub fn log(self: *Self, level: Level, message: []const u8) void {
             switch (self.*) {
                 .noop => {},
-                inline else => |*impl| impl.log(level, message),
+                inline else => |impl| impl.log(level, message),
             }
         }
 
         pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
             switch (self.*) {
                 .noop => {},
-                inline else => |*impl| impl.logf(level, fmt, args),
+                inline else => |impl| impl.logf(level, fmt, args),
             }
         }
 
         pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
             switch (self.*) {
                 .noop => {},
-                inline else => |*impl| impl.logWithFields(level, message, fields),
+                inline else => |impl| impl.logWithFields(level, message, fields),
             }
         }
 
         pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
             switch (self.*) {
                 .noop => {},
-                inline else => |*impl| impl.logfWithFields(level, fmt, args, fields),
+                inline else => |impl| impl.logfWithFields(level, fmt, args, fields),
             }
         }
     };
