@@ -808,19 +808,20 @@ const ShredType = enum(u8) {
     pub const @"!bincode-config" = ShredTypeConfig();
 };
 
-pub fn testRoundTrip(comptime T: type, test_data: anytype) !void {
+/// Assert that bincode serializes the provided item to the provided bytes,
+/// and deserializes the bytes back to the item.
+pub fn testRoundTrip(deserialized_item: anytype, bincode_serialized_bytes: []const u8) !void {
+    std.debug.assert(builtin.is_test);
+    const T = @TypeOf(deserialized_item);
     const allocator = std.testing.allocator;
-    const expected_bytes = test_data.bincode_serialized_bytes;
-    const expected_struct = try test_data.asStruct(allocator);
-    defer expected_struct.deinit(allocator);
 
-    const actual_bytes = try sig.bincode.writeAlloc(allocator, expected_struct, .{});
+    const actual_bytes = try sig.bincode.writeAlloc(allocator, deserialized_item, .{});
     defer allocator.free(actual_bytes);
-    try std.testing.expectEqualSlices(u8, &expected_bytes, actual_bytes);
+    try std.testing.expectEqualSlices(u8, bincode_serialized_bytes, actual_bytes);
 
     const actual_struct = try sig.bincode.readFromSlice(allocator, T, actual_bytes, .{});
     defer actual_struct.deinit(allocator);
-    try std.testing.expect(sig.utils.types.eql(expected_struct, actual_struct));
+    try std.testing.expect(sig.utils.types.eql(deserialized_item, actual_struct));
 }
 
 test "bincode: custom enum" {

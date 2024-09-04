@@ -453,15 +453,21 @@ test "core.transaction: Message sanitize fails if account index is out of bounds
 }
 
 test "V0Message serialization and deserialization" {
-    try sig.bincode.testRoundTrip(V0Message, test_v0_message);
+    const message = try test_v0_message.asStruct(std.testing.allocator);
+    defer message.deinit(std.testing.allocator);
+    try sig.bincode.testRoundTrip(message, &test_v0_message.bincode_serialized_bytes);
 }
 
 test "VersionedTransaction v0 serialization and deserialization" {
-    try sig.bincode.testRoundTrip(VersionedTransaction, test_v0_transaction);
+    const transaction = try test_v0_transaction.asStruct(std.testing.allocator);
+    defer transaction.deinit(std.testing.allocator);
+    try sig.bincode.testRoundTrip(transaction, &test_v0_transaction.bincode_serialized_bytes);
 }
 
 test "VersionedMessage v0 serialization and deserialization" {
-    try sig.bincode.testRoundTrip(VersionedMessage, test_v0_versioned_message);
+    const versioned_message = try test_v0_versioned_message.asStruct(std.testing.allocator);
+    defer versioned_message.deinit(std.testing.allocator);
+    try sig.bincode.testRoundTrip(versioned_message, &test_v0_versioned_message.bincode_serialized_bytes);
 }
 
 pub const test_v0_transaction = struct {

@@ -27,7 +27,9 @@ pub const Entry = struct {
 };
 
 test "Entry serialization and deserialization" {
-    try sig.bincode.testRoundTrip(Entry, test_entry);
+    const entry = try test_entry.asStruct(std.testing.allocator);
+    defer entry.deinit(std.testing.allocator);
+    try sig.bincode.testRoundTrip(entry, &test_entry.bincode_serialized_bytes);
 }
 
 const test_entry = struct {
