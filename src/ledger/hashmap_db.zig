@@ -131,10 +131,13 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             _ = end;
         }
 
-        pub fn initWriteBatch(self: *Self) error{}!WriteBatch {
+        pub fn initWriteBatch(self: *Self) Allocator.Error!WriteBatch {
+            const executed = try self.allocator.create(bool);
+            executed.* = false;
             return .{
                 .allocator = self.allocator,
                 .instructions = .{},
+                .executed = executed,
             };
         }
 
@@ -152,14 +155,15 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                     },
                     .delete => |delete_ix| {
                         const cf_index, const key = delete_ix;
-                        self.maps[cf_index].delete(batch.allocator, key);
+                        self.maps[cf_index].delete(self.allocator, key);
                     },
                     .delete_range => {
-                        // TODO
+                        // TODO: also add to database tests
                         @panic("not implemented");
                     },
                 }
             }
+            batch.executed.* = true;
         }
 
         /// A write batch is a sequence of operations that execute atomically.
@@ -175,6 +179,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         pub const WriteBatch = struct {
             allocator: Allocator,
             instructions: std.ArrayListUnmanaged(Instruction),
+            executed: *bool,
 
             const Instruction = union(enum) {
                 put: struct { usize, []const u8, []const u8 },
@@ -182,8 +187,22 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 delete_range: struct { usize, []const u8, []const u8 },
             };
 
-            fn deinit(self: WriteBatch) void {
+            pub fn deinit(self: *WriteBatch) void {
+                for (self.instructions.items) |ix| switch (ix) {
+                    .put => |data| if (!self.executed.*) {
+                        self.allocator.free(data[1]);
+                        self.allocator.free(data[2]);
+                    },
+                    .delete => |data| {
+                        self.allocator.free(data[1]);
+                    },
+                    .delete_range => |data| {
+                        self.allocator.free(data[1]);
+                        self.allocator.free(data[2]);
+                    },
+                };
                 self.instructions.deinit(self.allocator);
+                self.allocator.destroy(self.executed);
             }
 
             pub fn put(
@@ -358,7 +377,12 @@ const SharedHashMap = struct {
     pub fn put(self: *Self, key: []const u8, value: []const u8) Allocator.Error!void {
         self.lock.lock();
         defer self.lock.unlock();
-        try self.map.put(key, value);
+        const entry = try self.map.getOrPut(key);
+        if (entry.found_existing) {
+            self.allocator.free(key);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        entry.value_ptr.* = value;
     }
 
     /// Only call this while holding the lock

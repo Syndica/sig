@@ -127,6 +127,7 @@ pub const BlockstoreWriter = struct {
     /// agave: set_roots
     pub fn setRoots(self: *Self, rooted_slots: []const Slot) !void {
         var write_batch = try self.db.initWriteBatch();
+        defer write_batch.deinit();
         var max_new_rooted_slot: Slot = 0;
         for (rooted_slots) |slot| {
             max_new_rooted_slot = @max(max_new_rooted_slot, slot);
@@ -268,6 +269,7 @@ pub const BlockstoreWriter = struct {
         }
         self.logger.infof("Marking slot {} and any full children slots as connected", .{root});
         var write_batch = try self.db.initWriteBatch();
+        defer write_batch.deinit();
 
         // Mark both connected bits on the root slot so that the flags for this
         // slot match the flags of slots that become connected the typical way.
@@ -310,6 +312,7 @@ pub const BlockstoreWriter = struct {
     /// analog to [`run_purge_with_stats`](https://github.com/anza-xyz/agave/blob/26692e666454d340a6691e2483194934e6a8ddfc/ledger/src/blockstore/blockstore_purge.rs#L202)
     pub fn purgeSlots(self: *Self, from_slot: Slot, to_slot: Slot) !bool {
         var write_batch = try self.db.initWriteBatch();
+        defer write_batch.deinit();
 
         // the methods used below are exclusive [from_slot, to_slot), so we add 1 to purge inclusive
         const purge_to_slot = to_slot + 1;
@@ -498,6 +501,7 @@ test "purgeSlots" {
 
     // write another type
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     for (0..roots.len + 1) |i| {
         const merkle_root_meta = sig.ledger.shred.ErasureSetId{
             .fec_set_index = i,
@@ -592,6 +596,7 @@ test "scanAndFixRoots" {
     const slot_meta_3 = SlotMeta.init(allocator, 3, 2);
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
     try write_batch.put(schema.slot_meta, slot_meta_2.slot, slot_meta_2);
     try write_batch.put(schema.slot_meta, slot_meta_3.slot, slot_meta_3);
@@ -629,6 +634,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     try writer.setRoots(&roots);
     const slot_meta_1 = SlotMeta.init(allocator, 1, null);
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
     try db.commit(write_batch);
 
@@ -645,6 +651,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     const other_roots: [3]Slot = .{ 2, 3, 4 };
     var parent_slot: ?Slot = 1;
     var write_batch2 = try db.initWriteBatch();
+    defer write_batch2.deinit();
     try writer.setRoots(&other_roots);
 
     for (other_roots, 0..) |slot, i| {
@@ -696,6 +703,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
 
     // 1 is a root and full
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     const roots: [3]Slot = .{ 1, 2, 3 };
     try writer.setRoots(&roots);
 

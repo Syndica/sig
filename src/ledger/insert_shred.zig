@@ -152,6 +152,7 @@ pub const ShredInserter = struct {
         std.debug.assert(shreds.len == is_repaired.len);
         var total_timer = try Timer.start();
         var write_batch = try self.db.initWriteBatch();
+        defer write_batch.deinit();
 
         var just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator); // TODO capacity = shreds.len
         var erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator);
@@ -2096,6 +2097,7 @@ test "merkle root metas coding" {
 
     { // first shred (should succeed)
         var write_batch = try state.db.initWriteBatch();
+        defer write_batch.deinit();
         const this_shred = shreds[0];
         var merkle_root_metas =
             AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)).init(allocator);
@@ -2135,6 +2137,7 @@ test "merkle root metas coding" {
 
     { // second shred (same index as first, should conflict with merkle root)
         var write_batch = try state.db.initWriteBatch();
+        defer write_batch.deinit();
         const this_shred = shreds[1];
 
         const succeeded, //
@@ -2172,6 +2175,7 @@ test "merkle root metas coding" {
 
     { // third shred (different index, should succeed)
         var write_batch = try state.db.initWriteBatch();
+        defer write_batch.deinit();
         const this_shred = shreds[2];
         const this_index = start_index + 31;
 

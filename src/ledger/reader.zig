@@ -1561,6 +1561,7 @@ test "getLatestOptimisticSlots" {
 
     {
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         const hash = Hash{ .data = .{1} ** 32 };
         try write_batch.put(schema.optimistic_slots, 1, .{
             .V0 = .{
@@ -1585,6 +1586,7 @@ test "getLatestOptimisticSlots" {
 
     {
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         const hash = Hash{ .data = .{10} ** 32 };
         try write_batch.put(schema.optimistic_slots, 10, .{
             .V0 = .{
@@ -1636,6 +1638,7 @@ test "getFirstDuplicateProof" {
             .shred2 = test_shreds.mainnet_shreds[1],
         };
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(schema.duplicate_slots, 19, proof);
         try db.commit(write_batch);
 
@@ -1669,6 +1672,7 @@ test "isDead" {
 
     {
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(schema.dead_slots, 19, true);
         try db.commit(write_batch);
     }
@@ -1676,6 +1680,7 @@ test "isDead" {
 
     {
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(schema.dead_slots, 19, false);
         try db.commit(write_batch);
     }
@@ -1702,6 +1707,7 @@ test "getBlockHeight" {
     );
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(schema.block_height, 19, 19);
     try db.commit(write_batch);
 
@@ -1730,6 +1736,7 @@ test "getRootedBlockTime" {
     );
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(schema.blocktime, 19, 19);
     try db.commit(write_batch);
 
@@ -1739,6 +1746,7 @@ test "getRootedBlockTime" {
 
     // root it
     var write_batch2 = try db.initWriteBatch();
+    defer write_batch2.deinit();
     try write_batch2.put(schema.roots, 19, true);
     try db.commit(write_batch2);
 
@@ -1775,6 +1783,7 @@ test "slotMetaIterator" {
     }
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     // 1 -> 2 -> 3
     const roots: [3]Slot = .{ 1, 2, 3 };
     var parent_slot: ?Slot = null;
@@ -1828,6 +1837,7 @@ test "rootedSlotIterator" {
     );
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     const roots: [3]Slot = .{ 2, 3, 4 };
     for (roots) |slot| {
         try write_batch.put(schema.roots, slot, true);
@@ -1863,6 +1873,7 @@ test "slotRangeConnected" {
     );
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     const roots: [3]Slot = .{ 1, 2, 3 };
 
     // 1 -> 2 -> 3
@@ -1927,6 +1938,7 @@ test "highestSlot" {
         slot_meta.received = 1;
 
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(
             schema.slot_meta,
             shred_slot,
@@ -1945,6 +1957,7 @@ test "highestSlot" {
         slot_meta2.received = 1;
 
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(
             schema.slot_meta,
             slot_meta2.slot,
@@ -1991,6 +2004,7 @@ test "lowestSlot" {
     slot_meta.received = 1;
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(
         schema.slot_meta,
         shred_slot,
@@ -2039,6 +2053,7 @@ test "isShredDuplicate" {
 
     // insert a shred
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(
         schema.data_shred,
         .{ shred_slot, shred_index },
@@ -2094,6 +2109,7 @@ test "findMissingDataIndexes" {
     slot_meta.last_index = 4;
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(
         schema.data_shred,
         .{ shred_slot, shred_index },
@@ -2160,6 +2176,7 @@ test "getCodeShred" {
     const shred_index = shred.commonHeader().index;
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(
         schema.code_shred,
         .{ shred_slot, shred_index },
@@ -2228,6 +2245,7 @@ test "getDataShred" {
     defer shred.deinit();
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(
         schema.data_shred,
         .{ shred_slot, shred_index },

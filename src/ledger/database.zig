@@ -20,8 +20,19 @@ pub fn assertIsDatabase(comptime Impl: type) void {
 /// Runs all tests in `tests`
 pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) !void {
     assertIsDatabase(Impl(&.{}));
+    var err: ?anyerror = null;
     inline for (@typeInfo(tests(Impl)).Struct.decls) |decl| {
-        try @call(.auto, @field(tests(Impl), decl.name), .{});
+        @call(.auto, @field(tests(Impl), decl.name), .{}) catch |e| {
+            if (err == null) {
+                std.debug.print("The following tests failed:\n", .{});
+            }
+            err = e;
+            std.debug.print("\n\u{001B}[35m{s}\u{001B}[0m\n\n", .{decl.name});
+            std.debug.dumpStackTrace(@errorReturnTrace().?.*);
+        };
+    }
+    if (err) |e| {
+        return e;
     }
 }
 
@@ -99,7 +110,7 @@ pub fn Database(comptime Impl: type) type {
         }
 
         pub fn initWriteBatch(self: *Self) anyerror!WriteBatch {
-            return .{ .impl = self.impl.initBatch() };
+            return .{ .impl = try self.impl.initWriteBatch() };
         }
 
         pub fn commit(self: *Self, batch: WriteBatch) anyerror!void {
@@ -118,6 +129,10 @@ pub fn Database(comptime Impl: type) type {
         /// - this name avoids confusion with solana transactions
         pub const WriteBatch = struct {
             impl: Impl.WriteBatch,
+
+            pub fn deinit(self: *WriteBatch) void {
+                self.impl.deinit();
+            }
 
             pub fn put(
                 self: *WriteBatch,
@@ -257,36 +272,37 @@ pub const BytesRef = struct {
 fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     @setEvalBranchQuota(10_000);
     const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
-    const test_dir = std.fmt.comptimePrint(
-        sig.TEST_DATA_DIR ++ "blockstore/database/{s}",
-        .{impl_id.buffer},
-    );
+    const test_dir = sig.TEST_DATA_DIR ++ "blockstore/database/" ++ impl_id.buffer ++ "/";
+
+    const allocator = std.testing.allocator;
+
+    const Value1 = struct { hello: u16 };
+    const Value2 = struct { world: u16 };
+    const cf1 = ColumnFamily{
+        .name = "one",
+        .Key = u64,
+        .Value = Value1,
+    };
+    const cf2 = ColumnFamily{
+        .name = "two",
+        .Key = u64,
+        .Value = Value2,
+    };
+    const DB = Database(Impl(&.{ cf1, cf2 }));
+
+    const logger = sig.trace.TestLogger.default.logger();
 
     return struct {
         pub fn basic() !void {
-            const Value = struct { hello: u16 };
-            const cf1 = ColumnFamily{
-                .name = "one",
-                .Key = u64,
-                .Value = Value,
-            };
-            const cf2 = ColumnFamily{
-                .name = "two",
-                .Key = u64,
-                .Value = Value,
-            };
-            const path = std.fmt.comptimePrint("{s}/basic", .{test_dir});
+            const path = test_dir ++ @src().fn_name;
             try blockstore.tests.freshDir(path);
-            const allocator = std.testing.allocator;
-            const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-            defer logger.deinit();
-            var db = try Database(Impl(&.{ cf1, cf2 })).open(allocator, logger, path);
+            var db = try DB.open(allocator, logger, path);
             defer db.deinit();
 
             try db.put(cf1, 123, .{ .hello = 345 });
-            const got = try db.get(cf1, 123, std.testing.allocator);
+            const got = try db.get(cf1, 123, allocator);
             try std.testing.expect(345 == got.?.hello);
-            const not = try db.get(cf2, 123, std.testing.allocator);
+            const not = try db.get(cf2, 123, allocator);
             try std.testing.expect(null == not);
             const wrong_was_deleted = try db.delete(cf2, 123);
             _ = wrong_was_deleted;
@@ -294,8 +310,39 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             const was_deleted = try db.delete(cf1, 123);
             _ = was_deleted;
             // try std.testing.expect(was_deleted);
-            const not_now = try db.get(cf1, 123, std.testing.allocator);
+            const not_now = try db.get(cf1, 123, allocator);
             try std.testing.expect(null == not_now);
+        }
+
+        pub fn @"write batch"() !void {
+            const path = test_dir ++ @src().fn_name;
+            try blockstore.tests.freshDir(path);
+            var db = try DB.open(allocator, logger, path);
+            defer db.deinit();
+
+            try db.put(cf1, 0, .{ .hello = 99 });
+
+            var batch = try db.initWriteBatch();
+            defer batch.deinit();
+
+            try batch.delete(cf1, 0);
+            try batch.put(cf1, 123, .{ .hello = 100 });
+            try batch.put(cf2, 321, .{ .world = 444 });
+            try batch.delete(cf2, 321);
+            try batch.put(cf2, 133, .{ .world = 555 });
+            try batch.put(cf2, 133, .{ .world = 666 });
+
+            try std.testing.expectEqual(Value1{ .hello = 99 }, try db.get(cf1, 0, allocator));
+            try std.testing.expectEqual(null, try db.get(cf1, 123, allocator));
+            try std.testing.expectEqual(null, try db.get(cf2, 321, allocator));
+            try std.testing.expectEqual(null, try db.get(cf2, 333, allocator));
+
+            try db.commit(batch);
+
+            try std.testing.expectEqual(null, try db.get(cf1, 0, allocator));
+            try std.testing.expectEqual(Value1{ .hello = 100 }, try db.get(cf1, 123, allocator));
+            try std.testing.expectEqual(null, try db.get(cf2, 321, allocator));
+            try std.testing.expectEqual(Value2{ .world = 666 }, try db.get(cf2, 133, allocator));
         }
     };
 }

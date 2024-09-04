@@ -229,6 +229,7 @@ test "findSlotsToClean" {
 
     {
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(ledger.schema.schema.slot_meta, lowest_slot_meta.slot, lowest_slot_meta);
         try write_batch.put(ledger.schema.schema.slot_meta, highest_slot_meta.slot, highest_slot_meta);
         try db.commit(write_batch);

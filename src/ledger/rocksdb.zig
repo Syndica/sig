@@ -179,6 +179,10 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             inner: rocks.WriteBatch,
             cf_handles: []const rocks.ColumnFamilyHandle,
 
+            pub fn deinit(self: *WriteBatch) void {
+                self.inner.deinit();
+            }
+
             pub fn put(
                 self: *WriteBatch,
                 comptime cf: ColumnFamily,
