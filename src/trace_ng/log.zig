@@ -211,6 +211,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 return;
             }
 
+            self.log_msg.?.clearAndFree();
             const maybe_scope = if (scope) |s| s else null;
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
@@ -232,6 +233,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 return;
             }
 
+            self.log_msg.?.clearAndFree();
             const maybe_scope = if (scope) |s| s else null;
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
@@ -252,7 +254,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 // noop
                 return;
             }
-
+            self.log_msg.?.clearAndFree();
             const maybe_scope = if (scope) |s| s else null;
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
@@ -274,6 +276,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 return;
             }
 
+            self.log_msg.?.clearAndFree();
             const maybe_scope = if (scope) |s| s else null;
             const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
@@ -349,53 +352,29 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
 
         pub fn log(self: *Self, level: Level, message: []const u8) void {
             switch (self.*) {
-                .standard => |*logger| {
-                    logger.log(level, message);
-                },
-                .testing => |*logger| {
-                    logger.log_msg.?.clearAndFree();
-                    logger.log(level, message);
-                },
                 .noop => {},
+                inline else => |*impl| impl.log(level, message),
             }
         }
 
         pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
             switch (self.*) {
-                .standard => |*logger| {
-                    logger.logf(level, fmt, args);
-                },
-                .testing => |*logger| {
-                    logger.log_msg.?.clearAndFree();
-                    logger.logf(level, fmt, args);
-                },
                 .noop => {},
+                inline else => |*impl| impl.logf(level, fmt, args),
             }
         }
 
         pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
             switch (self.*) {
-                .standard => |*logger| {
-                    logger.logWithFields(level, message, fields);
-                },
-                .testing => |*logger| {
-                    logger.log_msg.?.clearAndFree();
-                    logger.logWithFields(level, message, fields);
-                },
                 .noop => {},
+                inline else => |*impl| impl.logWithFields(level, message, fields),
             }
         }
 
         pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
             switch (self.*) {
-                .standard => |*logger| {
-                    logger.logfWithFields(level, fmt, args, fields);
-                },
-                .testing => |*logger| {
-                    logger.log_msg.?.clearAndFree();
-                    logger.logfWithFields(level, fmt, args, fields);
-                },
                 .noop => {},
+                inline else => |*impl| impl.logfWithFields(level, fmt, args, fields),
             }
         }
     };
