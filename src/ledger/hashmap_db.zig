@@ -275,18 +275,28 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             std.debug.assert(keys.len == vals.len);
 
             // TODO perf: reduce copying, e.g. copy-on-write or reference counting
-            const copied_keys = self.allocator.alloc([]const u8, keys.len);
-            const copied_vals = self.allocator.alloc([]const u8, vals.len);
+            const copied_keys = try self.allocator.alloc([]const u8, keys.len);
+            errdefer self.allocator.free(copied_keys);
+            const copied_vals = try self.allocator.alloc([]const u8, vals.len);
+            errdefer self.allocator.free(copied_vals);
             for (0..keys.len) |i| {
-                copied_keys[i] = self.allocator.dupe(u8, keys[i]);
-                copied_vals[i] = self.allocator.dupe(u8, vals[i]);
+                errdefer for (0..i) |n| {
+                    self.allocator.free(copied_keys[n]);
+                    self.allocator.free(copied_vals[n]);
+                };
+                copied_keys[i] = try self.allocator.dupe(u8, keys[i]);
+                errdefer self.allocator.free(copied_keys[i]);
+                copied_vals[i] = try self.allocator.dupe(u8, vals[i]);
             }
 
             return .{
                 .allocator = self.allocator,
                 .keys = copied_keys,
                 .vals = copied_vals,
-                .cursor = 0,
+                .cursor = switch (direction) {
+                    .forward => 0,
+                    .reverse => keys.len,
+                },
                 .size = keys.len,
             };
         }
@@ -311,8 +321,8 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 pub fn next(self: *@This()) anyerror!?cf.Entry() {
                     const index = self.nextIndex() orelse return null;
                     return .{
-                        key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]),
-                        value_serializer.deserialize(cf.Value, self.allocator, self.vals[index]),
+                        try key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]),
+                        try value_serializer.deserialize(cf.Value, self.allocator, self.vals[index]),
                     };
                 }
 

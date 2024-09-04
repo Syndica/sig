@@ -119,6 +119,11 @@ pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) ty
         pub fn range(self: *Self, start: ?T, end: ?T) []const T {
             return self.map.range(start, end)[0];
         }
+
+        /// subslice of items ranging from start (inclusive) to end (exclusive)
+        pub fn rangeCustom(self: *Self, start: ?Bound(T), end: ?Bound(T)) []const T {
+            return self.map.rangeCustom(start, end)[0];
+        }
     };
 }
 
@@ -283,7 +288,7 @@ pub fn SortedMapCustom(
             if (end) |end_| {
                 // .any instead of .last because uniqueness is guaranteed
                 const end_index = switch (binarySearch(K, keys_, end_, .any, order)) {
-                    .found => |index| if (excl_end) index else if (index == 0) 0 else index - 1,
+                    .found => |index| if (excl_end) index else index + 1,
                     .after => |index| index + 1,
                     .less => return .{ &.{}, &.{} },
                     .greater => keys_.len,
@@ -361,6 +366,19 @@ pub fn order(a: anytype, b: anytype) std.math.Order {
     @compileError(std.fmt.comptimePrint("`order` not supported for {}", .{T}));
 }
 
+pub const BinarySearchResult = union(enum) {
+    /// item was found at this index
+    found: usize,
+    /// not found, but it's between this and the next index
+    after: usize,
+    /// the search term is less than all items in the slice
+    less,
+    /// the search term is greater than all items in the slice
+    greater,
+    /// the input slice is empty
+    empty,
+};
+
 /// binary search that is very specific about the outcome.
 /// only works with numbers
 pub fn binarySearch(
@@ -376,18 +394,7 @@ pub fn binarySearch(
     /// - fn(a: T, b: T) std.math.Order
     /// - fn(a: anytype, b: anytype) std.math.Order
     comptime orderFn: anytype,
-) union(enum) {
-    /// item was found at this index
-    found: usize,
-    /// not found, but it's between this and the next index
-    after: usize,
-    /// the search term is less than all items in the slice
-    less,
-    /// the search term is greater than all items in the slice
-    greater,
-    /// the input slice is empty
-    empty,
-} {
+) BinarySearchResult {
     if (items.len == 0) return .empty;
 
     // binary search for the item
@@ -559,4 +566,65 @@ test "order slices" {
     try expectEqual(orderSlices(u8, std.math.order, &c, &b), .lt);
     try expectEqual(orderSlices(u8, std.math.order, &b, &e), .gt);
     try expectEqual(orderSlices(u8, std.math.order, &e, &b), .lt);
+}
+
+test "sorted set slice range" {
+    var set = SortedSet([]const u8).init(std.testing.allocator);
+    defer set.deinit();
+    try set.put(&.{ 0, 0, 10 });
+    try set.put(&.{ 0, 0, 20 });
+    try set.put(&.{ 0, 0, 30 });
+    try set.put(&.{ 0, 0, 40 });
+
+    const range = set.rangeCustom(null, .{ .inclusive = &.{ 0, 0, 40 } });
+
+    try std.testing.expectEqual(4, range.len);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 10 }, range[0]);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 20 }, range[1]);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 30 }, range[2]);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 40 }, range[3]);
+}
+
+test "binarySearch slice of slices" {
+    const slices = [4][]const u8{
+        &.{ 0, 0, 10 },
+        &.{ 0, 0, 20 },
+        &.{ 0, 0, 30 },
+        &.{ 0, 0, 40 },
+    };
+
+    try std.testing.expectEqual(
+        BinarySearchResult{ .found = 3 },
+        binarySearch([]const u8, &slices, &.{ 0, 0, 40 }, .any, order),
+    );
+    try std.testing.expectEqual(
+        BinarySearchResult{ .after = 2 },
+        binarySearch([]const u8, &slices, &.{ 0, 0, 39 }, .any, order),
+    );
+    try std.testing.expectEqual(
+        BinarySearchResult.greater,
+        binarySearch([]const u8, &slices, &.{ 0, 0, 41 }, .any, order),
+    );
+
+    try std.testing.expectEqual(
+        BinarySearchResult{ .found = 0 },
+        binarySearch([]const u8, &slices, &.{ 0, 0, 10 }, .any, order),
+    );
+    try std.testing.expectEqual(
+        BinarySearchResult{ .after = 0 },
+        binarySearch([]const u8, &slices, &.{ 0, 0, 11 }, .any, order),
+    );
+    try std.testing.expectEqual(
+        BinarySearchResult.less,
+        binarySearch([]const u8, &slices, &.{ 0, 0, 9 }, .any, order),
+    );
+
+    try std.testing.expectEqual(
+        BinarySearchResult{ .found = 1 },
+        binarySearch([]const u8, &slices, &.{ 0, 0, 20 }, .any, order),
+    );
+    try std.testing.expectEqual(
+        BinarySearchResult{ .after = 1 },
+        binarySearch([]const u8, &slices, &.{ 0, 0, 21 }, .any, order),
+    );
 }
