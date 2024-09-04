@@ -1390,11 +1390,17 @@ pub const ContactInfo = struct {
 /// This exists to provide a version of ContactInfo which can safely cross gossip table lock
 /// boundaries without exposing unsafe pointers. For now it contains only the fields
 /// required to satisfy existing usage, it can be extended in the future if required.
+/// TODO: This struct is starting to look a lot like LegacyContactInfo, it would be nice to
+/// create some comptime code that behaves like graphql.  For example, gossip would have a
+/// generic getContactInfo function where you could pass in a custom type definition for a
+/// struct that only includes fields for the specific ports you care about, and the function
+/// would be able to populate that custom struct by iterating over the struct fields.
 pub const ThreadSafeContactInfo = struct {
     pubkey: Pubkey,
     shred_version: u16,
     gossip_addr: ?SocketAddr,
     rpc_addr: ?SocketAddr,
+    tpu_addr: ?SocketAddr,
 
     pub fn fromContactInfo(contact_info: ContactInfo) ThreadSafeContactInfo {
         return .{
@@ -1402,6 +1408,7 @@ pub const ThreadSafeContactInfo = struct {
             .shred_version = contact_info.shred_version,
             .gossip_addr = contact_info.getSocket(.gossip),
             .rpc_addr = contact_info.getSocket(.rpc),
+            .tpu_addr = contact_info.getSocket(.tpu),
         };
     }
 
@@ -1411,6 +1418,7 @@ pub const ThreadSafeContactInfo = struct {
             .shred_version = legacy_contact_info.shred_version,
             .gossip_addr = legacy_contact_info.gossip,
             .rpc_addr = legacy_contact_info.rpc,
+            .tpu_addr = legacy_contact_info.tpu,
         };
     }
 };
