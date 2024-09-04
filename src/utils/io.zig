@@ -32,8 +32,9 @@ pub fn PeekableReader(comptime ReaderType: type) type {
                 self.next_byte = null;
                 if (dest.len == 1) return 1;
                 return 1 + try self.backing_reader.read(dest[1..]);
+            } else {
+                return self.backing_reader.read(dest);
             }
-            return self.backing_reader.read(dest);
         }
 
         pub fn peekByte(self: *Self) !u8 {
