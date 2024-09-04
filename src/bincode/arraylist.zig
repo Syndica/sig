@@ -2,16 +2,11 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const bincode = sig.bincode;
 
-const ArrayListInfo = sig.utils.types.ArrayListInfo;
 const arrayListInfo = sig.utils.types.arrayListInfo;
 
-const FieldConfig = bincode.FieldConfig;
 const Params = bincode.Params;
 
-const readFieldWithConfig = bincode.readFieldWithConfig;
 const readIntAsLength = bincode.readIntAsLength;
-const write = bincode.write;
-const writeFieldWithConfig = bincode.writeFieldWithConfig;
 
 /// The standard bincode serialization for an ArrayList
 pub fn arrayListFieldConfig(comptime ArrayListType: type) bincode.FieldConfig(ArrayListType) {

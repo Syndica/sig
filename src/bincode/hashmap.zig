@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const bincode = @import("bincode.zig");
 
-const HashMapInfo = sig.utils.types.HashMapInfo;
 const hashMapInfo = sig.utils.types.hashMapInfo;
 
 const FieldConfig = bincode.FieldConfig;

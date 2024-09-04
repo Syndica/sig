@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const bincode = sig.bincode;
-const hashMapInfo = sig.utils.types.hashMapInfo;
 
 pub fn defaultToNullOnEof(
     comptime T: type,
