@@ -270,6 +270,10 @@ pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred
     const file = try std.fs.cwd().openFile(path, .{});
     const reader = file.reader();
     var shreds = std.ArrayList(Shred).init(allocator);
+    errdefer {
+        for (shreds.items) |shred| shred.deinit();
+        shreds.deinit();
+    }
     while (try readChunk(allocator, reader)) |chunk| {
         defer allocator.free(chunk);
         try shreds.append(try Shred.fromPayload(allocator, chunk));
@@ -294,6 +298,7 @@ fn readChunk(allocator: Allocator, reader: anytype) !?[]const u8 {
     const size = std.mem.readInt(u64, &size_bytes, .little);
 
     const chunk = try allocator.alloc(u8, @intCast(size));
+    errdefer allocator.free(chunk);
     const num_bytes_read = try reader.readAll(chunk);
     if (num_bytes_read != size) {
         return error.IncompleteChunk;
@@ -320,6 +325,10 @@ pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entr
     const file = try std.fs.cwd().openFile(path, .{});
     const reader = file.reader();
     var entries = std.ArrayList(Entry).init(allocator);
+    errdefer {
+        for (entries.items) |entry| entry.deinit(allocator);
+        entries.deinit();
+    }
     while (try readChunk(allocator, reader)) |chunk| {
         defer allocator.free(chunk);
         try entries.append(try sig.bincode.readFromSlice(allocator, Entry, chunk, .{}));
