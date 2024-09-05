@@ -52,7 +52,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             return self;
         }
 
-        fn unscoped(self: Self) Logger {
+        pub fn unscoped(self: Self) Logger {
             return .{
                 .allocator = self.allocator,
                 .recycle_fba = self.recycle_fba,
@@ -64,7 +64,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             };
         }
 
-        fn withScope(self: Self, comptime new_scope: anytype) ScoppedLogger(new_scope) {
+        pub fn withScope(self: Self, comptime new_scope: anytype) ScoppedLogger(new_scope) {
             return .{
                 .allocator = self.allocator,
                 .recycle_fba = self.recycle_fba,
@@ -211,7 +211,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             return self;
         }
 
-        fn unscoped(self: *Self) Logger {
+        pub fn unscoped(self: *Self) Logger {
             return .{
                 .allocator = self.allocator,
                 .recycle_fba = self.recycle_fba,
@@ -223,7 +223,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             };
         }
 
-        fn withScope(self: *Self, comptime new_scope: anytype) ScoppedLogger(new_scope) {
+        pub fn withScope(self: *Self, comptime new_scope: anytype) ScoppedLogger(new_scope) {
             return .{
                 .allocator = self.allocator,
                 .recycle_fba = self.recycle_fba,
