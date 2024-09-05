@@ -39,10 +39,10 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         channel: *Channel(logfmt.LogMsg),
         handle: ?std.Thread,
 
-        pub fn init(config: Config) *Self {
-            const recycle_fba = config.allocator.create(RecycleFBA(.{})) catch @panic("could not allocate mem for RecycleFBA");
-            recycle_fba.* = RecycleFBA(.{}).init(config.allocator, config.max_buffer) catch @panic("could not init RecycleFBA");
-            const self = config.allocator.create(Self) catch @panic("could not allocator.create Logger");
+        pub fn init(config: Config) !*Self {
+            const recycle_fba = try config.allocator.create(RecycleFBA(.{}));
+            recycle_fba.* = try RecycleFBA(.{}).init(config.allocator, config.max_buffer);
+            const self = try config.allocator.create(Self);
             self.* = .{
                 .allocator = config.allocator,
                 .log_allocator = recycle_fba.allocator(),
@@ -51,7 +51,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 .max_level = config.max_level,
                 .exit_sig = config.exit_sig,
                 .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
-                .handle = std.Thread.spawn(.{}, Self.run, .{self}) catch @panic("could not spawn Logger"),
+                .handle = try std.Thread.spawn(.{}, Self.run, .{self}),
             };
             return self;
         }
@@ -404,10 +404,10 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         standard: *StanardErrLogger,
         testing: *TestingLogger,
         noop: void,
-        pub fn init(config: Config) Self {
+        pub fn init(config: Config) !Self {
             switch (config.kind) {
                 .standard => {
-                    return .{ .standard = StanardErrLogger.init(.{
+                    return .{ .standard = try StanardErrLogger.init(.{
                         .allocator = config.allocator,
                         .exit_sig = config.exit_sig,
                         .max_level = config.max_level,
@@ -517,7 +517,7 @@ test "trace_ng: scope switch" {
         .exit_sig = exit,
         .max_level = Level.info,
         .max_buffer = 2048,
-    });
+    }) catch @panic("Logger init failed");
     defer logger.deinit();
 
     var stuff = Stuff.init(&logger);
@@ -536,7 +536,7 @@ test "trace_ng: all" {
         .exit_sig = exit,
         .max_level = Level.info,
         .max_buffer = 2048,
-    });
+    }) catch @panic("Logger init failed");
 
     defer logger.deinit();
 
@@ -579,7 +579,7 @@ test "trace_ng: reclaim" {
         .exit_sig = exit,
         .max_level = Level.info,
         .max_buffer = 2048,
-    });
+    }) catch @panic("Logger init failed");
 
     defer logger.deinit();
 
@@ -608,7 +608,7 @@ test "trace_ng: level" {
         .exit_sig = exit,
         .max_level = Level.err,
         .max_buffer = 2048,
-    });
+    }) catch @panic("Logger init failed");
 
     defer logger.deinit();
 
@@ -653,7 +653,7 @@ test "trace_ng: format" {
         .max_level = Level.debug,
         .max_buffer = 2048,
         .kind = LogKind.testing,
-    });
+    }) catch @panic("Logger init failed");
 
     defer logger.deinit();
 
