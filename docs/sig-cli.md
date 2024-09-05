@@ -13,13 +13,13 @@ entrypoints (ie, first few nodes to ping / send pull requests) can be defined wi
 `entrypoint.mainnet-beta.solana.com:8001` or `entrypoint.testnet.solana.com:8001`
 to start talking to the network
 
-you wont need to change any of the defaults unless you are doing something specical 
+you won't need to change any of the defaults unless you are doing something special
 requiring a different host or port.
 
-we dont have a way to access the gossip data stored yet.
+we don't have a way to access the gossip data stored yet.
 
 we do have many helpful metrics stored in a grafana dashboard while gossip runs which 
-you can read me about in `prometheus-grafana/`
+you can read about in `metrics/`
 
 ## snapshot-download
 

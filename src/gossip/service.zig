@@ -1251,9 +1251,9 @@ pub const GossipService = struct {
 
             for (pull_requests.items) |*req| {
                 _ = gossip_table.insert(req.value, now) catch {};
-                self.stats.table_n_updates_pull_request.inc();
                 gossip_table.updateRecordTimestamp(req.value.id(), now);
             }
+            self.stats.table_n_updates_pull_req.add(pull_requests.items.len);
         }
 
         var valid_indexs = blk: {
@@ -1442,8 +1442,8 @@ pub const GossipService = struct {
                         pull_message.gossip_values[index],
                         now,
                     ) catch {};
-                    self.stats.table_n_updates_pull_response.inc();
                 }
+                self.stats.table_n_updates_pull_resp.add(timeout_indexs.items.len);
 
                 // update the contactInfo timestamps of the successful inserts
                 // (and all other origin values)
@@ -1771,7 +1771,7 @@ pub const GossipService = struct {
 
         while (push_msg_queue.popOrNull()) |gossip_value| {
             _ = gossip_table.insert(gossip_value, now) catch {};
-            self.stats.table_n_updates_push_message.inc();
+            self.stats.table_n_updates_push_msg.inc();
         }
     }
 
@@ -1966,11 +1966,10 @@ pub const GossipStats = struct {
     table_trim_call_count: *Counter,
     table_remove_old_values_call_count: *Counter,
 
-    table_n_updates_push_message: *Counter,
-    table_n_updates_pull_request: *Counter,
-    table_n_updates_pull_response: *Counter,
-    table_n_updates_local: *Counter,
-    pull_n_crds_values_produced: *Counter,
+    table_n_updates_push_msg: *Counter,
+    table_n_updates_pull_req: *Counter,
+    table_n_updates_pull_resp: *Counter,
+    table_n_crds_values_produced: *GaugeU64, // TODO: mb Summary instead of Gauge?
 
     // logging details
     _logging_fields: struct {
