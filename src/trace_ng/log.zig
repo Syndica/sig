@@ -33,16 +33,20 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         max_level: Level,
         exit_sig: *std.atomic.Value(bool),
         allocator: Allocator,
-        recycle_fba: RecycleFBA,
+        log_allocator: Allocator,
+        log_allocator_state: *RecycleFBA(.{}),
         max_buffer: u64,
         channel: *Channel(logfmt.LogMsg),
         handle: ?std.Thread,
 
         pub fn init(config: Config) *Self {
+            const recycle_fba = config.allocator.create(RecycleFBA(.{})) catch @panic("could not allocate mem for RecycleFBA");
+            recycle_fba.* = RecycleFBA(.{}).init(config.allocator, config.max_buffer) catch @panic("could not init RecycleFBA");
             const self = config.allocator.create(Self) catch @panic("could not allocator.create Logger");
             self.* = .{
                 .allocator = config.allocator,
-                .recycle_fba = RecycleFBA.init(config.allocator, config.max_buffer) catch @panic("could not create RecycleFBA"),
+                .log_allocator = recycle_fba.allocator(),
+                .log_allocator_state = recycle_fba,
                 .max_buffer = config.max_buffer,
                 .max_level = config.max_level,
                 .exit_sig = config.exit_sig,
@@ -52,10 +56,22 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             return self;
         }
 
+        pub fn deinit(self: *Self) void {
+            if (self.handle) |*handle| {
+                self.exit_sig.store(true, .seq_cst);
+                handle.join();
+            }
+            self.channel.close();
+            self.channel.deinit();
+            self.log_allocator_state.deinit();
+            self.allocator.destroy(self.log_allocator_state);
+            self.allocator.destroy(self);
+        }
+
         pub fn unscoped(self: Self) Logger {
             return .{
                 .allocator = self.allocator,
-                .recycle_fba = self.recycle_fba,
+                .recycle_fba = self.log_allocator_state,
                 .max_buffer = self.max_buffer,
                 .max_level = self.max_level,
                 .exit_sig = self.exit_sig,
@@ -67,7 +83,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         pub fn withScope(self: Self, comptime new_scope: anytype) ScoppedLogger(new_scope) {
             return .{
                 .allocator = self.allocator,
-                .recycle_fba = self.recycle_fba,
+                .recycle_fba = self.log_allocator_state,
                 .max_buffer = self.max_buffer,
                 .max_level = self.max_level,
                 .exit_sig = self.exit_sig,
@@ -78,17 +94,6 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
 
         pub fn spawn(self: *Self) void {
             self.handle = std.Thread.spawn(.{}, Self.run, .{self}) catch @panic("could not spawn Logger");
-        }
-
-        pub fn deinit(self: *Self) void {
-            if (self.handle) |*handle| {
-                self.exit_sig.store(true, .seq_cst);
-                handle.join();
-            }
-            self.channel.close();
-            self.channel.deinit();
-            self.recycle_fba.deinit();
-            self.allocator.destroy(self);
         }
 
         pub fn run(self: *Self) void {
@@ -103,10 +108,13 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 for (messages) |message| {
                     const writer = std.io.getStdErr().writer();
                     logfmt.writeLog(writer, message) catch @panic("logging failed");
+                    if (message.maybe_fields) |fields| {
+                        self.log_allocator.free(fields);
+                    }
+                    if (message.maybe_fmt) |fmt_msg| {
+                        self.log_allocator.free(fmt_msg);
+                    }
                 }
-                self.recycle_fba.mux.lock();
-                self.recycle_fba.alloc_allocator.reset();
-                self.recycle_fba.mux.unlock();
             }
         }
 
@@ -137,7 +145,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format fields.
-            const buf = self.allocBuf(512);
+            const buf = self.allocBuf(512) catch @panic("Could not alloc");
             var fmt_fields = std.io.fixedBufferStream(buf);
             logfmt.fmtField(fmt_fields.writer(), fields);
 
@@ -160,7 +168,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format message.
-            const buf = self.allocBuf(std.fmt.count(fmt, args));
+            const buf = self.allocBuf(std.fmt.count(fmt, args)) catch @panic("Could not alloc");
             var fmt_message = std.io.fixedBufferStream(buf);
             logfmt.fmtMsg(fmt_message.writer(), fmt, args);
 
@@ -183,12 +191,12 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format fields.
-            const fields_buf = self.allocBuf(512);
+            const fields_buf = self.allocBuf(512) catch @panic("Could not alloc");
             var fmt_fields = std.io.fixedBufferStream(fields_buf);
             logfmt.fmtField(fmt_fields.writer(), fields);
 
             // Format message.
-            const msg_buf = self.allocBuf(std.fmt.count(fmt, args));
+            const msg_buf = self.allocBuf(std.fmt.count(fmt, args)) catch @panic("Could not alloc");
             var fmt_message = std.io.fixedBufferStream(msg_buf);
             logfmt.fmtMsg(fmt_message.writer(), fmt, args);
 
@@ -203,25 +211,20 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         }
 
         // Utility function for allocating memory from RecycleFBA for part of the log message.
-        fn allocBuf(self: *Self, size: u64) []u8 {
-            self.recycle_fba.mux.lock();
+        fn allocBuf(self: *Self, size: u64) ![]u8 {
             const buf = blk: while (true) {
-                const buf = self.recycle_fba.allocator().alloc(u8, size) catch {
-                    // no memory available rn - unlock and wait
-                    self.recycle_fba.mux.unlock();
+                const buf = self.log_allocator.alloc(u8, size) catch {
                     std.time.sleep(std.time.ns_per_ms);
-                    self.recycle_fba.mux.lock();
+                    if (self.exit_sig.load(.unordered)) {
+                        return error.MemoryBlockedWithExitSignaled;
+                    }
                     continue;
                 };
                 break :blk buf;
             };
-            self.recycle_fba.mux.unlock();
             errdefer {
-                self.recycle_fba.mux.lock();
-                self.recycle_fba.allocator().free(buf);
-                self.recycle_fba.mux.unlock();
+                self.log_allocator.free(buf);
             }
-
             return buf;
         }
     };
