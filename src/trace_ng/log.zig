@@ -51,7 +51,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 .max_level = config.max_level,
                 .exit_sig = config.exit_sig,
                 .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
-                .handle = null,
+                .handle = std.Thread.spawn(.{}, Self.run, .{self}) catch @panic("could not spawn Logger"),
             };
             return self;
         }
@@ -90,10 +90,6 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 .channel = self.channel,
                 .handle = self.handle,
             };
-        }
-
-        pub fn spawn(self: *Self) void {
-            self.handle = std.Thread.spawn(.{}, Self.run, .{self}) catch @panic("could not spawn Logger");
         }
 
         pub fn run(self: *Self) void {
@@ -443,15 +439,6 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             }
         }
 
-        pub fn spawn(self: Self) void {
-            switch (self) {
-                .standard => |logger| {
-                    logger.spawn();
-                },
-                .noop, .testing => {},
-            }
-        }
-
         pub fn unscoped(self: *Self) *Logger {
             return @ptrCast(self);
         }
@@ -532,7 +519,6 @@ test "trace_ng: scope switch" {
         .max_buffer = 2048,
     });
     defer logger.deinit();
-    logger.spawn();
 
     var stuff = Stuff.init(&logger);
     stuff.doStuff();
@@ -553,7 +539,6 @@ test "trace_ng: all" {
     });
 
     defer logger.deinit();
-    logger.spawn();
 
     logger.log(.info, "Logging with log");
     logger.logf(
@@ -597,7 +582,6 @@ test "trace_ng: reclaim" {
     });
 
     defer logger.deinit();
-    logger.spawn();
 
     // Ensure memory can be continously requested from recycle_fba without getting stuck.
     for (0..25) |_| {
@@ -627,7 +611,6 @@ test "trace_ng: level" {
     });
 
     defer logger.deinit();
-    logger.spawn();
 
     // None should log as they are higher than set max_log.
     logger.log(.warn, "Logging with log");
