@@ -447,6 +447,70 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             return @ptrCast(self);
         }
 
+        pub fn err(self: *Self, message: []const u8) void {
+            self.log(.err, message);
+        }
+
+        pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+            self.logf(.err, fmt, args);
+        }
+
+        pub fn errWithFields(self: *Self, message: []const u8, fields: anytype) void {
+            self.logWithFields(.err, message, fields);
+        }
+
+        pub fn errfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            self.logfWithFields(.err, fmt, args, fields);
+        }
+
+        pub fn warn(self: *Self, message: []const u8) void {
+            self.log(.warn, message);
+        }
+
+        pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+            self.logf(.warn, fmt, args);
+        }
+
+        pub fn warnWithFields(self: *Self, message: []const u8, fields: anytype) void {
+            self.logWithFields(.warn, message, fields);
+        }
+
+        pub fn warnfWithFields(self: *Self, message: []const u8, fields: anytype) void {
+            self.logWithFields(.warn, message, fields);
+        }
+
+        pub fn info(self: *Self, message: []const u8) void {
+            self.log(.info, message);
+        }
+
+        pub fn infof(self: *Self, comptime fmt: []const u8, args: anytype) void {
+            self.logf(.info, fmt, args);
+        }
+
+        pub fn infoWithFields(self: *Self, message: []const u8, fields: anytype) void {
+            self.logWithFields(.info, message, fields);
+        }
+
+        pub fn infofWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            self.logfWithFields(.info, fmt, args, fields);
+        }
+
+        pub fn debug(self: *Self, message: []const u8) void {
+            self.log(.debug, message);
+        }
+
+        pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+            self.logf(.debug, fmt, args);
+        }
+
+        pub fn debugWithFields(self: *Self, message: []const u8, fields: anytype) void {
+            self.logWithFields(.debug, message, fields);
+        }
+
+        pub fn debugfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            self.logfWithFields(.debug, fmt, args, fields);
+        }
+
         pub fn log(self: *Self, level: Level, message: []const u8) void {
             switch (self.*) {
                 .noop => {},
@@ -722,5 +786,207 @@ test "trace_ng: format" {
     if (scoped_logger.testing.log_msg) |log_msg| {
         try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=debug f_agent=Firefox f_version=120 f_local=en f_stock=nvidia Logging with logfWithFields\n"));
         try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "[trace_ng.log] time="));
+    }
+}
+
+test "trace_ng: format.methods" {
+    const allocator = std.testing.allocator;
+
+    const exit = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(exit);
+    exit.* = std.atomic.Value(bool).init(false);
+
+    var logger = Logger.init(.{
+        .allocator = allocator,
+        .exit_sig = exit,
+        .max_level = Level.debug,
+        .max_buffer = 2048,
+        .kind = LogKind.testing,
+    }) catch @panic("Logger init failed");
+
+    defer logger.deinit();
+
+    // ERROR
+    logger.err("Logging with log");
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=error Logging with log\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.errf(
+        "Log message: {s}",
+        .{"Logging with logf"},
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=error Log message: Logging with logf\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.errWithFields(
+        "Logging with logWithFields",
+        .{
+            .f_agent = "Firefox",
+            .f_version = "2.0",
+        },
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=error f_agent=Firefox f_version=2.0 Logging with logWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.errfWithFields(
+        "{s}",
+        .{"Logging with logfWithFields"},
+        .{
+            .f_agent = "Firefox",
+            .f_version = 120,
+            .f_local = "en",
+            .f_stock = "nvidia",
+        },
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=error f_agent=Firefox f_version=120 f_local=en f_stock=nvidia Logging with logfWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    // WARN
+    logger.warn("Logging with log");
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=warning Logging with log\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.warnf(
+        "Log message: {s}",
+        .{"Logging with logf"},
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=warning Log message: Logging with logf\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.warnWithFields(
+        "Logging with logWithFields",
+        .{
+            .f_agent = "Firefox",
+            .f_version = "2.0",
+        },
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=warning f_agent=Firefox f_version=2.0 Logging with logWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.warnfWithFields(
+        "{s}",
+        .{"Logging with logfWithFields"},
+        .{
+            .f_agent = "Firefox",
+            .f_version = 120,
+            .f_local = "en",
+            .f_stock = "nvidia",
+        },
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=warning f_agent=Firefox f_version=120 f_local=en f_stock=nvidia Logging with logfWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    // INFO
+    logger.info("Logging with log");
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=info Logging with log\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.infof(
+        "Log message: {s}",
+        .{"Logging with logf"},
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=info Log message: Logging with logf\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.infoWithFields(
+        "Logging with logWithFields",
+        .{
+            .f_agent = "Firefox",
+            .f_version = "2.0",
+        },
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=info f_agent=Firefox f_version=2.0 Logging with logWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.infofWithFields(
+        "{s}",
+        .{"Logging with logfWithFields"},
+        .{
+            .f_agent = "Firefox",
+            .f_version = 120,
+            .f_local = "en",
+            .f_stock = "nvidia",
+        },
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=info f_agent=Firefox f_version=120 f_local=en f_stock=nvidia Logging with logfWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    // DEBUG
+    logger.debug("Logging with log");
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=debug Logging with log\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.debugf(
+        "Log message: {s}",
+        .{"Logging with logf"},
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=debug Log message: Logging with logf\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.debugWithFields(
+        "Logging with logWithFields",
+        .{
+            .f_agent = "Firefox",
+            .f_version = "2.0",
+        },
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=debug f_agent=Firefox f_version=2.0 Logging with logWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.debugfWithFields(
+        "{s}",
+        .{"Logging with logfWithFields"},
+        .{
+            .f_agent = "Firefox",
+            .f_version = 120,
+            .f_local = "en",
+            .f_stock = "nvidia",
+        },
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=debug f_agent=Firefox f_version=120 f_local=en f_stock=nvidia Logging with logfWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
     }
 }
