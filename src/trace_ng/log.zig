@@ -117,17 +117,15 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             }
 
             const maybe_scope = if (scope) |s| s else null;
-            const log_message = logfmt.createLogMessage(
-                &self.recycle_fba,
-                self.max_buffer,
-                level,
-                maybe_scope,
-                message,
-                null,
-                null,
-                null,
-            );
-            self.channel.send(log_message) catch @panic("could not send to channel");
+            const log_msg = logfmt.LogMsg{
+                .level = level,
+                .maybe_scope = maybe_scope,
+                .maybe_msg = message,
+                .maybe_fields = null,
+                .maybe_fmt = null,
+            };
+
+            self.channel.send(log_msg) catch @panic("could not send to channel");
         }
 
         pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
@@ -137,17 +135,21 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             }
 
             const maybe_scope = if (scope) |s| s else null;
-            const log_message = logfmt.createLogMessage(
-                &self.recycle_fba,
-                self.max_buffer,
-                level,
-                maybe_scope,
-                message,
-                fields,
-                null,
-                null,
-            );
-            self.channel.send(log_message) catch @panic("could not send to channel");
+
+            // Format fields.
+            const buf = self.allocBuf(512);
+            var fmt_fields = std.io.fixedBufferStream(buf);
+            logfmt.fmtField(fmt_fields.writer(), fields);
+
+            const log_msg = logfmt.LogMsg{
+                .level = level,
+                .maybe_scope = maybe_scope,
+                .maybe_msg = message,
+                .maybe_fields = fmt_fields.getWritten(),
+                .maybe_fmt = null,
+            };
+
+            self.channel.send(log_msg) catch @panic("could not send to channel");
         }
 
         pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
@@ -157,17 +159,20 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             }
             const maybe_scope = if (scope) |s| s else null;
 
-            const log_message = logfmt.createLogMessage(
-                &self.recycle_fba,
-                self.max_buffer,
-                level,
-                maybe_scope,
-                null,
-                null,
-                fmt,
-                args,
-            );
-            self.channel.send(log_message) catch @panic("could not send to channel");
+            // Format message.
+            const buf = self.allocBuf(std.fmt.count(fmt, args));
+            var fmt_message = std.io.fixedBufferStream(buf);
+            logfmt.fmtMsg(fmt_message.writer(), fmt, args);
+
+            const log_msg = logfmt.LogMsg{
+                .level = level,
+                .maybe_scope = maybe_scope,
+                .maybe_msg = null,
+                .maybe_fields = null,
+                .maybe_fmt = fmt_message.getWritten(),
+            };
+
+            self.channel.send(log_msg) catch @panic("could not send to channel");
         }
 
         pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
@@ -177,17 +182,47 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             }
             const maybe_scope = if (scope) |s| s else null;
 
-            const log_message = logfmt.createLogMessage(
-                &self.recycle_fba,
-                self.max_buffer,
-                level,
-                maybe_scope,
-                null,
-                fields,
-                fmt,
-                args,
-            );
-            self.channel.send(log_message) catch @panic("could not send to channel");
+            // Format fields.
+            const fields_buf = self.allocBuf(512);
+            var fmt_fields = std.io.fixedBufferStream(fields_buf);
+            logfmt.fmtField(fmt_fields.writer(), fields);
+
+            // Format message.
+            const msg_buf = self.allocBuf(std.fmt.count(fmt, args));
+            var fmt_message = std.io.fixedBufferStream(msg_buf);
+            logfmt.fmtMsg(fmt_message.writer(), fmt, args);
+
+            const log_msg = logfmt.LogMsg{
+                .level = level,
+                .maybe_scope = maybe_scope,
+                .maybe_msg = null,
+                .maybe_fields = null,
+                .maybe_fmt = fmt_message.getWritten(),
+            };
+            self.channel.send(log_msg) catch @panic("could not send to channel");
+        }
+
+        // Utility function for allocating memory from RecycleFBA for part of the log message.
+        fn allocBuf(self: *Self, size: u64) []u8 {
+            self.recycle_fba.mux.lock();
+            const buf = blk: while (true) {
+                const buf = self.recycle_fba.allocator().alloc(u8, size) catch {
+                    // no memory available rn - unlock and wait
+                    self.recycle_fba.mux.unlock();
+                    std.time.sleep(std.time.ns_per_ms);
+                    self.recycle_fba.mux.lock();
+                    continue;
+                };
+                break :blk buf;
+            };
+            self.recycle_fba.mux.unlock();
+            errdefer {
+                self.recycle_fba.mux.lock();
+                self.recycle_fba.allocator().free(buf);
+                self.recycle_fba.mux.unlock();
+            }
+
+            return buf;
         }
     };
 
@@ -251,18 +286,17 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
 
             self.log_msg.?.clearAndFree();
             const maybe_scope = if (scope) |s| s else null;
-            const log_message = logfmt.createLogMessage(
-                &self.recycle_fba,
-                self.max_buffer,
-                level,
-                maybe_scope,
-                message,
-                null,
-                null,
-                null,
-            );
+
+            const log_msg = logfmt.LogMsg{
+                .level = level,
+                .maybe_scope = maybe_scope,
+                .maybe_msg = message,
+                .maybe_fields = null,
+                .maybe_fmt = null,
+            };
+
             const writer = self.log_msg.?.writer();
-            logfmt.writeLog(writer, log_message) catch @panic("Failed to write log");
+            logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
         }
 
         pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
@@ -273,18 +307,22 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
 
             self.log_msg.?.clearAndFree();
             const maybe_scope = if (scope) |s| s else null;
-            const log_message = logfmt.createLogMessage(
-                &self.recycle_fba,
-                self.max_buffer,
-                level,
-                maybe_scope,
-                message,
-                fields,
-                null,
-                null,
-            );
+
+            // Format fields.
+            var fmt_fields = std.ArrayList(u8).initCapacity(self.allocator, 256) catch @panic("could not initCapacity for message");
+            defer fmt_fields.deinit();
+            logfmt.fmtField(fmt_fields.writer(), fields);
+
+            const log_msg = logfmt.LogMsg{
+                .level = level,
+                .maybe_scope = maybe_scope,
+                .maybe_msg = message,
+                .maybe_fields = fmt_fields.items,
+                .maybe_fmt = null,
+            };
+
             const writer = self.log_msg.?.writer();
-            logfmt.writeLog(writer, log_message) catch @panic("Failed to write log");
+            logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
         }
 
         pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
@@ -294,18 +332,22 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             }
             self.log_msg.?.clearAndFree();
             const maybe_scope = if (scope) |s| s else null;
-            const log_message = logfmt.createLogMessage(
-                &self.recycle_fba,
-                self.max_buffer,
-                level,
-                maybe_scope,
-                null,
-                null,
-                fmt,
-                args,
-            );
+
+            // Format message.
+            var fmt_msg = std.ArrayList(u8).initCapacity(self.allocator, 256) catch @panic("could not initCapacity for message");
+            defer fmt_msg.deinit();
+            logfmt.fmtMsg(fmt_msg.writer(), fmt, args);
+
+            const log_msg = logfmt.LogMsg{
+                .level = level,
+                .maybe_scope = maybe_scope,
+                .maybe_msg = null,
+                .maybe_fields = null,
+                .maybe_fmt = fmt_msg.items,
+            };
+
             const writer = self.log_msg.?.writer();
-            logfmt.writeLog(writer, log_message) catch @panic("Failed to write log");
+            logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
         }
 
         pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
@@ -316,18 +358,27 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
 
             self.log_msg.?.clearAndFree();
             const maybe_scope = if (scope) |s| s else null;
-            const log_message = logfmt.createLogMessage(
-                &self.recycle_fba,
-                self.max_buffer,
-                level,
-                maybe_scope,
-                null,
-                fields,
-                fmt,
-                args,
-            );
+
+            // Format fields.
+            var fmt_fields = std.ArrayList(u8).initCapacity(self.allocator, 256) catch @panic("could not initCapacity for message");
+            defer fmt_fields.deinit();
+            logfmt.fmtField(fmt_fields.writer(), fields);
+
+            // Format message.
+            var fmt_msg = std.ArrayList(u8).initCapacity(self.allocator, 256) catch @panic("could not initCapacity for message");
+            defer fmt_msg.deinit();
+            logfmt.fmtMsg(fmt_msg.writer(), fmt, args);
+
+            const log_msg = logfmt.LogMsg{
+                .level = level,
+                .maybe_scope = maybe_scope,
+                .maybe_msg = null,
+                .maybe_fields = fmt_fields.items,
+                .maybe_fmt = fmt_msg.items,
+            };
+
             const writer = self.log_msg.?.writer();
-            logfmt.writeLog(writer, log_message) catch @panic("Failed to write log");
+            logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
         }
     };
 
@@ -466,7 +517,7 @@ test "trace_ng: scope switch" {
     stuff.doStuff();
 }
 
-test "trace_ng: testing.allocator" {
+test "trace_ng: all" {
     const allocator = std.testing.allocator;
 
     const exit = try allocator.create(std.atomic.Value(bool));
@@ -508,6 +559,36 @@ test "trace_ng: testing.allocator" {
             .f_stock = "nvidia",
         },
     );
+}
+
+test "trace_ng: reclaim" {
+    const allocator = std.testing.allocator;
+
+    const exit = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(exit);
+    exit.* = std.atomic.Value(bool).init(false);
+
+    var logger = Logger.init(.{
+        .allocator = allocator,
+        .exit_sig = exit,
+        .max_level = Level.info,
+        .max_buffer = 2048,
+    });
+
+    defer logger.deinit();
+    logger.spawn();
+
+    // Ensure memory can be continously requested from recycle_fba without getting stuck.
+    for (0..25) |_| {
+        logger.logWithFields(
+            .info,
+            "Logging with logWithFields",
+            .{
+                .f_agent = "Firefox",
+                .f_version = "2.0",
+            },
+        );
+    }
 }
 
 test "trace_ng: level" {
