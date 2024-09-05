@@ -8,6 +8,7 @@ pub const snapshots = @import("snapshots.zig");
 pub const sysvars = @import("sysvars.zig");
 pub const fuzz = @import("fuzz.zig");
 pub const fuzz_snapshot = @import("fuzz_snapshot.zig");
+pub const swiss_map = @import("swiss_map.zig");
 
 pub const AccountsDB = db.AccountsDB;
 pub const AllSnapshotFields = snapshots.AllSnapshotFields;

@@ -51,6 +51,10 @@ pub const Signature = struct {
         return base58.encode(self.data);
     }
 
+    pub fn base58StringAlloc(self: Signature, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
+        return base58.encodeAlloc(self.data, allocator);
+    }
+
     pub fn format(
         self: Signature,
         comptime _: []const u8,
@@ -58,5 +62,9 @@ pub const Signature = struct {
         writer: anytype,
     ) !void {
         return base58.format(self.data, writer);
+    }
+
+    pub fn jsonStringify(self: Signature, writer: anytype) !void {
+        try writer.print("\"{s}\"", .{self.base58String().slice()});
     }
 };

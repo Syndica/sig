@@ -21,7 +21,7 @@ const RecycleFBA = sig.utils.allocators.RecycleFBA;
 const PIPE_MAX_SIZE_PATH = "/proc/sys/fs/pipe-max-size";
 
 pub const AccountPayload = struct {
-    // used to know how much to allocate to read the full data slice
+    /// used to know how much to allocate to read the full data slice
     len: u64,
     payload: VersionedAccountPayload,
 
@@ -65,17 +65,19 @@ pub const AccountPayloadV1 = struct {
 };
 
 pub const GeyserWriter = struct {
-    // used to allocate a buf for serialization
+    /// used to allocate a buf for serialization
     allocator: std.mem.Allocator,
-    // allocator to free memory from
-    io_free_fba: RecycleFBA,
-    // pipe to write to
+    /// used to alloc/free the data being streamed
+    io_allocator: std.mem.Allocator,
+    /// backing state for io_allocator
+    io_allocator_state: *RecycleFBA(.{}),
+    /// pipe to write to
     file: std.fs.File,
-    // channel which data is streamed into and then written to the pipe
+    /// channel which data is streamed into and then written to the pipe
     io_channel: *sig.sync.Channel([]u8),
     exit: *std.atomic.Value(bool),
 
-    // set when the writer thread is running
+    /// set when the writer thread is running
     io_handle: ?std.Thread = null,
 
     const Self = @This();
@@ -95,11 +97,13 @@ pub const GeyserWriter = struct {
     ) !Self {
         const file = try openPipe(pipe_path);
         const io_channel = sig.sync.Channel([]u8).init(allocator, 1_000);
-        const io_free_fba = try RecycleFBA.init(allocator, io_fba_bytes);
+        const io_allocator_state = try allocator.create(RecycleFBA(.{}));
+        io_allocator_state.* = try RecycleFBA(.{}).init(allocator, io_fba_bytes);
 
         return .{
             .allocator = allocator,
-            .io_free_fba = io_free_fba,
+            .io_allocator = io_allocator_state.allocator(),
+            .io_allocator_state = io_allocator_state,
             .io_channel = io_channel,
             .file = file,
             .exit = exit,
@@ -113,7 +117,8 @@ pub const GeyserWriter = struct {
         self.file.close();
         self.io_channel.close();
         self.io_channel.deinit();
-        self.io_free_fba.deinit();
+        self.io_allocator_state.deinit();
+        self.allocator.destroy(self.io_allocator_state);
     }
 
     pub fn spawnIOLoop(self: *Self) !void {
@@ -139,9 +144,7 @@ pub const GeyserWriter = struct {
                     }
                 };
 
-                self.io_free_fba.mux.lock();
-                self.io_free_fba.allocator().free(payload);
-                self.io_free_fba.mux.unlock();
+                self.io_allocator.free(payload);
             }
         }
     }
@@ -170,25 +173,19 @@ pub const GeyserWriter = struct {
         const total_len = bincode.sizeOf(payload, .{});
 
         // obtain a memory to write to
-        self.io_free_fba.mux.lock();
         const buf = blk: while (true) {
-            const buf = self.io_free_fba.allocator().alloc(u8, total_len) catch {
+            const buf = self.io_allocator.alloc(u8, total_len) catch {
                 // no memory available rn - unlock and wait
-                self.io_free_fba.mux.unlock();
                 std.time.sleep(std.time.ns_per_ms);
                 if (self.exit.load(.unordered)) {
                     return error.MemoryBlockedWithExitSignaled;
                 }
-                self.io_free_fba.mux.lock();
                 continue;
             };
             break :blk buf;
         };
-        self.io_free_fba.mux.unlock();
         errdefer {
-            self.io_free_fba.mux.lock();
-            self.io_free_fba.allocator().free(buf);
-            self.io_free_fba.mux.unlock();
+            self.io_allocator.free(buf);
         }
 
         // serialize the payload
@@ -239,11 +236,11 @@ pub const GeyserWriter = struct {
 pub const GeyserReader = struct {
     allocator: std.mem.Allocator,
     file: std.fs.File,
-    // read from pipe into this
+    /// read from pipe into this
     io_buf: []u8,
-    // use this for bincode allocations (and is the underlying memory for fb_allocator)
+    /// use this for bincode allocations (and is the underlying memory for fb_allocator)
     bincode_buf: []u8,
-    // NOTE: not thread-safe
+    /// NOTE: not thread-safe
     bincode_allocator: std.heap.FixedBufferAllocator,
     exit: ?*std.atomic.Value(bool),
 

@@ -9,7 +9,6 @@ const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const UdpSocket = network.Socket;
 const TcpListener = network.Socket;
-
 const SocketAddr = sig.net.SocketAddr;
 const Hash = sig.core.Hash;
 const Signature = sig.core.Signature;
@@ -19,19 +18,15 @@ const Pubkey = sig.core.Pubkey;
 const IpAddr = sig.net.IpAddr;
 const ClientVersion = sig.version.ClientVersion;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
+
+const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 const ShortVecArrayListConfig = sig.bincode.shortvec.ShortVecArrayListConfig;
-
 const sanitizeWallclock = sig.gossip.message.sanitizeWallclock;
 
 const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 const var_int_config_u16 = sig.bincode.varint.var_int_config_u16;
 const var_int_config_u64 = sig.bincode.varint.var_int_config_u64;
-
-/// returns current timestamp in milliseconds
-pub fn getWallclockMs() u64 {
-    return @intCast(std.time.milliTimestamp());
-}
 
 pub const MAX_EPOCH_SLOTS: u8 = 255;
 pub const MAX_VOTES: u8 = 32;
@@ -1395,11 +1390,17 @@ pub const ContactInfo = struct {
 /// This exists to provide a version of ContactInfo which can safely cross gossip table lock
 /// boundaries without exposing unsafe pointers. For now it contains only the fields
 /// required to satisfy existing usage, it can be extended in the future if required.
+/// TODO: This struct is starting to look a lot like LegacyContactInfo, it would be nice to
+/// create some comptime code that behaves like graphql.  For example, gossip would have a
+/// generic getContactInfo function where you could pass in a custom type definition for a
+/// struct that only includes fields for the specific ports you care about, and the function
+/// would be able to populate that custom struct by iterating over the struct fields.
 pub const ThreadSafeContactInfo = struct {
     pubkey: Pubkey,
     shred_version: u16,
     gossip_addr: ?SocketAddr,
     rpc_addr: ?SocketAddr,
+    tpu_addr: ?SocketAddr,
 
     pub fn fromContactInfo(contact_info: ContactInfo) ThreadSafeContactInfo {
         return .{
@@ -1407,6 +1408,7 @@ pub const ThreadSafeContactInfo = struct {
             .shred_version = contact_info.shred_version,
             .gossip_addr = contact_info.getSocket(.gossip),
             .rpc_addr = contact_info.getSocket(.rpc),
+            .tpu_addr = contact_info.getSocket(.tpu),
         };
     }
 
@@ -1416,6 +1418,7 @@ pub const ThreadSafeContactInfo = struct {
             .shred_version = legacy_contact_info.shred_version,
             .gossip_addr = legacy_contact_info.gossip,
             .rpc_addr = legacy_contact_info.rpc,
+            .tpu_addr = legacy_contact_info.tpu,
         };
     }
 };
@@ -1560,7 +1563,7 @@ const RawOffsets = struct {
     }
 };
 
-test "gossip.data: new contact info" {
+test "new contact info" {
     const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
@@ -1569,7 +1572,7 @@ test "gossip.data: new contact info" {
     defer ci.deinit();
 }
 
-test "gossip.data: socketaddr bincode serialize matches rust" {
+test "socketaddr bincode serialize matches rust" {
     const Tmp = struct {
         addr: SocketAddr,
     };
@@ -1589,7 +1592,7 @@ test "gossip.data: socketaddr bincode serialize matches rust" {
     try testing.expectEqualSlices(u8, rust_bytes[0..rust_bytes.len], bytes);
 }
 
-test "gossip.data: set & get socket on contact info" {
+test "set & get socket on contact info" {
     const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
@@ -1604,7 +1607,7 @@ test "gossip.data: set & get socket on contact info" {
     try testing.expect(ci.sockets.items[0].eql(&.{ .key = .rpc, .index = 0, .offset = 8899 }));
 }
 
-test "gossip.data: contact info bincode serialize matches rust bincode" {
+test "contact info bincode serialize matches rust bincode" {
     // ContactInfo generated using rust ConfigInfo::new_rand(..., ...); and printed in debug format
     // ContactInfo serialized using rust bincode
     //
@@ -1723,7 +1726,7 @@ test "gossip.data: contact info bincode serialize matches rust bincode" {
     try testing.expect(sig_contact_info_deserialised.outset == sig_contact_info.outset);
 }
 
-test "gossip.data: ContactInfo bincode roundtrip maintains data integrity" {
+test "ContactInfo bincode roundtrip maintains data integrity" {
     var contact_info_bytes_from_mainnet = [109]u8{
         168, 36,  147, 159, 43,  110, 51,  177, 21,  191, 96,  206,
         25,  12,  133, 238, 147, 223, 2,   133, 105, 29,  83,  234,
@@ -1748,7 +1751,7 @@ test "gossip.data: ContactInfo bincode roundtrip maintains data integrity" {
     try testing.expect(std.mem.eql(u8, buf.items, &contact_info_bytes_from_mainnet));
 }
 
-test "gossip.data: SocketEntry serializer works" {
+test "SocketEntry serializer works" {
     testing.log_level = .debug;
 
     comptime std.debug.assert(@intFromEnum(SocketTag.rpc_pubsub) == 3);
@@ -1766,7 +1769,7 @@ test "gossip.data: SocketEntry serializer works" {
     try testing.expect(other_se.offset == se.offset);
 }
 
-test "gossip.data: test sig verify duplicateShreds" {
+test "sig verify duplicateShreds" {
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     var rng = std.rand.DefaultPrng.init(0);
@@ -1778,7 +1781,7 @@ test "gossip.data: test sig verify duplicateShreds" {
     try std.testing.expect(try value.verify(pubkey));
 }
 
-test "gossip.data: test sanitize GossipData" {
+test "sanitize GossipData" {
     var rng = std.rand.DefaultPrng.init(0);
     const rand = rng.random();
 
@@ -1788,7 +1791,7 @@ test "gossip.data: test sanitize GossipData" {
     }
 }
 
-test "gossip.data: test SignedGossipData label() and id() methods" {
+test "SignedGossipData label() and id() methods" {
     const kp_bytes = [_]u8{1} ** 32;
     var kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
@@ -1805,7 +1808,7 @@ test "gossip.data: test SignedGossipData label() and id() methods" {
     try std.testing.expect(value.label().LegacyContactInfo.equals(&id));
 }
 
-test "gossip.data: pubkey matches rust" {
+test "pubkey matches rust" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
@@ -1823,7 +1826,7 @@ test "gossip.data: pubkey matches rust" {
     try std.testing.expectEqual(id, out);
 }
 
-test "gossip.data: contact info serialization matches rust" {
+test "contact info serialization matches rust" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
@@ -1853,7 +1856,7 @@ test "gossip.data: contact info serialization matches rust" {
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], &contact_info_rust);
 }
 
-test "gossip.data: test RestartHeaviestFork serialization matches rust" {
+test "RestartHeaviestFork serialization matches rust" {
     var rust_bytes = [_]u8{ 82, 182, 93, 119, 193, 123, 4, 235, 68, 64, 82, 233, 51, 34, 232, 123, 245, 237, 236, 142, 251, 1, 123, 124, 26, 40, 219, 84, 165, 116, 208, 63, 19, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 20, 0 };
 
     const x = RestartHeaviestFork{
@@ -1870,7 +1873,7 @@ test "gossip.data: test RestartHeaviestFork serialization matches rust" {
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_bytes[0..bytes.len]);
 }
 
-test "gossip.data: test RestartLastVotedForkSlots serialization matches rust" {
+test "RestartLastVotedForkSlots serialization matches rust" {
     var rust_bytes = [_]u8{ 82, 182, 93, 119, 193, 123, 4, 235, 68, 64, 82, 233, 51, 34, 232, 123, 245, 237, 236, 142, 251, 1, 123, 124, 26, 40, 219, 84, 165, 116, 208, 63, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 16, 0, 0, 0, 0, 0, 0, 0, 255, 255, 239, 255, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
     var x = try DynamicArrayBitSet(u8).initFull(std.testing.allocator, 128);
@@ -1896,7 +1899,7 @@ test "gossip.data: test RestartLastVotedForkSlots serialization matches rust" {
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_bytes[0..bytes.len]);
 }
 
-test "gossip.data: gossip data serialization matches rust" {
+test "gossip data serialization matches rust" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
@@ -1928,7 +1931,7 @@ test "gossip.data: gossip data serialization matches rust" {
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_gossip_data[0..bytes.len]);
 }
 
-test "gossip.data: random gossip data" {
+test "random gossip data" {
     const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
@@ -1962,7 +1965,7 @@ test "gossip.data: random gossip data" {
     }
 }
 
-test "gossip.data: LegacyContactInfo <-> ContactInfo roundtrip" {
+test "LegacyContactInfo <-> ContactInfo roundtrip" {
     const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
@@ -1975,7 +1978,7 @@ test "gossip.data: LegacyContactInfo <-> ContactInfo roundtrip" {
     try std.testing.expect(std.meta.eql(start, end));
 }
 
-test "gossip.data: sanitize valid ContactInfo works" {
+test "sanitize valid ContactInfo works" {
     var rand = std.rand.DefaultPrng.init(871329);
     const rng = rand.random();
     const info = try ContactInfo.random(std.testing.allocator, rng, Pubkey.random(rng), 100, 123, 246);
@@ -1984,7 +1987,7 @@ test "gossip.data: sanitize valid ContactInfo works" {
     try data.sanitize();
 }
 
-test "gossip.data: sanitize invalid ContactInfo has error" {
+test "sanitize invalid ContactInfo has error" {
     var rand = std.rand.DefaultPrng.init(3414214);
     const rng = rand.random();
     const info = try ContactInfo.random(std.testing.allocator, rng, Pubkey.random(rng), 1_000_000_000_000_000, 123, 246);
@@ -1993,7 +1996,7 @@ test "gossip.data: sanitize invalid ContactInfo has error" {
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }
 
-test "gossip.data: sanitize valid NodeInstance works" {
+test "sanitize valid NodeInstance works" {
     var rand = std.rand.DefaultPrng.init(23523413);
     const rng = rand.random();
     const instance = NodeInstance.random(rng);
@@ -2001,7 +2004,7 @@ test "gossip.data: sanitize valid NodeInstance works" {
     try data.sanitize();
 }
 
-test "gossip.data: sanitize invalid NodeInstance has error" {
+test "sanitize invalid NodeInstance has error" {
     var rand = std.rand.DefaultPrng.init(524145234);
     const rng = rand.random();
     var instance = NodeInstance.random(rng);
@@ -2010,7 +2013,7 @@ test "gossip.data: sanitize invalid NodeInstance has error" {
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }
 
-test "gossip.data: sanitize valid SnapshotHashes works" {
+test "sanitize valid SnapshotHashes works" {
     var rand = std.rand.DefaultPrng.init(23523413);
     const rng = rand.random();
     var instance = SnapshotHashes.random(rng);
@@ -2019,7 +2022,7 @@ test "gossip.data: sanitize valid SnapshotHashes works" {
     try data.sanitize();
 }
 
-test "gossip.data: sanitize invalid SnapshotHashes full slot has error" {
+test "sanitize invalid SnapshotHashes full slot has error" {
     var rand = std.rand.DefaultPrng.init(524145234);
     const rng = rand.random();
     var instance = SnapshotHashes.random(rng);
@@ -2028,7 +2031,7 @@ test "gossip.data: sanitize invalid SnapshotHashes full slot has error" {
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }
 
-test "gossip.data: sanitize invalid SnapshotHashes incremental slot has error" {
+test "sanitize invalid SnapshotHashes incremental slot has error" {
     var rand = std.rand.DefaultPrng.init(524145234);
     const rng = rand.random();
     var incremental: [1]SlotAndHash = .{.{ .slot = 1_000_000_000_487_283, .hash = Hash.default() }};
@@ -2038,7 +2041,7 @@ test "gossip.data: sanitize invalid SnapshotHashes incremental slot has error" {
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }
 
-test "gossip.data: sanitize SnapshotHashes full > incremental has error" {
+test "sanitize SnapshotHashes full > incremental has error" {
     var rand = std.rand.DefaultPrng.init(524145234);
     const rng = rand.random();
     var incremental: [1]SlotAndHash = .{.{ .slot = 1, .hash = Hash.default() }};

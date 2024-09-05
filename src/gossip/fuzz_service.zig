@@ -1,11 +1,12 @@
 //! to use the fuzzer run the following command:
 //!     ./zig-out/bin/fuzz <seed> <num_messages> ?<entrypoint>
 //! to stop the fuzzer write any input to stdin and press enter
-
 const std = @import("std");
 const sig = @import("../sig.zig");
+
 const bincode = sig.bincode;
 
+const EndPoint = @import("zig-network").EndPoint;
 const GossipService = sig.gossip.service.GossipService;
 const ChunkType = sig.gossip.service.ChunkType;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
@@ -20,16 +21,14 @@ const SocketAddr = sig.net.net.SocketAddr;
 const Pubkey = sig.core.pubkey.Pubkey;
 const Bloom = sig.bloom.bloom.Bloom;
 const Packet = sig.net.packet.Packet;
-const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 const Hash = sig.core.hash.Hash;
-const EndPoint = @import("zig-network").EndPoint;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const AtomicBool = std.atomic.Value(bool);
+const Duration = sig.time.Duration;
 
 const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
 
-const Duration = sig.time.Duration;
-
+const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 const SLEEP_TIME = Duration.zero();
 // const SLEEP_TIME = Duration.fromMillis(10);
 // const SLEEP_TIME = Duration.fromSecs(10);

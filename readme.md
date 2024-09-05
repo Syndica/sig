@@ -33,6 +33,11 @@ metrics
 ├─ grafana/
 scripts/
 src/
+├─ main.zig # exec entrypoint 
+├─ sig.zig # library entrypoint
+├─ tests.zig 
+├─ fuzz.zig 
+├─ benchmarks.zig 
 ```
 
 

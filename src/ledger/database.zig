@@ -42,8 +42,8 @@ pub fn Database(comptime Impl: type) type {
             };
         }
 
-        pub fn deinit(self: *Self, delete_mem: bool) void {
-            self.impl.deinit(delete_mem);
+        pub fn deinit(self: *Self) void {
+            self.impl.deinit();
         }
 
         pub fn put(
@@ -265,7 +265,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
             defer logger.deinit();
             var db = try Database(Impl(&.{ cf1, cf2 })).open(allocator, logger, path);
-            defer db.deinit(true);
+            defer db.deinit();
 
             try db.put(cf1, 123, .{ .hello = 345 });
             const got = try db.get(cf1, 123);

@@ -1,15 +1,13 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
+
 const AutoArrayHashMap = std.AutoArrayHashMap;
-
-const Hash = @import("../core/hash.zig").Hash;
-
-const _gossip_data = @import("data.zig");
-const SignedGossipData = _gossip_data.SignedGossipData;
-const GossipVersionedData = _gossip_data.GossipVersionedData;
-
+const Hash = sig.core.Hash;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const GossipVersionedData = sig.gossip.data.GossipVersionedData;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const hashToU64 = @import("./pull_request.zig").hashToU64;
+const hashToU64 = sig.gossip.pull_request.hashToU64;
 
 pub const GOSSIP_SHARDS_BITS: u32 = 12;
 pub const GOSSIP_SHARDS_LEN: u32 = 1 << GOSSIP_SHARDS_BITS;
@@ -104,9 +102,9 @@ pub const GossipTableShards = struct {
     }
 };
 
-const GossipTable = @import("table.zig").GossipTable;
+const GossipTable = sig.gossip.table.GossipTable;
 
-test "gossip.gossip_shards: tests GossipTableShards" {
+test "GossipTableShards" {
     var shards = try GossipTableShards.init(std.testing.allocator);
     defer shards.deinit();
 

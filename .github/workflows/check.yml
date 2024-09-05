@@ -65,8 +65,6 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v2
-        with:
-          submodules: recursive
 
       - name: setup-zig
         uses: mlugg/setup-zig@v1
@@ -75,23 +73,17 @@ jobs:
 
       - name: Set up dependencies
         run: sudo apt-get update
-
-      - name: Install kcov
+        
+      - name: install kcov
         run: |
-          sudo apt-get install -y binutils-dev libssl-dev libcurl4-openssl-dev zlib1g-dev libdw-dev libiberty-dev
-          git clone https://github.com/SimonKagstrom/kcov.git
-          cd kcov
-          mkdir build
-          cd build
-          cmake ..
-          make
-          sudo make install
+          wget https://github.com/SimonKagstrom/kcov/releases/download/v42/kcov-amd64.tar.gz
+          sudo tar xf kcov-amd64.tar.gz -C /
 
-      - name: Run kcov
+      - name: run kcov
         run: |
           bash scripts/kcov_test.sh
 
-      - name: Print coverage report
+      - name: print coverage report
         run: |
           python scripts/parse_kcov.py kcov-output/test/coverage.json
 

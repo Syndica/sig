@@ -8,6 +8,7 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const WeightedRandomSampler = sig.rand.WeightedRandomSampler;
+const RpcClient = sig.rpc.Client;
 
 pub const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
 
@@ -53,6 +54,52 @@ pub fn leaderScheduleFromBank(
         .allocator = allocator,
         .slot_leaders = slot_leaders,
         .start_slot = epoch_start_slot,
+    };
+}
+
+pub fn leaderScheduleFromRpc(allocator: Allocator, start_slot: Slot, rpc_client: *RpcClient) !SingleEpochLeaderSchedule {
+    const rpc_leader_schedule_response = try rpc_client.getLeaderSchedule(allocator, null, .{});
+    defer rpc_leader_schedule_response.deinit();
+    const rpc_leader_schedule = try rpc_leader_schedule_response.result();
+
+    var num_leaders: u64 = 0;
+    for (rpc_leader_schedule.values()) |leader_slots| {
+        num_leaders += leader_slots.len;
+    }
+
+    const Record = struct { slot: Slot, key: Pubkey };
+
+    var leaders_index: usize = 0;
+    var leaders = try allocator.alloc(Record, num_leaders);
+    defer allocator.free(leaders);
+
+    var rpc_leader_iter = rpc_leader_schedule.iterator();
+    while (rpc_leader_iter.next()) |entry| {
+        const key = try Pubkey.fromString(entry.key_ptr.*);
+        for (entry.value_ptr.*) |slot| {
+            leaders[leaders_index] = .{ .slot = slot, .key = key };
+            leaders_index += 1;
+        }
+    }
+
+    std.mem.sortUnstable(Record, leaders, {}, struct {
+        fn gt(_: void, lhs: Record, rhs: Record) bool {
+            return switch (std.math.order(lhs.slot, rhs.slot)) {
+                .gt => false,
+                else => true,
+            };
+        }
+    }.gt);
+
+    var leader_pubkeys = try allocator.alloc(Pubkey, leaders.len);
+    for (leaders, 0..) |record, i| {
+        leader_pubkeys[i] = record.key;
+    }
+
+    return .{
+        .allocator = allocator,
+        .slot_leaders = leader_pubkeys,
+        .start_slot = start_slot,
     };
 }
 

@@ -1,13 +1,14 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const ledger = @import("lib.zig");
 
 const AtomicBool = std.atomic.Value(bool);
 
-const BlockstoreReader = sig.ledger.reader.BlockstoreReader;
-const BlockstoreWriter = sig.ledger.writer.BlockstoreWriter;
+const BlockstoreReader = ledger.reader.BlockstoreReader;
+const BlockstoreWriter = ledger.writer.BlockstoreWriter;
 const Slot = sig.core.Slot;
 const Duration = sig.time.Duration;
-const Schema = sig.ledger.schema.schema;
+const Schema = ledger.schema.schema;
 
 // The default time to sleep between checks for new roots
 const DEFAULT_MS_PER_SLOT: u64 = 400;
@@ -194,17 +195,16 @@ fn findSlotsToClean(
     }
 }
 
-const Blockstore = sig.ledger.BlockstoreDB;
-const TestState = sig.ledger.insert_shred.TestState;
+const Blockstore = ledger.BlockstoreDB;
+const TestDB = ledger.tests.TestDB("cleanup_service");
 
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("findSlotsToClean");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("findSlotsToClean");
+    defer db.deinit();
 
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -219,18 +219,18 @@ test "findSlotsToClean" {
     );
 
     // set highest and lowest slot by inserting slot_meta
-    var lowest_slot_meta = sig.ledger.meta.SlotMeta.init(allocator, 10, null);
+    var lowest_slot_meta = ledger.meta.SlotMeta.init(allocator, 10, null);
     defer lowest_slot_meta.deinit();
     lowest_slot_meta.received = 10;
 
-    var highest_slot_meta = sig.ledger.meta.SlotMeta.init(allocator, 20, null);
+    var highest_slot_meta = ledger.meta.SlotMeta.init(allocator, 20, null);
     defer highest_slot_meta.deinit();
     highest_slot_meta.received = 20;
 
     {
         var write_batch = try db.initWriteBatch();
-        try write_batch.put(sig.ledger.schema.schema.slot_meta, lowest_slot_meta.slot, lowest_slot_meta);
-        try write_batch.put(sig.ledger.schema.schema.slot_meta, highest_slot_meta.slot, highest_slot_meta);
+        try write_batch.put(ledger.schema.schema.slot_meta, lowest_slot_meta.slot, lowest_slot_meta);
+        try write_batch.put(ledger.schema.schema.slot_meta, highest_slot_meta.slot, highest_slot_meta);
         try db.commit(write_batch);
     }
 
@@ -241,12 +241,12 @@ test "findSlotsToClean" {
 
     // // TODO: understand how live files are created
     // // add data shreds
-    // var data_shred = try sig.ledger.shred.DataShred.default(allocator);
+    // var data_shred = try ledger.shred.DataShred.default(allocator);
     // defer data_shred.fields.deinit();
     // {
     //     var write_batch = try db.initWriteBatch();
     //     for (0..1000) |i| {
-    //         try write_batch.put(sig.ledger.schema.schema.data_shred, .{ 19, i }, data_shred.fields.payload);
+    //         try write_batch.put(ledger.schema.schema.data_shred, .{ 19, i }, data_shred.fields.payload);
     //     }
     //     try db.commit(write_batch);
     // }

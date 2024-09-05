@@ -5,7 +5,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const accounts_db = sig.accounts_db;
 
-pub fn SwissMapManaged(
+pub fn SwissMap(
     comptime Key: type,
     comptime Value: type,
     comptime hash_fn: fn (Key) callconv(.Inline) u64,
@@ -58,7 +58,7 @@ pub fn SwissMapManaged(
 
         pub const GetOrPutResult = Unmanaged.GetOrPutResult;
 
-        pub fn remove(self: *@This(), key: Key) error{KeyNotFound}!void {
+        pub fn remove(self: *@This(), key: Key) error{KeyNotFound}!Value {
             return @call(.always_inline, Unmanaged.remove, .{ &self.unmanaged, key });
         }
 
@@ -273,7 +273,10 @@ pub fn SwissMapUnmanaged(
             value_ptr: *Value,
         };
 
-        pub fn remove(self: *@This(), key: Key) error{KeyNotFound}!void {
+        pub fn remove(
+            self: *@This(),
+            key: Key,
+        ) error{KeyNotFound}!Value {
             if (self._capacity == 0) return error.KeyNotFound;
             const hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
@@ -293,7 +296,8 @@ pub fn SwissMapUnmanaged(
                     inline for (0..GROUP_SIZE) |j| {
                         // remove here
                         if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
-                            //
+                            const result = self.groups[group_index][j].value;
+
                             // search works by searching each group starting from group_index until an empty state is found
                             // because if theres an empty state, the key DNE
                             //
@@ -307,7 +311,7 @@ pub fn SwissMapUnmanaged(
                             const new_state = if (@reduce(.Or, EMPTY_STATE_VEC == state_vec)) EMPTY_STATE else DELETED_STATE;
                             self.states[group_index][j] = @bitCast(new_state);
                             self._count -= 1;
-                            return;
+                            return result;
                         }
                     }
                 }
@@ -494,7 +498,7 @@ pub fn SwissMapUnmanaged(
 }
 
 test "swissmap resize" {
-    var map = SwissMapManaged(sig.core.Pubkey, accounts_db.index.AccountRef, accounts_db.index.pubkey_hash, accounts_db.index.pubkey_eql).init(std.testing.allocator);
+    var map = SwissMap(sig.core.Pubkey, accounts_db.index.AccountRef, accounts_db.index.pubkey_hash, accounts_db.index.pubkey_eql).init(std.testing.allocator);
     defer map.deinit();
 
     try map.ensureTotalCapacity(100);
@@ -518,7 +522,7 @@ test "swissmap read/write/delete" {
         allocator.free(pubkeys);
     }
 
-    var map = try SwissMapManaged(
+    var map = try SwissMap(
         sig.core.Pubkey,
         *accounts_db.index.AccountRef,
         accounts_db.index.pubkey_hash,
@@ -542,7 +546,7 @@ test "swissmap read/write/delete" {
 
     // remove half
     for (0..account_refs.len / 2) |i| {
-        try map.remove(pubkeys[i]);
+        _ = try map.remove(pubkeys[i]);
     }
 
     // read removed half
@@ -569,7 +573,7 @@ test "swissmap read/write" {
         allocator.free(pubkeys);
     }
 
-    var map = try SwissMapManaged(
+    var map = try SwissMap(
         sig.core.Pubkey,
         *accounts_db.index.AccountRef,
         accounts_db.index.pubkey_hash,
@@ -642,7 +646,7 @@ pub const BenchmarkSwissMap = struct {
         const accounts, const pubkeys = try generateData(allocator, n_accounts);
 
         const write_time, const read_time = try benchGetOrPut(
-            SwissMapManaged(
+            SwissMap(
                 sig.core.Pubkey,
                 *accounts_db.index.AccountRef,
                 accounts_db.index.pubkey_hash,

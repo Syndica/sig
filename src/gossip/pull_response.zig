@@ -1,26 +1,25 @@
 const std = @import("std");
-const Hash = @import("../core/hash.zig").Hash;
+const sig = @import("../sig.zig");
+
+const Hash = sig.core.Hash;
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
+const Pubkey = sig.core.Pubkey;
+const RwMux = sig.sync.mux.RwMux;
+const GossipTable = sig.gossip.table.GossipTable;
+const GossipData = sig.gossip.data.GossipData;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
 
-const RwMux = @import("../sync/mux.zig").RwMux;
-const GossipTable = @import("table.zig").GossipTable;
-const _gossip_data = @import("data.zig");
-const GossipData = _gossip_data.GossipData;
-const SignedGossipData = _gossip_data.SignedGossipData;
-
-const _pull_request = @import("pull_request.zig");
-const GossipPullFilter = _pull_request.GossipPullFilter;
-const buildGossipPullFilters = _pull_request.buildGossipPullFilters;
-const deinitGossipPullFilters = _pull_request.deinitGossipPullFilters;
+const buildGossipPullFilters = sig.gossip.pull_request.buildGossipPullFilters;
+const deinitGossipPullFilters = sig.gossip.pull_request.deinitGossipPullFilters;
 
 pub const GOSSIP_PULL_TIMEOUT_MS: u64 = 15000;
 
 pub fn filterSignedGossipDatas(
     /// It is advised to use a PRNG, and not a true RNG, otherwise
     /// the runtime of this function may be unbounded.
-    rand: std.Random,
+    rng: std.Random,
     allocator: std.mem.Allocator,
     gossip_table: *const GossipTable,
     filter: *const GossipPullFilter,
@@ -31,7 +30,7 @@ pub fn filterSignedGossipDatas(
         return ArrayList(SignedGossipData).init(allocator);
     }
 
-    const jitter = rand.intRangeAtMost(u64, 0, GOSSIP_PULL_TIMEOUT_MS / 4);
+    const jitter = rng.intRangeAtMost(u64, 0, GOSSIP_PULL_TIMEOUT_MS / 4);
     const caller_wallclock_with_jitter = caller_wallclock + jitter;
 
     var bloom = filter.filter;
@@ -69,7 +68,7 @@ pub fn filterSignedGossipDatas(
     return output;
 }
 
-const LegacyContactInfo = _gossip_data.LegacyContactInfo;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 
 test "gossip.pull_response: test filtering values works" {
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;

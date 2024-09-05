@@ -70,14 +70,9 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn deinit(self: *Self, delete_disk: bool) void {
+        pub fn deinit(self: *Self) void {
             self.allocator.free(self.cf_handles);
             self.db.deinit();
-            if (delete_disk) {
-                std.fs.cwd().deleteTree(self.path) catch |e| {
-                    std.debug.print("failed to delete rocksDB path: {s}", .{@errorName(e)});
-                };
-            }
             self.allocator.free(self.path);
         }
 

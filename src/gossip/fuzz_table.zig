@@ -9,12 +9,10 @@ const ContactInfo = sig.gossip.data.ContactInfo;
 const Logger = sig.trace.log.Logger;
 const Pubkey = sig.core.pubkey.Pubkey;
 const GossipTable = sig.gossip.GossipTable;
-
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipData = sig.gossip.data.GossipData;
 const GossipKey = sig.gossip.data.GossipKey;
 const Signature = sig.core.Signature;
-
 const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const Duration = sig.time.Duration;
 

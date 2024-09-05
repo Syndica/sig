@@ -1,25 +1,24 @@
 const std = @import("std");
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const Signature = @import("../core/signature.zig").Signature;
-const bincode = @import("../bincode/bincode.zig");
-const SocketAddr = @import("../net/net.zig").SocketAddr;
+const sig = @import("../sig.zig");
 
-const _gossip_data = @import("data.zig");
-const SignedGossipData = _gossip_data.SignedGossipData;
-const GossipData = _gossip_data.GossipData;
-const LegacyContactInfo = _gossip_data.LegacyContactInfo;
-const getWallclockMs = _gossip_data.getWallclockMs;
-
-const GossipPullFilter = @import("pull_request.zig").GossipPullFilter;
-const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
-
-const DefaultPrng = std.rand.DefaultPrng;
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const bincode = sig.bincode;
 const testing = std.testing;
 
-const Ping = @import("ping_pong.zig").Ping;
-const Pong = @import("ping_pong.zig").Pong;
+const Pubkey = sig.core.Pubkey;
+const Signature = sig.core.Signature;
+const SocketAddr = sig.net.SocketAddr;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const GossipData = sig.gossip.data.GossipData;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
+const Ping = sig.gossip.ping_pong.Ping;
+const Pong = sig.gossip.ping_pong.Pong;
+const DefaultPrng = std.rand.DefaultPrng;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
+const getWallclockMs = sig.time.getWallclockMs;
+
+const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 /// Analogous to [Protocol](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/cluster_info.rs#L268)
@@ -183,8 +182,8 @@ pub const PruneData = struct {
             .wallclock = self.wallclock,
         };
         const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
-        var sig = try keypair.sign(out, null);
-        self.signature.data = sig.toBytes();
+        var signature = try keypair.sign(out, null);
+        self.signature.data = signature.toBytes();
     }
 
     pub fn verify(self: *const PruneData) !void {
@@ -204,7 +203,7 @@ pub const PruneData = struct {
 };
 
 test "gossip.message: push message serialization is predictable" {
-    var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
+    var rng = DefaultPrng.init(getWallclockMs());
     const pubkey = Pubkey.random(rng.random());
     var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
@@ -230,7 +229,7 @@ test "gossip.message: test prune data sig verify" {
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
 
-    var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
+    var rng = DefaultPrng.init(getWallclockMs());
     var prune = try PruneData.random(rng.random(), &keypair);
 
     try prune.verify();
