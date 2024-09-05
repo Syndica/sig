@@ -28,7 +28,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) !void {
             }
             err = e;
             std.debug.print("\n\u{001B}[35m{s}\u{001B}[0m\n\n", .{decl.name});
-            std.debug.dumpStackTrace(@errorReturnTrace().?.*);
+            if (@errorReturnTrace()) |trace| std.debug.dumpStackTrace(trace.*);
         };
     }
     if (err) |e| {
