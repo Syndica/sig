@@ -27,6 +27,7 @@ pub const Client = struct {
             .MainnetBeta => "https://api.mainnet-beta.solana.com",
             .Testnet => "https://api.testnet.solana.com",
             .Devnet => "https://api.devnet.solana.com",
+            .LocalHost => "http://localhost:8899",
             .Custom => |cluster| cluster.url,
         };
         return .{
