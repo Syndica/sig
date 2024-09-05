@@ -1403,6 +1403,31 @@ pub const ThreadSafeContactInfo = struct {
     tpu_addr: ?SocketAddr,
     tvu_addr: ?SocketAddr,
 
+    pub fn random(
+        allocator: std.mem.Allocator,
+        rng: std.rand.Random,
+        pubkey: Pubkey,
+        wallclock: u64,
+        outset: u64,
+        shred_version: u16,
+    ) !ThreadSafeContactInfo {
+        const contact_info = try ContactInfo.random(
+            allocator,
+            rng,
+            pubkey,
+            wallclock,
+            outset,
+            shred_version,
+        );
+        defer contact_info.deinit();
+        var threadsafe_contact_info = ThreadSafeContactInfo.fromContactInfo(contact_info);
+        threadsafe_contact_info.gossip_addr = SocketAddr.random(rng);
+        threadsafe_contact_info.rpc_addr = SocketAddr.random(rng);
+        threadsafe_contact_info.tpu_addr = SocketAddr.random(rng);
+        threadsafe_contact_info.tvu_addr = SocketAddr.random(rng);
+        return threadsafe_contact_info;
+    }
+
     pub fn fromContactInfo(contact_info: ContactInfo) ThreadSafeContactInfo {
         return .{
             .pubkey = contact_info.pubkey,
