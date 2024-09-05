@@ -8,7 +8,6 @@ const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
 const UdpSocket = network.Socket;
 
-const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const Slot = sig.core.Slot;
 const Signature = sig.core.Signature;
 const GossipTable = sig.gossip.GossipTable;
@@ -18,6 +17,7 @@ const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const RpcClient = sig.rpc.Client;
+const ClusterType = sig.rpc.types.ClusterType;
 const RwMux = sig.sync.RwMux;
 const Channel = sig.sync.Channel;
 const Duration = sig.time.Duration;

@@ -93,3 +93,12 @@ pub const SignatureStatuses = struct {
         confirmationStatus: ?[]const u8,
     };
 };
+
+pub const ClusterType = union(enum(u8)) {
+    Testnet,
+    MainnetBeta,
+    Devnet,
+    Custom: struct {
+        url: []const u8,
+    },
+};
