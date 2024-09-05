@@ -234,7 +234,6 @@ pub const DiskMemoryAllocator = struct {
         return full_alloc.ptr;
     }
 
-    /// not supported rn
     fn resize(
         ctx: *anyopaque,
         buf: []u8,
