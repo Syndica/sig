@@ -211,12 +211,28 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             return self;
         }
 
-        fn unscoped(self: *Self) *Logger {
-            return @ptrCast(self);
+        fn unscoped(self: *Self) Logger {
+            return .{
+                .allocator = self.allocator,
+                .recycle_fba = self.recycle_fba,
+                .max_buffer = self.max_buffer,
+                .max_level = self.max_level,
+                .exit_sig = self.exit_sig,
+                .channel = self.channel,
+                .handle = self.handle,
+            };
         }
 
-        fn withScope(self: *Self, comptime new_scope: anytype) *ScoppedLogger(new_scope) {
-            return @ptrCast(self);
+        fn withScope(self: *Self, comptime new_scope: anytype) ScoppedLogger(new_scope) {
+            return .{
+                .allocator = self.allocator,
+                .recycle_fba = self.recycle_fba,
+                .max_buffer = self.max_buffer,
+                .max_level = self.max_level,
+                .exit_sig = self.exit_sig,
+                .channel = self.channel,
+                .handle = self.handle,
+            };
         }
 
         pub fn deinit(self: *Self) void {
