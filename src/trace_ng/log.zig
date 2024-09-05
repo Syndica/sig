@@ -230,7 +230,6 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         const Self = @This();
         max_level: Level,
         allocator: Allocator,
-        recycle_fba: RecycleFBA,
         max_buffer: u64,
         log_msg: ?std.ArrayList(u8),
 
@@ -239,7 +238,6 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             self.* = .{
                 .max_level = config.max_level,
                 .allocator = config.allocator,
-                .recycle_fba = RecycleFBA.init(config.allocator, 2048) catch @panic("could not create RecycleFBA"),
                 .max_buffer = config.max_buffer,
                 .log_msg = std.ArrayList(u8).init(config.allocator),
             };
@@ -271,7 +269,6 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.recycle_fba.deinit();
             if (self.log_msg) |log_msg| {
                 log_msg.deinit();
             }
