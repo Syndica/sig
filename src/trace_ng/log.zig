@@ -107,7 +107,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
 
                 for (messages) |message| {
                     const writer = std.io.getStdErr().writer();
-                    logfmt.writeLog(writer, message) catch @panic("logging failed");
+                    logfmt.writeLog(writer, message) catch {};
                     if (message.maybe_fields) |fields| {
                         self.log_allocator.free(fields);
                     }
@@ -133,7 +133,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 .maybe_fmt = null,
             };
 
-            self.channel.send(log_msg) catch @panic("could not send to channel");
+            self.channel.send(log_msg) catch {};
         }
 
         pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
@@ -145,7 +145,10 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format fields.
-            const buf = self.allocBuf(512) catch @panic("Could not alloc");
+            const buf = self.allocBuf(512) catch {
+                // Ignore error
+                return;
+            };
             var fmt_fields = std.io.fixedBufferStream(buf);
             logfmt.fmtField(fmt_fields.writer(), fields);
 
@@ -157,7 +160,10 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 .maybe_fmt = null,
             };
 
-            self.channel.send(log_msg) catch @panic("could not send to channel");
+            self.channel.send(log_msg) catch {
+                // Ignore error
+                return;
+            };
         }
 
         pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
@@ -168,7 +174,10 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format message.
-            const buf = self.allocBuf(std.fmt.count(fmt, args)) catch @panic("Could not alloc");
+            const buf = self.allocBuf(std.fmt.count(fmt, args)) catch {
+                // Ignore error
+                return;
+            };
             var fmt_message = std.io.fixedBufferStream(buf);
             logfmt.fmtMsg(fmt_message.writer(), fmt, args);
 
@@ -180,7 +189,10 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 .maybe_fmt = fmt_message.getWritten(),
             };
 
-            self.channel.send(log_msg) catch @panic("could not send to channel");
+            self.channel.send(log_msg) catch {
+                // Ignore error
+                return;
+            };
         }
 
         pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
@@ -191,12 +203,18 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format fields.
-            const fields_buf = self.allocBuf(512) catch @panic("Could not alloc");
+            const fields_buf = self.allocBuf(512) catch {
+                // Ignore error
+                return;
+            };
             var fmt_fields = std.io.fixedBufferStream(fields_buf);
             logfmt.fmtField(fmt_fields.writer(), fields);
 
             // Format message.
-            const msg_buf = self.allocBuf(std.fmt.count(fmt, args)) catch @panic("Could not alloc");
+            const msg_buf = self.allocBuf(std.fmt.count(fmt, args)) catch {
+                // Ignore error
+                return;
+            };
             var fmt_message = std.io.fixedBufferStream(msg_buf);
             logfmt.fmtMsg(fmt_message.writer(), fmt, args);
 
@@ -207,7 +225,10 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 .maybe_fields = null,
                 .maybe_fmt = fmt_message.getWritten(),
             };
-            self.channel.send(log_msg) catch @panic("could not send to channel");
+            self.channel.send(log_msg) catch {
+                // Ignore error
+                return;
+            };
         }
 
         // Utility function for allocating memory from RecycleFBA for part of the log message.
