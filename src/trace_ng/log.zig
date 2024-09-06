@@ -274,7 +274,6 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
         const Self = @This();
         max_level: Level,
         allocator: Allocator,
-        max_buffer: u64,
         log_msg: ?std.ArrayList(u8),
 
         pub fn init(config: Config) *Self {
@@ -282,7 +281,6 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             self.* = .{
                 .max_level = config.max_level,
                 .allocator = config.allocator,
-                .max_buffer = config.max_buffer,
                 .log_msg = std.ArrayList(u8).init(config.allocator),
             };
             return self;
