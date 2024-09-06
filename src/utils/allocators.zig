@@ -249,6 +249,7 @@ pub const DiskMemoryAllocator = struct {
     ) bool {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
+        _ = self;
 
         const alignment = @as(usize, 1) << @intCast(log2_align);
         std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
@@ -258,10 +259,10 @@ pub const DiskMemoryAllocator = struct {
 
         const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
         const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
-        const file_name_bounded = fileNameBounded(metadata.file_index);
-        const file_name = file_name_bounded.constSlice();
 
-        if (aligned_size == new_aligned_size) return true;
+        if (new_aligned_size == aligned_size) {
+            return true;
+        }
 
         if (new_aligned_size < aligned_size) {
             std.posix.munmap(@alignCast(buf_ptr[new_aligned_size..aligned_size]));
@@ -269,28 +270,9 @@ pub const DiskMemoryAllocator = struct {
                 .file_index = metadata.file_index,
             };
             return true;
-        } else {
-            const file = self.dir.openFile(file_name, .{ .mode = .read_write }) catch |err| {
-                self.logFailure(err, file_name);
-                return false;
-            };
-            defer file.close();
-
-            const mapped = std.posix.mmap(
-                buf_ptr,
-                new_aligned_size,
-                std.posix.PROT.READ | std.posix.PROT.WRITE,
-                std.posix.MAP{ .TYPE = .SHARED },
-                file.handle,
-                0,
-            ) catch |err| {
-                self.logFailure(err, file_name);
-                return false;
-            };
-            std.debug.assert(mapped.ptr == buf_ptr);
-
-            return true;
         }
+
+        return false;
     }
 
     /// unmaps the memory (file still exists and is removed on deinit())
@@ -385,6 +367,25 @@ test "disk allocator on arraylists" {
 
     try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_0", .{}));
     try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_1", .{}));
+}
+
+test "disk allocator large realloc" {
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    var dma_state: DiskMemoryAllocator = .{
+        .dir = tmp_dir,
+        .logger = .noop,
+    };
+    const dma = dma_state.allocator();
+
+    var page1 = try dma.alloc(u8, std.mem.page_size);
+    defer dma.free(page1);
+
+    page1 = try dma.realloc(page1, std.mem.page_size * 15);
+
+    page1[page1.len - 1] = 10;
 }
 
 /// Namespace housing the different components for the stateless failing allocator.
