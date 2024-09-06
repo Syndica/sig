@@ -167,13 +167,36 @@ test "recycle allocator" {
 pub const DiskMemoryAllocator = struct {
     dir: std.fs.Dir,
     logger: sig.trace.Logger,
+    /// The address space mmap'd to a particular file will be at least
+    /// `(file_size * (1000 + mmap_ratio)) / 1000` in integer terms.
+    /// With a value of 0, the mmap'd size will be equal to the file size.
+    /// With a value of 1000, the mmap'd size will be double the file size.
+    /// NOTE: not intended to be changed after initialization.
+    mmap_ratio: MmapRatio = 0,
     count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     const Self = @This();
+
+    pub const MmapRatio = u32;
 
     /// Metadata stored at the end of each allocation.
     const Metadata = extern struct {
         file_index: u32,
     };
+
+    /// Returns the aligned size with enough space for `size` and `Metadata` at the end.
+    inline fn alignedFileSize(size: usize) usize {
+        return std.mem.alignForward(usize, size + @sizeOf(Metadata), std.mem.page_size);
+    }
+
+    /// Returns the aligned size to mmap relative to `alignedFileSize(size)`.
+    inline fn alignedMmapSize(
+        /// Must be `= alignedFileSize(size)`.
+        aligned_file_size: usize,
+        mmap_ratio: MmapRatio,
+    ) usize {
+        const min_mmap_size = (aligned_file_size * (1000 + mmap_ratio)) / 1000;
+        return std.mem.alignForward(usize, min_mmap_size, std.mem.page_size);
+    }
 
     pub inline fn allocator(self: *Self) std.mem.Allocator {
         return .{
@@ -186,7 +209,11 @@ pub const DiskMemoryAllocator = struct {
         };
     }
 
-    /// creates a new file with size aligned to page_size and returns a pointer to it
+    /// creates a new file with size aligned to page_size and returns a pointer to it.
+    ///
+    /// mmaps at least enough memory to the file for `size`, the metadata, and optionally
+    /// more based on the `mmap_ratio` field, in order to accommodate potential growth
+    /// from `resize` calls.
     fn alloc(ctx: *anyopaque, size: usize, log2_align: u8, return_address: usize) ?[*]u8 {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
@@ -194,7 +221,8 @@ pub const DiskMemoryAllocator = struct {
         const alignment = @as(usize, 1) << @intCast(log2_align);
         std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
 
-        const aligned_size = alignedFileSize(size);
+        const file_aligned_size = alignedFileSize(size);
+        const aligned_mmap_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
 
         const file_index = self.count.fetchAdd(1, .monotonic);
         const file_name_bounded = fileNameBounded(file_index);
@@ -207,14 +235,14 @@ pub const DiskMemoryAllocator = struct {
         defer file.close();
 
         // resize the file
-        file.setEndPos(aligned_size) catch |err| {
+        file.setEndPos(file_aligned_size) catch |err| {
             self.logFailure(err, file_name);
             return null;
         };
 
         const full_alloc = std.posix.mmap(
             null,
-            aligned_size,
+            aligned_mmap_size,
             std.posix.PROT.READ | std.posix.PROT.WRITE,
             std.posix.MAP{ .TYPE = .SHARED },
             file.handle,
@@ -224,6 +252,7 @@ pub const DiskMemoryAllocator = struct {
             return null;
         };
 
+        std.debug.assert(size <= file_aligned_size - @sizeOf(Metadata)); // sanity check
         std.mem.bytesAsValue(Metadata, full_alloc[size..][0..@sizeOf(Metadata)]).* = .{
             .file_index = file_index,
         };
@@ -239,43 +268,65 @@ pub const DiskMemoryAllocator = struct {
     ) bool {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
-        _ = self;
 
         const alignment = @as(usize, 1) << @intCast(log2_align);
         std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
 
-        const aligned_size = alignedFileSize(buf.len);
-        const new_aligned_size = alignedFileSize(new_size);
+        const old_file_aligned_size = alignedFileSize(buf.len);
+        const old_mmap_aligned_size = alignedMmapSize(old_file_aligned_size, self.mmap_ratio);
 
-        if (new_aligned_size == aligned_size) {
-            return true;
-        }
+        const new_file_aligned_size = alignedFileSize(new_size);
+        const new_mmap_aligned_size = alignedMmapSize(new_file_aligned_size, self.mmap_ratio);
 
-        if (new_aligned_size > aligned_size) {
+        if (new_mmap_aligned_size > old_mmap_aligned_size) {
             return false;
         }
 
-        std.debug.assert(new_aligned_size < aligned_size);
+        if (new_file_aligned_size == old_file_aligned_size) {
+            return true;
+        }
 
         const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
-        const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
+        const metadata: Metadata = @bitCast(buf_ptr[old_file_aligned_size - @sizeOf(Metadata) ..][0..@sizeOf(Metadata)].*);
 
-        std.posix.munmap(@alignCast(buf_ptr[new_aligned_size..aligned_size]));
+        const file_name_bounded = fileNameBounded(metadata.file_index);
+        const file_name = file_name_bounded.constSlice();
+
+        const file = self.dir.openFile(file_name, .{ .mode = .read_write }) catch |err| {
+            self.logFailure(err, file_name);
+            return false;
+        };
+        defer file.close();
+
+        file.setEndPos(new_file_aligned_size) catch return false;
+        if (new_mmap_aligned_size < old_mmap_aligned_size) {
+            // we'll never be able to recover this anyway, because the `alignedFileSize` will
+            // reflect the new length, and as such `alignedMmapSize` will reflect a size
+            // which doesn't include this region - so we may as well free it up.
+            const lost_region = buf_ptr[new_mmap_aligned_size..old_mmap_aligned_size];
+            std.posix.munmap(@alignCast(lost_region));
+        }
+
+        std.debug.assert(new_size <= new_file_aligned_size - @sizeOf(Metadata)); // sanity check
         std.mem.bytesAsValue(Metadata, buf_ptr[new_size..][0..@sizeOf(Metadata)]).* = .{
             .file_index = metadata.file_index,
         };
+
         return true;
     }
 
-    /// unmaps the memory (file still exists and is removed on deinit())
+    /// unmaps the memory and deletes the associated file.
     fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
 
+        std.debug.assert(buf.len != 0); // should be ensured by the allocator interface
+
         const alignment = @as(usize, 1) << @intCast(log2_align);
         std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
 
-        const aligned_size = alignedFileSize(buf.len);
+        const file_aligned_size = alignedFileSize(buf.len);
+        const mmap_aligned_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
 
         const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
         const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
@@ -283,15 +334,10 @@ pub const DiskMemoryAllocator = struct {
         const file_name_bounded = fileNameBounded(metadata.file_index);
         const file_name = file_name_bounded.constSlice();
 
-        std.posix.munmap(buf_ptr[0..aligned_size]);
+        std.posix.munmap(buf_ptr[0..mmap_aligned_size]);
         self.dir.deleteFile(file_name) catch |err| {
             self.logFailure(err, file_name);
         };
-    }
-
-    /// Returns the aligned size with enough space for `size` and `Metadata` at the end.
-    inline fn alignedFileSize(size: usize) usize {
-        return std.mem.alignForward(usize, size + @sizeOf(Metadata), std.mem.page_size);
     }
 
     fn logFailure(self: Self, err: anyerror, file_name: []const u8) void {
@@ -306,17 +352,46 @@ pub const DiskMemoryAllocator = struct {
     }
 };
 
+test "disk allocator stdlib test" {
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    for ([_]DiskMemoryAllocator.MmapRatio{
+        0,    1,    2,    3,  4,  5,
+        10,   11,   12,   13, 14, 15,
+        20,   21,   22,   23, 24, 25,
+        30,   31,   32,   33, 34, 35,
+        40,   41,   42,   43, 44, 45,
+        50,   51,   52,   53, 54, 55,
+        1000, 2000, 3000,
+    }) |ratio| {
+        var dma_state: DiskMemoryAllocator = .{
+            .dir = tmp_dir,
+            .logger = .noop,
+            .mmap_ratio = ratio,
+        };
+        const dma = dma_state.allocator();
+
+        try std.heap.testAllocator(dma);
+        try std.heap.testAllocatorAligned(dma);
+        try std.heap.testAllocatorLargeAlignment(dma);
+        try std.heap.testAllocatorAlignedShrink(dma);
+    }
+}
+
 test "disk allocator on hashmaps" {
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
     const tmp_dir = tmp_dir_root.dir;
 
-    var allocator: DiskMemoryAllocator = .{
+    var dma_state: DiskMemoryAllocator = .{
         .dir = tmp_dir,
         .logger = .noop,
     };
+    const dma = dma_state.allocator();
 
-    var refs = std.AutoHashMap(u8, u8).init(allocator.allocator());
+    var refs = std.AutoHashMap(u8, u8).init(dma);
     defer refs.deinit();
 
     try refs.ensureTotalCapacity(100);
