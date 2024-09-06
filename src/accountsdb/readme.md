@@ -178,7 +178,7 @@ disk allocator which creates memory from mmap-ing files stored on disk.
 // incremented by one for each new allocation.
 var dma_dir = try std.fs.cwd().makeOpenPath("data/test-data");
 defer dma_dir.close();
-var dma_state = try DiskMemoryAllocator.init(dma_dir, logger);
+var dma_state: DiskMemoryAllocator = try DiskMemoryAllocator.init(dma_dir, logger);
 const dma = dma_state.allocator();
 ```
 

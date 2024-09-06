@@ -170,16 +170,6 @@ pub const DiskMemoryAllocator = struct {
     count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     const Self = @This();
 
-    pub inline fn init(
-        index_dir: std.fs.Dir,
-        logger: sig.trace.Logger,
-    ) Self {
-        return .{
-            .dir = index_dir,
-            .logger = logger,
-        };
-    }
-
     /// Metadata stored at the end of each allocation.
     const Metadata = extern struct {
         file_index: u32,
@@ -319,7 +309,10 @@ test "disk allocator on hashmaps" {
     defer tmp_dir_root.cleanup();
     const tmp_dir = tmp_dir_root.dir;
 
-    var allocator = DiskMemoryAllocator.init(tmp_dir, .noop);
+    var allocator: DiskMemoryAllocator = .{
+        .dir = tmp_dir,
+        .logger = .noop,
+    };
 
     var refs = std.AutoHashMap(u8, u8).init(allocator.allocator());
     defer refs.deinit();
@@ -337,7 +330,10 @@ test "disk allocator on arraylists" {
     defer tmp_dir_root.cleanup();
     const tmp_dir = tmp_dir_root.dir;
 
-    var dma_state = DiskMemoryAllocator.init(tmp_dir, .noop);
+    var dma_state: DiskMemoryAllocator = .{
+        .dir = tmp_dir,
+        .logger = .noop,
+    };
     const dma = dma_state.allocator();
 
     {

@@ -222,7 +222,10 @@ pub const AccountsDB = struct {
                 logger.infof("using disk index in {s}", .{sig.utils.fmt.tryRealPath(index_bin_dir, ".")});
 
                 const ptr = try allocator.create(DiskMemoryAllocator);
-                ptr.* = DiskMemoryAllocator.init(index_bin_dir, logger);
+                ptr.* = .{
+                    .dir = index_bin_dir,
+                    .logger = logger,
+                };
 
                 break :blk .{ ptr, ptr.allocator() };
             } else {
