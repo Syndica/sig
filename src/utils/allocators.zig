@@ -204,11 +204,12 @@ pub const DiskMemoryAllocator = struct {
         const alignment = @as(usize, 1) << @intCast(log2_align);
         std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
 
-        const aligned_size = fullMmapSize(size);
+        const aligned_size = alignedFileSize(size);
 
         const file_index = self.count.fetchAdd(1, .monotonic);
         const file_name_bounded = fileNameBounded(file_index);
         const file_name = file_name_bounded.constSlice();
+
         const file = self.dir.createFile(file_name, .{ .read = true, .truncate = true }) catch |err| {
             self.logFailure(err, file_name);
             return null;
@@ -252,10 +253,10 @@ pub const DiskMemoryAllocator = struct {
         const alignment = @as(usize, 1) << @intCast(log2_align);
         std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
 
-        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
-        const aligned_size = fullMmapSize(buf.len);
-        const new_aligned_size = fullMmapSize(new_size);
+        const aligned_size = alignedFileSize(buf.len);
+        const new_aligned_size = alignedFileSize(new_size);
 
+        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
         const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
         const file_name_bounded = fileNameBounded(metadata.file_index);
         const file_name = file_name_bounded.constSlice();
@@ -300,10 +301,11 @@ pub const DiskMemoryAllocator = struct {
         const alignment = @as(usize, 1) << @intCast(log2_align);
         std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
 
-        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
-        const aligned_size = fullMmapSize(buf.len);
+        const aligned_size = alignedFileSize(buf.len);
 
+        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
         const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
+
         const file_name_bounded = fileNameBounded(metadata.file_index);
         const file_name = file_name_bounded.constSlice();
 
@@ -314,7 +316,7 @@ pub const DiskMemoryAllocator = struct {
     }
 
     /// Returns the aligned size with enough space for `size` and `Metadata` at the end.
-    inline fn fullMmapSize(size: usize) usize {
+    inline fn alignedFileSize(size: usize) usize {
         return std.mem.alignForward(usize, size + @sizeOf(Metadata), std.mem.page_size);
     }
 
