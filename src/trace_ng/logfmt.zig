@@ -2,7 +2,6 @@ const std = @import("std");
 const time = @import("../time/time.zig");
 const Level = @import("level.zig").Level;
 const sig = @import("../sig.zig");
-const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
 pub const LogMsg = struct {
     level: Level,
