@@ -167,7 +167,7 @@ test "recycle allocator" {
 pub const DiskMemoryAllocator = struct {
     dir: std.fs.Dir,
     logger: sig.trace.Logger,
-    count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     const Self = @This();
 
     pub inline fn init(
@@ -179,6 +179,11 @@ pub const DiskMemoryAllocator = struct {
             .logger = logger,
         };
     }
+
+    /// Metadata stored at the end of each allocation.
+    const Metadata = extern struct {
+        file_index: u32,
+    };
 
     pub inline fn allocator(self: *Self) std.mem.Allocator {
         return .{
@@ -308,10 +313,6 @@ pub const DiskMemoryAllocator = struct {
         };
     }
 
-    const Metadata = extern struct {
-        file_index: usize,
-    };
-
     /// Returns the aligned size with enough space for `size` and `Metadata` at the end.
     inline fn fullMmapSize(size: usize) usize {
         return std.mem.alignForward(usize, size + @sizeOf(Metadata), std.mem.page_size);
@@ -323,8 +324,8 @@ pub const DiskMemoryAllocator = struct {
         });
     }
 
-    const file_name_max_len = sig.utils.fmt.boundedLenValue("bin_{d}", .{std.math.maxInt(usize)});
-    inline fn fileNameBounded(file_index: usize) std.BoundedArray(u8, file_name_max_len) {
+    const file_name_max_len = sig.utils.fmt.boundedLenValue("bin_{d}", .{std.math.maxInt(u32)});
+    inline fn fileNameBounded(file_index: u32) std.BoundedArray(u8, file_name_max_len) {
         return sig.utils.fmt.boundedFmt("bin_{d}", .{file_index});
     }
 };
