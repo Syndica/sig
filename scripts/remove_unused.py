@@ -30,6 +30,7 @@ import_line_regex = re.compile(
 
 total_num_lines_removed = 0
 lines_removed_this_time = 999  # get past 1st while check
+files_with_unused_lines = [];
 
 while lines_removed_this_time > 0:
     lines_removed_this_time = 0
@@ -64,10 +65,12 @@ while lines_removed_this_time > 0:
         lines_removed_this_time += num_lines_to_remove
         if (num_lines_to_remove > 0):
             os.system(f"zig fmt {path}")
+            files_with_unused_lines.append(path)
 
     print("removed this iteration:", lines_removed_this_time)
     print()
 
 print("total lines removed:", total_num_lines_removed)
 if (total_num_lines_removed > 0):
+    print(f"Files with unused lines removed: {files_with_unused_lines}")
     exit(1)
