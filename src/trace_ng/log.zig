@@ -247,7 +247,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
 
         // Utility fuction for get size of the struct when formated as k0=v0 k1=v2.
         // It uses `any` as the formatter hence it would be slighly more for string values.
-        fn estimateFieldSize(_:*Self, input: anytype) usize {
+        fn estimateFieldSize(_: *Self, input: anytype) usize {
             const info = @typeInfo(@TypeOf(input));
             var size: usize = 0;
 
