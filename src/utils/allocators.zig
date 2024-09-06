@@ -247,22 +247,24 @@ pub const DiskMemoryAllocator = struct {
         const aligned_size = alignedFileSize(buf.len);
         const new_aligned_size = alignedFileSize(new_size);
 
-        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
-        const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
-
         if (new_aligned_size == aligned_size) {
             return true;
         }
 
-        if (new_aligned_size < aligned_size) {
-            std.posix.munmap(@alignCast(buf_ptr[new_aligned_size..aligned_size]));
-            std.mem.bytesAsValue(Metadata, buf_ptr[new_size..][0..@sizeOf(Metadata)]).* = .{
-                .file_index = metadata.file_index,
-            };
-            return true;
+        if (new_aligned_size > aligned_size) {
+            return false;
         }
 
-        return false;
+        std.debug.assert(new_aligned_size < aligned_size);
+
+        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
+        const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
+
+        std.posix.munmap(@alignCast(buf_ptr[new_aligned_size..aligned_size]));
+        std.mem.bytesAsValue(Metadata, buf_ptr[new_size..][0..@sizeOf(Metadata)]).* = .{
+            .file_index = metadata.file_index,
+        };
+        return true;
     }
 
     /// unmaps the memory (file still exists and is removed on deinit())
