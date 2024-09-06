@@ -475,8 +475,8 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             self.logWithFields(.warn, message, fields);
         }
 
-        pub fn warnfWithFields(self: *Self, message: []const u8, fields: anytype) void {
-            self.logWithFields(.warn, message, fields);
+        pub fn warnfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            self.logfWithFields(.warn, fmt, args, fields);
         }
 
         pub fn info(self: *Self, message: []const u8) void {
