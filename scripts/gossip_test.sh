@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 usage() {
     echo "Usage: $0 <duration_in_seconds>"
     exit 1

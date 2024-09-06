@@ -221,6 +221,20 @@ Run a benchmark group: socket_utils, gossip, or sync.
 zig build benchmark -- gossip
 ```
 
+### 💯 Comprehensive Checks
+
+To run all the checks that need to pass in CI before a PR can be merged:
+
+```bash
+./check all
+```
+
+To run a faster subset of those checks:
+
+```bash
+./check
+```
+
 <br>
 
 ## 📦 Import Sig

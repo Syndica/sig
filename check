@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+
+zig fmt --check src build.zig
+python scripts/remove_unused.py --check src
+zig build test --summary all
+
+if [[ $@ == all ]]; then
+    scripts/kcov_test.sh
+    python scripts/parse_kcov.py kcov-output/test/coverage.json
+    zig build -Doptimize=ReleaseSafe benchmark
+    zig build -Doptimize=ReleaseSafe
+    scripts/gossip_test.sh 120
+fi
