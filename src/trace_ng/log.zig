@@ -141,7 +141,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format fields.
-            const buf = self.allocBuf(512) catch {
+            const buf = self.allocBuf(self.estimateFieldSize(fields)) catch {
                 // Ignore error
                 return;
             };
@@ -199,7 +199,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format fields.
-            const fields_buf = self.allocBuf(512) catch {
+            const fields_buf = self.allocBuf(self.estimateFieldSize(fields)) catch {
                 // Ignore error
                 return;
             };
@@ -243,6 +243,30 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
                 self.log_allocator.free(buf);
             }
             return buf;
+        }
+
+        // Utility fuction for get size of the struct when formated as k0=v0 k1=v2.
+        // It uses `any` as the formatter hence it would be slighly more for string values.
+        fn estimateFieldSize(_:*Self, input: anytype) usize {
+            const info = @typeInfo(@TypeOf(input));
+            var size: usize = 0;
+
+            switch (info) {
+                .Struct => |struct_info| {
+                    // Iterate through each field
+                    inline for (struct_info.fields) |field| {
+                        // Add size for the key (field name)
+                        size += field.name.len;
+                        size += 1; // For '=' symbol
+                        const field_value = @field(input, field.name);
+                        const val_size = std.fmt.count("{any} ", .{field_value});
+                        size += val_size;
+                    }
+                },
+                else => std.debug.panic("Expected a struct type"),
+            }
+
+            return size;
         }
     };
 
