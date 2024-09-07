@@ -11,7 +11,7 @@ const meta = std.meta;
 /// to run gossip benchmarks:
 /// zig build benchmark -- gossip
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
+    const allocator = std.heap.c_allocator;
     logger.default_logger.* = logger.Logger.init(allocator, .debug);
 
     if (builtin.mode == .Debug) std.debug.print("warning: running benchmark in Debug mode\n", .{});

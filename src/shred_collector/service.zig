@@ -64,8 +64,15 @@ pub fn start(
     conf: ShredCollectorConfig,
     deps: ShredCollectorDependencies,
 ) !ServiceManager {
-    var service_manager = ServiceManager.init(deps.allocator, deps.logger, deps.exit, "shred collector", .{}, .{});
-    var arena = service_manager.arena();
+    var service_manager = ServiceManager.init(
+        deps.allocator,
+        deps.logger,
+        deps.exit,
+        "shred collector",
+        .{},
+        .{},
+    );
+    var arena = service_manager.arena.allocator();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
@@ -86,7 +93,7 @@ pub fn start(
         .metrics = try ShredReceiverMetrics.init(),
         .root_slot = if (conf.start_slot) |s| s - 1 else 0,
     };
-    try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
+    try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver}, false);
 
     // verifier (thread)
     try service_manager.spawn(
@@ -98,6 +105,7 @@ pub fn start(
             verified_shred_channel,
             deps.leader_schedule,
         },
+        false,
     );
 
     // tracker (shared state, internal to Shred Collector)
@@ -120,6 +128,7 @@ pub fn start(
             deps.shred_inserter,
             deps.leader_schedule,
         },
+        false,
     );
 
     // repair (thread)
@@ -148,7 +157,12 @@ pub fn start(
         repair_peer_provider,
         shred_tracker,
     );
-    try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
+    try service_manager.spawn(
+        "Repair Service",
+        RepairService.run,
+        .{repair_svc},
+        false,
+    );
 
     return service_manager;
 }

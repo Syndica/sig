@@ -13,22 +13,19 @@ pub const PACKETS_PER_BATCH: usize = 64;
 pub fn readSocket(
     socket_: UdpSocket,
     incoming_channel: *Channel(Packet),
-    exit: *const std.atomic.Value(bool),
     logger: Logger,
+    comptime needs_exit_order: bool,
+    counter: *Atomic(if (needs_exit_order) usize else bool),
+    idx: if (needs_exit_order) usize else void,
 ) !void {
     // NOTE: we set to non-blocking to periodically check if we should exit
     var socket = socket_;
     try socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
-    inf_loop: while (!exit.load(.acquire)) {
+    while (counter.load(.acquire) != (if (needs_exit_order) idx else true)) {
         var packet: Packet = Packet.default();
         const recv_meta = socket.receiveFrom(&packet.data) catch |err| switch (err) {
-            error.WouldBlock => {
-                if (exit.load(.acquire)) {
-                    break :inf_loop;
-                }
-                continue;
-            },
+            error.WouldBlock => continue,
             else => |e| return e,
         };
         const bytes_read = recv_meta.numberOfBytes;
@@ -38,27 +35,40 @@ pub fn readSocket(
         try incoming_channel.send(packet);
     }
 
-    logger.debugf("readSocket loop closed", .{});
+    logger.infof("leaving with: {}, {}, {}\n", .{ incoming_channel.len(), counter.load(.acquire), idx });
+
+    if (needs_exit_order) {
+        counter.store(idx + 1, .release);
+    }
+
+    logger.infof("readSocket loop closed", .{});
 }
 
 pub fn sendSocket(
     socket: UdpSocket,
     outgoing_channel: *Channel(Packet),
-    exit: *const std.atomic.Value(bool),
     logger: Logger,
-) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
-    var packets_sent: u64 = 0;
-
-    while (!exit.load(.acquire)) {
+    comptime needs_exit_order: bool,
+    counter: *Atomic(if (needs_exit_order) usize else bool),
+    idx: if (needs_exit_order) usize else void,
+) !void {
+    while (counter.load(.acquire) != (if (needs_exit_order) idx else true) or
+        outgoing_channel.len() != 0)
+    {
         while (outgoing_channel.receive()) |p| {
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                 logger.debugf("send_socket error: {s}", .{@errorName(e)});
                 continue;
             };
-            packets_sent +|= 1;
             std.debug.assert(bytes_sent == p.size);
         }
     }
+
+    if (needs_exit_order) {
+        // exit the next service in the chain
+        counter.store(idx + 1, .release);
+    }
+
     logger.debugf("sendSocket loop closed", .{});
 }
 
@@ -70,26 +80,44 @@ pub fn sendSocket(
 /// socket, the underlying thread won't actually read the data from the channel.
 pub const SocketThread = struct {
     channel: *Channel(Packet),
-    exit: *std.atomic.Value(bool),
+    exit: *Atomic(bool),
     handle: std.Thread,
 
     const Self = @This();
 
-    pub fn initSender(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
+    pub fn initSender(
+        allocator: Allocator,
+        logger: Logger,
+        socket: UdpSocket,
+        exit: *Atomic(bool),
+    ) !Self {
         const channel = try Channel(Packet).create(allocator, 0);
         return .{
             .channel = channel,
             .exit = exit,
-            .handle = try std.Thread.spawn(.{}, sendSocket, .{ socket, channel, exit, logger }),
+            .handle = try std.Thread.spawn(
+                .{},
+                sendSocket,
+                .{ socket, channel, logger, false, exit, {} },
+            ),
         };
     }
 
-    pub fn initReceiver(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
+    pub fn initReceiver(
+        allocator: Allocator,
+        logger: Logger,
+        socket: UdpSocket,
+        exit: *Atomic(bool),
+    ) !Self {
         const channel = try Channel(Packet).create(allocator, 0);
         return .{
             .channel = channel,
             .exit = exit,
-            .handle = try std.Thread.spawn(.{}, readSocket, .{ socket, channel, exit, logger }),
+            .handle = try std.Thread.spawn(
+                .{},
+                readSocket,
+                .{ socket, channel, logger, false, exit, {} },
+            ),
         };
     }
 
@@ -124,20 +152,27 @@ pub const BenchmarkPacketProcessing = struct {
 
     pub fn benchmarkReadSocket(bench_args: BenchmarkArgs) !u64 {
         const n_packets = bench_args.n_packets;
-        const allocator = std.heap.page_allocator;
+        const allocator = std.heap.c_allocator;
 
         var channel = try Channel(Packet).init(allocator, n_packets);
         defer channel.deinit();
 
         var socket = try UdpSocket.create(.ipv4, .udp);
         try socket.bindToPort(0);
-        try socket.setReadTimeout(1000000); // 1 second
+        try socket.setReadTimeout(std.time.us_per_s); // 1 second
 
         const to_endpoint = try socket.getLocalEndPoint();
 
-        var exit = std.atomic.Value(bool).init(false);
-
-        var handle = try std.Thread.spawn(.{}, readSocket, .{ socket, &channel, &exit, .noop });
+        var counter = std.atomic.Value(bool).init(false);
+        var handle = try std.Thread.spawn(
+            .{},
+            readSocket,
+            .{ socket, &channel, .noop, false, &counter, {} },
+        );
+        defer {
+            counter.store(true, .release);
+            handle.join();
+        }
         var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ &channel, n_packets });
 
         var rand = std.rand.DefaultPrng.init(0);
@@ -159,15 +194,9 @@ pub const BenchmarkPacketProcessing = struct {
                 }
             }
         }
-        // std.debug.print("sent all packets.. waiting on receiver\r", .{});
 
         recv_handle.join();
-        const elapsed = timer.read();
-
-        exit.store(true, .release);
-        handle.join();
-
-        return elapsed;
+        return timer.read();
     }
 };
 
@@ -176,12 +205,10 @@ pub fn benchmarkChannelRecv(
     n_values_to_receive: usize,
 ) !void {
     var count: usize = 0;
-    while (true) {
-        if (channel.receive()) |_| {
+    while (count < n_values_to_receive) {
+        if (channel.receive()) |i| {
+            std.mem.doNotOptimizeAway(i);
             count += 1;
-        }
-        if (count >= n_values_to_receive) {
-            break;
         }
     }
 }

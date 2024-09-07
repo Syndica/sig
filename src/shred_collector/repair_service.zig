@@ -466,6 +466,7 @@ test "RepairService sends repair request to gossip peer" {
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
     );
+
     var tracker = BasicShredTracker.init(13579, .noop);
     var service = RepairService.init(
         allocator,

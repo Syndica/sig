@@ -207,7 +207,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
 
         blk: {
-            const allocator = std.heap.page_allocator;
+            // NOTE: we *specifically* don't use the GPA here because of leaks
+            const allocator = std.heap.c_allocator;
 
             // holding the lock here means that the snapshot archive wont be deleted
             // since deletion requires a write lock
@@ -325,7 +326,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
             defer snapshot_fields.deinit(allocator);
 
-            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
+            var alt_accounts_db = try AccountsDB.init(std.heap.c_allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
             defer alt_accounts_db.deinit(true);
 
             _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true, 1_500);

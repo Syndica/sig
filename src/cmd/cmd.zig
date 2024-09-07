@@ -599,10 +599,15 @@ fn identity() !void {
 fn gossip() !void {
     var app_base = try AppBase.init(gpa_allocator);
 
-    _, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
-    defer gossip_manager.deinit();
+    const g, var service_manager =
+        try startGossip(gpa_allocator, &app_base, &.{});
 
-    gossip_manager.join();
+    // block until we're all done
+    service_manager.join();
+
+    g.shutdown();
+    g.deinit();
+    service_manager.deinit();
 }
 
 /// entrypoint to run a full solana validator
@@ -1000,7 +1005,7 @@ pub fn testTransactionSenderService() !void {
     const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
     defer gossip_manager.deinit();
 
-    const transaction_channel = sig.sync.Channel(sig.transaction_sender.TransactionInfo).init(gpa_allocator, 100);
+    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(gpa_allocator, 100);
     defer transaction_channel.deinit();
 
     const transaction_sender_config = sig.transaction_sender.service.Config{
@@ -1044,6 +1049,8 @@ pub fn testTransactionSenderService() !void {
 /// and deinitialized only when the app exits.
 const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
     logger: Logger,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
@@ -1081,6 +1088,7 @@ const AppBase = struct {
     }
 
     pub fn deinit(self: @This()) void {
+        self.counter.store(1, .release);
         self.exit.store(true, .release);
         self.entrypoints.deinit();
         self.metrics_thread.detach();
@@ -1092,7 +1100,7 @@ const AppBase = struct {
 fn initGossip(
     logger: Logger,
     my_keypair: KeyPair,
-    exit: *Atomic(bool),
+    exit: *Atomic(usize),
     entrypoints: []const SocketAddr,
     shred_version: u16,
     gossip_host_ip: IpAddr,
@@ -1145,14 +1153,15 @@ fn startGossip(
         .{},
         .{},
     );
-    const service = try manager.arena().create(GossipService);
+
+    const service = try manager.arena.allocator().create(GossipService);
     service.* = try GossipService.init(
         gpa_allocator,
         gossip_value_gpa_allocator,
         contact_info,
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints.items,
-        &app_base.exit,
+        &app_base.counter,
         app_base.logger,
     );
     try manager.defers.deferCall(GossipService.deinit, .{service});
@@ -1481,7 +1490,7 @@ fn downloadSnapshot() !void {
     var logger = try spawnLogger();
     defer logger.deinit();
 
-    var exit = std.atomic.Value(bool).init(false);
+    var counter = std.atomic.Value(usize).init(0);
     const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
     const entrypoints = try getEntrypoints(logger);
     defer entrypoints.deinit();
@@ -1491,7 +1500,7 @@ fn downloadSnapshot() !void {
     var gossip_service = try initGossip(
         .noop,
         my_keypair,
-        &exit,
+        &counter,
         entrypoints.items,
         my_data.shred_version,
         my_data.ip,
@@ -1501,7 +1510,7 @@ fn downloadSnapshot() !void {
 
     const handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
     defer {
-        exit.store(true, .release);
+        gossip_service.shutdown();
         handle.join();
     }
 

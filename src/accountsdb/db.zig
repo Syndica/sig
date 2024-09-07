@@ -3083,11 +3083,11 @@ pub fn writeSnapshotTarWithFields(
 }
 
 fn testWriteSnapshotFull(
+    allocator: std.mem.Allocator,
     accounts_db: *AccountsDB,
     slot: Slot,
     maybe_expected_hash: ?Hash,
 ) !void {
-    const allocator = std.testing.allocator;
     const snapshot_dir = accounts_db.snapshot_dir;
 
     const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot});
@@ -3143,11 +3143,11 @@ fn testWriteSnapshotFull(
 }
 
 fn testWriteSnapshotIncremental(
+    allocator: std.mem.Allocator,
     accounts_db: *AccountsDB,
     slot: Slot,
     maybe_expected_incremental_hash: ?Hash,
 ) !void {
-    const allocator = std.testing.allocator;
     const snapshot_dir = accounts_db.snapshot_dir;
 
     const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot});
@@ -3204,10 +3204,11 @@ fn testWriteSnapshotIncremental(
 }
 
 test "testWriteSnapshot" {
+    const allocator = std.testing.allocator;
     var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer test_data_dir.close();
 
-    const snap_files = try SnapshotFiles.find(std.testing.allocator, test_data_dir);
+    const snap_files = try SnapshotFiles.find(allocator, test_data_dir);
 
     var tmp_snap_dir_root = std.testing.tmpDir(.{});
     defer tmp_snap_dir_root.cleanup();
@@ -3216,23 +3217,33 @@ test "testWriteSnapshot" {
     {
         const archive_file = try test_data_dir.openFile(snap_files.full_snapshot.snapshotNameStr().constSlice(), .{});
         defer archive_file.close();
-        try parallelUnpackZstdTarBall(std.testing.allocator, .noop, archive_file, tmp_snap_dir, 4, true);
+        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, true);
     }
 
     if (snap_files.incremental_snapshot) |inc_snap| {
         const archive_file = try test_data_dir.openFile(inc_snap.snapshotNameStr().constSlice(), .{});
         defer archive_file.close();
-        try parallelUnpackZstdTarBall(std.testing.allocator, .noop, archive_file, tmp_snap_dir, 4, false);
+        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, false);
     }
 
-    var accounts_db = try AccountsDB.init(std.testing.allocator, .noop, tmp_snap_dir, .{
+    var accounts_db = try AccountsDB.init(allocator, .noop, tmp_snap_dir, .{
         .number_of_index_bins = ACCOUNT_INDEX_BINS,
         .use_disk_index = false,
     }, null);
     defer accounts_db.deinit(true);
 
-    try testWriteSnapshotFull(&accounts_db, snap_files.full_snapshot.slot, snap_files.full_snapshot.hash);
-    try testWriteSnapshotIncremental(&accounts_db, snap_files.incremental_snapshot.?.slot, snap_files.incremental_snapshot.?.hash);
+    try testWriteSnapshotFull(
+        allocator,
+        &accounts_db,
+        snap_files.full_snapshot.slot,
+        snap_files.full_snapshot.hash,
+    );
+    try testWriteSnapshotIncremental(
+        allocator,
+        &accounts_db,
+        snap_files.incremental_snapshot.?.slot,
+        snap_files.incremental_snapshot.?.hash,
+    );
 }
 
 fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
@@ -3376,7 +3387,7 @@ test "geyser stream on load" {
 test "write and read an account" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -3413,7 +3424,7 @@ test "write and read an account" {
 test "load and validate from test snapshot using disk index" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -3430,7 +3441,7 @@ test "load and validate from test snapshot using disk index" {
 test "load and validate from test snapshot parallel" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 2);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 2);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -3447,7 +3458,7 @@ test "load and validate from test snapshot parallel" {
 test "load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -3464,7 +3475,7 @@ test "load and validate from test snapshot" {
 test "load clock sysvar" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -3484,7 +3495,7 @@ test "load clock sysvar" {
 test "load other sysvars" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -3534,7 +3545,7 @@ test "flushing slots works" {
     try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     // this writes to disk
-    var unclean_account_files = ArrayList(FileId).init(std.testing.allocator);
+    var unclean_account_files = ArrayList(FileId).init(allocator);
     defer unclean_account_files.deinit();
     try unclean_account_files.append(try accounts_db.flushSlot(slot));
 
@@ -4009,7 +4020,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
     };
 
     pub fn loadSnapshot(bench_args: BenchArgs) !u64 {
-        const allocator = std.heap.page_allocator;
+        const allocator = std.heap.c_allocator;
 
         // unpack the snapshot
         // NOTE: usually this will be an incremental snapshot

@@ -108,7 +108,7 @@ pub const PruneData = struct {
     /// Pubkey of the node that sent this prune data
     pubkey: Pubkey,
     /// Pubkeys of nodes that should be pruned
-    prunes: []Pubkey,
+    prunes: []const Pubkey,
     /// Signature of this Prune Message
     signature: Signature,
     /// The Pubkey of the intended node/destination for this message
@@ -130,7 +130,7 @@ pub const PruneData = struct {
 
     const PruneSignableData = struct {
         pubkey: Pubkey,
-        prunes: []Pubkey,
+        prunes: []const Pubkey,
         destination: Pubkey,
         wallclock: u64,
     };

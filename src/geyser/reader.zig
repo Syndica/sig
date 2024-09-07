@@ -20,12 +20,9 @@ pub fn main() !void {
     };
     std.debug.print("using pipe path: {s}\n", .{pipe_path});
 
-    const exit = try allocator.create(std.atomic.Value(bool));
-    defer allocator.destroy(exit);
-    exit.* = std.atomic.Value(bool).init(false);
-
+    var exit = std.atomic.Value(bool).init(false);
     try sig.geyser.core.streamReader(
-        exit,
+        &exit,
         pipe_path,
         MEASURE_RATE,
         .{

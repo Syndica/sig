@@ -11,9 +11,7 @@ const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
 const MEASURE_RATE = sig.time.Duration.fromSecs(2);
 const PIPE_PATH = "../sig/" ++ sig.TEST_DATA_DIR ++ "accountsdb_fuzz.pipe";
 
-pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
-    const allocator = std.heap.page_allocator;
-
+pub fn streamWriter(allocator: std.mem.Allocator, exit: *std.atomic.Value(bool)) !void {
     // 4gb
     var geyser_writer = try GeyserWriter.init(allocator, PIPE_PATH, exit, 1 << 32);
     defer geyser_writer.deinit();
@@ -56,7 +54,7 @@ pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
 }
 
 pub fn runBenchmark() !void {
-    const allocator = std.heap.page_allocator;
+    const allocator = std.heap.c_allocator;
 
     const exit = try allocator.create(std.atomic.Value(bool));
     defer allocator.destroy(exit);
@@ -68,7 +66,7 @@ pub fn runBenchmark() !void {
         geyser.core.streamReader,
         .{ exit, PIPE_PATH, MEASURE_RATE, null },
     );
-    const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{exit});
+    const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{ allocator, exit });
 
     // let it run for ~4 measurements
     const NUM_MEAUSUREMENTS = 4;

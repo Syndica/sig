@@ -12,20 +12,22 @@ pub const GossipDumpService = struct {
     allocator: Allocator,
     logger: Logger,
     gossip_table_rw: *RwMux(GossipTable),
-    exit: *Atomic(bool),
+    counter: *Atomic(usize),
 
     const Self = @This();
 
-    pub fn run(self: Self) !void {
+    pub fn run(self: Self, idx: usize) !void {
         const start_time = std.time.timestamp();
         const dir = try std.fmt.allocPrint(self.allocator, "gossip-dumps/{}", .{start_time});
         defer self.allocator.free(dir);
         try std.fs.cwd().makePath(dir);
-        while (true) {
-            if (self.exit.load(.acquire)) return;
+        while (self.counter.load(.acquire) != idx) {
             try self.dumpGossip(dir, start_time);
-            std.time.sleep(10_000_000_000);
+            std.time.sleep(std.time.ns_per_s * 10);
         }
+        // this should be the last service in the chain,
+        // but we still kick off anything after it just in case
+        self.counter.store(idx + 1, .release);
     }
 
     fn dumpGossip(self: *const Self, dir: []const u8, start_time: i64) !void {

@@ -542,7 +542,7 @@ pub const BenchmarkChannel = struct {
         const receivers_count = argss.n_receivers;
         var timer = try std.time.Timer.start();
 
-        const allocator = std.heap.page_allocator;
+        const allocator = std.heap.c_allocator;
         var channel = try Channel(usize).init(allocator, n_items / 2);
         defer channel.deinit();
 
@@ -578,7 +578,7 @@ pub const BenchmarkChannel = struct {
         const receivers_count = argss.n_receivers;
         var timer = try std.time.Timer.start();
 
-        const allocator = std.heap.page_allocator;
+        const allocator = std.heap.c_allocator;
         var channel = try Channel(Packet).init(allocator, n_items / 2);
         defer channel.deinit();
 
