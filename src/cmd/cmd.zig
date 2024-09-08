@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
 const network = @import("zig-network");
@@ -41,17 +42,26 @@ const BlockstoreWriter = sig.ledger.BlockstoreWriter;
 
 const SocketTag = sig.gossip.SocketTag;
 
-// TODO: use better allocator, unless GPA becomes more performant.
-
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const gpa_allocator = gpa.allocator();
+const gpa_allocator = if (builtin.mode == .Debug)
+    gpa.allocator()
+else
+    std.heap.c_allocator;
 
 var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-const gossip_value_gpa_allocator = gossip_value_gpa.allocator();
+const gossip_value_gpa_allocator = if (builtin.mode == .Debug)
+    gossip_value_gpa.allocator()
+else
+    std.heap.c_allocator;
 
 const base58Encoder = base58.Encoder.init(.{});
 
 pub fn run() !void {
+    defer {
+        _ = gpa.deinit();
+        _ = gossip_value_gpa.deinit();
+    }
+
     var gossip_host_option = cli.Option{
         .long_name = "gossip-host",
         .help = "IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1",

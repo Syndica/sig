@@ -53,9 +53,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();
-    const gpa = gpa_state.allocator();
+    const allocator = gpa_state.allocator();
 
-    const logger = Logger.init(gpa, .debug);
+    const logger = Logger.init(allocator, .debug);
     defer logger.deinit();
     logger.spawn();
 
@@ -89,7 +89,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var last_inc_snapshot_validated_slot: Slot = 0;
 
     var accounts_db = try AccountsDB.init(
-        gpa,
+        allocator,
         logger,
         snapshot_dir,
         .{
@@ -101,8 +101,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     );
     defer accounts_db.deinit(true);
 
-    const exit = try gpa.create(std.atomic.Value(bool));
-    defer gpa.destroy(exit);
+    const exit = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(exit);
     exit.* = std.atomic.Value(bool).init(false);
 
     const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{ &accounts_db, AccountsDB.ManagerLoopConfig{
@@ -115,15 +115,15 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         manager_handle.join();
     }
 
-    var tracked_accounts = std.AutoArrayHashMap(Pubkey, TrackedAccount).init(gpa);
+    var tracked_accounts = std.AutoArrayHashMap(Pubkey, TrackedAccount).init(allocator);
     defer tracked_accounts.deinit();
     defer for (tracked_accounts.values()) |*value| {
-        value.deinit(gpa);
+        value.deinit(allocator);
     };
     try tracked_accounts.ensureTotalCapacity(10_000);
 
-    var random_bank_fields = try BankFields.random(gpa, rand, 1 << 8);
-    defer random_bank_fields.deinit(gpa);
+    var random_bank_fields = try BankFields.random(allocator, rand, 1 << 8);
+    defer random_bank_fields.deinit(allocator);
 
     // const random_bank_hash_info = BankHashInfo.random(rand);
 
@@ -152,9 +152,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 var pubkeys: [N_ACCOUNTS_PER_SLOT]Pubkey = undefined;
 
                 for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
-                    errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(gpa);
+                    errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
 
-                    var tracked_account = try TrackedAccount.random(rand, slot, gpa);
+                    var tracked_account = try TrackedAccount.random(rand, slot, allocator);
 
                     const existing_pubkey = rand.boolean();
                     if (existing_pubkey and tracked_accounts.count() > 0) {
@@ -163,17 +163,17 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                         tracked_account.pubkey = key;
                     }
 
-                    account.* = try tracked_account.toAccount(gpa);
+                    account.* = try tracked_account.toAccount(allocator);
                     pubkey.* = tracked_account.pubkey;
 
                     const r = try tracked_accounts.getOrPut(tracked_account.pubkey);
                     if (r.found_existing) {
-                        r.value_ptr.deinit(gpa);
+                        r.value_ptr.deinit(allocator);
                     }
                     // always overwrite the old slot
                     r.value_ptr.* = tracked_account;
                 }
-                defer for (accounts) |account| account.deinit(gpa);
+                defer for (accounts) |account| account.deinit(allocator);
 
                 // write to accounts_db
                 try accounts_db.putAccountSlice(
@@ -192,7 +192,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 const tracked_account = tracked_accounts.get(key).?;
                 var account = try accounts_db.getAccount(&tracked_account.pubkey);
-                defer account.deinit(gpa);
+                defer account.deinit(allocator);
 
                 if (!std.mem.eql(u8, tracked_account.data, account.data)) {
                     @panic("found accounts with different data");
@@ -208,7 +208,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
         blk: {
             // NOTE: we *specifically* don't use the GPA here because of leaks
-            const allocator = std.heap.c_allocator;
+            const c_allocator = std.heap.c_allocator;
 
             // holding the lock here means that the snapshot archive wont be deleted
             // since deletion requires a write lock
@@ -250,7 +250,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             defer archive_file.close();
 
             try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
-                allocator,
+                c_allocator,
                 .noop,
                 archive_file,
                 alternative_snapshot_dir,
@@ -301,7 +301,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 defer inc_archive_file.close();
 
                 try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
-                    allocator,
+                    c_allocator,
                     .noop,
                     inc_archive_file,
                     alternative_snapshot_dir,
@@ -319,14 +319,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             }
 
             var snapshot_fields = try sig.accounts_db.AllSnapshotFields.fromFiles(
-                allocator,
+                c_allocator,
                 logger,
                 alternative_snapshot_dir,
                 snapshot_files,
             );
-            defer snapshot_fields.deinit(allocator);
+            defer snapshot_fields.deinit(c_allocator);
 
-            var alt_accounts_db = try AccountsDB.init(std.heap.c_allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
+            var alt_accounts_db = try AccountsDB.init(c_allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
             defer alt_accounts_db.deinit(true);
 
             _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true, 1_500);

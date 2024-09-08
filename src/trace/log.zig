@@ -7,8 +7,6 @@ const StandardEntry = entry.StandardEntry;
 const testing = std.testing;
 const AtomicBool = std.atomic.Value(bool);
 const Channel = @import("../sync/channel.zig").Channel;
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-var gpa_allocator = gpa.allocator();
 
 const INITIAL_ENTRIES_CHANNEL_SIZE: usize = 1024;
 

@@ -4232,8 +4232,7 @@ pub const BenchmarkAccountsDB = struct {
         const slot_list_len = bench_args.slot_list_len;
         const total_n_accounts = n_accounts * slot_list_len;
 
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        var allocator = gpa.allocator();
+        var allocator = std.heap.c_allocator;
 
         const disk_path = sig.TEST_DATA_DIR ++ "tmp/";
         std.fs.cwd().makeDir(disk_path) catch {};
