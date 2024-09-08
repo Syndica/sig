@@ -201,7 +201,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
     };
 }
 
-const Logger = ScoppedLogger(null);
+pub const Logger = ScoppedLogger(null);
 
 /// An instance of `ScopedLogger` that logs to the standard err.
 pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
@@ -237,6 +237,7 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
         pub fn deinit(self: *Self) void {
             self.channel.close();
             if (self.handle) |*handle| {
+                std.time.sleep(std.time.ns_per_ms * 5);
                 self.exit_sig.store(true, .seq_cst);
                 handle.join();
             }
