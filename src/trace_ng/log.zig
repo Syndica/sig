@@ -455,6 +455,7 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
 /// An instance of `ScopedLogger` that logs to an internal array
 /// that allows asserting the log message in tests.
 fn TestingLogger(comptime scope: ?[]const u8) type {
+    const builtin = @import("builtin");
     return struct {
         const Self = @This();
         max_level: Level,
@@ -462,6 +463,7 @@ fn TestingLogger(comptime scope: ?[]const u8) type {
         log_msg: ?std.ArrayList(u8),
 
         pub fn init(config: Config) *Self {
+            std.debug.assert(builtin.is_test);
             const self = config.allocator.create(Self) catch @panic("could not allocator.create Logger");
             self.* = .{
                 .max_level = config.max_level,
