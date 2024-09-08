@@ -25,9 +25,187 @@ const LogKind = enum {
     noop,
 };
 
-const Logger = ScoppedLogger(null);
+/// A ScopedLogger could either be:
+/// - A StandardErrLogger
+/// - A TestingLogger
 pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
-    const StanardErrLogger = struct {
+    return union(LogKind) {
+        const Self = @This();
+        standard: *StandardErrLogger(scope),
+        testing: *TestingLogger(scope),
+        noop: void,
+        pub fn init(config: Config) !Self {
+            switch (config.kind) {
+                .standard => {
+                    return .{ .standard = try StandardErrLogger(scope).init(.{
+                        .allocator = config.allocator,
+                        .max_level = config.max_level,
+                        .max_buffer = config.max_buffer,
+                    }) };
+                },
+                .testing, .noop => {
+                    return .{ .testing = TestingLogger(scope).init(.{
+                        .allocator = config.allocator,
+                        .max_level = config.max_level,
+                        .max_buffer = config.max_buffer,
+                    }) };
+                },
+            }
+        }
+
+        pub fn deinit(self: *const Self) void {
+            switch (self.*) {
+                .standard => |*logger| {
+                    logger.*.deinit();
+                },
+                .testing => |*logger| {
+                    logger.*.deinit();
+                },
+                .noop => {},
+            }
+        }
+
+        pub fn unscoped(self: *const Self) Logger {
+            switch (self.*) {
+                .standard => |logger| {
+                    return Logger.init(.{
+                        .allocator = logger.*.allocator,
+                        .max_buffer = logger.*.max_buffer,
+                        .kind = LogKind.standard,
+                    }) catch @panic("message: []const u8");
+                },
+                .testing => |logger| {
+                    return Logger.init(.{
+                        .allocator = logger.*.allocator,
+                        .kind = LogKind.testing,
+                    }) catch @panic("message: []const u8");
+                },
+                .noop => {
+                    @panic("Cannot scope noop");
+                },
+            }
+        }
+
+        pub fn withScope(self: *const Self, comptime new_scope: []const u8) ScoppedLogger(new_scope) {
+            switch (self.*) {
+                .standard => |*logger| {
+                    return ScoppedLogger(new_scope).init(.{
+                        .allocator = logger.*.allocator,
+                        .max_buffer = logger.*.max_buffer,
+                        .kind = LogKind.standard,
+                    }) catch @panic("message: []const u8");
+                },
+                .testing => |*logger| {
+                    return ScoppedLogger(new_scope).init(.{
+                        .allocator = logger.*.allocator,
+                        .kind = LogKind.testing,
+                    }) catch @panic("message: []const u8");
+                },
+                .noop => {
+                    @panic("Cannot scope noop");
+                },
+            }
+        }
+
+        pub fn err(self: *Self, message: []const u8) void {
+            self.log(.err, message);
+        }
+
+        pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+            self.logf(.err, fmt, args);
+        }
+
+        pub fn errWithFields(self: *Self, message: []const u8, fields: anytype) void {
+            self.logWithFields(.err, message, fields);
+        }
+
+        pub fn errfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            self.logfWithFields(.err, fmt, args, fields);
+        }
+
+        pub fn warn(self: *Self, message: []const u8) void {
+            self.log(.warn, message);
+        }
+
+        pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+            self.logf(.warn, fmt, args);
+        }
+
+        pub fn warnWithFields(self: *Self, message: []const u8, fields: anytype) void {
+            self.logWithFields(.warn, message, fields);
+        }
+
+        pub fn warnfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            self.logfWithFields(.warn, fmt, args, fields);
+        }
+
+        pub fn info(self: *Self, message: []const u8) void {
+            self.log(.info, message);
+        }
+
+        pub fn infof(self: *Self, comptime fmt: []const u8, args: anytype) void {
+            self.logf(.info, fmt, args);
+        }
+
+        pub fn infoWithFields(self: *Self, message: []const u8, fields: anytype) void {
+            self.logWithFields(.info, message, fields);
+        }
+
+        pub fn infofWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            self.logfWithFields(.info, fmt, args, fields);
+        }
+
+        pub fn debug(self: *Self, message: []const u8) void {
+            self.log(.debug, message);
+        }
+
+        pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+            self.logf(.debug, fmt, args);
+        }
+
+        pub fn debugWithFields(self: *Self, message: []const u8, fields: anytype) void {
+            self.logWithFields(.debug, message, fields);
+        }
+
+        pub fn debugfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            self.logfWithFields(.debug, fmt, args, fields);
+        }
+
+        pub fn log(self: *Self, level: Level, message: []const u8) void {
+            switch (self.*) {
+                .noop => {},
+                inline else => |*impl| impl.*.log(level, message),
+            }
+        }
+
+        pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
+            switch (self.*) {
+                .noop => {},
+                inline else => |impl| impl.logf(level, fmt, args),
+            }
+        }
+
+        pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
+            switch (self.*) {
+                .noop => {},
+                inline else => |impl| impl.logWithFields(level, message, fields),
+            }
+        }
+
+        pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            switch (self.*) {
+                .noop => {},
+                inline else => |impl| impl.logfWithFields(level, fmt, args, fields),
+            }
+        }
+    };
+}
+
+const Logger = ScoppedLogger(null);
+
+/// An instance of `ScopedLogger` that logs to the standard err.
+pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
+    return struct {
         const Self = @This();
         max_level: Level,
         exit_sig: std.atomic.Value(bool),
@@ -271,8 +449,12 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             return size;
         }
     };
+}
 
-    const TestingLogger = struct {
+/// An instance of `ScopedLogger` that logs to an internal array
+/// that allows asserting the log message in tests.
+fn TestingLogger(comptime scope: ?[]const u8) type {
+    return struct {
         const Self = @This();
         max_level: Level,
         allocator: Allocator,
@@ -422,177 +604,6 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
         }
     };
-
-    return union(LogKind) {
-        const Self = @This();
-        standard: *StanardErrLogger,
-        testing: *TestingLogger,
-        noop: void,
-        pub fn init(config: Config) !Self {
-            switch (config.kind) {
-                .standard => {
-                    return .{ .standard = try StanardErrLogger.init(.{
-                        .allocator = config.allocator,
-                        .max_level = config.max_level,
-                        .max_buffer = config.max_buffer,
-                    }) };
-                },
-                .testing, .noop => {
-                    return .{ .testing = TestingLogger.init(.{
-                        .allocator = config.allocator,
-                        .max_level = config.max_level,
-                        .max_buffer = config.max_buffer,
-                    }) };
-                },
-            }
-        }
-
-        pub fn deinit(self: *const Self) void {
-            switch (self.*) {
-                .standard => |*logger| {
-                    logger.*.deinit();
-                },
-                .testing => |*logger| {
-                    logger.*.deinit();
-                },
-                .noop => {},
-            }
-        }
-
-        pub fn unscoped(self: *const Self) Logger {
-            switch (self.*) {
-                .standard => |logger| {
-                    return Logger.init(.{
-                        .allocator = logger.*.allocator,
-                        .max_buffer = logger.*.max_buffer,
-                        .kind = LogKind.standard,
-                    }) catch @panic("message: []const u8");
-                },
-                .testing => |logger| {
-                    return Logger.init(.{
-                        .allocator = logger.*.allocator,
-                        .kind = LogKind.testing,
-                    }) catch @panic("message: []const u8");
-                },
-                .noop => {
-                    @panic("Cannot scope noop");
-                },
-            }
-        }
-
-        pub fn withScope(self: *const Self, comptime new_scope: []const u8) ScoppedLogger(new_scope) {
-            switch (self.*) {
-                .standard => |*logger| {
-                    return ScoppedLogger(new_scope).init(.{
-                        .allocator = logger.*.allocator,
-                        .max_buffer = logger.*.max_buffer,
-                        .kind = LogKind.standard,
-                    }) catch @panic("message: []const u8");
-                },
-                .testing => |*logger| {
-                    return ScoppedLogger(new_scope).init(.{
-                        .allocator = logger.*.allocator,
-                        .kind = LogKind.testing,
-                    }) catch @panic("message: []const u8");
-                },
-                .noop => {
-                    @panic("Cannot scope noop");
-                },
-            }
-        }
-
-        pub fn err(self: *Self, message: []const u8) void {
-            self.log(.err, message);
-        }
-
-        pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-            self.logf(.err, fmt, args);
-        }
-
-        pub fn errWithFields(self: *Self, message: []const u8, fields: anytype) void {
-            self.logWithFields(.err, message, fields);
-        }
-
-        pub fn errfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
-            self.logfWithFields(.err, fmt, args, fields);
-        }
-
-        pub fn warn(self: *Self, message: []const u8) void {
-            self.log(.warn, message);
-        }
-
-        pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-            self.logf(.warn, fmt, args);
-        }
-
-        pub fn warnWithFields(self: *Self, message: []const u8, fields: anytype) void {
-            self.logWithFields(.warn, message, fields);
-        }
-
-        pub fn warnfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
-            self.logfWithFields(.warn, fmt, args, fields);
-        }
-
-        pub fn info(self: *Self, message: []const u8) void {
-            self.log(.info, message);
-        }
-
-        pub fn infof(self: *Self, comptime fmt: []const u8, args: anytype) void {
-            self.logf(.info, fmt, args);
-        }
-
-        pub fn infoWithFields(self: *Self, message: []const u8, fields: anytype) void {
-            self.logWithFields(.info, message, fields);
-        }
-
-        pub fn infofWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
-            self.logfWithFields(.info, fmt, args, fields);
-        }
-
-        pub fn debug(self: *Self, message: []const u8) void {
-            self.log(.debug, message);
-        }
-
-        pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-            self.logf(.debug, fmt, args);
-        }
-
-        pub fn debugWithFields(self: *Self, message: []const u8, fields: anytype) void {
-            self.logWithFields(.debug, message, fields);
-        }
-
-        pub fn debugfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
-            self.logfWithFields(.debug, fmt, args, fields);
-        }
-
-        pub fn log(self: *Self, level: Level, message: []const u8) void {
-            switch (self.*) {
-                .noop => {},
-                inline else => |*impl| impl.*.log(level, message),
-            }
-        }
-
-        pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
-            switch (self.*) {
-                .noop => {},
-                inline else => |impl| impl.logf(level, fmt, args),
-            }
-        }
-
-        pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
-            switch (self.*) {
-                .noop => {},
-                inline else => |impl| impl.logWithFields(level, message, fields),
-            }
-        }
-
-        pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
-            switch (self.*) {
-                .noop => {},
-                inline else => |impl| impl.logfWithFields(level, fmt, args, fields),
-            }
-        }
-    };
 }
 
 test "trace_ng: scope switch" {
@@ -710,6 +721,7 @@ test "trace_ng: reclaim" {
         );
     }
 }
+
 test "trace_ng: level" {
     const allocator = std.testing.allocator;
 
