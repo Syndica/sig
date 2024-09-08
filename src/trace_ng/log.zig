@@ -65,20 +65,20 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             }
         }
 
-        pub fn unscoped(self: *const Self) Logger {
+        pub fn unscoped(self: *const Self) !Logger {
             switch (self.*) {
                 .standard => |logger| {
                     return Logger.init(.{
                         .allocator = logger.*.allocator,
                         .max_buffer = logger.*.max_buffer,
                         .kind = LogKind.standard,
-                    }) catch @panic("message: []const u8");
+                    });
                 },
                 .testing => |logger| {
                     return Logger.init(.{
                         .allocator = logger.*.allocator,
                         .kind = LogKind.testing,
-                    }) catch @panic("message: []const u8");
+                    });
                 },
                 .noop => {
                     @panic("Cannot scope noop");
@@ -86,7 +86,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             }
         }
 
-        pub fn withScope(self: *const Self, comptime new_scope: []const u8) ScoppedLogger(new_scope) {
+        pub fn withScope(self: *const Self, comptime new_scope: []const u8) !ScoppedLogger(new_scope) {
             switch (self.*) {
                 .standard => |*logger| {
                     return ScoppedLogger(new_scope).init(.{
@@ -615,7 +615,9 @@ test "trace_ng: scope switch" {
         logger: ScoppedLogger(@typeName(StuffChild)),
 
         pub fn init(logger: *const Logger) StuffChild {
-            return .{ .logger = logger.withScope(@typeName(StuffChild)) };
+            return .{ .logger = logger.withScope(@typeName(StuffChild)) catch {
+                @panic("Init logger failed");
+            } };
         }
 
         pub fn deinit(self: *StuffChild) void {
@@ -632,7 +634,7 @@ test "trace_ng: scope switch" {
         logger: ScoppedLogger(@typeName(Stuff)),
 
         pub fn init(logger: *const Logger) Stuff {
-            return .{ .logger = logger.withScope(@typeName(Stuff)) };
+            return .{ .logger = logger.withScope(@typeName(Stuff)) catch @panic("Init logger failed") };
         }
 
         pub fn deinit(self: *Stuff) void {
@@ -641,7 +643,7 @@ test "trace_ng: scope switch" {
 
         pub fn doStuff(self: *Stuff) void {
             self.logger.log(.info, "doing stuff parent");
-            const logger = self.logger.unscoped();
+            const logger = self.logger.unscoped() catch @panic("Init logger failed");
             defer logger.deinit();
             var child = StuffChild.init(&logger);
             defer child.deinit();
@@ -825,7 +827,7 @@ test "trace_ng: format" {
     }
 
     // Add scope.
-    var scoped_logger = logger.withScope(@typeName(@This()));
+    var scoped_logger = logger.withScope(@typeName(@This())) catch @panic("Init logger failed");
     defer scoped_logger.deinit();
     scoped_logger.logfWithFields(
         .debug,
