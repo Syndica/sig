@@ -99,7 +99,6 @@ pub fn build(b: *Build) void {
         .sanitize_thread = enable_tsan,
     });
     b.installArtifact(unit_tests_exe);
-    unit_tests_exe.root_module.addImport("sig", sig_mod);
     unit_tests_exe.root_module.addImport("base58-zig", base58_module);
     unit_tests_exe.root_module.addImport("curl", curl_mod);
     unit_tests_exe.root_module.addImport("httpz", httpz_mod);
