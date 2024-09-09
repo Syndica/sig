@@ -7,7 +7,6 @@ const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
-const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
@@ -23,12 +22,13 @@ pub const Client = struct {
         logger: Logger = .noop,
     };
 
-    pub fn init(allocator: std.mem.Allocator, cluster_type: ClusterType, options: Options) Client {
+    pub fn init(allocator: std.mem.Allocator, cluster_type: types.ClusterType, options: Options) Client {
         const http_endpoint = switch (cluster_type) {
             .MainnetBeta => "https://api.mainnet-beta.solana.com",
             .Testnet => "https://api.testnet.solana.com",
             .Devnet => "https://api.devnet.solana.com",
-            .Development => @panic("Unsupported cluster type 'Development'"),
+            .LocalHost => "http://localhost:8899",
+            .Custom => |cluster| cluster.url,
         };
         return .{
             .http_endpoint = http_endpoint,
