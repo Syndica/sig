@@ -310,7 +310,10 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
                 .maybe_fmt = null,
             };
 
-            self.channel.send(log_msg) catch {};
+            self.channel.send(log_msg) catch |err| {
+                std.debug.print("Send msg through channel failed with err: {any}", .{err});
+                return;
+            };
         }
 
         pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
@@ -322,8 +325,8 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format fields.
-            const buf = self.allocBuf(self.estimateFieldSize(fields)) catch {
-                // Ignore error
+            const buf = self.allocBuf(self.estimateFieldSize(fields)) catch |err| {
+                std.debug.print("allocBuff failed with err: {any}", .{err});
                 return;
             };
             var fmt_fields = std.io.fixedBufferStream(buf);
@@ -337,8 +340,8 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
                 .maybe_fmt = null,
             };
 
-            self.channel.send(log_msg) catch {
-                // Ignore error
+            self.channel.send(log_msg) catch |err| {
+                std.debug.print("Send msg through channel failed with err: {any}", .{err});
                 return;
             };
         }
@@ -351,8 +354,8 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format message.
-            const buf = self.allocBuf(std.fmt.count(fmt, args)) catch {
-                // Ignore error
+            const buf = self.allocBuf(std.fmt.count(fmt, args)) catch |err| {
+                std.debug.print("allocBuff failed with err: {any}", .{err});
                 return;
             };
             var fmt_message = std.io.fixedBufferStream(buf);
@@ -366,8 +369,8 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
                 .maybe_fmt = fmt_message.getWritten(),
             };
 
-            self.channel.send(log_msg) catch {
-                // Ignore error
+            self.channel.send(log_msg) catch |err| {
+                std.debug.print("Send msg through channel failed with err: {any}", .{err});
                 return;
             };
         }
@@ -380,16 +383,16 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
             const maybe_scope = if (scope) |s| s else null;
 
             // Format fields.
-            const fields_buf = self.allocBuf(self.estimateFieldSize(fields)) catch {
-                // Ignore error
+            const fields_buf = self.allocBuf(self.estimateFieldSize(fields)) catch |err| {
+                std.debug.print("allocBuff failed with err: {any}", .{err});
                 return;
             };
             var fmt_fields = std.io.fixedBufferStream(fields_buf);
             logfmt.fmtField(fmt_fields.writer(), fields);
 
             // Format message.
-            const msg_buf = self.allocBuf(std.fmt.count(fmt, args)) catch {
-                // Ignore error
+            const msg_buf = self.allocBuf(std.fmt.count(fmt, args)) catch |err| {
+                std.debug.print("allocBuff failed with err: {any}", .{err});
                 return;
             };
             var fmt_message = std.io.fixedBufferStream(msg_buf);
@@ -402,8 +405,8 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
                 .maybe_fields = null,
                 .maybe_fmt = fmt_message.getWritten(),
             };
-            self.channel.send(log_msg) catch {
-                // Ignore error
+            self.channel.send(log_msg) catch |err| {
+                std.debug.print("Send msg through channel failed with err: {any}", .{err});
                 return;
             };
         }
