@@ -78,7 +78,7 @@ while lines_removed_this_time > 0:
                         for i, line in enumerate(orig_lines)
                         if i not in lines_to_drop
                     )
-                print(path, num_lines_to_remove)
+                print(f"Removed {num_lines_to_remove} unused import(s) in {path}")
                 os.system(f"zig fmt {path}")
         elif args.verbose:
             print(path, num_lines_to_remove)
@@ -89,9 +89,13 @@ while lines_removed_this_time > 0:
     if args.check:
         break
     else:
-        print("removed this iteration:", lines_removed_this_time)
+        print("Unused imports removed this iteration:", lines_removed_this_time)
         print()
 
-print("total unused found:", total_num_lines_removed)
+if args.check:
+    print("Total unused imports found:", total_num_lines_removed)
+else:
+    print("Total unused imports removed:", total_num_lines_removed)
+
 if total_num_lines_removed > 0:
     exit(1)
