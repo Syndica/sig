@@ -175,7 +175,6 @@ pub const StandardErrLogger = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.channel.close();
         if (self.handle) |handle| {
             self.exit_sig.store(true, .seq_cst);
             handle.join();

@@ -50,7 +50,7 @@ pub const GossipVersionedData = struct {
         };
     }
 
-    pub fn deinit(self: *GossipVersionedData, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const GossipVersionedData, allocator: std.mem.Allocator) void {
         self.value.deinit(allocator);
     }
 

@@ -317,10 +317,6 @@ pub fn Channel(T: type) type {
                 channel.allocator.destroy(b);
             }
         }
-
-        pub fn close(channel: *Self) void {
-            _ = channel;
-        }
     };
 }
 
@@ -566,7 +562,6 @@ pub const BenchmarkChannel = struct {
             }
         }
 
-        channel.close();
         const elapsed = timer.read();
         return elapsed;
     }
@@ -602,8 +597,6 @@ pub const BenchmarkChannel = struct {
             }
         }
 
-        channel.close();
-        const elapsed = timer.read();
-        return elapsed;
+        return timer.read();
     }
 };
