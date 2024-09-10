@@ -256,7 +256,6 @@ const StandardErrLogger = struct {
 
     pub fn run(self: *Self) void {
         while (!self.exit_sig.load(.seq_cst)) {
-            std.time.sleep(std.time.ns_per_ms * 5);
             const messages = self.channel.drain() orelse {
                 // channel is closed
                 return;
