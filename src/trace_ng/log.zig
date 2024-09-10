@@ -263,11 +263,13 @@ const StandardErrLogger = struct {
             };
             defer self.channel.allocator.free(messages);
             for (messages) |message| {
-                const writer = std.io.getStdErr().writer();
-                std.debug.lockStdErr();
-                defer std.debug.unlockStdErr();
+                { // Scope to limit the span of the lock on std err.
+                    const writer = std.io.getStdErr().writer();
+                    std.debug.lockStdErr();
+                    defer std.debug.unlockStdErr();
+                    logfmt.writeLog(writer, message) catch {};
+                }
 
-                logfmt.writeLog(writer, message) catch {};
                 if (message.maybe_fields) |fields| {
                     self.log_allocator.free(fields);
                 }
