@@ -72,7 +72,7 @@ pub const LeaderInfo = struct {
         var leader_addresses = std.ArrayList(SocketAddr).init(allocator);
         for (0..self.config.max_leaders_to_send_to) |i| {
             const slot = current_slot + i * self.config.number_of_consecutive_leader_slots;
-            const leader = try self.leader_schedule_cache.getSlotLeaderProviderMaybeComputeRpc(slot, &self.rpc_client);
+            const leader = try self.leader_schedule_cache.getSlotLeaderMaybeComputeRpc(slot, &self.rpc_client);
             const socket = self.leader_addresses_cache.get(leader) orelse continue;
             try leader_addresses.append(socket);
         }

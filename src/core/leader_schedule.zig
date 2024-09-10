@@ -91,7 +91,7 @@ pub const LeaderScheduleCache = struct {
         return entry.value_ptr.slot_leaders[slot_index];
     }
 
-    pub fn getSlotLeaderProviderMaybeComputeRpc(self: *LeaderScheduleCache, slot: Slot, rpc_client: *RpcClient) !sig.core.Pubkey {
+    pub fn getSlotLeaderMaybeComputeRpc(self: *LeaderScheduleCache, slot: Slot, rpc_client: *RpcClient) !sig.core.Pubkey {
         const epoch, const slot_index = self.epoch_schedule.getEpochAndSlotIndex(slot);
         if (self.getSlotLeader(epoch, slot_index)) |leader| return leader;
 
