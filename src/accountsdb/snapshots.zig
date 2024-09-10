@@ -14,7 +14,7 @@ const Slot = sig.core.time.Slot;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
-const EpochSchedule = sig.accounts_db.genesis_config.EpochSchedule;
+const EpochSchedule = sig.core.EpochSchedule;
 const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
 const Inflation = sig.accounts_db.genesis_config.Inflation;
 const Rent = sig.accounts_db.genesis_config.Rent;
@@ -888,6 +888,11 @@ pub const BankFields = struct {
             .epoch_stakes = epoch_stakes,
             .is_delta = rand.boolean(),
         };
+    }
+
+    pub fn getStakedNodes(self: *const BankFields, allocator: std.mem.Allocator, epoch: Epoch) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+        const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
+        return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
     }
 };
 
