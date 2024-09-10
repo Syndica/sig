@@ -28,7 +28,7 @@ const LogKind = enum {
 /// A ScopedLogger could either be:
 /// - A StandardErrLogger
 /// - A TestingLogger
-pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
+pub fn ScopedLogger(comptime scope: ?[]const u8) type {
     return union(LogKind) {
         const Self = @This();
         standard: *StandardErrLogger(scope),
@@ -86,17 +86,17 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
             }
         }
 
-        pub fn withScope(self: *const Self, comptime new_scope: []const u8) !ScoppedLogger(new_scope) {
+        pub fn withScope(self: *const Self, comptime new_scope: []const u8) !ScopedLogger(new_scope) {
             switch (self.*) {
                 .standard => |*logger| {
-                    return ScoppedLogger(new_scope).init(.{
+                    return ScopedLogger(new_scope).init(.{
                         .allocator = logger.*.allocator,
                         .max_buffer = logger.*.max_buffer,
                         .kind = LogKind.standard,
                     }) catch @panic("message: []const u8");
                 },
                 .testing => |*logger| {
-                    return ScoppedLogger(new_scope).init(.{
+                    return ScopedLogger(new_scope).init(.{
                         .allocator = logger.*.allocator,
                         .kind = LogKind.testing,
                     }) catch @panic("message: []const u8");
@@ -201,7 +201,7 @@ pub fn ScoppedLogger(comptime scope: ?[]const u8) type {
     };
 }
 
-pub const Logger = ScoppedLogger(null);
+pub const Logger = ScopedLogger(null);
 
 /// An instance of `ScopedLogger` that logs to the standard err.
 pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
@@ -259,7 +259,7 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
             };
         }
 
-        pub fn withScope(self: Self, comptime new_scope: anytype) ScoppedLogger(new_scope) {
+        pub fn withScope(self: Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
             return .{
                 .allocator = self.allocator,
                 .recycle_fba = self.log_allocator_state,
@@ -488,7 +488,7 @@ fn TestingLogger(comptime scope: ?[]const u8) type {
             };
         }
 
-        pub fn withScope(self: *Self, comptime new_scope: anytype) ScoppedLogger(new_scope) {
+        pub fn withScope(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
             return .{
                 .allocator = self.allocator,
                 .recycle_fba = self.recycle_fba,
@@ -615,7 +615,7 @@ fn TestingLogger(comptime scope: ?[]const u8) type {
 test "trace_ng: scope switch" {
     const StuffChild = struct {
         const StuffChild = @This();
-        logger: ScoppedLogger(@typeName(StuffChild)),
+        logger: ScopedLogger(@typeName(StuffChild)),
 
         pub fn init(logger: *const Logger) StuffChild {
             return .{ .logger = logger.withScope(@typeName(StuffChild)) catch {
@@ -634,7 +634,7 @@ test "trace_ng: scope switch" {
 
     const Stuff = struct {
         const Stuff = @This();
-        logger: ScoppedLogger(@typeName(Stuff)),
+        logger: ScopedLogger(@typeName(Stuff)),
 
         pub fn init(logger: *const Logger) Stuff {
             return .{ .logger = logger.withScope(@typeName(Stuff)) catch @panic("Init logger failed") };
