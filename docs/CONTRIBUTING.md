@@ -17,6 +17,10 @@ We follow the [Zig Style](https://ziglang.org/documentation/master/#Style-Guide)
 - Do not use identifier names that start with a `_`, i.e (`_foo` or `__bar`). These are the bane of all codebases and the product 
 of not enough time spent thinking about naming. Every decl is unique in some way, use that to your advantage when naming. 
 
+### Structs
+
+We don't use Zig's file-based structs in the codebase. Meaning use `Foo { }` over `foo.zig: @This()` struct declarations.
+
 ### Imports 
 
 #### Sig Dependencies

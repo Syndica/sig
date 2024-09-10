@@ -1015,7 +1015,7 @@ pub fn testTransactionSenderService() !void {
     const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
     defer gossip_manager.deinit();
 
-    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(gpa_allocator, 100);
+    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(gpa_allocator);
     defer transaction_channel.deinit();
 
     const transaction_sender_config = sig.transaction_sender.service.Config{

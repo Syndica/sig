@@ -78,8 +78,9 @@ pub fn Channel(T: type) type {
             };
         };
 
-        pub fn init(allocator: Allocator, initial_capacity: usize) !Self {
-            _ = initial_capacity; // TODO: do something with this
+        // NOTE: if we start seeing performance problems with the channel implementation in the future
+        // note that it's possible to pre-allocate an initial capacity of blocks in order to speed it up.
+        pub fn init(allocator: Allocator) !Self {
             const first_block = try Buffer.create(allocator);
             const first_position: Position = .{
                 .index = Atomic(usize).init(0),
@@ -92,9 +93,9 @@ pub fn Channel(T: type) type {
             };
         }
 
-        pub fn create(allocator: Allocator, initial_capacity: usize) !*Self {
+        pub fn create(allocator: Allocator) !*Self {
             const channel = try allocator.create(Self);
-            channel.* = try Self.init(allocator, initial_capacity);
+            channel.* = try Self.init(allocator);
             return channel;
         }
 
@@ -323,7 +324,7 @@ pub fn Channel(T: type) type {
 const expect = std.testing.expect;
 
 test "smoke" {
-    var ch = try Channel(u32).init(std.testing.allocator, 0);
+    var ch = try Channel(u32).init(std.testing.allocator);
     defer ch.deinit();
 
     try ch.send(7);
@@ -335,7 +336,7 @@ test "smoke" {
 }
 
 test "len_empty_full" {
-    var ch = try Channel(u32).init(std.testing.allocator, 0);
+    var ch = try Channel(u32).init(std.testing.allocator);
     defer ch.deinit();
 
     try expect(ch.len() == 0);
@@ -353,7 +354,7 @@ test "len_empty_full" {
 }
 
 test "len" {
-    var ch = try Channel(u64).init(std.testing.allocator, 0);
+    var ch = try Channel(u64).init(std.testing.allocator);
     defer ch.deinit();
 
     try expect(ch.len() == 0);
@@ -393,7 +394,7 @@ test "spsc" {
         }
     };
 
-    var ch = try Channel(u64).init(std.testing.allocator, 0);
+    var ch = try Channel(u64).init(std.testing.allocator);
     defer ch.deinit();
 
     const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
@@ -426,7 +427,7 @@ test "mpmc" {
 
     var v: [COUNT]Atomic(usize) = .{Atomic(usize).init(0)} ** COUNT;
 
-    var ch = try Channel(u64).init(std.testing.allocator, 0);
+    var ch = try Channel(u64).init(std.testing.allocator);
     defer ch.deinit();
 
     var c_threads: [THREADS]std.Thread = undefined;
@@ -539,7 +540,7 @@ pub const BenchmarkChannel = struct {
         var timer = try std.time.Timer.start();
 
         const allocator = std.heap.c_allocator;
-        var channel = try Channel(usize).init(allocator, n_items / 2);
+        var channel = try Channel(usize).init(allocator);
         defer channel.deinit();
 
         const sends_per_sender: usize = n_items / senders_count;
@@ -574,7 +575,7 @@ pub const BenchmarkChannel = struct {
         var timer = try std.time.Timer.start();
 
         const allocator = std.heap.c_allocator;
-        var channel = try Channel(Packet).init(allocator, n_items / 2);
+        var channel = try Channel(Packet).init(allocator);
         defer channel.deinit();
 
         const sends_per_sender: usize = n_items / senders_count;

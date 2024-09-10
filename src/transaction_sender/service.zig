@@ -76,10 +76,7 @@ pub const Service = struct {
                 .ipv4,
                 .udp,
             ),
-            .send_channel = try Channel(Packet).create(
-                allocator,
-                config.pool_max_size,
-            ),
+            .send_channel = try Channel(Packet).create(allocator),
             .receive_channel = receive_channel,
             .logger = logger,
             .exit = exit,

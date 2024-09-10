@@ -96,7 +96,7 @@ pub const GeyserWriter = struct {
         io_fba_bytes: u64,
     ) !Self {
         const file = try openPipe(pipe_path);
-        const io_channel = try sig.sync.Channel([]u8).create(allocator, 1_000);
+        const io_channel = try sig.sync.Channel([]u8).create(allocator);
         const io_allocator_state = try allocator.create(RecycleFBA(.{}));
         io_allocator_state.* = try RecycleFBA(.{}).init(allocator, io_fba_bytes);
 

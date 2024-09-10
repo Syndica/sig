@@ -78,8 +78,8 @@ pub fn start(
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
     // receiver (threads)
-    const unverified_shred_channel = try Channel(Packet).create(deps.allocator, 1000);
-    const verified_shred_channel = try Channel(Packet).create(deps.allocator, 1000);
+    const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
+    const verified_shred_channel = try Channel(Packet).create(deps.allocator);
     const shred_receiver = try arena.create(ShredReceiver);
     shred_receiver.* = .{
         .allocator = deps.allocator,

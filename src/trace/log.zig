@@ -164,7 +164,7 @@ pub const StandardErrLogger = struct {
             .max_level = max_level,
             .exit_sig = AtomicBool.init(false),
             .handle = null,
-            .channel = Channel(*StandardEntry).create(allocator, INITIAL_ENTRIES_CHANNEL_SIZE) catch
+            .channel = Channel(*StandardEntry).create(allocator) catch
                 @panic("could not allocate StandardEntry channel"),
         };
         return self;

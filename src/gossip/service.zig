@@ -184,13 +184,13 @@ pub const GossipService = struct {
         counter: *Atomic(usize),
         logger: Logger,
     ) !Self {
-        var packet_incoming_channel = try Channel(Packet).create(allocator, 10000);
+        var packet_incoming_channel = try Channel(Packet).create(allocator);
         errdefer packet_incoming_channel.deinit();
 
-        var packet_outgoing_channel = try Channel(Packet).create(allocator, 10000);
+        var packet_outgoing_channel = try Channel(Packet).create(allocator);
         errdefer packet_outgoing_channel.deinit();
 
-        var verified_incoming_channel = try Channel(GossipMessageWithEndpoint).create(allocator, 10000);
+        var verified_incoming_channel = try Channel(GossipMessageWithEndpoint).create(allocator);
         errdefer verified_incoming_channel.deinit();
 
         const thread_pool = try allocator.create(ThreadPool);

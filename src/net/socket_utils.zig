@@ -91,7 +91,7 @@ pub const SocketThread = struct {
         socket: UdpSocket,
         exit: *Atomic(bool),
     ) !Self {
-        const channel = try Channel(Packet).create(allocator, 0);
+        const channel = try Channel(Packet).create(allocator);
         return .{
             .channel = channel,
             .exit = exit,
@@ -109,7 +109,7 @@ pub const SocketThread = struct {
         socket: UdpSocket,
         exit: *Atomic(bool),
     ) !Self {
-        const channel = try Channel(Packet).create(allocator, 0);
+        const channel = try Channel(Packet).create(allocator);
         return .{
             .channel = channel,
             .exit = exit,
@@ -149,7 +149,7 @@ pub const BenchmarkPacketProcessing = struct {
         const n_packets = bench_args.n_packets;
         const allocator = std.heap.c_allocator;
 
-        var channel = try Channel(Packet).init(allocator, n_packets);
+        var channel = try Channel(Packet).init(allocator);
         defer channel.deinit();
 
         var socket = try UdpSocket.create(.ipv4, .udp);
