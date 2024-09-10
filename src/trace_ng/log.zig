@@ -248,27 +248,11 @@ pub fn StandardErrLogger(comptime scope: ?[]const u8) type {
         }
 
         pub fn unscoped(self: Self) Logger {
-            return .{
-                .allocator = self.allocator,
-                .recycle_fba = self.log_allocator_state,
-                .max_buffer = self.max_buffer,
-                .max_level = self.max_level,
-                .exit_sig = self.exit_sig,
-                .channel = self.channel,
-                .handle = self.handle,
-            };
+            return .{ .standard = self };
         }
 
         pub fn withScope(self: Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
-            return .{
-                .allocator = self.allocator,
-                .recycle_fba = self.log_allocator_state,
-                .max_buffer = self.max_buffer,
-                .max_level = self.max_level,
-                .exit_sig = self.exit_sig,
-                .channel = self.channel,
-                .handle = self.handle,
-            };
+            return .{ .standard = self };
         }
 
         pub fn run(self: *Self) void {
