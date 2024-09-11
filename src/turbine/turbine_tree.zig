@@ -6,12 +6,57 @@ const SocketAddr = sig.net.SocketAddr;
 const ShredId = sig.ledger.shred.ShredId;
 const RwMux = sig.sync.RwMux;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
+const BankFields = sig.accounts_db.snapshots.BankFields;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
+const Slot = sig.core.Slot;
 const Duration = sig.time.Duration;
 const Instant = sig.time.Instant;
 const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
+
+pub const TurbineTreeCache = struct {
+    allocator: std.mem.Allocator,
+    cache: std.AutoArrayHashMap(Epoch, CacheEntry),
+    ttl: Duration,
+
+    pub const CacheEntry = struct {
+        created: Instant,
+        turbine_tree: TurbineTree,
+
+        pub fn alive(self: *const CacheEntry, ttl: Duration) bool {
+            return self.created.elapsed().asNanos() < ttl.asNanos();
+        }
+    };
+
+    pub fn init(allocator: std.mem.Allocator, ttl: Duration) TurbineTreeCache {
+        return .{
+            .allocator = allocator,
+            .cache = std.AutoArrayHashMap(Epoch, CacheEntry).init(allocator),
+            .ttl = ttl,
+        };
+    }
+
+    pub fn getTurbineTree(self: TurbineTreeCache, bank_fields: *const BankFields) *const TurbineTree {
+        const entry = try self.cache.getOrPut(bank_fields.epoch);
+        if (entry.found_existing and self.cacheEntryAlive(entry.value_ptr)) {
+            return &entry.value_ptr[1];
+        }
+
+        const epoch_staked_nodes = try bank_fields.getStakedNodes();
+        // const turbine_tree = TurbineTree.initForRetransmit(
+        //     self.allocator,
+        //     my_contact_info,
+        //     tvu_peers,
+        //     epoch_staked_nodes,
+        // );
+        _ = epoch_staked_nodes;
+    }
+
+    pub fn cacheEntryAlive(self: TurbineTreeCache, cache_entry: *CacheEntry) bool {
+        return cache_entry[0].elapsed().asNanos() < self.ttl.asNanos();
+    }
+};
 
 /// Analogous to [ClusterNodes](https://github.com/anza-xyz/agave/blob/efd47046c1bb9bb027757ddabe408315bc7865cc/turbine/src/cluster_nodes.rs#L65)
 pub const TurbineTree = struct {
@@ -124,7 +169,7 @@ pub const TurbineTree = struct {
         fanout: usize,
     ) struct {
         usize,
-        []ThreadSafeContactInfo,
+        []SocketAddr,
     } {
         const root_distance, const children, const addresses = try self.getRetransmitChildren(slot_leader, shred, fanout);
         var peers = std.ArrayList(SocketAddr).init(allocator);
