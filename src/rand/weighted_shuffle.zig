@@ -72,11 +72,11 @@ pub fn WeightedShuffle(comptime T: type) type {
             self.zeros.deinit();
         }
 
-        pub fn clone(self: *const WeightedShuffle(T)) WeightedShuffle(T) {
+        pub fn clone(self: *const WeightedShuffle(T)) !WeightedShuffle(T) {
             return .{
-                .tree = self.tree.clone(),
+                .tree = try self.tree.clone(),
                 .weight = self.weight,
-                .zeros = self.zeros.clone(),
+                .zeros = try self.zeros.clone(),
             };
         }
 

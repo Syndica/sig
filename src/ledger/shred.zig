@@ -532,18 +532,18 @@ pub const ShredId = struct {
     index: u32,
     shred_type: sig.ledger.shred.ShredType,
 
-    pub fn seed(self: *const ShredId, leader: *const Pubkey) [32]u8 {
-        const slot_bytes: [8]u8 = undefined;
-        std.mem.writeInt(u64, slot_bytes, self.slot, .little);
-        const index_bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, index_bytes, self.index, .little);
-        const shred_bytes: [1]u8 = undefined;
-        std.mem.writeInt(u8, shred_bytes, @intCast(self.shred_type), .little);
+    pub fn seed(self: ShredId, leader: Pubkey) [32]u8 {
+        var slot_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &slot_bytes, self.slot, .little);
+        var index_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &index_bytes, self.index, .little);
+        var shred_bytes: [1]u8 = undefined;
+        std.mem.writeInt(u8, &shred_bytes, @intFromEnum(self.shred_type), .little);
         return hashv(&.{
-            slot_bytes,
-            shred_bytes,
-            index_bytes,
-            leader.data,
+            &slot_bytes,
+            &shred_bytes,
+            &index_bytes,
+            &leader.data,
         }).data;
     }
 };
