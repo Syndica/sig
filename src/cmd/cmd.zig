@@ -693,7 +693,6 @@ fn validator() !void {
         geyser_writer,
     );
 
-    // leader schedule cache
     var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
     if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
         try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
@@ -748,6 +747,26 @@ fn validator() !void {
     });
     defer cleanup_service_handle.join();
 
+    // Shred retransmit channel
+    const retransmit_shred_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(allocator, 100);
+    defer retransmit_shred_channel.deinit();
+    var retransmit_send_socket = try network.Socket.create(.ipv4, .udp);
+    defer retransmit_send_socket.close();
+    try retransmit_send_socket.bind(try network.EndPoint.parse("0.0.0.0:0"));
+    const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.runRetransmitService, .{
+        allocator,
+        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info),
+        snapshot.bank.bank_fields.epoch_schedule,
+        snapshot.bank.bank_fields,
+        &leader_schedule_cache,
+        retransmit_shred_channel,
+        &.{
+            retransmit_send_socket,
+        },
+        &gossip_service.gossip_table_rw,
+        &app_base.exit,
+    });
+
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
@@ -765,6 +784,7 @@ fn validator() !void {
             .my_shred_version = &gossip_service.my_shred_version,
             .leader_schedule = leader_provider,
             .shred_inserter = shred_inserter,
+            .retransmit_shred_sender = retransmit_shred_channel,
         },
     );
     defer shred_collector_manager.deinit();
@@ -848,6 +868,9 @@ fn shredCollector() !void {
     });
     defer cleanup_service_handle.join();
 
+    const retransmit_shred_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(allocator, 100);
+    defer retransmit_shred_channel.deinit();
+
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
@@ -865,6 +888,7 @@ fn shredCollector() !void {
             .my_shred_version = &gossip_service.my_shred_version,
             .leader_schedule = leader_provider,
             .shred_inserter = shred_inserter,
+            .retransmit_shred_sender = retransmit_shred_channel,
         },
     );
     defer shred_collector_manager.deinit();
