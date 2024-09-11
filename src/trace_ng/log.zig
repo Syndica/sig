@@ -216,14 +216,13 @@ const StandardErrLogger = struct {
                 return;
             };
             defer self.channel.allocator.free(messages);
+            const writer = std.io.getStdErr().writer();
             for (messages) |message| {
                 { // Scope to limit the span of the lock on std err.
-                    const writer = std.io.getStdErr().writer();
                     std.debug.lockStdErr();
                     defer std.debug.unlockStdErr();
                     logfmt.writeLog(writer, message) catch {};
                 }
-
                 if (message.maybe_fields) |fields| {
                     self.log_allocator.free(fields);
                 }
