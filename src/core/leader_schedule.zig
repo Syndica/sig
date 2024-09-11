@@ -105,7 +105,7 @@ pub const LeaderScheduleCache = struct {
             }
             entry.value_ptr.* = try LeaderSchedule.fromRpc(
                 self.allocator,
-                epoch,
+                slot,
                 rpc_client,
             );
         }
@@ -168,10 +168,10 @@ pub const LeaderSchedule = struct {
 
     pub fn fromRpc(
         allocator: Allocator,
-        epoch: Epoch,
+        for_slot: Slot,
         rpc_client: *RpcClient,
     ) !LeaderSchedule {
-        const rpc_leader_schedule_response = try rpc_client.getLeaderSchedule(allocator, epoch, .{});
+        const rpc_leader_schedule_response = try rpc_client.getLeaderSchedule(allocator, for_slot, .{});
         defer rpc_leader_schedule_response.deinit();
         const rpc_leader_schedule = try rpc_leader_schedule_response.result();
 

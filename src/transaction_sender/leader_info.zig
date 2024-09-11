@@ -31,7 +31,6 @@ const Config = sig.transaction_sender.service.Config;
 pub const LeaderInfo = struct {
     config: Config,
     rpc_client: RpcClient,
-    epoch_info: RpcEpochInfo,
     leader_schedule_cache: LeaderScheduleCache,
     leader_addresses_cache: AutoArrayHashMap(Pubkey, SocketAddr),
     gossip_table_rw: *RwMux(GossipTable),
@@ -42,20 +41,13 @@ pub const LeaderInfo = struct {
         gossip_table_rw: *RwMux(GossipTable),
         logger: Logger,
     ) !LeaderInfo {
-        var rpc_client = RpcClient.init(
-            allocator,
-            config.cluster,
-            .{ .max_retries = config.rpc_retries, .logger = logger },
-        );
-
-        const epoch_info_response = try rpc_client.getEpochInfo(allocator, .{ .commitment = .processed });
-        defer epoch_info_response.deinit(); // Deinit safe because EpochInfo contians only u64's.
-        const epoch_info = try epoch_info_response.result();
-
         return .{
-            .rpc_client = rpc_client,
             .config = config,
-            .epoch_info = epoch_info,
+            .rpc_client = RpcClient.init(
+                allocator,
+                config.cluster,
+                .{ .max_retries = config.rpc_retries, .logger = logger },
+            ),
             .leader_schedule_cache = LeaderScheduleCache.init(allocator, try EpochSchedule.default()),
             .leader_addresses_cache = std.AutoArrayHashMap(Pubkey, SocketAddr).init(allocator),
             .gossip_table_rw = gossip_table_rw,
