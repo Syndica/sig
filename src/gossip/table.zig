@@ -517,6 +517,11 @@ pub const GossipTable = struct {
             }
             return null;
         }
+
+        pub fn nextThreadSafe(self: *@This()) ?ThreadSafeContactInfo {
+            const contact_info = self.next() orelse return null;
+            return ThreadSafeContactInfo.fromContactInfo(contact_info.*);
+        }
     };
 
     // ** shard getter fcns **
