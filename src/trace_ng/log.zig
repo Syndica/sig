@@ -14,7 +14,6 @@ pub const Config = struct {
     allocator: std.mem.Allocator,
     /// Maximum memory that logger can use.
     max_buffer: ?u64 = null,
-    kind: LogKind = LogKind.standard,
 };
 
 const INITIAL_LOG_CHANNEL_SIZE: usize = 1024;
@@ -34,23 +33,21 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
         standard: *StandardErrLogger,
         testing: *TestingLogger,
         noop: void,
-        pub fn init(config: Config) !Self {
-            switch (config.kind) {
-                .standard => {
-                    return .{ .standard = try StandardErrLogger.init(.{
-                        .allocator = config.allocator,
-                        .max_level = config.max_level,
-                        .max_buffer = config.max_buffer,
-                    }) };
-                },
-                .testing, .noop => {
-                    return .{ .testing = TestingLogger.init(.{
-                        .allocator = config.allocator,
-                        .max_level = config.max_level,
-                        .max_buffer = config.max_buffer,
-                    }) };
-                },
-            }
+
+        pub fn unscoped(self: Self) Logger {
+            return switch (self) {
+                .standard => |logger| .{ .standard = logger },
+                .testing => |logger| .{ .testing = logger },
+                .noop => .noop,
+            };
+        }
+
+        pub fn withScope(self: Self, comptime new_scope: []const u8) ScopedLogger(new_scope) {
+            return switch (self) {
+                .standard => |logger| .{ .standard = logger },
+                .testing => |logger| .{ .testing = logger },
+                .noop => .noop,
+            };
         }
 
         pub fn deinit(self: *const Self) void {
@@ -62,48 +59,6 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
                     logger.*.deinit();
                 },
                 .noop => {},
-            }
-        }
-
-        pub fn unscoped(self: *const Self) !Logger {
-            switch (self.*) {
-                .standard => |logger| {
-                    return Logger.init(.{
-                        .allocator = logger.*.allocator,
-                        .max_buffer = logger.*.max_buffer,
-                        .kind = LogKind.standard,
-                    });
-                },
-                .testing => |logger| {
-                    return Logger.init(.{
-                        .allocator = logger.*.allocator,
-                        .kind = LogKind.testing,
-                    });
-                },
-                .noop => {
-                    @panic("Cannot scope noop");
-                },
-            }
-        }
-
-        pub fn withScope(self: *const Self, comptime new_scope: []const u8) !ScopedLogger(new_scope) {
-            switch (self.*) {
-                .standard => |*logger| {
-                    return ScopedLogger(new_scope).init(.{
-                        .allocator = logger.*.allocator,
-                        .max_buffer = logger.*.max_buffer,
-                        .kind = LogKind.standard,
-                    }) catch @panic("message: []const u8");
-                },
-                .testing => |*logger| {
-                    return ScopedLogger(new_scope).init(.{
-                        .allocator = logger.*.allocator,
-                        .kind = LogKind.testing,
-                    }) catch @panic("message: []const u8");
-                },
-                .noop => {
-                    @panic("Cannot scope noop");
-                },
             }
         }
 
@@ -246,11 +201,11 @@ const StandardErrLogger = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn unscoped(self: Self) Logger {
+    pub fn logger(self: *Self) Logger {
         return .{ .standard = self };
     }
 
-    pub fn withScope(self: Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
+    pub fn scopedLogger(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
         return .{ .standard = self };
     }
 
@@ -458,28 +413,12 @@ const TestingLogger = struct {
         return self;
     }
 
-    pub fn unscoped(self: *Self) Logger {
-        return .{
-            .allocator = self.allocator,
-            .recycle_fba = self.recycle_fba,
-            .max_buffer = self.max_buffer,
-            .max_level = self.max_level,
-            .exit_sig = self.exit_sig,
-            .channel = self.channel,
-            .handle = self.handle,
-        };
+    pub fn logger(self: *Self) Logger {
+        return .{ .testing = self };
     }
 
-    pub fn withScope(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
-        return .{
-            .allocator = self.allocator,
-            .recycle_fba = self.recycle_fba,
-            .max_buffer = self.max_buffer,
-            .max_level = self.max_level,
-            .exit_sig = self.exit_sig,
-            .channel = self.channel,
-            .handle = self.handle,
-        };
+    pub fn scopedLogger(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
+        return .{ .testing = self };
     }
 
     pub fn deinit(self: *const Self) void {
@@ -545,7 +484,7 @@ const TestingLogger = struct {
         const maybe_scope = if (scope) |s| s else null;
 
         // Format message.
-        var fmt_msg = std.ArrayList(u8).initCapacity(self.allocator, 256) catch @panic("could not initCapacity for message");
+        var fmt_msg = std.ArrayList(u8).initCapacity(self.allocator, 512) catch @panic("could not initCapacity for message");
         defer fmt_msg.deinit();
         logfmt.fmtMsg(fmt_msg.writer(), fmt, args);
 
@@ -599,13 +538,7 @@ test "trace_ng: scope switch" {
         logger: ScopedLogger(@typeName(StuffChild)),
 
         pub fn init(logger: *const Logger) StuffChild {
-            return .{ .logger = logger.withScope(@typeName(StuffChild)) catch {
-                @panic("Init logger failed");
-            } };
-        }
-
-        pub fn deinit(self: *StuffChild) void {
-            self.logger.deinit();
+            return .{ .logger = logger.withScope(@typeName(StuffChild)) };
         }
 
         pub fn doStuffDetails(self: *StuffChild) void {
@@ -617,48 +550,44 @@ test "trace_ng: scope switch" {
         const Stuff = @This();
         logger: ScopedLogger(@typeName(Stuff)),
 
-        pub fn init(logger: *const Logger) Stuff {
-            return .{ .logger = logger.withScope(@typeName(Stuff)) catch @panic("Init logger failed") };
-        }
-
-        pub fn deinit(self: *Stuff) void {
-            self.logger.deinit();
+        pub fn init(logger: Logger) Stuff {
+            return .{ .logger = logger.withScope(@typeName(Stuff)) };
         }
 
         pub fn doStuff(self: *Stuff) void {
             self.logger.log(.info, "doing stuff parent");
-            const logger = self.logger.unscoped() catch @panic("Init logger failed");
-            defer logger.deinit();
+            const logger = self.logger.unscoped();
             var child = StuffChild.init(&logger);
-            defer child.deinit();
             child.doStuffDetails();
         }
     };
 
     const allocator = std.testing.allocator;
 
-    const logger = Logger.init(.{
+    const std_logger = StandardErrLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
         .max_buffer = 2048,
     }) catch @panic("Logger init failed");
-    defer logger.deinit();
+    defer std_logger.deinit();
 
-    var stuff = Stuff.init(&logger);
-    defer stuff.deinit();
+    const logger = std_logger.logger();
+
+    var stuff = Stuff.init(logger);
     stuff.doStuff();
 }
 
 test "trace_ng: all" {
     const allocator = std.testing.allocator;
 
-    var logger = Logger.init(.{
+    var std_logger = StandardErrLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
         .max_buffer = 2048,
     }) catch @panic("Logger init failed");
+    defer std_logger.deinit();
 
-    defer logger.deinit();
+    var logger = std_logger.logger();
 
     logger.log(.info, "Logging with log");
     logger.logf(
@@ -690,13 +619,15 @@ test "trace_ng: all" {
 test "trace_ng: reclaim" {
     const allocator = std.testing.allocator;
 
-    var logger = Logger.init(.{
+    var std_logger = StandardErrLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
         .max_buffer = 2048,
     }) catch @panic("Logger init failed");
 
-    defer logger.deinit();
+    defer std_logger.deinit();
+
+    var logger = std_logger.logger();
 
     // Ensure memory can be continously requested from recycle_fba without getting stuck.
     for (0..25) |_| {
@@ -714,13 +645,15 @@ test "trace_ng: reclaim" {
 test "trace_ng: level" {
     const allocator = std.testing.allocator;
 
-    var logger = Logger.init(.{
+    var std_logger = StandardErrLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.err,
+        .max_level = Level.info,
         .max_buffer = 2048,
     }) catch @panic("Logger init failed");
 
-    defer logger.deinit();
+    defer std_logger.deinit();
+
+    var logger = std_logger.logger();
 
     // None should log as they are higher than set max_log.
     logger.log(.warn, "Logging with log");
@@ -753,14 +686,15 @@ test "trace_ng: level" {
 test "trace_ng: format" {
     const allocator = std.testing.allocator;
 
-    var logger = Logger.init(.{
+    var test_logger = TestingLogger.init(.{
         .allocator = allocator,
         .max_level = Level.debug,
         .max_buffer = 2048,
-        .kind = LogKind.testing,
-    }) catch @panic("Logger init failed");
+    });
 
-    defer logger.deinit();
+    defer test_logger.deinit();
+
+    var logger = test_logger.logger();
 
     logger.log(.err, "Logging with log");
     if (logger.testing.log_msg) |log_msg| {
@@ -789,7 +723,7 @@ test "trace_ng: format" {
     );
 
     if (logger.testing.log_msg) |log_msg| {
-        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=info f_agent=Firefox f_version=2.0 Logging with logWithFields\n"));
+        std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=info f_agent=Firefox f_version=2.0 Logging with logWithFields\n")) catch |err| std.debug.print("xxx{}", .{err});
         try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
     }
 
@@ -811,8 +745,7 @@ test "trace_ng: format" {
     }
 
     // Add scope.
-    var scoped_logger = logger.withScope(@typeName(@This())) catch @panic("Init logger failed");
-    defer scoped_logger.deinit();
+    var scoped_logger = logger.withScope(@typeName(@This()));
     scoped_logger.logfWithFields(
         .debug,
         "{s}",
@@ -834,14 +767,13 @@ test "trace_ng: format" {
 test "trace_ng: format.methods" {
     const allocator = std.testing.allocator;
 
-    var logger = Logger.init(.{
+    const test_logger = TestingLogger.init(.{
         .allocator = allocator,
         .max_level = Level.debug,
-        .max_buffer = 2048,
-        .kind = LogKind.testing,
-    }) catch @panic("Logger init failed");
+    });
+    defer test_logger.deinit();
 
-    defer logger.deinit();
+    var logger = test_logger.logger();
 
     // ERROR
     logger.err("Logging with log");
