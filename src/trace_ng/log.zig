@@ -572,8 +572,14 @@ test "trace_ng: scope switch" {
 
     const logger = std_logger.logger();
 
+    // Below logs out the following:
+    // trace_ng.log.test.trace_ng: scope switch.Stuff] time=2024-09-11T06:49:02Z level=info doing stuff parent
+    // [trace_ng.log.test.trace_ng: scope switch.StuffChild] time=2024-09-11T06:49:02Z level=info doing stuff child
+    // time=2024-09-11T06:49:02Z level=info Log from main
     var stuff = Stuff.init(logger);
     stuff.doStuff();
+    // Log using the concrete instance also works.
+    std_logger.log(null, Level.info, "Log from main");
 }
 
 test "trace_ng: all" {
