@@ -7,7 +7,6 @@ const bincode = sig.bincode;
 const AutoHashMap = std.AutoHashMap;
 const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
 
