@@ -9,13 +9,14 @@ pub fn build(b: *Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const filters = b.option([]const []const u8, "filter", "List of filters, used for example to filter unit tests by name"); // specified as a series like `-Dfilter="filter1" -Dfilter="filter2"`
     const enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite");
+    const no_run = b.option(bool, "no-run", "Do not run the selected step and install it") orelse false;
 
     // CLI build steps
-    const run_step = b.step("run", "Run the sig executable");
+    const sig_step = b.step("run", "Run the sig executable");
     const test_step = b.step("test", "Run library tests");
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
     const benchmark_step = b.step("benchmark", "Benchmark client");
-    const geyser_reader_step = b.step("geyser_reader", "read data from geyser");
+    const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
 
     // Dependencies
     const dep_opts = .{ .target = target, .optimize = optimize };
@@ -73,7 +74,8 @@ pub fn build(b: *Build) void {
 
     const main_exe_run = b.addRunArtifact(sig_exe);
     main_exe_run.addArgs(b.args orelse &.{});
-    run_step.dependOn(&main_exe_run.step);
+    if (!no_run) sig_step.dependOn(&main_exe_run.step);
+    if (no_run) sig_step.dependOn(&b.addInstallArtifact(sig_exe, .{}).step);
 
     // docs for the Sig library
     const sig_obj = b.addObject(.{
@@ -109,7 +111,8 @@ pub fn build(b: *Build) void {
     unit_tests_exe.linkLibC();
 
     const unit_tests_exe_run = b.addRunArtifact(unit_tests_exe);
-    test_step.dependOn(&unit_tests_exe_run.step);
+    if (!no_run) test_step.dependOn(&unit_tests_exe_run.step);
+    if (no_run) test_step.dependOn(&b.addInstallArtifact(unit_tests_exe, .{}).step);
 
     // fuzz test
     const fuzz_exe = b.addExecutable(.{
@@ -128,7 +131,8 @@ pub fn build(b: *Build) void {
 
     const fuzz_exe_run = b.addRunArtifact(fuzz_exe);
     fuzz_exe_run.addArgs(b.args orelse &.{});
-    fuzz_step.dependOn(&fuzz_exe_run.step);
+    if (!no_run) fuzz_step.dependOn(&fuzz_exe_run.step);
+    if (no_run) fuzz_step.dependOn(&b.addInstallArtifact(fuzz_exe, .{}).step);
 
     // benchmarks
     const benchmark_exe = b.addExecutable(.{
@@ -147,7 +151,8 @@ pub fn build(b: *Build) void {
 
     const benchmark_exe_run = b.addRunArtifact(benchmark_exe);
     benchmark_exe_run.addArgs(b.args orelse &.{});
-    benchmark_step.dependOn(&benchmark_exe_run.step);
+    if (!no_run) benchmark_step.dependOn(&benchmark_exe_run.step);
+    if (no_run) benchmark_step.dependOn(&b.addInstallArtifact(benchmark_exe, .{}).step);
 
     // geyser reader
     const geyser_reader_exe = b.addExecutable(.{
@@ -163,7 +168,8 @@ pub fn build(b: *Build) void {
 
     const geyser_reader_exe_run = b.addRunArtifact(geyser_reader_exe);
     geyser_reader_exe_run.addArgs(b.args orelse &.{});
-    geyser_reader_step.dependOn(&geyser_reader_exe_run.step);
+    if (!no_run) geyser_reader_step.dependOn(&geyser_reader_exe_run.step);
+    if (no_run) geyser_reader_step.dependOn(&b.addInstallArtifact(geyser_reader_exe, .{}).step);
 }
 
 /// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/
