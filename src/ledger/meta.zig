@@ -145,6 +145,8 @@ pub const ConnectedFlags = BitFlags(enum(u8) {
     // 2) S's parent is connected AND S is full (S's complete block present)
     //
     // 1) is a straightfoward case, roots are finalized blocks on the main fork
+    // // QUESTION: How come there can be many roots?
+    // // Forks?
     // so by definition, they are connected. All roots are connected, but not
     // all connected slots are (or will become) roots.
     //

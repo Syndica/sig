@@ -50,6 +50,7 @@ pub const ShredInserter = struct {
     logger: sig.trace.Logger,
     db: BlockstoreDB,
     lock: Mutex,
+    // QUESTION: What is the max_root?
     max_root: Atomic(u64), // TODO shared
     metrics: BlockstoreInsertionMetrics,
 
@@ -81,6 +82,7 @@ pub const ShredInserter = struct {
     ///
     /// This function updates the following column families:
     ///   - [`schema.dead_slots`]: mark a shred as "dead" if its meta-data indicates
+    ///     QUESTION: What does replying a shred mean?
     ///     there is no need to replay this shred.  Specifically when both the
     ///     following conditions satisfy,
     ///     - We get a new shred N marked as the last shred in the slot S,
@@ -89,6 +91,7 @@ pub const ShredInserter = struct {
     ///     - The slot is not currently full
     ///     It means there's an alternate version of this slot. See
     ///     `check_insert_data_shred` for more details.
+    ///    // QUESTION: How are these various family corrolated with one another together?
     ///   - [`schema.shred_data`]: stores data shreds (in check_insert_data_shreds).
     ///   - [`schema.shred_code`]: stores code shreds (in check_insert_code_shreds).
     ///   - [`schema.slot_meta`]: the SlotMeta of the input `shreds` and their related
@@ -149,11 +152,15 @@ pub const ShredInserter = struct {
         const allocator = self.allocator;
         var reed_solomon_cache = try ReedSolomonCache.init(allocator);
         defer reed_solomon_cache.deinit();
+        // QUESTION: In scenario where shreds.len > 0 and not same as is_repaired.len
+        // this would fail but this would have been recorded in self.metrics.num_shreds.add(shreds.len);
+        // Is this fine?
         std.debug.assert(shreds.len == is_repaired.len);
         var total_timer = try Timer.start();
         var write_batch = try self.db.initWriteBatch();
 
         var just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator); // TODO capacity = shreds.len
+        // QUESTION. Would ErasureSetId.fec_set_index always === ErasureMeta.fec_set_index
         var erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator);
         var merkle_root_metas = AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)).init(allocator);
         var slot_meta_working_set = AutoHashMap(u64, SlotMetaWorkingSetEntry).init(allocator);
@@ -176,6 +183,7 @@ pub const ShredInserter = struct {
         var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
         defer newly_completed_data_sets.deinit();
         for (shreds, is_repaired) |shred, is_repair| {
+            // QUESTION: What guarantees that contents of shred/is_repair are ordered same way?
             const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
             switch (shred) {
                 .data => |data_shred| {
@@ -617,6 +625,47 @@ pub const ShredInserter = struct {
         };
     }
 
+    /// QUESTION: Okay to reuse this documentation from Agave?
+    /// Create an entry to the specified `write_batch` that performs shred
+    /// insertion and associated metadata update.  The function also updates
+    /// its in-memory copy of the associated metadata.
+    ///
+    /// Currently, this function must be invoked while holding
+    /// `insert_shreds_lock` as it performs read-modify-write operations
+    /// on multiple column families.
+    ///
+    /// The resulting `write_batch` may include updates to [`cf::DeadSlots`]
+    /// and [`cf::ShredData`].  Note that it will also update the in-memory copy
+    /// of `erasure_metas`, `merkle_root_metas`, and `index_working_set`, which will
+    /// later be used to update other column families such as [`cf::ErasureMeta`] and
+    /// [`cf::Index`].
+    ///
+    /// Arguments:
+    /// - `shred`: the shred to be inserted
+    /// - `erasure_metas`: the in-memory hash-map that maintains the dirty
+    ///     copy of the erasure meta.  It will later be written to
+    ///     `cf::ErasureMeta` in insert_shreds_handle_duplicate().
+    /// - `merkle_root_metas`: the in-memory hash-map that maintains the dirty
+    ///     copy of the merkle root meta. It will later be written to
+    ///     `cf::MerkleRootMeta` in `insert_shreds_handle_duplicate()`.
+    /// - `index_working_set`: the in-memory hash-map that maintains the
+    ///     dirty copy of the index meta.  It will later be written to
+    ///     `cf::Index` in insert_shreds_handle_duplicate().
+    /// - `slot_meta_working_set`: the in-memory hash-map that maintains
+    ///     the dirty copy of the index meta.  It will later be written to
+    ///     `cf::SlotMeta` in insert_shreds_handle_duplicate().
+    /// - `write_batch`: the collection of the current writes which will
+    ///     be committed atomically.
+    /// - `just_inserted_data_shreds`: a (slot, shred index within the slot)
+    ///     to shred map which maintains which data shreds have been inserted.
+    /// - `index_meta_time_us`: the time spent on loading or creating the
+    ///     index meta entry from the db.
+    /// - `is_trusted`: if false, this function will check whether the
+    ///     input shred is duplicate.
+    /// - `handle_duplicate`: the function that handles duplication.
+    /// - `leader_schedule`: the leader schedule will be used to check
+    ///     whether it is okay to insert the input shred.
+    /// - `shred_source`: the source of the shred.
     /// agave: check_insert_data_shred
     fn checkInsertDataShred(
         self: *Self,
@@ -635,6 +684,8 @@ pub const ShredInserter = struct {
     ) !ArrayList(CompletedDataSetInfo) {
         const slot = shred.fields.common.slot;
         const shred_index: u64 = @intCast(shred.fields.common.index);
+        // QUESTION: Why set this back to a union when we are in a function that deals with
+        // shred data and we know we already have a shred data?
         const shred_union = Shred{ .data = shred };
 
         const index_meta_working_set_entry =
@@ -643,6 +694,8 @@ pub const ShredInserter = struct {
         const slot_meta_entry = try self.getSlotMetaEntry(
             slot_meta_working_set,
             slot,
+            // QUESTION/SUGGESTION: Maybe move this more to the top? If this fails then
+            // the self.getIndexMetaEntry would have been a waste
             try shred.parent(),
         );
         const slot_meta = &slot_meta_entry.new_slot_meta;
@@ -650,6 +703,8 @@ pub const ShredInserter = struct {
         const erasure_set_id = shred.fields.common.erasureSetId();
         // TODO: redundant get or put pattern
         if (!merkle_root_metas.contains(erasure_set_id)) {
+            // QUESTION: Why do some variables have underscore as a suffix?
+            // In this case meta_
             if (try self.db.get(schema.merkle_root_meta, erasure_set_id)) |meta_| {
                 try merkle_root_metas.put(erasure_set_id, .{ .clean = meta_ });
             }
@@ -739,6 +794,8 @@ pub const ShredInserter = struct {
         allocator: std.mem.Allocator,
         slot: Slot,
         working_set: *AutoHashMap(Slot, IndexMetaWorkingSetEntry),
+        // QUESTION: Is there another way apart from passing this down? What about passing self.metrics instead?
+        // See index_meta_time_us was not initially sure why this? But this is being passed all the way down for timing purposes
         index_meta_time_us: *u64,
     ) !*IndexMetaWorkingSetEntry {
         // TODO: redundant get or put pattern
@@ -762,6 +819,8 @@ pub const ShredInserter = struct {
         slot: Slot,
         parent_slot: Slot,
     ) !*SlotMetaWorkingSetEntry {
+        // QUESTION: Any reason why no metrics is being recorded here, but it is
+        // for getIndexMetaEntry with index_meta_time_us
         // TODO: redundant get or put pattern
         const entry = try working_set.getOrPut(slot);
         if (!entry.found_existing) {
@@ -1742,6 +1801,7 @@ const ShredSource = enum {
     recovered,
 };
 
+// QUESTION: Is this guaranteed to not have gaps ie start_index..end_index always?
 pub const CompletedDataSetInfo = struct {
     /// [`Slot`] to which the [`Shred`]s in this set belong.
     slot: Slot,
@@ -1820,6 +1880,7 @@ pub const BlockstoreInsertionMetrics = struct {
     }
 };
 
+/// Question: Is it possible to use WorkingEntry(SlotMeta) here?
 /// The in-memory data structure for updating entries in the column family
 /// [`SlotMeta`].
 pub const SlotMetaWorkingSetEntry = struct {

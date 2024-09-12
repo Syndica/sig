@@ -529,6 +529,8 @@ pub fn GenericShred(
 pub const ShredId = struct {
     slot: Slot,
     index: u32,
+    // Question: Why have shred_type as part of the ShredId?
+    // Is it possible to have same slot, same id but different shred_type?
     shred_type: sig.ledger.shred.ShredType,
 };
 
@@ -547,6 +549,7 @@ pub const ErasureSetId = struct {
             unreachable;
         }
     }
+    // Question: Why does this not have a shred_type like ShredId
 };
 
 fn getMerkleRoot(
@@ -799,6 +802,7 @@ pub const CommonHeader = struct {
     slot: Slot,
     index: u32,
     version: u16,
+    // Question: Is this also set when it is a data shred
     fec_set_index: u32,
 
     pub const @"!bincode-config:variant" = ShredVariantConfig;
