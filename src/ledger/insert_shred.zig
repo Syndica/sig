@@ -690,6 +690,7 @@ pub const ShredInserter = struct {
 
         const index_meta_working_set_entry =
             try self.getIndexMetaEntry(self.allocator, slot, index_working_set, index_meta_time_us);
+
         const index_meta = &index_meta_working_set_entry.index;
         const slot_meta_entry = try self.getSlotMetaEntry(
             slot_meta_working_set,
@@ -805,6 +806,7 @@ pub const ShredInserter = struct {
             if (try self.db.get(schema.index, slot)) |item| {
                 entry.value_ptr.* = .{ .index = item };
             } else {
+                // QUESTION: Find out at what point this get persisted?
                 entry.value_ptr.* = IndexMetaWorkingSetEntry.init(allocator, slot);
             }
         }
@@ -869,6 +871,12 @@ pub const ShredInserter = struct {
         data_index: *meta.ShredIndex,
     ) bool {
         const shred_index: u64 = @intCast(shred.fields.common.index);
+        // QUESTION: is the "shred_index < slot_meta.consecutive_received_from_0" check needed?
+        // Ie would there ever be a case where data_index.contains(shred_index) is true but 
+        // shred_index < slot_meta.consecutive_received_from_0 is false? If not then is data_index.contains(shred_index)
+        // not enough check?
+        // Also if shred_index > slot_meta.consecutive_received_from_0 is true and also data_index.contains(shred_index) is true
+        // is it a valid case case for data_index.contains(shred_index) to be true but shred_index > slot_meta.consecutive_received_from_0.
         return shred_index < slot_meta.consecutive_received_from_0 or
             data_index.contains(shred_index);
     }

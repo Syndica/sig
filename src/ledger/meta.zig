@@ -260,12 +260,18 @@ pub const ErasureConfig = struct {
 /// Index recording presence/absence of shreds
 pub const Index = struct {
     slot: Slot,
+    // QUESTION: maybe name these data_index and code_index?
+    // while reading the code, I often thought this was refering to the actual data shred and code shred
+    // but it is just the index.
     data: ShredIndex,
     code: ShredIndex,
 
     pub fn init(allocator: std.mem.Allocator, slot: Slot) Index {
         return .{
             .slot = slot,
+            // QUESTION: So the slot is passed in here, but it is not used to construct
+            // the data and code index? Would have expected some relationship here between
+            // the slot being passed and the data/code index?
             .data = ShredIndex.init(allocator),
             .code = ShredIndex.init(allocator),
         };
