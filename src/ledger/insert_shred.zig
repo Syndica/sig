@@ -733,6 +733,8 @@ pub const ShredInserter = struct {
                     "Received *last* shred index {} less than previous shred index {}, and slot {} is not full, marking slot dead",
                     .{ shred_index, slot_meta.received, slot },
                 );
+                // QUESTION: Should the function not return at this point?
+                // Given we have a dead slots and we have saved that.
                 try write_batch.put(schema.dead_slots, slot, true);
             }
 
