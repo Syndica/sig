@@ -361,6 +361,8 @@ pub const MerkleRootMeta = struct {
             // shred that contains a proper merkle root would constitute
             // a valid duplicate shred proof.
             .merkle_root = shred.fields.merkleRoot() catch null,
+            // QUESTION: This does not look like the _first_ recieved shred index,
+            // but the index of _this_ shred we used to construct the MerkleRootMeta
             .first_received_shred_index = shred.fields.common.index,
             .first_received_shred_type = shred.fields.common.variant.shred_type,
         };
