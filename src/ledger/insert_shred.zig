@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("sig.zig");
 
 const ledger = sig.ledger;
 const meta = ledger.meta;
@@ -874,7 +874,7 @@ pub const ShredInserter = struct {
     ) bool {
         const shred_index: u64 = @intCast(shred.fields.common.index);
         // QUESTION: is the "shred_index < slot_meta.consecutive_received_from_0" check needed?
-        // Ie would there ever be a case where data_index.contains(shred_index) is true but 
+        // Ie would there ever be a case where data_index.contains(shred_index) is true but
         // shred_index < slot_meta.consecutive_received_from_0 is false? If not then is data_index.contains(shred_index)
         // not enough check?
         // Also if shred_index > slot_meta.consecutive_received_from_0 is true and also data_index.contains(shred_index) is true
@@ -898,6 +898,9 @@ pub const ShredInserter = struct {
         const shred_index_u32 = shred.fields.common.index;
         const shred_index_u64: u64 = @intCast(shred_index_u32);
         const is_last_in_slot = shred.isLastInSlot();
+        // QUESTION/SUGGESTION rename this to is_valid (or similar) instead of sanitize as santize gives the
+        // impression this is fixing up things and updating the shred, when it is only running a bunch of
+        // validation.
         assertOk(shred.sanitize());
 
         // Check that we do not receive a shred with either:
