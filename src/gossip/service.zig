@@ -699,9 +699,6 @@ pub const GossipService = struct {
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_push_time.observe(@floatFromInt(elapsed));
 
-                for (push_messages.items) |message| {
-                    self.allocator.free(message.gossip_values);
-                }
                 push_messages.clearRetainingCapacity();
             }
 
@@ -711,9 +708,6 @@ pub const GossipService = struct {
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_prune_time.observe(@floatFromInt(elapsed));
 
-                for (prune_messages.items) |message| {
-                    self.allocator.free(message.prunes);
-                }
                 prune_messages.clearRetainingCapacity();
             }
 
@@ -725,24 +719,17 @@ pub const GossipService = struct {
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_pull_req_time.observe(@floatFromInt(elapsed));
 
-                for (pull_requests.items) |message| {
-                    message.filter.deinit();
-                    message.value.deinit(self.allocator);
-                }
                 pull_requests.clearRetainingCapacity();
             }
 
             if (pull_responses.items.len > 0) {
                 var x_timer = try sig.time.Timer.start();
-                self.handleBatchPullResponses(&pull_responses) catch |err| {
+                self.handleBatchPullResponses(pull_responses.items) catch |err| {
                     self.logger.errf("handleBatchPullResponses failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_pull_resp_time.observe(@floatFromInt(elapsed));
 
-                for (pull_responses.items) |message| {
-                    self.allocator.free(message.gossip_values);
-                }
                 pull_responses.clearRetainingCapacity();
             }
 
@@ -1442,9 +1429,9 @@ pub const GossipService = struct {
     ///     - PullResponseMessage.gossip_values are inserted into the gossip table or added to failed pull hashes and freed
     pub fn handleBatchPullResponses(
         self: *Self,
-        pull_response_messages: *const ArrayList(PullResponseMessage),
+        pull_response_messages: []const PullResponseMessage,
     ) !void {
-        if (pull_response_messages.items.len == 0) {
+        if (pull_response_messages.len == 0) {
             return;
         }
 
@@ -1457,7 +1444,7 @@ pub const GossipService = struct {
             var gossip_table: *GossipTable = gossip_table_lock.mut();
             defer gossip_table_lock.unlock();
 
-            for (pull_response_messages.items) |*pull_message| {
+            for (pull_response_messages) |*pull_message| {
                 const valid_len = self.filterBasedOnShredVersion(
                     gossip_table,
                     pull_message.gossip_values,
@@ -1896,92 +1883,37 @@ pub const GossipService = struct {
         gossip_values: []SignedGossipData,
         sender_pubkey: Pubkey,
     ) usize {
-        const S = struct {
-            /// Implements Hoare's Partition Scheme for filtering valid GossipData. Takes O(N) time.
-            /// Returns the number of valid entries placed at the "start" of `list`.
-            fn partition(
-                list: []SignedGossipData,
-                sender_matches: bool,
-                table: *const GossipTable,
-                my_shred_version: u16,
-            ) usize {
-                if (list.len == 0) return 0;
-                var left: usize = 0;
-                var right: usize = list.len - 1;
-
-                while (left < right) {
-                    while (left < right and sort(
-                        list[left],
-                        sender_matches,
-                        table,
-                        my_shred_version,
-                    )) {
-                        left += 1;
-                    }
-                    while (left < right and !sort(
-                        list[right],
-                        sender_matches,
-                        table,
-                        my_shred_version,
-                    )) {
-                        right -= 1;
-                    }
-
-                    if (left < right) {
-                        std.mem.swap(SignedGossipData, &list[left], &list[right]);
-                        left += 1;
-                        right -= 1;
-                    }
-                }
-
-                // After the loop, "left" points to the first element for which "sort" is false.
-                if (list.len > 1) left -= 1;
-                return left;
-            }
-
-            /// Returns `true` if the signed gossip data matches.
-            fn sort(
-                value: SignedGossipData,
-                sender_matches: bool,
-                table: *const GossipTable,
-                my_shred_version: u16,
-            ) bool {
-                switch (value.data) {
-                    // always allow contact info + node instance to update shred versions
-                    // even if the sender's shred version doesn't match.
-                    .ContactInfo => {},
-                    .LegacyContactInfo => {},
-                    .NodeInstance => {},
-                    else => {
-                        // These data types are only valid when the sender AND the value's pubkey matches
-                        // our gossip table's contact info.
-                        if (!(sender_matches and
-                            table.checkMatchingShredVersion(value.id(), my_shred_version)))
-                        {
-                            // The data was wrong.
-                            return false;
-                        }
-                    },
-                }
-                return true;
-            }
-        };
-
-        const my_shred_version = self.my_shred_version.load(.acquire);
+        // we use swap remove which just reorders the array
+        // (order dm), so we just track the new len -- ie, no allocations/frees
+        const my_shred_version = self.my_shred_version.load(.monotonic);
         if (my_shred_version == 0) {
             return gossip_values.len;
         }
 
-        // Does the sender's pubkey exist in the gossip table contact's, and if so does it match
-        // our shred version.
+        var gossip_values_array = ArrayList(SignedGossipData).fromOwnedSlice(self.allocator, gossip_values);
         const sender_matches = gossip_table.checkMatchingShredVersion(sender_pubkey, my_shred_version);
-        const num_valid = S.partition(
-            gossip_values,
-            sender_matches,
-            gossip_table,
-            my_shred_version,
-        );
-        return num_valid;
+        var i: usize = 0;
+        while (i < gossip_values_array.items.len) {
+            const gossip_value = &gossip_values[i];
+            switch (gossip_value.data) {
+                // always allow contact info + node instance to update shred versions
+                .ContactInfo => {},
+                .LegacyContactInfo => {},
+                .NodeInstance => {},
+                else => {
+                    // only allow values where both the sender and origin match our shred version
+                    if (!sender_matches or
+                        !gossip_table.checkMatchingShredVersion(gossip_value.id(), my_shred_version))
+                    {
+                        const removed_value = gossip_values_array.swapRemove(i);
+                        bincode.free(self.gossip_value_allocator, removed_value);
+                        continue; // do not incrememnt `i`. it has a new value we need to inspect.
+                    }
+                },
+            }
+            i += 1;
+        }
+        return gossip_values_array.items.len;
     }
 };
 
@@ -2484,7 +2416,7 @@ test "handling pull responses" {
         .from_pubkey = &my_pubkey,
     });
 
-    try gossip_service.handleBatchPullResponses(&data);
+    try gossip_service.handleBatchPullResponses(data.items);
 
     // make sure values are inserted
     var gossip_table_lock = gossip_service.gossip_table_rw.read();
@@ -2495,7 +2427,7 @@ test "handling pull responses" {
     gossip_table_lock.unlock();
 
     // try inserting again with same values (should all fail)
-    try gossip_service.handleBatchPullResponses(&data);
+    try gossip_service.handleBatchPullResponses(data.items);
 
     var lg = gossip_service.failed_pull_hashes_mux.lock();
     var failed_pull_hashes: *HashTimeQueue = lg.mut();
@@ -3130,6 +3062,7 @@ test "process contact info push packet" {
     const gossip_data: GossipData = .{ .LegacyContactInfo = legacy_contact_info };
     const gossip_value = try SignedGossipData.initSigned(gossip_data, &kp);
     const heap_values = try allocator.dupe(SignedGossipData, &.{gossip_value});
+    defer allocator.free(heap_values);
 
     // packet
     const msg: GossipMessage = .{ .PushMessage = .{ id, heap_values } };
