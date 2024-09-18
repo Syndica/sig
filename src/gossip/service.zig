@@ -749,6 +749,8 @@ pub const GossipService = struct {
                 self.handleBatchPongMessages(&pong_messages);
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_pong_time.observe(@floatFromInt(elapsed));
+
+                pong_messages.clearRetainingCapacity();
             }
 
             // TRIM gossip-table
