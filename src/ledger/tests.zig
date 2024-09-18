@@ -494,4 +494,40 @@ pub const BenchmarLegger = struct {
         _ = try inserter.insertShreds(shreds, is_repairs, null, false, null);
         return timer.read();
     }
+
+    // Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
+    pub fn benchReadSequential() !u64 {
+        const allocator = std.heap.page_allocator;
+        var state = try State.initBench("insert shreds and transaction statuses then get blocks");
+        defer state.deinitBench();
+        var inserter = try state.shredInserter();
+        var reader = try state.reader();
+
+        const prefix = "agave.blockstore.bench_read_sequential.";
+        const shreds = try benchShreds(prefix ++ "shreds.bin");
+        defer inline for (.{shreds}) |slice| {
+            deinitShreds(allocator, slice);
+        };
+
+        const total_shreds = shreds.len;
+        const is_repairs = try inserter.allocator.alloc(bool, total_shreds);
+        defer inserter.allocator.free(is_repairs);
+        for (0..total_shreds) |i| {
+            is_repairs[i] = false;
+        }
+        _ = try inserter.insertShreds(shreds, is_repairs, null, false, null);
+
+        const slot: u32 = 0;
+        const num_reads = total_shreds / 15;
+
+        var rng = std.Random.DefaultPrng.init(100);
+
+        var timer = try std.time.Timer.start();
+        const start_index = rng.random().intRangeAtMost(u32, 0, @intCast(total_shreds));
+        for (start_index..start_index + num_reads) |i| {
+            const shred_index = i % total_shreds;
+            _ = try reader.getDataShred(slot, shred_index);
+        }
+        return timer.read();
+    }
 };
