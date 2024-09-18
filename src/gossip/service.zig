@@ -1904,39 +1904,87 @@ pub const GossipService = struct {
         gossip_values: []SignedGossipData,
         sender_pubkey: Pubkey,
     ) usize {
-        // we use swap remove which just reorders the array
-        // (order dm), so we just track the new len -- ie, no allocations/frees
-        const my_shred_version = self.my_shred_version.load(.monotonic);
+        const S = struct {
+            /// Implements Hoare's Partition Scheme for filtering valid GossipData. Takes O(N) time.
+            /// Returns the number of valid entries placed at the "start" of `list`.
+            fn partition(
+                list: []SignedGossipData,
+                sender_matches: bool,
+                table: *const GossipTable,
+                my_shred_version: u16,
+            ) usize {
+                if (list.len == 0) return 0;
+                var left: usize = 0;
+                var right: usize = list.len - 1;
+
+                while (left <= right) {
+                    while (left < list.len and sort(
+                        list[left],
+                        sender_matches,
+                        table,
+                        my_shred_version,
+                    )) {
+                        left += 1;
+                    }
+
+                    while (right > 0 and !sort(
+                        list[right],
+                        sender_matches,
+                        table,
+                        my_shred_version,
+                    )) {
+                        right -= 1;
+                    }
+
+                    if (left >= right) break;
+                    std.mem.swap(SignedGossipData, &list[left], &list[right]);
+                }
+                return right + 1;
+            }
+
+            /// Returns `true` if the signed gossip data matches.
+            fn sort(
+                value: SignedGossipData,
+                sender_matches: bool,
+                table: *const GossipTable,
+                my_shred_version: u16,
+            ) bool {
+                switch (value.data) {
+                    // always allow contact info + node instance to update shred versions
+                    // even if the sender's shred version doesn't match.
+                    .ContactInfo => {},
+                    .LegacyContactInfo => {},
+                    .NodeInstance => {},
+                    else => {
+                        // These data types are only valid when the sender AND the value's pubkey matches
+                        // our gossip table's contact info.
+                        if (!sender_matches or
+                            !table.checkMatchingShredVersion(value.id(), my_shred_version))
+                        {
+                            // The data was wrong.
+                            return false;
+                        }
+                    },
+                }
+                return true;
+            }
+        };
+
+        const my_shred_version = self.my_shred_version.load(.acquire);
         if (my_shred_version == 0) {
             return gossip_values.len;
         }
 
-        var gossip_values_array = ArrayList(SignedGossipData).fromOwnedSlice(self.allocator, gossip_values);
+        // Does the sender's pubkey exist in the gossip table contact's, and if so does it match
+        // our shred version.
         const sender_matches = gossip_table.checkMatchingShredVersion(sender_pubkey, my_shred_version);
-        var i: usize = 0;
-        while (i < gossip_values_array.items.len) {
-            const gossip_value = &gossip_values[i];
-            switch (gossip_value.data) {
-                // always allow contact info + node instance to update shred versions.
-                // this also allows us to know who *not* to send pull requests to, if the shred version
-                // doesnt match ours
-                .ContactInfo => {},
-                .LegacyContactInfo => {},
-                .NodeInstance => {},
-                else => {
-                    // only allow values where both the sender and origin match our shred version
-                    if (!sender_matches or
-                        !gossip_table.checkMatchingShredVersion(gossip_value.id(), my_shred_version))
-                    {
-                        const removed_value = gossip_values_array.swapRemove(i);
-                        bincode.free(self.gossip_value_allocator, removed_value);
-                        continue; // do not incrememnt `i`. it has a new value we need to inspect.
-                    }
-                },
-            }
-            i += 1;
-        }
-        return gossip_values_array.items.len;
+        const num_valid = S.partition(
+            gossip_values,
+            sender_matches,
+            gossip_table,
+            my_shred_version,
+        );
+        return num_valid;
     }
 };
 
