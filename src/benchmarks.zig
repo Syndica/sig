@@ -99,6 +99,14 @@ pub fn main() !void {
             TimeUnits.microseconds,
         );
     }
+
+    if (std.mem.startsWith(u8, filter, "ledger") or run_all_benchmarks) {
+        try benchmark(
+            @import("ledger/tests.zig").BenchmarLegger,
+            max_time_per_bench,
+            TimeUnits.microseconds,
+        );
+    }
 }
 
 const TimeUnits = enum {

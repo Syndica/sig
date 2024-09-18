@@ -252,6 +252,13 @@ fn testShreds(comptime filename: []const u8) ![]const Shred {
     return loadShredsFromFile(std.testing.allocator, path);
 }
 
+/// Differs from testShreds in that it uses the std.heap.c_allocator instead
+/// of the test allocator.
+fn benchShreds(comptime filename: []const u8) ![]const Shred {
+    const path = comptimePrint("{s}/{s}", .{ test_shreds_dir, filename });
+    return loadShredsFromFile(std.heap.c_allocator, path);
+}
+
 /// Read shreds from binary file structured like this:
 /// [shred0_len: u64(little endian)][shred0_payload][shred1_len...
 ///
@@ -321,6 +328,18 @@ pub fn deinitShreds(allocator: Allocator, shreds: []const Shred) void {
 
 /// Read entries from binary file structured like this:
 /// [entry0_len: u64(little endian)][entry0_bincode][entry1_len...
+///
+/// loadEntriesFromFile can read entries produced by this rust function:
+/// ```rust
+/// fn save_entries_to_file(shreds: &[Entry], path: &str) {
+///     let mut file = std::fs::File::create(path).unwrap();
+///    for entry in &entries {
+///        let payload = bincode::serialize(&entry).unwrap();
+///        file.write(&payload.len().to_le_bytes()).unwrap();
+///        file.write(&*payload).unwrap();
+///    }
+/// }
+/// ```
 pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entry {
     const file = try std.fs.cwd().openFile(path, .{});
     const reader = file.reader();
@@ -370,6 +389,20 @@ pub fn TestState(scope: []const u8) type {
             return self;
         }
 
+        /// Differs from init in that it uses the std.heap.c_allocator instead
+        /// of the test allocator.
+        pub fn initBench(comptime test_name: []const u8) !*Self {
+            const self = try _allocator.create(Self);
+            self.* = .{
+                .db = try TestDB(scope).initCustom(_allocator, test_name),
+                .registry = sig.prometheus.Registry(.{}).init(_allocator),
+                .lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0),
+                .max_root = std.atomic.Value(Slot).init(0),
+                ._leak_check = try std.heap.c_allocator.create(u8),
+            };
+            return self;
+        }
+
         pub fn allocator(_: Self) Allocator {
             return _allocator;
         }
@@ -407,6 +440,14 @@ pub fn TestState(scope: []const u8) type {
             _allocator.destroy(self);
             _ = gpa.detectLeaks();
         }
+
+        pub fn deinitBench(self: *Self) void {
+            self.db.deinit();
+            self.registry.deinit();
+            std.heap.c_allocator.destroy(self._leak_check);
+            _allocator.destroy(self);
+            _ = gpa.detectLeaks();
+        }
     };
 }
 
@@ -425,3 +466,32 @@ pub fn TestDB(scope: []const u8) type {
         }
     };
 }
+
+pub const BenchmarLegger = struct {
+    pub const min_iterations = 5;
+    pub const max_iterations = 5;
+
+    // Analogous to [bench_write_small](https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L59)
+    pub fn benchWriteSmall() !u64 {
+        const allocator = std.heap.page_allocator;
+        var state = try State.initBench("insert shreds and transaction statuses then get blocks");
+        defer state.deinitBench();
+        var inserter = try state.shredInserter();
+
+        const prefix = "agave.blockstore.bench_write_small.";
+        const shreds = try benchShreds(prefix ++ "shreds.bin");
+        defer inline for (.{shreds}) |slice| {
+            deinitShreds(allocator, slice);
+        };
+
+        const is_repairs = try inserter.allocator.alloc(bool, shreds.len);
+        defer inserter.allocator.free(is_repairs);
+        for (0..shreds.len) |i| {
+            is_repairs[i] = false;
+        }
+
+        var timer = try std.time.Timer.start();
+        _ = try inserter.insertShreds(shreds, is_repairs, null, false, null);
+        return timer.read();
+    }
+};
