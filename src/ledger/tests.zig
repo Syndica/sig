@@ -530,4 +530,43 @@ pub const BenchmarLegger = struct {
         }
         return timer.read();
     }
+
+    // Analogous to [bench_read_random]https://github.com/anza-xyz/agave/blob/92eca1192b055d896558a78759d4e79ab4721ff1/ledger/benches/blockstore.rs#L103
+    pub fn benchReadRandom() !u64 {
+        const allocator = std.heap.page_allocator;
+        var state = try State.initBench("insert shreds and transaction statuses then get blocks");
+        defer state.deinitBench();
+        var inserter = try state.shredInserter();
+        var reader = try state.reader();
+
+        const prefix = "agave.blockstore.bench_read.";
+        const shreds = try benchShreds(prefix ++ "shreds.bin");
+        defer inline for (.{shreds}) |slice| {
+            deinitShreds(allocator, slice);
+        };
+
+        const total_shreds = shreds.len;
+        const is_repairs = try inserter.allocator.alloc(bool, total_shreds);
+        defer inserter.allocator.free(is_repairs);
+        for (0..total_shreds) |i| {
+            is_repairs[i] = false;
+        }
+        _ = try inserter.insertShreds(shreds, is_repairs, null, false, null);
+
+        const slot: u32 = 0;
+
+        var rng = std.Random.DefaultPrng.init(100);
+
+        var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, total_shreds);
+        defer indices.deinit();
+        for (total_shreds) |_| {
+            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
+        }
+
+        var timer = try std.time.Timer.start();
+        for (indices.items) |shred_index| {
+            _ = try reader.getDataShred(slot, shred_index);
+        }
+        return timer.read();
+    }
 };
