@@ -503,7 +503,7 @@ pub const BenchmarLegger = struct {
         var inserter = try state.shredInserter();
         var reader = try state.reader();
 
-        const prefix = "agave.blockstore.bench_read_sequential.";
+        const prefix = "agave.blockstore.bench_read.";
         const shreds = try benchShreds(prefix ++ "shreds.bin");
         defer inline for (.{shreds}) |slice| {
             deinitShreds(allocator, slice);
