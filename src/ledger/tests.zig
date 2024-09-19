@@ -536,7 +536,7 @@ pub const BenchmarLegger = struct {
         const allocator = std.heap.c_allocator;
         var state = try State.initBench("insert shreds and transaction statuses then get blocks");
         defer state.deinitBench();
-        var inserter = try state.shredIngitserter();
+        var inserter = try state.shredInserter();
         var reader = try state.reader();
 
         const prefix = "agave.blockstore.bench_read.";
