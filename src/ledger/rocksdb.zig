@@ -38,18 +38,36 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             }
 
             // open rocksdb
+            // const database: rocks.DB, //
+            // const cfs: []const rocks.ColumnFamily //
+            // = try callRocks(
+            //     logger,
+            //     rocks.DB.openCf,
+            //     .{
+            //         allocator,
+            //         path,
+            //         .{ .create_if_missing = true, .create_missing_column_families = true },
+            //         column_family_descriptions,
+            //     },
+            // );
+            // defer allocator.free(cfs);
+
+            // QUESTION:
+            // What's the benefit of passing rocks.DB.openCf into callRocks to be called using @call
+            // over calling it directly as below?
+            var err_str: ?rocks.Data = null;
             const database: rocks.DB, //
             const cfs: []const rocks.ColumnFamily //
-            = try callRocks(
-                logger,
-                rocks.DB.openCf,
-                .{
-                    allocator,
-                    path,
-                    .{ .create_if_missing = true, .create_missing_column_families = true },
-                    column_family_descriptions,
-                },
-            );
+            = rocks.DB.openCf(
+                allocator,
+                path,
+                .{ .create_if_missing = true, .create_missing_column_families = true },
+                column_family_descriptions,
+                &err_str,
+            ) catch |e| {
+                logger.errf("{} - {s}", .{ e, err_str.? });
+                return e;
+            };
             defer allocator.free(cfs);
 
             // allocate handle slice
