@@ -22,7 +22,8 @@ pub fn readSocket(
     var socket = socket_;
     try socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
-    while (counter.load(.acquire) != (if (needs_exit_order) idx else true)) {
+    const exit_condition = if (needs_exit_order) idx else true;
+    while (counter.load(.acquire) != exit_condition) {
         var packet: Packet = Packet.default();
         const recv_meta = socket.receiveFrom(&packet.data) catch |err| switch (err) {
             error.WouldBlock => continue,
@@ -35,7 +36,7 @@ pub fn readSocket(
         try incoming_channel.send(packet);
     }
 
-    logger.infof("leaving with: {}, {}, {}\n", .{ incoming_channel.len(), counter.load(.acquire), idx });
+    logger.infof("leaving with: {}, {}, {}", .{ incoming_channel.len(), counter.load(.acquire), idx });
 
     if (needs_exit_order) {
         counter.store(idx + 1, .release);
@@ -52,7 +53,8 @@ pub fn sendSocket(
     counter: *Atomic(if (needs_exit_order) usize else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
-    while (counter.load(.acquire) != (if (needs_exit_order) idx else true) or
+    const exit_condition = if (needs_exit_order) idx else true;
+    while (counter.load(.acquire) != exit_condition or
         outgoing_channel.len() != 0)
     {
         while (outgoing_channel.receive()) |p| {

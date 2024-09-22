@@ -22,6 +22,7 @@ pub fn main() !void {
 
     var exit = std.atomic.Value(bool).init(false);
     try sig.geyser.core.streamReader(
+        allocator,
         &exit,
         pipe_path,
         MEASURE_RATE,

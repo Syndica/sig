@@ -32,6 +32,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // setup
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     const logger = Logger.init(allocator, .debug);
     defer logger.deinit();

@@ -194,9 +194,9 @@ pub const GossipService = struct {
         errdefer verified_incoming_channel.deinit();
 
         const thread_pool = try allocator.create(ThreadPool);
-        const n_threads = @min(@as(u32, @truncate(std.Thread.getCpuCount() catch 1)), 8);
+        const n_threads: usize = @min(std.Thread.getCpuCount() catch 1, 8);
         thread_pool.* = ThreadPool.init(.{
-            .max_threads = n_threads,
+            .max_threads = @intCast(n_threads),
             .stack_size = 2 * 1024 * 1024,
         });
         logger.debugf("using n_threads in gossip: {}", .{n_threads});
@@ -275,7 +275,7 @@ pub const GossipService = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        std.debug.assert(self.closed); // call `self.close()` first
+        std.debug.assert(self.closed); // call `self.shutdown()` first
 
         self.thread_pool.shutdown();
         self.thread_pool.deinit();

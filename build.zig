@@ -59,6 +59,7 @@ pub fn build(b: *Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .sanitize_thread = enable_tsan,
     });
     b.installArtifact(sig_exe);
     sig_exe.root_module.addImport("base58-zig", base58_module);
@@ -116,6 +117,7 @@ pub fn build(b: *Build) void {
         .root_source_file = b.path("src/fuzz.zig"),
         .target = target,
         .optimize = optimize,
+        .sanitize_thread = enable_tsan,
     });
     b.installArtifact(fuzz_exe);
     fuzz_exe.root_module.addImport("base58-zig", base58_module);
@@ -153,6 +155,7 @@ pub fn build(b: *Build) void {
         .root_source_file = b.path("src/geyser/reader.zig"),
         .target = target,
         .optimize = optimize,
+        .sanitize_thread = enable_tsan,
     });
     b.installArtifact(geyser_reader_exe);
     geyser_reader_exe.root_module.addImport("sig", sig_mod);

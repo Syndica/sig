@@ -111,7 +111,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .slots_per_incremental_snapshot = 5_000,
     } });
     errdefer {
-        exit.store(true, .monotonic);
+        exit.store(true, .release);
         manager_handle.join();
     }
 
@@ -207,9 +207,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
 
         blk: {
-            // NOTE: we *specifically* don't use the GPA here because of leaks
-            const c_allocator = std.heap.c_allocator;
-
             // holding the lock here means that the snapshot archive wont be deleted
             // since deletion requires a write lock
             const archive_name, const snapshot_info = full: {
@@ -250,7 +247,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             defer archive_file.close();
 
             try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
-                c_allocator,
+                allocator,
                 .noop,
                 archive_file,
                 alternative_snapshot_dir,
@@ -301,7 +298,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 defer inc_archive_file.close();
 
                 try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
-                    c_allocator,
+                    allocator,
                     .noop,
                     inc_archive_file,
                     alternative_snapshot_dir,
@@ -319,23 +316,23 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             }
 
             var snapshot_fields = try sig.accounts_db.AllSnapshotFields.fromFiles(
-                c_allocator,
+                allocator,
                 logger,
                 alternative_snapshot_dir,
                 snapshot_files,
             );
-            defer snapshot_fields.deinit(c_allocator);
+            defer snapshot_fields.deinit(allocator);
 
-            var alt_accounts_db = try AccountsDB.init(c_allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
+            var alt_accounts_db = try AccountsDB.init(allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
             defer alt_accounts_db.deinit(true);
 
-            _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true, 1_500);
+            _ = try alt_accounts_db.loadWithDefaults(allocator, &snapshot_fields, 1, true, 1_500);
             const maybe_inc_slot = if (snapshot_files.incremental_snapshot) |inc| inc.slot else null;
             logger.infof("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})", .{ snapshot_info.slot, maybe_inc_slot });
         }
     }
 
     std.debug.print("fuzzing complete\n", .{});
-    exit.store(true, .monotonic);
+    exit.store(true, .release);
     manager_handle.join();
 }

@@ -64,7 +64,7 @@ pub fn runBenchmark() !void {
     const reader_handle = try std.Thread.spawn(
         .{},
         geyser.core.streamReader,
-        .{ exit, PIPE_PATH, MEASURE_RATE, null },
+        .{ allocator, exit, PIPE_PATH, MEASURE_RATE, null },
     );
     const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{ allocator, exit });
 

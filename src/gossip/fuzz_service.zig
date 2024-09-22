@@ -226,6 +226,7 @@ pub fn waitForExit(exit: *Atomic(bool)) void {
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
+    defer _ = gpa.deinit();
 
     var rng = std.rand.DefaultPrng.init(seed);
 

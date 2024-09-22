@@ -229,7 +229,7 @@ pub const AccountsDB = struct {
                 break :blk .{ ptr, ptr.allocator() };
             } else {
                 logger.infof("using ram index", .{});
-                break :blk .{ null, std.heap.page_allocator };
+                break :blk .{ null, allocator };
             }
         };
         errdefer if (maybe_disk_allocator_ptr) |ptr| {
@@ -315,6 +315,7 @@ pub const AccountsDB = struct {
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *Self,
+        allocator: std.mem.Allocator,
         snapshot_fields_and_paths: *AllSnapshotFields,
         n_threads: u32,
         validate: bool,
@@ -325,7 +326,7 @@ pub const AccountsDB = struct {
         const load_duration = try self.loadFromSnapshot(
             snapshot_fields.accounts_db_fields,
             n_threads,
-            std.heap.page_allocator,
+            allocator,
             accounts_per_file_estimate,
         );
         self.logger.infof("loaded from snapshot in {s}", .{load_duration});
@@ -632,8 +633,8 @@ pub const AccountsDB = struct {
 
             file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
             self.largest_file_id = FileId.max(self.largest_file_id, file_id);
-            _ = self.largest_rooted_slot.fetchMax(slot, .monotonic);
-            self.largest_flushed_slot.store(self.largest_rooted_slot.load(.monotonic), .monotonic);
+            _ = self.largest_rooted_slot.fetchMax(slot, .release);
+            self.largest_flushed_slot.store(self.largest_rooted_slot.load(.acquire), .release);
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
@@ -3347,6 +3348,7 @@ test "geyser stream on load" {
     try geyser_writer.?.spawnIOLoop();
 
     const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
+        allocator,
         geyser_exit,
         geyser_pipe_path,
         null,
