@@ -171,7 +171,7 @@
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
-            "axisLabel": "",
+            "axisLabel": "Packets / Second",
             "axisPlacement": "auto",
             "barAlignment": 0,
             "barWidthFactor": 0.6,
@@ -240,26 +240,26 @@
         {
           "datasource": {},
           "editorMode": "builder",
-          "expr": "gossip_packets_received",
-          "legendFormat": "gossip_packets_received",
+          "expr": "rate(gossip_packets_received_total[$__rate_interval])",
+          "legendFormat": "gossip_packets_received_total",
           "range": true,
           "refId": "A"
         },
         {
           "datasource": {},
           "editorMode": "builder",
-          "expr": "gossip_packets_verified",
+          "expr": "rate(gossip_packets_verified_total[$__rate_interval])",
           "hide": false,
-          "legendFormat": "gossip_packets_verified",
+          "legendFormat": "gossip_packets_verified_total",
           "range": true,
           "refId": "B"
         },
         {
           "datasource": {},
           "editorMode": "builder",
-          "expr": "gossip_packets_processed",
+          "expr": "rate(gossip_packets_processed_total[$__rate_interval])",
           "hide": false,
-          "legendFormat": "gossip_packets_processed",
+          "legendFormat": "gossip_packets_processed_total",
           "range": true,
           "refId": "C"
         }
