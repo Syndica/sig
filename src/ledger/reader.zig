@@ -153,6 +153,8 @@ pub const BlockstoreReader = struct {
     }
 
     /// Analogous to [get_data_shred](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2220)
+    // QUESTION: Agave does a check if the shred retrieved is of the right variant. Ie if it is not
+    // LegacyCode or MerkleCode. Is the implementation of the retrieval already preventing that here?
     pub fn getDataShred(self: *Self, slot: Slot, index: u64) !?BytesRef {
         const shred = try self.db.getBytes(schema.data_shred, .{ slot, index }) orelse return null;
         if (shred.data.len != DataShred.constants.payload_size) {

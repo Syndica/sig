@@ -145,6 +145,8 @@ pub const ConnectedFlags = BitFlags(enum(u8) {
     // 2) S's parent is connected AND S is full (S's complete block present)
     //
     // 1) is a straightfoward case, roots are finalized blocks on the main fork
+    // // QUESTION: How come there can be many roots?
+    // // Forks?
     // so by definition, they are connected. All roots are connected, but not
     // all connected slots are (or will become) roots.
     //
@@ -258,12 +260,18 @@ pub const ErasureConfig = struct {
 /// Index recording presence/absence of shreds
 pub const Index = struct {
     slot: Slot,
+    // QUESTION: maybe name these data_index and code_index?
+    // while reading the code, I often thought this was refering to the actual data shred and code shred
+    // but it is just the index.
     data: ShredIndex,
     code: ShredIndex,
 
     pub fn init(allocator: std.mem.Allocator, slot: Slot) Index {
         return .{
             .slot = slot,
+            // QUESTION: So the slot is passed in here, but it is not used to construct
+            // the data and code index? Would have expected some relationship here between
+            // the slot being passed and the data/code index?
             .data = ShredIndex.init(allocator),
             .code = ShredIndex.init(allocator),
         };
@@ -359,6 +367,8 @@ pub const MerkleRootMeta = struct {
             // shred that contains a proper merkle root would constitute
             // a valid duplicate shred proof.
             .merkle_root = shred.fields.merkleRoot() catch null,
+            // QUESTION: This does not look like the _first_ recieved shred index,
+            // but the index of _this_ shred we used to construct the MerkleRootMeta
             .first_received_shred_index = shred.fields.common.index,
             .first_received_shred_type = shred.fields.common.variant.shred_type,
         };
