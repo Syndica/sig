@@ -55,6 +55,8 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             // QUESTION:
             // What's the benefit of passing rocks.DB.openCf into callRocks to be called using @call
             // over calling it directly as below?
+            // PROBABLE ANSWER: Reading more of the code to avoid repeating the error handling for
+            // other rocks.DB.* calls.
             var err_str: ?rocks.Data = null;
             const database: rocks.DB, //
             const cfs: []const rocks.ColumnFamily //
@@ -88,6 +90,8 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
+        // QUESTION/NIT: What about naming this close? To be symmetric with open.
+        // or changing open to init.
         pub fn deinit(self: *Self) void {
             self.allocator.free(self.cf_handles);
             self.db.deinit();
