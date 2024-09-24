@@ -315,6 +315,7 @@ pub const AccountsDB = struct {
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *Self,
+        /// needs to be a thread-safe allocator
         allocator: std.mem.Allocator,
         snapshot_fields_and_paths: *AllSnapshotFields,
         n_threads: u32,
@@ -351,6 +352,7 @@ pub const AccountsDB = struct {
         /// Account file info map from the snapshot manifest.
         snapshot_manifest: AccountsDbFields,
         n_threads: u32,
+        /// needs to be a thread-safe allocator
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
     ) !sig.time.Duration {
