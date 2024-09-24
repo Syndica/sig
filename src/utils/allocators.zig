@@ -181,9 +181,17 @@ pub const DiskMemoryAllocator = struct {
     /// Metadata stored at the end of each allocation.
     const Metadata = extern struct {
         file_index: u32,
+        /// In an extern struct only ABI-sized types are allowed, so this is a `std.math.Log2Int(usize)`,
+        /// wrapped in a packed struct to define the padding bits.
         mmap_size: packed struct(u8) {
-            log2: std.math.Log2Int(usize),
-            _padding: enum(u2) { unset = 0 } = .unset,
+            /// The log2 of the mmap size - the actual mmap size can be acquired via `1 << log2`. See `get`.
+            /// This is done this way to minimize the amount of redundantly stored information: the mmap size
+            /// will always be a power of two, and as such can be represented minimally using its log2.
+            log2: UsizeLog2,
+            _padding: enum(PaddingInt) { unset = 0 } = .unset,
+
+            const UsizeLog2 = std.math.Log2Int(usize);
+            const PaddingInt = std.meta.Int(.unsigned, @bitSizeOf(u8) - @bitSizeOf(UsizeLog2));
 
             pub inline fn get(self: @This()) usize {
                 return @as(usize, 1) << self.log2;
