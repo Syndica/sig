@@ -5,7 +5,7 @@ const Packet = @import("packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
 const Channel = @import("../sync/channel.zig").Channel;
 const std = @import("std");
-const Logger = @import("../trace/log.zig").Logger;
+const Logger = @import("../trace_ng/log.zig").Logger;
 
 pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
@@ -15,7 +15,7 @@ pub fn readSocket(
     socket_: UdpSocket,
     incoming_channel: *Channel(std.ArrayList(Packet)),
     exit: *const std.atomic.Value(bool),
-    logger: Logger,
+    logger: *Logger,
 ) !void {
     // NOTE: we set to non-blocking to periodically check if we should exit
     var socket = socket_;
@@ -61,7 +61,7 @@ pub fn sendSocket(
     socket: UdpSocket,
     outgoing_channel: *Channel(std.ArrayList(Packet)),
     exit: *const std.atomic.Value(bool),
-    logger: Logger,
+    logger: *Logger,
 ) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
     var packets_sent: u64 = 0;
 
@@ -106,7 +106,7 @@ pub const SocketThread = struct {
 
     const Self = @This();
 
-    pub fn initSender(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
+    pub fn initSender(allocator: Allocator, logger: *Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
         const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
         return .{
             .channel = channel,
@@ -115,7 +115,7 @@ pub const SocketThread = struct {
         };
     }
 
-    pub fn initReceiver(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
+    pub fn initReceiver(allocator: Allocator, logger: *Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
         const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
         return .{
             .channel = channel,

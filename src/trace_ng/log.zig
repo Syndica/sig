@@ -159,7 +159,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
 pub const Logger = ScopedLogger(null);
 
 /// An instance of `ScopedLogger` that logs to the standard err.
-const StandardErrLogger = struct {
+pub const StandardErrLogger = struct {
     const Self = @This();
     max_level: Level,
     exit_sig: std.atomic.Value(bool),
@@ -394,7 +394,7 @@ const StandardErrLogger = struct {
 
 /// An instance of `ScopedLogger` that logs to an internal array
 /// that allows asserting the log message in tests.
-const TestingLogger = struct {
+pub const TestingLogger = struct {
     const builtin = @import("builtin");
 
     const Self = @This();

@@ -16,7 +16,7 @@ const UdpSocket = network.Socket;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
-const Logger = sig.trace.log.Logger;
+const Logger = sig.trace_ng.log.Logger;
 const Packet = sig.net.Packet;
 const EchoServer = sig.net.echo.Server;
 const SocketAddr = sig.net.SocketAddr;
@@ -128,7 +128,7 @@ pub const GossipService = struct {
     /// only be read by that thread, or it needs a synchronization mechanism.
     entrypoints: ArrayList(Entrypoint),
     ping_cache_rw: RwMux(*PingCache),
-    logger: Logger,
+    logger: *Logger,
     thread_pool: *ThreadPool,
     echo_server: EchoServer,
 
@@ -148,7 +148,7 @@ pub const GossipService = struct {
         my_keypair: KeyPair,
         entrypoints: ?[]const SocketAddr,
         exit: *AtomicBool,
-        logger: Logger,
+        logger: *Logger,
     ) !Self {
         var packet_incoming_channel = Channel(PacketBatch).init(allocator, 10000);
         errdefer packet_incoming_channel.deinit();
@@ -349,7 +349,7 @@ pub const GossipService = struct {
         gossip_value_allocator: std.mem.Allocator,
         packet_batch: ArrayList(Packet),
         verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
-        logger: Logger,
+        logger: *Logger,
 
         pub fn callback(self: *VerifyMessageEntry) !void {
             defer self.packet_batch.deinit();
@@ -1385,10 +1385,10 @@ pub const GossipService = struct {
 
             const endpoint_str = try endpointToString(self.allocator, ping_message.from_endpoint);
             defer endpoint_str.deinit();
-            self.logger
-                .field("from_endpoint", endpoint_str.items)
-                .field("from_pubkey", ping_message.ping.from.string().slice())
-                .debug("gossip: recv ping");
+            self.logger.debugWithFields("gossip: recv ping", .{
+                .from_endpoint = endpoint_str.items,
+                .from_pubkey = ping_message.ping.from.string().slice(),
+            });
         }
         self.stats.pong_messages_sent.add(n_ping_messages);
         try self.packet_outgoing_channel.send(ping_packet_batch);
@@ -1660,10 +1660,10 @@ pub const GossipService = struct {
             prune_data.sign(&self.my_keypair) catch return error.SignatureError;
             const msg = GossipMessage{ .PruneMessage = .{ self.my_pubkey, prune_data } };
 
-            self.logger
-                .field("n_pruned_origins", prune_size)
-                .field("to_addr", from_pubkey.string().slice())
-                .debug("gossip: send prune_message");
+            self.logger.debugWithFields("gossip: send prune_message", .{
+                .n_pruned_origins = prune_size,
+                .to_addr = from_pubkey.string().slice(),
+            });
 
             var packet = &prune_packet_batch.items[count];
             const written_slice = bincode.writeToSlice(&packet.data, msg, bincode.Params{}) catch unreachable;
@@ -1965,7 +1965,7 @@ pub const GossipStats = struct {
 
     // logging details
     _logging_fields: struct {
-        logger: Logger,
+        logger: *Logger,
         log_interval_micros: i64 = 10 * std.time.us_per_s,
         last_log: i64 = 0,
         last_logged_snapshot: StatsToLog = .{},
@@ -2001,7 +2001,7 @@ pub const GossipStats = struct {
         1000, 2500,
         5000, 10000,
     };
-    pub fn init(logger: Logger) GetMetricError!Self {
+    pub fn init(logger: *Logger) GetMetricError!Self {
         var self: Self = undefined;
         const registry = globalRegistry();
         const stats_struct_info = @typeInfo(GossipStats).Struct;
@@ -2167,6 +2167,8 @@ pub fn chunkValuesIntoPacketIndexes(
 test "handle pong messages" {
     const allocator = std.testing.allocator;
 
+    var noopLogger = Logger{ .noop = {} };
+
     var exit = AtomicBool.init(false);
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
@@ -2179,7 +2181,7 @@ test "handle pong messages" {
         keypair,
         null,
         &exit,
-        .noop,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -2238,9 +2240,7 @@ test "build messages startup and shutdown" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2249,7 +2249,7 @@ test "build messages startup and shutdown" {
         my_keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -2294,9 +2294,7 @@ test "handling prune messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2305,7 +2303,7 @@ test "handling prune messages" {
         my_keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -2368,9 +2366,7 @@ test "handling pull responses" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2379,7 +2375,7 @@ test "handling pull responses" {
         my_keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -2431,6 +2427,7 @@ test "handle old prune & pull request message" {
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
+    var noopLogger = Logger{ .noop = {} };
     var gossip_service = try allocator.create(GossipService);
     gossip_service.* = try GossipService.init(
         allocator,
@@ -2439,7 +2436,7 @@ test "handle old prune & pull request message" {
         my_keypair,
         null,
         &exit,
-        .noop,
+        &noopLogger,
     );
     defer {
         gossip_service.deinit();
@@ -2557,10 +2554,7 @@ test "handle pull request" {
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
-
+    var noopLogger = Logger{ .noop = {} };
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
@@ -2568,7 +2562,7 @@ test "handle pull request" {
         my_keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -2671,9 +2665,7 @@ test "test build prune messages and handle push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2682,7 +2674,7 @@ test "test build prune messages and handle push messages" {
         my_keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -2759,9 +2751,7 @@ test "build pull requests" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2770,7 +2760,7 @@ test "build pull requests" {
         my_keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -2813,9 +2803,7 @@ test "test build push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2824,7 +2812,7 @@ test "test build push messages" {
         my_keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -2887,9 +2875,7 @@ test "test large push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2898,7 +2884,7 @@ test "test large push messages" {
         my_keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -2946,7 +2932,7 @@ test "test packet verification" {
     const contact_info = try localhostTestContactInfo(id);
 
     // noop for this case because this tests error failed verification
-    const logger: Logger = .noop;
+    var noopLogger = Logger{ .noop = {} };
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
@@ -2954,7 +2940,7 @@ test "test packet verification" {
         keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -3084,9 +3070,7 @@ test "process contact info push packet" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -3095,7 +3079,7 @@ test "process contact info push packet" {
         my_keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
     defer gossip_service.deinit();
 
@@ -3190,9 +3174,7 @@ test "init, exit, and deinit" {
 
     var exit = AtomicBool.init(false);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try GossipService.init(
         std.testing.allocator,
@@ -3201,7 +3183,7 @@ test "init, exit, and deinit" {
         my_keypair,
         null,
         &exit,
-        logger,
+        &noopLogger,
     );
 
     const handle = try std.Thread.spawn(.{}, GossipService.run, .{
@@ -3275,7 +3257,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         // defer logger.deinit();
         // logger.spawn();
 
-        const logger: Logger = .noop;
+        var logger = sig.trace_ng.Logger{ .noop = {} };
 
         // process incoming packets/messsages
         var exit = AtomicBool.init(false);
@@ -3286,7 +3268,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             keypair,
             null,
             &exit,
-            logger,
+            &logger,
         );
         gossip_service.echo_server.kill(); // we dont need this rn
         defer gossip_service.deinit();
@@ -3405,7 +3387,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         // defer logger.deinit();
         // logger.spawn();
 
-        const logger: Logger = .noop;
+        var logger = sig.trace_ng.Logger{ .noop = {} };
 
         // process incoming packets/messsages
         var exit = AtomicBool.init(false);
@@ -3417,7 +3399,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
             keypair,
             null,
             &exit,
-            logger,
+            &logger,
         );
         gossip_service.echo_server.kill(); // we dont need this rn
         defer gossip_service.deinit();

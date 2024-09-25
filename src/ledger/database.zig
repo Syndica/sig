@@ -4,7 +4,7 @@ const blockstore = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Logger = sig.trace.Logger;
+const Logger = sig.trace_ng.Logger;
 
 pub fn assertIsDatabase(comptime Impl: type) void {
     sig.utils.interface.assertSameInterface(Database(Impl), Impl, .subset);
@@ -34,7 +34,7 @@ pub fn Database(comptime Impl: type) type {
 
         pub fn open(
             allocator: Allocator,
-            logger: Logger,
+            logger: *Logger,
             path: []const u8,
         ) anyerror!Database(Impl) {
             return .{
@@ -262,9 +262,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             const path = std.fmt.comptimePrint("{s}/basic", .{test_dir});
             try blockstore.tests.freshDir(path);
             const allocator = std.testing.allocator;
-            const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-            defer logger.deinit();
-            var db = try Database(Impl(&.{ cf1, cf2 })).open(allocator, logger, path);
+            var logger = Logger{ .noop = {} };
+            var db = try Database(Impl(&.{ cf1, cf2 })).open(allocator, &logger, path);
             defer db.deinit();
 
             try db.put(cf1, 123, .{ .hello = 345 });

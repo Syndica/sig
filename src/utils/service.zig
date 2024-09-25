@@ -8,8 +8,8 @@ const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
 const Lazy = sig.utils.lazy.Lazy;
-const Level = sig.trace.Level;
-const Logger = sig.trace.Logger;
+const Level = sig.trace_ng.Level;
+const Logger = sig.trace_ng.Logger;
 
 /// High level manager for long-running threads and the state
 /// shared by those threads.
@@ -17,7 +17,7 @@ const Logger = sig.trace.Logger;
 /// You can add threads or state, then await all threads and
 /// clean up their state.
 pub const ServiceManager = struct {
-    logger: Logger,
+    logger: *Logger,
     /// Signal that is expected to tell all threads to exit.
     exit: *Atomic(bool),
     /// Threads to join.
@@ -34,7 +34,7 @@ pub const ServiceManager = struct {
 
     pub fn init(
         allocator: Allocator,
-        logger: Logger,
+        logger: *Logger,
         exit: *Atomic(bool),
         name: []const u8,
         default_run_config: RunConfig,
@@ -142,7 +142,7 @@ pub const ReturnHandler = struct {
 /// Convert a short-lived task into a long-lived service by looping it,
 /// or make a service resilient by restarting it on failure.
 pub fn runService(
-    logger: Logger,
+    logger: *Logger,
     exit: *Atomic(bool),
     maybe_name: ?[]const u8,
     config: RunConfig,

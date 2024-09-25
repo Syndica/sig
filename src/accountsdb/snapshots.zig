@@ -21,7 +21,7 @@ const Rent = sig.accounts_db.genesis_config.Rent;
 const UnixTimestamp = sig.accounts_db.genesis_config.UnixTimestamp;
 const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
 
-const Logger = sig.trace.Logger;
+const Logger = sig.trace_ng.Logger;
 
 const defaultArrayListUnmanagedOnEOFConfig = bincode.arraylist.defaultArrayListUnmanagedOnEOFConfig;
 const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
@@ -1705,7 +1705,7 @@ pub const AllSnapshotFields = struct {
 
     pub fn fromFiles(
         allocator: std.mem.Allocator,
-        logger: Logger,
+        logger: *Logger,
         snapshot_dir: std.fs.Dir,
         files: SnapshotFiles,
     ) !Self {
@@ -1823,7 +1823,7 @@ pub const AllSnapshotFields = struct {
 /// unpacks a .tar.zstd file into the given directory
 pub fn parallelUnpackZstdTarBall(
     allocator: std.mem.Allocator,
-    logger: Logger,
+    logger: *Logger,
     file: std.fs.File,
     output_dir: std.fs.Dir,
     n_threads: usize,

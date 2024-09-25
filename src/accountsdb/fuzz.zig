@@ -3,7 +3,9 @@ const sig = @import("../sig.zig");
 const zstd = @import("zstd");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const Logger = sig.trace.Logger;
+const Logger = sig.trace_ng.Logger;
+const StandardErrLogger = sig.trace_ng.StandardErrLogger;
+const Level = sig.trace_ng.Level;
 const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
@@ -55,9 +57,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer _ = gpa_state.deinit();
     const gpa = gpa_state.allocator();
 
-    const logger = Logger.init(gpa, .debug);
-    defer logger.deinit();
-    logger.spawn();
+    var std_logger = StandardErrLogger.init(.{
+        .allocator = gpa,
+        .max_level = Level.debug,
+        .max_buffer = 2048,
+    }) catch @panic("Logger init failed");
+    defer std_logger.deinit();
+
+    var logger = std_logger.logger();
 
     const use_disk = rand.boolean();
 
@@ -90,7 +97,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var accounts_db = try AccountsDB.init(
         gpa,
-        logger,
+        &logger,
         snapshot_dir,
         .{
             .number_of_index_bins = sig.accounts_db.db.ACCOUNT_INDEX_BINS,
@@ -247,10 +254,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             const archive_file = try alternative_snapshot_dir.openFile(archive_name.slice(), .{});
             defer archive_file.close();
+            var noopLogger = Logger{ .noop = {} };
 
             try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
                 allocator,
-                .noop,
+                &noopLogger,
                 archive_file,
                 alternative_snapshot_dir,
                 5,
@@ -298,10 +306,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 const inc_archive_file = try alternative_snapshot_dir.openFile(inc_archive_name.slice(), .{});
                 defer inc_archive_file.close();
-
                 try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
                     allocator,
-                    .noop,
+                    &noopLogger,
                     inc_archive_file,
                     alternative_snapshot_dir,
                     5,
@@ -325,7 +332,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
             defer snapshot_fields.deinit(allocator);
 
-            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
+            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, &noopLogger, alternative_snapshot_dir, accounts_db.config, null);
             defer alt_accounts_db.deinit(true);
 
             _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true, 1_500);

@@ -10,7 +10,7 @@ const ArrayList = std.ArrayList;
 const GetMetricError = sig.prometheus.GetMetricError;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
-const Logger = sig.trace.Logger;
+const Logger = sig.trace_ng.Logger;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const Signature = sig.core.Signature;
@@ -31,7 +31,7 @@ const schema_list = ledger.schema.list;
 
 pub const BlockstoreWriter = struct {
     allocator: Allocator,
-    logger: Logger,
+    logger: *Logger,
     db: BlockstoreDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
@@ -42,7 +42,7 @@ pub const BlockstoreWriter = struct {
 
     pub fn init(
         allocator: Allocator,
-        logger: Logger,
+        logger: *Logger,
         db: BlockstoreDB,
         registry: *sig.prometheus.Registry(.{}),
         lowest_cleanup_slot: *RwMux(Slot),
@@ -461,7 +461,7 @@ const TestDB = sig.ledger.tests.TestDB("writer");
 
 test "purgeSlots" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setRoots");
@@ -472,7 +472,7 @@ test "purgeSlots" {
     var writer = BlockstoreWriter{
         .allocator = allocator,
         .db = db,
-        .logger = logger,
+        .logger = &logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
@@ -530,7 +530,7 @@ test "purgeSlots" {
 
 test "setRoots" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setRoots");
@@ -541,7 +541,7 @@ test "setRoots" {
     var writer = BlockstoreWriter{
         .allocator = allocator,
         .db = db,
-        .logger = logger,
+        .logger = &logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
@@ -558,7 +558,7 @@ test "setRoots" {
 
 test "scanAndFixRoots" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("scanAndFixRoots");
@@ -569,7 +569,7 @@ test "scanAndFixRoots" {
     var writer = BlockstoreWriter{
         .allocator = allocator,
         .db = db,
-        .logger = logger,
+        .logger = &logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
@@ -599,7 +599,7 @@ test "scanAndFixRoots" {
 
 test "setAndChainConnectedOnRootAndNextSlots" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setAndChainConnectedOnRootAndNextSlots");
@@ -610,7 +610,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     var writer = BlockstoreWriter{
         .allocator = allocator,
         .db = db,
-        .logger = logger,
+        .logger = &logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
@@ -667,7 +667,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
 
 test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setAndChainConnectedOnRootAndNextSlots");
@@ -678,7 +678,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     var writer = BlockstoreWriter{
         .allocator = allocator,
         .db = db,
-        .logger = logger,
+        .logger = &logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),

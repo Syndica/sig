@@ -11,7 +11,7 @@ const Atomic = std.atomic.Value;
 
 const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
-const Logger = sig.trace.Logger;
+const Logger = sig.trace_ng.Logger;
 const Packet = sig.net.Packet;
 const Shred = sig.ledger.shred.Shred;
 const ShredInserter = sig.ledger.ShredInserter;
@@ -22,7 +22,7 @@ const ShredInserter = sig.ledger.ShredInserter;
 pub fn runShredProcessor(
     allocator: Allocator,
     exit: *Atomic(bool),
-    logger: Logger,
+    logger: *Logger,
     // shred verifier --> me
     verified_shred_receiver: *Channel(ArrayList(Packet)),
     tracker: *BasicShredTracker,

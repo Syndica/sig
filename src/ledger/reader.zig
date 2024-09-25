@@ -13,7 +13,7 @@ const Entry = sig.core.Entry;
 const GetMetricError = sig.prometheus.GetMetricError;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
-const Logger = sig.trace.Logger;
+const Logger = sig.trace_ng.Logger;
 const Pubkey = sig.core.Pubkey;
 const Registry = sig.prometheus.Registry;
 const RwMux = sig.sync.RwMux;
@@ -49,7 +49,7 @@ const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 pub const BlockstoreReader = struct {
     allocator: Allocator,
-    logger: Logger,
+    logger: *Logger,
     db: BlockstoreDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
@@ -62,7 +62,7 @@ pub const BlockstoreReader = struct {
 
     pub fn init(
         allocator: Allocator,
-        logger: Logger,
+        logger: *Logger,
         db: BlockstoreDB,
         registry: *Registry(.{}),
         lowest_cleanup_slot: *RwMux(Slot),
@@ -1532,7 +1532,7 @@ const test_shreds = @import("test_shreds.zig");
 
 test "getLatestOptimisticSlots" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("getLatestOptimisticSlots");
@@ -1542,7 +1542,7 @@ test "getLatestOptimisticSlots" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -1601,19 +1601,19 @@ test "getLatestOptimisticSlots" {
 test "getFirstDuplicateProof" {
     const allocator = std.testing.allocator;
 
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_DATA_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
     try sig.ledger.tests.freshDir(path);
-    var db = try BlockstoreDB.open(allocator, logger, path);
+    var db = try BlockstoreDB.open(allocator, &logger, path);
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -1640,7 +1640,7 @@ test "getFirstDuplicateProof" {
 
 test "isDead" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("isDead");
@@ -1650,7 +1650,7 @@ test "isDead" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -1674,7 +1674,7 @@ test "isDead" {
 
 test "getBlockHeight" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("getBlockHeight");
@@ -1684,7 +1684,7 @@ test "getBlockHeight" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -1702,7 +1702,7 @@ test "getBlockHeight" {
 
 test "getRootedBlockTime" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("getRootedBlockTime");
@@ -1712,7 +1712,7 @@ test "getRootedBlockTime" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -1739,7 +1739,7 @@ test "getRootedBlockTime" {
 
 test "slotMetaIterator" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("slotMetaIterator");
@@ -1749,7 +1749,7 @@ test "slotMetaIterator" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -1800,7 +1800,7 @@ test "slotMetaIterator" {
 
 test "rootedSlotIterator" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("rootedSlotIterator");
@@ -1810,7 +1810,7 @@ test "rootedSlotIterator" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -1835,7 +1835,7 @@ test "rootedSlotIterator" {
 
 test "slotRangeConnected" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("slotRangeConnected");
@@ -1845,7 +1845,7 @@ test "slotRangeConnected" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -1892,7 +1892,7 @@ test "slotRangeConnected" {
 
 test "highestSlot" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("highestSlot");
@@ -1902,7 +1902,7 @@ test "highestSlot" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -1949,7 +1949,7 @@ test "highestSlot" {
 
 test "lowestSlot" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("lowestSlot");
@@ -1959,7 +1959,7 @@ test "lowestSlot" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -1994,7 +1994,7 @@ test "lowestSlot" {
 
 test "isShredDuplicate" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("isShredDuplicate");
@@ -2004,7 +2004,7 @@ test "isShredDuplicate" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -2045,7 +2045,7 @@ test "isShredDuplicate" {
 
 test "findMissingDataIndexes" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("findMissingDataIndexes");
@@ -2055,7 +2055,7 @@ test "findMissingDataIndexes" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -2112,7 +2112,7 @@ test "findMissingDataIndexes" {
 
 test "getCodeShred" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("getCodeShred");
@@ -2122,7 +2122,7 @@ test "getCodeShred" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,
@@ -2191,7 +2191,7 @@ test "getCodeShred" {
 
 test "getDataShred" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    var logger = sig.trace_ng.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("getDataShred");
@@ -2201,7 +2201,7 @@ test "getDataShred" {
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
-        logger,
+        &logger,
         db,
         registry,
         &lowest_cleanup_slot,

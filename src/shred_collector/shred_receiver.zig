@@ -13,7 +13,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
-const Logger = sig.trace.Logger;
+const Logger = sig.trace_ng.Logger;
 const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
@@ -28,7 +28,7 @@ pub const ShredReceiver = struct {
     allocator: Allocator,
     keypair: *const KeyPair,
     exit: *Atomic(bool),
-    logger: Logger,
+    logger: *Logger,
     repair_socket: Socket,
     turbine_socket: Socket,
     /// me --> shred verifier

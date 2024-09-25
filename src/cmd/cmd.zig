@@ -17,7 +17,9 @@ const ContactInfo = sig.gossip.ContactInfo;
 const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
-const Logger = sig.trace.Logger;
+const Logger = sig.trace_ng.Logger;
+const StandardErrLogger = sig.trace_ng.StandardErrLogger;
+const Level = sig.trace_ng.Level;
 const Pubkey = sig.core.Pubkey;
 const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
 const SingleEpochLeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
@@ -585,11 +587,16 @@ pub fn run() !void {
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    var logger = Logger.init(gpa_allocator, config.current.log_level);
-    defer logger.deinit();
-    logger.spawn();
+    var std_logger = StandardErrLogger.init(.{
+        .allocator = gpa_allocator,
+        .max_level = config.current.log_level,
+        .max_buffer = 2048,
+    }) catch @panic("Logger init failed");
+    defer std_logger.deinit();
 
-    const keypair = try getOrInitIdentity(gpa_allocator, logger);
+    var logger = std_logger.logger();
+
+    const keypair = try getOrInitIdentity(gpa_allocator, &logger);
     var pubkey: [50]u8 = undefined;
     const size = try base58Encoder.encode(&keypair.public_key.toBytes(), &pubkey);
     try std.io.getStdErr().writer().print("Identity: {s}\n", .{pubkey[0..size]});
@@ -824,7 +831,7 @@ fn shredCollector() !void {
 
 const GeyserWriter = sig.geyser.GeyserWriter;
 
-fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWriter {
+fn buildGeyserWriter(allocator: std.mem.Allocator, logger: *Logger) !?*GeyserWriter {
     var geyser_writer: ?*GeyserWriter = null;
     if (config.current.geyser.enable) {
         logger.info("Starting GeyserWriter...");
@@ -1044,7 +1051,7 @@ pub fn testTransactionSenderService() !void {
 /// and deinitialized only when the app exits.
 const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    logger: Logger,
+    logger: *Logger,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
     my_keypair: KeyPair,
@@ -1062,15 +1069,15 @@ const AppBase = struct {
         const metrics_thread = try spawnMetrics(gpa_allocator, config.current.metrics_port);
         errdefer metrics_thread.detach();
 
-        const my_keypair = try getOrInitIdentity(allocator, logger);
+        const my_keypair = try getOrInitIdentity(allocator, &logger);
 
-        const entrypoints = try getEntrypoints(logger);
+        const entrypoints = try getEntrypoints(&logger);
         errdefer entrypoints.deinit();
 
-        const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
+        const ip_echo_data = try getMyDataFromIpEcho(&logger, entrypoints.items);
 
         return .{
-            .logger = logger,
+            .logger = &logger,
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
             .my_keypair = my_keypair,
@@ -1090,7 +1097,7 @@ const AppBase = struct {
 
 /// Initialize an instance of GossipService and configure with CLI arguments
 fn initGossip(
-    logger: Logger,
+    logger: *Logger,
     my_keypair: KeyPair,
     exit: *Atomic(bool),
     entrypoints: []const SocketAddr,
@@ -1176,7 +1183,7 @@ fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
 /// determine our shred version and ip. in the solana-labs client, the shred version
 /// comes from the snapshot, and ip echo is only used to validate it.
 fn getMyDataFromIpEcho(
-    logger: Logger,
+    logger: *Logger,
     entrypoints: []SocketAddr,
 ) !struct { shred_version: u16, ip: IpAddr } {
     var my_ip_from_entrypoint: ?IpAddr = null;
@@ -1211,7 +1218,7 @@ pub const Network = enum {
 
     const Self = @This();
 
-    pub fn getPredefinedEntrypoints(self: Self, socket_addrs: *std.ArrayList(SocketAddr), logger: Logger) !void {
+    pub fn getPredefinedEntrypoints(self: Self, socket_addrs: *std.ArrayList(SocketAddr), logger: *Logger) !void {
         const E = std.BoundedArray(u8, 100);
         var predefined_entrypoints: [10]E = undefined;
         @memset(&predefined_entrypoints, .{});
@@ -1254,15 +1261,16 @@ pub const Network = enum {
 
         for (predefined_entrypoints[0..len]) |entrypoint| {
             logger.infof("adding predefined entrypoint: {s}", .{entrypoint.slice()});
-            const socket_addr = try resolveSocketAddr(entrypoint.slice(), .noop);
+            // TODO: LOG: Use noop
+            const socket_addr = try resolveSocketAddr(entrypoint.slice(), logger);
             try socket_addrs.append(socket_addr);
         }
     }
 };
 
-fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
+fn resolveSocketAddr(entrypoint: []const u8, logger: *Logger) !SocketAddr {
     const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
-        logger.field("entrypoint", entrypoint).err("entrypoint port missing");
+        logger.errWithFields("entrypoint port missing", .{ .entrypoint = "entrypoint" });
         return error.EntrypointPortMissing;
     };
     const domain_str = entrypoint[0..domain_port_sep];
@@ -1293,7 +1301,7 @@ fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     return socket_addr;
 }
 
-fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
+fn getEntrypoints(logger: *Logger) !std.ArrayList(SocketAddr) {
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     errdefer entrypoints.deinit();
 
@@ -1330,9 +1338,12 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 }
 
 fn spawnLogger() !Logger {
-    var logger = Logger.init(gpa_allocator, config.current.log_level);
-    logger.spawn();
-    return logger;
+    var std_logger = StandardErrLogger.init(.{
+        .allocator = gpa_allocator,
+        .max_level = config.current.log_level,
+        .max_buffer = 2048,
+    }) catch @panic("Logger init failed");
+    return std_logger.logger();
 }
 
 const LoadedSnapshot = struct {
@@ -1355,7 +1366,7 @@ const LoadedSnapshot = struct {
 
 fn loadSnapshot(
     allocator: Allocator,
-    logger: Logger,
+    logger: *Logger,
     /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
     gossip_service: ?*GossipService,
     /// whether to validate the snapshot account data against the metadata
@@ -1482,14 +1493,15 @@ fn downloadSnapshot() !void {
     defer logger.deinit();
 
     var exit = std.atomic.Value(bool).init(false);
-    const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
-    const entrypoints = try getEntrypoints(logger);
+    const my_keypair = try getOrInitIdentity(gpa_allocator, &logger);
+    const entrypoints = try getEntrypoints(&logger);
     defer entrypoints.deinit();
 
-    const my_data = try getMyDataFromIpEcho(logger, entrypoints.items);
+    const my_data = try getMyDataFromIpEcho(&logger, entrypoints.items);
+    var noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try initGossip(
-        .noop,
+        &noopLogger,
         my_keypair,
         &exit,
         entrypoints.items,
@@ -1516,7 +1528,7 @@ fn downloadSnapshot() !void {
 
     try downloadSnapshotsFromGossip(
         gpa_allocator,
-        logger,
+        &logger,
         if (trusted_validators) |trusted| trusted.items else null,
         &gossip_service,
         snapshot_dir,
@@ -1543,7 +1555,7 @@ fn getTrustedValidators(allocator: Allocator) !?std.ArrayList(Pubkey) {
 
 fn getOrDownloadSnapshots(
     allocator: Allocator,
-    logger: Logger,
+    logger: *Logger,
     gossip_service: ?*GossipService,
     // accounts_db_config: config.AccountsDBConfig,
     options: struct {

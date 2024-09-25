@@ -16,7 +16,7 @@ const GossipTable = sig.gossip.GossipTable;
 const RpcClient = sig.rpc.Client;
 const RpcEpochInfo = sig.rpc.types.EpochInfo;
 const LeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
-const Logger = sig.trace.log.Logger;
+const Logger = sig.trace_ng.log.Logger;
 const Config = sig.transaction_sender.service.Config;
 
 const leaderScheduleFromRpc = sig.core.leader_schedule.leaderScheduleFromRpc;
@@ -40,7 +40,7 @@ pub const LeaderInfo = struct {
         allocator: Allocator,
         config: Config,
         gossip_table_rw: *RwMux(GossipTable),
-        logger: Logger,
+        logger: *Logger,
     ) !LeaderInfo {
         var rpc_client = RpcClient.init(
             allocator,

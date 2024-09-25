@@ -1,5 +1,5 @@
 const std = @import("std");
-const logger = @import("./trace/log.zig");
+const logger = @import("./trace_ng/log.zig");
 
 const Decl = std.builtin.Type.Declaration;
 
@@ -11,7 +11,6 @@ const meta = std.meta;
 /// zig build benchmark -- gossip
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
-    logger.default_logger.* = logger.Logger.init(allocator, .debug);
 
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();

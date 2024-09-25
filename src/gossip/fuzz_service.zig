@@ -25,6 +25,7 @@ const Hash = sig.core.hash.Hash;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const AtomicBool = std.atomic.Value(bool);
 const Duration = sig.time.Duration;
+const Logger = sig.trace_ng.Logger;
 
 const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
 
@@ -267,7 +268,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             const client_pubkey = Pubkey.fromPublicKey(&client_keypair.public_key);
             var client_contact_info = ContactInfo.init(allocator, client_pubkey, 0, 19);
             try client_contact_info.setSocket(.gossip, client_address);
-
+            var noopLogger = Logger{ .noop = {} };
             var gossip_service_client = try GossipService.init(
                 allocator,
                 allocator,
@@ -275,7 +276,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 client_keypair,
                 null, // we will only recv packets
                 &exit,
-                .noop, // no logs
+                &noopLogger, // no logs
             );
 
             const client_handle = try std.Thread.spawn(.{}, GossipService.run, .{
@@ -284,7 +285,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     .dump = false,
                 },
             });
-
             // this is used to respond to pings
             var gossip_service_fuzzer = try GossipService.init(
                 allocator,
@@ -293,7 +293,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 fuzz_keypair,
                 (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
                 &exit,
-                .noop, // no logs
+                &noopLogger, // no logs
             );
 
             // this is mainly used to just send packets through the fuzzer
@@ -308,6 +308,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             break :blk .{ gossip_service_client, gossip_service_client.packet_incoming_channel, client_handle };
         } else {
+            var noopLogger = Logger{.noop = {}};
             var gossip_service_fuzzer = try GossipService.init(
                 allocator,
                 allocator,
@@ -315,7 +316,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 fuzz_keypair,
                 (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
                 &exit,
-                .noop, // no logs
+                &noopLogger, // no logs
             );
 
             // this is mainly used to just send packets through the fuzzer

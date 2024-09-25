@@ -10,17 +10,19 @@ const Signature = sig.core.Signature;
 const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
-const Logger = sig.trace.log.Logger;
+const Logger = sig.trace_ng.log.Logger;
 
 pub const Client = struct {
     http_endpoint: []const u8,
     http_client: std.http.Client,
     max_retries: usize,
-    logger: Logger,
+    logger: *Logger,
+
+    var noop = Logger{ .noop = {} };
 
     pub const Options = struct {
         max_retries: usize = 0,
-        logger: Logger = .noop,
+        logger: *Logger = &noop,
     };
 
     pub fn init(allocator: std.mem.Allocator, cluster_type: ClusterType, options: Options) Client {

@@ -6,7 +6,8 @@ const accountsdb_fuzz = sig.accounts_db.fuzz;
 const gossip_fuzz_service = sig.gossip.fuzz_service;
 const gossip_fuzz_table = sig.gossip.fuzz_table;
 const accountsdb_snapshot_fuzz = sig.accounts_db.fuzz_snapshot;
-const logger = sig.trace.log;
+const StandardErrLogger = sig.trace_ng.StandardErrLogger;
+const Level = sig.trace_ng.Level;
 
 const spawnMetrics = sig.prometheus.spawnMetrics;
 
@@ -25,12 +26,20 @@ pub const FuzzFilter = enum {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-    logger.default_logger.* = logger.Logger.init(allocator, .debug);
+
+    var std_logger = StandardErrLogger.init(.{
+        .allocator = allocator,
+        .max_level = Level.info,
+        .max_buffer = 2048,
+    }) catch @panic("Logger init failed");
+    defer std_logger.deinit();
+
+    var logger = std_logger.logger();
 
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
-    logger.default_logger.infof("metrics port: {d}", .{config.current.metrics_port});
+    logger.infof("metrics port: {d}", .{config.current.metrics_port});
     const metrics_thread = try spawnMetrics(allocator, config.current.metrics_port);
     errdefer metrics_thread.detach();
 

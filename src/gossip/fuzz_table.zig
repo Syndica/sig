@@ -15,6 +15,8 @@ const GossipKey = sig.gossip.data.GossipKey;
 const Signature = sig.core.Signature;
 const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const Duration = sig.time.Duration;
+const StandardErrLogger = sig.trace_ng.StandardErrLogger;
+const Level = sig.trace_ng.Level;
 
 const TRIM_INTERVAL = Duration.fromSecs(2);
 const MAX_N_THREADS = 2;
@@ -33,9 +35,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const logger = Logger.init(allocator, .debug);
-    defer logger.deinit();
-    logger.spawn();
+    var std_logger = StandardErrLogger.init(.{
+        .allocator = allocator,
+        .max_level = Level.info,
+        .max_buffer = 2048,
+    }) catch @panic("Logger init failed");
+    defer std_logger.deinit();
+
+    var logger = std_logger.logger();
 
     var prng = std.rand.DefaultPrng.init(seed);
     const rand = prng.random();
