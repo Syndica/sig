@@ -1137,7 +1137,7 @@ pub const GossipService = struct {
                 const peer_index = rand.intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
-                if (peer_contact_info.shred_version != my_shred_version) { 
+                if (peer_contact_info.shred_version != my_shred_version) {
                     continue;
                 }
                 if (peer_contact_info.gossip_addr) |gossip_addr| {

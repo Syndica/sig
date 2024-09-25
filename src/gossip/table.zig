@@ -149,10 +149,6 @@ pub const GossipTable = struct {
     };
 
     pub fn insert(self: *Self, value: SignedGossipData, now: u64) !InsertResult {
-        if (self.store.count() >= MAX_TABLE_SIZE) {
-            return .GossipTableFull;
-        }
-
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256Hash(bytes);
@@ -170,6 +166,11 @@ pub const GossipTable = struct {
 
         // entry doesnt exist
         if (!result.found_existing) {
+            // if table is full, return early
+            if (self.store.count() >= MAX_TABLE_SIZE) {
+                return .GossipTableFull;
+            }
+
             switch (value.data) {
                 .ContactInfo => |*info| {
                     try self.contact_infos.put(entry_index, {});
