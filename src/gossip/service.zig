@@ -1074,9 +1074,8 @@ pub const GossipService = struct {
 
         // filter out peers who have responded to pings
         const ping_cache_result = blk: {
-            var ping_cache_lock = self.ping_cache_rw.write();
-            defer ping_cache_lock.unlock();
-            var ping_cache: *PingCache = ping_cache_lock.mut();
+            var ping_cache, var ping_cache_lg = self.ping_cache_rw.writeWithLock();
+            defer ping_cache_lg.unlock();
 
             const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers);
             break :blk result;
@@ -1131,16 +1130,20 @@ pub const GossipService = struct {
             .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
         }, &self.my_keypair);
 
+        const my_shred_version = self.my_contact_info.shred_version;
         if (num_peers != 0) {
             for (filters.items) |filter_i| {
                 // TODO: incorperate stake weight in random sampling
                 const peer_index = rand.intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
+                if (peer_contact_info.shred_version != my_shred_version) { 
+                    continue;
+                }
                 if (peer_contact_info.gossip_addr) |gossip_addr| {
                     const message = GossipMessage{ .PullRequest = .{ filter_i, my_contact_info_value } };
-
                     var packet = &packet_batch.items[packet_index];
+
                     const bytes = try bincode.writeToSlice(&packet.data, message, bincode.Params{});
                     packet.size = bytes.len;
                     packet.addr = gossip_addr.toEndpoint();
@@ -1154,7 +1157,6 @@ pub const GossipService = struct {
             const entrypoint = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
             for (filters.items) |filter| {
                 const message = GossipMessage{ .PullRequest = .{ filter, my_contact_info_value } };
-
                 var packet = &packet_batch.items[packet_index];
                 const bytes = try bincode.writeToSlice(&packet.data, message, bincode.Params{});
                 packet.size = bytes.len;
@@ -1884,7 +1886,9 @@ pub const GossipService = struct {
         while (i < gossip_values_array.items.len) {
             const gossip_value = &gossip_values[i];
             switch (gossip_value.data) {
-                // always allow contact info + node instance to update shred versions
+                // always allow contact info + node instance to update shred versions.
+                // this also allows us to know who *not* to send pull requests to, if the shred version
+                // doesnt match ours
                 .ContactInfo => {},
                 .LegacyContactInfo => {},
                 .NodeInstance => {},
