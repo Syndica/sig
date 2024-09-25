@@ -1070,11 +1070,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "push_message_n_failed_inserts",
+          "expr": "push_message_n_invalid_shred_version",
           "fullMetaSearch": false,
+          "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "failed_inserts",
+          "legendFormat": "invalid_shred_version",
           "range": true,
           "refId": "A",
           "useBackend": false
@@ -1085,12 +1086,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "push_message_n_invalid_shred_version",
+          "expr": "push_message_n_new_inserts",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "invalid_shred_versions",
+          "legendFormat": "new_inserts",
           "range": true,
           "refId": "B",
           "useBackend": false
@@ -1101,12 +1102,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "push_message_n_success_inserts",
+          "expr": "push_message_n_overwrite_existing",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "success_inserts",
+          "legendFormat": "overwrites",
           "range": true,
           "refId": "C",
           "useBackend": false
@@ -1117,14 +1118,46 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "push_message_n_timeout_inserts",
+          "expr": "push_message_n_old_value",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "old_values",
+          "range": true,
+          "refId": "D",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "push_message_n_duplicate_value",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "duplicate_values",
+          "range": true,
+          "refId": "E",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "push_message_n_timeouts",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
           "legendFormat": "timeouts",
           "range": true,
-          "refId": "D",
+          "refId": "F",
           "useBackend": false
         }
       ],
@@ -1189,7 +1222,36 @@
             ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "__systemRef": "hideSeriesFrom",
+            "matcher": {
+              "id": "byNames",
+              "options": {
+                "mode": "exclude",
+                "names": [
+                  "new_inserts",
+                  "overwrites",
+                  "old_values",
+                  "duplicate_values",
+                  "timeouts"
+                ],
+                "prefix": "All except:",
+                "readOnly": true
+              }
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -1217,12 +1279,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "pull_response_n_failed_inserts",
+          "expr": "pull_response_n_invalid_shred_version",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "failed_inserts",
+          "legendFormat": "invalid_shred_version",
           "range": true,
           "refId": "A",
           "useBackend": false
@@ -1233,12 +1295,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "pull_response_n_invalid_shred_version",
+          "expr": "pull_response_n_new_inserts",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "invalid_shred_version",
+          "legendFormat": "new_inserts",
           "range": true,
           "refId": "B",
           "useBackend": false
@@ -1249,12 +1311,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "pull_response_n_success_inserts",
+          "expr": "pull_response_n_overwrite_existing",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "success_inserts",
+          "legendFormat": "overwrites",
           "range": true,
           "refId": "C",
           "useBackend": false
@@ -1265,14 +1327,46 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "pull_response_n_timeout_inserts",
+          "expr": "pull_response_n_old_value",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "timeout",
+          "legendFormat": "old_values",
           "range": true,
           "refId": "D",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "pull_response_n_duplicate_value",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "duplicate_values",
+          "range": true,
+          "refId": "E",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "pull_response_n_duplicate_value",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "timeouts",
+          "range": true,
+          "refId": "F",
           "useBackend": false
         }
       ],
@@ -1403,13 +1497,13 @@
     "list": []
   },
   "time": {
-    "from": "now-5m",
+    "from": "now-15m",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "Gossip Metrics",
   "uid": "jBuN47BVz",
-  "version": 5,
+  "version": 2,
   "weekStart": ""
 }

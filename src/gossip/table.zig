@@ -33,24 +33,6 @@ pub fn AutoArrayHashSet(comptime T: type) type {
     return AutoArrayHashMap(T, void);
 }
 
-pub const InsertResults = struct {
-    inserted: ?std.ArrayList(usize),
-    timeouts: ?std.ArrayList(usize),
-    failed: ?std.ArrayList(usize),
-
-    pub fn deinit(self: InsertResults) void {
-        if (self.inserted) |inserted| {
-            inserted.deinit();
-        }
-        if (self.timeouts) |timeouts| {
-            timeouts.deinit();
-        }
-        if (self.failed) |failed| {
-            failed.deinit();
-        }
-    }
-};
-
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
 /// indexing values (value = arrayhashmap[0]). This allows us to insert data
@@ -152,9 +134,23 @@ pub const GossipTable = struct {
         self.store.deinit();
     }
 
-    pub fn insert(self: *Self, value: SignedGossipData, now: u64) !bool {
+    pub const InsertResult = enum {
+        // possible values returned from insert()
+        InsertedNewEntry,
+        OverwroteExistingEntry,
+        IgnoredOldValue,
+        IgnoredDuplicateValue,
+        IgnoredTimeout,
+        GossipTableFull,
+
+        pub fn wasInserted(self: InsertResult) bool {
+            return self == .InsertedNewEntry or self == .OverwroteExistingEntry;
+        }
+    };
+
+    pub fn insert(self: *Self, value: SignedGossipData, now: u64) !InsertResult {
         if (self.store.count() >= MAX_TABLE_SIZE) {
-            return error.GossipTableFull;
+            return .GossipTableFull;
         }
 
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -214,7 +210,9 @@ pub const GossipTable = struct {
 
             self.cursor += 1;
 
-            return true;
+            // inserted new entry
+            return .InsertedNewEntry;
+
             // should overwrite existing entry
         } else if (versioned_value.overwrites(result.value_ptr)) {
             const old_entry = result.value_ptr.*;
@@ -265,7 +263,9 @@ pub const GossipTable = struct {
             result.value_ptr.* = versioned_value;
 
             self.cursor += 1;
-            return true;
+
+            // overwrite existing entry
+            return .OverwroteExistingEntry;
 
             // do nothing
         } else {
@@ -274,14 +274,27 @@ pub const GossipTable = struct {
             if (old_entry.value_hash.order(&versioned_value.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
                 try self.purged.insert(old_entry.value_hash, now);
-                return InsertionError.OldValue;
+                return .IgnoredOldValue;
             } else {
-                // hash is the same then its a duplicate
-                return InsertionError.DuplicateValue;
+                // hash is the same then its a duplicate value which isnt stored
+                return .IgnoredDuplicateValue;
             }
-
-            return false;
         }
+    }
+
+    pub fn insertWithTimeout(
+        self: *Self,
+        value: SignedGossipData,
+        now: u64,
+        timeout: u64,
+    ) !InsertResult {
+        const value_time = value.wallclock();
+        const is_too_new = value_time > now +| timeout;
+        const is_too_old = value_time < now -| timeout;
+        if (is_too_new or is_too_old) {
+            return .IgnoredTimeout;
+        }
+        return self.insert(value, now);
     }
 
     pub fn insertValues(
@@ -289,87 +302,27 @@ pub const GossipTable = struct {
         now: u64,
         values: []SignedGossipData,
         timeout: u64,
-        comptime record_inserts: bool,
-        comptime record_timeouts: bool,
-    ) error{OutOfMemory}!InsertResults {
-        // TODO: change to record duplicate and old values seperately + handle when
-        // gossip table is full
-        var indexes_timeout = std.ArrayList(usize).init(self.allocator);
-        var indexes_success = std.ArrayList(usize).init(self.allocator);
-        var indexes_fail = std.ArrayList(usize).init(self.allocator);
-
-        for (values, 0..) |value, index| {
-            const value_time = value.wallclock();
-            const is_too_new = value_time > now +| timeout;
-            const is_too_old = value_time < now -| timeout;
-            if (is_too_new or is_too_old) {
-                if (record_timeouts) {
-                    try indexes_timeout.append(index);
-                }
-                continue;
-            }
-
-            const was_inserted = self.insert(value, now) catch false;
-            if (was_inserted) {
-                try indexes_success.append(index);
-            } else {
-                try indexes_fail.append(index);
-            }
-        }
-
-        return InsertResults{
-            .inserted = if (record_inserts) indexes_success else null,
-            .timeouts = if (record_timeouts) indexes_timeout else null,
-            .failed = indexes_fail,
-        };
+    ) !std.ArrayList(InsertResult) {
+        var results = std.ArrayList(InsertResult).init(self.allocator);
+        try self.insertValuesWithResults(now, values, timeout, &results);
+        return results;
     }
 
-    /// Like insertValues, but it minimizes the number of memory allocations.
-    ///
-    /// This is optimized to minimize the number of times that allocations occur.
-    /// It is *not* optimized to minimize overall memory usage.
-    ///
-    /// It accepts an arraylist of failures instead of returning an InsertResults, so it
-    /// can reuse the arraylist from a previous execution rather than allocating a new one.
-    ///
-    /// For simplicity and performance, only tracks failures without `inserted` and `timeouts`,
-    pub fn insertValuesMinAllocs(
+    /// Like insertValues, but it accepts an arraylist whose memory can be reused.
+    pub fn insertValuesWithResults(
         self: *Self,
         now: u64,
         values: []SignedGossipData,
         timeout: u64,
-        failed_indexes: *std.ArrayList(usize),
-    ) error{OutOfMemory}!struct {
-        timeout_count: u64,
-        success_count: u64,
-    } {
-        failed_indexes.clearRetainingCapacity();
-        try failed_indexes.ensureTotalCapacity(values.len);
+        results: *std.ArrayList(InsertResult),
+    ) !void {
+        results.clearRetainingCapacity();
+        try results.ensureTotalCapacity(values.len);
 
-        var timeout_count: u64 = 0;
-        var success_count: u64 = 0;
-
-        for (values, 0..) |value, index| {
-            const value_time = value.wallclock();
-            const is_too_new = value_time > now +| timeout;
-            const is_too_old = value_time < now -| timeout;
-            if (is_too_new or is_too_old) {
-                timeout_count += 1;
-                continue;
-            }
-
-            const did_insert = self.insert(value, now) catch false;
-            if (did_insert) {
-                success_count += 1;
-            } else {
-                failed_indexes.appendAssumeCapacity(index);
-            }
+        for (values) |value| {
+            const result = try self.insertWithTimeout(value, now, timeout);
+            results.appendAssumeCapacity(result);
         }
-
-        return .{
-            .timeout_count = timeout_count,
-            .success_count = success_count,
-        };
     }
 
     pub fn len(self: *const Self) usize {
@@ -1142,7 +1095,8 @@ test "insert and get contact_info" {
     defer table.deinit();
 
     // test insertion
-    _ = try table.insert(gossip_value, 0);
+    const result = try table.insert(gossip_value, 0);
+    try std.testing.expectEqual(.InsertedNewEntry, result);
 
     // test retrieval
     var buf: [100]ContactInfo = undefined;
@@ -1151,13 +1105,14 @@ test "insert and get contact_info" {
     try std.testing.expect(nodes[0].pubkey.equals(&id));
 
     // test re-insertion
-    const result = table.insert(gossip_value, 0);
-    try std.testing.expectError(GossipTable.InsertionError.DuplicateValue, result);
+    const result2 = try table.insert(gossip_value, 0);
+    try std.testing.expectEqual(.IgnoredDuplicateValue, result2);
 
     // test re-insertion with greater wallclock
     gossip_value.data.LegacyContactInfo.wallclock += 2;
     const v = gossip_value.data.LegacyContactInfo.wallclock;
-    _ = try table.insert(gossip_value, 0);
+    const result3 = try table.insert(gossip_value, 0);
+    try std.testing.expectEqual(.OverwroteExistingEntry, result3);
 
     // check retrieval
     nodes = table.getContactInfos(&buf, 0);
