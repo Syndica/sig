@@ -73,9 +73,9 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
         pub fn get(
             self: *Self,
+            allocator: Allocator,
             comptime cf: ColumnFamily,
             key: cf.Key,
-            allocator: Allocator,
         ) anyerror!?cf.Value {
             const key_bytes = try key_serializer.serializeAlloc(self.allocator, key);
             defer self.allocator.free(key_bytes);

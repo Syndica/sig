@@ -92,7 +92,7 @@ pub const BlockstoreWriter = struct {
         frozen_hash: Hash,
         is_duplicate_confirmed: bool,
     ) !void {
-        if (try self.db.get(schema.bank_hash, slot, self.allocator)) |prev_value| {
+        if (try self.db.get(self.allocator, schema.bank_hash, slot)) |prev_value| {
             if (frozen_hash.eql(prev_value.frozenHash()) and prev_value.isDuplicateConfirmed()) {
                 // Don't overwrite is_duplicate_confirmed == true with is_duplicate_confirmed == false,
                 // which may happen on startup when procesing from blockstore processor because the
@@ -258,7 +258,7 @@ pub const BlockstoreWriter = struct {
     /// have their slots considered connected.
     /// agave: set_and_chain_connected_on_root_and_next_slots
     pub fn setAndChainConnectedOnRootAndNextSlots(self: *Self, root: Slot) !void {
-        var root_slot_meta: SlotMeta = try self.db.get(schema.slot_meta, root, self.allocator) orelse
+        var root_slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, root) orelse
             SlotMeta.init(self.allocator, root, null);
         defer root_slot_meta.deinit();
 
@@ -286,7 +286,7 @@ pub const BlockstoreWriter = struct {
         var i: usize = 0;
         while (i < next_slots.items.len) : (i += 1) {
             const slot = next_slots.items[i];
-            var slot_meta: SlotMeta = try self.db.get(schema.slot_meta, slot, self.allocator) orelse {
+            var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
                 self.logger.errf("Slot {} is a child but has no SlotMeta in blockstore", .{slot});
                 return error.CorruptedBlockstore;
             };
@@ -433,7 +433,7 @@ pub const BlockstoreWriter = struct {
     }
 
     fn isRoot(self: *Self, slot: Slot) !bool {
-        return try self.db.get(schema.roots, slot, self.allocator) orelse false;
+        return try self.db.get(self.allocator, schema.roots, slot) orelse false;
     }
 };
 
@@ -523,18 +523,18 @@ test "purgeSlots" {
 
     for (0..5 + 1) |i| {
         const r = try db.get(
+            std.testing.allocator,
             schema.merkle_root_meta,
             .{ .slot = i, .fec_set_index = i },
-            std.testing.allocator,
         );
         try std.testing.expectEqual(null, r);
     }
 
     for (6..10 + 1) |i| {
         const r = try db.get(
+            std.testing.allocator,
             schema.merkle_root_meta,
             .{ .slot = i, .fec_set_index = i },
-            std.testing.allocator,
         );
         try std.testing.expect(r != null);
     }
@@ -643,7 +643,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     try writer.setAndChainConnectedOnRootAndNextSlots(1);
 
     // should be connected
-    const db_slot_meta_1 = (try db.get(schema.slot_meta, 1, allocator)) orelse
+    const db_slot_meta_1 = (try db.get(allocator, schema.slot_meta, 1)) orelse
         return error.MissingSlotMeta;
     try std.testing.expectEqual(true, db_slot_meta_1.isConnected());
 
@@ -675,7 +675,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     try writer.setAndChainConnectedOnRootAndNextSlots(other_roots[0]);
 
     for (other_roots) |slot| {
-        var db_slot_meta = (try db.get(schema.slot_meta, slot, allocator)) orelse
+        var db_slot_meta = (try db.get(allocator, schema.slot_meta, slot)) orelse
             return error.MissingSlotMeta;
         defer db_slot_meta.deinit();
         try std.testing.expectEqual(true, db_slot_meta.isConnected());
@@ -734,18 +734,18 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     try writer.setAndChainConnectedOnRootAndNextSlots(1);
 
     // should be connected
-    var db_slot_meta_1 = (try db.get(schema.slot_meta, 1, allocator)) orelse
+    var db_slot_meta_1 = (try db.get(allocator, schema.slot_meta, 1)) orelse
         return error.MissingSlotMeta;
     defer db_slot_meta_1.deinit();
     try std.testing.expectEqual(true, db_slot_meta_1.isConnected());
 
-    var db_slot_meta_2: SlotMeta = (try db.get(schema.slot_meta, 2, allocator)) orelse
+    var db_slot_meta_2: SlotMeta = (try db.get(allocator, schema.slot_meta, 2)) orelse
         return error.MissingSlotMeta;
     defer db_slot_meta_2.deinit();
     try std.testing.expectEqual(true, db_slot_meta_2.isParentConnected());
     try std.testing.expectEqual(false, db_slot_meta_2.isConnected());
 
-    var db_slot_meta_3: SlotMeta = (try db.get(schema.slot_meta, 3, allocator)) orelse
+    var db_slot_meta_3: SlotMeta = (try db.get(allocator, schema.slot_meta, 3)) orelse
         return error.MissingSlotMeta;
     defer db_slot_meta_3.deinit();
     try std.testing.expectEqual(false, db_slot_meta_3.isParentConnected());

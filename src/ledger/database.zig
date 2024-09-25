@@ -75,11 +75,11 @@ pub fn Database(comptime Impl: type) type {
         //       this will need some changes to bincode.
         pub fn get(
             self: *Self,
+            allocator: Allocator,
             comptime cf: ColumnFamily,
             key: cf.Key,
-            allocator: Allocator,
         ) anyerror!?cf.Value {
-            return try self.impl.get(cf, key, allocator);
+            return try self.impl.get(allocator, cf, key);
         }
 
         /// Returns a reference to the serialized bytes.
@@ -304,9 +304,9 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             defer db.deinit();
 
             try db.put(cf1, 123, .{ .hello = 345 });
-            const got = try db.get(cf1, 123, allocator);
+            const got = try db.get(allocator, cf1, 123);
             try std.testing.expect(345 == got.?.hello);
-            const not = try db.get(cf2, 123, allocator);
+            const not = try db.get(allocator, cf2, 123);
             try std.testing.expect(null == not);
             const wrong_was_deleted = try db.delete(cf2, 123);
             _ = wrong_was_deleted;
@@ -314,7 +314,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             const was_deleted = try db.delete(cf1, 123);
             _ = was_deleted;
             // try std.testing.expect(was_deleted);
-            const not_now = try db.get(cf1, 123, allocator);
+            const not_now = try db.get(allocator, cf1, 123);
             try std.testing.expect(null == not_now);
         }
 
@@ -336,17 +336,17 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             try batch.put(cf2, 133, .{ .world = 555 });
             try batch.put(cf2, 133, .{ .world = 666 });
 
-            try std.testing.expectEqual(Value1{ .hello = 99 }, try db.get(cf1, 0, allocator));
-            try std.testing.expectEqual(null, try db.get(cf1, 123, allocator));
-            try std.testing.expectEqual(null, try db.get(cf2, 321, allocator));
-            try std.testing.expectEqual(null, try db.get(cf2, 333, allocator));
+            try std.testing.expectEqual(Value1{ .hello = 99 }, try db.get(allocator, cf1, 0));
+            try std.testing.expectEqual(null, try db.get(allocator, cf1, 123));
+            try std.testing.expectEqual(null, try db.get(allocator, cf2, 321));
+            try std.testing.expectEqual(null, try db.get(allocator, cf2, 333));
 
             try db.commit(batch);
 
-            try std.testing.expectEqual(null, try db.get(cf1, 0, allocator));
-            try std.testing.expectEqual(Value1{ .hello = 100 }, try db.get(cf1, 123, allocator));
-            try std.testing.expectEqual(null, try db.get(cf2, 321, allocator));
-            try std.testing.expectEqual(Value2{ .world = 666 }, try db.get(cf2, 133, allocator));
+            try std.testing.expectEqual(null, try db.get(allocator, cf1, 0));
+            try std.testing.expectEqual(Value1{ .hello = 100 }, try db.get(allocator, cf1, 123));
+            try std.testing.expectEqual(null, try db.get(allocator, cf2, 321));
+            try std.testing.expectEqual(Value2{ .world = 666 }, try db.get(allocator, cf2, 133));
         }
 
         pub fn @"iterator forward"() !void {

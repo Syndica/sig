@@ -114,9 +114,9 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 
         pub fn get(
             self: *Self,
+            allocator: Allocator,
             comptime cf: ColumnFamily,
             key: cf.Key,
-            allocator: Allocator,
         ) anyerror!?cf.Value {
             const val_bytes = try self.getBytes(cf, key) orelse return null;
             defer val_bytes.deinit();

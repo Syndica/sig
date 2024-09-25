@@ -41,9 +41,9 @@ test "put/get data consistency for merkle root" {
         },
     );
     const output: sig.ledger.meta.MerkleRootMeta = (try db.get(
+        std.testing.allocator,
         schema.merkle_root_meta,
         id,
-        std.testing.allocator,
     )).?;
     try std.testing.expectEqualSlices(u8, &root.data, &output.merkle_root.?.data);
 }
