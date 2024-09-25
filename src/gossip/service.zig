@@ -1547,7 +1547,7 @@ pub const GossipService = struct {
         // insert values and track the failed origins per pubkey
         {
             var timer = try sig.time.Timer.start();
-            defer { 
+            defer {
                 const elapsed = timer.read().asMillis();
                 self.stats.push_messages_time_to_insert.observe(@floatFromInt(elapsed));
             }
@@ -1954,7 +1954,7 @@ pub const GossipStats = struct {
     pull_response_n_failed_inserts: *Counter,
     pull_response_n_success_inserts: *Counter,
     pull_response_n_timeout_inserts: *Counter,
-    
+
     handle_batch_ping_time: *Histogram,
     handle_batch_pong_time: *Histogram,
     handle_batch_push_time: *Histogram,

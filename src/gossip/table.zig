@@ -339,7 +339,7 @@ pub const GossipTable = struct {
         values: []SignedGossipData,
         timeout: u64,
         failed_indexes: *std.ArrayList(usize),
-    ) error{OutOfMemory}!struct { 
+    ) error{OutOfMemory}!struct {
         timeout_count: u64,
         success_count: u64,
     } {
@@ -361,12 +361,12 @@ pub const GossipTable = struct {
             const did_insert = self.insert(value, now) catch false;
             if (did_insert) {
                 success_count += 1;
-            } else { 
+            } else {
                 failed_indexes.appendAssumeCapacity(index);
             }
         }
 
-        return .{ 
+        return .{
             .timeout_count = timeout_count,
             .success_count = success_count,
         };
