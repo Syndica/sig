@@ -294,9 +294,9 @@ pub const GossipTable = struct {
     ) error{OutOfMemory}!InsertResults {
         // TODO: change to record duplicate and old values seperately + handle when
         // gossip table is full
-        var failed_indexs = std.ArrayList(usize).init(self.allocator);
-        var inserted_indexs = std.ArrayList(usize).init(self.allocator);
-        var timeout_indexs = std.ArrayList(usize).init(self.allocator);
+        var indexes_timeout = std.ArrayList(usize).init(self.allocator);
+        var indexes_success = std.ArrayList(usize).init(self.allocator);
+        var indexes_fail = std.ArrayList(usize).init(self.allocator);
 
         for (values, 0..) |value, index| {
             const value_time = value.wallclock();
@@ -304,23 +304,23 @@ pub const GossipTable = struct {
             const is_too_old = value_time < now -| timeout;
             if (is_too_new or is_too_old) {
                 if (record_timeouts) {
-                    try timeout_indexs.append(index);
+                    try indexes_timeout.append(index);
                 }
                 continue;
             }
 
             const was_inserted = self.insert(value, now) catch false;
             if (was_inserted) {
-                try inserted_indexs.append(index);
+                try indexes_success.append(index);
             } else {
-                try failed_indexs.append(index);
+                try indexes_fail.append(index);
             }
         }
 
         return InsertResults{
-            .inserted = if (record_inserts) inserted_indexs else null,
-            .timeouts = if (record_timeouts) timeout_indexs else null,
-            .failed = failed_indexs,
+            .inserted = if (record_inserts) indexes_success else null,
+            .timeouts = if (record_timeouts) indexes_timeout else null,
+            .failed = indexes_fail,
         };
     }
 
@@ -339,23 +339,37 @@ pub const GossipTable = struct {
         values: []SignedGossipData,
         timeout: u64,
         failed_indexes: *std.ArrayList(usize),
-    ) error{OutOfMemory}!void {
+    ) error{OutOfMemory}!struct { 
+        timeout_count: u64,
+        success_count: u64,
+    } {
         failed_indexes.clearRetainingCapacity();
         try failed_indexes.ensureTotalCapacity(values.len);
+
+        var timeout_count: u64 = 0;
+        var success_count: u64 = 0;
 
         for (values, 0..) |value, index| {
             const value_time = value.wallclock();
             const is_too_new = value_time > now +| timeout;
             const is_too_old = value_time < now -| timeout;
             if (is_too_new or is_too_old) {
+                timeout_count += 1;
                 continue;
             }
 
             const did_insert = self.insert(value, now) catch false;
-            if (!did_insert) {
+            if (did_insert) {
+                success_count += 1;
+            } else { 
                 failed_indexes.appendAssumeCapacity(index);
             }
         }
+
+        return .{ 
+            .timeout_count = timeout_count,
+            .success_count = success_count,
+        };
     }
 
     pub fn len(self: *const Self) usize {

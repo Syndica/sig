@@ -750,9 +750,6 @@ pub const GossipService = struct {
             defer gossip_table_lock.unlock();
 
             const should_trim = gossip_table.shouldTrim(UNIQUE_PUBKEY_CAPACITY);
-            // NOTE: this counts as a trim attempt
-            self.stats.table_trim_call_count.inc();
-
             break :blk should_trim;
         };
 
@@ -1418,11 +1415,14 @@ pub const GossipService = struct {
             defer gossip_table_lock.unlock();
 
             for (pull_response_messages.items) |*pull_message| {
+                const full_len = pull_message.gossip_values.len;
                 const valid_len = self.filterBasedOnShredVersion(
                     gossip_table,
                     pull_message.gossip_values,
                     pull_message.from_pubkey.*,
                 );
+                const invalid_shred_len = full_len - valid_len;
+                self.stats.pull_response_n_invalid_shred_version.add(invalid_shred_len);
 
                 const insert_results = try gossip_table.insertValues(
                     now,
@@ -1432,32 +1432,42 @@ pub const GossipService = struct {
                     true,
                 );
 
+                // update the contactInfo timestamps of the successful inserts
+                // (and all other origin values)
+                const success_indexes = insert_results.inserted.?;
+                defer success_indexes.deinit();
+                for (success_indexes.items) |index| {
+                    const origin = pull_message.gossip_values[index].id();
+                    gossip_table.updateRecordTimestamp(origin, now);
+                }
+                gossip_table.updateRecordTimestamp(pull_message.from_pubkey.*, now);
+
+                var failed_indexes = insert_results.failed.?;
+                defer failed_indexes.deinit();
+                for (failed_indexes.items) |index| {
+                    try failed_insert_ptrs.append(&pull_message.gossip_values[index]);
+                }
+
                 // silently insert the timeout values
                 // (without updating all associated origin values)
+                var insert_success_count = success_indexes.items.len;
+                var insert_fail_count = failed_indexes.items.len;
                 const timeout_indexs = insert_results.timeouts.?;
                 defer timeout_indexs.deinit();
                 for (timeout_indexs.items) |index| {
                     _ = gossip_table.insert(
                         pull_message.gossip_values[index],
                         now,
-                    ) catch {};
+                    ) catch {
+                        insert_fail_count += 1;
+                        continue;
+                    };
+                    insert_success_count += 1;
                 }
 
-                // update the contactInfo timestamps of the successful inserts
-                // (and all other origin values)
-                const successful_insert_indexs = insert_results.inserted.?;
-                defer successful_insert_indexs.deinit();
-                for (successful_insert_indexs.items) |index| {
-                    const origin = pull_message.gossip_values[index].id();
-                    gossip_table.updateRecordTimestamp(origin, now);
-                }
-                gossip_table.updateRecordTimestamp(pull_message.from_pubkey.*, now);
-
-                var failed_insert_indexs = insert_results.failed.?;
-                defer failed_insert_indexs.deinit();
-                for (failed_insert_indexs.items) |index| {
-                    try failed_insert_ptrs.append(&pull_message.gossip_values[index]);
-                }
+                self.stats.pull_response_n_timeout_inserts.add(timeout_indexs.items.len);
+                self.stats.pull_response_n_success_inserts.add(insert_success_count);
+                self.stats.pull_response_n_failed_inserts.add(insert_fail_count);
             }
         }
 
@@ -1531,47 +1541,45 @@ pub const GossipService = struct {
         for (batch_push_messages.items) |*push_message| {
             max_inserts_per_push = @max(max_inserts_per_push, push_message.gossip_values.len);
         }
-        var failed_insert_indexs = try std.ArrayList(usize)
-            .initCapacity(self.allocator, max_inserts_per_push);
+        var failed_insert_indexs = try std.ArrayList(usize).initCapacity(self.allocator, max_inserts_per_push);
         defer failed_insert_indexs.deinit();
 
         // insert values and track the failed origins per pubkey
         {
             var timer = try sig.time.Timer.start();
-
-            var gossip_table_lock = self.gossip_table_rw.write();
-            var gossip_table: *GossipTable = gossip_table_lock.mut();
-
-            defer {
-                gossip_table_lock.unlock();
-
+            defer { 
                 const elapsed = timer.read().asMillis();
                 self.stats.push_messages_time_to_insert.observe(@floatFromInt(elapsed));
             }
 
-            var n_gossip_data: usize = 0;
-            var n_failed_inserts: usize = 0;
-            var n_invalid_data: usize = 0;
+            var gossip_table, var gossip_table_lg = self.gossip_table_rw.writeWithLock();
+            defer gossip_table_lg.unlock();
+
+            var n_success_inserts: u64 = 0;
+            var n_failed_inserts: u64 = 0;
+            var n_timeout_inserts: u64 = 0;
+            var invalid_shred_version_len: u64 = 0;
 
             const now = getWallclockMs();
             for (batch_push_messages.items) |*push_message| {
-                n_gossip_data += push_message.gossip_values.len;
-
                 // Filtered values are freed
+                const full_len = push_message.gossip_values.len;
                 const valid_len = self.filterBasedOnShredVersion(
                     gossip_table,
                     push_message.gossip_values,
                     push_message.from_pubkey.*,
                 );
-                n_invalid_data += push_message.gossip_values.len - valid_len;
+                invalid_shred_version_len += full_len - valid_len;
 
-                try gossip_table.insertValuesMinAllocs(
+                const insert_result = try gossip_table.insertValuesMinAllocs(
                     now,
                     push_message.gossip_values[0..valid_len],
                     PUSH_MSG_TIMEOUT.asMillis(),
                     &failed_insert_indexs,
                 );
                 n_failed_inserts += failed_insert_indexs.items.len;
+                n_success_inserts += insert_result.success_count;
+                n_timeout_inserts += insert_result.timeout_count;
 
                 // logging this message takes too long and causes a bottleneck
                 // self.logger
@@ -1621,9 +1629,10 @@ pub const GossipService = struct {
                 }
             }
 
-            self.stats.push_message_n_values.add(n_gossip_data);
-            self.stats.push_message_n_invalid_values.add(n_failed_inserts);
-            self.stats.push_message_n_invalid_values.add(n_invalid_data);
+            self.stats.push_message_n_success_inserts.add(n_success_inserts);
+            self.stats.push_message_n_failed_inserts.add(n_failed_inserts);
+            self.stats.push_message_n_timeout_inserts.add(n_timeout_inserts);
+            self.stats.push_message_n_invalid_shred_version.add(invalid_shred_version_len);
         }
 
         // build prune packets
@@ -1701,7 +1710,6 @@ pub const GossipService = struct {
             //   - if any other nodes have non-zero stake: GOSSIP_PULL_TIMEOUT_MS (15s)
             const n_values_removed = try gossip_table.removeOldLabels(now, DEFAULT_EPOCH_DURATION);
             self.stats.table_old_values_removed.add(n_values_removed);
-            self.stats.table_remove_old_values_call_count.inc();
         }
 
         const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION.asMillis();
@@ -1937,10 +1945,16 @@ pub const GossipStats = struct {
     pull_responses_sent: *Counter,
     prune_messages_sent: *Counter,
 
-    push_message_n_values: *Counter,
+    push_message_n_invalid_shred_version: *Counter,
     push_message_n_failed_inserts: *Counter,
-    push_message_n_invalid_values: *Counter,
+    push_message_n_success_inserts: *Counter,
+    push_message_n_timeout_inserts: *Counter,
 
+    pull_response_n_invalid_shred_version: *Counter,
+    pull_response_n_failed_inserts: *Counter,
+    pull_response_n_success_inserts: *Counter,
+    pull_response_n_timeout_inserts: *Counter,
+    
     handle_batch_ping_time: *Histogram,
     handle_batch_pong_time: *Histogram,
     handle_batch_push_time: *Histogram,
@@ -1960,8 +1974,6 @@ pub const GossipStats = struct {
     table_n_pubkeys: *GaugeU64,
     table_pubkeys_dropped: *Counter,
     table_old_values_removed: *Counter,
-    table_trim_call_count: *Counter,
-    table_remove_old_values_call_count: *Counter,
 
     // logging details
     _logging_fields: struct {
