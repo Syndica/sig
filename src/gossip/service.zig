@@ -1412,9 +1412,8 @@ pub const GossipService = struct {
         defer failed_insert_ptrs.deinit();
 
         {
-            var gossip_table_lock = self.gossip_table_rw.write();
-            var gossip_table: *GossipTable = gossip_table_lock.mut();
-            defer gossip_table_lock.unlock();
+            var gossip_table, var gossip_table_lg = self.gossip_table_rw.writeWithLock();
+            defer gossip_table_lg.unlock();
 
             for (pull_response_messages.items) |*pull_message| {
                 const full_len = pull_message.gossip_values.len;
@@ -1450,6 +1449,14 @@ pub const GossipService = struct {
                         // successful inserts
                         const origin = pull_message.gossip_values[index].id();
                         gossip_table.updateRecordTimestamp(origin, now);
+
+                        switch (result) {
+                            .OverwroteExistingEntry => |old_data| {
+                                // if the value was overwritten, we need to free the old value
+                                bincode.free(self.gossip_value_allocator, old_data);
+                            },
+                            else => {},
+                        }
                     } else if (result == .IgnoredTimeout) {
                         // silently insert the timeout values
                         // (without updating all associated origin values)
@@ -1571,7 +1578,11 @@ pub const GossipService = struct {
                 for (insert_results.items) |result| {
                     switch (result) {
                         .InsertedNewEntry => self.stats.push_message_n_new_inserts.inc(),
-                        .OverwroteExistingEntry => self.stats.push_message_n_overwrite_existing.inc(),
+                        .OverwroteExistingEntry => |old_data| {
+                            self.stats.push_message_n_overwrite_existing.inc();
+                            // if the value was overwritten, we need to free the old value
+                            bincode.free(self.gossip_value_allocator, old_data);
+                        },
                         .IgnoredOldValue => self.stats.push_message_n_old_value.inc(),
                         .IgnoredDuplicateValue => self.stats.push_message_n_duplicate_value.inc(),
                         .IgnoredTimeout => self.stats.push_message_n_timeouts.inc(),

@@ -24,6 +24,7 @@ const SocketAddr = sig.net.SocketAddr;
 
 const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 pub const UNIQUE_PUBKEY_CAPACITY: usize = 8_192;
+// TODO: cli arg for this
 pub const MAX_TABLE_SIZE: usize = 100_000; // TODO: better value for this
 
 pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
@@ -134,14 +135,14 @@ pub const GossipTable = struct {
         self.store.deinit();
     }
 
-    pub const InsertResult = enum {
+    pub const InsertResult = union(enum) {
         // possible values returned from insert()
-        InsertedNewEntry,
-        OverwroteExistingEntry,
-        IgnoredOldValue,
-        IgnoredDuplicateValue,
-        IgnoredTimeout,
-        GossipTableFull,
+        InsertedNewEntry: void,
+        OverwroteExistingEntry: GossipData, // the overwritten value
+        IgnoredOldValue: void,
+        IgnoredDuplicateValue: void,
+        IgnoredTimeout: void,
+        GossipTableFull: void,
 
         pub fn wasInserted(self: InsertResult) bool {
             return self == .InsertedNewEntry or self == .OverwroteExistingEntry;
@@ -168,6 +169,7 @@ pub const GossipTable = struct {
         if (!result.found_existing) {
             // if table is full, return early
             if (self.store.count() >= MAX_TABLE_SIZE) {
+                _ = self.store.swapRemove(label);
                 return .GossipTableFull;
             }
 
@@ -262,11 +264,10 @@ pub const GossipTable = struct {
             try self.purged.insert(old_entry.value_hash, now);
 
             result.value_ptr.* = versioned_value;
-
             self.cursor += 1;
 
             // overwrite existing entry
-            return .OverwroteExistingEntry;
+            return .{ .OverwroteExistingEntry = old_entry.value.data };
 
             // do nothing
         } else {
@@ -727,27 +728,18 @@ pub const GossipTable = struct {
         return old_labels.items.len;
     }
 
-    const GetOldLabelsTask = struct {
-        // context
-        key: Pubkey,
-        table: *const GossipTable,
-        cutoff_timestamp: u64,
-        old_labels: std.ArrayList(GossipKey),
+    pub fn getOldLabels(
+        self: *Self,
+        now: u64,
+        timeout: u64,
+    ) error{OutOfMemory}!std.ArrayList(GossipKey) {
+        const cutoff_timestamp = now -| timeout;
+        const n_pubkeys = self.pubkey_to_values.count();
 
-        // standard
-        task: Task = .{ .callback = callback },
-        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-        pub fn deinit(self: *GetOldLabelsTask) void {
-            self.old_labels.deinit();
-        }
-
-        pub fn callback(task: *Task) void {
-            const self: *@This() = @fieldParentPtr("task", task);
-            defer self.done.store(true, .release);
-
-            // get assocaited entries
-            const entry = self.table.pubkey_to_values.getEntry(self.key).?;
+        var old_labels = std.ArrayList(GossipKey).init(self.allocator);
+        next_key: for (self.pubkey_to_values.keys()[0..n_pubkeys]) |key| {
+            // get associated entries
+            const entry = self.pubkey_to_values.getEntry(key).?;
 
             // if contact info is up to date then we dont need to check the values
             const pubkey = entry.key_ptr;
@@ -756,13 +748,13 @@ pub const GossipTable = struct {
                 GossipKey{ .ContactInfo = pubkey.* },
             };
             inline for (labels) |label| {
-                if (self.table.get(label)) |*contact_info| {
+                if (self.get(label)) |*contact_info| {
                     const value_timestamp = @min(
                         contact_info.value.wallclock(),
                         contact_info.timestamp_on_insertion,
                     );
-                    if (value_timestamp > self.cutoff_timestamp) {
-                        return;
+                    if (value_timestamp > cutoff_timestamp) {
+                        continue :next_key;
                     }
                 }
             }
@@ -772,62 +764,18 @@ pub const GossipTable = struct {
             const count = entry_indexs.count();
 
             for (entry_indexs.iterator().keys[0..count]) |entry_index| {
-                const versioned_value = self.table.store.values()[entry_index];
+                const versioned_value = self.store.values()[entry_index];
                 const value_timestamp = @min(
                     versioned_value.value.wallclock(),
                     versioned_value.timestamp_on_insertion,
                 );
-                if (value_timestamp <= self.cutoff_timestamp) {
-                    self.old_labels.append(versioned_value.value.label()) catch unreachable;
+                if (value_timestamp <= cutoff_timestamp) {
+                    old_labels.append(versioned_value.value.label()) catch unreachable;
                 }
             }
         }
-    };
 
-    pub fn getOldLabels(
-        self: *Self,
-        now: u64,
-        timeout: u64,
-    ) error{OutOfMemory}!std.ArrayList(GossipKey) {
-        const cutoff_timestamp = now -| timeout;
-        const n_pubkeys = self.pubkey_to_values.count();
-
-        var tasks = try self.allocator.alloc(GetOldLabelsTask, n_pubkeys);
-        defer {
-            for (tasks) |*task| task.deinit();
-            self.allocator.free(tasks);
-        }
-
-        // run this loop in parallel
-        for (self.pubkey_to_values.keys()[0..n_pubkeys], 0..) |key, i| {
-            tasks[i] = GetOldLabelsTask{
-                .key = key,
-                .table = self,
-                .cutoff_timestamp = cutoff_timestamp,
-                .old_labels = std.ArrayList(GossipKey).init(self.allocator),
-            };
-
-            // run it
-            const batch = Batch.from(&tasks[i].task);
-            self.thread_pool.schedule(batch);
-        }
-
-        // wait for them to be done to release the lock
-        var output_length: u64 = 0;
-        for (tasks) |*task| {
-            while (!task.done.load(.acquire)) {
-                // wait
-            }
-            output_length += task.old_labels.items.len;
-        }
-
-        // move labels to one big array
-        var output = try std.ArrayList(GossipKey).initCapacity(self.allocator, output_length);
-        for (tasks) |*task| {
-            output.appendSliceAssumeCapacity(task.old_labels.items);
-        }
-
-        return output;
+        return old_labels;
     }
 
     pub fn getOwnedContactInfoByGossipAddr(
@@ -1113,7 +1061,7 @@ test "insert and get contact_info" {
     gossip_value.data.LegacyContactInfo.wallclock += 2;
     const v = gossip_value.data.LegacyContactInfo.wallclock;
     const result3 = try table.insert(gossip_value, 0);
-    try std.testing.expectEqual(.OverwroteExistingEntry, result3);
+    try std.testing.expectEqual(.OverwroteExistingEntry, std.meta.activeTag(result3));
 
     // check retrieval
     nodes = table.getContactInfos(&buf, 0);
