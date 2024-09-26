@@ -1219,15 +1219,15 @@ pub const Network = enum {
 
         switch (self) {
             .mainnet => {
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint.mainnet.solana.com:8001");
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint.mainnet-beta.solana.com:8001");
                 len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.mainnet.solana.com:8001");
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.mainnet-beta.solana.com:8001");
                 len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.mainnet.solana.com:8001");
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.mainnet-beta.solana.com:8001");
                 len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint4.mainnet.solana.com:8001");
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint4.mainnet-beta.solana.com:8001");
                 len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint5.mainnet.solana.com:8001");
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint5.mainnet-beta.solana.com:8001");
                 len += 1;
             },
             .testnet => {
