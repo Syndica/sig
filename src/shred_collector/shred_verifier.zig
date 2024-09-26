@@ -20,24 +20,21 @@ pub fn runShredVerifier(
     leader_schedule: SlotLeaderProvider,
 ) !void {
     var verified_count: usize = 0;
-    while (!exit.load(.acquire)) {
+    while (!exit.load(.acquire) or
+        unverified_shred_receiver.len() != 0)
+    {
         while (unverified_shred_receiver.receive()) |packet| {
             // TODO parallelize this once it's actually verifying signatures
-            var our_packet = packet;
-            if (!verifyShred(&packet, leader_schedule)) {
-                our_packet.flags.set(.discard);
-            } else {
+            if (verifyShred(&packet, leader_schedule)) {
                 verified_count += 1;
+                try verified_shred_sender.send(packet);
             }
-            try verified_shred_sender.send(our_packet);
-            if (exit.load(.acquire)) return;
         }
     }
 }
 
 /// verify_shred_cpu
 fn verifyShred(packet: *const Packet, leader_schedule: SlotLeaderProvider) bool {
-    if (packet.flags.isSet(.discard)) return false;
     const shred = shred_layout.getShred(packet) orelse return false;
     const slot = shred_layout.getSlot(shred) orelse return false;
     const signature = shred_layout.getSignature(shred) orelse return false;

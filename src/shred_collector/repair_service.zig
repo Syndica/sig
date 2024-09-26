@@ -56,7 +56,7 @@ pub const RepairService = struct {
 
     pub const RequestBatchThreadPool = HomogeneousThreadPool(struct {
         requester: *RepairRequester,
-        requests: []AddressedRepairRequest,
+        requests: []const AddressedRepairRequest,
 
         pub fn run(self: *@This()) !void {
             return self.requester.sendRepairRequestBatch(self.requests);

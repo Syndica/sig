@@ -41,7 +41,6 @@ pub const Packet = struct {
 /// it would be nice to find another approach that is equally easy to use,
 /// without sacrificing safety, performance, or readability.
 pub const Flag = enum(u8) {
-    discard = 0b0000_0001,
     // forwarded = 0b0000_0010,
     repair = 0b0000_0100,
     // simple_vote_tx = 0b0000_1000,

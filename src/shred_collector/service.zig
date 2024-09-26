@@ -93,7 +93,12 @@ pub fn start(
         .metrics = try ShredReceiverMetrics.init(),
         .root_slot = if (conf.start_slot) |s| s - 1 else 0,
     };
-    try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver}, false);
+    try service_manager.spawn(
+        "Shred Receiver",
+        ShredReceiver.run,
+        .{shred_receiver},
+        false,
+    );
 
     // verifier (thread)
     try service_manager.spawn(

@@ -29,30 +29,30 @@ pub fn runShredProcessor(
     leader_schedule: sig.core.leader_schedule.SlotLeaderProvider,
 ) !void {
     var shred_inserter = shred_inserter_;
-    var shreds = ArrayListUnmanaged(Shred){};
-    var is_repaired = ArrayListUnmanaged(bool){};
-    var error_context = ErrorContext{};
+    var shreds: ArrayListUnmanaged(Shred) = .{};
+    var is_repaired: ArrayListUnmanaged(bool) = .{};
+    var error_context: ErrorContext = .{};
 
-    while (!exit.load(.acquire)) {
+    while (!exit.load(.acquire) or
+        verified_shred_receiver.len() != 0)
+    {
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
         while (verified_shred_receiver.receive()) |packet| {
-            if (!packet.flags.isSet(.discard)) {
-                processShred(
-                    allocator,
-                    tracker,
-                    &packet,
-                    &shreds,
-                    &is_repaired,
-                    &error_context,
-                ) catch |e| {
-                    logger.errf(
-                        "failed to process verified shred {?}.{?}: {}",
-                        .{ error_context.slot, error_context.index, e },
-                    );
-                    error_context = .{};
-                };
-            }
+            processShred(
+                allocator,
+                tracker,
+                &packet,
+                &shreds,
+                &is_repaired,
+                &error_context,
+            ) catch |e| {
+                logger.errf(
+                    "failed to process verified shred {?}.{?}: {}",
+                    .{ error_context.slot, error_context.index, e },
+                );
+                error_context = .{};
+            };
         }
         _ = try shred_inserter.insertShreds(
             shreds.items,
