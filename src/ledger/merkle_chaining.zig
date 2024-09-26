@@ -26,6 +26,7 @@ const key_serializer = sig.ledger.database.key_serializer;
 const value_serializer = sig.ledger.database.value_serializer;
 
 const getShredFromJustInsertedOrDb = ledger.insert_shred.getShredFromJustInsertedOrDb;
+const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 /// Returns true if there is no chaining conflict between
 /// the `shred` and `merkle_root_meta` of the next FEC set,
@@ -77,24 +78,24 @@ pub fn checkForwardChainedMerkleRootConsistency(
     const next_shred = if (try getShredFromJustInsertedOrDb(db, just_inserted_shreds, next_shred_id)) |ns|
         ns
     else {
-        logger.errf(
+        logger.errf(&newlinesToSpaces(
             \\Shred {any} indicated by merkle root meta {any} \
             \\is missing from blockstore. This should only happen in extreme cases where \
             \\blockstore cleanup has caught up to the root. Skipping the forward chained \
             \\merkle root consistency check
-        , .{ next_shred_id, next_merkle_root_meta });
+        ), .{ next_shred_id, next_merkle_root_meta });
         return true;
     };
     const merkle_root = shred.fields.merkleRoot() catch null;
     const chained_merkle_root = shred_mod.layout.getChainedMerkleRoot(next_shred);
 
     if (!checkChaining(merkle_root, chained_merkle_root)) {
-        logger.warnf(
+        logger.warnf(&newlinesToSpaces(
             \\Received conflicting chained merkle roots for slot: {}, shred \
             \\{any} type {any} has merkle root {any}, however next fec set \
             \\shred {any} type {any} chains to merkle root \
             \\{any}. Reporting as duplicate
-        , .{
+        ), .{
             slot,
             erasure_set_id,
             shred.fields.common.variant.shred_type,
@@ -167,23 +168,23 @@ pub fn checkBackwardsChainedMerkleRootConsistency(
     };
     const prev_shred =
         if (try getShredFromJustInsertedOrDb(db, just_inserted_shreds, prev_shred_id)) |ps| ps else {
-        logger.warnf(
+        logger.warnf(&newlinesToSpaces(
             \\Shred {any} indicated by the erasure meta {any} \
             \\is missing from blockstore. This can happen if you have recently upgraded \
             \\from a version < v1.18.13, or if blockstore cleanup has caught up to the root. \
             \\Skipping the backwards chained merkle root consistency check
-        , .{ prev_shred_id, prev_erasure_meta });
+        ), .{ prev_shred_id, prev_erasure_meta });
         return true;
     };
     const merkle_root = shred_mod.layout.getChainedMerkleRoot(prev_shred);
     const chained_merkle_root = shred.chainedMerkleRoot() catch null;
 
     if (!checkChaining(merkle_root, chained_merkle_root)) {
-        logger.warnf(
+        logger.warnf(&newlinesToSpaces(
             \\Received conflicting chained merkle roots for slot: {}, shred {any} type {any} \
             \\chains to merkle root {any}, however previous fec set code \
             \\shred {any} has merkle root {any}. Reporting as duplicate
-        , .{
+        ), .{
             slot,
             shred.commonHeader().erasureSetId(),
             shred.commonHeader().variant.shred_type,

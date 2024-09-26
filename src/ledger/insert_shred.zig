@@ -29,6 +29,7 @@ const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const ColumnFamily = ledger.database.ColumnFamily;
 const WriteBatch = BlockstoreDB.WriteBatch;
 
 const ErasureMeta = meta.ErasureMeta;
@@ -38,6 +39,7 @@ const ShredIndex = meta.ShredIndex;
 const SlotMeta = meta.SlotMeta;
 
 const recover = ledger.recovery.recover;
+const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
@@ -136,6 +138,9 @@ pub const ShredInserter = struct {
         is_trusted: bool,
         retransmit_sender: ?PointerClosure([]const []const u8, void),
     ) !InsertShredsResult {
+        ///////////////////////////
+        // setup state for the rest of function
+        //
         if (shreds.len == 0) return .{
             .completed_data_set_infos = ArrayList(CompletedDataSetInfo).init(self.allocator),
             .duplicate_shreds = ArrayList(PossibleDuplicateShred).init(self.allocator),
@@ -158,6 +163,9 @@ pub const ShredInserter = struct {
         defer self.lock.unlock();
         self.metrics.insert_lock_elapsed_us.add(get_lock_timer.read().asMicros());
 
+        ///////////////////////////
+        // insert received shreds
+        //
         var shred_insertion_timer = try Timer.start();
         var index_meta_time_us: u64 = 0;
         var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
@@ -210,6 +218,9 @@ pub const ShredInserter = struct {
         }
         self.metrics.insert_shreds_elapsed_us.add(shred_insertion_timer.read().asMicros());
 
+        /////////////////////
+        // recover shreds
+        //
         var shred_recovery_timer = try Timer.start();
         var valid_recovered_shreds = ArrayList([]const u8).init(allocator);
         defer valid_recovered_shreds.deinit();
@@ -275,11 +286,14 @@ pub const ShredInserter = struct {
         }
         self.metrics.shred_recovery_elapsed_us.add(shred_recovery_timer.read().asMicros());
 
+        ///////////////////////////
+        // slot meta: chain and persist
+        //
         var chaining_timer = try Timer.start();
         // Handle chaining for the members of the slot_meta_working_set that were inserted into,
         // drop the others
         try ledger.slot_chaining.handleChaining(
-            self.allocator,
+            allocator,
             &self.db,
             &write_batch,
             &state.slot_meta_working_set,
@@ -288,13 +302,16 @@ pub const ShredInserter = struct {
 
         var commit_timer = try Timer.start();
         _ = try commitSlotMetaWorkingSet(
-            self.allocator,
+            allocator,
             &state.slot_meta_working_set,
             &.{}, // TODO senders
             &write_batch,
         );
         // TODO return value
 
+        ///////////////////////////
+        // process erasure metas
+        //
         const em0_keys, const em0_values = state.erasure_metas.items();
         for (em0_keys, em0_values) |erasure_set, working_em| if (working_em == .dirty) {
             const slot = erasure_set.slot;
@@ -312,7 +329,7 @@ pub const ShredInserter = struct {
             const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
             // TODO: agave discards the result here. should we also?
             _ = try ledger.merkle_chaining.checkForwardChainedMerkleRootConsistency(
-                self.allocator,
+                allocator,
                 self.logger,
                 &self.db,
                 shred.code,
@@ -323,6 +340,9 @@ pub const ShredInserter = struct {
             );
         };
 
+        ///////////////////////////
+        // process merkle root metas
+        //
         var merkle_root_metas_iter = state.merkle_root_metas.iterator();
         while (merkle_root_metas_iter.next()) |mrm_entry| {
             const erasure_set_id = mrm_entry.key_ptr.*;
@@ -343,7 +363,7 @@ pub const ShredInserter = struct {
             const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
             // TODO: agave discards the result here. should we also?
             _ = try ledger.merkle_chaining.checkBackwardsChainedMerkleRootConsistency(
-                self.allocator,
+                allocator,
                 self.logger,
                 &self.db,
                 shred,
@@ -353,34 +373,11 @@ pub const ShredInserter = struct {
             );
         }
 
-        // TODO: this feels redundant: logic of next loop applied to the data of 2 loops ago
-        const em1_keys, const em1_values = state.erasure_metas.items();
-        for (em1_keys, em1_values) |erasure_set, *working_erasure_meta| {
-            if (working_erasure_meta.* == .clean) {
-                continue;
-            }
-            try write_batch.put(
-                schema.erasure_meta,
-                erasure_set,
-                working_erasure_meta.asRef().*,
-            );
-        }
-
-        // TODO: this feels redundant: logic of prior loop applied to the data of loop before that
-        var merkle_iter = state.merkle_root_metas.iterator();
-        while (merkle_iter.next()) |merkle_entry| {
-            const erasure_set_id = merkle_entry.key_ptr.*;
-            const working_merkle_meta = merkle_entry.value_ptr;
-            if (working_merkle_meta.* == .clean) {
-                continue;
-            }
-
-            try write_batch.put(
-                schema.merkle_root_meta,
-                erasure_set_id,
-                working_merkle_meta.asRef().*,
-            );
-        }
+        ///////////////////////////
+        // put working entries items in write batch
+        //
+        try persistWorkingEntries(&write_batch, schema.erasure_meta, &state.erasure_metas);
+        try persistWorkingEntries(&write_batch, schema.merkle_root_meta, &state.merkle_root_metas);
 
         var index_working_set_iterator = state.index_working_set.iterator();
         while (index_working_set_iterator.next()) |entry| {
@@ -392,6 +389,9 @@ pub const ShredInserter = struct {
 
         self.metrics.commit_working_sets_elapsed_us.add(commit_timer.read().asMicros());
 
+        ///////////////////////////
+        // commit batch and return
+        //
         var write_timer = try Timer.start();
         try self.db.commit(write_batch);
         self.metrics.write_batch_elapsed_us.add(write_timer.read().asMicros());
@@ -405,6 +405,22 @@ pub const ShredInserter = struct {
             .completed_data_set_infos = newly_completed_data_sets,
             .duplicate_shreds = state.duplicate_shreds,
         };
+    }
+
+    fn persistWorkingEntries(
+        write_batch: *WriteBatch,
+        cf: ColumnFamily,
+        /// Map(cf.Key, WorkingEntry(cf.Value))
+        working_entries_map: anytype,
+    ) !void {
+        var iterator = working_entries_map.iterator();
+        while (iterator.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const value = entry.value_ptr;
+            if (value.* == .dirty) {
+                try write_batch.put(cf, key, value.asRef().*);
+            }
+        }
     }
 
     /// agave: check_insert_coding_shred
@@ -507,17 +523,19 @@ pub const ShredInserter = struct {
                         },
                     });
                 } else {
-                    self.logger.errf(
-                    // TODO: clean up newlines from all logs in this file
+                    self.logger.errf(&newlinesToSpaces(
                         \\Unable to find the conflicting code shred that set {any}.
                         \\This should only happen in extreme cases where blockstore cleanup has
                         \\caught up to the root. Skipping the erasure meta duplicate shred check
-                    , .{erasure_meta});
+                    ), .{erasure_meta});
                 }
             }
             // TODO (agave): This is a potential slashing condition
             self.logger.warn("Received multiple erasure configs for the same erasure set!!!");
-            self.logger.warnf("Slot: {}, shred index: {}, erasure_set: {any}, is_duplicate: {}, stored config: {any}, new shred: {any}", .{
+            self.logger.warnf(&newlinesToSpaces(
+                \\Slot: {}, shred index: {}, erasure_set: {any}, is_duplicate: {},
+                \\stored config: {any}, new shred: {any}
+            ), .{
                 slot,
                 shred.fields.common.index,
                 erasure_set_id,
@@ -1080,11 +1098,11 @@ pub const ShredInserter = struct {
                 try available_shreds.append(shred);
             } else if (index.contains(i)) {
                 const shred = try self.db.getBytes(column_family, .{ slot, i }) orelse {
-                    self.logger.errf(
+                    self.logger.errf(&newlinesToSpaces(
                         \\Unable to read the {s} with slot {}, index {} for shred
                         \\recovery. The shred is marked present in the slot's {s} index,
                         \\but the shred could not be found in the {s} column.
-                    , .{ column_family.name, slot, i, column_family.name, column_family.name });
+                    ), .{ column_family.name, slot, i, column_family.name, column_family.name });
                     continue;
                 };
                 defer shred.deinit();
@@ -1441,14 +1459,6 @@ pub fn deinitMapRecursive(map: anytype) void {
         entry.value_ptr.deinit();
     }
     map.deinit();
-}
-
-fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
-    var ret: [fmt.len]u8 = .{' '} ** fmt.len;
-    for (fmt, 0..) |char, i| if (char != '\n') {
-        ret[i] = char;
-    };
-    return ret;
 }
 
 //////////
