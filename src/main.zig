@@ -1,5 +1,4 @@
 const cmd = @import("cmd/cmd.zig");
-const logger = @import("./trace/log.zig");
 const std = @import("std");
 
 // We set this so that std.log knows not to log .debug level messages

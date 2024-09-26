@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const net = @import("net.zig");
 const ShredVersion = @import("../core/shred.zig").ShredVersion;
 const SocketAddr = @import("net.zig").SocketAddr;
-const logger = @import("../trace/log.zig").default_logger;
 const Atomic = std.atomic.Value;
 const assert = std.debug.assert;
 const testing = std.testing;
