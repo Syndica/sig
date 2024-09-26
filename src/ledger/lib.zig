@@ -11,6 +11,7 @@ pub const rocksdb = @import("rocksdb.zig");
 pub const schema = @import("schema.zig");
 pub const shred = @import("shred.zig");
 pub const shredder = @import("shredder.zig");
+pub const slot_chaining = @import("slot_chaining.zig");
 pub const transaction_status = @import("transaction_status.zig");
 pub const tests = @import("tests.zig");
 pub const writer = @import("writer.zig");

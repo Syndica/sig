@@ -27,7 +27,6 @@ const SlotMeta = ledger.meta.SlotMeta;
 const TransactionStatusMeta = ledger.transaction_status.TransactionStatusMeta;
 
 const schema = ledger.schema.schema;
-const schema_list = ledger.schema.list;
 
 pub const BlockstoreWriter = struct {
     allocator: Allocator,

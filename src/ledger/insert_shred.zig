@@ -306,7 +306,12 @@ pub const ShredInserter = struct {
         var chaining_timer = try Timer.start();
         // Handle chaining for the members of the slot_meta_working_set that were inserted into,
         // drop the others
-        try self.handleChaining(&write_batch, &slot_meta_working_set);
+        try ledger.slot_chaining.handleChaining(
+            self.allocator,
+            &self.db,
+            &write_batch,
+            &slot_meta_working_set,
+        );
         self.metrics.chaining_elapsed_us.add(chaining_timer.read().asMicros());
 
         var commit_timer = try Timer.start();
@@ -1135,182 +1140,6 @@ pub const ShredInserter = struct {
         }
     }
 
-    /// agave: handle_chaining
-    fn handleChaining(
-        self: *Self,
-        write_batch: *WriteBatch,
-        working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
-    ) !void {
-        const count = working_set.count();
-        if (count == 0) return; // TODO is this correct?
-
-        // filter out slots that were not inserted
-        var keys = try self.allocator.alloc(u64, count);
-        defer self.allocator.free(keys);
-        var keep_i: usize = 0;
-        var delete_i = count;
-        var iter = working_set.iterator();
-        while (iter.next()) |entry| {
-            if (entry.value_ptr.did_insert_occur) {
-                keys[keep_i] = entry.key_ptr.*;
-                keep_i += 1;
-            } else {
-                delete_i -= 1;
-                keys[delete_i] = entry.key_ptr.*;
-            }
-        }
-        std.debug.assert(keep_i == delete_i);
-        for (keys[delete_i..count]) |k| {
-            if (working_set.fetchRemove(k)) |entry| {
-                var slot_meta_working_set_entry = entry.value;
-                slot_meta_working_set_entry.deinit();
-            }
-        }
-
-        // handle chaining
-        var new_chained_slots = AutoHashMap(u64, SlotMeta).init(self.allocator);
-        defer deinitMapRecursive(&new_chained_slots);
-        for (keys[0..keep_i]) |slot| {
-            try self.handleChainingForSlot(write_batch, working_set, &new_chained_slots, slot);
-        }
-
-        // Write all the newly changed slots in new_chained_slots to the write_batch
-        var new_iter = new_chained_slots.iterator();
-        while (new_iter.next()) |entry| {
-            try write_batch.put(schema.slot_meta, entry.key_ptr.*, entry.value_ptr.*);
-        }
-    }
-
-    /// agave: handle_chaining_for_slot
-    fn handleChainingForSlot(
-        self: *Self,
-        write_batch: *WriteBatch,
-        working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
-        new_chained_slots: *AutoHashMap(u64, SlotMeta),
-        slot: Slot,
-    ) !void {
-        const slot_meta_entry = working_set.getPtr(slot) orelse return error.Unwrap;
-        const slot_meta = &slot_meta_entry.new_slot_meta;
-        const meta_backup = slot_meta_entry.old_slot_meta;
-
-        const was_orphan_slot = meta_backup != null and meta_backup.?.isOrphan();
-
-        // If:
-        // 1) This is a new slot
-        // 2) slot != 0
-        // then try to chain this slot to a previous slot
-        if (slot != 0) if (slot_meta.parent_slot) |prev_slot| {
-            // Check if the slot represented by meta_mut is either a new slot or a orphan.
-            // In both cases we need to run the chaining logic b/c the parent on the slot was
-            // previously unknown.
-
-            if (meta_backup == null or was_orphan_slot) {
-                const prev_slot_meta = try self
-                    .findSlotMetaElseCreate(working_set, new_chained_slots, prev_slot);
-
-                // This is a newly inserted slot/orphan so run the chaining logic to link it to a
-                // newly discovered parent
-                try chainNewSlotToPrevSlot(prev_slot_meta, slot, slot_meta);
-
-                // If the parent of `slot` is a newly inserted orphan, insert it into the orphans
-                // column family
-                if (prev_slot_meta.isOrphan()) {
-                    try write_batch.put(schema.orphans, prev_slot, true);
-                }
-            }
-        };
-
-        // At this point this slot has received a parent, so it's no longer an orphan
-        if (was_orphan_slot) {
-            try write_batch.delete(schema.orphans, slot);
-        }
-
-        // If this is a newly completed slot and the parent is connected, then the
-        // slot is now connected. Mark the slot as connected, and then traverse the
-        // children to update their parent_connected and connected status.
-        if (isNewlyCompletedSlot(slot_meta, &meta_backup) and slot_meta.isParentConnected()) {
-            slot_meta.setConnected();
-            try self.traverseChildrenMut(
-                slot_meta.next_slots.items,
-                working_set,
-                new_chained_slots,
-            );
-        }
-    }
-
-    /// Returns the `SlotMeta` with the specified `slot_index`.  The resulting
-    /// `SlotMeta` could be either from the cache or from the DB.  Specifically,
-    /// the function:
-    ///
-    /// 1) Finds the slot metadata in the cache of dirty slot metadata we've
-    ///    previously touched, otherwise:
-    /// 2) Searches the database for that slot metadata. If still no luck, then:
-    /// 3) Create a dummy orphan slot in the database.
-    ///
-    /// Also see [`find_slot_meta_in_cached_state`] and [`find_slot_meta_in_db_else_create`].
-    ///
-    /// agave: find_slot_meta_else_create
-    fn findSlotMetaElseCreate(
-        self: *Self,
-        working_set: *const AutoHashMap(u64, SlotMetaWorkingSetEntry),
-        chained_slots: *AutoHashMap(u64, SlotMeta),
-        slot: Slot,
-    ) !*SlotMeta {
-        if (working_set.getPtr(slot)) |m| {
-            return &m.new_slot_meta;
-        }
-        const entry = try chained_slots.getOrPut(slot);
-        if (entry.found_existing) {
-            return entry.value_ptr;
-        }
-        entry.value_ptr.* = if (try self.db.get(self.allocator, schema.slot_meta, slot)) |m|
-            m
-        else
-            SlotMeta.init(self.allocator, slot, null);
-        return entry.value_ptr;
-    }
-
-    /// Traverse all slots and their children (direct and indirect), and apply
-    /// `setParentConnected` to each.
-    ///
-    /// Arguments:
-    /// `db`: the blockstore db that stores shreds and their metadata.
-    /// `slot_meta`: the SlotMeta of the above `slot`.
-    /// `working_set`: a slot-id to SlotMetaWorkingSetEntry map which is used
-    ///   to traverse the graph.
-    /// `passed_visited_slots`: all the traversed slots which have passed the
-    ///   slot_function.  This may also include the input `slot`.
-    /// `slot_function`: a function which updates the SlotMeta of the visisted
-    ///   slots and determine whether to further traverse the children slots of
-    ///   a given slot.
-    ///
-    /// agave: traverse_children_mut
-    fn traverseChildrenMut(
-        self: *Self,
-        slots: []const u64,
-        working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
-        passed_visited_slots: *AutoHashMap(u64, SlotMeta),
-    ) !void {
-        var slot_lists = std.ArrayList([]const u64).init(self.allocator);
-        defer slot_lists.deinit();
-        try slot_lists.append(slots);
-        var i: usize = 0;
-        while (i < slot_lists.items.len) {
-            const slot_list = slot_lists.items[i];
-            for (slot_list) |slot| {
-                const slot_meta = try self.findSlotMetaElseCreate(
-                    working_set,
-                    passed_visited_slots,
-                    slot,
-                );
-                if (slot_meta.setParentConnected()) {
-                    try slot_lists.append(slot_meta.next_slots.items);
-                }
-            }
-            i += 1;
-        }
-    }
-
     /// Returns true if there is no chaining conflict between
     /// the `shred` and `merkle_root_meta` of the next FEC set,
     /// or if shreds from the next set are yet to be received.
@@ -1589,20 +1418,8 @@ pub const ShredInserter = struct {
     }
 };
 
-/// agave: chain_new_slot_to_prev_slot
-fn chainNewSlotToPrevSlot(
-    prev_slot_meta: *SlotMeta,
-    current_slot: Slot,
-    current_slot_meta: *SlotMeta,
-) !void {
-    try prev_slot_meta.next_slots.append(current_slot);
-    if (prev_slot_meta.isConnected()) {
-        _ = current_slot_meta.setParentConnected();
-    }
-}
-
 /// agave: is_newly_completed_slot
-fn isNewlyCompletedSlot(slot_meta: *const SlotMeta, backup_slot_meta: *const ?SlotMeta) bool {
+pub fn isNewlyCompletedSlot(slot_meta: *const SlotMeta, backup_slot_meta: *const ?SlotMeta) bool {
     return slot_meta.isFull() and ( //
         backup_slot_meta.* == null or
         slot_meta.consecutive_received_from_0 !=
@@ -1841,7 +1658,7 @@ pub const SlotMetaWorkingSetEntry = struct {
     }
 };
 
-fn deinitMapRecursive(map: anytype) void {
+pub fn deinitMapRecursive(map: anytype) void {
     var iter = map.iterator();
     while (iter.next()) |entry| {
         entry.value_ptr.deinit();
