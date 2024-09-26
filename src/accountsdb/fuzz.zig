@@ -326,7 +326,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             var snapshot_fields = try sig.accounts_db.AllSnapshotFields.fromFiles(
                 allocator,
-                logger,
+                &logger,
                 alternative_snapshot_dir,
                 snapshot_files,
             );

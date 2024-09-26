@@ -330,7 +330,9 @@ pub const AccountsDB = struct {
             std.heap.page_allocator,
             accounts_per_file_estimate,
         );
-        self.logger.infof("loaded from snapshot in {s}", .{load_duration});
+        _ = load_duration;
+        // TODO: Fix error: expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
+        // self.logger.infof("loaded from snapshot in {s}", .{load_duration});
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.full;
@@ -340,7 +342,9 @@ pub const AccountsDB = struct {
                 full_snapshot.bank_fields.capitalization,
                 snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
             );
-            self.logger.infof("validated from snapshot in {s}", .{validate_duration});
+            _ = validate_duration;
+            // TODO: Fix error: expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
+            // self.logger.infof("validated from snapshot in {s}", .{validate_duration});
         }
 
         return snapshot_fields;
@@ -400,7 +404,7 @@ pub const AccountsDB = struct {
         );
         for (0..n_parse_threads) |_| {
             var thread_db = loading_threads.addOneAssumeCapacity();
-            var noopLogger = Logger{.noop = {}};
+            var noopLogger = Logger{ .noop = {} };
             thread_db.* = try AccountsDB.init(
                 per_thread_allocator,
                 &noopLogger, // dont spam the logs with init information (we set it after)
@@ -459,12 +463,16 @@ pub const AccountsDB = struct {
                 n_parse_threads,
             );
         }
-        self.logger.infof("total time: {s}", .{timer.read()});
+        // TODO: Fix error: expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
+        //self.logger.infof("total time: {s}", .{timer.read()});
 
-        self.logger.infof("combining thread accounts...", .{});
+        // TODO: Fix error: expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
+        // self.logger.infof("combining thread accounts...", .{});
         var merge_timer = try sig.time.Timer.start();
+        _ = &merge_timer;
         try self.mergeMultipleDBs(loading_threads.items, n_combine_threads);
-        self.logger.debugf("combining thread indexes took: {s}", .{merge_timer.read()});
+        // TODO: Fix expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
+        // self.logger.debugf("combining thread indexes took: {s}", .{merge_timer.read()});
 
         return timer.read();
     }
@@ -686,7 +694,6 @@ pub const AccountsDB = struct {
             }
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
-                
                 printTimeEstimate(
                     self.logger,
                     &timer,
@@ -781,7 +788,7 @@ pub const AccountsDB = struct {
     /// combines multiple thread indexes into the given index.
     /// each bin is also sorted by pubkey.
     pub fn combineThreadIndexesMultiThread(
-        logger: Logger,
+        logger: *Logger,
         index: *AccountIndex,
         thread_dbs: []const AccountsDB,
         // task specific
@@ -1423,10 +1430,12 @@ pub const AccountsDB = struct {
 
         // write the snapshot to disk, compressed
         var timer = try sig.time.Timer.start();
+        _ = &timer;
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try snapshot_gen_pkg.write(zstd_write_ctx.writer(), status_cache);
         try zstd_write_ctx.finish();
-        self.logger.infof("writing full snapshot took {any}", .{timer.read()});
+        // TODO: Fix error: expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
+        //self.logger.infof("writing full snapshot took {any}", .{timer.read()});
 
         // track new snapshot
         try self.commitFullSnapshotInfo(snapshot_gen_info, .ignore_old);
@@ -3220,17 +3229,17 @@ test "testWriteSnapshot" {
     {
         const archive_file = try test_data_dir.openFile(snap_files.full_snapshot.snapshotNameStr().constSlice(), .{});
         defer archive_file.close();
-        var noopLogger = Logger{.noop = {}};
+        var noopLogger = Logger{ .noop = {} };
         try parallelUnpackZstdTarBall(std.testing.allocator, &noopLogger, archive_file, tmp_snap_dir, 4, true);
     }
 
     if (snap_files.incremental_snapshot) |inc_snap| {
         const archive_file = try test_data_dir.openFile(inc_snap.snapshotNameStr().constSlice(), .{});
         defer archive_file.close();
-        var noopLogger = Logger{.noop = {}};
+        var noopLogger = Logger{ .noop = {} };
         try parallelUnpackZstdTarBall(std.testing.allocator, &noopLogger, archive_file, tmp_snap_dir, 4, false);
     }
-    var noopLogger = Logger{.noop = {}};
+    var noopLogger = Logger{ .noop = {} };
     var accounts_db = try AccountsDB.init(std.testing.allocator, &noopLogger, tmp_snap_dir, .{
         .number_of_index_bins = ACCOUNT_INDEX_BINS,
         .use_disk_index = false,
@@ -3253,7 +3262,7 @@ fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
 
         const inc_archive = try dir.openFile("incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst", .{});
         defer inc_archive.close();
-        var noopLogger = Logger{.noop = {}};
+        var noopLogger = Logger{ .noop = {} };
         try parallelUnpackZstdTarBall(
             allocator,
             &noopLogger,
@@ -3290,7 +3299,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     errdefer snapshots.deinit(allocator);
 
     const snapshot = try snapshots.collapse();
-    var accounts_db = try AccountsDB.init(allocator, logger, dir, .{
+    var accounts_db = try AccountsDB.init(allocator, &logger, dir, .{
         .number_of_index_bins = 4,
         .use_disk_index = use_disk,
     }, null);
@@ -3355,7 +3364,7 @@ test "geyser stream on load" {
     const snapshot = try snapshots.collapse();
     var accounts_db = try AccountsDB.init(
         allocator,
-        logger,
+        &logger,
         dir,
         .{
             .number_of_index_bins = 4,
