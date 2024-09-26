@@ -178,9 +178,12 @@ disk allocator which creates memory from mmap-ing files stored on disk.
 // incremented by one for each new allocation.
 var dma_dir = try std.fs.cwd().makeOpenPath("data/test-data");
 defer dma_dir.close();
-var dma_state: DiskMemoryAllocator = try DiskMemoryAllocator.init(dma_dir, logger);
+var dma_state: DiskMemoryAllocator = .{};
 const dma = dma_state.allocator();
 ```
+
+Unlike a simpler page allocator, it stores certain metadata after the user-facing
+buffer which tracks the associated file, and the true mmap'd size to allow for resizes.
 
 ### background-threads
 
