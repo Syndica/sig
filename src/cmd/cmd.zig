@@ -691,7 +691,6 @@ fn validator() !void {
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        allocator,
         app_base.logger,
         blockstore_reader,
         blockstore_writer,
@@ -789,7 +788,6 @@ fn shredCollector() !void {
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        allocator,
         app_base.logger,
         blockstore_reader,
         blockstore_writer,
