@@ -2811,6 +2811,7 @@ test "build pull requests" {
             var rando_keypair = try KeyPair.create(null);
             var value = try SignedGossipData.randomWithIndex(prng.random(), &rando_keypair, 0);
             value.wallclockPtr().* = now + 10 * i;
+            value.data.LegacyContactInfo.shred_version = contact_info.shred_version;
 
             _ = try lg.mut().insert(value, now + 10 * i);
             pc._setPong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
