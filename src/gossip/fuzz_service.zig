@@ -308,7 +308,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             break :blk .{ gossip_service_client, gossip_service_client.packet_incoming_channel, client_handle };
         } else {
-            var noopLogger = Logger{.noop = {}};
+            var noopLogger = Logger{ .noop = {} };
             var gossip_service_fuzzer = try GossipService.init(
                 allocator,
                 allocator,
