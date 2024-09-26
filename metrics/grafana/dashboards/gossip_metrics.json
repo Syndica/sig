@@ -269,6 +269,7 @@
     },
     {
       "datasource": {
+        "default": true,
         "type": "prometheus"
       },
       "fieldConfig": {
@@ -350,7 +351,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(ping_messages_dropped[$__interval])",
+          "expr": "delta(ping_messages_dropped[$__interval])",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "ping_messages_dropped",
@@ -362,7 +363,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(pull_requests_dropped[$__interval])",
+          "expr": "delta(pull_requests_dropped[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -375,7 +376,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(prune_messages_dropped[$__interval])",
+          "expr": "delta(prune_messages_dropped[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -390,6 +391,7 @@
     },
     {
       "datasource": {
+        "default": true,
         "type": "prometheus"
       },
       "fieldConfig": {
@@ -468,7 +470,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(pull_requests_recv[$__interval])",
+          "expr": "delta(pull_requests_recv[$__interval])",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "pull_requests_recv",
@@ -480,7 +482,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(pull_responses_recv[$__interval])",
+          "expr": "delta(pull_responses_recv[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -493,7 +495,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(prune_messages_recv[$__interval])",
+          "expr": "delta(prune_messages_recv[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -506,7 +508,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(push_messages_recv[$__interval])",
+          "expr": "delta(push_messages_recv[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -519,7 +521,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(ping_messages_recv[$__interval])",
+          "expr": "delta(ping_messages_recv[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -532,7 +534,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(pong_messages_recv[$__interval])",
+          "expr": "delta(pong_messages_recv[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -547,6 +549,7 @@
     },
     {
       "datasource": {
+        "default": true,
         "type": "prometheus"
       },
       "fieldConfig": {
@@ -626,7 +629,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(ping_messages_sent[$__interval])",
+          "expr": "delta(ping_messages_sent[$__interval])",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "ping_messages_sent",
@@ -638,7 +641,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(pong_messages_sent[$__interval])",
+          "expr": "delta(pong_messages_sent[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -651,7 +654,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(prune_messages_sent[$__interval])",
+          "expr": "delta(prune_messages_sent[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -664,7 +667,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(pull_requests_sent[$__interval])",
+          "expr": "delta(pull_requests_sent[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -677,7 +680,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(pull_responses_sent[$__interval])",
+          "expr": "delta(pull_responses_sent[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -690,7 +693,7 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(push_messages_sent[$__interval])",
+          "expr": "delta(push_messages_sent[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -1375,6 +1378,7 @@
     },
     {
       "datasource": {
+        "default": true,
         "type": "prometheus"
       },
       "fieldConfig": {
@@ -1458,7 +1462,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(push_messages_time_to_insert[$__interval])",
+          "expr": "delta(push_messages_time_to_insert[$__interval])",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
@@ -1474,7 +1478,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(push_messages_time_build_prune[$__interval])",
+          "expr": "delta(push_messages_time_build_prune[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -1497,13 +1501,13 @@
     "list": []
   },
   "time": {
-    "from": "now-15m",
+    "from": "now-5m",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "Gossip Metrics",
   "uid": "jBuN47BVz",
-  "version": 2,
+  "version": 5,
   "weekStart": ""
 }
