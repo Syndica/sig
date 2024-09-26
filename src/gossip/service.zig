@@ -66,6 +66,7 @@ const GossipMessageWithEndpoint = struct { from_endpoint: EndPoint, message: Gos
 pub const PULL_REQUEST_RATE = Duration.fromSecs(5);
 pub const PULL_RESPONSE_TIMEOUT = Duration.fromSecs(5);
 pub const ACTIVE_SET_REFRESH_RATE = Duration.fromSecs(15);
+pub const DATA_TIMEOUT = Duration.fromSecs(15);
 pub const TABLE_TRIM_RATE = Duration.fromSecs(10);
 pub const BUILD_MESSAGE_LOOP_MIN = Duration.fromSecs(1);
 pub const PUBLISH_STATS_INTERVAL = Duration.fromSecs(2);
@@ -91,7 +92,7 @@ pub const PING_CACHE_TTL = Duration.fromSecs(1280);
 pub const PING_CACHE_RATE_LIMIT_DELAY = Duration.fromSecs(1280 / 64);
 
 // TODO: replace with get_epoch_duration when BankForks is supported
-const DEFAULT_EPOCH_DURATION: u64 = 172800000;
+const DEFAULT_EPOCH_DURATION = Duration.fromMillis(172_800_000);
 
 pub const VERIFY_PACKET_PARALLEL_TASKS = 4;
 
@@ -1542,7 +1543,7 @@ pub const GossipService = struct {
         for (batch_push_messages.items) |*push_message| {
             max_inserts_per_push = @max(max_inserts_per_push, push_message.gossip_values.len);
         }
-        var insert_results = try std.ArrayList(sig.gossip.table.GossipTable.InsertResult).initCapacity(self.allocator, max_inserts_per_push);
+        var insert_results = try std.ArrayList(GossipTable.InsertResult).initCapacity(self.allocator, max_inserts_per_push);
         defer insert_results.deinit();
 
         // insert values and track the failed origins per pubkey
@@ -1719,9 +1720,9 @@ pub const GossipService = struct {
             // TODO: condition timeout on stake weight:
             // - values from nodes with non-zero stake: epoch duration
             // - values from nodes with zero stake:
-            //   - if all nodes have zero stake: epoch duration
-            //   - if any other nodes have non-zero stake: GOSSIP_PULL_TIMEOUT_MS (15s)
-            const n_values_removed = try gossip_table.removeOldLabels(now, DEFAULT_EPOCH_DURATION);
+            //   - if all nodes have zero stake: epoch duration (TODO: this might be unreasonably large)
+            //   - if any other nodes have non-zero stake: DATA_TIMEOUT (15s)
+            const n_values_removed = try gossip_table.removeOldLabels(now, DEFAULT_EPOCH_DURATION.asMillis());
             self.stats.table_old_values_removed.add(n_values_removed);
         }
 
