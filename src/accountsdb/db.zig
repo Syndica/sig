@@ -330,9 +330,7 @@ pub const AccountsDB = struct {
             std.heap.page_allocator,
             accounts_per_file_estimate,
         );
-        _ = load_duration;
-        // TODO: Fix error: expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
-        // self.logger.infof("loaded from snapshot in {s}", .{load_duration});
+        self.logger.infof("loaded from snapshot in {s}", .{load_duration});
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.full;
@@ -342,9 +340,7 @@ pub const AccountsDB = struct {
                 full_snapshot.bank_fields.capitalization,
                 snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
             );
-            _ = validate_duration;
-            // TODO: Fix error: expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
-            // self.logger.infof("validated from snapshot in {s}", .{validate_duration});
+            self.logger.infof("validated from snapshot in {s}", .{validate_duration});
         }
 
         return snapshot_fields;
@@ -463,16 +459,13 @@ pub const AccountsDB = struct {
                 n_parse_threads,
             );
         }
-        // TODO: Fix error: expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
-        //self.logger.infof("total time: {s}", .{timer.read()});
 
-        // TODO: Fix error: expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
-        // self.logger.infof("combining thread accounts...", .{});
+        self.logger.infof("total time: {s}", .{timer.read()});
+
+        self.logger.infof("combining thread accounts...", .{});
         var merge_timer = try sig.time.Timer.start();
-        _ = &merge_timer;
         try self.mergeMultipleDBs(loading_threads.items, n_combine_threads);
-        // TODO: Fix expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
-        // self.logger.debugf("combining thread indexes took: {s}", .{merge_timer.read()});
+        self.logger.debugf("combining thread indexes took: {s}", .{merge_timer.read()});
 
         return timer.read();
     }
@@ -1430,12 +1423,10 @@ pub const AccountsDB = struct {
 
         // write the snapshot to disk, compressed
         var timer = try sig.time.Timer.start();
-        _ = &timer;
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try snapshot_gen_pkg.write(zstd_write_ctx.writer(), status_cache);
         try zstd_write_ctx.finish();
-        // TODO: Fix error: expected type 'error{NoSpaceLeft}', found 'error{OutOfMemory}'
-        //self.logger.infof("writing full snapshot took {any}", .{timer.read()});
+        self.logger.infof("writing full snapshot took {any}", .{timer.read()});
 
         // track new snapshot
         try self.commitFullSnapshotInfo(snapshot_gen_info, .ignore_old);
