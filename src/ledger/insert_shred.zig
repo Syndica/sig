@@ -167,7 +167,6 @@ pub const ShredInserter = struct {
         // insert received shreds
         //
         var shred_insertion_timer = try Timer.start();
-        var index_meta_time_us: u64 = 0;
         var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
         defer newly_completed_data_sets.deinit();
         for (shreds, is_repaired) |shred, is_repair| {
@@ -178,7 +177,6 @@ pub const ShredInserter = struct {
                         data_shred,
                         &state,
                         &write_batch,
-                        &index_meta_time_us,
                         is_trusted,
                         leader_schedule,
                         shred_source,
@@ -209,7 +207,6 @@ pub const ShredInserter = struct {
                         code_shred,
                         &state,
                         &write_batch,
-                        &index_meta_time_us,
                         is_trusted,
                         shred_source,
                     );
@@ -261,7 +258,6 @@ pub const ShredInserter = struct {
                     shred.data,
                     &state,
                     &write_batch,
-                    &index_meta_time_us,
                     is_trusted,
                     leader_schedule,
                     .recovered,
@@ -399,7 +395,6 @@ pub const ShredInserter = struct {
         // TODO send signals
 
         self.metrics.total_elapsed_us.add(total_timer.read().asMicros());
-        self.metrics.index_meta_time_us.add(index_meta_time_us);
 
         return .{
             .completed_data_set_infos = newly_completed_data_sets,
@@ -430,7 +425,6 @@ pub const ShredInserter = struct {
         shred: CodeShred,
         state: *InsertShredsState,
         write_batch: *WriteBatch,
-        index_meta_time_us: *u64,
         is_trusted: bool,
         shred_source: ShredSource,
     ) !bool {
@@ -438,7 +432,7 @@ pub const ShredInserter = struct {
         const shred_index: u64 = @intCast(shred.fields.common.index);
 
         const index_meta_working_set_entry =
-            try self.getIndexMetaEntry(self.allocator, slot, &state.index_working_set, index_meta_time_us);
+            try self.getIndexMetaEntry(self.allocator, slot, &state.index_working_set);
         const index_meta = &index_meta_working_set_entry.index;
 
         const erasure_set_id = shred.fields.common.erasureSetId();
@@ -602,7 +596,6 @@ pub const ShredInserter = struct {
         shred: DataShred,
         state: *InsertShredsState,
         write_batch: *WriteBatch,
-        index_meta_time_us: *u64,
         is_trusted: bool,
         leader_schedule: ?SlotLeaderProvider,
         shred_source: ShredSource,
@@ -615,7 +608,6 @@ pub const ShredInserter = struct {
             self.allocator,
             slot,
             &state.index_working_set,
-            index_meta_time_us,
         );
         const index_meta = &index_meta_working_set_entry.index;
         const slot_meta_entry = try self.getSlotMetaEntry(
@@ -717,7 +709,6 @@ pub const ShredInserter = struct {
         allocator: std.mem.Allocator,
         slot: Slot,
         working_set: *AutoHashMap(Slot, IndexMetaWorkingSetEntry),
-        index_meta_time_us: *u64,
     ) !*IndexMetaWorkingSetEntry {
         // TODO: redundant get or put pattern
         var timer = try Timer.start();
@@ -729,7 +720,7 @@ pub const ShredInserter = struct {
                 entry.value_ptr.* = IndexMetaWorkingSetEntry.init(allocator, slot);
             }
         }
-        index_meta_time_us.* += timer.read().asMicros();
+        self.metrics.index_meta_time_us.add(timer.read().asMicros());
         return entry.value_ptr;
     }
 
@@ -1525,12 +1516,10 @@ const ShredInserterTestState = struct {
         state: *InsertShredsState,
         write_batch: *WriteBatch,
     ) !bool {
-        var i: usize = 0;
         return try self.inserter.checkInsertCodeShred(
             shred.code,
             state,
             write_batch,
-            &i,
             false,
             .turbine,
         );
