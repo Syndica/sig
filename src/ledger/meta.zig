@@ -213,8 +213,8 @@ pub const ErasureMeta = struct {
     } {
         const c_start, const c_end = self.codeShredsIndices();
         const d_start, const d_end = self.dataShredsIndices();
-        const num_code = index.code.range(c_start, c_end).len;
-        const num_data = index.data.range(d_start, d_end).len;
+        const num_code = index.code_index.range(c_start, c_end).len;
+        const num_data = index.data_index.range(d_start, d_end).len;
 
         const data_missing = self.config.num_data -| num_data;
         const num_needed = data_missing -| num_code;
@@ -258,20 +258,20 @@ pub const ErasureConfig = struct {
 /// Index recording presence/absence of shreds
 pub const Index = struct {
     slot: Slot,
-    data: ShredIndex,
-    code: ShredIndex,
+    data_index: ShredIndex,
+    code_index: ShredIndex,
 
     pub fn init(allocator: std.mem.Allocator, slot: Slot) Index {
         return .{
             .slot = slot,
-            .data = ShredIndex.init(allocator),
-            .code = ShredIndex.init(allocator),
+            .data_index = ShredIndex.init(allocator),
+            .code_index = ShredIndex.init(allocator),
         };
     }
 
     pub fn deinit(self: *Index) void {
-        self.data.deinit();
-        self.code.deinit();
+        self.data_index.deinit();
+        self.code_index.deinit();
     }
 };
 

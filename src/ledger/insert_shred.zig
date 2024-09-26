@@ -446,7 +446,7 @@ pub const ShredInserter = struct {
         // This gives the index of first code shred in this FEC block
         // So, all code shreds in a given FEC block will have the same set index
         if (!is_trusted) {
-            if (index_meta.code.contains(shred_index)) {
+            if (index_meta.code_index.contains(shred_index)) {
                 self.metrics.num_code_shreds_exists.inc();
                 try state.duplicate_shreds.append(.{ .Exists = .{ .code = shred } });
                 return false;
@@ -626,7 +626,7 @@ pub const ShredInserter = struct {
         }
 
         if (!is_trusted) {
-            if (isDataShredPresent(shred, slot_meta, &index_meta.data)) {
+            if (isDataShredPresent(shred, slot_meta, &index_meta.data_index)) {
                 try state.duplicate_shreds.append(.{ .Exists = shred_union });
                 return error.Exists;
             }
@@ -680,7 +680,7 @@ pub const ShredInserter = struct {
 
         const newly_completed_data_sets = try self.insertDataShred(
             slot_meta,
-            &index_meta.data,
+            &index_meta.data_index,
             &shred,
             write_batch,
             shred_source,
@@ -768,7 +768,7 @@ pub const ShredInserter = struct {
         assertOk(shred.sanitize());
 
         try write_batch.put(schema.code_shred, .{ slot, shred_index }, shred.fields.payload);
-        try index_meta.code.put(shred_index);
+        try index_meta.code_index.put(shred_index);
     }
 
     /// Check if the shred already exists in blockstore
@@ -1039,7 +1039,7 @@ pub const ShredInserter = struct {
         try getRecoveryShreds(
             self,
             .data,
-            &index.data,
+            &index.data_index,
             index.slot,
             erasure_meta.dataShredsIndices(),
             prev_inserted_shreds,
@@ -1048,7 +1048,7 @@ pub const ShredInserter = struct {
         try getRecoveryShreds(
             self,
             .code,
-            &index.code,
+            &index.code_index,
             index.slot,
             erasure_meta.codeShredsIndices(),
             prev_inserted_shreds,
