@@ -16,7 +16,7 @@ const GossipTable = sig.gossip.GossipTable;
 const RpcClient = sig.rpc.Client;
 const RpcEpochInfo = sig.rpc.types.EpochInfo;
 const LeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
-const Logger = sig.trace_ng.log.Logger;
+const Logger = sig.trace.log.Logger;
 const Config = sig.transaction_sender.service.Config;
 
 const leaderScheduleFromRpc = sig.core.leader_schedule.leaderScheduleFromRpc;

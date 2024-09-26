@@ -60,7 +60,7 @@ pub const UnTarEntry = struct {
 /// interface struct for queueing untar tasks
 pub const UnTarTask = ThreadPoolTask(UnTarEntry);
 
-const Logger = @import("../trace_ng/log.zig").Logger;
+const Logger = @import("../trace/log.zig").Logger;
 
 pub fn parallelUntarToFileSystem(
     allocator: std.mem.Allocator,

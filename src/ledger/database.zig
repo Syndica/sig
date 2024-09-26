@@ -4,7 +4,7 @@ const blockstore = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Logger = sig.trace_ng.Logger;
+const Logger = sig.trace.Logger;
 
 pub fn assertIsDatabase(comptime Impl: type) void {
     sig.utils.interface.assertSameInterface(Database(Impl), Impl, .subset);

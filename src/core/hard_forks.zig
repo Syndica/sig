@@ -62,7 +62,7 @@ pub const HardForks = struct {
 };
 
 test "core.hard_forks: test hardforks" {
-    const Logger = @import("../trace_ng/log.zig").Logger;
+    const Logger = @import("../trace/log.zig").Logger;
     const testing_alloc = std.testing.allocator;
     var logger = Logger{ .noop = {} };
 

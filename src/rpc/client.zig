@@ -10,7 +10,7 @@ const Signature = sig.core.Signature;
 const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
-const Logger = sig.trace_ng.log.Logger;
+const Logger = sig.trace.log.Logger;
 
 pub const Client = struct {
     http_endpoint: []const u8,

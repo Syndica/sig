@@ -16,7 +16,7 @@ const VersionedTransactionWithStatusMeta = ledger.reader.VersionedTransactionWit
 const comptimePrint = std.fmt.comptimePrint;
 
 const schema = ledger.schema.schema;
-var test_logger = sig.trace_ng.Logger{ .noop = {} };
+var test_logger = sig.trace.Logger{ .noop = {} };
 
 test "put/get data consistency for merkle root" {
     var rng = std.Random.DefaultPrng.init(100);

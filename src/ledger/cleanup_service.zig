@@ -9,7 +9,7 @@ const BlockstoreWriter = ledger.writer.BlockstoreWriter;
 const Slot = sig.core.Slot;
 const Duration = sig.time.Duration;
 const Schema = ledger.schema.schema;
-const Logger = sig.trace_ng.Logger;
+const Logger = sig.trace.Logger;
 
 // The default time to sleep between checks for new roots
 const DEFAULT_MS_PER_SLOT: u64 = 400;
@@ -28,7 +28,7 @@ const LOOP_LIMITER = Duration.fromMillis(DEFAULT_CLEANUP_SLOT_INTERVAL * DEFAULT
 
 pub fn run(
     allocator: std.mem.Allocator,
-    logger: *sig.trace_ng.Logger,
+    logger: *sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
     blockstore_writer: *BlockstoreWriter,
     max_ledger_shreds: u64,
@@ -73,7 +73,7 @@ pub fn run(
 /// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
 pub fn cleanBlockstore(
     allocator: std.mem.Allocator,
-    logger: *sig.trace_ng.Logger,
+    logger: *sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
     blockstore_writer: *BlockstoreWriter,
     max_ledger_shreds: u64,

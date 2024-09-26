@@ -21,7 +21,7 @@ pub const Range = struct {
 /// once it is implemented. This struct tracks shreds linearly with no regard
 /// for forking. The Blockstore will fix this by tracking forks.
 pub const BasicShredTracker = struct {
-    logger: *sig.trace_ng.Logger,
+    logger: *sig.trace.Logger,
     mux: Mutex = .{},
     /// The slot that this struct was initialized with at index 0
     start_slot: ?Slot,
@@ -38,7 +38,7 @@ pub const BasicShredTracker = struct {
 
     const Self = @This();
 
-    pub fn init(slot: ?Slot, logger: *sig.trace_ng.Logger) Self {
+    pub fn init(slot: ?Slot, logger: *sig.trace.Logger) Self {
         return .{
             .start_slot = slot,
             .current_bottom_slot = slot orelse 0,
@@ -239,7 +239,7 @@ test "trivial happy path" {
     var msr = MultiSlotReport.init(allocator);
     defer msr.deinit();
 
-    var logger = sig.trace_ng.Logger{ .noop = {} };
+    var logger = sig.trace.Logger{ .noop = {} };
 
     var tracker = BasicShredTracker.init(13579, &logger);
 
@@ -259,7 +259,7 @@ test "1 registered shred is identified" {
     var msr = MultiSlotReport.init(allocator);
     defer msr.deinit();
 
-    var logger = sig.trace_ng.Logger{ .noop = {} };
+    var logger = sig.trace.Logger{ .noop = {} };
 
     var tracker = BasicShredTracker.init(13579, &logger);
     try tracker.registerShred(13579, 123);

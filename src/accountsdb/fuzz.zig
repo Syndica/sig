@@ -3,9 +3,9 @@ const sig = @import("../sig.zig");
 const zstd = @import("zstd");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const Logger = sig.trace_ng.Logger;
-const StandardErrLogger = sig.trace_ng.StandardErrLogger;
-const Level = sig.trace_ng.Level;
+const Logger = sig.trace.Logger;
+const StandardErrLogger = sig.trace.StandardErrLogger;
+const Level = sig.trace.Level;
 const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;

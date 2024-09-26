@@ -10,7 +10,7 @@ const ArrayList = std.ArrayList;
 const GetMetricError = sig.prometheus.GetMetricError;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
-const Logger = sig.trace_ng.Logger;
+const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const Signature = sig.core.Signature;
@@ -461,7 +461,7 @@ const TestDB = sig.ledger.tests.TestDB("writer");
 
 test "purgeSlots" {
     const allocator = std.testing.allocator;
-    var logger = sig.trace_ng.Logger{ .noop = {} };
+    var logger = sig.trace.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setRoots");
@@ -530,7 +530,7 @@ test "purgeSlots" {
 
 test "setRoots" {
     const allocator = std.testing.allocator;
-    var logger = sig.trace_ng.Logger{ .noop = {} };
+    var logger = sig.trace.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setRoots");
@@ -558,7 +558,7 @@ test "setRoots" {
 
 test "scanAndFixRoots" {
     const allocator = std.testing.allocator;
-    var logger = sig.trace_ng.Logger{ .noop = {} };
+    var logger = sig.trace.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("scanAndFixRoots");
@@ -599,7 +599,7 @@ test "scanAndFixRoots" {
 
 test "setAndChainConnectedOnRootAndNextSlots" {
     const allocator = std.testing.allocator;
-    var logger = sig.trace_ng.Logger{ .noop = {} };
+    var logger = sig.trace.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setAndChainConnectedOnRootAndNextSlots");
@@ -667,7 +667,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
 
 test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     const allocator = std.testing.allocator;
-    var logger = sig.trace_ng.Logger{ .noop = {} };
+    var logger = sig.trace.Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setAndChainConnectedOnRootAndNextSlots");

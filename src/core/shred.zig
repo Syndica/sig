@@ -37,7 +37,7 @@ pub const ShredVersion = struct {
 };
 
 test "core.shred: test ShredVersion" {
-    const Logger = @import("../trace_ng/log.zig").Logger;
+    const Logger = @import("../trace/log.zig").Logger;
     var hash = Hash{ .data = [_]u8{ 180, 194, 54, 239, 216, 26, 164, 170, 3, 72, 104, 87, 32, 189, 12, 254, 9, 103, 99, 155, 117, 158, 241, 0, 95, 128, 64, 174, 42, 158, 205, 26 } };
     const version = ShredVersion.versionFromHash(&hash);
     try std.testing.expect(version == 44810);

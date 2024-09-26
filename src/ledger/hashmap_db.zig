@@ -7,7 +7,7 @@ const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 const BytesRef = sig.ledger.database.BytesRef;
 const ColumnFamily = sig.ledger.database.ColumnFamily;
 const IteratorDirection = sig.ledger.database.IteratorDirection;
-const Logger = sig.trace_ng.Logger;
+const Logger = sig.trace.Logger;
 const SortedMap = sig.utils.collections.SortedMap;
 
 const key_serializer = sig.ledger.database.key_serializer;

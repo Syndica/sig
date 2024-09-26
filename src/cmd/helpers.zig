@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Logger = @import("../trace_ng/log.zig").Logger;
+const Logger = @import("../trace/log.zig").Logger;
 
 const Keypair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;

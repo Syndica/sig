@@ -8,8 +8,8 @@ const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
 const Lazy = sig.utils.lazy.Lazy;
-const Level = sig.trace_ng.Level;
-const Logger = sig.trace_ng.Logger;
+const Level = sig.trace.Level;
+const Logger = sig.trace.Logger;
 
 /// High level manager for long-running threads and the state
 /// shared by those threads.

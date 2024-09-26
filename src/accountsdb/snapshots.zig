@@ -21,7 +21,7 @@ const Rent = sig.accounts_db.genesis_config.Rent;
 const UnixTimestamp = sig.accounts_db.genesis_config.UnixTimestamp;
 const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
 
-const Logger = sig.trace_ng.Logger;
+const Logger = sig.trace.Logger;
 
 const defaultArrayListUnmanagedOnEOFConfig = bincode.arraylist.defaultArrayListUnmanagedOnEOFConfig;
 const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;

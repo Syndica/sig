@@ -5,7 +5,7 @@ const Packet = @import("packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
 const Channel = @import("../sync/channel.zig").Channel;
 const std = @import("std");
-const Logger = @import("../trace_ng/log.zig").Logger;
+const Logger = @import("../trace/log.zig").Logger;
 
 pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;

@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipTable = sig.gossip.table.GossipTable;
-const Logger = sig.trace_ng.log.Logger;
+const Logger = sig.trace.log.Logger;
 const RwMux = sig.sync.mux.RwMux;
 
 pub const GossipDumpService = struct {

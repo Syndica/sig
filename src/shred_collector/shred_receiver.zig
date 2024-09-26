@@ -13,7 +13,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
-const Logger = sig.trace_ng.Logger;
+const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;

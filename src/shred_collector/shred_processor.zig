@@ -11,7 +11,7 @@ const Atomic = std.atomic.Value;
 
 const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
-const Logger = sig.trace_ng.Logger;
+const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Shred = sig.ledger.shred.Shred;
 const ShredInserter = sig.ledger.ShredInserter;

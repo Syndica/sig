@@ -9,7 +9,7 @@ const Pubkey = sig.core.Pubkey;
 const GossipTable = sig.gossip.GossipTable;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipService = sig.gossip.GossipService;
-const Logger = sig.trace_ng.Logger;
+const Logger = sig.trace.Logger;
 
 const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
 

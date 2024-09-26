@@ -47,7 +47,7 @@ const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 pub const ShredInserter = struct {
     allocator: Allocator,
-    logger: *sig.trace_ng.Logger,
+    logger: *sig.trace.Logger,
     db: BlockstoreDB,
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
@@ -57,7 +57,7 @@ pub const ShredInserter = struct {
 
     pub fn init(
         allocator: Allocator,
-        logger: *sig.trace_ng.Logger,
+        logger: *sig.trace.Logger,
         registry: *sig.prometheus.Registry(.{}),
         db: BlockstoreDB,
     ) GetMetricError!Self {
@@ -1862,7 +1862,7 @@ fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
 const test_shreds = @import("test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
 const TestState = ledger.tests.TestState("insert_shred");
-var noopLogger = sig.trace_ng.Logger{ .noop = {} };
+var noopLogger = sig.trace.Logger{ .noop = {} };
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
@@ -1879,7 +1879,7 @@ const ShredInserterTestState = struct {
         return initWithLogger(test_name, &noopLogger);
     }
 
-    fn initWithLogger(comptime test_name: []const u8, logger: *sig.trace_ng.Logger) !ShredInserterTestState {
+    fn initWithLogger(comptime test_name: []const u8, logger: *sig.trace.Logger) !ShredInserterTestState {
         const state = try TestState.init(test_name);
         const inserter = try ShredInserter.init(
             state.allocator(),
@@ -2082,7 +2082,7 @@ test "chaining basic" {
 
 // agave: test_merkle_root_metas_coding
 test "merkle root metas coding" {
-    var logger = sig.trace_ng.Logger{ .noop = {} };
+    var logger = sig.trace.Logger{ .noop = {} };
     var state = try ShredInserterTestState.initWithLogger("handle chaining basic", &logger);
     defer state.deinit();
     const allocator = state.allocator();

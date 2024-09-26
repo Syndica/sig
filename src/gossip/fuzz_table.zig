@@ -15,8 +15,8 @@ const GossipKey = sig.gossip.data.GossipKey;
 const Signature = sig.core.Signature;
 const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const Duration = sig.time.Duration;
-const StandardErrLogger = sig.trace_ng.StandardErrLogger;
-const Level = sig.trace_ng.Level;
+const StandardErrLogger = sig.trace.StandardErrLogger;
+const Level = sig.trace.Level;
 
 const TRIM_INTERVAL = Duration.fromSecs(2);
 const MAX_N_THREADS = 2;

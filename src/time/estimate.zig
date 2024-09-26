@@ -1,6 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const Logger = sig.trace_ng.Logger;
+const Logger = sig.trace.Logger;
 // const Logger = sig.trace.Logger;
 
 // TODO: change to writer interface when logger has improved

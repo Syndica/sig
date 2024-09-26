@@ -12,7 +12,7 @@ const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
 const GossipTable = sig.gossip.GossipTable;
-const Logger = sig.trace_ng.Logger;
+const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;

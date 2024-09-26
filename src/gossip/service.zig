@@ -16,7 +16,7 @@ const UdpSocket = network.Socket;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
-const Logger = sig.trace_ng.log.Logger;
+const Logger = sig.trace.log.Logger;
 const Packet = sig.net.Packet;
 const EchoServer = sig.net.echo.Server;
 const SocketAddr = sig.net.SocketAddr;
@@ -3257,7 +3257,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         // defer logger.deinit();
         // logger.spawn();
 
-        var logger = sig.trace_ng.Logger{ .noop = {} };
+        var logger = sig.trace.Logger{ .noop = {} };
 
         // process incoming packets/messsages
         var exit = AtomicBool.init(false);
@@ -3387,7 +3387,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         // defer logger.deinit();
         // logger.spawn();
 
-        var logger = sig.trace_ng.Logger{ .noop = {} };
+        var logger = sig.trace.Logger{ .noop = {} };
 
         // process incoming packets/messsages
         var exit = AtomicBool.init(false);

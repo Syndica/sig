@@ -1,5 +1,5 @@
 const std = @import("std");
-const logger = @import("./trace_ng/log.zig");
+const logger = @import("./trace/log.zig");
 
 const Decl = std.builtin.Type.Declaration;
 
