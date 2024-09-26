@@ -216,15 +216,16 @@ pub const AccountsDB = struct {
         const reference_allocator: std.mem.Allocator //
         = blk: {
             if (config.use_disk_index) {
-                var index_bin_dir = try snapshot_dir.makeOpenPath("index/bin", .{});
-                defer index_bin_dir.close();
+                var index_bin_dir = try snapshot_dir.makeOpenPath("index", .{});
+                errdefer index_bin_dir.close();
 
-                const disk_file_suffix = try index_bin_dir.realpathAlloc(allocator, ".");
-                errdefer allocator.free(disk_file_suffix);
-                logger.infof("using disk index in {s}", .{disk_file_suffix});
+                logger.infof("using disk index in {s}", .{sig.utils.fmt.tryRealPath(index_bin_dir, ".")});
 
                 const ptr = try allocator.create(DiskMemoryAllocator);
-                ptr.* = DiskMemoryAllocator.init(disk_file_suffix);
+                ptr.* = .{
+                    .dir = index_bin_dir,
+                    .logger = logger,
+                };
 
                 break :blk .{ ptr, ptr.allocator() };
             } else {
@@ -233,7 +234,7 @@ pub const AccountsDB = struct {
             }
         };
         errdefer if (maybe_disk_allocator_ptr) |ptr| {
-            ptr.deinit(allocator);
+            ptr.dir.close();
             allocator.destroy(ptr);
         };
 
@@ -266,19 +267,10 @@ pub const AccountsDB = struct {
         };
     }
 
-    pub fn deinit(
-        self: *Self,
-        delete_index_files: bool,
-    ) void {
+    pub fn deinit(self: *Self) void {
         self.account_index.deinit(true);
         if (self.disk_allocator_ptr) |ptr| {
-            // note: we dont always deinit the allocator so we keep the index files
-            // because they are expensive to generate
-            if (delete_index_files) {
-                ptr.deinit(self.allocator);
-            } else {
-                self.allocator.free(ptr.filepath);
-            }
+            ptr.dir.close();
             self.allocator.destroy(ptr);
         }
 
@@ -3229,7 +3221,7 @@ test "testWriteSnapshot" {
         .number_of_index_bins = ACCOUNT_INDEX_BINS,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     try testWriteSnapshotFull(&accounts_db, snap_files.full_snapshot.slot, snap_files.full_snapshot.hash);
     try testWriteSnapshotIncremental(&accounts_db, snap_files.incremental_snapshot.?.slot, snap_files.incremental_snapshot.?.hash);
@@ -3288,7 +3280,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
         .number_of_index_bins = 4,
         .use_disk_index = use_disk,
     }, null);
-    errdefer accounts_db.deinit(true);
+    errdefer accounts_db.deinit();
 
     _ = try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator, 1_500);
 
@@ -3358,7 +3350,7 @@ test "geyser stream on load" {
         geyser_writer,
     );
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3378,7 +3370,7 @@ test "write and read an account" {
 
     var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3415,7 +3407,7 @@ test "load and validate from test snapshot using disk index" {
 
     var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3432,7 +3424,7 @@ test "load and validate from test snapshot parallel" {
 
     var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 2);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3449,7 +3441,7 @@ test "load and validate from test snapshot" {
 
     var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3466,7 +3458,7 @@ test "load clock sysvar" {
 
     var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3486,7 +3478,7 @@ test "load other sysvars" {
 
     var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3513,7 +3505,7 @@ test "flushing slots works" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -3564,7 +3556,7 @@ test "purge accounts in cache works" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -3621,7 +3613,7 @@ test "clean to shrink account file works with zero-lamports" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -3697,7 +3689,7 @@ test "clean to shrink account file works" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -3765,7 +3757,7 @@ test "full clean account file works" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -3850,7 +3842,7 @@ test "shrink account file works" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -4051,7 +4043,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             .number_of_index_bins = 32,
             .use_disk_index = bench_args.use_disk,
         }, null);
-        defer accounts_db.deinit(false);
+        defer accounts_db.deinit();
 
         var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
         defer accounts_dir.close();
@@ -4235,7 +4227,7 @@ pub const BenchmarkAccountsDB = struct {
             .number_of_index_bins = ACCOUNT_INDEX_BINS,
             .use_disk_index = bench_args.index == .disk,
         }, null);
-        defer accounts_db.deinit(true);
+        defer accounts_db.deinit();
 
         var random = std.Random.DefaultPrng.init(19);
         const rng = random.random();

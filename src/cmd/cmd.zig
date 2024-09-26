@@ -1346,7 +1346,7 @@ const LoadedSnapshot = struct {
         self.genesis_config.deinit(self.allocator);
         self.status_cache.deinit(self.allocator);
         self.snapshot_fields.deinit(self.allocator);
-        self.accounts_db.deinit(false); // keep index files on disk
+        self.accounts_db.deinit();
         self.allocator.destroy(self);
     }
 };
@@ -1409,7 +1409,7 @@ fn loadSnapshot(
         },
         geyser_writer,
     );
-    errdefer result.accounts_db.deinit(false);
+    errdefer result.accounts_db.deinit();
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(
         &all_snapshot_fields,
