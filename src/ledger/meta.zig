@@ -346,7 +346,7 @@ pub const MerkleRootMeta = struct {
     /// The shred type of the first received shred
     first_received_shred_type: sig.ledger.shred.ShredType,
 
-    pub fn fromShred(shred: anytype) MerkleRootMeta {
+    pub fn fromFirstReceivedShred(shred: anytype) MerkleRootMeta {
         comptime std.debug.assert(
             @TypeOf(shred) == sig.ledger.shred.DataShred or
                 @TypeOf(shred) == sig.ledger.shred.CodeShred,

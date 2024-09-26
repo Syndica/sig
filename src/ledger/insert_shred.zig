@@ -549,7 +549,7 @@ pub const ShredInserter = struct {
             self.metrics.num_inserted.inc();
             const entry = try state.merkle_root_metas.getOrPut(erasure_set_id);
             if (!entry.found_existing) {
-                entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromShred(shred) };
+                entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromFirstReceivedShred(shred) };
             }
             break :blk true;
         } else |_| false;
@@ -687,7 +687,7 @@ pub const ShredInserter = struct {
         );
         const entry = try state.merkle_root_metas.getOrPut(erasure_set_id);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromShred(shred) };
+            entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromFirstReceivedShred(shred) };
         }
         try state.just_inserted_shreds.put(shred.fields.id(), shred_union); // TODO check first?
         index_meta_working_set_entry.did_insert_occur = true;
