@@ -3,6 +3,7 @@ pub const cleanup_service = @import("cleanup_service.zig");
 pub const database = @import("database.zig");
 pub const hashmap_db = @import("hashmap_db.zig");
 pub const insert_shred = @import("insert_shred.zig");
+pub const merkle_chaining = @import("merkle_chaining.zig");
 pub const meta = @import("meta.zig");
 pub const reader = @import("reader.zig");
 pub const recovery = @import("recovery.zig");

@@ -16,7 +16,6 @@ const PointerClosure = sig.utils.closure.PointerClosure;
 
 const Counter = sig.prometheus.Counter;
 const ErasureSetId = sig.ledger.shred.ErasureSetId;
-const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Shred = sig.ledger.shred.Shred;
@@ -37,9 +36,6 @@ const Index = meta.Index;
 const MerkleRootMeta = meta.MerkleRootMeta;
 const ShredIndex = meta.ShredIndex;
 const SlotMeta = meta.SlotMeta;
-
-const key_serializer = sig.ledger.database.key_serializer;
-const value_serializer = sig.ledger.database.value_serializer;
 
 const recover = ledger.recovery.recover;
 
@@ -339,7 +335,10 @@ pub const ShredInserter = struct {
             // unreachable: Erasure meta was just created, initial shred must exist
             const shred = just_inserted_shreds.get(shred_id) orelse unreachable;
             // TODO: agave discards the result here. should we also?
-            _ = try self.checkForwardChainedMerkleRootConsistency(
+            _ = try ledger.merkle_chaining.checkForwardChainedMerkleRootConsistency(
+                self.allocator,
+                self.logger,
+                &self.db,
                 shred.code,
                 erasure_meta,
                 &just_inserted_shreds,
@@ -367,7 +366,10 @@ pub const ShredInserter = struct {
             // unreachable: Merkle root meta was just created, initial shred must exist
             const shred = just_inserted_shreds.get(shred_id) orelse unreachable;
             // TODO: agave discards the result here. should we also?
-            _ = try self.checkBackwardsChainedMerkleRootConsistency(
+            _ = try ledger.merkle_chaining.checkBackwardsChainedMerkleRootConsistency(
+                self.allocator,
+                self.logger,
+                &self.db,
                 shred,
                 &just_inserted_shreds,
                 &erasure_metas,
@@ -595,32 +597,13 @@ pub const ShredInserter = struct {
         // or in the current batch in just_received_shreds.
         const index: u32 = @intCast(erasure_meta.first_received_code_index);
         const shred_id = ShredId{ .slot = slot, .index = index, .shred_type = .code };
-        const maybe_shred = try self.getShredFromJustInsertedOrDb(just_received_shreds, shred_id);
+        const maybe_shred = try getShredFromJustInsertedOrDb(&self.db, just_received_shreds, shred_id);
 
         if (index != 0 or maybe_shred != null) {
             return maybe_shred;
         }
 
         return null;
-    }
-
-    // FIXME: the return may be owned by either the hashmap or the database
-    /// Finds the corresponding shred at `shred_id` in the just inserted
-    /// shreds or the backing store. Returns None if there is no shred.
-    /// agave: get_shred_from_just_inserted_or_db
-    fn getShredFromJustInsertedOrDb(
-        self: *Self,
-        just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
-        id: ShredId,
-    ) !?[]const u8 { // TODO consider lifetime -> return must inform a conditional deinit
-        if (just_inserted_shreds.get(id)) |shred| {
-            return shred.payload(); // owned by map
-        }
-        return switch (id.shred_type) {
-            // owned by database
-            .data => if (try self.db.getBytes(schema.data_shred, .{ id.slot, @intCast(id.index) })) |s| s.data else null,
-            .code => if (try self.db.getBytes(schema.code_shred, .{ id.slot, @intCast(id.index) })) |s| s.data else null,
-        };
     }
 
     /// agave: check_insert_data_shred
@@ -850,7 +833,7 @@ pub const ShredInserter = struct {
                     .shred_type = .data,
                 };
                 // FIXME: leak - decide how to free shred
-                const maybe_shred = try self.getShredFromJustInsertedOrDb(just_inserted_shreds, shred_id);
+                const maybe_shred = try getShredFromJustInsertedOrDb(&self.db, just_inserted_shreds, shred_id);
                 const ending_shred = if (maybe_shred) |s| s else {
                     self.logger.errf(&newlinesToSpaces(
                         \\Last received data shred {any} indicated by slot meta \
@@ -902,8 +885,7 @@ pub const ShredInserter = struct {
 
     /// agave: has_duplicate_shreds_in_slot
     fn hasDuplicateShredsInSlot(self: *Self, slot: Slot) !bool {
-        // TODO PERF: just need to check for existence, don't need the value
-        return try self.db.getBytes(schema.duplicate_slots, slot) != null;
+        return try self.db.contains(schema.duplicate_slots, slot);
     }
 
     /// agave: check_merkle_root_consistency
@@ -944,7 +926,7 @@ pub const ShredInserter = struct {
                 .index = merkle_root_meta.first_received_shred_index,
                 .shred_type = merkle_root_meta.first_received_shred_type,
             };
-            if (try self.getShredFromJustInsertedOrDb(just_inserted_shreds, shred_id)) |conflicting_shred| {
+            if (try getShredFromJustInsertedOrDb(&self.db, just_inserted_shreds, shred_id)) |conflicting_shred| {
                 try duplicate_shreds.append(.{
                     .MerkleRootConflict = .{
                         .original = shred.*, // TODO lifetimes (cloned in rust)
@@ -965,7 +947,7 @@ pub const ShredInserter = struct {
     }
 
     /// agave: insert_data_shred
-    pub fn insertDataShred(
+    fn insertDataShred(
         self: *const Self,
         slot_meta: *SlotMeta,
         data_index: *meta.ShredIndex,
@@ -1140,234 +1122,6 @@ pub const ShredInserter = struct {
         }
     }
 
-    /// Returns true if there is no chaining conflict between
-    /// the `shred` and `merkle_root_meta` of the next FEC set,
-    /// or if shreds from the next set are yet to be received.
-    ///
-    /// Otherwise return false and add duplicate proof to
-    /// `duplicate_shreds`.
-    ///
-    /// This is intended to be used right after `shred`'s `erasure_meta`
-    /// has been created for the first time.
-    ///
-    /// agave: check_forward_chained_merkle_root_consistency
-    fn checkForwardChainedMerkleRootConsistency(
-        self: *Self,
-        shred: CodeShred,
-        erasure_meta: ErasureMeta,
-        just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
-        merkle_root_metas: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
-        duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
-    ) !bool {
-        std.debug.assert(erasure_meta.checkCodeShred(shred));
-        const slot = shred.fields.common.slot;
-        const erasure_set_id = shred.fields.common.erasureSetId();
-
-        // If a shred from the next fec set has already been inserted, check the chaining
-        const next_fec_set_index = if (erasure_meta.nextFecSetIndex()) |n| n else {
-            self.logger.errf(
-                "Invalid erasure meta, unable to compute next fec set index {any}",
-                .{erasure_meta},
-            );
-            return false;
-        };
-        const next_erasure_set = ErasureSetId{ .slot = slot, .fec_set_index = next_fec_set_index };
-        const next_merkle_root_meta = if (merkle_root_metas.get(next_erasure_set)) |nes|
-            nes.asRef().*
-        else if (try self.db.get(self.allocator, schema.merkle_root_meta, next_erasure_set)) |nes|
-            nes
-        else
-            // No shred from the next fec set has been received
-            return true;
-
-        const next_shred_id = ShredId{
-            .slot = slot,
-            .index = next_merkle_root_meta.first_received_shred_index,
-            .shred_type = next_merkle_root_meta.first_received_shred_type,
-        };
-        const next_shred = if (try self.getShredFromJustInsertedOrDb(just_inserted_shreds, next_shred_id)) |ns|
-            ns
-        else {
-            self.logger.errf(
-                \\Shred {any} indicated by merkle root meta {any} \
-                \\is missing from blockstore. This should only happen in extreme cases where \
-                \\blockstore cleanup has caught up to the root. Skipping the forward chained \
-                \\merkle root consistency check
-            , .{ next_shred_id, next_merkle_root_meta });
-            return true;
-        };
-        const merkle_root = shred.fields.merkleRoot() catch null;
-        const chained_merkle_root = shred_mod.layout.getChainedMerkleRoot(next_shred);
-
-        if (!checkChaining(merkle_root, chained_merkle_root)) {
-            self.logger.warnf(
-                \\Received conflicting chained merkle roots for slot: {}, shred \
-                \\{any} type {any} has merkle root {any}, however next fec set \
-                \\shred {any} type {any} chains to merkle root \
-                \\{any}. Reporting as duplicate
-            , .{
-                slot,
-                erasure_set_id,
-                shred.fields.common.variant.shred_type,
-                merkle_root,
-                next_erasure_set,
-                next_merkle_root_meta.first_received_shred_type,
-                chained_merkle_root,
-            });
-            if (!try self.hasDuplicateShredsInSlot(slot)) {
-                // TODO lifetime
-                try duplicate_shreds.append(.{ .ChainedMerkleRootConflict = .{
-                    .original = .{ .code = shred },
-                    .conflict = next_shred,
-                } });
-            }
-            return false;
-        }
-
-        return true;
-    }
-
-    /// Returns true if there is no chaining conflict between
-    /// the `shred` and `merkle_root_meta` of the previous FEC set,
-    /// or if shreds from the previous set are yet to be received.
-    ///
-    /// Otherwise return false and add duplicate proof to
-    /// `duplicate_shreds`.
-    ///
-    /// This is intended to be used right after `shred`'s `merkle_root_meta`
-    /// has been created for the first time.
-    ///
-    /// agave: check_backwards_chained_merkle_root_consistency
-    fn checkBackwardsChainedMerkleRootConsistency(
-        self: *Self,
-        shred: Shred,
-        just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
-        erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)), // BTreeMap in agave
-        duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
-    ) !bool {
-        const slot = shred.commonHeader().slot;
-        const erasure_set_id = shred.commonHeader().erasureSetId();
-        const fec_set_index = shred.commonHeader().fec_set_index;
-
-        if (fec_set_index == 0) {
-            // Although the first fec set chains to the last fec set of the parent block,
-            // if this chain is incorrect we do not know which block is the duplicate until votes
-            // are received. We instead delay this check until the block reaches duplicate
-            // confirmation.
-            return true;
-        }
-
-        // If a shred from the previous fec set has already been inserted, check the chaining.
-        // Since we cannot compute the previous fec set index, we check the in memory map, otherwise
-        // check the previous key from blockstore to see if it is consecutive with our current set.
-        const prev_erasure_set, const prev_erasure_meta =
-            if (try self.previousErasureSet(erasure_set_id, erasure_metas)) |pes|
-            pes
-        else
-            // No shreds from the previous erasure batch have been received,
-            // so nothing to check. Once the previous erasure batch is received,
-            // we will verify this chain through the forward check above.
-            return true;
-
-        const prev_shred_id = ShredId{
-            .slot = slot,
-            .index = @intCast(prev_erasure_meta.first_received_code_index),
-            .shred_type = .code,
-        };
-        const prev_shred =
-            if (try self.getShredFromJustInsertedOrDb(just_inserted_shreds, prev_shred_id)) |ps| ps else {
-            self.logger.warnf(
-                \\Shred {any} indicated by the erasure meta {any} \
-                \\is missing from blockstore. This can happen if you have recently upgraded \
-                \\from a version < v1.18.13, or if blockstore cleanup has caught up to the root. \
-                \\Skipping the backwards chained merkle root consistency check
-            , .{ prev_shred_id, prev_erasure_meta });
-            return true;
-        };
-        const merkle_root = shred_mod.layout.getChainedMerkleRoot(prev_shred);
-        const chained_merkle_root = shred.chainedMerkleRoot() catch null;
-
-        if (!checkChaining(merkle_root, chained_merkle_root)) {
-            self.logger.warnf(
-                \\Received conflicting chained merkle roots for slot: {}, shred {any} type {any} \
-                \\chains to merkle root {any}, however previous fec set code \
-                \\shred {any} has merkle root {any}. Reporting as duplicate
-            , .{
-                slot,
-                shred.commonHeader().erasureSetId(),
-                shred.commonHeader().variant.shred_type,
-                chained_merkle_root,
-                prev_erasure_set,
-                merkle_root,
-            });
-        }
-
-        if (!try self.hasDuplicateShredsInSlot(slot)) {
-            // TODO lifetime
-            try duplicate_shreds.append(.{ .ChainedMerkleRootConflict = .{
-                .original = shred,
-                .conflict = prev_shred,
-            } });
-        }
-
-        return true;
-    }
-
-    /// agave: previous_erasure_set
-    fn previousErasureSet(
-        self: *Self,
-        erasure_set: ErasureSetId,
-        erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
-    ) !?struct { ErasureSetId, ErasureMeta } { // TODO: agave uses CoW here
-        const slot = erasure_set.slot;
-        const fec_set_index = erasure_set.fec_set_index;
-
-        // Check the previous entry from the in memory map to see if it is the consecutive
-        // set to `erasure set`
-        const id_range, const meta_range = erasure_metas.range(
-            .{ .slot = slot, .fec_set_index = 0 },
-            erasure_set,
-        );
-        if (id_range.len != 0) {
-            const i = id_range.len - 1;
-            const last_meta = meta_range[i].asRef();
-            if (@as(u32, @intCast(fec_set_index)) == last_meta.nextFecSetIndex()) {
-                return .{ id_range[i], last_meta.* };
-            }
-        }
-
-        // Consecutive set was not found in memory, scan blockstore for a potential candidate
-        var iter = try self.db.iterator(schema.erasure_meta, .reverse, erasure_set);
-        defer iter.deinit();
-        const candidate_set: ErasureSetId, //
-        const candidate: ErasureMeta //
-        = while (try iter.nextBytes()) |entry| {
-            defer for (entry) |e| e.deinit();
-            const key = try key_serializer.deserialize(ErasureSetId, self.allocator, entry[0].data);
-            if (key.slot != slot) return null;
-            if (key.fec_set_index != fec_set_index) break .{
-                key,
-                try value_serializer.deserialize(ErasureMeta, self.allocator, entry[1].data),
-            };
-        } else return null;
-
-        // Check if this is actually the consecutive erasure set
-        const next = if (candidate.nextFecSetIndex()) |n| n else return error.InvalidErasureConfig;
-        return if (next == fec_set_index)
-            .{ candidate_set, candidate }
-        else
-            return null;
-    }
-
-    /// agave: check_chaining
-    fn checkChaining(
-        merkle_root: ?Hash,
-        chained_merkle_root: ?Hash,
-    ) bool {
-        return chained_merkle_root == null or // Chained merkle roots have not been enabled yet
-            sig.utils.types.eql(chained_merkle_root, merkle_root);
-    }
-
     /// For each slot in the slot_meta_working_set which has any change, include
     /// corresponding updates to schema.slot_meta via the specified `write_batch`.
     /// The `write_batch` will later be atomically committed to the blockstore.
@@ -1417,6 +1171,25 @@ pub const ShredInserter = struct {
         return .{ should_signal, newly_completed_slots };
     }
 };
+
+// FIXME: the return may be owned by either the hashmap or the database
+/// Finds the corresponding shred at `shred_id` in the just inserted
+/// shreds or the backing store. Returns None if there is no shred.
+/// agave: get_shred_from_just_inserted_or_db
+pub fn getShredFromJustInsertedOrDb(
+    db: *BlockstoreDB,
+    just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
+    id: ShredId,
+) !?[]const u8 { // TODO consider lifetime -> return must inform a conditional deinit
+    if (just_inserted_shreds.get(id)) |shred| {
+        return shred.payload(); // owned by map
+    }
+    return switch (id.shred_type) {
+        // owned by database
+        .data => if (try db.getBytes(schema.data_shred, .{ id.slot, @intCast(id.index) })) |s| s.data else null,
+        .code => if (try db.getBytes(schema.code_shred, .{ id.slot, @intCast(id.index) })) |s| s.data else null,
+    };
+}
 
 /// agave: is_newly_completed_slot
 pub fn isNewlyCompletedSlot(slot_meta: *const SlotMeta, backup_slot_meta: *const ?SlotMeta) bool {
@@ -1538,14 +1311,14 @@ fn updateCompletedDataIndexes(
     return ret;
 }
 
-fn WorkingEntry(comptime T: type) type {
+pub fn WorkingEntry(comptime T: type) type {
     return union(enum) {
         // Value has been modified with respect to the blockstore column
         dirty: T,
         // Value matches what is currently in the blockstore column
         clean: T,
 
-        fn asRef(self: *const @This()) *const T {
+        pub fn asRef(self: *const @This()) *const T {
             return switch (self.*) {
                 .dirty => &self.dirty,
                 .clean => &self.clean,
@@ -1573,7 +1346,7 @@ pub const CompletedDataSetInfo = struct {
     end_index: u32,
 };
 
-const PossibleDuplicateShred = union(enum) {
+pub const PossibleDuplicateShred = union(enum) {
     Exists: Shred, // Blockstore has another shred in its spot
     LastIndexConflict: ShredConflict, // The index of this shred conflicts with `slot_meta.last_index`
     ErasureConflict: ShredConflict, // The code shred has a conflict in the erasure_meta
