@@ -19,14 +19,12 @@ pub fn runShredVerifier(
     verified_shred_sender: *Channel(Packet),
     leader_schedule: SlotLeaderProvider,
 ) !void {
-    var verified_count: usize = 0;
     while (!exit.load(.acquire) or
         unverified_shred_receiver.len() != 0)
     {
         while (unverified_shred_receiver.receive()) |packet| {
             // TODO parallelize this once it's actually verifying signatures
             if (verifyShred(&packet, leader_schedule)) {
-                verified_count += 1;
                 try verified_shred_sender.send(packet);
             }
         }
