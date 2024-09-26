@@ -140,36 +140,20 @@ pub fn RecycleFBA(config: struct {
 pub const DiskMemoryAllocator = struct {
     dir: std.fs.Dir,
     logger: sig.trace.Logger,
-    /// The address space mmap'd to a particular file will be at least
-    /// `(file_size * (1000 + mmap_ratio)) / 1000` in integer terms.
-    /// With a value of 0, the mmap'd size will be equal to the file size.
-    /// With a value of 1000, the mmap'd size will be double the file size.
-    /// NOTE: not intended to be changed after initialization.
-    mmap_ratio: MmapRatio = 0,
+    /// The amount of memory mmap'd for a particular allocation will be `file_size * mmap_ratio`.
+    /// See `alignedFileSize` and its usages to understand the relationship between an allocation
+    /// size, and the size of a file, and by extension, how this then relates to the allocated
+    /// address space.
+    mmap_ratio: MmapRatio = 1,
     count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     const Self = @This();
 
-    pub const MmapRatio = u32;
+    pub const MmapRatio = u16;
 
     /// Metadata stored at the end of each allocation.
     const Metadata = extern struct {
         file_index: u32,
-        /// In an extern struct only ABI-sized types are allowed, so this is a `std.math.Log2Int(usize)`,
-        /// wrapped in a packed struct to define the padding bits.
-        mmap_size: packed struct(u8) {
-            /// The log2 of the mmap size - the actual mmap size can be acquired via `1 << log2`. See `get`.
-            /// This is done this way to minimize the amount of redundantly stored information: the mmap size
-            /// will always be a power of two, and as such can be represented minimally using its log2.
-            log2: UsizeLog2,
-            _padding: enum(PaddingInt) { unset = 0 } = .unset,
-
-            const UsizeLog2 = std.math.Log2Int(usize);
-            const PaddingInt = std.meta.Int(.unsigned, @bitSizeOf(u8) - @bitSizeOf(UsizeLog2));
-
-            pub inline fn get(self: @This()) usize {
-                return @as(usize, 1) << self.log2;
-            }
-        },
+        mmap_size: usize align(4),
     };
 
     /// Returns the aligned size with enough space for `size` and `Metadata` at the end.
@@ -177,14 +161,12 @@ pub const DiskMemoryAllocator = struct {
         return std.mem.alignForward(usize, size + @sizeOf(Metadata), std.mem.page_size);
     }
 
-    /// Returns the aligned size to mmap relative to `alignedFileSize(size)`.
     inline fn alignedMmapSize(
         /// Must be `= alignedFileSize(size)`.
         aligned_file_size: usize,
         mmap_ratio: MmapRatio,
     ) usize {
-        const min_mmap_size = (aligned_file_size * (1000 + mmap_ratio)) / 1000;
-        return std.mem.alignForward(usize, min_mmap_size, std.mem.page_size);
+        return aligned_file_size *| mmap_ratio;
     }
 
     pub inline fn allocator(self: *Self) std.mem.Allocator {
@@ -206,6 +188,7 @@ pub const DiskMemoryAllocator = struct {
     fn alloc(ctx: *anyopaque, size: usize, log2_align: u8, return_address: usize) ?[*]u8 {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
+        std.debug.assert(self.mmap_ratio != 0);
 
         const alignment = @as(usize, 1) << @intCast(log2_align);
         std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
@@ -244,11 +227,12 @@ pub const DiskMemoryAllocator = struct {
         std.debug.assert(size <= file_aligned_size - @sizeOf(Metadata)); // sanity check
         std.mem.bytesAsValue(Metadata, full_alloc[size..][0..@sizeOf(Metadata)]).* = .{
             .file_index = file_index,
-            .mmap_size = .{ .log2 = std.math.log2_int(usize, aligned_mmap_size) },
+            .mmap_size = aligned_mmap_size,
         };
         return full_alloc.ptr;
     }
 
+    /// Resizes the allocation within the bounds of the mmap'd address space if possible.
     fn resize(
         ctx: *anyopaque,
         buf: []u8,
@@ -258,6 +242,7 @@ pub const DiskMemoryAllocator = struct {
     ) bool {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
+        std.debug.assert(self.mmap_ratio != 0);
 
         const alignment = @as(usize, 1) << @intCast(log2_align);
         std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
@@ -272,7 +257,7 @@ pub const DiskMemoryAllocator = struct {
         const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
         const metadata: Metadata = @bitCast(buf_ptr[old_file_aligned_size - @sizeOf(Metadata) ..][0..@sizeOf(Metadata)].*);
 
-        if (new_file_aligned_size > metadata.mmap_size.get()) {
+        if (new_file_aligned_size > metadata.mmap_size) {
             return false;
         }
 
@@ -288,10 +273,7 @@ pub const DiskMemoryAllocator = struct {
         file.setEndPos(new_file_aligned_size) catch return false;
 
         std.debug.assert(new_size <= new_file_aligned_size - @sizeOf(Metadata)); // sanity check
-        std.mem.bytesAsValue(Metadata, buf_ptr[new_size..][0..@sizeOf(Metadata)]).* = .{
-            .file_index = metadata.file_index,
-            .mmap_size = metadata.mmap_size,
-        };
+        std.mem.bytesAsValue(Metadata, buf_ptr[new_size..][0..@sizeOf(Metadata)]).* = metadata;
 
         return true;
     }
@@ -300,7 +282,7 @@ pub const DiskMemoryAllocator = struct {
     fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
-
+        std.debug.assert(self.mmap_ratio != 0);
         std.debug.assert(buf.len != 0); // should be ensured by the allocator interface
 
         const alignment = @as(usize, 1) << @intCast(log2_align);
@@ -428,13 +410,13 @@ test "disk allocator stdlib test" {
     const tmp_dir = tmp_dir_root.dir;
 
     for ([_]DiskMemoryAllocator.MmapRatio{
-        0,    1,    2,    3,  4,  5,
-        10,   11,   12,   13, 14, 15,
-        20,   21,   22,   23, 24, 25,
-        30,   31,   32,   33, 34, 35,
-        40,   41,   42,   43, 44, 45,
-        50,   51,   52,   53, 54, 55,
-        1000, 2000, 3000,
+        1,  2,  3,  4,  5,
+        10, 11, 12, 13, 14,
+        15, 20, 21, 22, 23,
+        24, 25, 30, 31, 32,
+        33, 34, 35, 40, 41,
+        42, 43, 44, 45, 50,
+        51, 52, 53, 54, 55,
     }) |ratio| {
         var dma_state: DiskMemoryAllocator = .{
             .dir = tmp_dir,
@@ -530,4 +512,3 @@ test "disk allocator large realloc" {
 
     page1[page1.len - 1] = 10;
 }
-
