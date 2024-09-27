@@ -57,9 +57,10 @@ pub fn main() !void {
 }
 
 pub fn csvDump() !void {
+    const allocator = std.heap.c_allocator;
+
     const pipe_path = config.pipe_path;
     std.debug.print("using pipe path: {s}\n", .{pipe_path});
-    const allocator = std.heap.c_allocator;
 
     const exit = try allocator.create(std.atomic.Value(bool));
     defer allocator.destroy(exit);
