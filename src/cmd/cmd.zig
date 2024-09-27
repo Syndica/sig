@@ -1061,8 +1061,7 @@ const AppBase = struct {
 
     fn init(allocator: Allocator) !AppBase {
         const logger = try spawnLogger();
-        // var logger: Logger = .noop;
-        errdefer logger.deinit();
+        defer logger.deinit();
 
         const metrics_registry = globalRegistry();
         logger.infof("metrics port: {d}", .{config.current.metrics_port});
@@ -1261,8 +1260,7 @@ pub const Network = enum {
 
         for (predefined_entrypoints[0..len]) |entrypoint| {
             logger.infof("adding predefined entrypoint: {s}", .{entrypoint.slice()});
-            // TODO: LOG: Use noop
-            const socket_addr = try resolveSocketAddr(entrypoint.slice(), logger);
+            const socket_addr = try resolveSocketAddr(entrypoint.slice(), Logger{ .noop = {} });
             try socket_addrs.append(socket_addr);
         }
     }
@@ -1270,7 +1268,7 @@ pub const Network = enum {
 
 fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
-        logger.errWithFields("entrypoint port missing", .{ .entrypoint = "entrypoint" });
+        logger.errWithFields("entrypoint port missing", .{ .entrypoint = entrypoint });
         return error.EntrypointPortMissing;
     };
     const domain_str = entrypoint[0..domain_port_sep];
@@ -1498,10 +1496,9 @@ fn downloadSnapshot() !void {
     defer entrypoints.deinit();
 
     const my_data = try getMyDataFromIpEcho(logger, entrypoints.items);
-    const noopLogger = Logger{ .noop = {} };
 
     var gossip_service = try initGossip(
-        noopLogger,
+        Logger{ .noop = {} },
         my_keypair,
         &exit,
         entrypoints.items,
