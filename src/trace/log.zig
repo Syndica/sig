@@ -765,7 +765,7 @@ test "trace_ng: format" {
 
     if (scoped_logger.testing.log_msg) |log_msg| {
         try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=debug f_agent=Firefox f_version=120 f_local=en f_stock=nvidia Logging with logfWithFields\n"));
-        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "[trace_ng.log] time="));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "[trace.log] time="));
     }
 }
 
