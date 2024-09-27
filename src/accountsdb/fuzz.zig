@@ -254,11 +254,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             const archive_file = try alternative_snapshot_dir.openFile(archive_name.slice(), .{});
             defer archive_file.close();
-            const noopLogger = Logger{ .noop = {} };
 
             try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
                 allocator,
-                noopLogger,
+                Logger{ .noop = {} },
                 archive_file,
                 alternative_snapshot_dir,
                 5,
@@ -308,7 +307,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 defer inc_archive_file.close();
                 try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
                     allocator,
-                    noopLogger,
+                    Logger{ .noop = {} },
                     inc_archive_file,
                     alternative_snapshot_dir,
                     5,
@@ -332,7 +331,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
             defer snapshot_fields.deinit(allocator);
 
-            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, noopLogger, alternative_snapshot_dir, accounts_db.config, null);
+            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, Logger{ .noop = {} }, alternative_snapshot_dir, accounts_db.config, null);
             defer alt_accounts_db.deinit(true);
 
             _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true, 1_500);
