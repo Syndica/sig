@@ -17,15 +17,15 @@ const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const CodeShred = ledger.shred.CodeShred;
 const ErasureMeta = ledger.meta.ErasureMeta;
 const MerkleRootMeta = ledger.meta.MerkleRootMeta;
+const PossibleDuplicateShred = ledger.insert_shreds_working_state.PossibleDuplicateShred;
 const Shred = ledger.shred.Shred;
 const ShredId = ledger.shred.ShredId;
-const WorkingEntry = ledger.insert_shred.WorkingEntry;
-const PossibleDuplicateShred = ledger.insert_shred.PossibleDuplicateShred;
+const WorkingEntry = ledger.insert_shreds_working_state.WorkingEntry;
+const WorkingShredStore = ledger.insert_shreds_working_state.WorkingShredStore;
 
 const key_serializer = sig.ledger.database.key_serializer;
 const value_serializer = sig.ledger.database.value_serializer;
 
-const getShredFromJustInsertedOrDb = ledger.insert_shred.getShredFromJustInsertedOrDb;
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 /// Returns true if there is no chaining conflict between
@@ -45,7 +45,7 @@ pub fn checkForwardChainedMerkleRootConsistency(
     db: *BlockstoreDB,
     shred: CodeShred,
     erasure_meta: ErasureMeta,
-    just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
+    shred_store: WorkingShredStore,
     merkle_root_metas: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
     duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
 ) !bool {
@@ -75,7 +75,7 @@ pub fn checkForwardChainedMerkleRootConsistency(
         .index = next_merkle_root_meta.first_received_shred_index,
         .shred_type = next_merkle_root_meta.first_received_shred_type,
     };
-    const next_shred = if (try getShredFromJustInsertedOrDb(db, just_inserted_shreds, next_shred_id)) |ns|
+    const next_shred = if (try shred_store.get(next_shred_id)) |ns|
         ns
     else {
         logger.errf(&newlinesToSpaces(
@@ -133,7 +133,7 @@ pub fn checkBackwardsChainedMerkleRootConsistency(
     logger: Logger,
     db: *BlockstoreDB,
     shred: Shred,
-    just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
+    shred_store: WorkingShredStore,
     erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)), // BTreeMap in agave
     duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
 ) !bool {
@@ -167,7 +167,7 @@ pub fn checkBackwardsChainedMerkleRootConsistency(
         .shred_type = .code,
     };
     const prev_shred =
-        if (try getShredFromJustInsertedOrDb(db, just_inserted_shreds, prev_shred_id)) |ps| ps else {
+        if (try shred_store.get(prev_shred_id)) |ps| ps else {
         logger.warnf(&newlinesToSpaces(
             \\Shred {any} indicated by the erasure meta {any} \
             \\is missing from blockstore. This can happen if you have recently upgraded \

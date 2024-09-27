@@ -11,11 +11,11 @@ const Slot = sig.core.Slot;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const SlotMeta = ledger.meta.SlotMeta;
-const SlotMetaWorkingSetEntry = ledger.insert_shred.SlotMetaWorkingSetEntry;
+const SlotMetaWorkingSetEntry = ledger.insert_shreds_working_state.SlotMetaWorkingSetEntry;
 const WriteBatch = BlockstoreDB.WriteBatch;
 
-const deinitMapRecursive = ledger.insert_shred.deinitMapRecursive;
-const isNewlyCompletedSlot = ledger.insert_shred.isNewlyCompletedSlot;
+const deinitMapRecursive = ledger.insert_shreds_working_state.deinitMapRecursive;
+const isNewlyCompletedSlot = ledger.insert_shreds_working_state.isNewlyCompletedSlot;
 
 /// agave: handle_chaining
 pub fn handleChaining(
