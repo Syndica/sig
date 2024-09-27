@@ -876,10 +876,11 @@ pub const ShredInserter = struct {
                     reed_solomon_cache,
                 ),
                 .data_full => {
-                    // TODO: submit self.metrics
+                    self.submitRecoveryMetrics(erasure_set.slot, erasure_meta, false, "complete", 0);
                 },
-                .still_need => {
-                    // TODO: submit self.metrics
+                .still_need => |needed| {
+                    const str = sig.utils.fmt.boundedFmt("still need: {}", .{needed});
+                    self.submitRecoveryMetrics(erasure_set.slot, erasure_meta, false, str.slice(), 0);
                 },
             }
         }
@@ -921,11 +922,11 @@ pub const ShredInserter = struct {
             available_shreds.items,
             reed_solomon_cache,
         )) |shreds| {
+            self.submitRecoveryMetrics(index.slot, erasure_meta, true, "complete", shreds.items.len);
             return shreds;
         } else |e| {
-            // TODO: submit_self.metrics
-            // TODO: consider returning error (agave does not return an error or log)
             self.logger.errf("shred recovery error: {}", .{e});
+            self.submitRecoveryMetrics(index.slot, erasure_meta, true, "incomplete", 0);
             return std.ArrayList(Shred).init(self.allocator);
         }
     }
@@ -945,6 +946,33 @@ pub const ShredInserter = struct {
                 try available_shreds.append(shred);
             }
         }
+    }
+
+    fn submitRecoveryMetrics(
+        self: *const Self,
+        slot: Slot,
+        erasure_meta: *const ErasureMeta,
+        attempted: bool,
+        status: []const u8,
+        recovered: usize,
+    ) void {
+        const start, const end = erasure_meta.dataShredsIndices();
+        self.logger.debugf(
+            \\datapoint: blockstore-erasure
+            \\    slot: {[slot]}
+            \\    start_index: {[start_index]}
+            \\    end_index: {[end_index]}
+            \\    recovery_attempted: {[recovery_attempted]}
+            \\    recovery_status: {[recovery_status]s}
+            \\    recovered: {[recovered]}
+        , .{
+            .slot = slot,
+            .start_index = start,
+            .end_index = end + 1,
+            .recovery_attempted = attempted,
+            .recovery_status = status,
+            .recovered = recovered,
+        });
     }
 };
 
