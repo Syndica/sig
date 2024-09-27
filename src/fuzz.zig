@@ -29,7 +29,7 @@ pub fn main() !void {
 
     var std_logger = StandardErrLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.info,
+        .max_level = Level.debug,
         .max_buffer = 2048,
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
