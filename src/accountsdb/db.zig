@@ -3220,18 +3220,15 @@ test "testWriteSnapshot" {
     {
         const archive_file = try test_data_dir.openFile(snap_files.full_snapshot.snapshotNameStr().constSlice(), .{});
         defer archive_file.close();
-        const noopLogger = Logger{ .noop = {} };
-        try parallelUnpackZstdTarBall(std.testing.allocator, noopLogger, archive_file, tmp_snap_dir, 4, true);
+        try parallelUnpackZstdTarBall(std.testing.allocator, Logger{ .noop = {} }, archive_file, tmp_snap_dir, 4, true);
     }
 
     if (snap_files.incremental_snapshot) |inc_snap| {
         const archive_file = try test_data_dir.openFile(inc_snap.snapshotNameStr().constSlice(), .{});
         defer archive_file.close();
-        const noopLogger = Logger{ .noop = {} };
-        try parallelUnpackZstdTarBall(std.testing.allocator, noopLogger, archive_file, tmp_snap_dir, 4, false);
+        try parallelUnpackZstdTarBall(std.testing.allocator, Logger{ .noop = {} }, archive_file, tmp_snap_dir, 4, false);
     }
-    const noopLogger = Logger{ .noop = {} };
-    var accounts_db = try AccountsDB.init(std.testing.allocator, noopLogger, tmp_snap_dir, .{
+    var accounts_db = try AccountsDB.init(std.testing.allocator, Logger{ .noop = {} }, tmp_snap_dir, .{
         .number_of_index_bins = ACCOUNT_INDEX_BINS,
         .use_disk_index = false,
     }, null);
@@ -3253,10 +3250,10 @@ fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
 
         const inc_archive = try dir.openFile("incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst", .{});
         defer inc_archive.close();
-        const noopLogger = Logger{ .noop = {} };
+
         try parallelUnpackZstdTarBall(
             allocator,
-            noopLogger,
+            Logger{ .noop = {} },
             full_archive,
             dir,
             n_threads,
@@ -3264,7 +3261,7 @@ fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
         );
         try parallelUnpackZstdTarBall(
             allocator,
-            noopLogger,
+            Logger{ .noop = {} },
             inc_archive,
             dir,
             n_threads,
@@ -3284,7 +3281,6 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     const snapshot_files = try SnapshotFiles.find(allocator, dir);
 
     const logger = Logger{ .noop = {} };
-    // const logger = Logger.init(std.heap.page_allocator, .debug);
 
     var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
     errdefer snapshots.deinit(allocator);
@@ -3312,7 +3308,6 @@ test "geyser stream on load" {
     const snapshot_files = try SnapshotFiles.find(allocator, dir);
 
     const logger = Logger{ .noop = {} };
-    // const logger = Logger.init(std.heap.page_allocator, .debug);
 
     var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
     errdefer snapshots.deinit(allocator);
@@ -4023,8 +4018,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         // (because test snapshots are too small and full snapshots are too big)
         const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
         const accounts_path = dir_path ++ "accounts";
-
-        // const logger = Logger{ .noop = {} };
 
         var std_logger = StandardErrLogger.init(.{
             .allocator = allocator,
