@@ -34,7 +34,7 @@ pub fn main() !void {
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
 
-    var logger = std_logger.logger();
+    const logger = std_logger.logger();
 
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();

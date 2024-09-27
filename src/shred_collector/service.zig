@@ -38,7 +38,7 @@ pub const ShredCollectorConfig = struct {
 /// Resources that are required for the Shred Collector to operate.
 pub const ShredCollectorDependencies = struct {
     allocator: Allocator,
-    logger: *Logger,
+    logger: Logger,
     random: Random,
     /// This validator's keypair
     my_keypair: *const KeyPair,

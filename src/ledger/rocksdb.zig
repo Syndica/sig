@@ -17,13 +17,13 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         allocator: Allocator,
         db: rocks.DB,
-        logger: *Logger,
+        logger: Logger,
         cf_handles: []const rocks.ColumnFamilyHandle,
         path: []const u8,
 
         const Self = @This();
 
-        pub fn open(allocator: Allocator, logger: *Logger, path: []const u8) Error!Self {
+        pub fn open(allocator: Allocator, logger: Logger, path: []const u8) Error!Self {
             const owned_path = try allocator.dupe(u8, path);
 
             // allocate cf descriptions
@@ -248,7 +248,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             return struct {
                 allocator: Allocator,
                 inner: rocks.Iterator,
-                logger: *Logger,
+                logger: Logger,
 
                 /// Calling this will free all slices returned by the iterator
                 pub fn deinit(self: *@This()) void {
@@ -304,7 +304,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     };
 }
 
-fn callRocks(logger: *Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
+fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
     var err_str: ?rocks.Data = null;
     return @call(.auto, func, args ++ .{&err_str}) catch |e| {
         logger.errf("{} - {s}", .{ e, err_str.? });

@@ -48,7 +48,7 @@ pub const Service = struct {
     send_channel: *Channel(std.ArrayList(Packet)),
     receive_channel: *Channel(TransactionInfo),
     exit: *AtomicBool,
-    logger: *Logger,
+    logger: Logger,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -56,7 +56,7 @@ pub const Service = struct {
         receive_channel: *Channel(TransactionInfo),
         gossip_table_rw: *RwMux(GossipTable),
         exit: *AtomicBool,
-        logger: *Logger,
+        logger: Logger,
     ) !Service {
         return .{
             .allocator = allocator,
@@ -367,7 +367,7 @@ pub const Stats = struct {
         return self;
     }
 
-    pub fn log(self: *const Stats, logger: *Logger) void {
+    pub fn log(self: *const Stats, logger: Logger) void {
         logger.infof("transaction-sender: {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
             self.transactions_received_count.get(),
             self.transactions_pending.get(),

@@ -42,7 +42,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
 
-    var logger = std_logger.logger();
+    const logger = std_logger.logger();
 
     var prng = std.rand.DefaultPrng.init(seed);
     const rand = prng.random();

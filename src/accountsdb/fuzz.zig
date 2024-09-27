@@ -64,7 +64,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
 
-    var logger = std_logger.logger();
+    const logger = std_logger.logger();
 
     const use_disk = rand.boolean();
 
@@ -97,7 +97,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var accounts_db = try AccountsDB.init(
         gpa,
-        &logger,
+        logger,
         snapshot_dir,
         .{
             .number_of_index_bins = sig.accounts_db.db.ACCOUNT_INDEX_BINS,
@@ -254,11 +254,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             const archive_file = try alternative_snapshot_dir.openFile(archive_name.slice(), .{});
             defer archive_file.close();
-            var noopLogger = Logger{ .noop = {} };
+            const noopLogger = Logger{ .noop = {} };
 
             try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
                 allocator,
-                &noopLogger,
+                noopLogger,
                 archive_file,
                 alternative_snapshot_dir,
                 5,
@@ -308,7 +308,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 defer inc_archive_file.close();
                 try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
                     allocator,
-                    &noopLogger,
+                    noopLogger,
                     inc_archive_file,
                     alternative_snapshot_dir,
                     5,
@@ -326,13 +326,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             var snapshot_fields = try sig.accounts_db.AllSnapshotFields.fromFiles(
                 allocator,
-                &logger,
+                logger,
                 alternative_snapshot_dir,
                 snapshot_files,
             );
             defer snapshot_fields.deinit(allocator);
 
-            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, &noopLogger, alternative_snapshot_dir, accounts_db.config, null);
+            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, noopLogger, alternative_snapshot_dir, accounts_db.config, null);
             defer alt_accounts_db.deinit(true);
 
             _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true, 1_500);

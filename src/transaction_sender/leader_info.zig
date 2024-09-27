@@ -40,7 +40,7 @@ pub const LeaderInfo = struct {
         allocator: Allocator,
         config: Config,
         gossip_table_rw: *RwMux(GossipTable),
-        logger: *Logger,
+        logger: Logger,
     ) !LeaderInfo {
         var rpc_client = RpcClient.init(
             allocator,

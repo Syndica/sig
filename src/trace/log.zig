@@ -62,93 +62,93 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
             }
         }
 
-        pub fn err(self: *Self, message: []const u8) void {
+        pub fn err(self: Self, message: []const u8) void {
             self.log(.err, message);
         }
 
-        pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        pub fn errf(self: Self, comptime fmt: []const u8, args: anytype) void {
             self.logf(.err, fmt, args);
         }
 
-        pub fn errWithFields(self: *Self, message: []const u8, fields: anytype) void {
+        pub fn errWithFields(self: Self, message: []const u8, fields: anytype) void {
             self.logWithFields(.err, message, fields);
         }
 
-        pub fn errfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+        pub fn errfWithFields(self: Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
             self.logfWithFields(.err, fmt, args, fields);
         }
 
-        pub fn warn(self: *Self, message: []const u8) void {
+        pub fn warn(self: Self, message: []const u8) void {
             self.log(.warn, message);
         }
 
-        pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        pub fn warnf(self: Self, comptime fmt: []const u8, args: anytype) void {
             self.logf(.warn, fmt, args);
         }
 
-        pub fn warnWithFields(self: *Self, message: []const u8, fields: anytype) void {
+        pub fn warnWithFields(self: Self, message: []const u8, fields: anytype) void {
             self.logWithFields(.warn, message, fields);
         }
 
-        pub fn warnfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+        pub fn warnfWithFields(self: Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
             self.logfWithFields(.warn, fmt, args, fields);
         }
 
-        pub fn info(self: *Self, message: []const u8) void {
+        pub fn info(self: Self, message: []const u8) void {
             self.log(.info, message);
         }
 
-        pub fn infof(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        pub fn infof(self: Self, comptime fmt: []const u8, args: anytype) void {
             self.logf(.info, fmt, args);
         }
 
-        pub fn infoWithFields(self: *Self, message: []const u8, fields: anytype) void {
+        pub fn infoWithFields(self: Self, message: []const u8, fields: anytype) void {
             self.logWithFields(.info, message, fields);
         }
 
-        pub fn infofWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+        pub fn infofWithFields(self: Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
             self.logfWithFields(.info, fmt, args, fields);
         }
 
-        pub fn debug(self: *Self, message: []const u8) void {
+        pub fn debug(self: Self, message: []const u8) void {
             self.log(.debug, message);
         }
 
-        pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        pub fn debugf(self: Self, comptime fmt: []const u8, args: anytype) void {
             self.logf(.debug, fmt, args);
         }
 
-        pub fn debugWithFields(self: *Self, message: []const u8, fields: anytype) void {
+        pub fn debugWithFields(self: Self, message: []const u8, fields: anytype) void {
             self.logWithFields(.debug, message, fields);
         }
 
-        pub fn debugfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+        pub fn debugfWithFields(self: Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
             self.logfWithFields(.debug, fmt, args, fields);
         }
 
-        pub fn log(self: *Self, level: Level, message: []const u8) void {
-            switch (self.*) {
+        pub fn log(self: Self, level: Level, message: []const u8) void {
+            switch (self) {
                 .noop => {},
                 inline else => |*impl| impl.*.log(scope, level, message),
             }
         }
 
-        pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
-            switch (self.*) {
+        pub fn logf(self: Self, level: Level, comptime fmt: []const u8, args: anytype) void {
+            switch (self) {
                 .noop => {},
                 inline else => |impl| impl.logf(scope, level, fmt, args),
             }
         }
 
-        pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
-            switch (self.*) {
+        pub fn logWithFields(self: Self, level: Level, message: []const u8, fields: anytype) void {
+            switch (self) {
                 .noop => {},
                 inline else => |impl| impl.logWithFields(scope, level, message, fields),
             }
         }
 
-        pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
-            switch (self.*) {
+        pub fn logfWithFields(self: Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            switch (self) {
                 .noop => {},
                 inline else => |impl| impl.logfWithFields(scope, level, fmt, args, fields),
             }
@@ -592,7 +592,7 @@ test "trace_ng: all" {
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
 
-    var logger = std_logger.logger();
+    const logger = std_logger.logger();
 
     logger.log(.info, "Logging with log");
     logger.logf(
@@ -632,7 +632,7 @@ test "trace_ng: reclaim" {
 
     defer std_logger.deinit();
 
-    var logger = std_logger.logger();
+    const logger = std_logger.logger();
 
     // Ensure memory can be continously requested from recycle_fba without getting stuck.
     for (0..25) |_| {
@@ -658,7 +658,7 @@ test "trace_ng: level" {
 
     defer std_logger.deinit();
 
-    var logger = std_logger.logger();
+    const logger = std_logger.logger();
 
     // None should log as they are higher than set max_log.
     logger.log(.warn, "Logging with log");
@@ -699,7 +699,7 @@ test "trace_ng: format" {
 
     defer test_logger.deinit();
 
-    var logger = test_logger.logger();
+    const logger = test_logger.logger();
 
     logger.log(.err, "Logging with log");
     if (logger.testing.log_msg) |log_msg| {
@@ -778,7 +778,7 @@ test "trace_ng: format.methods" {
     });
     defer test_logger.deinit();
 
-    var logger = test_logger.logger();
+    const logger = test_logger.logger();
 
     // ERROR
     logger.err("Logging with log");

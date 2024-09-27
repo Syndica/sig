@@ -25,7 +25,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
         pub fn open(
             allocator: Allocator,
-            _: *Logger,
+            _: Logger,
             _: []const u8,
         ) Allocator.Error!Self {
             var maps = try allocator.alloc(SharedHashMap, column_families.len);

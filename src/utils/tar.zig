@@ -64,7 +64,7 @@ const Logger = @import("../trace/log.zig").Logger;
 
 pub fn parallelUntarToFileSystem(
     allocator: std.mem.Allocator,
-    logger: *Logger,
+    logger: Logger,
     dir: std.fs.Dir,
     reader: anytype,
     n_threads: usize,

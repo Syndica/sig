@@ -10,7 +10,7 @@ const RwMux = sig.sync.mux.RwMux;
 
 pub const GossipDumpService = struct {
     allocator: Allocator,
-    logger: *Logger,
+    logger: Logger,
     gossip_table_rw: *RwMux(GossipTable),
     exit: *Atomic(bool),
 

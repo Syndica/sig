@@ -16,13 +16,11 @@ pub const Client = struct {
     http_endpoint: []const u8,
     http_client: std.http.Client,
     max_retries: usize,
-    logger: *Logger,
-
-    var noop = Logger{ .noop = {} };
+    logger: Logger,
 
     pub const Options = struct {
         max_retries: usize = 0,
-        logger: *Logger = &noop,
+        logger: Logger = Logger{ .noop = {} },
     };
 
     pub fn init(allocator: std.mem.Allocator, cluster_type: ClusterType, options: Options) Client {

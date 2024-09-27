@@ -15,7 +15,7 @@ pub fn readSocket(
     socket_: UdpSocket,
     incoming_channel: *Channel(std.ArrayList(Packet)),
     exit: *const std.atomic.Value(bool),
-    logger: *Logger,
+    logger: Logger,
 ) !void {
     // NOTE: we set to non-blocking to periodically check if we should exit
     var socket = socket_;
@@ -61,7 +61,7 @@ pub fn sendSocket(
     socket: UdpSocket,
     outgoing_channel: *Channel(std.ArrayList(Packet)),
     exit: *const std.atomic.Value(bool),
-    logger: *Logger,
+    logger: Logger,
 ) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
     var packets_sent: u64 = 0;
 
@@ -106,7 +106,7 @@ pub const SocketThread = struct {
 
     const Self = @This();
 
-    pub fn initSender(allocator: Allocator, logger: *Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
+    pub fn initSender(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
         const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
         return .{
             .channel = channel,
@@ -115,7 +115,7 @@ pub const SocketThread = struct {
         };
     }
 
-    pub fn initReceiver(allocator: Allocator, logger: *Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
+    pub fn initReceiver(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
         const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
         return .{
             .channel = channel,
@@ -168,9 +168,9 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Value(bool).init(false);
 
-        var logger = Logger{ .noop = {} };
+        const logger = Logger{ .noop = {} };
 
-        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, socket, channel, &exit, &logger });
+        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, socket, channel, &exit, logger });
         var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, n_packets });
 
         var rand = std.rand.DefaultPrng.init(0);

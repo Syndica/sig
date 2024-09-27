@@ -45,7 +45,7 @@ pub const RepairService = struct {
     requester: RepairRequester,
     peer_provider: RepairPeerProvider,
     shred_tracker: *BasicShredTracker,
-    logger: *Logger,
+    logger: Logger,
     exit: *Atomic(bool),
     last_big_request_timestamp_ms: i64 = 0,
 
@@ -70,7 +70,7 @@ pub const RepairService = struct {
 
     pub fn init(
         allocator: Allocator,
-        logger: *Logger,
+        logger: Logger,
         exit: *Atomic(bool),
         requester: RepairRequester,
         peer_provider: RepairPeerProvider,
@@ -218,7 +218,7 @@ pub const RepairService = struct {
 /// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
     allocator: Allocator,
-    logger: *Logger,
+    logger: Logger,
     rng: Random,
     keypair: *const KeyPair,
     sender: SocketThread,
@@ -227,7 +227,7 @@ pub const RepairRequester = struct {
 
     pub fn init(
         allocator: Allocator,
-        logger: *Logger,
+        logger: Logger,
         rng: Random,
         keypair: *const KeyPair,
         udp_send_socket: Socket,
@@ -436,7 +436,7 @@ test "RepairService sends repair request to gossip peer" {
     const wallclock = 100;
     var gossip = try GossipTable.init(allocator, undefined);
     defer gossip.deinit();
-    var noopLogger = Logger{ .noop = {} };
+    const noopLogger = Logger{ .noop = {} };
 
     // connectivity
     const repair_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
@@ -471,14 +471,14 @@ test "RepairService sends repair request to gossip peer" {
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
     );
-    var tracker = BasicShredTracker.init(13579, &noopLogger);
+    var tracker = BasicShredTracker.init(13579, noopLogger);
     var service = RepairService.init(
         allocator,
-        &noopLogger,
+        noopLogger,
         &exit,
         try RepairRequester.init(
             allocator,
-            &noopLogger,
+            noopLogger,
             random,
             &keypair,
             repair_socket,

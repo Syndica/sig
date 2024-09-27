@@ -34,7 +34,7 @@ pub fn Database(comptime Impl: type) type {
 
         pub fn open(
             allocator: Allocator,
-            logger: *Logger,
+            logger: Logger,
             path: []const u8,
         ) anyerror!Database(Impl) {
             return .{
@@ -262,8 +262,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             const path = std.fmt.comptimePrint("{s}/basic", .{test_dir});
             try blockstore.tests.freshDir(path);
             const allocator = std.testing.allocator;
-            var logger = Logger{ .noop = {} };
-            var db = try Database(Impl(&.{ cf1, cf2 })).open(allocator, &logger, path);
+            const logger = Logger{ .noop = {} };
+            var db = try Database(Impl(&.{ cf1, cf2 })).open(allocator, logger, path);
             defer db.deinit();
 
             try db.put(cf1, 123, .{ .hello = 345 });

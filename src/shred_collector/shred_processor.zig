@@ -22,7 +22,7 @@ const ShredInserter = sig.ledger.ShredInserter;
 pub fn runShredProcessor(
     allocator: Allocator,
     exit: *Atomic(bool),
-    logger: *Logger,
+    logger: Logger,
     // shred verifier --> me
     verified_shred_receiver: *Channel(ArrayList(Packet)),
     tracker: *BasicShredTracker,

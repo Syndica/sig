@@ -157,7 +157,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
 /// note: gossip_service must be running.
 pub fn downloadSnapshotsFromGossip(
     allocator: std.mem.Allocator,
-    logger: *Logger,
+    logger: Logger,
     // if null, then we trust any peer for snapshot download
     maybe_trusted_validators: ?[]const Pubkey,
     gossip_service: *GossipService,
@@ -298,7 +298,7 @@ const DownloadProgress = struct {
     mmap: []align(std.mem.page_size) u8,
     download_size: usize,
     min_mb_per_second: ?usize,
-    logger: *Logger,
+    logger: Logger,
 
     mb_timer: std.time.Timer,
     bytes_read: usize = 0,
@@ -308,7 +308,7 @@ const DownloadProgress = struct {
     const Self = @This();
 
     pub fn init(
-        logger: *Logger,
+        logger: Logger,
         output_dir: std.fs.Dir,
         filename: []const u8,
         download_size: usize,
@@ -417,7 +417,7 @@ pub fn setNoBody(self: curl.Easy, no_body: bool) !void {
 /// the main errors include {HeaderRequestFailed, NoContentLength, TooSlow} or a curl-related error
 pub fn downloadFile(
     allocator: std.mem.Allocator,
-    logger: *Logger,
+    logger: Logger,
     url: [:0]const u8,
     output_dir: std.fs.Dir,
     filename: []const u8,

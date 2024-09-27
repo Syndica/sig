@@ -1705,7 +1705,7 @@ pub const AllSnapshotFields = struct {
 
     pub fn fromFiles(
         allocator: std.mem.Allocator,
-        logger: *Logger,
+        logger: Logger,
         snapshot_dir: std.fs.Dir,
         files: SnapshotFiles,
     ) !Self {
@@ -1823,7 +1823,7 @@ pub const AllSnapshotFields = struct {
 /// unpacks a .tar.zstd file into the given directory
 pub fn parallelUnpackZstdTarBall(
     allocator: std.mem.Allocator,
-    logger: *Logger,
+    logger: Logger,
     file: std.fs.File,
     output_dir: std.fs.Dir,
     n_threads: usize,

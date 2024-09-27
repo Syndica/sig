@@ -28,7 +28,7 @@ const LOOP_LIMITER = Duration.fromMillis(DEFAULT_CLEANUP_SLOT_INTERVAL * DEFAULT
 
 pub fn run(
     allocator: std.mem.Allocator,
-    logger: *sig.trace.Logger,
+    logger: sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
     blockstore_writer: *BlockstoreWriter,
     max_ledger_shreds: u64,
@@ -73,7 +73,7 @@ pub fn run(
 /// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
 pub fn cleanBlockstore(
     allocator: std.mem.Allocator,
-    logger: *sig.trace.Logger,
+    logger: sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
     blockstore_writer: *BlockstoreWriter,
     max_ledger_shreds: u64,
@@ -201,7 +201,7 @@ const TestDB = ledger.tests.TestDB("cleanup_service");
 
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
-    var logger = Logger{ .noop = {} };
+    const logger = Logger{ .noop = {} };
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("findSlotsToClean");
@@ -212,7 +212,7 @@ test "findSlotsToClean" {
 
     var reader = try BlockstoreReader.init(
         allocator,
-        &logger,
+        logger,
         db,
         registry,
         &lowest_cleanup_slot,
