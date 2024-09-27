@@ -39,7 +39,6 @@ const spawnMetrics = sig.prometheus.spawnMetrics;
 const writeLeaderSchedule = sig.core.leader_schedule.writeLeaderSchedule;
 
 const BlockstoreReader = sig.ledger.BlockstoreReader;
-const BlockstoreWriter = sig.ledger.BlockstoreWriter;
 
 const SocketTag = sig.gossip.SocketTag;
 

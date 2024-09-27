@@ -187,13 +187,13 @@ pub const ErasureMeta = struct {
 
     pub fn fromCodeShred(shred: CodeShred) ?Self {
         return .{
-            .fec_set_index = @intCast(shred.fields.common.fec_set_index),
+            .fec_set_index = shred.fields.common.fec_set_index,
             .config = ErasureConfig{
-                .num_data = @intCast(shred.fields.custom.num_data_shreds),
-                .num_code = @intCast(shred.fields.custom.num_code_shreds),
+                .num_data = shred.fields.custom.num_data_shreds,
+                .num_code = shred.fields.custom.num_code_shreds,
             },
-            .first_code_index = @intCast(shred.firstCodeIndex() catch return null),
-            .first_received_code_index = @intCast(shred.fields.common.index),
+            .first_code_index = shred.firstCodeIndex() catch return null,
+            .first_received_code_index = shred.fields.common.index,
         };
     }
 

@@ -384,7 +384,6 @@ pub const ShredInserter = struct {
     }
 
     /// agave: check_insert_coding_shred
-    /// TODO: break this up
     fn checkInsertCodeShred(
         self: *Self,
         shred: CodeShred,
@@ -394,7 +393,6 @@ pub const ShredInserter = struct {
         shred_source: ShredSource,
     ) !bool {
         const slot = shred.fields.common.slot;
-        const shred_index: u64 = @intCast(shred.fields.common.index);
 
         const index_meta_working_set_entry = try state.getIndexMetaEntry(slot);
         const index_meta = &index_meta_working_set_entry.index;
@@ -402,91 +400,10 @@ pub const ShredInserter = struct {
         const erasure_set_id = shred.fields.common.erasureSetId();
         try state.loadMerkleRootMeta(erasure_set_id);
 
-        // This gives the index of first code shred in this FEC block
-        // So, all code shreds in a given FEC block will have the same set index
-        if (!is_trusted) {
-            if (index_meta.code_index.contains(shred_index)) {
-                self.metrics.num_code_shreds_exists.inc();
-                try state.duplicate_shreds.append(.{ .Exists = .{ .code = shred } });
-                return false;
-            }
-
-            if (!shouldInsertCodeShred(&shred, self.max_root.load(.acquire))) {
-                self.metrics.num_code_shreds_invalid.inc();
-                return false;
-            }
-
-            if (state.merkle_root_metas.get(erasure_set_id)) |merkle_root_meta| {
-                // A previous shred has been inserted in this batch or in blockstore
-                // Compare our current shred against the previous shred for potential
-                // conflicts
-                if (!try self.checkMerkleRootConsistency(
-                    state.shredStore(),
-                    slot,
-                    merkle_root_meta.asRef(),
-                    &.{ .code = shred },
-                    &state.duplicate_shreds,
-                )) {
-                    return false;
-                }
-            }
-        }
-
-        const erasure_meta = try state.getOrPutErasureMeta(erasure_set_id, shred);
-
-        // NOTE perf: maybe this can be skipped for trusted shreds.
-        // agave runs this regardless of trust, but we can check if it has
-        // a meaningful performance impact to skip this for trusted shreds.
-        if (!erasure_meta.checkCodeShred(shred)) {
-            self.metrics.num_code_shreds_invalid_erasure_config.inc();
-            if (!try self.hasDuplicateShredsInSlot(slot)) {
-                if (try findConflictingCodeShred(
-                    state.shredStore(),
-                    shred,
-                    slot,
-                    erasure_meta,
-                )) |conflicting_shred| {
-                    // TODO: reduce nesting
-                    self.db.put(schema.duplicate_slots, slot, .{
-                        .shred1 = conflicting_shred,
-                        .shred2 = shred.fields.payload,
-                    }) catch |e| {
-                        // TODO: only log a database error?
-                        self.logger.errf(
-                            "Unable to store conflicting erasure meta duplicate proof for: {} {any} {}",
-                            .{ slot, erasure_set_id, e },
-                        );
-                    };
-                    try state.duplicate_shreds.append(.{
-                        .ErasureConflict = .{
-                            // TODO lifetimes
-                            .original = .{ .code = shred },
-                            .conflict = conflicting_shred,
-                        },
-                    });
-                } else {
-                    self.logger.errf(&newlinesToSpaces(
-                        \\Unable to find the conflicting code shred that set {any}.
-                        \\This should only happen in extreme cases where blockstore cleanup has
-                        \\caught up to the root. Skipping the erasure meta duplicate shred check
-                    ), .{erasure_meta});
-                }
-            }
-            // TODO (agave): This is a potential slashing condition
-            self.logger.warn("Received multiple erasure configs for the same erasure set!!!");
-            self.logger.warnf(&newlinesToSpaces(
-                \\Slot: {}, shred index: {}, erasure_set: {any}, is_duplicate: {},
-                \\stored config: {any}, new shred: {any}
-            ), .{
-                slot,
-                shred.fields.common.index,
-                erasure_set_id,
-                try self.hasDuplicateShredsInSlot(slot), // TODO perf redundant
-                erasure_meta.config,
-                shred,
-            });
+        if (!try self.shouldInsertCodeShred(state, shred, index_meta, is_trusted)) {
             return false;
         }
+
         // TODO self.metrics
         // self.slots_stats
         //     .record_shred(shred.slot(), shred.fec_set_index(), shred_source, None);
@@ -508,10 +425,125 @@ pub const ShredInserter = struct {
         return result;
     }
 
-    /// agave: should_insert_coding_shred
-    fn shouldInsertCodeShred(shred: *const CodeShred, max_root: Slot) bool {
-        assertOk(shred.sanitize());
-        return shred.fields.common.slot > max_root;
+    fn shouldInsertCodeShred(
+        self: *Self,
+        state: *InsertShredsWorkingState,
+        shred: CodeShred,
+        index_meta: *const Index,
+        is_trusted: bool,
+    ) !bool {
+        const erasure_set_id = shred.fields.common.erasureSetId();
+
+        // This gives the index of first code shred in this FEC block
+        // So, all code shreds in a given FEC block will have the same set index
+        if (!is_trusted) {
+            // dupes
+            if (index_meta.code_index.contains(shred.fields.common.index)) {
+                self.metrics.num_code_shreds_exists.inc();
+                try state.duplicate_shreds.append(.{ .Exists = .{ .code = shred } });
+                return false;
+            }
+
+            assertOk(shred.sanitize());
+
+            // too old
+            if (shred.fields.common.slot <= self.max_root.load(.monotonic)) {
+                self.metrics.num_code_shreds_invalid.inc();
+                return false;
+            }
+
+            // invalid merkle root
+            if (state.merkle_root_metas.get(erasure_set_id)) |merkle_root_meta| {
+                // TODO: this does not look in the database, so it's only checking this batch. is that desired?
+                // A previous shred has been inserted in this batch or in blockstore
+                // Compare our current shred against the previous shred for potential
+                // conflicts
+                if (!try self.checkMerkleRootConsistency(
+                    state.shredStore(),
+                    shred.fields.common.slot,
+                    merkle_root_meta.asRef(),
+                    &.{ .code = shred },
+                    &state.duplicate_shreds,
+                )) {
+                    return false;
+                }
+            }
+        }
+
+        // inconsistent erasure metadata
+        //
+        // NOTE perf: maybe this can be skipped for trusted shreds.
+        // agave runs this regardless of trust, but we can check if it has
+        // a meaningful performance impact to skip this for trusted shreds.
+        const erasure_meta = try state.getOrPutErasureMeta(erasure_set_id, shred);
+        if (!erasure_meta.checkCodeShred(shred)) {
+            self.metrics.num_code_shreds_invalid_erasure_config.inc();
+            try self.recordShredConflict(state, shred, erasure_meta);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// If this is the first seen shred conflict for the current slot, this function
+    /// will store a record of it in the database in `schema.duplicate_slots` and log
+    /// some error and warn messages.
+    fn recordShredConflict(
+        self: *Self,
+        state: *InsertShredsWorkingState,
+        shred: CodeShred,
+        erasure_meta: *const ErasureMeta,
+    ) !void {
+        const slot = shred.fields.common.slot;
+        const erasure_set_id = shred.fields.common.erasureSetId();
+        // TODO question: there may be a conflicting shred already saved for a totally different
+        // erasure set, but not this one. is it worth persisting this one as well?
+        if (!try self.hasDuplicateShredsInSlot(slot)) {
+            if (try findConflictingCodeShred(
+                state.shredStore(),
+                shred,
+                slot,
+                erasure_meta,
+            )) |conflicting_shred| {
+                // found the duplicate
+                self.db.put(schema.duplicate_slots, slot, .{
+                    .shred1 = conflicting_shred,
+                    .shred2 = shred.fields.payload,
+                }) catch |e| {
+                    // TODO: only log a database error?
+                    self.logger.errf(
+                        "Unable to store conflicting erasure meta duplicate proof for: {} {any} {}",
+                        .{ slot, erasure_set_id, e },
+                    );
+                };
+                try state.duplicate_shreds.append(.{
+                    .ErasureConflict = .{
+                        // TODO lifetimes
+                        .original = .{ .code = shred },
+                        .conflict = conflicting_shred,
+                    },
+                });
+            } else {
+                self.logger.errf(&newlinesToSpaces(
+                    \\Unable to find the conflicting code shred that set {any}.
+                    \\This should only happen in extreme cases where blockstore cleanup has
+                    \\caught up to the root. Skipping the erasure meta duplicate shred check
+                ), .{erasure_meta});
+            }
+        }
+        // TODO (agave): This is a potential slashing condition
+        self.logger.warn("Received multiple erasure configs for the same erasure set!!!");
+        self.logger.warnf(&newlinesToSpaces(
+            \\Slot: {}, shred index: {}, erasure_set: {any}, is_duplicate: {},
+            \\stored config: {any}, new shred: {any}
+        ), .{
+            slot,
+            shred.fields.common.index,
+            erasure_set_id,
+            try self.hasDuplicateShredsInSlot(slot), // TODO perf redundant (careful, state has changed)
+            erasure_meta.config,
+            shred,
+        });
     }
 
     /// agave: find_conflicting_coding_shred
