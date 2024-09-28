@@ -242,6 +242,7 @@ pub const BytesRef = struct {
 
 /// Test cases that can be applied to any implementation of Database
 fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     @setEvalBranchQuota(10_000);
     const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
     const test_dir = std.fmt.comptimePrint(sig.TEST_DATA_DIR ++ "blockstore/database/{s}", .{impl_id.buffer});
@@ -262,7 +263,12 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             const path = std.fmt.comptimePrint("{s}/basic", .{test_dir});
             try blockstore.tests.freshDir(path);
             const allocator = std.testing.allocator;
-            const logger = Logger{ .noop = {} };
+            const test_logger = TestingLogger.init(.{
+                .allocator = allocator,
+                .max_level = Logger.TEST_DEFAULT_LEVEL,
+            });
+            defer test_logger.deinit();
+            const logger = test_logger.logger();
             var db = try Database(Impl(&.{ cf1, cf2 })).open(allocator, logger, path);
             defer db.deinit();
 
