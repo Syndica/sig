@@ -239,9 +239,7 @@ test "trivial happy path" {
     var msr = MultiSlotReport.init(allocator);
     defer msr.deinit();
 
-    const logger = sig.trace.Logger{ .noop = {} };
-
-    var tracker = BasicShredTracker.init(13579, logger);
+    var tracker = BasicShredTracker.init(13579, sig.trace.Logger{ .noop = {} });
 
     _ = try tracker.identifyMissing(&msr);
 
@@ -259,9 +257,7 @@ test "1 registered shred is identified" {
     var msr = MultiSlotReport.init(allocator);
     defer msr.deinit();
 
-    const logger = sig.trace.Logger{ .noop = {} };
-
-    var tracker = BasicShredTracker.init(13579, logger);
+    var tracker = BasicShredTracker.init(13579, sig.trace.Logger{ .noop = {} });
     try tracker.registerShred(13579, 123);
     std.time.sleep(210 * std.time.ns_per_ms);
 
