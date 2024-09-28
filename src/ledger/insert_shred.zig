@@ -1862,7 +1862,8 @@ fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
 const test_shreds = @import("test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
 const TestState = ledger.tests.TestState("insert_shred");
-const noopLogger = sig.trace.Logger{ .noop = {} };
+const TestingLogger = @import("../trace/log.zig").TestingLogger;
+const Logger = @import("../trace/log.zig").Logger;
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
@@ -1876,7 +1877,14 @@ const ShredInserterTestState = struct {
     inserter: ShredInserter,
 
     pub fn init(comptime test_name: []const u8) !ShredInserterTestState {
-        return initWithLogger(test_name, noopLogger);
+        const test_logger = TestingLogger.init(.{
+            .allocator = std.testing.allocator,
+            .max_level = Logger.TEST_DEFAULT_LEVEL,
+        });
+        defer test_logger.deinit();
+
+        const logger = test_logger.logger();
+        return initWithLogger(test_name, logger);
     }
 
     fn initWithLogger(comptime test_name: []const u8, logger: sig.trace.Logger) !ShredInserterTestState {
@@ -2082,8 +2090,7 @@ test "chaining basic" {
 
 // agave: test_merkle_root_metas_coding
 test "merkle root metas coding" {
-    const logger = sig.trace.Logger{ .noop = {} };
-    var state = try ShredInserterTestState.initWithLogger("handle chaining basic", logger);
+    var state = try ShredInserterTestState.initWithLogger("handle chaining basic", Logger{ .noop = {} });
     defer state.deinit();
     const allocator = state.allocator();
 
