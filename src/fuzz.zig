@@ -27,13 +27,18 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    logger.default_logger.* = logger.Logger.init(allocator, .debug);
+    logger.default_logger.* = logger.Logger.init(std.heap.c_allocator, .debug);
 
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
     logger.default_logger.infof("metrics port: {d}", .{config.current.metrics_port});
-    const metrics_thread = try spawnMetrics(allocator, config.current.metrics_port);
+    const metrics_thread = try spawnMetrics(
+        // TODO: use the GPA here, the server is just leaking because we're losing the handle
+        // to it and never deiniting.
+        std.heap.c_allocator,
+        config.current.metrics_port,
+    );
     metrics_thread.detach();
 
     _ = cli_args.skip();

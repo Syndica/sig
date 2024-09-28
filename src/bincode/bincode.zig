@@ -37,7 +37,7 @@ pub fn sizeOf(data: anytype, params: bincode.Params) usize {
     }
     var stream = std.io.countingWriter(std.io.null_writer);
     bincode.write(stream.writer(), data, params) catch unreachable;
-    return @as(usize, @intCast(stream.bytes_written));
+    return @intCast(stream.bytes_written);
 }
 
 pub fn readFromSlice(allocator: std.mem.Allocator, comptime T: type, slice: []const u8, params: bincode.Params) !T {

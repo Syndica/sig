@@ -418,13 +418,13 @@ pub const GossipService = struct {
                 GossipMessage,
                 packet.data[0..packet.size],
                 bincode.Params.standard,
-            ) catch {
-                self.logger.errf("gossip: packet_verify: failed to deserialize", .{});
+            ) catch |e| {
+                self.logger.errf("gossip: packet_verify: failed to deserialize: {s}", .{@errorName(e)});
                 return;
             };
 
-            message.sanitize() catch {
-                self.logger.errf("gossip: packet_verify: failed to sanitize", .{});
+            message.sanitize() catch |e| {
+                self.logger.errf("gossip: packet_verify: failed to sanitize: {s}", .{@errorName(e)});
                 bincode.free(self.gossip_value_allocator, message);
                 return;
             };
@@ -442,7 +442,6 @@ pub const GossipService = struct {
                 .from_endpoint = packet.addr,
                 .message = message,
             };
-
             try self.verified_incoming_channel.send(msg);
         }
     };
@@ -451,6 +450,12 @@ pub const GossipService = struct {
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
     fn verifyPackets(self: *Self, idx: usize) !void {
+        defer {
+            // trigger the next service in the chain to close
+            self.counter.store(idx + 1, .release);
+            self.logger.debugf("verifyPackets loop closed", .{});
+        }
+
         const tasks = try VerifyMessageTask.init(self.allocator, VERIFY_PACKET_PARALLEL_TASKS);
         defer self.allocator.free(tasks);
 
@@ -491,10 +496,6 @@ pub const GossipService = struct {
             task.blockUntilCompletion();
             task.result catch |err| self.logger.errf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
         }
-
-        // trigger the next service in the chain to close
-        self.counter.store(idx + 1, .release);
-        self.logger.debugf("verifyPackets loop closed", .{});
     }
 
     // structs used in process_messages loop
@@ -527,7 +528,11 @@ pub const GossipService = struct {
 
     /// main logic for recieving and processing gossip messages.
     pub fn processMessages(self: *Self, seed: u64, idx: usize) !void {
-        var trim_table_timer = try sig.time.Timer.start();
+        defer {
+            // even if we fail, trigger the next thing
+            self.counter.store(idx + 1, .release);
+            self.logger.debugf("processMessages loop closed", .{});
+        }
 
         // we batch messages bc:
         // 1) less lock contention
@@ -551,8 +556,10 @@ pub const GossipService = struct {
         var pull_responses = try ArrayList(PullResponseMessage).initCapacity(self.allocator, init_capacity);
         defer pull_responses.deinit();
 
-        var prune_messages = try ArrayList(*const PruneData).initCapacity(self.allocator, init_capacity);
+        var prune_messages = try ArrayList(PruneData).initCapacity(self.allocator, init_capacity);
         defer prune_messages.deinit();
+
+        var trim_table_timer = try sig.time.Timer.start();
 
         // keep waiting for new data until,
         // - `exit` isn't set,
@@ -631,7 +638,7 @@ pub const GossipService = struct {
                         });
                     },
                     .PruneMessage => |*prune| {
-                        var prune_data = &prune[1];
+                        const prune_data = prune[1];
                         const now = getWallclockMs();
                         const prune_wallclock = prune_data.wallclock;
 
@@ -639,7 +646,6 @@ pub const GossipService = struct {
                         const incorrect_destination = !prune_data.destination.equals(&self.my_pubkey);
                         if (too_old or incorrect_destination) {
                             self.stats.prune_messages_dropped.add(1);
-                            // prune_data free by defered shallowFree
                             continue;
                         }
                         try prune_messages.append(prune_data);
@@ -759,9 +765,6 @@ pub const GossipService = struct {
                 try self.attemptGossipTableTrim();
             }
         }
-
-        self.counter.store(idx + 1, .release);
-        self.logger.debugf("processMessages loop closed", .{});
     }
 
     /// uses a read lock to first check if the gossip table should be trimmed,
@@ -805,6 +808,11 @@ pub const GossipService = struct {
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
     fn buildMessages(self: *Self, seed: u64, idx: usize) !void {
+        defer {
+            self.counter.store(idx + 1, .release);
+            self.logger.infof("buildMessages loop closed", .{});
+        }
+
         var loop_timer = try sig.time.Timer.start();
         var active_set_timer = try sig.time.Timer.start();
         var pull_req_timer = try sig.time.Timer.start();
@@ -900,9 +908,6 @@ pub const GossipService = struct {
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
-
-        self.counter.store(idx + 1, .release);
-        self.logger.infof("buildMessages loop closed", .{});
     }
 
     // collect gossip table metrics and pushes them to stats
@@ -1234,9 +1239,7 @@ pub const GossipService = struct {
                 self.filter,
                 getWallclockMs(),
                 @as(usize, @max(output_limit, 0)),
-            ) catch {
-                return;
-            };
+            ) catch return;
             defer {
                 for (response_gossip_values.items) |val| {
                     bincode.free(self.allocator, val);
@@ -1507,11 +1510,11 @@ pub const GossipService = struct {
     }
 
     /// logic for handling a prune message. verifies the prune message
-    /// is not too old, and that the destination pubkey is the local node,
+    /// is not too old, and that the destination pubkey is not the local node,
     /// then updates the active set to prune the list of origin Pubkeys.
     pub fn handleBatchPruneMessages(
         self: *Self,
-        prune_messages: *const ArrayList(*const PruneData),
+        prune_messages: *const ArrayList(PruneData),
     ) void {
         var active_set_lock = self.active_set_rw.write();
         defer active_set_lock.unlock();
@@ -2362,9 +2365,9 @@ test "handling prune messages" {
     };
     try prune_data.sign(&my_keypair);
 
-    var data = std.ArrayList(*const PruneData).init(allocator);
+    var data = std.ArrayList(PruneData).init(allocator);
     defer data.deinit();
-    try data.append(&prune_data);
+    try data.append(prune_data);
 
     gossip_service.handleBatchPruneMessages(&data);
 

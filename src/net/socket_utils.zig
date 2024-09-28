@@ -18,6 +18,14 @@ pub fn readSocket(
     counter: *Atomic(if (needs_exit_order) usize else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
+    defer {
+        logger.infof("leaving with: {}, {}, {}", .{ incoming_channel.len(), counter.load(.acquire), idx });
+        if (needs_exit_order) {
+            counter.store(idx + 1, .release);
+        }
+        logger.infof("readSocket loop closed", .{});
+    }
+
     // NOTE: we set to non-blocking to periodically check if we should exit
     var socket = socket_;
     try socket.setReadTimeout(SOCKET_TIMEOUT_US);
@@ -35,14 +43,6 @@ pub fn readSocket(
         packet.size = bytes_read;
         try incoming_channel.send(packet);
     }
-
-    logger.infof("leaving with: {}, {}, {}", .{ incoming_channel.len(), counter.load(.acquire), idx });
-
-    if (needs_exit_order) {
-        counter.store(idx + 1, .release);
-    }
-
-    logger.infof("readSocket loop closed", .{});
 }
 
 pub fn sendSocket(
@@ -53,6 +53,14 @@ pub fn sendSocket(
     counter: *Atomic(if (needs_exit_order) usize else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
+    defer {
+        if (needs_exit_order) {
+            // exit the next service in the chain
+            counter.store(idx + 1, .release);
+        }
+        logger.debugf("sendSocket loop closed", .{});
+    }
+
     const exit_condition = if (needs_exit_order) idx else true;
     while (counter.load(.acquire) != exit_condition or
         outgoing_channel.len() != 0)
@@ -65,13 +73,6 @@ pub fn sendSocket(
             std.debug.assert(bytes_sent == p.size);
         }
     }
-
-    if (needs_exit_order) {
-        // exit the next service in the chain
-        counter.store(idx + 1, .release);
-    }
-
-    logger.debugf("sendSocket loop closed", .{});
 }
 
 /// A thread that is dedicated to either sending or receiving data over a socket.

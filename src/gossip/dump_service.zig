@@ -17,6 +17,12 @@ pub const GossipDumpService = struct {
     const Self = @This();
 
     pub fn run(self: Self, idx: usize) !void {
+        defer {
+            // this should be the last service in the chain,
+            // but we still kick off anything after it just in case
+            self.counter.store(idx + 1, .release);
+        }
+
         const start_time = std.time.timestamp();
         const dir = try std.fmt.allocPrint(self.allocator, "gossip-dumps/{}", .{start_time});
         defer self.allocator.free(dir);
@@ -25,9 +31,6 @@ pub const GossipDumpService = struct {
             try self.dumpGossip(dir, start_time);
             std.time.sleep(std.time.ns_per_s * 10);
         }
-        // this should be the last service in the chain,
-        // but we still kick off anything after it just in case
-        self.counter.store(idx + 1, .release);
     }
 
     fn dumpGossip(self: *const Self, dir: []const u8, start_time: i64) !void {
