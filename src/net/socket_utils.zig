@@ -168,9 +168,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Value(bool).init(false);
 
-        const logger = Logger{ .noop = {} };
-
-        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, socket, channel, &exit, logger });
+        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, socket, channel, &exit, Logger{ .noop = {} } });
         var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, n_packets });
 
         var rand = std.rand.DefaultPrng.init(0);
