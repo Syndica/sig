@@ -2167,8 +2167,6 @@ pub fn chunkValuesIntoPacketIndexes(
 test "handle pong messages" {
     const allocator = std.testing.allocator;
 
-    const noopLogger = Logger{ .noop = {} };
-
     var exit = AtomicBool.init(false);
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
@@ -2181,7 +2179,7 @@ test "handle pong messages" {
         keypair,
         null,
         &exit,
-        noopLogger,
+        Logger{ .noop = {} },
     );
     defer gossip_service.deinit();
 
@@ -2234,13 +2232,20 @@ test "handle pong messages" {
 }
 
 test "build messages startup and shutdown" {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     const allocator = std.testing.allocator;
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = std.testing.allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2249,7 +2254,7 @@ test "build messages startup and shutdown" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -2286,6 +2291,7 @@ test "build messages startup and shutdown" {
 }
 
 test "handling prune messages" {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     var rng = std.rand.DefaultPrng.init(91);
 
     const allocator = std.testing.allocator;
@@ -2294,7 +2300,13 @@ test "handling prune messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = std.testing.allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2303,7 +2315,7 @@ test "handling prune messages" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -2358,6 +2370,7 @@ test "handling prune messages" {
 }
 
 test "handling pull responses" {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     const allocator = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(91);
@@ -2366,7 +2379,13 @@ test "handling pull responses" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = std.testing.allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2375,7 +2394,7 @@ test "handling pull responses" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -2427,7 +2446,6 @@ test "handle old prune & pull request message" {
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
-    const noopLogger = Logger{ .noop = {} };
     var gossip_service = try allocator.create(GossipService);
     gossip_service.* = try GossipService.init(
         allocator,
@@ -2436,7 +2454,7 @@ test "handle old prune & pull request message" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        Logger{ .noop = {} },
     );
     defer {
         gossip_service.deinit();
@@ -2545,6 +2563,7 @@ test "handle old prune & pull request message" {
 }
 
 test "handle pull request" {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     const allocator = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(91);
@@ -2554,7 +2573,13 @@ test "handle pull request" {
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = std.testing.allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
@@ -2562,7 +2587,7 @@ test "handle pull request" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -2658,6 +2683,7 @@ test "handle pull request" {
 }
 
 test "test build prune messages and handle push messages" {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -2665,7 +2691,13 @@ test "test build prune messages and handle push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = std.testing.allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2674,7 +2706,7 @@ test "test build prune messages and handle push messages" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -2744,6 +2776,7 @@ test "test build prune messages and handle push messages" {
 }
 
 test "build pull requests" {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -2751,7 +2784,13 @@ test "build pull requests" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = std.testing.allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2760,7 +2799,7 @@ test "build pull requests" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -2796,6 +2835,7 @@ test "build pull requests" {
 }
 
 test "test build push messages" {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -2803,7 +2843,13 @@ test "test build push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = std.testing.allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2812,7 +2858,7 @@ test "test build push messages" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -2868,6 +2914,7 @@ test "test build push messages" {
 }
 
 test "test large push messages" {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -2875,7 +2922,13 @@ test "test large push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = std.testing.allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -2884,7 +2937,7 @@ test "test large push messages" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -2932,7 +2985,6 @@ test "test packet verification" {
     const contact_info = try localhostTestContactInfo(id);
 
     // noop for this case because this tests error failed verification
-    const noopLogger = Logger{ .noop = {} };
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
@@ -2940,7 +2992,7 @@ test "test packet verification" {
         keypair,
         null,
         &exit,
-        noopLogger,
+        Logger{ .noop = {} },
     );
     defer gossip_service.deinit();
 
@@ -3063,6 +3115,7 @@ test "test packet verification" {
 }
 
 test "process contact info push packet" {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     const allocator = std.testing.allocator;
     const gossip_value_allocator = allocator;
     var exit = AtomicBool.init(false);
@@ -3070,7 +3123,13 @@ test "process contact info push packet" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -3079,7 +3138,7 @@ test "process contact info push packet" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -3165,6 +3224,7 @@ test "process contact info push packet" {
 }
 
 test "init, exit, and deinit" {
+    const TestingLogger = @import("../trace/log.zig").TestingLogger;
     const gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     const my_keypair = try KeyPair.create(null);
     var rng = std.rand.DefaultPrng.init(getWallclockMs());
@@ -3174,7 +3234,13 @@ test "init, exit, and deinit" {
 
     var exit = AtomicBool.init(false);
 
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = std.testing.allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
 
     var gossip_service = try GossipService.init(
         std.testing.allocator,
@@ -3183,7 +3249,7 @@ test "init, exit, and deinit" {
         my_keypair,
         null,
         &exit,
-        noopLogger,
+        logger,
     );
 
     const handle = try std.Thread.spawn(.{}, GossipService.run, .{
