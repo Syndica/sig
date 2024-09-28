@@ -429,6 +429,7 @@ test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(4328095);
     var random = rand.random();
+    const TestingLogger = sig.trace.TestingLogger;
 
     // my details
     const keypair = KeyPair.create(null) catch unreachable;
@@ -436,7 +437,13 @@ test "RepairService sends repair request to gossip peer" {
     const wallclock = 100;
     var gossip = try GossipTable.init(allocator, undefined);
     defer gossip.deinit();
-    const noopLogger = Logger{ .noop = {} };
+    const test_logger = TestingLogger.init(.{
+        .allocator = allocator,
+        .max_level = Logger.TEST_DEFAULT_LEVEL,
+    });
+    defer test_logger.deinit();
+
+    const logger = test_logger.logger();
 
     // connectivity
     const repair_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
@@ -471,14 +478,14 @@ test "RepairService sends repair request to gossip peer" {
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
     );
-    var tracker = BasicShredTracker.init(13579, noopLogger);
+    var tracker = BasicShredTracker.init(13579, Logger{ .noop = {} });
     var service = RepairService.init(
         allocator,
-        noopLogger,
+        logger,
         &exit,
         try RepairRequester.init(
             allocator,
-            noopLogger,
+            logger,
             random,
             &keypair,
             repair_socket,
