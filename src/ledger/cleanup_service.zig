@@ -26,7 +26,6 @@ const DEFAULT_CLEANUP_SLOT_INTERVAL: u64 = 512;
 const LOOP_LIMITER = Duration.fromMillis(DEFAULT_CLEANUP_SLOT_INTERVAL * DEFAULT_MS_PER_SLOT / 10);
 
 pub fn run(
-    allocator: std.mem.Allocator,
     logger: sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
     blockstore_writer: *BlockstoreWriter,
@@ -38,7 +37,6 @@ pub fn run(
     logger.info("Starting blockstore cleanup service");
     while (!exit.load(.acquire)) {
         last_purge_slot = try cleanBlockstore(
-            allocator,
             logger,
             blockstore_reader,
             blockstore_writer,
@@ -71,7 +69,6 @@ pub fn run(
 ///
 /// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
 pub fn cleanBlockstore(
-    allocator: std.mem.Allocator,
     logger: sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
     blockstore_writer: *BlockstoreWriter,
@@ -87,12 +84,7 @@ pub fn cleanBlockstore(
 
     // NOTE: this will clean everything past the lowest slot in the blockstore
     const root: Slot = try blockstore_reader.lowestSlot();
-    const result = try findSlotsToClean(
-        allocator,
-        blockstore_reader,
-        root,
-        max_ledger_shreds,
-    );
+    const result = try findSlotsToClean(blockstore_reader, root, max_ledger_shreds);
     logger.infof("findSlotsToClean result: {any}", .{result});
 
     if (result.should_clean) {
@@ -127,7 +119,6 @@ pub fn cleanBlockstore(
 ///
 /// Analogous to the [`find_slots_to_clean`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L103)
 fn findSlotsToClean(
-    allocator: std.mem.Allocator,
     blockstore_reader: *BlockstoreReader,
     max_root: Slot,
     max_ledger_shreds: u64,
@@ -136,17 +127,7 @@ fn findSlotsToClean(
     highest_slot_to_purge: Slot,
     total_shreds: u64,
 } {
-    const data_shred_cf_name = Schema.data_shred.name;
-
-    const live_files = try blockstore_reader.db.db.liveFiles(allocator);
-    defer live_files.deinit();
-
-    var num_shreds: u64 = 0;
-    for (live_files.items) |live_file| {
-        if (std.mem.eql(u8, live_file.column_family_name, data_shred_cf_name)) {
-            num_shreds += live_file.num_entries;
-        }
-    }
+    const num_shreds = try blockstore_reader.db.count(Schema.data_shred);
 
     // Using the difference between the lowest and highest slot seen will
     // result in overestimating the number of slots in the blockstore since
@@ -229,12 +210,13 @@ test "findSlotsToClean" {
 
     {
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(ledger.schema.schema.slot_meta, lowest_slot_meta.slot, lowest_slot_meta);
         try write_batch.put(ledger.schema.schema.slot_meta, highest_slot_meta.slot, highest_slot_meta);
         try db.commit(write_batch);
     }
 
-    const r = try findSlotsToClean(allocator, &reader, 0, 100);
+    const r = try findSlotsToClean(&reader, 0, 100);
     try std.testing.expectEqual(false, r.should_clean);
     try std.testing.expectEqual(0, r.total_shreds);
     try std.testing.expectEqual(0, r.highest_slot_to_purge);

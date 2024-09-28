@@ -152,6 +152,7 @@ pub const ShredInserter = struct {
         std.debug.assert(shreds.len == is_repaired.len);
         var total_timer = try Timer.start();
         var write_batch = try self.db.initWriteBatch();
+        defer write_batch.deinit();
 
         var just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator); // TODO capacity = shreds.len
         var erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator);
@@ -448,7 +449,7 @@ pub const ShredInserter = struct {
         const erasure_set_id = shred.fields.common.erasureSetId();
         // TODO: redundant get or put pattern
         if (!merkle_root_metas.contains(erasure_set_id)) {
-            if (try self.db.get(schema.merkle_root_meta, erasure_set_id)) |meta_| {
+            if (try self.db.get(self.allocator, schema.merkle_root_meta, erasure_set_id)) |meta_| {
                 try merkle_root_metas.put(erasure_set_id, .{ .clean = meta_ });
             }
         }
@@ -486,7 +487,7 @@ pub const ShredInserter = struct {
         // TODO: redundant get or put pattern
         const erasure_meta_entry = try erasure_metas.getOrPut(erasure_set_id);
         if (!erasure_meta_entry.found_existing) {
-            if (try self.db.get(schema.erasure_meta, erasure_set_id)) |meta_| {
+            if (try self.db.get(self.allocator, schema.erasure_meta, erasure_set_id)) |meta_| {
                 erasure_meta_entry.value_ptr.* = .{ .clean = meta_ };
             } else {
                 erasure_meta_entry.value_ptr.* = .{
@@ -650,7 +651,7 @@ pub const ShredInserter = struct {
         const erasure_set_id = shred.fields.common.erasureSetId();
         // TODO: redundant get or put pattern
         if (!merkle_root_metas.contains(erasure_set_id)) {
-            if (try self.db.get(schema.merkle_root_meta, erasure_set_id)) |meta_| {
+            if (try self.db.get(self.allocator, schema.merkle_root_meta, erasure_set_id)) |meta_| {
                 try merkle_root_metas.put(erasure_set_id, .{ .clean = meta_ });
             }
         }
@@ -725,7 +726,7 @@ pub const ShredInserter = struct {
 
         // TODO: redundant get or put pattern
         if (!erasure_metas.contains(erasure_set_id)) {
-            if (try self.db.get(schema.erasure_meta, erasure_set_id)) |meta_| {
+            if (try self.db.get(self.allocator, schema.erasure_meta, erasure_set_id)) |meta_| {
                 try erasure_metas.put(erasure_set_id, .{ .clean = meta_ });
             }
         }
@@ -745,7 +746,7 @@ pub const ShredInserter = struct {
         var timer = try Timer.start();
         const entry = try working_set.getOrPut(slot);
         if (!entry.found_existing) {
-            if (try self.db.get(schema.index, slot)) |item| {
+            if (try self.db.get(self.allocator, schema.index, slot)) |item| {
                 entry.value_ptr.* = .{ .index = item };
             } else {
                 entry.value_ptr.* = IndexMetaWorkingSetEntry.init(allocator, slot);
@@ -765,7 +766,7 @@ pub const ShredInserter = struct {
         // TODO: redundant get or put pattern
         const entry = try working_set.getOrPut(slot);
         if (!entry.found_existing) {
-            if (try self.db.get(schema.slot_meta, slot)) |backup| {
+            if (try self.db.get(self.allocator, schema.slot_meta, slot)) |backup| {
                 var slot_meta: SlotMeta = try backup.clone(self.allocator);
                 // If parent_slot == None, then this is one of the orphans inserted
                 // during the chaining process, see the function find_slot_meta_in_cached_state()
@@ -1262,7 +1263,7 @@ pub const ShredInserter = struct {
         if (entry.found_existing) {
             return entry.value_ptr;
         }
-        entry.value_ptr.* = if (try self.db.get(schema.slot_meta, slot)) |m|
+        entry.value_ptr.* = if (try self.db.get(self.allocator, schema.slot_meta, slot)) |m|
             m
         else
             SlotMeta.init(self.allocator, slot, null);
@@ -1344,7 +1345,7 @@ pub const ShredInserter = struct {
         const next_erasure_set = ErasureSetId{ .slot = slot, .fec_set_index = next_fec_set_index };
         const next_merkle_root_meta = if (merkle_root_metas.get(next_erasure_set)) |nes|
             nes.asRef().*
-        else if (try self.db.get(schema.merkle_root_meta, next_erasure_set)) |nes|
+        else if (try self.db.get(self.allocator, schema.merkle_root_meta, next_erasure_set)) |nes|
             nes
         else
             // No shred from the next fec set has been received
@@ -2024,7 +2025,7 @@ test "chaining basic" {
     // insert slot 1
     _ = try state.insertShredBytes(slots[1]);
     {
-        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 1)).?;
+        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
         try std.testing.expect(!slot_meta.isConnected());
@@ -2035,7 +2036,7 @@ test "chaining basic" {
     // insert slot 2
     _ = try state.insertShredBytes(slots[2]);
     {
-        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 1)).?;
+        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.next_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
@@ -2043,7 +2044,7 @@ test "chaining basic" {
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 2)).?;
+        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 2)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
@@ -2054,7 +2055,7 @@ test "chaining basic" {
     // insert slot 0
     _ = try state.insertShredBytes(slots[0]);
     {
-        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 0)).?;
+        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 0)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{1}, slot_meta.next_slots.items);
         try std.testing.expect(slot_meta.isConnected());
@@ -2062,7 +2063,7 @@ test "chaining basic" {
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 1)).?;
+        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.next_slots.items);
         try std.testing.expect(slot_meta.isConnected());
@@ -2070,7 +2071,7 @@ test "chaining basic" {
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 2)).?;
+        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 2)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
         try std.testing.expect(slot_meta.isConnected());
@@ -2096,6 +2097,7 @@ test "merkle root metas coding" {
 
     { // first shred (should succeed)
         var write_batch = try state.db.initWriteBatch();
+        defer write_batch.deinit();
         const this_shred = shreds[0];
         var merkle_root_metas =
             AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)).init(allocator);
@@ -2135,6 +2137,7 @@ test "merkle root metas coding" {
 
     { // second shred (same index as first, should conflict with merkle root)
         var write_batch = try state.db.initWriteBatch();
+        defer write_batch.deinit();
         const this_shred = shreds[1];
 
         const succeeded, //
@@ -2154,6 +2157,7 @@ test "merkle root metas coding" {
         const original_erasure_set_id = shreds[0].commonHeader().erasureSetId();
         const original_meta_from_map = merkle_root_metas.get(original_erasure_set_id).?.asRef();
         const original_meta_from_db = (try state.db.get(
+            state.allocator(),
             schema.merkle_root_meta,
             original_erasure_set_id,
         )).?;
@@ -2171,6 +2175,7 @@ test "merkle root metas coding" {
 
     { // third shred (different index, should succeed)
         var write_batch = try state.db.initWriteBatch();
+        defer write_batch.deinit();
         const this_shred = shreds[2];
         const this_index = start_index + 31;
 
@@ -2187,6 +2192,7 @@ test "merkle root metas coding" {
         const original_erasure_set_id = shreds[0].commonHeader().erasureSetId();
         const original_meta_from_map = merkle_root_metas.get(original_erasure_set_id).?.asRef();
         const original_meta_from_db = (try state.db.get(
+            state.allocator(),
             schema.merkle_root_meta,
             original_erasure_set_id,
         )).?;

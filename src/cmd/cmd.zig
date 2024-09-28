@@ -715,7 +715,6 @@ fn validator() !void {
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        allocator,
         app_base.logger,
         blockstore_reader,
         blockstore_writer,
@@ -818,7 +817,6 @@ fn shredCollector() !void {
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        allocator,
         app_base.logger,
         blockstore_reader,
         blockstore_writer,
@@ -1283,15 +1281,15 @@ pub const Network = enum {
 
         switch (self) {
             .mainnet => {
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint.mainnet.solana.com:8001");
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint.mainnet-beta.solana.com:8001");
                 len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.mainnet.solana.com:8001");
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.mainnet-beta.solana.com:8001");
                 len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.mainnet.solana.com:8001");
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.mainnet-beta.solana.com:8001");
                 len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint4.mainnet.solana.com:8001");
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint4.mainnet-beta.solana.com:8001");
                 len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint5.mainnet.solana.com:8001");
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint5.mainnet-beta.solana.com:8001");
                 len += 1;
             },
             .testnet => {
@@ -1412,7 +1410,7 @@ const LoadedSnapshot = struct {
         self.genesis_config.deinit(self.allocator);
         self.status_cache.deinit(self.allocator);
         self.snapshot_fields.deinit(self.allocator);
-        self.accounts_db.deinit(false); // keep index files on disk
+        self.accounts_db.deinit();
         self.allocator.destroy(self);
     }
 };
@@ -1475,7 +1473,7 @@ fn loadSnapshot(
         },
         geyser_writer,
     );
-    errdefer result.accounts_db.deinit(false);
+    errdefer result.accounts_db.deinit();
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(
         allocator,

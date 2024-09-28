@@ -99,7 +99,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         },
         null,
     );
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     const exit = try allocator.create(std.atomic.Value(bool));
     defer allocator.destroy(exit);
@@ -324,7 +324,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             defer snapshot_fields.deinit(allocator);
 
             var alt_accounts_db = try AccountsDB.init(allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
-            defer alt_accounts_db.deinit(true);
+            defer alt_accounts_db.deinit();
 
             _ = try alt_accounts_db.loadWithDefaults(allocator, &snapshot_fields, 1, true, 1_500);
             const maybe_inc_slot = if (snapshot_files.incremental_snapshot) |inc| inc.slot else null;
