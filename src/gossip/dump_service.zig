@@ -27,10 +27,9 @@ pub const GossipDumpService = struct {
         }
 
         const start_time = std.time.timestamp();
-        const dir_name = try std.fmt.allocPrint(self.allocator, "gossip-dumps/{}", .{start_time});
-        defer self.allocator.free(dir_name);
+        const dir_name_bounded = sig.utils.fmt.boundedFmt("gossip-dumps/{}", .{start_time});
 
-        var dir = try std.fs.cwd().makeOpenPath(dir_name, .{});
+        var dir = try std.fs.cwd().makeOpenPath(dir_name_bounded.constSlice(), .{});
         defer dir.close();
 
         while (true) {
