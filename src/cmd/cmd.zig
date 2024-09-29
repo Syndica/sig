@@ -1061,7 +1061,7 @@ const AppBase = struct {
 
     fn init(allocator: Allocator) !AppBase {
         const logger = try spawnLogger();
-        defer logger.deinit();
+        errdefer logger.deinit();
 
         const metrics_registry = globalRegistry();
         logger.infof("metrics port: {d}", .{config.current.metrics_port});
