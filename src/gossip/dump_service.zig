@@ -5,8 +5,11 @@ const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipTable = sig.gossip.table.GossipTable;
+const Duration = sig.time.Duration;
 const Logger = sig.trace.log.Logger;
 const RwMux = sig.sync.mux.RwMux;
+
+pub const DUMP_INTERVAL = Duration.fromSecs(10);
 
 pub const GossipDumpService = struct {
     allocator: Allocator,
@@ -24,16 +27,20 @@ pub const GossipDumpService = struct {
         }
 
         const start_time = std.time.timestamp();
-        const dir = try std.fmt.allocPrint(self.allocator, "gossip-dumps/{}", .{start_time});
-        defer self.allocator.free(dir);
-        try std.fs.cwd().makePath(dir);
-        while (self.counter.load(.acquire) != idx) {
+        const dir_name = try std.fmt.allocPrint(self.allocator, "gossip-dumps/{}", .{start_time});
+        defer self.allocator.free(dir_name);
+
+        var dir = try std.fs.cwd().makeOpenPath(dir_name, .{});
+        defer dir.close();
+
+        while (true) {
+            if (self.exit.load(.unordered)) return;
             try self.dumpGossip(dir, start_time);
-            std.time.sleep(std.time.ns_per_s * 10);
+            std.time.sleep(DUMP_INTERVAL.asNanos());
         }
     }
 
-    fn dumpGossip(self: *const Self, dir: []const u8, start_time: i64) !void {
+    fn dumpGossip(self: *const Self, dir: std.fs.Dir, start_time: i64) !void {
         const data = blk: {
             var gossip_table_lock = self.gossip_table_rw.read();
             defer gossip_table_lock.unlock();
@@ -76,9 +83,9 @@ pub const GossipDumpService = struct {
 
         // create file
         const now = std.time.timestamp();
-        const filename = try std.fmt.allocPrint(self.allocator, "{s}/gossip-dump-{}.csv", .{ dir, now });
+        const filename = try std.fmt.allocPrint(self.allocator, "gossip-dump-{}.csv", .{now});
         defer self.allocator.free(filename);
-        var file = try std.fs.cwd().createFile(filename, .{});
+        var file = try dir.createFile(filename, .{});
         defer file.close();
 
         // output results
