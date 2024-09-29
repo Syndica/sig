@@ -510,12 +510,8 @@ pub const BenchmarLegger = struct {
         };
 
         const total_shreds = shreds.len;
-        const is_repairs = try inserter.allocator.alloc(bool, total_shreds);
-        defer inserter.allocator.free(is_repairs);
-        for (0..total_shreds) |i| {
-            is_repairs[i] = false;
-        }
-        _ = try inserter.insertShreds(shreds, is_repairs, null, false, null);
+
+        _ = try ledger.insert_shred.insertShredsForTest(&inserter, shreds);
 
         const slot: u32 = 0;
         const num_reads = total_shreds / 15;
@@ -546,12 +542,7 @@ pub const BenchmarLegger = struct {
         };
 
         const total_shreds = shreds.len;
-        const is_repairs = try inserter.allocator.alloc(bool, total_shreds);
-        defer inserter.allocator.free(is_repairs);
-        for (0..total_shreds) |i| {
-            is_repairs[i] = false;
-        }
-        _ = try inserter.insertShreds(shreds, is_repairs, null, false, null);
+        _ = try ledger.insert_shred.insertShredsForTest(&inserter, shreds);
 
         const slot: u32 = 0;
 
