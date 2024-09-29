@@ -585,7 +585,7 @@ pub const BenchmarLegger = struct {
     // Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
     pub fn benchSerializeWriteBincode() !u64 {
         const allocator = std.heap.c_allocator;
-        var state = try State.initBench("bench read randmom");
+        var state = try State.initBench("bench serialize write bincode");
         defer state.deinitBench();
         const slot: u32 = 0;
 
