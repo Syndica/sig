@@ -3,6 +3,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const ledger = @import("lib.zig");
+const transaction_status = @import("./transaction_status.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -12,6 +13,10 @@ const Shred = ledger.shred.Shred;
 const Slot = sig.core.Slot;
 const SlotMeta = ledger.meta.SlotMeta;
 const VersionedTransactionWithStatusMeta = ledger.reader.VersionedTransactionWithStatusMeta;
+const Reward = transaction_status.Reward;
+const Rewards = transaction_status.Rewards;
+const RewardType = transaction_status.RewardType;
+const Pubkey = sig.core.Pubkey;
 
 const comptimePrint = std.fmt.comptimePrint;
 
@@ -355,6 +360,22 @@ pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entr
     return entries.toOwnedSlice();
 }
 
+fn create_rewards(allocator: std.mem.Allocator, count: usize) !Rewards {
+    var rng = std.Random.DefaultPrng.init(100);
+    const rand = rng.random();
+    var rewards: Rewards = Rewards.init(allocator);
+    for (0..count) |i| {
+        try rewards.append(Reward{
+            .pubkey = &Pubkey.random(rand).data,
+            .lamports = @intCast(42 + i),
+            .post_balance = std.math.maxInt(u64),
+            .reward_type = RewardType.Fee,
+            .commission = null,
+        });
+    }
+    return rewards;
+}
+
 const State = TestState("global");
 const DB = TestDB("global");
 
@@ -558,6 +579,22 @@ pub const BenchmarLegger = struct {
         for (indices.items) |shred_index| {
             _ = try reader.getDataShred(slot, shred_index);
         }
+        return timer.read();
+    }
+
+    // Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
+    pub fn benchSerializeWriteBincode() !u64 {
+        const allocator = std.heap.c_allocator;
+        var state = try State.initBench("bench read randmom");
+        defer state.deinitBench();
+        const slot: u32 = 0;
+
+        var rewards: Rewards = try create_rewards(allocator, 100);
+        var timer = try std.time.Timer.start();
+        try state.db.put(schema.rewards, slot, .{
+            .rewards = try rewards.toOwnedSlice(),
+            .num_partitions = null,
+        });
         return timer.read();
     }
 };

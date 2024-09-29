@@ -184,7 +184,6 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 defer key_bytes.deinit();
                 const val_bytes = try value_serializer.serializeToRef(self.allocator, value);
                 defer val_bytes.deinit();
-
                 self.inner.put(
                     self.cf_handles[cf.find(column_families)],
                     key_bytes.data,
