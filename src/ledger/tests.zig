@@ -474,7 +474,7 @@ pub const BenchmarLegger = struct {
     // Analogous to [bench_write_small](https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L59)
     pub fn benchWriteSmall() !u64 {
         const allocator = std.heap.c_allocator;
-        var state = try State.initBench("insert shreds and transaction statuses then get blocks");
+        var state = try State.initBench("bench write small");
         defer state.deinitBench();
         var inserter = try state.shredInserter();
 
@@ -498,7 +498,7 @@ pub const BenchmarLegger = struct {
     // Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
     pub fn benchReadSequential() !u64 {
         const allocator = std.heap.c_allocator;
-        var state = try State.initBench("insert shreds and transaction statuses then get blocks");
+        var state = try State.initBench("bentch read sequential");
         defer state.deinitBench();
         var inserter = try state.shredInserter();
         var reader = try state.reader();
@@ -534,7 +534,7 @@ pub const BenchmarLegger = struct {
     // Analogous to [bench_read_random]https://github.com/anza-xyz/agave/blob/92eca1192b055d896558a78759d4e79ab4721ff1/ledger/benches/blockstore.rs#L103
     pub fn benchReadRandom() !u64 {
         const allocator = std.heap.c_allocator;
-        var state = try State.initBench("insert shreds and transaction statuses then get blocks");
+        var state = try State.initBench("bench read randmom");
         defer state.deinitBench();
         var inserter = try state.shredInserter();
         var reader = try state.reader();
