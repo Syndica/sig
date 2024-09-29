@@ -597,4 +597,20 @@ pub const BenchmarLegger = struct {
         });
         return timer.read();
     }
+
+    pub fn benchReadBincode() !u64 {
+        const allocator = std.heap.c_allocator;
+        var state = try State.initBench("bench read bincode");
+        defer state.deinitBench();
+        const slot: u32 = 1;
+
+        var rewards: Rewards = try create_rewards(allocator, 100);
+        try state.db.put(schema.rewards, slot, .{
+            .rewards = try rewards.toOwnedSlice(),
+            .num_partitions = null,
+        });
+        var timer = try std.time.Timer.start();
+        _ = try state.db.getBytes(schema.rewards, slot);
+        return timer.read();
+    }
 };
