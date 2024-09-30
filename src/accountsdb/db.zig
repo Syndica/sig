@@ -1265,30 +1265,12 @@ pub const AccountsDB = struct {
             };
             if (largest_flushed_slot - latest_full_snapshot_slot >= slots_per_full_snapshot) {
                 self.logger.info().logf("accountsdb[manager]: generating full snapshot for slot {d}", .{largest_flushed_slot});
-
-                var snapshot_gen_pkg, const snapshot_gen_info = try self.makeFullSnapshotGenerationPackage(
-                    largest_flushed_slot,
-                    &tmp_bank_fields,
-                    rand.random().int(u64),
-                    0,
-                );
-                defer snapshot_gen_pkg.deinit();
-
-                const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
-                    .slot = snapshot_gen_info.slot,
-                    .hash = snapshot_gen_info.hash,
-                    .compression = .zstd,
+                try self.generateFullSnapshotWithCompressor(zstd_compressor, zstd_buffer, .{
+                    .target_slot = largest_flushed_slot,
+                    .bank_fields = &tmp_bank_fields,
+                    .lamports_per_signature = rand.random().int(u64),
+                    .old_snapshot_action = .delete_old,
                 });
-                const archive_file_name = archive_file_name_bounded.constSlice();
-                const archive_file = try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
-                defer archive_file.close();
-
-                const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
-
-                try snapshot_gen_pkg.write(zstd_write_ctx.writer(), StatusCache.default());
-                try zstd_write_ctx.finish();
-
-                try self.commitFullSnapshotInfo(snapshot_gen_info, .delete_old);
             }
 
             const latest_incremental_snapshot_slot = blk: {
@@ -1363,57 +1345,6 @@ pub const AccountsDB = struct {
                 }
             }
         }
-    }
-
-    pub fn buildFullSnapshot(
-        self: *Self,
-        slot: Slot,
-        archive_dir: std.fs.Dir,
-        bank_fields: *sig.accounts_db.snapshots.BankFields,
-        status_cache: StatusCache,
-    ) !void {
-        var rand = std.Random.DefaultPrng.init(1234);
-
-        // setup zstd
-        const zstd_compressor = try zstd.Compressor.init(.{});
-        defer zstd_compressor.deinit();
-        var zstd_sfba_state = std.heap.stackFallback(4096 * 4, self.allocator);
-        const zstd_sfba = zstd_sfba_state.get();
-        const zstd_buffer = try zstd_sfba.alloc(u8, zstd.Compressor.recommOutSize());
-        defer zstd_sfba.free(zstd_buffer);
-
-        // generate the snapshot package
-        var snapshot_gen_pkg, const snapshot_gen_info = try self.makeFullSnapshotGenerationPackage(
-            slot,
-            bank_fields,
-            rand.random().int(u64),
-            0,
-        );
-        defer snapshot_gen_pkg.deinit();
-
-        // create the snapshot filename
-        const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
-            .slot = snapshot_gen_info.slot,
-            .hash = snapshot_gen_info.hash,
-            .compression = .zstd,
-        });
-        const archive_file_name = archive_file_name_bounded.constSlice();
-        const archive_file = try archive_dir.createFile(archive_file_name, .{ .read = true });
-        defer archive_file.close();
-
-        const full_path = try archive_dir.realpathAlloc(self.allocator, archive_file_name);
-        defer self.allocator.free(full_path);
-        self.logger.info().logf("writing full snapshot to {s}", .{full_path});
-
-        // write the snapshot to disk, compressed
-        var timer = try sig.time.Timer.start();
-        const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
-        try snapshot_gen_pkg.write(zstd_write_ctx.writer(), status_cache);
-        try zstd_write_ctx.finish();
-        self.logger.info().logf("writing full snapshot took {any}", .{timer.read()});
-
-        // track new snapshot
-        try self.commitFullSnapshotInfo(snapshot_gen_info, .ignore_old);
     }
 
     /// flushes a slot account data from the cache onto disk, and updates the index
@@ -2576,6 +2507,178 @@ pub const AccountsDB = struct {
         }
 
         switch (old_snapshot_action) {
+            .ignore_old => {},
+            .delete_old => if (maybe_old_snapshot_info) |old_snapshot_info| {
+                const old_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+                    .slot = old_snapshot_info.slot,
+                    .hash = old_snapshot_info.hash,
+                    .compression = .zstd,
+                });
+                const old_name = old_name_bounded.constSlice();
+
+                self.logger.info().logf("deleting old full snapshot archive: {s}", .{old_name});
+                try self.snapshot_dir.deleteFile(old_name);
+            },
+        }
+    }
+
+    pub const FullSnapshotGenParams = struct {
+        /// The slot to generate a snapshot for.
+        /// Must be a flushed slot (`<= self.largest_flushed_slot.load(...)`).
+        /// Must be greater than the most recently generated full snapshot.
+        /// Must exist explicitly in the database.
+        target_slot: Slot,
+        /// Mutated (without re-allocation) to be valid for the target slot.
+        bank_fields: *BankFields,
+        lamports_per_signature: u64,
+        old_snapshot_action: OldSnapshotAction,
+
+        /// For tests against older snapshots. Should just be 0 during normal operation.
+        deprecated_stored_meta_write_version: u64 = 0,
+
+        pub const OldSnapshotAction = enum {
+            /// Ignore the previous snapshot.
+            ignore_old,
+            /// Delete the previous snapshot.
+            delete_old,
+        };
+    };
+
+    pub fn generateFullSnapshot(
+        self: *Self,
+        params: FullSnapshotGenParams,
+    ) !void {
+        const zstd_compressor = try zstd.Compressor.init(.{});
+        defer zstd_compressor.deinit();
+
+        var zstd_sfba_state = std.heap.stackFallback(4096 * 4, self.allocator);
+        const zstd_sfba = zstd_sfba_state.get();
+        const zstd_buffer = try zstd_sfba.alloc(u8, zstd.Compressor.recommOutSize());
+        defer zstd_sfba.free(zstd_buffer);
+
+        return self.generateFullSnapshotWithCompressor(zstd_compressor, zstd_buffer, params);
+    }
+
+    pub fn generateFullSnapshotWithCompressor(
+        self: *Self,
+        zstd_compressor: zstd.Compressor,
+        zstd_buffer: []u8,
+        params: FullSnapshotGenParams,
+    ) !void {
+        std.debug.assert(zstd_buffer.len != 0);
+        const full_hash, const full_capitalization = try self.computeAccountHashesAndLamports(.{
+            .FullAccountHash = .{
+                .max_slot = params.target_slot,
+            },
+        });
+
+        const snapshot_fields, //
+        const snapshot_gen_info, //
+        var file_map_rw: RwMux(FileMap).RLockGuard //
+        = blk: {
+            // NOTE: we hold the lock for the entire duration of the procedure to ensure
+            // flush and clean do not create files while generating a snapshot.
+            self.file_map_fd_rw.lockShared();
+            defer self.file_map_fd_rw.unlockShared();
+
+            var file_map_rw = self.file_map.read();
+            errdefer file_map_rw.unlock();
+
+            const file_map = file_map_rw.get();
+
+            std.debug.assert(params.target_slot <= self.largest_flushed_slot.load(.monotonic));
+
+            var serializable_file_map = std.AutoArrayHashMap(Slot, AccountFileInfo).init(self.allocator);
+            errdefer serializable_file_map.deinit();
+            try serializable_file_map.ensureTotalCapacity(file_map.count());
+
+            var bank_hash_stats = BankHashStats.zero_init;
+
+            for (file_map.values()) |account_file| {
+                if (account_file.slot > params.target_slot) continue;
+
+                const bank_hash_stats_map, var bank_hash_stats_map_lg = self.bank_hash_stats.readWithLock();
+                defer bank_hash_stats_map_lg.unlock();
+
+                if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
+                    bank_hash_stats.accumulate(other_stats);
+                } else {
+                    self.logger.warn().logf("No bank hash stats for slot {}.", .{account_file.slot});
+                }
+
+                serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
+                    .id = account_file.id,
+                    .length = account_file.length,
+                });
+            }
+
+            // TODO: this is a temporary value
+            const delta_hash = Hash.default();
+
+            params.bank_fields.slot = params.target_slot; // !
+            params.bank_fields.capitalization = full_capitalization; // !
+
+            const info: FullSnapshotGenerationInfo = .{
+                .slot = params.target_slot,
+                .hash = full_hash,
+                .capitalization = full_capitalization,
+            };
+
+            const snapshot_fields: SnapshotFields = .{
+                .bank_fields = params.bank_fields.*,
+                .accounts_db_fields = .{
+                    .file_map = serializable_file_map,
+
+                    .stored_meta_write_version = params.deprecated_stored_meta_write_version,
+
+                    .slot = params.target_slot,
+                    .bank_hash_info = .{
+                        .accounts_delta_hash = delta_hash,
+                        .accounts_hash = full_hash,
+                        .stats = bank_hash_stats,
+                    },
+
+                    .rooted_slots = .{},
+                    .rooted_slot_hashes = .{},
+                },
+                .lamports_per_signature = params.lamports_per_signature,
+                .bank_fields_inc = .{}, // default to null for full snapshot,
+            };
+
+            break :blk .{ snapshot_fields, info, file_map_rw };
+        };
+        defer file_map_rw.unlock();
+
+        const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+            .slot = params.target_slot,
+            .hash = full_hash,
+            .compression = .zstd,
+        });
+        const archive_file_name = archive_file_name_bounded.constSlice();
+        const archive_file = try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
+        defer archive_file.close();
+
+        const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
+
+        try writeSnapshotTarWithFields(
+            zstd_write_ctx.writer(),
+            sig.version.CURRENT_CLIENT_VERSION,
+            StatusCache.default(),
+            snapshot_fields,
+            file_map_rw.get(),
+        );
+        try zstd_write_ctx.finish();
+
+        const latest_full_snapshot_info, var latest_full_snapshot_info_lg = self.latest_full_snapshot_info.writeWithLock();
+        defer latest_full_snapshot_info_lg.unlock();
+
+        const maybe_old_snapshot_info: ?FullSnapshotGenerationInfo = latest_full_snapshot_info.*;
+        latest_full_snapshot_info.* = snapshot_gen_info;
+        if (maybe_old_snapshot_info) |old_snapshot_info| {
+            std.debug.assert(old_snapshot_info.slot <= snapshot_gen_info.slot);
+        }
+
+        switch (params.old_snapshot_action) {
             .ignore_old => {},
             .delete_old => if (maybe_old_snapshot_info) |old_snapshot_info| {
                 const old_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
