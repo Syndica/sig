@@ -236,7 +236,6 @@ pub const AccountFile = struct {
     length: usize,
     // total bytes available
     file_size: usize,
-    file: std.fs.File,
 
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
@@ -253,7 +252,7 @@ pub const AccountFile = struct {
             null,
             file_size,
             std.posix.PROT.READ | std.posix.PROT.WRITE,
-            std.posix.MAP{ .TYPE = .SHARED },
+            std.posix.MAP{ .TYPE = .PRIVATE },
             file.handle,
             0,
         );
@@ -263,14 +262,12 @@ pub const AccountFile = struct {
             .length = accounts_file_info.length,
             .id = accounts_file_info.id,
             .file_size = file_size,
-            .file = file,
             .slot = slot,
         };
     }
 
     pub fn deinit(self: Self) void {
         std.posix.munmap(self.memory);
-        self.file.close();
     }
 
     pub fn validate(self: *const Self) !usize {
