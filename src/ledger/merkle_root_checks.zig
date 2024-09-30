@@ -11,6 +11,7 @@ const AutoHashMap = std.AutoHashMap;
 const ErasureSetId = sig.ledger.shred.ErasureSetId;
 const Hash = sig.core.Hash;
 const Logger = sig.trace.Logger;
+const Slot = sig.core.Slot;
 const SortedMap = sig.utils.collections.SortedMap;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
@@ -27,6 +28,66 @@ const key_serializer = sig.ledger.database.key_serializer;
 const value_serializer = sig.ledger.database.value_serializer;
 
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
+
+/// agave: check_merkle_root_consistency
+pub fn checkMerkleRootConsistency(
+    logger: Logger,
+    db: *BlockstoreDB,
+    shred_store: WorkingShredStore,
+    slot: Slot,
+    merkle_root_meta: *const ledger.meta.MerkleRootMeta,
+    shred: *const Shred,
+    duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
+) !bool {
+    const new_merkle_root = shred.merkleRoot() catch null;
+    if (new_merkle_root == null and merkle_root_meta.merkle_root == null or
+        new_merkle_root != null and merkle_root_meta.merkle_root != null and
+        std.mem.eql(u8, &merkle_root_meta.merkle_root.?.data, &new_merkle_root.?.data))
+    {
+        // No conflict, either both merkle shreds with same merkle root
+        // or both legacy shreds with merkle_root `None`
+        return true;
+    }
+
+    logger.warnf(&newlinesToSpaces(
+        \\Received conflicting merkle roots for slot: {}, erasure_set: {any} original merkle
+        \\root meta {any} vs conflicting merkle root {any} shred index {} type {any}. Reporting
+        \\as duplicate
+    ), .{
+        slot,
+        shred.commonHeader().erasureSetId(),
+        merkle_root_meta,
+        new_merkle_root,
+        shred.commonHeader().index,
+        shred,
+    });
+
+    if (!try db.contains(schema.duplicate_slots, slot)) {
+        // TODO this could be handled by caller (similar for chaining methods)
+        const shred_id = ShredId{
+            .slot = slot,
+            .index = merkle_root_meta.first_received_shred_index,
+            .shred_type = merkle_root_meta.first_received_shred_type,
+        };
+        if (try shred_store.get(shred_id)) |conflicting_shred| {
+            try duplicate_shreds.append(.{
+                .MerkleRootConflict = .{
+                    .original = shred.*, // TODO lifetimes (cloned in rust)
+                    .conflict = conflicting_shred,
+                },
+            });
+        } else {
+            logger.errf(&newlinesToSpaces(
+                \\Shred {any} indiciated by merkle root meta {any} is 
+                \\missing from blockstore. This should only happen in extreme cases where 
+                \\blockstore cleanup has caught up to the root. Skipping the merkle root 
+                \\consistency check
+            ), .{ shred_id, merkle_root_meta });
+            return true;
+        }
+    }
+    return false;
+}
 
 /// Returns true if there is no chaining conflict between
 /// the `shred` and `merkle_root_meta` of the next FEC set,

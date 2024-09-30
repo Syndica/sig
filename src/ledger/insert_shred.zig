@@ -321,7 +321,7 @@ pub const ShredInserter = struct {
             // unreachable: Erasure meta was just created, initial shred must exist
             const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
             // TODO: agave discards the result here. should we also?
-            _ = try ledger.merkle_chaining.checkForwardChainedMerkleRootConsistency(
+            _ = try ledger.merkle_root_checks.checkForwardChainedMerkleRootConsistency(
                 allocator,
                 self.logger,
                 &self.db,
@@ -355,7 +355,7 @@ pub const ShredInserter = struct {
             // unreachable: Merkle root meta was just created, initial shred must exist
             const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
             // TODO: agave discards the result here. should we also?
-            _ = try ledger.merkle_chaining.checkBackwardsChainedMerkleRootConsistency(
+            _ = try ledger.merkle_root_checks.checkBackwardsChainedMerkleRootConsistency(
                 allocator,
                 self.logger,
                 &self.db,
@@ -458,7 +458,9 @@ pub const ShredInserter = struct {
                 // A previous shred has been inserted in this batch or in blockstore
                 // Compare our current shred against the previous shred for potential
                 // conflicts
-                if (!try self.checkMerkleRootConsistency(
+                if (!try ledger.merkle_root_checks.checkMerkleRootConsistency(
+                    self.logger,
+                    &self.db,
                     state.shredStore(),
                     shred.fields.common.slot,
                     merkle_root_meta.asRef(),
@@ -629,7 +631,9 @@ pub const ShredInserter = struct {
                 // A previous shred has been inserted in this batch or in blockstore
                 // Compare our current shred against the previous shred for potential
                 // conflicts
-                if (!try self.checkMerkleRootConsistency(
+                if (!try ledger.merkle_root_checks.checkMerkleRootConsistency(
+                    self.logger,
+                    &self.db,
                     state.shredStore(),
                     slot,
                     merkle_root_meta.asRef(),
@@ -759,64 +763,6 @@ pub const ShredInserter = struct {
     /// agave: has_duplicate_shreds_in_slot
     fn hasDuplicateShredsInSlot(self: *Self, slot: Slot) !bool {
         return try self.db.contains(schema.duplicate_slots, slot);
-    }
-
-    /// agave: check_merkle_root_consistency
-    fn checkMerkleRootConsistency(
-        self: *Self,
-        shred_store: WorkingShredStore,
-        slot: Slot,
-        merkle_root_meta: *const meta.MerkleRootMeta,
-        shred: *const Shred,
-        duplicate_shreds: *ArrayList(PossibleDuplicateShred),
-    ) !bool {
-        const new_merkle_root = shred.merkleRoot() catch null;
-        if (new_merkle_root == null and merkle_root_meta.merkle_root == null or
-            new_merkle_root != null and merkle_root_meta.merkle_root != null and
-            std.mem.eql(u8, &merkle_root_meta.merkle_root.?.data, &new_merkle_root.?.data))
-        {
-            // No conflict, either both merkle shreds with same merkle root
-            // or both legacy shreds with merkle_root `None`
-            return true;
-        }
-
-        self.logger.warnf(&newlinesToSpaces(
-            \\Received conflicting merkle roots for slot: {}, erasure_set: {any} original merkle
-            \\root meta {any} vs conflicting merkle root {any} shred index {} type {any}. Reporting
-            \\as duplicate
-        ), .{
-            slot,
-            shred.commonHeader().erasureSetId(),
-            merkle_root_meta,
-            new_merkle_root,
-            shred.commonHeader().index,
-            shred,
-        });
-
-        if (!try self.hasDuplicateShredsInSlot(slot)) {
-            const shred_id = ShredId{
-                .slot = slot,
-                .index = merkle_root_meta.first_received_shred_index,
-                .shred_type = merkle_root_meta.first_received_shred_type,
-            };
-            if (try shred_store.get(shred_id)) |conflicting_shred| {
-                try duplicate_shreds.append(.{
-                    .MerkleRootConflict = .{
-                        .original = shred.*, // TODO lifetimes (cloned in rust)
-                        .conflict = conflicting_shred,
-                    },
-                });
-            } else {
-                self.logger.errf(&newlinesToSpaces(
-                    \\Shred {any} indiciated by merkle root meta {any} is 
-                    \\missing from blockstore. This should only happen in extreme cases where 
-                    \\blockstore cleanup has caught up to the root. Skipping the merkle root 
-                    \\consistency check
-                ), .{ shred_id, merkle_root_meta });
-                return true;
-            }
-        }
-        return false;
     }
 
     /// agave: insert_data_shred
