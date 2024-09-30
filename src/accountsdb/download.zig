@@ -382,7 +382,7 @@ const DownloadProgress = struct {
 
             const mb_read = self.bytes_read / 1024 / 1024;
             if (mb_read == 0) {
-                self.logger.infof("download speed is too slow (<1MB/s) -- disconnecting", .{});
+                self.logger.info().logf("download speed is too slow (<1MB/s) -- disconnecting", .{});
                 return 1; // abort from callback
             }
 
@@ -398,7 +398,7 @@ const DownloadProgress = struct {
                 self.has_checked_speed = true;
                 if (mb_per_second < self.min_mb_per_second.?) {
                     // not fast enough => abort
-                    self.logger.infof(
+                    self.logger.info().logf(
                         "[download progress]: speed is too slow ({}/s) -- disconnecting",
                         .{std.fmt.fmtIntSizeDec(download_now / elapsed_sec)},
                     );
@@ -408,7 +408,7 @@ const DownloadProgress = struct {
                 }
             }
 
-            self.logger.infof("[download progress]: {d}% done ({:.4}/s - {:.4}/{:.4}) (time left: {d})", .{
+            self.logger.info().logf("[download progress]: {d}% done ({:.4}/s - {:.4}/{:.4}) (time left: {d})", .{
                 self.total_read * 100 / download_total,
                 std.fmt.fmtIntSizeDec(self.bytes_read / elapsed_sec),
                 std.fmt.fmtIntSizeDec(download_now),
