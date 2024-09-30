@@ -937,7 +937,7 @@ fn createSnapshot() !void {
     defer output_dir.close();
 
     app_base.logger.info().logf("accountsdb[manager]: generating full snapshot for slot {d}", .{slot});
-    try accounts_db.generateFullSnapshot(.{
+    _ = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
         .bank_fields = &snapshot_result.snapshot_fields.full.bank_fields,
         .lamports_per_signature = lps: {
