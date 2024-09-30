@@ -82,9 +82,9 @@ pub const GossipDumpService = struct {
 
         // create file
         const now = std.time.timestamp();
-        const filename = try std.fmt.allocPrint(self.allocator, "gossip-dump-{}.csv", .{now});
-        defer self.allocator.free(filename);
-        var file = try dir.createFile(filename, .{});
+        const filename_bounded = sig.utils.fmt.boundedFmt("gossip-dump-{}.csv", .{now});
+
+        var file = try dir.createFile(filename_bounded.constSlice(), .{});
         defer file.close();
 
         // output results
