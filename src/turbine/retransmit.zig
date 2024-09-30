@@ -12,6 +12,7 @@ const bincode = sig.bincode;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
+const Deduper = sig.utils.deduper.Deduper;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
@@ -33,13 +34,13 @@ pub fn runRetransmitService(
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
     epoch_schedule: EpochSchedule,
-    bank_fields: *const BankFields, // Should be replaced with BankForks or some provider of root bank and working bank
+    bank_fields: *const BankFields,
     leader_schedule_cache: *LeaderScheduleCache,
     shreds_receiver: *Channel(std.ArrayList(sig.net.Packet)),
     retransmit_sockets: []const UdpSocket,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
+    rand: std.rand.Random,
     exit: *AtomicBool,
-    // max_slots: Arc<MaxSlots>,
 ) !void {
     var turbine_tree_cache = TurbineTreeCache.init(
         allocator,
@@ -48,7 +49,11 @@ pub fn runRetransmitService(
         gossip_table_rw,
     );
 
-    var shred_deduper = try ShredDeduper(2).init(allocator);
+    var shred_deduper = try ShredDeduper(2).init(
+        allocator,
+        rand,
+        DEDUPER_NUM_BITS,
+    );
     defer shred_deduper.deinit();
 
     while (exit.load(.unordered)) {
@@ -60,14 +65,10 @@ pub fn runRetransmitService(
             retransmit_sockets,
             &turbine_tree_cache,
             &shred_deduper,
-            // max_slots,
+            rand,
         );
     }
 }
-
-const MAX_DUPLICATE_COUNT: usize = 2;
-const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
-const DEDUPER_RESET_CYCLE: Duration = Duration.fromSecs(5 * 60);
 
 fn retransmit(
     allocator: std.mem.Allocator,
@@ -77,25 +78,24 @@ fn retransmit(
     sockets: []const UdpSocket,
     turbine_tree_cache: *TurbineTreeCache,
     shred_deduper: *ShredDeduper(2),
-    // max_slots: &MaxSlots, // When starting validator shared in json rpc service, completed data sets service and tvu retransmit stage
+    rand: std.rand.Random,
 ) !void {
     // Drain shred receiver into raw shreds
-    const raw_shred_batches = try shreds_receiver.try_drain() orelse return error.NoShreds; // Add timeout?
+    const raw_shred_batches = try shreds_receiver.try_drain() orelse return;
     defer {
         for (raw_shred_batches) |batch| batch.deinit();
         allocator.free(raw_shred_batches);
     }
 
-    // TODO: Implement / understand shred deduper
-    // shred_deduper.maybeReset(
-    //     rand,
-    //     DEDUPER_FALSE_POSITIVE_RATE,
-    //     DEDUPER_RESET_CYCLE,
-    // );
+    // Reset dedupers
+    shred_deduper.maybeReset(
+        rand,
+        DEDUPER_FALSE_POSITIVE_RATE,
+        DEDUPER_RESET_CYCLE,
+    );
 
     // Group shreds by slot
     const ShredsArray = std.ArrayList(struct { ShredId, []const u8 });
-
     var slot_shreds = std.AutoArrayHashMap(Slot, ShredsArray).init(allocator);
     defer {
         for (slot_shreds.values()) |arr| arr.deinit();
@@ -104,9 +104,12 @@ fn retransmit(
 
     for (raw_shred_batches) |raw_shred_batch| {
         for (raw_shred_batch.items) |raw_shred| {
-            const shred_id = ShredId{ .index = 0, .slot = 0, .shred_type = .code };
-            // const shred_id = (try bincode.readFromSlice(allocator, Shred, &raw_shred.data, .{})).id(); // Agave just reads shred id using byte offsets into struct
-            if (shred_deduper.dedup(&shred_id, &raw_shred.data, MAX_DUPLICATE_COUNT)) continue;
+            const shred_id = try sig.ledger.shred.layout.getShredId(&raw_shred);
+
+            if (shred_deduper.dedup(&shred_id, &raw_shred.data, MAX_DUPLICATE_COUNT)) {
+                continue;
+            }
+
             if (slot_shreds.getEntry(shred_id.slot)) |entry| {
                 try entry.value_ptr.append(.{ shred_id, &raw_shred.data });
             } else {
@@ -116,11 +119,9 @@ fn retransmit(
             }
         }
     }
-    // array_list.ArrayListAligned(turbine.retransmit.retransmit__struct_31077,null)
-    // array_list.ArrayListAligned(turbine.retransmit.retransmit__struct_31383,null)
+
     // Retransmit shreds
     for (slot_shreds.keys(), slot_shreds.values()) |slot, shreds| {
-        // max_slots.retransmit.fetch_max(slot, Ordering::Relaxed);
         const slot_leader = try leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
         const turbine_tree = try turbine_tree_cache.getTurbineTree(slot, bank_fields);
 
@@ -146,74 +147,45 @@ fn retransmit(
     }
 }
 
+const MAX_DUPLICATE_COUNT: usize = 2;
+const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
+const DEDUPER_RESET_CYCLE: Duration = Duration.fromSecs(5 * 60);
+const DEDUPER_NUM_BITS: u64 = 637_534_199;
+
 pub fn ShredDeduper(comptime K: usize) type {
     return struct {
-        // deduper: Deduper(K, []const u8),
-        // shred_id_filter: Deduper(K, struct { ShredId, usize }),
+        bytes_filter: BytesFilter,
+        shred_id_filter: ShredIdFilter,
 
-        pub fn init(allocator: std.mem.Allocator) !ShredDeduper(K) {
-            _ = allocator;
+        const BytesFilter = Deduper(K, []const u8);
+        const ShredIdFilter = Deduper(K, ShredIdFilterKey);
+        const ShredIdFilterKey = struct { id: ShredId, index: usize };
+
+        pub fn init(allocator: std.mem.Allocator, rand: std.rand.Random, num_bits: u64) !ShredDeduper(K) {
             return .{
-                // .deduper = try Deduper(K, []const u8).init(allocator),
-                // .shred_id_filter = try Deduper(K, struct { ShredId, usize }).init(allocator),
+                .bytes_filter = try BytesFilter.init(allocator, rand, num_bits),
+                .shred_id_filter = try ShredIdFilter.init(allocator, rand, num_bits),
             };
         }
 
         pub fn deinit(self: *ShredDeduper(K)) void {
-            _ = self;
-            // self.deduper.deinit();
-            // self.shred_id_filter.deinit();
+            self.bytes_filter.deinit();
+            self.shred_id_filter.deinit();
         }
 
         pub fn maybeReset(self: *ShredDeduper(K), rand: std.rand.Random, false_positive_rate: f64, reset_cycle: Duration) void {
-            // TODO:
-            _ = self;
-            _ = rand;
-            _ = false_positive_rate;
-            _ = reset_cycle;
+            _ = self.bytes_filter
+                .maybeReset(rand, false_positive_rate, reset_cycle);
+            _ = self.shred_id_filter
+                .maybeReset(rand, false_positive_rate, reset_cycle);
         }
 
-        pub fn dedup(self: ShredDeduper(K), shred_id: *const ShredId, shred_bytes: []const u8, max_duplicate_count: usize) bool {
-            // TODO:
-            _ = self;
-            _ = shred_id;
-            _ = shred_bytes;
-            _ = max_duplicate_count;
-            return false;
+        pub fn dedup(self: *ShredDeduper(K), shred_id: *const ShredId, shred_bytes: []const u8, max_duplicate_count: usize) bool {
+            if (self.bytes_filter.dedup(&shred_bytes)) return true;
+            for (0..max_duplicate_count) |i| {
+                if (!self.shred_id_filter.dedup(&.{ .id = shred_id.*, .index = i })) return false;
+            }
+            return true;
         }
     };
 }
-
-pub fn Deduper(comptime K: usize, comptime T: type) type {
-    return struct {
-        num_bits: u64,
-        bits: std.ArrayList(AtomicU64),
-        state: [K]RandomState,
-        clock: Instant,
-        popcount: AtomicU64,
-
-        pub fn init(allocator: std.mem.Allocator) !Deduper(K, T) {
-            // TODO
-            return .{
-                .num_bits = 0,
-                .bits = std.ArrayList(AtomicU64).init(allocator),
-                .state = [_]RandomState{.{}} ** K,
-                .clock = try Instant.now(),
-                .popcount = AtomicU64.init(0),
-            };
-        }
-
-        pub fn deinit(self: *Deduper(K, T)) void {
-            self.bits.deinit();
-        }
-
-        pub fn dedup(self: *Deduper(K, T), data: *const T) bool {
-            // TODO
-            _ = self;
-            _ = data;
-            return false;
-        }
-    };
-}
-
-pub const RandomState = struct {};

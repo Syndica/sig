@@ -1031,6 +1031,15 @@ pub const layout = struct {
     pub const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_VARIANT; // 64 + 1 = 65
     pub const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT; // 65 + 8 = 73
 
+    pub fn getShredId(packet: *const Packet) !ShredId {
+        const shred = getShred(packet) orelse return error.InvalidShred;
+        return .{
+            .slot = getSlot(shred) orelse return error.InvalidShred,
+            .index = getIndex(shred) orelse return error.InvalidShred,
+            .shred_type = getShredVariant(shred).?.shred_type,
+        };
+    }
+
     pub fn getShred(packet: *const Packet) ?[]const u8 {
         if (getShredSize(packet) > packet.data.len) return null;
         return packet.data[0..getShredSize(packet)];
