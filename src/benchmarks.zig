@@ -56,7 +56,7 @@ pub fn main() !void {
             try benchmark(
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
-                TimeUnits.nanoseconds,
+                TimeUnits.seconds,
             );
         }
 
@@ -66,7 +66,7 @@ pub fn main() !void {
             try benchmark(
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
-                TimeUnits.nanoseconds,
+                TimeUnits.seconds,
             );
         }
     }
@@ -105,6 +105,7 @@ const TimeUnits = enum {
     nanoseconds,
     microseconds,
     milliseconds,
+    seconds,
 
     const Self = @This();
 
@@ -113,14 +114,16 @@ const TimeUnits = enum {
             .nanoseconds => "ns",
             .milliseconds => "ms",
             .microseconds => "us",
+            .seconds => "s",
         };
     }
 
     pub fn unitsfromNanoseconds(self: *const Self, time_ns: u64) u64 {
         return switch (self.*) {
             .nanoseconds => time_ns,
-            .milliseconds => time_ns / std.time.ns_per_ms,
             .microseconds => time_ns / std.time.ns_per_us,
+            .milliseconds => time_ns / std.time.ns_per_ms,
+            .seconds => time_ns / std.time.ns_per_s,
         };
     }
 };
