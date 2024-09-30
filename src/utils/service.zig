@@ -139,7 +139,6 @@ pub const ServiceManager = struct {
 
     /// Wait for all threads to exit, then return.
     pub fn join(self: *Self) void {
-        self.exit.store(true, .release);
         for (self.threads.items) |t| t.join();
         self.threads.clearAndFree(self.arena.allocator());
     }

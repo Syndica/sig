@@ -125,7 +125,6 @@ pub const SocketThread = struct {
     }
 
     pub fn deinit(self: Self, allocator: Allocator) void {
-        self.exit.store(true, .release);
         self.handle.join();
         self.channel.deinit();
         allocator.destroy(self.channel);

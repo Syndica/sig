@@ -104,6 +104,23 @@ pub fn cleanBlockstore(
     return root;
 }
 
+const SlotsToCleanResult = struct {
+    should_clean: bool,
+    highest_slot_to_purge: Slot,
+    total_shreds: u64,
+
+    pub fn format(
+        result: SlotsToCleanResult,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        try writer.print("should_clean: {} ", .{result.should_clean});
+        try writer.print("highest_slot_to_purge: {d} ", .{result.highest_slot_to_purge});
+        try writer.print("total_shreds: {}", .{result.total_shreds});
+    }
+};
+
 /// A helper function to `cleanup_ledger` which returns a tuple of the
 /// following three elements suggesting whether to clean up the ledger:
 ///
@@ -122,11 +139,7 @@ fn findSlotsToClean(
     blockstore_reader: *BlockstoreReader,
     max_root: Slot,
     max_ledger_shreds: u64,
-) !struct {
-    should_clean: bool,
-    highest_slot_to_purge: Slot,
-    total_shreds: u64,
-} {
+) !SlotsToCleanResult {
     const num_shreds = try blockstore_reader.db.count(Schema.data_shred);
 
     // Using the difference between the lowest and highest slot seen will

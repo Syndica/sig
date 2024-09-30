@@ -831,7 +831,7 @@ fn shredCollector() !void {
     var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
-        ShredCollectorDependencies{
+        .{
             .allocator = allocator,
             .logger = app_base.logger,
             .random = rng.random(),

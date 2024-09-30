@@ -86,6 +86,7 @@ pub const RepairService = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.exit.store(true, .release);
         self.peer_provider.deinit();
         self.requester.deinit();
         self.thread_pool.deinit();
