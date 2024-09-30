@@ -644,6 +644,7 @@ fn validator() !void {
     defer {
         app_base.shutdown();
         gossip_service.shutdown();
+        service_manager.join();
         service_manager.deinit();
     }
 
