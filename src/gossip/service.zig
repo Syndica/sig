@@ -1240,12 +1240,7 @@ pub const GossipService = struct {
                 getWallclockMs(),
                 @as(usize, @max(output_limit, 0)),
             ) catch return;
-            defer {
-                for (response_gossip_values.items) |val| {
-                    bincode.free(self.allocator, val);
-                }
-                response_gossip_values.deinit();
-            }
+            defer response_gossip_values.deinit();
 
             _ = self.output_limit.fetchSub(
                 @as(i64, @intCast(response_gossip_values.items.len)),
