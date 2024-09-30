@@ -487,9 +487,6 @@ pub fn streamReader(
             const mb_per_sec_dec = (bytes_per_sec - mb_per_sec * 1_000_000) / (1_000_000 / 100);
             std.debug.print("read mb/sec: {}.{}\n", .{ mb_per_sec, mb_per_sec_dec });
 
-            const pubkeys = payload.AccountPayloadV1.pubkeys;
-            std.debug.print("example pubkeys: {any}\n", .{pubkeys[0..3]});
-
             bytes_read = 0;
             timer.reset();
         }

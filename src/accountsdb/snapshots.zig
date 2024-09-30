@@ -1680,19 +1680,16 @@ pub const SnapshotFiles = struct {
 
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
     pub fn find(allocator: std.mem.Allocator, snapshot_directory: std.fs.Dir) !Self {
-        const snapshot_dir_iter = snapshot_directory.iterate();
-
-        const files = try readDirectory(allocator, snapshot_dir_iter);
-        var filenames = files.filenames;
+        const files = try readDirectory(allocator, snapshot_directory);
         defer {
-            filenames.deinit();
-            allocator.free(files.filename_memory);
+            for (files) |file| allocator.free(file);
+            allocator.free(files);
         }
 
         // find the snapshots
         var maybe_latest_full_snapshot: ?FullSnapshotFileInfo = null;
         var count: usize = 0;
-        for (filenames.items) |filename| {
+        for (files) |filename| {
             const snapshot = FullSnapshotFileInfo.fromString(filename) catch continue;
             if (count == 0 or snapshot.slot > maybe_latest_full_snapshot.?.slot) {
                 maybe_latest_full_snapshot = snapshot;
@@ -1703,7 +1700,7 @@ pub const SnapshotFiles = struct {
 
         count = 0;
         var maybe_latest_incremental_snapshot: ?IncrementalSnapshotFileInfo = null;
-        for (filenames.items) |filename| {
+        for (files) |filename| {
             const snapshot = IncrementalSnapshotFileInfo.fromString(filename) catch continue;
             // need to match the base slot
             if (snapshot.base_slot == latest_full_snapshot.slot and (count == 0 or
@@ -1802,6 +1799,7 @@ pub const AllSnapshotFields = struct {
         // TODO: use a better allocator
         const allocator = storages_map.allocator;
         var slots_to_remove = std.ArrayList(Slot).init(allocator);
+        defer slots_to_remove.deinit();
 
         // make sure theres no overlap in slots between full and incremental and combine
         var storages_entry_iter = storages_map.iterator();
