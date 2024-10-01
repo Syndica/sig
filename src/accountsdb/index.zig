@@ -80,6 +80,7 @@ pub const AccountRef = struct {
         Cache: struct {
             index: usize,
         },
+        CachedInLru,
     };
 
     pub fn default() AccountRef {
@@ -98,8 +99,10 @@ pub const AccountRef = struct {
 /// Analogous to [AccountsIndex](https://github.com/anza-xyz/agave/blob/a6b2283142192c5360ad0f53bec1eb4a9fb36154/accounts-db/src/accounts_index.rs#L644)
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
+
     reference_allocator: std.mem.Allocator,
     reference_memory: RwMux(ReferenceMemory),
+
     bins: []RwMux(RefMap),
     pubkey_bin_calculator: PubkeyBinCalculator,
     const Self = @This();
