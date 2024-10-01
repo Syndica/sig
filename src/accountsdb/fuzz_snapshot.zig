@@ -21,9 +21,9 @@ pub fn run(args: *std.process.ArgIterator) !void {
     _ = args;
     const seed = std.crypto.random.int(u64);
 
-    var gpa_state: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    defer _ = gpa_state.deinit();
-    const gpa = gpa_state.allocator();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
     {
         // open and append seed
@@ -38,7 +38,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
     var prng = std.rand.DefaultPrng.init(seed);
     const rand = prng.random();
 
-    var bytes_buffer = std.ArrayList(u8).init(gpa);
+    var bytes_buffer = std.ArrayList(u8).init(allocator);
     defer bytes_buffer.deinit();
 
     var i: u64 = 0;
@@ -47,8 +47,8 @@ pub fn run(args: *std.process.ArgIterator) !void {
     while (timer.read() < MAX_FUZZ_TIME_NS) : (i += 1) {
         bytes_buffer.clearRetainingCapacity();
 
-        const snapshot_original: SnapshotFields = try randomSnapshotFields(gpa, rand);
-        defer snapshot_original.deinit(gpa);
+        const snapshot_original: SnapshotFields = try randomSnapshotFields(allocator, rand);
+        defer snapshot_original.deinit(allocator);
 
         try bytes_buffer.ensureUnusedCapacity(bincode.sizeOf(snapshot_original, .{}) * 2);
 
@@ -56,8 +56,8 @@ pub fn run(args: *std.process.ArgIterator) !void {
         try bincode.write(bytes_buffer.writer(), snapshot_original, .{});
         const original_bytes_end = bytes_buffer.items.len;
 
-        const snapshot_deserialized = try bincode.readFromSlice(gpa, SnapshotFields, bytes_buffer.items[original_bytes_start..original_bytes_end], .{});
-        defer snapshot_deserialized.deinit(gpa);
+        const snapshot_deserialized = try bincode.readFromSlice(allocator, SnapshotFields, bytes_buffer.items[original_bytes_start..original_bytes_end], .{});
+        defer snapshot_deserialized.deinit(allocator);
 
         const serialized_bytes_start = bytes_buffer.items.len;
         try bincode.write(bytes_buffer.writer(), snapshot_deserialized, .{});

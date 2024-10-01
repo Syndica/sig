@@ -7,8 +7,6 @@ const StandardEntry = entry.StandardEntry;
 const testing = std.testing;
 const AtomicBool = std.atomic.Value(bool);
 const Channel = @import("../sync/channel.zig").Channel;
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-var gpa_allocator = gpa.allocator();
 
 const INITIAL_ENTRIES_CHANNEL_SIZE: usize = 1024;
 
@@ -166,7 +164,8 @@ pub const StandardErrLogger = struct {
             .max_level = max_level,
             .exit_sig = AtomicBool.init(false),
             .handle = null,
-            .channel = Channel(*StandardEntry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
+            .channel = Channel(*StandardEntry).create(allocator) catch
+                @panic("could not allocate StandardEntry channel"),
         };
         return self;
     }
@@ -176,12 +175,12 @@ pub const StandardErrLogger = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.channel.close();
         if (self.handle) |handle| {
             self.exit_sig.store(true, .seq_cst);
             handle.join();
         }
         self.channel.deinit();
+        self.allocator.destroy(self.channel);
         self.allocator.destroy(self);
     }
 
@@ -191,16 +190,8 @@ pub const StandardErrLogger = struct {
         while (!self.exit_sig.load(.seq_cst)) {
             std.time.sleep(std.time.ns_per_ms * 5);
 
-            const entries = self.channel.drain() orelse {
-                // channel is closed
-                return;
-            };
-            defer self.channel.allocator.free(entries);
-
-            sink.consumeEntries(entries);
-
-            // deinit entries
-            for (entries) |e| {
+            while (self.channel.receive()) |e| {
+                sink.consumeEntry(e);
                 e.deinit();
             }
         }
@@ -324,14 +315,12 @@ pub const TestLogger = struct {
 pub const StdErrSink = struct {
     const Self = @This();
 
-    pub fn consumeEntries(_: Self, entries: []const *StandardEntry) void {
+    pub fn consumeEntry(_: Self, e: *StandardEntry) void {
         const std_err_writer = std.io.getStdErr().writer();
         std.debug.lockStdErr();
         defer std.debug.unlockStdErr();
 
-        for (entries) |e| {
-            logfmt.formatter(e, std_err_writer) catch unreachable;
-        }
+        logfmt.formatter(e, std_err_writer) catch unreachable;
     }
 };
 

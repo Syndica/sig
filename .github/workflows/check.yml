@@ -54,7 +54,7 @@ jobs:
           version: 0.13.0
 
       - name: test
-        run: zig build test
+        run: zig build test -Denable-tsan=true
 
   kcov_test:
     strategy:

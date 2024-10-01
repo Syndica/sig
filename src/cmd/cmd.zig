@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
 const network = @import("zig-network");
@@ -41,17 +42,26 @@ const BlockstoreWriter = sig.ledger.BlockstoreWriter;
 
 const SocketTag = sig.gossip.SocketTag;
 
-// TODO: use better allocator, unless GPA becomes more performant.
-
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const gpa_allocator = gpa.allocator();
+const gpa_allocator = if (builtin.mode == .Debug)
+    gpa.allocator()
+else
+    std.heap.c_allocator;
 
 var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-const gossip_value_gpa_allocator = gossip_value_gpa.allocator();
+const gossip_value_gpa_allocator = if (builtin.mode == .Debug)
+    gossip_value_gpa.allocator()
+else
+    std.heap.c_allocator;
 
 const base58Encoder = base58.Encoder.init(.{});
 
 pub fn run() !void {
+    defer {
+        // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
+        _ = gossip_value_gpa.deinit();
+    }
+
     var gossip_host_option = cli.Option{
         .long_name = "gossip-host",
         .help = "IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1",
@@ -598,17 +608,27 @@ fn identity() !void {
 /// entrypoint to run only gossip
 fn gossip() !void {
     var app_base = try AppBase.init(gpa_allocator);
+    errdefer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
-    _, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
-    defer gossip_manager.deinit();
+    const gossip_service, var service_manager =
+        try startGossip(gpa_allocator, &app_base, &.{});
+    defer {
+        gossip_service.shutdown();
+        service_manager.deinit();
+    }
 
-    gossip_manager.join();
+    // block until we're all done
+    service_manager.join();
 }
 
 /// entrypoint to run a full solana validator
 fn validator() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
+    defer app_base.deinit();
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
@@ -617,11 +637,16 @@ fn validator() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
+    var gossip_service, var service_manager = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
-    defer gossip_manager.deinit();
+    defer {
+        app_base.shutdown();
+        gossip_service.shutdown();
+        service_manager.join();
+        service_manager.deinit();
+    }
 
     const geyser_writer = try buildGeyserWriter(allocator, app_base.logger);
     defer {
@@ -719,13 +744,14 @@ fn validator() !void {
     );
     defer shred_collector_manager.deinit();
 
-    gossip_manager.join();
+    service_manager.join();
     shred_collector_manager.join();
 }
 
 fn shredCollector() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
+    defer app_base.deinit();
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
@@ -734,7 +760,11 @@ fn shredCollector() !void {
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
-    defer gossip_manager.deinit();
+    defer {
+        app_base.shutdown();
+        gossip_service.shutdown();
+        gossip_manager.deinit();
+    }
 
     // leader schedule
     // NOTE: leader schedule is needed for the shred collector because we skip accounts-db setup
@@ -802,7 +832,7 @@ fn shredCollector() !void {
     var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
-        ShredCollectorDependencies{
+        .{
             .allocator = allocator,
             .logger = app_base.logger,
             .random = rng.random(),
@@ -849,7 +879,11 @@ fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWrit
 
 fn printManifest() !void {
     const allocator = gpa_allocator;
-    const app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator);
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
@@ -873,7 +907,11 @@ fn printManifest() !void {
 
 fn createSnapshot() !void {
     const allocator = gpa_allocator;
-    const app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator);
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
@@ -914,7 +952,11 @@ fn createSnapshot() !void {
 
 fn validateSnapshot() !void {
     const allocator = gpa_allocator;
-    const app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator);
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
@@ -942,6 +984,10 @@ fn validateSnapshot() !void {
 fn printLeaderSchedule() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
     const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
         app_base.logger.info("Downloading a snapshot to calculate the leader schedule.");
@@ -982,6 +1028,7 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
 
 pub fn testTransactionSenderService() !void {
     var app_base = try AppBase.init(gpa_allocator);
+    defer app_base.deinit();
 
     if (config.current.gossip.network) |net| {
         if (!std.mem.eql(u8, net, "testnet")) {
@@ -996,9 +1043,13 @@ pub fn testTransactionSenderService() !void {
     }
 
     const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
-    defer gossip_manager.deinit();
+    defer {
+        app_base.shutdown();
+        gossip_service.shutdown();
+        gossip_manager.deinit();
+    }
 
-    const transaction_channel = sig.sync.Channel(sig.transaction_sender.TransactionInfo).init(gpa_allocator, 100);
+    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(gpa_allocator);
     defer transaction_channel.deinit();
 
     const transaction_sender_config = sig.transaction_sender.service.Config{
@@ -1042,6 +1093,9 @@ pub fn testTransactionSenderService() !void {
 /// and deinitialized only when the app exits.
 const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+    closed: bool,
     logger: Logger,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
@@ -1068,6 +1122,7 @@ const AppBase = struct {
         const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
         return .{
+            .closed = false,
             .logger = logger,
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
@@ -1078,8 +1133,17 @@ const AppBase = struct {
         };
     }
 
-    pub fn deinit(self: @This()) void {
-        self.exit.store(true, .unordered);
+    /// Signals the shutdown, however it does not block.
+    pub fn shutdown(self: *AppBase) void {
+        std.debug.assert(!self.closed);
+        defer self.closed = true;
+
+        self.counter.store(1, .release);
+        self.exit.store(true, .release);
+    }
+
+    pub fn deinit(self: *AppBase) void {
+        std.debug.assert(self.closed); // call `self.shutdown()` first
         self.entrypoints.deinit();
         self.metrics_thread.detach();
         self.logger.deinit();
@@ -1090,7 +1154,7 @@ const AppBase = struct {
 fn initGossip(
     logger: Logger,
     my_keypair: KeyPair,
-    exit: *Atomic(bool),
+    exit: *Atomic(usize),
     entrypoints: []const SocketAddr,
     shred_version: u16,
     gossip_host_ip: IpAddr,
@@ -1143,14 +1207,15 @@ fn startGossip(
         .{},
         .{},
     );
-    const service = try manager.arena().create(GossipService);
+
+    const service = try manager.arena.allocator().create(GossipService);
     service.* = try GossipService.init(
         gpa_allocator,
         gossip_value_gpa_allocator,
         contact_info,
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints.items,
-        &app_base.exit,
+        &app_base.counter,
         app_base.logger,
     );
     try manager.defers.deferCall(GossipService.deinit, .{service});
@@ -1412,6 +1477,7 @@ fn loadSnapshot(
     errdefer result.accounts_db.deinit();
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(
+        allocator,
         &all_snapshot_fields,
         n_threads_snapshot_load,
         validate_snapshot,
@@ -1479,7 +1545,7 @@ fn downloadSnapshot() !void {
     var logger = try spawnLogger();
     defer logger.deinit();
 
-    var exit = std.atomic.Value(bool).init(false);
+    var counter = std.atomic.Value(usize).init(0);
     const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
     const entrypoints = try getEntrypoints(logger);
     defer entrypoints.deinit();
@@ -1489,7 +1555,7 @@ fn downloadSnapshot() !void {
     var gossip_service = try initGossip(
         .noop,
         my_keypair,
-        &exit,
+        &counter,
         entrypoints.items,
         my_data.shred_version,
         my_data.ip,
@@ -1497,9 +1563,13 @@ fn downloadSnapshot() !void {
     );
     defer gossip_service.deinit();
 
-    const handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
+    const handle = try std.Thread.spawn(
+        .{},
+        runGossipWithConfigValues,
+        .{&gossip_service},
+    );
     defer {
-        exit.store(true, .unordered);
+        gossip_service.shutdown();
         handle.join();
     }
 
@@ -1595,7 +1665,7 @@ fn getOrDownloadSnapshots(
     }
 
     // if this exists, we wont look for a .tar.zstd
-    const accounts_path_exists = if (snapshot_dir.access("accounts", .{})) |_| true else |_| false;
+    const accounts_path_exists = !std.meta.isError(snapshot_dir.access("accounts", .{}));
     errdefer {
         // if something goes wrong, delete the accounts/ directory
         // so we unpack the full snapshot the next time.

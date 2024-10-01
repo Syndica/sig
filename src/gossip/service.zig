@@ -1,6 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../sig.zig");
+const Bloom = @import("../bloom/bloom.zig").Bloom;
 
 const bincode = sig.bincode;
 const socket_utils = sig.net.socket_utils;
@@ -9,7 +10,7 @@ const pull_response = sig.gossip.pull_response;
 
 const ArrayList = std.ArrayList;
 const Thread = std.Thread;
-const AtomicBool = std.atomic.Value(bool);
+const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const EndPoint = network.EndPoint;
 const UdpSocket = network.Socket;
@@ -60,7 +61,6 @@ const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 const UNIQUE_PUBKEY_CAPACITY = sig.gossip.table.UNIQUE_PUBKEY_CAPACITY;
 const MAX_NUM_PULL_REQUESTS = sig.gossip.pull_request.MAX_NUM_PULL_REQUESTS;
 
-const PacketBatch = ArrayList(Packet);
 const GossipMessageWithEndpoint = struct { from_endpoint: EndPoint, message: GossipMessage };
 
 pub const PULL_REQUEST_RATE = Duration.fromSecs(5);
@@ -96,6 +96,35 @@ const DEFAULT_EPOCH_DURATION = Duration.fromMillis(172_800_000);
 
 pub const VERIFY_PACKET_PARALLEL_TASKS = 4;
 
+const MAX_PROCESS_BATCH_SIZE = 64;
+
+/// The flow of data goes as follows:
+///
+/// `readSocket` ->
+///         - reads from the gossip socket
+///         - puts the new packet onto `packet_incoming_channel`
+///         - repeat until exit
+///
+/// `verifyPackets` ->
+///         - receives from `packet_incoming_channel`
+///         - starts queuing new parallel tasks with the new packets
+///         - as a task verifies the incoming packet, it sends it into `verified_incoming_channel`
+///         - repeat until exit *and* `packet_incoming_channel` is empty
+///
+/// `processMessages` ->
+///         - receives from `verified_incoming_channel`
+///         - processes the verified message it has received
+///         - depending on the type of message received, it may put something onto `packet_outgoing_channel`
+///
+///  `sendSocket` ->
+///         - receives from `packet_outgoing_channel`
+///         - sends the outgoing packet onto the gossip socket
+///         - repeats while `exit` is false and `packet_outgoing_channel`
+///         - when `sendSocket` sees that `exit` has become `true`, it will begin waiting on
+///           the previous thing in the chain to close, that usually being `processMessages`.
+///           this ensures that `processMessages` doesn't add new items to `packet_outgoing_channel`
+///           after the `sendSocket` thread exits.
+///
 pub const GossipService = struct {
     allocator: std.mem.Allocator,
     gossip_value_allocator: std.mem.Allocator,
@@ -107,12 +136,17 @@ pub const GossipService = struct {
     my_contact_info: ContactInfo,
     my_keypair: KeyPair,
     my_pubkey: Pubkey,
-    my_shred_version: std.atomic.Value(u16),
-    exit: *AtomicBool,
+    my_shred_version: Atomic(u16),
+
+    /// Indicates if the gossip service is closed.
+    closed: bool,
+    /// An atomic counter for ensuring proper exit order of tasks.
+    counter: *Atomic(usize),
+    service_exit: Atomic(bool),
 
     // communication between threads
-    packet_incoming_channel: *Channel(PacketBatch),
-    packet_outgoing_channel: *Channel(PacketBatch),
+    packet_incoming_channel: *Channel(Packet),
+    packet_outgoing_channel: *Channel(Packet),
     verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
 
     // TODO(x19): most of these things need to be on the heap to be shared between threads
@@ -148,22 +182,22 @@ pub const GossipService = struct {
         my_contact_info: ContactInfo,
         my_keypair: KeyPair,
         entrypoints: ?[]const SocketAddr,
-        exit: *AtomicBool,
+        counter: *Atomic(usize),
         logger: Logger,
     ) !Self {
-        var packet_incoming_channel = Channel(PacketBatch).init(allocator, 10000);
+        var packet_incoming_channel = try Channel(Packet).create(allocator);
         errdefer packet_incoming_channel.deinit();
 
-        var packet_outgoing_channel = Channel(PacketBatch).init(allocator, 10000);
+        var packet_outgoing_channel = try Channel(Packet).create(allocator);
         errdefer packet_outgoing_channel.deinit();
 
-        var verified_incoming_channel = Channel(GossipMessageWithEndpoint).init(allocator, 10000);
+        var verified_incoming_channel = try Channel(GossipMessageWithEndpoint).create(allocator);
         errdefer verified_incoming_channel.deinit();
 
         const thread_pool = try allocator.create(ThreadPool);
-        const n_threads = @min(@as(u32, @truncate(std.Thread.getCpuCount() catch 1)), 8);
+        const n_threads: usize = @min(std.Thread.getCpuCount() catch 1, 8);
         thread_pool.* = ThreadPool.init(.{
-            .max_threads = n_threads,
+            .max_threads = @intCast(n_threads),
             .stack_size = 2 * 1024 * 1024,
         });
         logger.debugf("using n_threads in gossip: {}", .{n_threads});
@@ -184,7 +218,7 @@ pub const GossipService = struct {
 
         const failed_pull_hashes = HashTimeQueue.init(allocator);
         const push_msg_q = ArrayList(SignedGossipData).init(allocator);
-        const echo_server = EchoServer.init(allocator, gossip_address.port(), exit);
+        const echo_server = EchoServer.init(allocator, gossip_address.port());
 
         var entrypoint_list = ArrayList(Entrypoint).init(allocator);
         if (entrypoints) |eps| {
@@ -206,12 +240,15 @@ pub const GossipService = struct {
             .allocator = allocator,
             .gossip_value_allocator = gossip_value_allocator,
 
+            .counter = counter,
+            .service_exit = Atomic(bool).init(false),
+            .closed = false,
+
             .my_contact_info = my_contact_info,
             .my_keypair = my_keypair,
             .my_pubkey = my_pubkey,
-            .my_shred_version = std.atomic.Value(u16).init(my_shred_version),
+            .my_shred_version = Atomic(u16).init(my_shred_version),
             .gossip_socket = gossip_socket,
-            .exit = exit,
             .packet_incoming_channel = packet_incoming_channel,
             .packet_outgoing_channel = packet_outgoing_channel,
             .verified_incoming_channel = verified_incoming_channel,
@@ -228,58 +265,72 @@ pub const GossipService = struct {
         };
     }
 
-    fn deinitRwMux(v: anytype) void {
-        var t, var lg = v.writeWithLock();
-        defer lg.unlock();
-        t.deinit();
-    }
+    /// Starts the shutdown chain for all services. Does *not* block until
+    /// the service manager is joined.
+    pub fn shutdown(self: *Self) void {
+        std.debug.assert(!self.closed);
+        defer self.closed = true;
 
-    fn deinitMux(v: anytype) void {
-        var t, var lg = v.writeWithLock();
-        defer lg.unlock();
-        t.deinit();
+        self.counter.store(1, .release); // kick off the shutdown chain
+        self.service_exit.store(true, .release);
     }
 
     pub fn deinit(self: *Self) void {
-        self.exit.store(true, .monotonic);
+        std.debug.assert(self.closed); // call `self.shutdown()` first
+
+        self.thread_pool.shutdown();
+        self.thread_pool.deinit();
+
+        // assert the channels are empty in order to make sure no data was lost.
+        // everything should be cleaned up when the thread-pool joins.
+        std.debug.assert(self.packet_incoming_channel.len() == 0);
+        self.packet_incoming_channel.deinit();
+        self.allocator.destroy(self.packet_incoming_channel);
+
+        std.debug.assert(self.packet_outgoing_channel.len() == 0);
+        self.packet_outgoing_channel.deinit();
+        self.allocator.destroy(self.packet_outgoing_channel);
+
+        std.debug.assert(self.verified_incoming_channel.len() == 0);
+        self.verified_incoming_channel.deinit();
+        self.allocator.destroy(self.verified_incoming_channel);
+
         self.my_contact_info.deinit();
         self.echo_server.deinit();
         self.gossip_socket.close();
 
-        {
-            var buff_lock = self.packet_incoming_channel.buffer.lock();
-            const buff: *std.ArrayList(PacketBatch) = buff_lock.mut();
-            for (buff.items) |*item| item.deinit();
-            buff_lock.unlock();
-            self.packet_incoming_channel.deinit();
-        }
-        {
-            var buff_lock = self.packet_outgoing_channel.buffer.lock();
-            const buff: *std.ArrayList(PacketBatch) = buff_lock.mut();
-            for (buff.items) |*item| item.deinit();
-            buff_lock.unlock();
-            self.packet_outgoing_channel.deinit();
-        }
-        self.verified_incoming_channel.deinit();
-
         self.entrypoints.deinit();
+        self.allocator.destroy(self.thread_pool);
+
         {
-            self.thread_pool.shutdown();
-            self.thread_pool.deinit();
-            self.allocator.destroy(self.thread_pool);
+            var t, var lg = self.gossip_table_rw.writeWithLock();
+            defer lg.unlock();
+            t.deinit();
         }
 
-        deinitRwMux(&self.gossip_table_rw);
-        deinitRwMux(&self.active_set_rw);
         {
-            var ping_cache, var ping_cache_lg = self.ping_cache_rw.writeWithLock();
-            defer ping_cache_lg.unlock();
-
-            ping_cache.deinit();
-            self.allocator.destroy(ping_cache);
+            var t, var lg = self.active_set_rw.writeWithLock();
+            defer lg.unlock();
+            t.deinit();
         }
-        deinitMux(&self.push_msg_queue_mux);
-        deinitMux(&self.failed_pull_hashes_mux);
+
+        var ping_cache, var ping_cache_lg = self.ping_cache_rw.writeWithLock();
+        defer ping_cache_lg.unlock();
+
+        ping_cache.deinit();
+        self.allocator.destroy(ping_cache);
+
+        {
+            var t, var lg = self.push_msg_queue_mux.writeWithLock();
+            defer lg.unlock();
+            t.deinit();
+        }
+
+        {
+            var t, var lg = self.failed_pull_hashes_mux.writeWithLock();
+            defer lg.unlock();
+            t.deinit();
+        }
     }
 
     pub const RunThreadsParams = struct {
@@ -289,7 +340,14 @@ pub const GossipService = struct {
 
     /// starts gossip and blocks until it exits
     pub fn run(self: *Self, params: RunThreadsParams) !void {
-        var manager = ServiceManager.init(self.allocator, self.logger, self.exit, "gossip", .{}, .{});
+        var manager = ServiceManager.init(
+            self.allocator,
+            self.logger,
+            &self.service_exit,
+            "gossip",
+            .{},
+            .{},
+        );
         try self.start(params, &manager);
         manager.join();
         manager.deinit();
@@ -315,85 +373,90 @@ pub const GossipService = struct {
         errdefer manager.deinit();
 
         try manager.spawn("gossip readSocket", socket_utils.readSocket, .{
-            self.allocator,
             self.gossip_socket,
             self.packet_incoming_channel,
-            self.exit,
             self.logger,
-        });
-        try manager.spawn("gossip verifyPackets", verifyPackets, .{self});
-        try manager.spawn("gossip processMessages", processMessages, .{ self, 19 });
+            true,
+            self.counter,
+        }, true);
+
+        try manager.spawn("gossip verifyPackets", verifyPackets, .{self}, true);
+        try manager.spawn("gossip processMessages", processMessages, .{ self, 19 }, true);
 
         if (!params.spy_node) {
-            try manager.spawn("gossip buildMessages", buildMessages, .{ self, 19 });
+            try manager.spawn("gossip buildMessages", buildMessages, .{ self, 19 }, true);
         }
 
         try manager.spawn("gossip sendSocket", socket_utils.sendSocket, .{
             self.gossip_socket,
             self.packet_outgoing_channel,
-            self.exit,
             self.logger,
-        });
+            true,
+            self.counter,
+        }, true);
 
         if (params.dump) {
             try manager.spawn("GossipDumpService", GossipDumpService.run, .{.{
                 .allocator = self.allocator,
                 .logger = self.logger,
                 .gossip_table_rw = &self.gossip_table_rw,
-                .exit = self.exit,
-            }});
+                .counter = self.counter,
+            }}, true);
         }
     }
 
     const VerifyMessageTask = ThreadPoolTask(VerifyMessageEntry);
     const VerifyMessageEntry = struct {
         gossip_value_allocator: std.mem.Allocator,
-        packet_batch: ArrayList(Packet),
+        packet: Packet,
         verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
         logger: Logger,
 
         pub fn callback(self: *VerifyMessageEntry) !void {
-            defer self.packet_batch.deinit();
+            const packet = self.packet;
+            var message = bincode.readFromSlice(
+                self.gossip_value_allocator,
+                GossipMessage,
+                packet.data[0..packet.size],
+                bincode.Params.standard,
+            ) catch |e| {
+                self.logger.errf("gossip: packet_verify: failed to deserialize: {s}", .{@errorName(e)});
+                return;
+            };
 
-            for (@as([]const Packet, self.packet_batch.items)) |*packet| {
-                var message = bincode.readFromSlice(
-                    self.gossip_value_allocator,
-                    GossipMessage,
-                    packet.data[0..packet.size],
-                    bincode.Params.standard,
-                ) catch {
-                    self.logger.errf("gossip: packet_verify: failed to deserialize", .{});
-                    continue;
-                };
+            message.sanitize() catch |e| {
+                self.logger.errf("gossip: packet_verify: failed to sanitize: {s}", .{@errorName(e)});
+                bincode.free(self.gossip_value_allocator, message);
+                return;
+            };
 
-                message.sanitize() catch {
-                    self.logger.errf("gossip: packet_verify: failed to sanitize", .{});
-                    bincode.free(self.gossip_value_allocator, message);
-                    continue;
-                };
+            message.verifySignature() catch |e| {
+                self.logger.errf(
+                    "gossip: packet_verify: failed to verify signature from {}: {s}",
+                    .{ packet.addr, @errorName(e) },
+                );
+                bincode.free(self.gossip_value_allocator, message);
+                return;
+            };
 
-                message.verifySignature() catch |e| {
-                    self.logger.errf(
-                        "gossip: packet_verify: failed to verify signature: {} from {}",
-                        .{ e, packet.addr },
-                    );
-                    bincode.free(self.gossip_value_allocator, message);
-                    continue;
-                };
-
-                const msg: GossipMessageWithEndpoint = .{
-                    .from_endpoint = packet.addr,
-                    .message = message,
-                };
-                try self.verified_incoming_channel.send(msg);
-            }
+            const msg: GossipMessageWithEndpoint = .{
+                .from_endpoint = packet.addr,
+                .message = message,
+            };
+            try self.verified_incoming_channel.send(msg);
         }
     };
 
     /// main logic for deserializing Packets into GossipMessage messages
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
-    fn verifyPackets(self: *Self) !void {
+    fn verifyPackets(self: *Self, idx: usize) !void {
+        defer {
+            // trigger the next service in the chain to close
+            self.counter.store(idx + 1, .release);
+            self.logger.debugf("verifyPackets loop closed", .{});
+        }
+
         const tasks = try VerifyMessageTask.init(self.allocator, VERIFY_PACKET_PARALLEL_TASKS);
         defer self.allocator.free(tasks);
 
@@ -402,32 +465,27 @@ pub const GossipService = struct {
             task.entry = .{
                 .gossip_value_allocator = self.gossip_value_allocator,
                 .verified_incoming_channel = self.verified_incoming_channel,
-                .packet_batch = undefined,
+                .packet = undefined,
                 .logger = self.logger,
             };
         }
 
-        while (!self.exit.load(.unordered)) {
-            const maybe_packet_batches = try self.packet_incoming_channel.try_drain();
-            const packet_batches = maybe_packet_batches orelse continue;
-            defer self.packet_incoming_channel.allocator.free(packet_batches);
-
-            // count number of packets
-            var n_packets_drained: usize = 0;
-            for (packet_batches) |*packet_batch| {
-                n_packets_drained += packet_batch.items.len;
-            }
-            self.stats.gossip_packets_received.add(n_packets_drained);
-
+        // loop until the previous service closes and triggers us to close
+        // and the packet_incoming_channel isn't empty, in order to not lose messages.
+        while (self.counter.load(.acquire) != idx or
+            self.packet_incoming_channel.len() != 0)
+        {
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
             var task_search_start_idx: usize = 0;
-            for (packet_batches) |packet_batch| {
+            while (self.packet_incoming_channel.receive()) |packet| {
+                defer self.stats.gossip_packets_received.inc();
+
                 const acquired_task_idx = VerifyMessageTask.awaitAndAcquireFirstAvailableTask(tasks, task_search_start_idx);
                 task_search_start_idx = (acquired_task_idx + 1) % tasks.len;
 
                 const task_ptr = &tasks[acquired_task_idx];
-                task_ptr.entry.packet_batch = packet_batch;
+                task_ptr.entry.packet = packet;
                 task_ptr.result catch |err| self.logger.errf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
 
                 const batch = Batch.from(&task_ptr.task);
@@ -439,19 +497,17 @@ pub const GossipService = struct {
             task.blockUntilCompletion();
             task.result catch |err| self.logger.errf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
         }
-
-        self.logger.debugf("verify_packets loop closed", .{});
     }
 
     // structs used in process_messages loop
     pub const PingMessage = struct {
-        ping: *Ping,
-        from_endpoint: *EndPoint,
+        ping: *const Ping,
+        from_endpoint: *const EndPoint,
     };
 
     pub const PongMessage = struct {
-        pong: *Pong,
-        from_endpoint: *EndPoint,
+        pong: *const Pong,
+        from_endpoint: *const EndPoint,
     };
 
     pub const PushMessage = struct {
@@ -468,13 +524,16 @@ pub const GossipService = struct {
 
     pub const PullResponseMessage = struct {
         gossip_values: []SignedGossipData,
-        from_pubkey: *Pubkey,
+        from_pubkey: *const Pubkey,
     };
 
     /// main logic for recieving and processing gossip messages.
-    pub fn processMessages(self: *Self, seed: u64) !void {
-        var trim_table_timer = try sig.time.Timer.start();
-        var msg_count: usize = 0;
+    pub fn processMessages(self: *Self, seed: u64, idx: usize) !void {
+        defer {
+            // even if we fail, trigger the next thing
+            self.counter.store(idx + 1, .release);
+            self.logger.debugf("processMessages loop closed", .{});
+        }
 
         // we batch messages bc:
         // 1) less lock contention
@@ -498,62 +557,30 @@ pub const GossipService = struct {
         var pull_responses = try ArrayList(PullResponseMessage).initCapacity(self.allocator, init_capacity);
         defer pull_responses.deinit();
 
-        var prune_messages = try ArrayList(*PruneData).initCapacity(self.allocator, init_capacity);
+        var prune_messages = try ArrayList(PruneData).initCapacity(self.allocator, init_capacity);
         defer prune_messages.deinit();
 
-        while (!self.exit.load(.unordered)) {
-            const maybe_messages = try self.verified_incoming_channel.try_drain();
+        var trim_table_timer = try sig.time.Timer.start();
 
-            if (maybe_messages == null) {
-                continue;
-            }
-
-            const messages = maybe_messages.?;
-            defer {
-                for (messages) |*msg| {
-                    // Important: this uses shallowFree instead of bincode.free
-                    //
-                    // The message contains some messaging metadata plus a
-                    // payload of a SignedGossipData. The metadata won't be needed
-                    // after this iteration is complete. The payload will be
-                    // needed since it is stored in the GossipTable.
-                    //
-                    // bincode.free would free the entire message including the
-                    // payload. This would lead to a segfault if the data is
-                    // accessed from the GossipTable later.
-                    //
-                    // Not freeing at all would lead to a memory leak of any
-                    // allocations in the metadata.
-                    //
-                    // The compromise is a "shallow" free that only frees the
-                    // messaging metadata. SignedGossipData ownership will be
-                    // transferred to GossipTable. The GossipTable implementation
-                    // becomes responsible for freeing any SignedGossipDatas when
-                    // needed.
-                    //
-                    // TODO: this approach is not ideal because it is difficult
-                    // to maintain. Another approach such as reference counting
-                    // would be safer. For more info, see:
-                    // - GossipTable.remove
-                    // - https://github.com/Syndica/sig/pull/69
-                    msg.message.shallowFree(self.gossip_value_allocator);
-                }
-                self.verified_incoming_channel.allocator.free(messages);
-            }
-
-            msg_count += messages.len;
-
-            for (messages) |*message| {
+        // keep waiting for new data until,
+        // - `exit` isn't set,
+        // - there isn't any data to process in the input channel, in order to block the join until we've finished
+        while (self.counter.load(.acquire) != idx or
+            self.verified_incoming_channel.len() != 0)
+        {
+            var msg_count: usize = 0;
+            while (self.verified_incoming_channel.receive()) |message| {
+                msg_count += 1;
                 switch (message.message) {
                     .PushMessage => |*push| {
-                        try push_messages.append(PushMessage{
+                        try push_messages.append(.{
                             .gossip_values = push[1],
                             .from_pubkey = &push[0],
                             .from_endpoint = &message.from_endpoint,
                         });
                     },
                     .PullResponse => |*pull| {
-                        try pull_responses.append(PullResponseMessage{
+                        try pull_responses.append(.{
                             .from_pubkey = &pull[0],
                             .gossip_values = pull[1],
                         });
@@ -612,7 +639,7 @@ pub const GossipService = struct {
                         });
                     },
                     .PruneMessage => |*prune| {
-                        var prune_data = &prune[1];
+                        const prune_data = prune[1];
                         const now = getWallclockMs();
                         const prune_wallclock = prune_data.wallclock;
 
@@ -620,7 +647,6 @@ pub const GossipService = struct {
                         const incorrect_destination = !prune_data.destination.equals(&self.my_pubkey);
                         if (too_old or incorrect_destination) {
                             self.stats.prune_messages_dropped.add(1);
-                            // prune_data free by defered shallowFree
                             continue;
                         }
                         try prune_messages.append(prune_data);
@@ -645,10 +671,12 @@ pub const GossipService = struct {
                         });
                     },
                 }
+                if (msg_count > MAX_PROCESS_BATCH_SIZE) break;
             }
+            if (msg_count == 0) continue;
 
             // track metrics
-            self.stats.gossip_packets_verified.add(messages.len);
+            self.stats.gossip_packets_verified.add(msg_count);
             self.stats.ping_messages_recv.add(ping_messages.items.len);
             self.stats.pong_messages_recv.add(pong_messages.items.len);
             self.stats.push_messages_recv.add(push_messages.items.len);
@@ -663,13 +691,15 @@ pub const GossipService = struct {
             gossip_packets_processed += pull_requests.items.len;
             gossip_packets_processed += pull_responses.items.len;
             gossip_packets_processed += prune_messages.items.len;
-            self.stats.gossip_packets_processed.add(gossip_packets_processed);
+
+            // only add the count once we've finished processing
+            defer self.stats.gossip_packets_processed.add(gossip_packets_processed);
 
             self.stats.maybeLog();
 
             // handle batch messages
             if (push_messages.items.len > 0) {
-                var x_timer = sig.time.Timer.start() catch unreachable;
+                var x_timer = try sig.time.Timer.start();
                 self.handleBatchPushMessages(&push_messages) catch |err| {
                     self.logger.errf("handleBatchPushMessages failed: {}", .{err});
                 };
@@ -680,7 +710,7 @@ pub const GossipService = struct {
             }
 
             if (prune_messages.items.len > 0) {
-                var x_timer = sig.time.Timer.start() catch unreachable;
+                var x_timer = try sig.time.Timer.start();
                 self.handleBatchPruneMessages(&prune_messages);
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_prune_time.observe(@floatFromInt(elapsed));
@@ -689,7 +719,7 @@ pub const GossipService = struct {
             }
 
             if (pull_requests.items.len > 0) {
-                var x_timer = sig.time.Timer.start() catch unreachable;
+                var x_timer = try sig.time.Timer.start();
                 self.handleBatchPullRequest(pull_requests, seed + msg_count) catch |err| {
                     self.logger.errf("handleBatchPullRequest failed: {}", .{err});
                 };
@@ -700,8 +730,8 @@ pub const GossipService = struct {
             }
 
             if (pull_responses.items.len > 0) {
-                var x_timer = sig.time.Timer.start() catch unreachable;
-                self.handleBatchPullResponses(&pull_responses) catch |err| {
+                var x_timer = try sig.time.Timer.start();
+                self.handleBatchPullResponses(pull_responses.items) catch |err| {
                     self.logger.errf("handleBatchPullResponses failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
@@ -711,7 +741,7 @@ pub const GossipService = struct {
             }
 
             if (ping_messages.items.len > 0) {
-                var x_timer = sig.time.Timer.start() catch unreachable;
+                var x_timer = try sig.time.Timer.start();
                 self.handleBatchPingMessages(&ping_messages) catch |err| {
                     self.logger.errf("handleBatchPingMessages failed: {}", .{err});
                 };
@@ -722,7 +752,7 @@ pub const GossipService = struct {
             }
 
             if (pong_messages.items.len > 0) {
-                var x_timer = sig.time.Timer.start() catch unreachable;
+                var x_timer = try sig.time.Timer.start();
                 self.handleBatchPongMessages(&pong_messages);
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_pong_time.observe(@floatFromInt(elapsed));
@@ -736,8 +766,6 @@ pub const GossipService = struct {
                 try self.attemptGossipTableTrim();
             }
         }
-
-        self.logger.debugf("process_messages loop closed", .{});
     }
 
     /// uses a read lock to first check if the gossip table should be trimmed,
@@ -755,25 +783,21 @@ pub const GossipService = struct {
         };
 
         // then trim with write lock
-        const n_pubkeys_dropped: u64 = blk: {
-            if (should_trim) {
-                var gossip_table, var gossip_table_lock = self.gossip_table_rw.writeWithLock();
-                defer gossip_table_lock.unlock();
+        const n_pubkeys_dropped: u64 = if (should_trim) blk: {
+            var gossip_table, var gossip_table_lock = self.gossip_table_rw.writeWithLock();
+            defer gossip_table_lock.unlock();
 
-                var x_timer = sig.time.Timer.start() catch unreachable;
-                const now = getWallclockMs();
-                const n_pubkeys_dropped = gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY) catch |err| err_blk: {
-                    self.logger.warnf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
-                    break :err_blk 0;
-                };
-                const elapsed = x_timer.read().asMillis();
-                self.stats.handle_trim_table_time.observe(@floatFromInt(elapsed));
+            var x_timer = sig.time.Timer.start() catch unreachable;
+            const now = getWallclockMs();
+            const n_pubkeys_dropped = gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY) catch |err| err_blk: {
+                self.logger.warnf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
+                break :err_blk 0;
+            };
+            const elapsed = x_timer.read().asMillis();
+            self.stats.handle_trim_table_time.observe(@floatFromInt(elapsed));
 
-                break :blk n_pubkeys_dropped;
-            } else {
-                break :blk 0;
-            }
-        };
+            break :blk n_pubkeys_dropped;
+        } else 0;
 
         self.stats.table_pubkeys_dropped.add(n_pubkeys_dropped);
     }
@@ -781,7 +805,12 @@ pub const GossipService = struct {
     /// main gossip loop for periodically sending new GossipMessagemessages.
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
-    fn buildMessages(self: *Self, seed: u64) !void {
+    fn buildMessages(self: *Self, seed: u64, idx: usize) !void {
+        defer {
+            self.counter.store(idx + 1, .release);
+            self.logger.infof("buildMessages loop closed", .{});
+        }
+
         var loop_timer = try sig.time.Timer.start();
         var active_set_timer = try sig.time.Timer.start();
         var pull_req_timer = try sig.time.Timer.start();
@@ -795,7 +824,7 @@ pub const GossipService = struct {
         var entrypoints_identified = false;
         var shred_version_assigned = false;
 
-        while (!self.exit.load(.unordered)) {
+        while (self.counter.load(.acquire) != idx) {
             defer loop_timer.reset();
 
             if (pull_req_timer.read().asNanos() > PULL_REQUEST_RATE.asNanos()) pull_blk: {
@@ -810,8 +839,10 @@ pub const GossipService = struct {
                     self.logger.errf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
+                for (packets.items) |packet| {
+                    try self.packet_outgoing_channel.send(packet);
+                }
                 self.stats.pull_requests_sent.add(packets.items.len);
-                try self.packet_outgoing_channel.send(packets);
             }
 
             // new push msgs
@@ -822,7 +853,9 @@ pub const GossipService = struct {
             };
             if (maybe_push_packets) |push_packets| {
                 self.stats.push_messages_sent.add(push_packets.items.len);
-                try self.packet_outgoing_channel.sendBatch(push_packets);
+                for (push_packets.items) |push_packet| {
+                    try self.packet_outgoing_channel.send(push_packet);
+                }
                 push_packets.deinit();
             }
 
@@ -873,7 +906,6 @@ pub const GossipService = struct {
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
-        self.logger.infof("build_messages loop closed", .{});
     }
 
     // collect gossip table metrics and pushes them to stats
@@ -881,20 +913,20 @@ pub const GossipService = struct {
         var gossip_table_lock = self.gossip_table_rw.read();
         defer gossip_table_lock.unlock();
 
-        var gossip_table: *const GossipTable = gossip_table_lock.get();
+        const gossip_table = gossip_table_lock.get();
         const n_entries = gossip_table.store.count();
         const n_pubkeys = gossip_table.pubkey_to_values.count();
 
         self.stats.table_n_values.set(n_entries);
         self.stats.table_n_pubkeys.set(n_pubkeys);
 
-        const incoming_channel_length = try packetBatchChannelLength(self.packet_incoming_channel);
+        const incoming_channel_length = self.packet_incoming_channel.len();
         self.stats.incoming_channel_length.set(incoming_channel_length);
 
-        const outgoing_channel_length = try packetBatchChannelLength(self.packet_outgoing_channel);
+        const outgoing_channel_length = self.packet_outgoing_channel.len();
         self.stats.outgoing_channel_length.set(outgoing_channel_length);
 
-        self.stats.verified_channel_length.set(try self.verified_incoming_channel.len());
+        self.stats.verified_channel_length.set(self.verified_incoming_channel.len());
     }
 
     pub fn rotateActiveSet(self: *Self, rand: std.Random) !void {
@@ -933,7 +965,7 @@ pub const GossipService = struct {
 
     /// logic for building new push messages which are sent to peers from the
     /// active set and serialized into packets.
-    fn buildPushMessages(self: *Self, push_cursor: *u64) !ArrayList(ArrayList(Packet)) {
+    fn buildPushMessages(self: *Self, push_cursor: *u64) !ArrayList(Packet) {
         // TODO: find a better static value?
         var buf: [512]GossipVersionedData = undefined;
 
@@ -946,7 +978,7 @@ pub const GossipService = struct {
         };
         defer for (gossip_entries) |*ge| ge.deinit(self.gossip_value_allocator);
 
-        var packet_batch = ArrayList(ArrayList(Packet)).init(self.allocator);
+        var packet_batch = ArrayList(Packet).init(self.allocator);
         errdefer packet_batch.deinit();
 
         if (gossip_entries.len == 0) {
@@ -1037,10 +1069,11 @@ pub const GossipService = struct {
                 to_endpoint,
                 ChunkType.PushMessage,
             );
-            if (packets.items.len > 0) {
-                try packet_batch.append(packets);
-            }
+            defer packets.deinit();
+
+            try packet_batch.appendSlice(packets.items);
         }
+
         return packet_batch;
     }
 
@@ -1176,12 +1209,12 @@ pub const GossipService = struct {
         filter: *GossipPullFilter,
         gossip_table: *const GossipTable,
         output: ArrayList(Packet),
-        output_limit: *std.atomic.Value(i64),
-        output_consumed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        output_limit: *Atomic(i64),
+        output_consumed: Atomic(bool) = Atomic(bool).init(false),
         seed: u64,
 
         task: Task,
-        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        done: Atomic(bool) = Atomic(bool).init(false),
 
         pub fn deinit(this: *PullRequestTask) void {
             if (!this.output_consumed.load(.acquire)) {
@@ -1193,7 +1226,7 @@ pub const GossipService = struct {
             var self: *@This() = @fieldParentPtr("task", task);
             defer self.done.store(true, .release);
 
-            const output_limit = self.output_limit.load(.unordered);
+            const output_limit = self.output_limit.load(.acquire);
             if (output_limit <= 0) {
                 return;
             }
@@ -1206,9 +1239,7 @@ pub const GossipService = struct {
                 self.filter,
                 getWallclockMs(),
                 @as(usize, @max(output_limit, 0)),
-            ) catch {
-                return;
-            };
+            ) catch return;
             defer response_gossip_values.deinit();
 
             _ = self.output_limit.fetchSub(
@@ -1300,7 +1331,7 @@ pub const GossipService = struct {
             const gossip_table: *const GossipTable = gossip_table_lock.get();
             defer gossip_table_lock.unlock();
 
-            var output_limit = std.atomic.Value(i64).init(MAX_NUM_VALUES_PER_PULL_RESPONSE);
+            var output_limit = Atomic(i64).init(MAX_NUM_VALUES_PER_PULL_RESPONSE);
 
             for (valid_indexs.items, 0..) |i, task_index| {
                 // create the thread task
@@ -1331,11 +1362,13 @@ pub const GossipService = struct {
 
         for (tasks) |*task| {
             if (task.output.items.len > 0) {
-                self.stats.pull_responses_sent.add(1);
-                // TODO: should only need one mux lock in this loop
-                try self.packet_outgoing_channel.send(task.output);
+                for (task.output.items) |output| {
+                    try self.packet_outgoing_channel.send(output);
+                    self.stats.pull_responses_sent.add(1);
+                }
                 task.output_consumed.store(true, .release);
             }
+            task.output.deinit();
         }
     }
 
@@ -1362,18 +1395,11 @@ pub const GossipService = struct {
         self: *Self,
         ping_messages: *const ArrayList(PingMessage),
     ) !void {
-        const n_ping_messages = ping_messages.items.len;
-
-        // init a new batch of pong responses
-        var ping_packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_ping_messages);
-        ping_packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_ping_messages);
-        errdefer ping_packet_batch.deinit();
-
-        for (ping_messages.items, 0..) |*ping_message, i| {
+        for (ping_messages.items) |*ping_message| {
             const pong = try Pong.init(ping_message.ping, &self.my_keypair);
             const pong_message = GossipMessage{ .PongMessage = pong };
 
-            var packet = &ping_packet_batch.items[i];
+            var packet = Packet.default();
             const bytes_written = try bincode.writeToSlice(
                 &packet.data,
                 pong_message,
@@ -1389,9 +1415,10 @@ pub const GossipService = struct {
                 .field("from_endpoint", endpoint_str.items)
                 .field("from_pubkey", ping_message.ping.from.string().slice())
                 .debug("gossip: recv ping");
+
+            try self.packet_outgoing_channel.send(packet);
+            self.stats.pong_messages_sent.add(1);
         }
-        self.stats.pong_messages_sent.add(n_ping_messages);
-        try self.packet_outgoing_channel.send(ping_packet_batch);
     }
 
     /// logic for handling a pull response message.
@@ -1402,21 +1429,21 @@ pub const GossipService = struct {
     ///     - PullResponseMessage.gossip_values are inserted into the gossip table or added to failed pull hashes and freed
     pub fn handleBatchPullResponses(
         self: *Self,
-        pull_response_messages: *const ArrayList(PullResponseMessage),
+        pull_response_messages: []const PullResponseMessage,
     ) !void {
-        if (pull_response_messages.items.len == 0) {
+        if (pull_response_messages.len == 0) {
             return;
         }
 
         const now = getWallclockMs();
-        var failed_insert_ptrs = ArrayList(*SignedGossipData).init(self.allocator);
+        var failed_insert_ptrs = ArrayList(*const SignedGossipData).init(self.allocator);
         defer failed_insert_ptrs.deinit();
 
         {
             var gossip_table, var gossip_table_lg = self.gossip_table_rw.writeWithLock();
             defer gossip_table_lg.unlock();
 
-            for (pull_response_messages.items) |*pull_message| {
+            for (pull_response_messages) |*pull_message| {
                 const full_len = pull_message.gossip_values.len;
                 const valid_len = self.filterBasedOnShredVersion(
                     gossip_table,
@@ -1490,11 +1517,11 @@ pub const GossipService = struct {
     }
 
     /// logic for handling a prune message. verifies the prune message
-    /// is not too old, and that the destination pubkey is the local node,
+    /// is not too old, and that the destination pubkey is not the local node,
     /// then updates the active set to prune the list of origin Pubkeys.
     pub fn handleBatchPruneMessages(
         self: *Self,
-        prune_messages: *const ArrayList(*PruneData),
+        prune_messages: *const ArrayList(PruneData),
     ) void {
         var active_set_lock = self.active_set_rw.write();
         defer active_set_lock.unlock();
@@ -1512,7 +1539,7 @@ pub const GossipService = struct {
         }
     }
 
-    /// For all push messages:
+    /// For each push messages:
     ///     - PushMessage.gossip_values are filtered and then inserted into the gossip table, filtered values and failed inserts are freed
     pub fn handleBatchPushMessages(
         self: *Self,
@@ -1540,7 +1567,7 @@ pub const GossipService = struct {
 
         // pre-allocate memory to track insertion failures
         var max_inserts_per_push: usize = 0;
-        for (batch_push_messages.items) |*push_message| {
+        for (batch_push_messages.items) |push_message| {
             max_inserts_per_push = @max(max_inserts_per_push, push_message.gossip_values.len);
         }
         var insert_results = try std.ArrayList(GossipTable.InsertResult).initCapacity(self.allocator, max_inserts_per_push);
@@ -1661,10 +1688,6 @@ pub const GossipService = struct {
         const n_packets = pubkey_to_failed_origins_iter.len;
         if (n_packets == 0) return;
 
-        var prune_packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
-        prune_packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_packets);
-        var count: usize = 0;
-
         while (pubkey_to_failed_origins_iter.next()) |failed_origin_entry| {
             const from_pubkey = failed_origin_entry.key_ptr.*;
             const failed_origins_hashset = failed_origin_entry.value_ptr;
@@ -1688,15 +1711,14 @@ pub const GossipService = struct {
                 .field("to_addr", from_pubkey.string().slice())
                 .debug("gossip: send prune_message");
 
-            var packet = &prune_packet_batch.items[count];
+            var packet = Packet.default();
             const written_slice = bincode.writeToSlice(&packet.data, msg, bincode.Params{}) catch unreachable;
             packet.size = written_slice.len;
             packet.addr = from_endpoint;
-            count += 1;
-        }
 
-        self.stats.prune_messages_sent.add(n_packets);
-        try self.packet_outgoing_channel.send(prune_packet_batch);
+            try self.packet_outgoing_channel.send(packet);
+            self.stats.prune_messages_sent.add(1);
+        }
     }
 
     /// removes old values from the gossip table and failed pull hashes struct
@@ -1802,21 +1824,17 @@ pub const GossipService = struct {
         const n_pings = pings.items.len;
         if (n_pings == 0) return;
 
-        var packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_pings);
-        errdefer packet_batch.deinit();
-        packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_pings);
-
-        for (pings.items, 0..) |ping_and_addr, i| {
+        for (pings.items) |ping_and_addr| {
             const message = GossipMessage{ .PingMessage = ping_and_addr.ping };
 
-            var packet = &packet_batch.items[i];
+            var packet = Packet.default();
             const serialized_ping = bincode.writeToSlice(&packet.data, message, .{}) catch return error.SerializationError;
             packet.size = serialized_ping.len;
             packet.addr = ping_and_addr.socket.toEndpoint();
-        }
 
-        self.stats.ping_messages_sent.add(n_pings);
-        try self.packet_outgoing_channel.send(packet_batch);
+            try self.packet_outgoing_channel.send(packet);
+            self.stats.ping_messages_sent.add(1);
+        }
     }
 
     /// returns a list of valid gossip nodes. this works by reading
@@ -1858,7 +1876,7 @@ pub const GossipService = struct {
                 continue;
             }
             // filter matching shred version or my_shred_version == 0
-            const my_shred_version = self.my_shred_version.load(.monotonic);
+            const my_shred_version = self.my_shred_version.load(.acquire);
             if (my_shred_version != 0 and my_shred_version != contact_info.shred_version) {
                 continue;
             }
@@ -1878,12 +1896,13 @@ pub const GossipService = struct {
         return nodes[0..node_index];
     }
 
-    /// Frees heap allocated memory of filtered values
+    /// Sorts the incoming `gossip_values` slice to place the valid gossip data
+    /// at the start, and returns the number of valid gossip values in that slice.
     pub fn filterBasedOnShredVersion(
         self: *Self,
         gossip_table: *const GossipTable,
         gossip_values: []SignedGossipData,
-        from_pubkey: Pubkey,
+        sender_pubkey: Pubkey,
     ) usize {
         // we use swap remove which just reorders the array
         // (order dm), so we just track the new len -- ie, no allocations/frees
@@ -1893,7 +1912,7 @@ pub const GossipService = struct {
         }
 
         var gossip_values_array = ArrayList(SignedGossipData).fromOwnedSlice(self.allocator, gossip_values);
-        const sender_matches = gossip_table.checkMatchingShredVersion(from_pubkey, my_shred_version);
+        const sender_matches = gossip_table.checkMatchingShredVersion(sender_pubkey, my_shred_version);
         var i: usize = 0;
         while (i < gossip_values_array.items.len) {
             const gossip_value = &gossip_values[i];
@@ -1920,22 +1939,6 @@ pub const GossipService = struct {
         return gossip_values_array.items.len;
     }
 };
-
-pub fn packetBatchChannelLength(channel: anytype) !u64 {
-    if (channel.closed.load(.monotonic)) {
-        return error.ChannelClosed;
-    }
-
-    var packet_batches_guard = channel.buffer.lock();
-    defer packet_batches_guard.unlock();
-
-    var total_packets: u64 = 0;
-    const packet_batches = packet_batches_guard.get();
-    for (packet_batches.items) |*packet_batch| {
-        total_packets += packet_batch.items.len;
-    }
-    return total_packets;
-}
 
 /// stats that we publish to prometheus
 pub const GossipStats = struct {
@@ -2166,7 +2169,7 @@ pub fn gossipDataToPackets(
 
 pub fn chunkValuesIntoPacketIndexes(
     allocator: std.mem.Allocator,
-    gossip_values: []SignedGossipData,
+    gossip_values: []const SignedGossipData,
     max_chunk_bytes: usize,
 ) error{ OutOfMemory, SerializationError }!ArrayList(usize) {
     var packet_indexs = try ArrayList(usize).initCapacity(allocator, 1);
@@ -2201,21 +2204,24 @@ pub fn chunkValuesIntoPacketIndexes(
 test "handle pong messages" {
     const allocator = std.testing.allocator;
 
-    var exit = AtomicBool.init(false);
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     const contact_info = try localhostTestContactInfo(pubkey);
 
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         keypair,
         null,
-        &exit,
+        &counter,
         .noop,
     );
-    defer gossip_service.deinit();
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+    }
 
     const endpoint = try allocator.create(EndPoint);
     defer allocator.destroy(endpoint);
@@ -2267,7 +2273,6 @@ test "handle pong messages" {
 
 test "build messages startup and shutdown" {
     const allocator = std.testing.allocator;
-    var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2276,13 +2281,14 @@ test "build messages startup and shutdown" {
     defer logger.deinit();
     logger.spawn();
 
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
     defer gossip_service.deinit();
@@ -2290,7 +2296,15 @@ test "build messages startup and shutdown" {
     var prng = std.Random.Xoshiro256.init(0);
     const rng = prng.random();
 
-    var build_messages_handle = try Thread.spawn(.{}, GossipService.buildMessages, .{ &gossip_service, 19 });
+    var build_messages_handle = try Thread.spawn(
+        .{},
+        GossipService.buildMessages,
+        .{ &gossip_service, 19, 1 },
+    );
+    defer {
+        gossip_service.shutdown();
+        build_messages_handle.join();
+    }
 
     // add some gossip values to push
     var lg = gossip_service.gossip_table_rw.write();
@@ -2312,18 +2326,12 @@ test "build messages startup and shutdown" {
     }
     lg.unlock();
     ping_lock.unlock();
-
-    std.time.sleep(std.time.ns_per_s * 3);
-
-    exit.store(true, .unordered);
-    build_messages_handle.join();
 }
 
 test "handling prune messages" {
     var rng = std.rand.DefaultPrng.init(91);
 
     const allocator = std.testing.allocator;
-    var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2332,16 +2340,20 @@ test "handling prune messages" {
     defer logger.deinit();
     logger.spawn();
 
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
-    defer gossip_service.deinit();
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+    }
 
     // add some peers
     var lg = gossip_service.gossip_table_rw.write();
@@ -2381,10 +2393,10 @@ test "handling prune messages" {
     };
     try prune_data.sign(&my_keypair);
 
-    var data = std.ArrayList(*PruneData).init(allocator);
+    var data = std.ArrayList(PruneData).init(allocator);
     defer data.deinit();
+    try data.append(prune_data);
 
-    try data.append(&prune_data);
     gossip_service.handleBatchPruneMessages(&data);
 
     var as_lock2 = gossip_service.active_set_rw.read();
@@ -2397,7 +2409,6 @@ test "handling pull responses" {
     const allocator = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(91);
-    var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2406,16 +2417,20 @@ test "handling pull responses" {
     defer logger.deinit();
     logger.spawn();
 
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
-    defer gossip_service.deinit();
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+    }
 
     // get random values
     var gossip_values: [5]SignedGossipData = undefined;
@@ -2434,7 +2449,7 @@ test "handling pull responses" {
         .from_pubkey = &my_pubkey,
     });
 
-    try gossip_service.handleBatchPullResponses(&data);
+    try gossip_service.handleBatchPullResponses(data.items);
 
     // make sure values are inserted
     var gossip_table_lock = gossip_service.gossip_table_rw.read();
@@ -2445,7 +2460,7 @@ test "handling pull responses" {
     gossip_table_lock.unlock();
 
     // try inserting again with same values (should all fail)
-    try gossip_service.handleBatchPullResponses(&data);
+    try gossip_service.handleBatchPullResponses(data.items);
 
     var lg = gossip_service.failed_pull_hashes_mux.lock();
     var failed_pull_hashes: *HashTimeQueue = lg.mut();
@@ -2459,26 +2474,22 @@ test "handle old prune & pull request message" {
     var random = std.rand.DefaultPrng.init(91);
     const rng = random.random();
 
-    var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
-    var gossip_service = try allocator.create(GossipService);
-    gossip_service.* = try GossipService.init(
+    var counter = Atomic(usize).init(0);
+    var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         .noop,
     );
-    defer {
-        gossip_service.deinit();
-        allocator.destroy(gossip_service);
-    }
+    defer gossip_service.deinit();
 
     const prune_pubkey = Pubkey.random(rng);
     const prune_data = PruneData.init(prune_pubkey, &.{}, my_pubkey, 0);
@@ -2486,36 +2497,17 @@ test "handle old prune & pull request message" {
         .PruneMessage = .{ prune_pubkey, prune_data },
     };
 
-    const handle = try std.Thread.spawn(.{}, GossipService.run, .{
-        gossip_service,
-        .{},
-    });
+    const handle = try std.Thread.spawn(.{}, GossipService.run, .{ &gossip_service, .{} });
 
     try gossip_service.verified_incoming_channel.send(.{
         .from_endpoint = try EndPoint.parse("127.0.0.1:8000"),
         .message = message,
     });
 
-    var dropped_old_prune = false;
-    for (0..10) |_| {
-        const v = gossip_service.stats.prune_messages_dropped.get();
-        if (v > 0) {
-            dropped_old_prune = true;
-            break;
-        }
-        std.time.sleep(std.time.ns_per_s * 1);
-    }
-    try std.testing.expect(dropped_old_prune);
-
     // send a pull request message
-    var pull_requests = ArrayList(GossipService.PullRequestMessage).init(allocator);
-    defer pull_requests.deinit();
-
-    // only consider the first bit so we know well get matches
-    const Bloom = @import("../bloom/bloom.zig").Bloom;
-
     const N_FILTER_BITS = 1;
-    const bloom = try Bloom.random(allocator, rng, 100, 0.1, N_FILTER_BITS);
+    var bloom = try Bloom.random(allocator, rng, 100, 0.1, N_FILTER_BITS);
+    defer bloom.deinit();
 
     const filter = GossipPullFilter{
         .filter = bloom,
@@ -2533,25 +2525,14 @@ test "handle old prune & pull request message" {
 
     try gossip_service.verified_incoming_channel.send(.{
         .from_endpoint = try EndPoint.parse("127.0.0.1:8000"),
-        .message = GossipMessage{
-            .PullRequest = .{ filter, ci },
-        },
+        .message = .{ .PullRequest = .{ filter, ci } },
     });
-
-    var dropped_old_req = false;
-    for (0..5) |_| {
-        const v = gossip_service.stats.pull_requests_dropped.get();
-        if (v == 1) {
-            dropped_old_req = true;
-            break;
-        }
-        std.time.sleep(std.time.ns_per_s * 1);
-    }
-    try std.testing.expect(dropped_old_req);
 
     // DIFFERENT GOSSIP DATA (NOT A LEGACY CONTACT INFO)
     // NOTE: need fresh bloom filter because it gets deinit
-    const bloom2 = try Bloom.random(allocator, rng, 100, 0.1, N_FILTER_BITS);
+    var bloom2 = try Bloom.random(allocator, rng, 100, 0.1, N_FILTER_BITS);
+    defer bloom2.deinit();
+
     const filter2 = GossipPullFilter{
         .filter = bloom2,
         // this is why we wanted atleast one hash_bit == 1
@@ -2561,31 +2542,19 @@ test "handle old prune & pull request message" {
     const data = try SignedGossipData.randomWithIndex(rng, &rando_keypair, 2);
     try gossip_service.verified_incoming_channel.send(.{
         .from_endpoint = try EndPoint.parse("127.0.0.1:8000"),
-        .message = GossipMessage{
-            .PullRequest = .{ filter2, data },
-        },
+        .message = .{ .PullRequest = .{ filter2, data } },
     });
 
-    dropped_old_req = false;
-    for (0..5) |_| {
-        const v = gossip_service.stats.pull_requests_dropped.get();
-        if (v == 2) {
-            dropped_old_req = true;
-            break;
-        }
-        std.time.sleep(std.time.ns_per_s * 1);
-    }
-    try std.testing.expect(dropped_old_req);
-
-    exit.store(true, .unordered);
+    gossip_service.shutdown();
     handle.join();
+
+    try std.testing.expect(gossip_service.stats.pull_requests_dropped.get() == 2);
 }
 
 test "handle pull request" {
     const allocator = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(91);
-    var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2595,13 +2564,14 @@ test "handle pull request" {
     defer logger.deinit();
     logger.spawn();
 
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
     defer gossip_service.deinit();
@@ -2651,7 +2621,6 @@ test "handle pull request" {
     }
 
     // only consider the first bit so we know well get matches
-    const Bloom = @import("../bloom/bloom.zig").Bloom;
     var bloom = try Bloom.random(allocator, rng.random(), 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
@@ -2665,7 +2634,7 @@ test "handle pull request" {
     var pull_requests = ArrayList(GossipService.PullRequestMessage).init(allocator);
     defer pull_requests.deinit();
 
-    try pull_requests.append(GossipService.PullRequestMessage{
+    try pull_requests.append(.{
         .filter = filter,
         .from_endpoint = addr.toEndpoint(),
         .value = ci,
@@ -2675,32 +2644,27 @@ test "handle pull request" {
 
     {
         const outgoing_packets = gossip_service.packet_outgoing_channel;
-        const response_packets = outgoing_packets.receive().?;
-        defer {
-            for (response_packets.items) |packet| {
-                bincode.free(allocator, packet);
-            }
-            response_packets.deinit();
+
+        while (outgoing_packets.receive()) |response_packet| {
+            const message = try bincode.readFromSlice(
+                allocator,
+                GossipMessage,
+                response_packet.data[0..response_packet.size],
+                bincode.Params.standard,
+            );
+            defer bincode.free(allocator, message);
+
+            const values = message.PullResponse[1];
+            try std.testing.expect(values.len > 0);
         }
-        const response_packet = response_packets.items[0];
-
-        const message = try bincode.readFromSlice(
-            allocator,
-            GossipMessage,
-            response_packet.data[0..response_packet.size],
-            bincode.Params.standard,
-        );
-        defer bincode.free(allocator, message);
-
-        const values = message.PullResponse[1];
-        try std.testing.expect(values.len > 0);
     }
+
+    gossip_service.shutdown();
 }
 
 test "test build prune messages and handle push messages" {
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
-    var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2709,13 +2673,14 @@ test "test build prune messages and handle push messages" {
     defer logger.deinit();
     logger.spawn();
 
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
     defer gossip_service.deinit();
@@ -2755,23 +2720,12 @@ test "test build prune messages and handle push messages" {
 
     try gossip_service.handleBatchPushMessages(&msgs);
     {
-        var packet_lg = gossip_service.packet_outgoing_channel.buffer.lock();
-        defer packet_lg.unlock();
-        const outgoing_packets: *const ArrayList(PacketBatch) = packet_lg.get();
         // zero prune messages
-        try std.testing.expect(outgoing_packets.items.len == 0);
+        try std.testing.expect(gossip_service.packet_outgoing_channel.len() == 0);
     }
 
     try gossip_service.handleBatchPushMessages(&msgs);
-    var packet = blk: {
-        var packet_lg = gossip_service.packet_outgoing_channel.buffer.lock();
-        defer packet_lg.unlock();
-        const outgoing_packets: *const ArrayList(PacketBatch) = packet_lg.get();
-        // > 0 prune messages to account for duplicate push messages
-        try std.testing.expect(outgoing_packets.items.len > 0);
-
-        break :blk outgoing_packets.items[0].items[0];
-    };
+    var packet = gossip_service.packet_outgoing_channel.receive() orelse return error.ChannelEmpty;
     const message = try bincode.readFromSlice(
         allocator,
         GossipMessage,
@@ -2783,12 +2737,13 @@ test "test build prune messages and handle push messages" {
     var prune_data = message.PruneMessage[1];
     try std.testing.expect(prune_data.destination.equals(&push_from));
     try std.testing.expectEqual(prune_data.prunes.len, 10);
+
+    gossip_service.shutdown();
 }
 
 test "build pull requests" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(91);
-    var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2797,16 +2752,20 @@ test "build pull requests" {
     defer logger.deinit();
     logger.spawn();
 
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
-    defer gossip_service.deinit();
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+    }
 
     // insert peers to send msgs to
     const now = getWallclockMs();
@@ -2843,7 +2802,6 @@ test "build pull requests" {
 test "test build push messages" {
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
-    var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2852,16 +2810,20 @@ test "test build push messages" {
     defer logger.deinit();
     logger.spawn();
 
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
-    defer gossip_service.deinit();
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+    }
 
     // add some peers
     var peers = ArrayList(ThreadSafeContactInfo).init(allocator);
@@ -2904,12 +2866,14 @@ test "test build push messages" {
 
     var cursor: u64 = 0;
     var msgs = try gossip_service.buildPushMessages(&cursor);
+    defer msgs.deinit();
+
     try std.testing.expectEqual(cursor, 11);
     try std.testing.expect(msgs.items.len > 0);
-    for (msgs.items) |*msg| msg.deinit();
-    msgs.deinit();
 
     const msgs2 = try gossip_service.buildPushMessages(&cursor);
+    defer msgs2.deinit();
+
     try std.testing.expectEqual(cursor, 11);
     try std.testing.expect(msgs2.items.len == 0);
 }
@@ -2917,7 +2881,6 @@ test "test build push messages" {
 test "test large push messages" {
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
-    var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2926,16 +2889,20 @@ test "test large push messages" {
     defer logger.deinit();
     logger.spawn();
 
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
-    defer gossip_service.deinit();
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+    }
 
     // add some peers
     var peers = ArrayList(ThreadSafeContactInfo).init(allocator);
@@ -2966,29 +2933,28 @@ test "test large push messages" {
 
     var cursor: u64 = 0;
     const msgs = try gossip_service.buildPushMessages(&cursor);
-    defer {
-        for (msgs.items) |*msg| msg.deinit();
-        msgs.deinit();
-    }
+    defer msgs.deinit();
+
     try std.testing.expect(msgs.items.len < 2_000);
 }
 
 test "test packet verification" {
     const allocator = std.testing.allocator;
-    var exit = AtomicBool.init(false);
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     const id = Pubkey.fromPublicKey(&keypair.public_key);
     const contact_info = try localhostTestContactInfo(id);
 
     // noop for this case because this tests error failed verification
     const logger: Logger = .noop;
+
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
     defer gossip_service.deinit();
@@ -2996,7 +2962,15 @@ test "test packet verification" {
     var packet_channel = gossip_service.packet_incoming_channel;
     var verified_channel = gossip_service.verified_incoming_channel;
 
-    const packet_verifier_handle = try Thread.spawn(.{}, GossipService.verifyPackets, .{&gossip_service});
+    const packet_verifier_handle = try Thread.spawn(
+        .{},
+        GossipService.verifyPackets,
+        .{ &gossip_service, 1 },
+    );
+    defer {
+        gossip_service.shutdown();
+        packet_verifier_handle.join();
+    }
 
     var rng = std.rand.DefaultPrng.init(getWallclockMs());
     var data = GossipData.randomFromIndex(rng.random(), 0);
@@ -3017,13 +2991,9 @@ test "test packet verification" {
     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
     const out = try bincode.writeToSlice(buf[0..], message, bincode.Params{});
     const packet = Packet.init(from, buf, out.len);
-    var packet_batch = ArrayList(Packet).init(allocator);
     for (0..3) |_| {
-        try packet_batch.append(packet);
+        try packet_channel.send(packet);
     }
-    try packet_channel.send(packet_batch);
-
-    var packet_batch_2 = ArrayList(Packet).init(allocator);
 
     // send one which fails sanitization
     var value_v2 = try SignedGossipData.initSigned(GossipData.randomFromIndex(rng.random(), 2), &keypair);
@@ -3035,7 +3005,7 @@ test "test packet verification" {
     var buf_v2 = [_]u8{0} ** PACKET_DATA_SIZE;
     const out_v2 = try bincode.writeToSlice(buf_v2[0..], message_v2, bincode.Params{});
     const packet_v2 = Packet.init(from, buf_v2, out_v2.len);
-    try packet_batch_2.append(packet_v2);
+    try packet_channel.send(packet_v2);
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
@@ -3047,7 +3017,7 @@ test "test packet verification" {
     var buf2 = [_]u8{0} ** PACKET_DATA_SIZE;
     const out2 = try bincode.writeToSlice(buf2[0..], message2, bincode.Params{});
     const packet2 = Packet.init(from, buf2, out2.len);
-    try packet_batch_2.append(packet2);
+    try packet_channel.send(packet2);
 
     // send it with a SignedGossipData which hash a slice
     {
@@ -3073,48 +3043,22 @@ test "test packet verification" {
         var buf3 = [_]u8{0} ** PACKET_DATA_SIZE;
         const out3 = try bincode.writeToSlice(buf3[0..], message3, bincode.Params{});
         const packet3 = Packet.init(from, buf3, out3.len);
-        try packet_batch_2.append(packet3);
+        try packet_channel.send(packet3);
     }
-    try packet_channel.send(packet_batch_2);
 
     var msg_count: usize = 0;
-    var attempt_count: usize = 0;
     while (msg_count < 4) {
-        if (try verified_channel.try_drain()) |msgs| {
-            defer verified_channel.allocator.free(msgs);
-            for (msgs) |msg| {
-                defer bincode.free(gossip_service.allocator, msg);
-                try std.testing.expect(msg.message.PushMessage[0].equals(&id));
-                msg_count += 1;
-            }
-        }
-        std.time.sleep(10);
-        attempt_count += 1;
-        if (attempt_count > 10_000) {
-            try std.testing.expect(false);
+        if (verified_channel.receive()) |msg| {
+            defer bincode.free(gossip_service.allocator, msg);
+            try std.testing.expect(msg.message.PushMessage[0].equals(&id));
+            msg_count += 1;
         }
     }
-
-    attempt_count = 0;
-    while (packet_channel.buffer.private.v.items.len != 0) {
-        std.time.sleep(std.time.ns_per_ms * 10);
-        attempt_count += 1;
-        if (attempt_count > 10) {
-            try std.testing.expect(false);
-        }
-    }
-
-    try std.testing.expect(packet_channel.buffer.private.v.items.len == 0);
-    try std.testing.expect(verified_channel.buffer.private.v.items.len == 0);
-
-    exit.store(true, .unordered);
-    packet_verifier_handle.join();
 }
 
 test "process contact info push packet" {
     const allocator = std.testing.allocator;
-    const gossip_value_allocator = allocator;
-    var exit = AtomicBool.init(false);
+
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -3123,13 +3067,14 @@ test "process contact info push packet" {
     defer logger.deinit();
     logger.spawn();
 
+    var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
     defer gossip_service.deinit();
@@ -3137,53 +3082,45 @@ test "process contact info push packet" {
     const verified_channel = gossip_service.verified_incoming_channel;
     const responder_channel = gossip_service.packet_outgoing_channel;
 
-    var kp = try KeyPair.create(null);
-    const pk = Pubkey.fromPublicKey(&kp.public_key);
+    const kp = try KeyPair.create(null);
+    const id = Pubkey.fromPublicKey(&kp.public_key);
 
     var packet_handle = try Thread.spawn(
         .{},
         GossipService.processMessages,
-        .{ &gossip_service, 19 },
+        .{ &gossip_service, 19, 1 },
     );
-
-    // send a push message
-    const id = pk;
 
     // new contact info
     const legacy_contact_info = LegacyContactInfo.default(id);
-    const gossip_data = GossipData{
-        .LegacyContactInfo = legacy_contact_info,
-    };
+    const gossip_data: GossipData = .{ .LegacyContactInfo = legacy_contact_info };
     const gossip_value = try SignedGossipData.initSigned(gossip_data, &kp);
-    const heap_values = try gossip_value_allocator.dupe(SignedGossipData, &.{gossip_value});
-    const msg = GossipMessage{
-        .PushMessage = .{ id, heap_values },
-    };
+    const heap_values = try allocator.dupe(SignedGossipData, &.{gossip_value});
+    defer allocator.free(heap_values);
 
     // packet
+    const msg: GossipMessage = .{ .PushMessage = .{ id, heap_values } };
     const peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
-    const message = GossipMessageWithEndpoint{
-        .from_endpoint = peer,
+    const message: GossipMessageWithEndpoint = .{
         .message = msg,
+        .from_endpoint = peer,
     };
     try verified_channel.send(message);
 
     // ping
-    const ping_msg = GossipMessageWithEndpoint{
-        .message = GossipMessage{
-            .PingMessage = try Ping.init(.{0} ** 32, &kp),
-        },
+    const ping_msg: GossipMessageWithEndpoint = .{
+        .message = .{ .PingMessage = try Ping.init(.{0} ** 32, &kp) },
         .from_endpoint = peer,
     };
     try verified_channel.send(ping_msg);
 
     // send pull request with own pubkey
-    const erroneous_pull_request_msg = GossipMessageWithEndpoint{
-        .message = GossipMessage{
+    const erroneous_pull_request_msg: GossipMessageWithEndpoint = .{
+        .message = .{
             .PullRequest = .{
                 GossipPullFilter.init(allocator),
-                try SignedGossipData.initSigned(GossipData{
-                    .ContactInfo = try localhostTestContactInfo(my_pubkey),
+                try SignedGossipData.initSigned(.{
+                    .ContactInfo = try localhostTestContactInfo(my_pubkey), // whoops
                 }, &my_keypair),
             },
         },
@@ -3191,28 +3128,24 @@ test "process contact info push packet" {
     };
     try verified_channel.send(erroneous_pull_request_msg);
 
+    // close everything up before looking at the output channel in order to
+    // not race with work services are doing
+    gossip_service.shutdown();
+    packet_handle.join();
+
+    // the ping message we sent, processed into a pong
+    try std.testing.expectEqual(1, responder_channel.len());
+    _ = responder_channel.receive().?;
+
     // correct insertion into table
     var buf2: [100]ContactInfo = undefined;
-    std.time.sleep(std.time.ns_per_s);
-
     {
         var lg = gossip_service.gossip_table_rw.read();
+        defer lg.unlock();
+
         const res = lg.get().getContactInfos(&buf2, 0);
         try std.testing.expect(res.len == 1);
-        lg.unlock();
     }
-
-    const resp = (try responder_channel.try_drain()).?;
-    defer {
-        for (resp) |*packet_batch| {
-            packet_batch.deinit();
-        }
-        responder_channel.allocator.free(resp);
-    }
-    try std.testing.expect(resp.len == 1);
-
-    exit.store(true, .unordered);
-    packet_handle.join();
 }
 
 test "init, exit, and deinit" {
@@ -3223,7 +3156,7 @@ test "init, exit, and deinit" {
     var contact_info = try LegacyContactInfo.random(rng.random()).toContactInfo(std.testing.allocator);
     try contact_info.setSocket(.gossip, gossip_address);
 
-    var exit = AtomicBool.init(false);
+    var counter = Atomic(usize).init(0);
 
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
@@ -3235,9 +3168,10 @@ test "init, exit, and deinit" {
         contact_info,
         my_keypair,
         null,
-        &exit,
+        &counter,
         logger,
     );
+    defer gossip_service.deinit();
 
     const handle = try std.Thread.spawn(.{}, GossipService.run, .{
         &gossip_service, .{
@@ -3245,18 +3179,17 @@ test "init, exit, and deinit" {
             .dump = false,
         },
     });
-
-    gossip_service.echo_server.kill();
-    exit.store(true, .unordered);
-    handle.join();
-    gossip_service.deinit();
+    defer {
+        gossip_service.shutdown();
+        handle.join();
+    }
 }
 
 const fuzz_service = @import("./fuzz_service.zig");
 
 pub const BenchmarkGossipServiceGeneral = struct {
-    pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const min_iterations = 3;
+    pub const max_iterations = 5;
 
     pub const MessageCounts = struct {
         n_ping: usize,
@@ -3297,7 +3230,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
     };
 
     pub fn benchmarkGossipService(bench_args: BenchmarkArgs) !usize {
-        const allocator = std.heap.page_allocator;
+        const allocator = std.heap.c_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
         const endpoint = address.toEndpoint();
@@ -3313,27 +3246,21 @@ pub const BenchmarkGossipServiceGeneral = struct {
         const logger: Logger = .noop;
 
         // process incoming packets/messsages
-        var exit = AtomicBool.init(false);
+        var counter = Atomic(usize).init(0);
         var gossip_service = try GossipService.init(
             allocator,
             allocator,
             contact_info,
             keypair,
             null,
-            &exit,
+            &counter,
             logger,
         );
         gossip_service.echo_server.kill(); // we dont need this rn
-        defer gossip_service.deinit();
-        // reset stats
-        defer gossip_service.stats.reset();
-
-        const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
-            &gossip_service, .{
-                .spy_node = true, // dont build any outgoing messages
-                .dump = false,
-            },
-        });
+        defer {
+            gossip_service.stats.reset();
+            gossip_service.deinit();
+        }
 
         const outgoing_channel = gossip_service.packet_incoming_channel;
 
@@ -3344,29 +3271,24 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var msg_sent: usize = 0;
         msg_sent += bench_args.message_counts.n_ping;
 
-        var packet_batch = try ArrayList(Packet).initCapacity(
-            allocator,
-            bench_args.message_counts.n_ping +
-                bench_args.message_counts.n_push_message +
-                bench_args.message_counts.n_pull_response,
-        );
-
         for (0..bench_args.message_counts.n_ping) |_| {
             // send a ping message
             const packet = try fuzz_service.randomPingPacket(rng, &keypair, endpoint);
-            try packet_batch.append(packet);
+            try outgoing_channel.send(packet);
         }
 
         for (0..bench_args.message_counts.n_push_message) |_| {
             // send a push message
             var packets = try fuzz_service.randomPushMessage(
+                allocator,
                 rng,
                 &keypair,
                 address.toEndpoint(),
             );
             defer packets.deinit();
+
             msg_sent += packets.items.len;
-            try packet_batch.appendSlice(packets.items);
+            for (packets.items) |packet| try outgoing_channel.send(packet);
         }
 
         for (0..bench_args.message_counts.n_pull_response) |_| {
@@ -3377,36 +3299,32 @@ pub const BenchmarkGossipServiceGeneral = struct {
                 address.toEndpoint(),
             );
             defer packets.deinit();
+
             msg_sent += packets.items.len;
-            try packet_batch.appendSlice(packets.items);
+            for (packets.items) |packet| try outgoing_channel.send(packet);
         }
 
-        // send all messages in one go
-        try outgoing_channel.send(packet_batch);
+        const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
+            &gossip_service, .{
+                .spy_node = true, // dont build any outgoing messages
+                .dump = false,
+            },
+        });
 
         // wait for all messages to be processed
         var timer = try std.time.Timer.start();
-        while (true) {
-            const v = gossip_service.stats.gossip_packets_processed.get();
-            // std.debug.print("{d} messages processed\r", .{v});
-            if (v >= msg_sent) {
-                break;
-            }
-        }
-        const elapsed = timer.read();
-        // std.debug.print("\r", .{});
 
-        exit.store(true, .unordered);
+        gossip_service.shutdown();
         packet_handle.join();
 
-        return elapsed;
+        return timer.read();
     }
 };
 
 /// pull requests require some additional setup to work
 pub const BenchmarkGossipServicePullRequests = struct {
-    pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const min_iterations = 3;
+    pub const max_iterations = 5;
 
     pub const BenchmarkArgs = struct {
         name: []const u8 = "",
@@ -3428,7 +3346,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
     };
 
     pub fn benchmarkPullRequests(bench_args: BenchmarkArgs) !usize {
-        const allocator = std.heap.page_allocator;
+        const allocator = std.heap.c_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
 
@@ -3443,21 +3361,21 @@ pub const BenchmarkGossipServicePullRequests = struct {
         const logger: Logger = .noop;
 
         // process incoming packets/messsages
-        var exit = AtomicBool.init(false);
-
+        var counter = Atomic(usize).init(0);
         var gossip_service = try GossipService.init(
             allocator,
             allocator,
             contact_info,
             keypair,
             null,
-            &exit,
+            &counter,
             logger,
         );
         gossip_service.echo_server.kill(); // we dont need this rn
-        defer gossip_service.deinit();
-        // reset stats
-        defer gossip_service.stats.reset();
+        defer {
+            gossip_service.stats.reset();
+            gossip_service.deinit();
+        }
 
         // setup recv peer
         const recv_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8889);
@@ -3495,20 +3413,9 @@ pub const BenchmarkGossipServicePullRequests = struct {
             table_lock.unlock();
         }
 
-        const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
-            &gossip_service, .{
-                .spy_node = true, // dont build any outgoing messages
-                .dump = false,
-            },
-        });
-
         const outgoing_channel = gossip_service.packet_incoming_channel;
 
         // generate messages
-        var packet_batch = try ArrayList(Packet).initCapacity(
-            allocator,
-            bench_args.n_pull_requests,
-        );
         for (0..bench_args.n_pull_requests) |_| {
             const packet = try fuzz_service.randomPullRequestWithContactInfo(
                 allocator,
@@ -3516,32 +3423,29 @@ pub const BenchmarkGossipServicePullRequests = struct {
                 address.toEndpoint(),
                 signed_contact_info_recv,
             );
-            packet_batch.appendAssumeCapacity(packet);
+
+            try outgoing_channel.send(packet);
         }
 
-        try outgoing_channel.send(packet_batch);
+        const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
+            &gossip_service, .{
+                .spy_node = true, // dont build any outgoing messages
+                .dump = false,
+            },
+        });
+
+        var timer = try std.time.Timer.start();
 
         // wait for all messages to be processed
-        const msg_sent = bench_args.n_pull_requests;
-        var timer = try std.time.Timer.start();
-        while (true) {
-            const v = gossip_service.stats.gossip_packets_processed.get();
-            if (v >= msg_sent) {
-                break;
-            }
-            // std.debug.print("{d} messages processed\r", .{v});
-        }
-        const elapsed = timer.read();
-        // std.debug.print("\r", .{});
-
-        exit.store(true, .unordered);
+        gossip_service.shutdown();
         packet_handle.join();
 
-        return elapsed;
+        return timer.read();
     }
 };
 
 fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
+    comptime std.debug.assert(@import("builtin").is_test); // should only be used for testin
     var contact_info = try LegacyContactInfo.default(id).toContactInfo(std.testing.allocator);
     try contact_info.setSocket(.gossip, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));
     return contact_info;

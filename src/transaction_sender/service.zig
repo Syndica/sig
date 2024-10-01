@@ -45,7 +45,7 @@ pub const Service = struct {
     transaction_pool: TransactionPool,
     leader_info_rw: RwMux(LeaderInfo),
     send_socket: UdpSocket,
-    send_channel: *Channel(std.ArrayList(Packet)),
+    send_channel: *Channel(Packet),
     receive_channel: *Channel(TransactionInfo),
     exit: *AtomicBool,
     logger: Logger,
@@ -76,10 +76,7 @@ pub const Service = struct {
                 .ipv4,
                 .udp,
             ),
-            .send_channel = Channel(std.ArrayList(Packet)).init(
-                allocator,
-                config.pool_max_size,
-            ),
+            .send_channel = try Channel(Packet).create(allocator),
             .receive_channel = receive_channel,
             .logger = logger,
             .exit = exit,
@@ -93,8 +90,10 @@ pub const Service = struct {
             .{
                 self.send_socket,
                 self.send_channel,
-                self.exit,
                 self.logger,
+                false,
+                self.exit,
+                {},
             },
         );
 
@@ -287,15 +286,13 @@ pub const Service = struct {
         }
 
         for (leader_addresses.items) |leader_address| {
-            var packets = try std.ArrayList(Packet).initCapacity(self.allocator, transactions.len);
             for (transactions) |tx| {
-                try packets.append(Packet.init(
+                try self.send_channel.send(Packet.init(
                     leader_address.toEndpoint(),
                     tx.wire_transaction,
                     tx.wire_transaction_size,
                 ));
             }
-            try self.send_channel.send(packets);
         }
 
         const last_sent_time = Instant.now();

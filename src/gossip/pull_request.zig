@@ -246,7 +246,7 @@ pub const GossipPullFilter = struct {
         return std.math.ceil(m / (-k / @log(@as(f64, 1) - exp(@log(p) / k))));
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *const Self) void {
         self.filter.deinit();
     }
 };

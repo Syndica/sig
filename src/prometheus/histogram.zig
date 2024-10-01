@@ -92,7 +92,7 @@ pub const Histogram = struct {
     pub fn observe(self: *Self, value: f64) void {
         const shard_sync = self.incrementCount(.acquire); // acquires lock. must be first step.
         const shard = &self.shards[shard_sync.shard];
-        for (0.., self.upper_bounds.items) |i, bound| {
+        for (self.upper_bounds.items, 0..) |bound, i| {
             if (value <= bound) {
                 _ = shard.buckets.items[i].fetchAdd(1, .monotonic);
                 break;

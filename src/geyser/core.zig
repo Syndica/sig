@@ -96,7 +96,7 @@ pub const GeyserWriter = struct {
         io_fba_bytes: u64,
     ) !Self {
         const file = try openPipe(pipe_path);
-        const io_channel = sig.sync.Channel([]u8).init(allocator, 1_000);
+        const io_channel = try sig.sync.Channel([]u8).create(allocator);
         const io_allocator_state = try allocator.create(RecycleFBA(.{}));
         io_allocator_state.* = try RecycleFBA(.{}).init(allocator, io_fba_bytes);
 
@@ -111,12 +111,12 @@ pub const GeyserWriter = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.exit.store(true, .unordered);
+        self.exit.store(true, .release);
         if (self.io_handle) |*handle| handle.join();
 
         self.file.close();
-        self.io_channel.close();
         self.io_channel.deinit();
+        self.allocator.destroy(self.io_channel);
         self.io_allocator_state.deinit();
         self.allocator.destroy(self.io_allocator_state);
     }
@@ -130,11 +130,10 @@ pub const GeyserWriter = struct {
         var payloads = std.ArrayList([]u8).init(self.allocator);
         defer payloads.deinit();
 
-        while (!self.exit.load(.unordered)) {
-            try self.io_channel.tryDrainRecycle(&payloads);
+        while (!self.exit.load(.acquire)) {
             // TODO(metrics): prometheus metrics on number of payloads written
 
-            for (payloads.items) |payload| {
+            while (self.io_channel.receive()) |payload| {
                 _ = self.writeToPipe(payload) catch |err| {
                     if (err == WritePipeError.PipeBlockedWithExitSignaled) {
                         return;
@@ -177,7 +176,7 @@ pub const GeyserWriter = struct {
             const buf = self.io_allocator.alloc(u8, total_len) catch {
                 // no memory available rn - unlock and wait
                 std.time.sleep(std.time.ns_per_ms);
-                if (self.exit.load(.unordered)) {
+                if (self.exit.load(.acquire)) {
                     return error.MemoryBlockedWithExitSignaled;
                 }
                 continue;
@@ -207,7 +206,7 @@ pub const GeyserWriter = struct {
         while (n_bytes_written_total < buf.len) {
             const n_bytes_written = self.file.write(buf[n_bytes_written_total..]) catch |err| {
                 if (err == std.posix.WriteError.WouldBlock) {
-                    if (self.exit.load(.unordered)) {
+                    if (self.exit.load(.acquire)) {
                         return WritePipeError.PipeBlockedWithExitSignaled;
                     } else {
                         // pipe is full but we dont need to exit, so we try again
@@ -318,7 +317,7 @@ pub const GeyserReader = struct {
         while (total_bytes_read < expected_n_bytes) {
             const n_bytes_read = self.file.read(self.io_buf[total_bytes_read..expected_n_bytes]) catch |err| {
                 if (err == std.posix.ReadError.WouldBlock) {
-                    if (self.exit != null and self.exit.?.load(.unordered)) {
+                    if (self.exit != null and self.exit.?.load(.acquire)) {
                         return error.PipeBlockedWithExitSignaled;
                     } else {
                         // pipe is empty but we dont need to exit, so we try again
@@ -412,20 +411,19 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
 }
 
 pub fn streamReader(
+    allocator: std.mem.Allocator,
     exit: *std.atomic.Value(bool),
     pipe_path: []const u8,
     measure_rate: ?sig.time.Duration,
     allocator_config: ?GeyserReader.AllocatorConfig,
 ) !void {
-    const allocator = std.heap.page_allocator;
-
     var reader = try sig.geyser.GeyserReader.init(allocator, pipe_path, exit, allocator_config orelse .{});
     defer reader.deinit();
 
     var bytes_read: usize = 0;
     var timer = try sig.time.Timer.start();
 
-    while (!exit.load(.unordered)) {
+    while (!exit.load(.acquire)) {
         const n, const payload = reader.readPayload() catch |err| {
             if (err == error.PipeBlockedWithExitSignaled) {
                 break;

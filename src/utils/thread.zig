@@ -84,7 +84,7 @@ pub fn ThreadPoolTask(comptime Entry: type) type {
         /// it is atomically set to be unavailable, and its index is returned.
         pub fn awaitAndAcquireFirstAvailableTask(tasks: []Self, start_index: usize) usize {
             var task_index = start_index;
-            while (tasks[task_index].available.cmpxchgWeak(true, false, .release, .acquire) != null) {
+            while (tasks[task_index].available.cmpxchgWeak(true, false, .acquire, .monotonic) != null) {
                 task_index = (task_index + 1) % tasks.len;
             }
             return task_index;

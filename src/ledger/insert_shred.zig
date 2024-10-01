@@ -463,7 +463,7 @@ pub const ShredInserter = struct {
                 return false;
             }
 
-            if (!shouldInsertCodeShred(&shred, self.max_root.load(.unordered))) {
+            if (!shouldInsertCodeShred(&shred, self.max_root.load(.acquire))) {
                 self.metrics.num_code_shreds_invalid.inc();
                 return false;
             }
@@ -685,7 +685,7 @@ pub const ShredInserter = struct {
                 shred,
                 slot_meta,
                 just_inserted_shreds,
-                self.max_root.load(.unordered),
+                self.max_root.load(.acquire),
                 leader_schedule,
                 shred_source,
                 duplicate_shreds,
