@@ -57,10 +57,9 @@ pub fn main() !void {
 }
 
 pub fn csvDump() !void {
-    const allocator = std.heap.c_allocator;
-
     const pipe_path = config.pipe_path;
     std.debug.print("using pipe path: {s}\n", .{pipe_path});
+    const allocator = std.heap.c_allocator;
 
     const exit = try allocator.create(std.atomic.Value(bool));
     defer allocator.destroy(exit);
@@ -68,6 +67,8 @@ pub fn csvDump() !void {
 
     var reader = try sig.geyser.GeyserReader.init(allocator, pipe_path, exit, .{
         // TODO: make these configurable
+        .bincode_buf_len = 1 << 29,
+        .io_buf_len = 1 << 29,
     });
     defer reader.deinit();
 
@@ -88,19 +89,34 @@ pub fn csvDump() !void {
     defer io_channel.deinit();
 
     const recycle_fba = try allocator.create(sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }));
-    recycle_fba.* = try sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }).init(allocator, 1 << 30);
+    recycle_fba.* = try sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }).init(allocator, 1 << 32);
+    defer {
+        recycle_fba.deinit();
+        allocator.destroy(recycle_fba);
+    }
 
-    const io_handle = try std.Thread.spawn(.{}, csvDumpIOWriter, .{ csv_file, io_channel, recycle_fba });
+    const io_handle = try std.Thread.spawn(.{}, csvDumpIOWriter, .{ exit, csv_file, io_channel, recycle_fba });
     defer io_handle.join();
+    errdefer {
+        exit.store(true, .release);
+    }
 
     // read from geyser
     while (true) {
         _, const payload = try reader.readPayload();
         defer reader.resetMemory();
 
-        if (std.meta.activeTag(payload) != .AccountPayloadV1) {
-            std.debug.print("unexpected payload type: {}\n", .{std.meta.activeTag(payload)});
-            continue;
+        if (std.meta.activeTag(payload) == .EndOfSnapshotLoading) {
+            break;
+        }
+
+        switch (std.meta.activeTag(payload)) {
+            .AccountPayloadV1 => {},
+            .EndOfSnapshotLoading => {
+                std.debug.print("recv end of snapshot loading signal\n", .{});
+                exit.store(true, .release);
+                break;
+            },
         }
 
         // format to csv
@@ -114,29 +130,53 @@ pub fn csvDump() !void {
         var offset: u64 = 0;
 
         for (account_payload.accounts, account_payload.pubkeys) |account, pubkey| {
-            const x = try std.fmt.bufPrint(csv_string[offset..], "{s};{s};{any}\n", .{ pubkey, account.owner, account.data });
+            const x = try std.fmt.bufPrint(csv_string[offset..], "{d};{s};{s};{any}\n", .{ account_payload.slot, pubkey, account.owner, account.data });
             offset += x.len;
         }
 
         // send to be written
         try io_channel.send(csv_string[0..offset]);
     }
+
+    std.debug.print("\ncsv dump done!\n", .{});
 }
 
 pub fn csvDumpIOWriter(
+    exit: *std.atomic.Value(bool),
     csv_file: std.fs.File,
     io_channel: *sig.sync.Channel([]u8),
     recycle_fba: *sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }),
 ) !void {
+    const total_payloads_estimate: u64 = 405_721;
     var payloads_written: u64 = 0;
+    var timer = try sig.time.Timer.start();
+
+    var buf = try std.ArrayList([]u8).initCapacity(std.heap.c_allocator, 10_000);
+    defer buf.deinit();
+
     while (true) {
-        if (io_channel.receive()) |csv_row| {
+        try io_channel.tryDrainRecycle(&buf);
+        if (buf.items.len == 0 and exit.load(.acquire)) {
+            std.debug.print("exiting io writer\n", .{});
+            break;
+        }
+        for (buf.items) |csv_row| {
             try csv_file.writeAll(csv_row);
             recycle_fba.allocator().free(csv_row);
 
             payloads_written += 1;
-            if (payloads_written % 1000 == 0) {
-                std.debug.print("payloads written: {}\n", .{payloads_written});
+            if (payloads_written == 1) {
+                // start time estimate on first payload written
+                timer.reset();
+            }
+            if (payloads_written % 1_000 == 0 or total_payloads_estimate - payloads_written < 1_000) {
+                sig.time.estimate.printTimeEstimateStd(
+                    &timer,
+                    total_payloads_estimate,
+                    payloads_written,
+                    "dumping accounts to csv",
+                    null,
+                );
             }
         }
     }

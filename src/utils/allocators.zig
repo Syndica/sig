@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
+const RecycleFBAStats = struct {};
+
 pub fn RecycleFBA(config: struct {
     /// If enabled, all operations will require an exclusive lock.
     thread_safe: bool = !builtin.single_threaded,
@@ -11,7 +13,7 @@ pub fn RecycleFBA(config: struct {
         // (only used on init/deinit + arraylist expansion)
         backing_allocator: std.mem.Allocator,
         // this does the data allocations (data is returned from alloc)
-        alloc_allocator: std.heap.FixedBufferAllocator,
+        fba_allocator: std.heap.FixedBufferAllocator,
         // recycling depot
         records: std.ArrayList(Record),
 
@@ -23,18 +25,18 @@ pub fn RecycleFBA(config: struct {
 
         pub fn init(backing_allocator: std.mem.Allocator, n_bytes: u64) !Self {
             const buf = try backing_allocator.alloc(u8, n_bytes);
-            const alloc_allocator = std.heap.FixedBufferAllocator.init(buf);
+            const fba_allocator = std.heap.FixedBufferAllocator.init(buf);
             const records = std.ArrayList(Record).init(backing_allocator);
 
             return .{
                 .backing_allocator = backing_allocator,
-                .alloc_allocator = alloc_allocator,
+                .fba_allocator = fba_allocator,
                 .records = records,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.backing_allocator.free(self.alloc_allocator.buffer);
+            self.backing_allocator.free(self.fba_allocator.buffer);
             self.records.deinit();
         }
 
@@ -56,25 +58,41 @@ pub fn RecycleFBA(config: struct {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
-            if (n > self.alloc_allocator.buffer.len) {
+            if (n > self.fba_allocator.buffer.len) {
                 @panic("RecycleFBA.alloc: requested size too large, make the buffer larger");
             }
+            // std.debug.print("[RecycleFBA state]: {n} {any}\n", .{ self.records.items });
 
             // check for a buf to recycle
+            var is_possible_to_recycle = false;
             for (self.records.items) |*item| {
-                if (item.is_free and
-                    item.len >= n and
+                if (item.len >= n and
                     std.mem.isAlignedLog2(@intFromPtr(item.buf), log2_align))
                 {
-                    item.is_free = false;
-                    return item.buf;
+                    if (item.is_free) {
+                        item.is_free = false;
+                        return item.buf;
+                    } else {
+                        // additional saftey check
+                        is_possible_to_recycle = true;
+                    }
                 }
             }
 
             // TODO(PERF, x19): allocate len+1 and store is_free at index 0, `free` could then be O(1)
             // otherwise, allocate a new one
-            const buf = self.alloc_allocator.allocator().rawAlloc(n, log2_align, return_address) orelse {
-                // std.debug.print("RecycleFBA alloc error: {}\n", .{ err });
+            const buf = self.fba_allocator.allocator().rawAlloc(n, log2_align, return_address) orelse {
+                if (!is_possible_to_recycle) {
+                    // not enough memory to allocate and no possible recycles will be perma stuck
+                    // TODO(x19): loop this and have a comptime limit?
+                    self.tryCollapse();
+                    // TODO(x19): check if we can allocate now (ie, is_possible_to_recycle)
+
+                    // try again : TODO(x19): remove the extra lock/unlock
+                    if (config.thread_safe) self.mux.unlock(); // no deadlock
+                    defer if (config.thread_safe) self.mux.lock();
+                    return alloc(ctx, n, log2_align, return_address);
+                }
                 return null;
             };
 
@@ -120,7 +138,7 @@ pub fn RecycleFBA(config: struct {
                     if (item.len >= new_size) {
                         return true;
                     } else {
-                        return self.alloc_allocator.allocator().rawResize(
+                        return self.fba_allocator.allocator().rawResize(
                             buf,
                             log2_align,
                             new_size,
@@ -132,6 +150,33 @@ pub fn RecycleFBA(config: struct {
 
             // not supported
             return false;
+        }
+
+        pub fn tryCollapse(self: *Self) void {
+            // TODO(x19): remove extra allocations using swapRemoves
+            var new_records = std.ArrayList(Record).init(self.backing_allocator);
+            var last_was_free = false;
+
+            for (self.records.items) |record| {
+                if (record.is_free) {
+                    if (last_was_free) {
+                        new_records.items[new_records.items.len - 1].len += record.len;
+                    } else {
+                        last_was_free = true;
+                        new_records.append(record) catch {
+                            @panic("RecycleFBA.tryCollapse: unable to append to new_records");
+                        };
+                    }
+                } else {
+                    new_records.append(record) catch {
+                        @panic("RecycleFBA.tryCollapse: unable to append to new_records");
+                    };
+                    last_was_free = false;
+                }
+            }
+
+            self.records.deinit();
+            self.records = new_records;
         }
     };
 }
@@ -376,6 +421,26 @@ pub const failing = struct {
         };
     }
 };
+
+test "recycle allocator: tryCollapse" {
+    const backing_allocator = std.testing.allocator;
+    var allocator = try RecycleFBA(.{}).init(backing_allocator, 200);
+    defer allocator.deinit();
+
+    // alloc a slice of 100 bytes
+    const bytes = try allocator.allocator().alloc(u8, 100);
+    // alloc a slice of 100 bytes
+    const bytes2 = try allocator.allocator().alloc(u8, 100);
+
+    // free both slices
+    allocator.allocator().free(bytes);
+    allocator.allocator().free(bytes2);
+
+    allocator.tryCollapse();
+    // this should be ok now
+    const bytes3 = try allocator.allocator().alloc(u8, 150);
+    allocator.allocator().free(bytes3);
+}
 
 test "recycle allocator" {
     const backing_allocator = std.testing.allocator;

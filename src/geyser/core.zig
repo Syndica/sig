@@ -35,12 +35,14 @@ pub const AccountPayload = struct {
 // TODO: https://github.com/Syndica/sig/pull/209#discussion_r1719858112
 pub const VersionedAccountPayload = union(enum(u8)) {
     AccountPayloadV1: AccountPayloadV1,
+    EndOfSnapshotLoading: void,
 
     const Self = @This();
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .AccountPayloadV1 => self.AccountPayloadV1.deinit(allocator),
+            .EndOfSnapshotLoading => {},
         }
     }
 };
@@ -64,6 +66,26 @@ pub const AccountPayloadV1 = struct {
     }
 };
 
+const Counter = sig.prometheus.Counter;
+const globalRegistry = sig.prometheus.globalRegistry;
+
+pub const GeyserStats = struct {
+    geyser_n_payloads_written: *Counter,
+    geyser_recycle_fba_empty_loop_count: *Counter,
+    geyser_pipe_full_count: *Counter,
+    geyser_bytes_written: *Counter,
+
+    pub fn init() !GeyserStats {
+        var self: GeyserStats = undefined;
+        const registry = globalRegistry();
+        const stats_struct_info = @typeInfo(GeyserStats).Struct;
+        inline for (stats_struct_info.fields) |field| {
+            @field(self, field.name) = try registry.getOrCreateCounter(field.name);
+        }
+        return self;
+    }
+};
+
 pub const GeyserWriter = struct {
     /// used to allocate a buf for serialization
     allocator: std.mem.Allocator,
@@ -76,6 +98,7 @@ pub const GeyserWriter = struct {
     /// channel which data is streamed into and then written to the pipe
     io_channel: *sig.sync.Channel([]u8),
     exit: *std.atomic.Value(bool),
+    stats: GeyserStats,
 
     /// set when the writer thread is running
     io_handle: ?std.Thread = null,
@@ -99,6 +122,7 @@ pub const GeyserWriter = struct {
         const io_channel = try sig.sync.Channel([]u8).create(allocator);
         const io_allocator_state = try allocator.create(RecycleFBA(.{}));
         io_allocator_state.* = try RecycleFBA(.{}).init(allocator, io_fba_bytes);
+        const stats = try GeyserStats.init();
 
         return .{
             .allocator = allocator,
@@ -106,6 +130,7 @@ pub const GeyserWriter = struct {
             .io_allocator_state = io_allocator_state,
             .io_channel = io_channel,
             .file = file,
+            .stats = stats,
             .exit = exit,
         };
     }
@@ -131,8 +156,6 @@ pub const GeyserWriter = struct {
         defer payloads.deinit();
 
         while (!self.exit.load(.acquire)) {
-            // TODO(metrics): prometheus metrics on number of payloads written
-
             while (self.io_channel.receive()) |payload| {
                 _ = self.writeToPipe(payload) catch |err| {
                     if (err == WritePipeError.PipeBlockedWithExitSignaled) {
@@ -142,7 +165,7 @@ pub const GeyserWriter = struct {
                         return err;
                     }
                 };
-
+                self.stats.geyser_n_payloads_written.inc();
                 self.io_allocator.free(payload);
             }
         }
@@ -175,6 +198,7 @@ pub const GeyserWriter = struct {
         const buf = blk: while (true) {
             const buf = self.io_allocator.alloc(u8, total_len) catch {
                 // no memory available rn - unlock and wait
+                self.stats.geyser_recycle_fba_empty_loop_count.inc();
                 std.time.sleep(std.time.ns_per_ms);
                 if (self.exit.load(.acquire)) {
                     return error.MemoryBlockedWithExitSignaled;
@@ -200,8 +224,6 @@ pub const GeyserWriter = struct {
         self: *Self,
         buf: []u8,
     ) WritePipeError!u64 {
-        var pipe_full_count: usize = 0;
-
         var n_bytes_written_total: u64 = 0;
         while (n_bytes_written_total < buf.len) {
             const n_bytes_written = self.file.write(buf[n_bytes_written_total..]) catch |err| {
@@ -210,8 +232,7 @@ pub const GeyserWriter = struct {
                         return WritePipeError.PipeBlockedWithExitSignaled;
                     } else {
                         // pipe is full but we dont need to exit, so we try again
-                        // TODO(metrics): prometheus metrics on pipe_full_count
-                        pipe_full_count += 1;
+                        self.stats.geyser_pipe_full_count.inc();
                         continue;
                     }
                 } else {
@@ -222,9 +243,8 @@ pub const GeyserWriter = struct {
             if (n_bytes_written == 0) {
                 return WritePipeError.PipeClosed;
             }
-            // TODO(metrics): prometheus metrics on total_bytes_written
             n_bytes_written_total += n_bytes_written;
-            pipe_full_count = 0;
+            self.stats.geyser_bytes_written.add(n_bytes_written);
         }
 
         std.debug.assert(n_bytes_written_total == buf.len);

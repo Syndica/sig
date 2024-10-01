@@ -855,7 +855,7 @@ const GeyserWriter = sig.geyser.GeyserWriter;
 fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWriter {
     var geyser_writer: ?*GeyserWriter = null;
     if (config.current.geyser.enable) {
-        logger.info("Starting GeyserWriter...");
+        logger.infof("starting GeyserWriter ({s})...", .{config.current.geyser.pipe_path});
 
         const exit = try allocator.create(Atomic(bool));
         exit.* = Atomic(bool).init(false);

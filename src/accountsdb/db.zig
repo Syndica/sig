@@ -382,6 +382,12 @@ pub const AccountsDB = struct {
                 true,
             );
 
+            // if geyser, send end of data signal
+            if (self.geyser_writer) |geyser_writer| {
+                const end_of_snapshot = sig.geyser.core.VersionedAccountPayload{ .EndOfSnapshotLoading = {} };
+                try geyser_writer.writePayloadToPipe(end_of_snapshot);
+            }
+
             return timer.read();
         }
 
@@ -430,7 +436,7 @@ pub const AccountsDB = struct {
             loading_threads.deinit();
         }
 
-        self.logger.infof("reading and indexing accounts...", .{});
+        self.logger.infof("[{d} threads]: reading and indexing accounts...", .{n_parse_threads});
         {
             var handles = std.ArrayList(std.Thread).init(self.allocator);
             defer {
@@ -453,7 +459,13 @@ pub const AccountsDB = struct {
         }
         self.logger.infof("total time: {s}", .{timer.read()});
 
-        self.logger.infof("combining thread accounts...", .{});
+        // if geyser, send end of data signal
+        if (self.geyser_writer) |geyser_writer| {
+            const end_of_snapshot = sig.geyser.core.VersionedAccountPayload{ .EndOfSnapshotLoading = {} };
+            try geyser_writer.writePayloadToPipe(end_of_snapshot);
+        }
+
+        self.logger.infof("[{d} threads]: combining thread accounts...", .{n_combine_threads});
         var merge_timer = try sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads.items, n_combine_threads);
         self.logger.debugf("combining thread indexes took: {s}", .{merge_timer.read()});
