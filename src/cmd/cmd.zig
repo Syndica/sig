@@ -642,7 +642,7 @@ fn validator() !void {
     // leader schedule cache
     var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
     if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
-        try leader_schedule_cache.insertLeaderSchedule(snapshot.bank.bank_fields.epoch, leader_schedule);
+        try leader_schedule_cache.insertLeaderSchedule(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
     } else {
         try leader_schedule_cache.insertLeaderScheduleFromBank(snapshot.bank.bank_fields);
     }
@@ -957,7 +957,7 @@ fn printLeaderSchedule() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
 
-    _, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
+    const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
         app_base.logger.info("Downloading a snapshot to calculate the leader schedule.");
         const loaded_snapshot = loadSnapshot(
             allocator,
@@ -976,11 +976,16 @@ fn printLeaderSchedule() !void {
                 return err;
             }
         };
-        break :b try LeaderSchedule.fromBank(allocator, loaded_snapshot.bank.bank_fields.epoch, loaded_snapshot.bank.bank_fields);
+
+        _, const slot_index = loaded_snapshot.bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(loaded_snapshot.bank.bank_fields.slot);
+        break :b .{
+            loaded_snapshot.bank.bank_fields.slot - slot_index,
+            try LeaderSchedule.fromBank(allocator, loaded_snapshot.bank.bank_fields.epoch, loaded_snapshot.bank.bank_fields),
+        };
     };
 
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    try leader_schedule.write(stdout.writer(), leader_schedule.first_slot.?);
+    try leader_schedule.write(stdout.writer(), start_slot);
     try stdout.flush();
 }
 

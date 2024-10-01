@@ -89,7 +89,7 @@ pub const LeaderScheduleCache = struct {
             bank,
         );
 
-        self.insertLeaderSchedule(epoch, leader_schedule);
+        try self.insertLeaderSchedule(epoch, leader_schedule);
 
         return leader_schedule.slot_leaders[slot_index];
     }
@@ -105,7 +105,7 @@ pub const LeaderScheduleCache = struct {
             rpc_client,
         );
 
-        self.insertLeaderSchedule(epoch, leader_schedule);
+        try self.insertLeaderSchedule(epoch, leader_schedule);
 
         return leader_schedule.slot_leaders[slot_index];
     }
@@ -117,7 +117,7 @@ pub const LeaderScheduleCache = struct {
             bank,
         );
 
-        self.insertLeaderSchedule(bank.epoch, leader_schedule);
+        try self.insertLeaderSchedule(bank.epoch, leader_schedule);
     }
 
     // Clobbers existing leader schedule for `epoch`
