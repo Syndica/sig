@@ -152,9 +152,6 @@ pub const GeyserWriter = struct {
     }
 
     pub fn IOStreamLoop(self: *Self) !void {
-        var payloads = std.ArrayList([]u8).init(self.allocator);
-        defer payloads.deinit();
-
         while (!self.exit.load(.acquire)) {
             while (self.io_channel.receive()) |payload| {
                 _ = self.writeToPipe(payload) catch |err| {
