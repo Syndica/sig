@@ -85,8 +85,11 @@ pub fn csvDump() !void {
     defer csv_file.close();
 
     // setup IO thread to write to csv
-    var io_channel = sig.sync.Channel([]u8).init(allocator, 10_000);
-    defer io_channel.deinit();
+    var io_channel = try sig.sync.Channel([]u8).create(allocator);
+    defer {
+        io_channel.deinit();
+        allocator.destroy(io_channel);
+    }
 
     const recycle_fba = try allocator.create(sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }));
     recycle_fba.* = try sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }).init(allocator, 1 << 32);
@@ -151,16 +154,8 @@ pub fn csvDumpIOWriter(
     var payloads_written: u64 = 0;
     var timer = try sig.time.Timer.start();
 
-    var buf = try std.ArrayList([]u8).initCapacity(std.heap.c_allocator, 10_000);
-    defer buf.deinit();
-
-    while (true) {
-        try io_channel.tryDrainRecycle(&buf);
-        if (buf.items.len == 0 and exit.load(.acquire)) {
-            std.debug.print("exiting io writer\n", .{});
-            break;
-        }
-        for (buf.items) |csv_row| {
+    while (!exit.load(.acquire)) {
+        while (io_channel.receive()) |csv_row| {
             try csv_file.writeAll(csv_row);
             recycle_fba.allocator().free(csv_row);
 
@@ -193,6 +188,7 @@ pub fn benchmark() !void {
     exit.* = std.atomic.Value(bool).init(false);
 
     try sig.geyser.core.streamReader(
+        allocator,
         exit,
         pipe_path,
         sig.time.Duration.fromSecs(config.measure_rate_secs),
