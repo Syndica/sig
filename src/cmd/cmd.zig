@@ -643,10 +643,10 @@ fn validator() !void {
     if (try getLeaderScheduleFromCli(allocator) orelse null) |leader_schedule| {
         try leader_schedule_cache.insertLeaderSchedule(snapshot.bank.bank_fields.epoch, leader_schedule);
     } else {
-        _ = try leader_schedule_cache.getSlotLeaderMaybeCompute(snapshot.bank.bank_fields.slot, snapshot.bank.bank_fields);
+        _ = try leader_schedule_cache.getOrComputeSlotLeader(snapshot.bank.bank_fields.slot, snapshot.bank.bank_fields);
     }
     // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
-    // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
+    // i.e. called leader_schedule_cache.getOrComputeSlotLeader(slot, bank_fields);
     const leader_provider = leader_schedule_cache.getSlotLeaderProvider();
 
     // blockstore
