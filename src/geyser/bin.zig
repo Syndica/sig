@@ -108,6 +108,7 @@ pub fn csvDump() !void {
 
     const metrics_thread = try sig.prometheus.spawnMetrics(allocator, 12355);
     metrics_thread.detach();
+    std.debug.print("spawing metrics thread on port 12355\n", .{});
 
     const pipe_path = config.pipe_path;
     std.debug.print("using pipe path: {s}\n", .{pipe_path});
