@@ -118,7 +118,7 @@ pub fn csvDump() !void {
     defer if (maybe_owner_pubkeys) |*owners| owners.deinit();
     if (maybe_owner_pubkeys) |owner_pubkeys| {
         std.debug.print("owner filters: {s}\n", .{owner_pubkeys.keys()});
-    } else { 
+    } else {
         std.debug.print("owner filters: none\n", .{});
     }
 
