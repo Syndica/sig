@@ -92,28 +92,29 @@ pub const ShredReceiver = struct {
         while (!self.exit.load(.acquire)) {
             for (receivers) |receiver| {
                 while (receiver.receive()) |packet| {
-                    var our_packet = packet;
-                    const should_send = try self.handlePacket(&our_packet, response_sender);
-                    if (is_repair) our_packet.flags.set(.repair);
-                    if (!should_send) try self.unverified_shred_sender.send(our_packet);
+                    try self.handlePacket(packet, response_sender, is_repair);
                 }
             }
         }
     }
 
-    /// Handle a single packet and return. Returns whether the packet should be sent
-    /// to the unverified_shred_sender.
+    /// Handle a single packet and return.
     fn handlePacket(
         self: Self,
-        packet: *Packet,
+        packet: Packet,
         response_sender: *Channel(Packet),
-    ) !bool {
+        comptime is_repair: bool,
+    ) !void {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
-            if (try self.handlePing(packet)) |p| try response_sender.send(p);
-            return true;
+            if (try self.handlePing(&packet)) |p| try response_sender.send(p);
         } else {
             const max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
-            return !shouldDiscardShred(packet, self.root_slot, self.shred_version, max_slot);
+            if (shouldDiscardShred(&packet, self.root_slot, self.shred_version, max_slot)) {
+                return;
+            }
+            var our_packet = packet;
+            if (is_repair) our_packet.flags.set(.repair);
+            try self.unverified_shred_sender.send(our_packet);
         }
     }
 
