@@ -110,6 +110,16 @@ pub const LeaderScheduleCache = struct {
         return leader_schedule.slot_leaders[slot_index];
     }
 
+    pub fn insertLeaderScheduleFromBank(self: *LeaderScheduleCache, bank: *const BankFields) !void {
+        const leader_schedule = try LeaderSchedule.fromBank(
+            self.allocator,
+            bank.epoch,
+            bank,
+        );
+
+        self.insertLeaderSchedule(bank.epoch, leader_schedule);
+    }
+
     // Clobbers existing leader schedule for `epoch`
     pub fn insertLeaderSchedule(self: *LeaderScheduleCache, epoch: Epoch, leader_schedule: LeaderSchedule) !void {
         const leader_schedules, var leader_schedule_lg = self.leader_schedules_rw.writeWithLock();
@@ -133,7 +143,6 @@ pub const LeaderScheduleCache = struct {
 pub const LeaderSchedule = struct {
     allocator: std.mem.Allocator,
     slot_leaders: []const Pubkey,
-    first_slot: ?Slot = null, // This is only used in 'mock' scenarios when loading leader schedule from cli
 
     pub fn deinit(self: LeaderSchedule) void {
         self.allocator.free(self.slot_leaders);
@@ -261,11 +270,11 @@ pub const LeaderSchedule = struct {
     }
 
     /// Reads the leader schedule as formatted by the `solana leader-schedule` and
-    /// `sig leader-schedule` commands.
+    /// `sig leader-schedule` commands. Return the start slot and the leader schedule.
     pub fn read(
         allocator: std.mem.Allocator,
         reader: anytype,
-    ) !LeaderSchedule {
+    ) !struct { Slot, LeaderSchedule } {
         const nextNonEmpty = struct {
             pub fn nextNonEmpty(word_iter: anytype) ?[]const u8 {
                 while (word_iter.next()) |word| if (word.len > 0) return word;
@@ -298,9 +307,11 @@ pub const LeaderSchedule = struct {
         }
 
         return .{
-            .allocator = allocator,
-            .slot_leaders = try slot_leaders.toOwnedSlice(),
-            .first_slot = start_slot,
+            start_slot,
+            .{
+                .allocator = allocator,
+                .slot_leaders = try slot_leaders.toOwnedSlice(),
+            },
         };
     }
 
@@ -365,7 +376,7 @@ test "parseLeaderSchedule writeLeaderSchedule happy path roundtrip" {
 
     // parse input file
     var stream = std.io.fixedBufferStream(input_file);
-    const leader_schedule = try LeaderSchedule.read(allocator, stream.reader());
+    _, const leader_schedule = try LeaderSchedule.read(allocator, stream.reader());
     defer leader_schedule.deinit();
     // try std.testing.expect(expected_start == leader_schedule.start_slot);
     try std.testing.expect(expected_nodes.len == leader_schedule.slot_leaders.len);

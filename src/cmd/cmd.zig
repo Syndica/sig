@@ -13,6 +13,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
 const Bank = sig.accounts_db.Bank;
+const Slot = sig.core.Slot;
 const ContactInfo = sig.gossip.ContactInfo;
 const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
@@ -640,10 +641,10 @@ fn validator() !void {
 
     // leader schedule cache
     var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
-    if (try getLeaderScheduleFromCli(allocator) orelse null) |leader_schedule| {
+    if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
         try leader_schedule_cache.insertLeaderSchedule(snapshot.bank.bank_fields.epoch, leader_schedule);
     } else {
-        _ = try leader_schedule_cache.getOrComputeSlotLeader(snapshot.bank.bank_fields.slot, snapshot.bank.bank_fields);
+        try leader_schedule_cache.insertLeaderScheduleFromBank(snapshot.bank.bank_fields);
     }
     // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
     // i.e. called leader_schedule_cache.getOrComputeSlotLeader(slot, bank_fields);
@@ -747,10 +748,8 @@ fn shredCollector() !void {
     var leader_schedule_cache = LeaderScheduleCache.init(allocator, try EpochSchedule.default());
 
     // This is a sort of hack to get the epoch of the leader schedule and then insert into the cache
-    // We should aim to use the leader schedule cache instead of the leader schedule since the later
-    // cannot transition between epochs.
-    const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
-    const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(leader_schedule.first_slot.?); // first_slot is non null iff leader schedule is built from cli
+    const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
+    const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(start_slot); // first_slot is non null iff leader schedule is built from cli
     try leader_schedule_cache.insertLeaderSchedule(leader_schedule_epoch, leader_schedule);
 
     const leader_provider = leader_schedule_cache.getSlotLeaderProvider();
@@ -958,7 +957,7 @@ fn printLeaderSchedule() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
 
-    const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
+    _, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
         app_base.logger.info("Downloading a snapshot to calculate the leader schedule.");
         const loaded_snapshot = loadSnapshot(
             allocator,
@@ -985,7 +984,7 @@ fn printLeaderSchedule() !void {
     try stdout.flush();
 }
 
-fn getLeaderScheduleFromCli(allocator: Allocator) !?LeaderSchedule {
+fn getLeaderScheduleFromCli(allocator: Allocator) !?struct { Slot, LeaderSchedule } {
     return if (config.current.leader_schedule_path) |path|
         if (std.mem.eql(u8, "--", path))
             try LeaderSchedule.read(allocator, std.io.getStdIn().reader())
