@@ -29,8 +29,9 @@ implementation and the HashMap implementation.
 
 The `schema.zig` is a good place to see the differnt kinds of data that can be stored in the ledger.
 
-Note, that the database also supports the idea of transaction but this is defined as a `WriteBatch` which should
-be used to ensure that a group of operations are either all executed successfully or, none of them are executed.
+Note, that the database also supports the idea of transaction but this is defined as a `WriteBatch` which should be used to ensure that a group of operations are either all executed successfully or, none of them are executed.
+
+<!-- Mention something about how the RocksDB is built? -->
 
 
 ## Source Layout
