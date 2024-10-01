@@ -7,6 +7,46 @@ opening a file-based pipe using the `mkfifo` syscall which is then
 written to like any other file. the key method used to setup 
 the pipes is `openPipe` in `src/geyser/core.zig`.
 
+## Usage
+
+while running, grafana stats will be available. the main binary code is in 
+`src/geyser/bin.zig`
+
+### benchmarking 
+
+we also have benchmarking to measure the throughput of geyser. you can run it using 
+
+```bash 
+zig build -Doptimize=ReleaseSafe
+./zig-out/bin/benchmark geyser
+```
+
+you can also benchmark an dummy reader
+
+```bash
+```bash
+# in terminal 1 -- read the snapshot accounts to geyser
+./zig-out/bin/sig snapshot-validate -g data/genesis-files/testnet_genesis.bin --enable-geyser -a 250 -t 2
+
+# in terminal 2 -- benchmark how fast you can read
+./zig-out/bin/geyser benchmark
+```
+
+### dump a snapshot to csv
+
+after downloading a snapshots, you can dump the accounts to a csv using the 
+csv geyser command, for example:
+
+```bash
+# in terminal 1 -- read the snapshot accounts to geyser
+./zig-out/bin/sig snapshot-validate -g data/genesis-files/testnet_genesis.bin --enable-geyser -a 250 -t 2
+
+# in terminal 2 -- dump accounts to a csv (validator/accounts.csv)
+./zig-out/bin/geyser csv
+# OR dump only specific account owners (ie, the drift program)
+./zig-out/bin/geyser csv -o dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH
+```
+
 ## data
 
 currently, data is serialized and written through the pipe using `bincode`
@@ -99,18 +139,3 @@ before reading the io_buf, since we know how much bytes to read for the full pay
 
 if the bincode_buf is not big enough then we double the buffer length and try again since
 we dont know exactly how many bytes we will need.
-
-## benchmarking 
-
-we also have benchmarking to measure the throughput of geyser. you can run it using 
-
-```bash 
-zig build -Doptimize=ReleaseSafe
-
-./zig-out/bin/benchmark stream_geyser
-```
-
-## example usage
-
-to write data to the pipe you can download a testnet and validate it, which will 
-stream the accounts out of the validator during startup.
