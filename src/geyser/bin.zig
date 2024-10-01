@@ -5,10 +5,38 @@ const cli = @import("zig-cli");
 pub const Config = struct {
     pipe_path: []const u8 = sig.VALIDATOR_DIR ++ "geyser.pipe",
     measure_rate_secs: u64 = 5,
+    geyser_bincode_buf_len: u64 = 1 << 29,
+    geyser_io_buf_len: u64 = 1 << 29,
+    owner_accounts: [][]const u8 = &.{},
 };
 
 var default_config = Config{};
 const config = &default_config;
+
+var owner_accounts_option = cli.Option{
+    .long_name = "owner-accounts",
+    .short_alias = 'o',
+    .help = "list of owner accounts to filter to csv",
+    .value_ref = cli.mkRef(&config.owner_accounts),
+    .required = false,
+    .value_name = "owner_accounts",
+};
+
+var geyser_bincode_buf_len_option = cli.Option{
+    .long_name = "geyser-bincode-buf-len",
+    .help = "size of the bincode buffer",
+    .value_ref = cli.mkRef(&config.geyser_bincode_buf_len),
+    .required = false,
+    .value_name = "geyser_bincode_buf_len",
+};
+
+var geyser_io_buf_len_option = cli.Option{
+    .long_name = "geyser-io-buf-len",
+    .help = "size of the io buffer",
+    .value_ref = cli.mkRef(&config.geyser_io_buf_len),
+    .required = false,
+    .value_name = "geyser_io_buf_len",
+};
 
 var pipe_path_option = cli.Option{
     .long_name = "geyser-pipe-path",
@@ -46,6 +74,9 @@ const cli_app = cli.App{ .version = "0.0.19", .author = "Syndica & Contributors"
                 .target = .{ .action = .{ .exec = csvDump } },
                 .options = &.{
                     &pipe_path_option,
+                    &geyser_bincode_buf_len_option,
+                    &geyser_io_buf_len_option,
+                    &owner_accounts_option,
                 },
             },
         },
@@ -54,6 +85,22 @@ const cli_app = cli.App{ .version = "0.0.19", .author = "Syndica & Contributors"
 
 pub fn main() !void {
     try cli.run(&cli_app, std.heap.page_allocator);
+}
+
+pub fn getOwnerFilters(allocator: std.mem.Allocator) !?std.AutoHashMap(sig.core.Pubkey, void) {
+    const owner_accounts_str = config.owner_accounts;
+    if (owner_accounts_str.len == 0) {
+        return null;
+    }
+
+    var owner_pubkeys = std.AutoHashMap(sig.core.Pubkey, void).init(allocator);
+    try owner_pubkeys.ensureTotalCapacity(@intCast(owner_accounts_str.len));
+    for (owner_accounts_str) |owner_str| {
+        const owner_pubkey = try sig.core.Pubkey.fromString(owner_str);
+        owner_pubkeys.putAssumeCapacity(owner_pubkey, {});
+    }
+
+    return owner_pubkeys;
 }
 
 pub fn csvDump() !void {
@@ -66,11 +113,13 @@ pub fn csvDump() !void {
     exit.* = std.atomic.Value(bool).init(false);
 
     var reader = try sig.geyser.GeyserReader.init(allocator, pipe_path, exit, .{
-        // TODO: make these configurable
-        .bincode_buf_len = 1 << 29,
-        .io_buf_len = 1 << 29,
+        .bincode_buf_len = config.geyser_bincode_buf_len,
+        .io_buf_len = config.geyser_io_buf_len,
     });
     defer reader.deinit();
+
+    var maybe_owner_pubkeys = try getOwnerFilters(allocator);
+    defer if (maybe_owner_pubkeys) |*owners| owners.deinit();
 
     // csv file to dump to
     const dump_csv_path = try std.fmt.allocPrint(
@@ -126,6 +175,12 @@ pub fn csvDump() !void {
         const account_payload = payload.AccountPayloadV1;
         var fmt_count: u64 = 0;
         for (account_payload.accounts) |account| {
+            // only dump accounts that match owner filters
+            if (maybe_owner_pubkeys) |owners| {
+                if (!owners.contains(account.owner)) {
+                    continue;
+                }
+            }
             fmt_count += 120 + 5 * account.data.len;
         }
 
@@ -133,6 +188,12 @@ pub fn csvDump() !void {
         var offset: u64 = 0;
 
         for (account_payload.accounts, account_payload.pubkeys) |account, pubkey| {
+            // only dump accounts that match owner filters
+            if (maybe_owner_pubkeys) |owners| {
+                if (!owners.contains(account.owner)) {
+                    continue;
+                }
+            }
             const x = try std.fmt.bufPrint(csv_string[offset..], "{d};{s};{s};{any}\n", .{ account_payload.slot, pubkey, account.owner, account.data });
             offset += x.len;
         }
