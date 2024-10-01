@@ -33,9 +33,16 @@ Note, that the database also supports the idea of transaction but this is define
 
 <!-- Mention something about how the RocksDB is built? -->
 
-
 ## Source Layout
-<!-- Overview of source files and what they do -->
+
+The core implementation of the ledger can be found in the `ledger` module.
+
+The RocksDB implementation depends on RocksDB, which is written in C++. 
+
+The repo [rocksdb-zig](https://github.com/Syndica/rocksdb-zig) builds the RocksDB project and makes it useable within `Sig` through RocksDB's C API and auto-generated Zig bindings.
+
+The process of collecting shreds is an imported part of the workings of the `ledger` and this functionality is implemented in the `shred_collectero` <!-- TODO Link to it -->. 
+
 
 ## Shreds
 As mentioned, the Shred is one, if not the most crucial data stored in the ledger, hence to fully understand the Legder implementation, a good overview of Shreds is required.
