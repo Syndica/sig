@@ -2,8 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
-const RecycleFBAStats = struct {};
-
 pub fn RecycleFBA(config: struct {
     /// If enabled, all operations will require an exclusive lock.
     thread_safe: bool = !builtin.single_threaded,
@@ -61,7 +59,6 @@ pub fn RecycleFBA(config: struct {
             if (n > self.fba_allocator.buffer.len) {
                 @panic("RecycleFBA.alloc: requested size too large, make the buffer larger");
             }
-            // std.debug.print("[RecycleFBA state]: {n} {any}\n", .{ self.records.items });
 
             // check for a buf to recycle
             var is_possible_to_recycle = false;
@@ -152,8 +149,8 @@ pub fn RecycleFBA(config: struct {
             return false;
         }
 
+        /// collapses adjacent free records into a single record
         pub fn tryCollapse(self: *Self) void {
-            // TODO(x19): remove extra allocations using swapRemoves
             var new_records = std.ArrayList(Record).init(self.backing_allocator);
             var last_was_free = false;
 

@@ -87,13 +87,13 @@ pub fn main() !void {
     try cli.run(&cli_app, std.heap.page_allocator);
 }
 
-pub fn getOwnerFilters(allocator: std.mem.Allocator) !?std.AutoHashMap(sig.core.Pubkey, void) {
+pub fn getOwnerFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(sig.core.Pubkey, void) {
     const owner_accounts_str = config.owner_accounts;
     if (owner_accounts_str.len == 0) {
         return null;
     }
 
-    var owner_pubkeys = std.AutoHashMap(sig.core.Pubkey, void).init(allocator);
+    var owner_pubkeys = std.AutoArrayHashMap(sig.core.Pubkey, void).init(allocator);
     try owner_pubkeys.ensureTotalCapacity(@intCast(owner_accounts_str.len));
     for (owner_accounts_str) |owner_str| {
         const owner_pubkey = try sig.core.Pubkey.fromString(owner_str);
@@ -104,10 +104,37 @@ pub fn getOwnerFilters(allocator: std.mem.Allocator) !?std.AutoHashMap(sig.core.
 }
 
 pub fn csvDump() !void {
-    const pipe_path = config.pipe_path;
-    std.debug.print("using pipe path: {s}\n", .{pipe_path});
     const allocator = std.heap.c_allocator;
 
+    const metrics_thread = try sig.prometheus.spawnMetrics(allocator, 12355);
+    metrics_thread.detach();
+
+    const pipe_path = config.pipe_path;
+    std.debug.print("using pipe path: {s}\n", .{pipe_path});
+
+    // owner filters
+    var maybe_owner_pubkeys = try getOwnerFilters(allocator);
+    defer if (maybe_owner_pubkeys) |*owners| owners.deinit();
+    if (maybe_owner_pubkeys) |owner_pubkeys| {
+        std.debug.print("owner filters: {s}\n", .{owner_pubkeys.keys()});
+    } else { 
+        std.debug.print("owner filters: none\n", .{});
+    }
+
+    // csv file to dump to
+    const dump_csv_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}{s}",
+        .{ sig.VALIDATOR_DIR, "accounts.csv" },
+    );
+    defer allocator.free(dump_csv_path);
+
+    const csv_file = try std.fs.cwd().createFile(dump_csv_path, .{});
+    defer csv_file.close();
+
+    std.debug.print("dumping to csv: {s}\n", .{dump_csv_path});
+
+    // setup reader
     const exit = try allocator.create(std.atomic.Value(bool));
     defer allocator.destroy(exit);
     exit.* = std.atomic.Value(bool).init(false);
@@ -118,33 +145,19 @@ pub fn csvDump() !void {
     });
     defer reader.deinit();
 
-    var maybe_owner_pubkeys = try getOwnerFilters(allocator);
-    defer if (maybe_owner_pubkeys) |*owners| owners.deinit();
-
-    // csv file to dump to
-    const dump_csv_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}{s}",
-        .{ sig.VALIDATOR_DIR, "accounts.csv" },
-    );
-    defer allocator.free(dump_csv_path);
-    std.debug.print("dumping to csv: {s}\n", .{dump_csv_path});
-
-    const csv_file = try std.fs.cwd().createFile(dump_csv_path, .{});
-    defer csv_file.close();
-
-    // setup IO thread to write to csv
-    var io_channel = try sig.sync.Channel([]u8).create(allocator);
-    defer {
-        io_channel.deinit();
-        allocator.destroy(io_channel);
-    }
-
+    // preallocate memory for csv rows
     const recycle_fba = try allocator.create(sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }));
     recycle_fba.* = try sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }).init(allocator, 1 << 32);
     defer {
         recycle_fba.deinit();
         allocator.destroy(recycle_fba);
+    }
+
+    // setup thread to write to csv
+    var io_channel = try sig.sync.Channel([]u8).create(allocator);
+    defer {
+        io_channel.deinit();
+        allocator.destroy(io_channel);
     }
 
     const io_handle = try std.Thread.spawn(.{}, csvDumpIOWriter, .{ exit, csv_file, io_channel, recycle_fba });
@@ -153,7 +166,7 @@ pub fn csvDump() !void {
         exit.store(true, .release);
     }
 
-    // read from geyser
+    // start to read from geyser
     while (true) {
         _, const payload = try reader.readPayload();
         defer reader.resetMemory();
@@ -171,7 +184,7 @@ pub fn csvDump() !void {
             },
         }
 
-        // format to csv
+        // compute how much memory we need for the rows
         const account_payload = payload.AccountPayloadV1;
         var fmt_count: u64 = 0;
         for (account_payload.accounts) |account| {
@@ -187,6 +200,7 @@ pub fn csvDump() !void {
         var csv_string = try recycle_fba.allocator().alloc(u8, fmt_count);
         var offset: u64 = 0;
 
+        // write the rows
         for (account_payload.accounts, account_payload.pubkeys) |account, pubkey| {
             // only dump accounts that match owner filters
             if (maybe_owner_pubkeys) |owners| {
@@ -198,7 +212,7 @@ pub fn csvDump() !void {
             offset += x.len;
         }
 
-        // send to be written
+        // send for io writes
         try io_channel.send(csv_string[0..offset]);
     }
 
@@ -217,7 +231,9 @@ pub fn csvDumpIOWriter(
 
     while (!exit.load(.acquire)) {
         while (io_channel.receive()) |csv_row| {
+            // write to file
             try csv_file.writeAll(csv_row);
+            // recycle memory to be re-used
             recycle_fba.allocator().free(csv_row);
 
             payloads_written += 1;
