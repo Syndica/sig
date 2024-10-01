@@ -1,4 +1,6 @@
+const std = @import("std");
 const sig = @import("../sig.zig");
+
 const ACCOUNT_INDEX_BINS = sig.accounts_db.db.ACCOUNT_INDEX_BINS;
 const ShredCollectorConfig = sig.shred_collector.ShredCollectorConfig;
 const IpAddr = sig.net.IpAddr;
@@ -17,6 +19,16 @@ pub const Config = struct {
     // general config
     log_level: LogLevel = .debug,
     metrics_port: u16 = 12345,
+
+    pub fn genesisFilePath(self: Config) error{UnknownNetwork}!?[]const u8 {
+        return if (self.genesis_file_path) |provided_path|
+            provided_path
+        else if (try self.gossip.getNetwork()) |n| switch (n) {
+            .mainnet => "data/genesis-files/mainnet_genesis.bin",
+            .devnet => "data/genesis-files/devnet_genesis.bin",
+            .testnet => "data/genesis-files/testnet_genesis.bin",
+        } else null;
+    }
 };
 
 pub const current: *Config = &default_validator_config;
@@ -39,6 +51,46 @@ const GossipConfig = struct {
         return switch (socket) {
             .V4 => |v4| .{ .ipv4 = v4.ip },
             .V6 => |v6| .{ .ipv6 = v6.ip },
+        };
+    }
+
+    pub fn getNetwork(self: GossipConfig) error{UnknownNetwork}!?Network {
+        return if (self.network) |network_str|
+            std.meta.stringToEnum(Network, network_str) orelse
+                error.UnknownNetwork
+        else
+            null;
+    }
+};
+
+pub const Network = enum {
+    mainnet,
+    devnet,
+    testnet,
+
+    const Self = @This();
+
+    pub fn entrypoints(self: Self) []const []const u8 {
+        return switch (self) {
+            .mainnet => &.{
+                "entrypoint.mainnet-beta.solana.com:8001",
+                "entrypoint2.mainnet-beta.solana.com:8001",
+                "entrypoint3.mainnet-beta.solana.com:8001",
+                "entrypoint4.mainnet-beta.solana.com:8001",
+                "entrypoint5.mainnet-beta.solana.com:8001",
+            },
+            .testnet => &.{
+                "entrypoint.testnet.solana.com:8001",
+                "entrypoint2.testnet.solana.com:8001",
+                "entrypoint3.testnet.solana.com:8001",
+            },
+            .devnet => &.{
+                "entrypoint.devnet.solana.com:8001",
+                "entrypoint2.devnet.solana.com:8001",
+                "entrypoint3.devnet.solana.com:8001",
+                "entrypoint4.devnet.solana.com:8001",
+                "entrypoint5.devnet.solana.com:8001",
+            },
         };
     }
 };

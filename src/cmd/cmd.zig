@@ -19,6 +19,7 @@ const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const Logger = sig.trace.Logger;
+const Network = config.Network;
 const Pubkey = sig.core.Pubkey;
 const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
 const SingleEpochLeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
@@ -130,7 +131,7 @@ pub fn run() !void {
 
     var network_option = cli.Option{
         .long_name = "network",
-        .help = "network to use with predefined entrypoints",
+        .help = "cluster to connect to - adds gossip entrypoints, sets default genesis file path",
         .short_alias = 'n',
         .value_ref = cli.mkRef(&config.current.gossip.network),
         .required = false,
@@ -235,10 +236,10 @@ pub fn run() !void {
 
     var genesis_file_path = cli.Option{
         .long_name = "genesis-file-path",
-        .help = "path to the genesis file",
+        .help = "path to the genesis file. defaults to 'data/genesis-files/<network>_genesis.bin' if --network option is set",
         .short_alias = 'g',
         .value_ref = cli.mkRef(&config.current.genesis_file_path),
-        .required = true,
+        .required = false,
         .value_name = "genesis_file_path",
     };
 
@@ -1267,62 +1268,6 @@ fn getMyDataFromIpEcho(
     };
 }
 
-pub const Network = enum {
-    mainnet,
-    devnet,
-    testnet,
-
-    const Self = @This();
-
-    pub fn getPredefinedEntrypoints(self: Self, socket_addrs: *std.ArrayList(SocketAddr), logger: Logger) !void {
-        const E = std.BoundedArray(u8, 100);
-        var predefined_entrypoints: [10]E = undefined;
-        @memset(&predefined_entrypoints, .{});
-        var len: usize = 0;
-
-        switch (self) {
-            .mainnet => {
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint.mainnet-beta.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.mainnet-beta.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.mainnet-beta.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint4.mainnet-beta.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint5.mainnet-beta.solana.com:8001");
-                len += 1;
-            },
-            .testnet => {
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint.testnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.testnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.testnet.solana.com:8001");
-                len += 1;
-            },
-            .devnet => {
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint.devnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.devnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.devnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint4.devnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint5.devnet.solana.com:8001");
-                len += 1;
-            },
-        }
-
-        for (predefined_entrypoints[0..len]) |entrypoint| {
-            logger.infof("adding predefined entrypoint: {s}", .{entrypoint.slice()});
-            const socket_addr = try resolveSocketAddr(entrypoint.slice(), .noop);
-            try socket_addrs.append(socket_addr);
-        }
-    }
-};
-
 fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
         logger.field("entrypoint", entrypoint).err("entrypoint port missing");
@@ -1367,12 +1312,12 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     // try entrypoint_set.ensureTotalCapacity(config.current.gossip.entrypoints.len);
     // try entrypoints.ensureTotalCapacityPrecise(config.current.gossip.entrypoints.len);
 
-    if (config.current.gossip.network) |network_str| {
-        const network_t: Network = std.meta.stringToEnum(Network, network_str) orelse {
-            logger.errf("'{s}': network not valid", .{network_str});
-            return error.NetworkNotValid;
-        };
-        try network_t.getPredefinedEntrypoints(&entrypoints, logger);
+    if (try config.current.gossip.getNetwork()) |cluster| {
+        for (cluster.entrypoints()) |entrypoint| {
+            logger.infof("adding predefined entrypoint: {s}", .{entrypoint});
+            const socket_addr = try resolveSocketAddr(entrypoint, .noop);
+            try entrypoints.append(socket_addr);
+        }
     }
 
     for (config.current.gossip.entrypoints) |entrypoint| {
@@ -1429,6 +1374,9 @@ fn loadSnapshot(
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
     result.allocator = allocator;
+
+    const genesis_file_path = try config.current.genesisFilePath() orelse
+        return error.GenesisPathNotProvided;
 
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
@@ -1490,7 +1438,6 @@ fn loadSnapshot(
 
     // this should exist before we start to unpack
     logger.infof("reading genesis...", .{});
-    const genesis_file_path = config.current.genesis_file_path orelse return error.GenesisNotProvided;
     result.genesis_config = readGenesisConfig(allocator, genesis_file_path) catch |err| {
         if (err == error.GenesisNotFound) {
             logger.errf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
