@@ -14,7 +14,7 @@ const Slot = sig.core.time.Slot;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
-const EpochSchedule = sig.accounts_db.genesis_config.EpochSchedule;
+const EpochSchedule = sig.core.EpochSchedule;
 const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
 const Inflation = sig.accounts_db.genesis_config.Inflation;
 const Rent = sig.accounts_db.genesis_config.Rent;
@@ -887,6 +887,39 @@ pub const BankFields = struct {
             .unused_accounts = unused_accounts,
             .epoch_stakes = epoch_stakes,
             .is_delta = rand.boolean(),
+        };
+    }
+
+    pub fn getStakedNodes(self: *const BankFields, allocator: std.mem.Allocator, epoch: Epoch) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+        const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
+        return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
+    }
+
+    /// Returns the leader schedule for this bank's epoch
+    pub fn leaderSchedule(
+        self: *const BankFields,
+        allocator: std.mem.Allocator,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        return self.leaderScheduleForEpoch(allocator, self.epoch);
+    }
+
+    /// Returns the leader schedule for an arbitrary epoch.
+    /// Only works if the bank is aware of the staked nodes for that epoch.
+    pub fn leaderScheduleForEpoch(
+        self: *const BankFields,
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
+        const staked_nodes = try self.getStakedNodes(allocator, epoch);
+        return .{
+            .allocator = allocator,
+            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule.fromStakedNodes(
+                allocator,
+                epoch,
+                slots_in_epoch,
+                staked_nodes,
+            ),
         };
     }
 };

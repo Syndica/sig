@@ -14,6 +14,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
 const Bank = sig.accounts_db.Bank;
+const Slot = sig.core.Slot;
 const ContactInfo = sig.gossip.ContactInfo;
 const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
@@ -22,21 +23,20 @@ const Logger = sig.trace.Logger;
 const Network = config.Network;
 const Pubkey = sig.core.Pubkey;
 const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
-const SingleEpochLeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
+const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
+const EpochSchedule = sig.core.EpochSchedule;
+const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
-const leaderScheduleFromBank = sig.core.leader_schedule.leaderScheduleFromBank;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
-const parseLeaderSchedule = sig.core.leader_schedule.parseLeaderSchedule;
 const requestIpEcho = sig.net.requestIpEcho;
 const spawnMetrics = sig.prometheus.spawnMetrics;
-const writeLeaderSchedule = sig.core.leader_schedule.writeLeaderSchedule;
 
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 const BlockstoreWriter = sig.ledger.BlockstoreWriter;
@@ -665,10 +665,17 @@ fn validator() !void {
         geyser_writer,
     );
 
-    // leader schedule
-    var leader_schedule = try getLeaderScheduleFromCli(allocator) orelse
-        try leaderScheduleFromBank(allocator, snapshot.bank.bank_fields);
-    const leader_provider = leader_schedule.provider();
+    // leader schedule cache
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
+    if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
+        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
+    } else {
+        const schedule = try snapshot.bank.bank_fields.leaderSchedule(allocator);
+        _ = try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, schedule);
+    }
+    // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
+    // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
+    const leader_provider = leader_schedule_cache.slotLeaderProvider();
 
     // blockstore
     const blockstore_db = try sig.ledger.BlockstoreDB.open(
@@ -769,8 +776,14 @@ fn shredCollector() !void {
 
     // leader schedule
     // NOTE: leader schedule is needed for the shred collector because we skip accounts-db setup
-    var leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
-    const leader_provider = leader_schedule.provider();
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, try EpochSchedule.default());
+
+    // This is a sort of hack to get the epoch of the leader schedule and then insert into the cache
+    const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
+    const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(start_slot); // first_slot is non null iff leader schedule is built from cli
+    try leader_schedule_cache.put(leader_schedule_epoch, leader_schedule);
+
+    const leader_provider = leader_schedule_cache.slotLeaderProvider();
 
     // blockstore
     const blockstore_db = try sig.ledger.BlockstoreDB.open(
@@ -990,7 +1003,7 @@ fn printLeaderSchedule() !void {
         app_base.deinit();
     }
 
-    const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
+    const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
         app_base.logger.info("Downloading a snapshot to calculate the leader schedule.");
         const loaded_snapshot = loadSnapshot(
             allocator,
@@ -1009,20 +1022,24 @@ fn printLeaderSchedule() !void {
                 return err;
             }
         };
-        break :b try leaderScheduleFromBank(allocator, loaded_snapshot.bank.bank_fields);
+        _, const slot_index = loaded_snapshot.bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(loaded_snapshot.bank.bank_fields.slot);
+        break :b .{
+            loaded_snapshot.bank.bank_fields.slot - slot_index,
+            try loaded_snapshot.bank.bank_fields.leaderSchedule(allocator),
+        };
     };
 
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    try writeLeaderSchedule(leader_schedule, stdout.writer());
+    try leader_schedule.write(stdout.writer(), start_slot);
     try stdout.flush();
 }
 
-fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
+fn getLeaderScheduleFromCli(allocator: Allocator) !?struct { Slot, LeaderSchedule } {
     return if (config.current.leader_schedule_path) |path|
         if (std.mem.eql(u8, "--", path))
-            try parseLeaderSchedule(allocator, std.io.getStdIn().reader())
+            try LeaderSchedule.read(allocator, std.io.getStdIn().reader())
         else
-            try parseLeaderSchedule(allocator, (try std.fs.cwd().openFile(path, .{})).reader())
+            try LeaderSchedule.read(allocator, (try std.fs.cwd().openFile(path, .{})).reader())
     else
         null;
 }
