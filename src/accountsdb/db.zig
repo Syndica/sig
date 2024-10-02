@@ -3993,8 +3993,8 @@ test "shrink account file works" {
 }
 
 pub const BenchmarkAccountsDBSnapshotLoad = struct {
-    pub const min_iterations = 3;
-    pub const max_iterations = 10;
+    pub const min_iterations = 1;
+    pub const max_iterations = 2; // 3 iterations uses >32gb of RAM
 
     pub const BenchArgs = struct {
         use_disk: bool,
@@ -4339,7 +4339,7 @@ pub const BenchmarkAccountsDB = struct {
 
                 var account_file = blk: {
                     const file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
-                    errdefer file.close();
+                    defer file.close();
                     break :blk try AccountFile.init(file, .{ .id = FileId.fromInt(@intCast(s)), .length = length }, s);
                 };
                 errdefer account_file.deinit();
