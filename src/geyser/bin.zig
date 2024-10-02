@@ -7,6 +7,7 @@ pub const Config = struct {
     measure_rate_secs: u64 = 5,
     geyser_bincode_buf_len: u64 = 1 << 29,
     geyser_io_buf_len: u64 = 1 << 29,
+    csv_buf_len: u64 = 1 << 32,
     owner_accounts: []const []const u8 = &.{},
     accounts: []const []const u8 = &.{},
 };
@@ -15,6 +16,14 @@ var default_config = Config{};
 const config = &default_config;
 
 pub fn main() !void {
+    var csv_buf_len_option = cli.Option{
+        .long_name = "csv-buf-len",
+        .help = "size of the csv buffer",
+        .value_ref = cli.mkRef(&config.csv_buf_len),
+        .required = false,
+        .value_name = "csv_buf_len",
+    };
+
     var accounts_option = cli.Option{
         .long_name = "accounts",
         .short_alias = 'a',
@@ -89,6 +98,7 @@ pub fn main() !void {
                         &geyser_io_buf_len_option,
                         &owner_accounts_option,
                         &accounts_option,
+                        &csv_buf_len_option,
                     },
                 },
             },
@@ -183,7 +193,7 @@ pub fn csvDump() !void {
 
     // preallocate memory for csv rows
     const recycle_fba = try allocator.create(sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }));
-    recycle_fba.* = try sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }).init(allocator, 1 << 32);
+    recycle_fba.* = try sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }).init(allocator, config.csv_buf_len);
     defer {
         recycle_fba.deinit();
         allocator.destroy(recycle_fba);
