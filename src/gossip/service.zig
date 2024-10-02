@@ -479,7 +479,7 @@ pub const GossipService = struct {
             // PERF: investigate CPU pinning
             var task_search_start_idx: usize = 0;
             while (self.packet_incoming_channel.receive()) |packet| {
-                defer self.stats.gossip_packets_received.inc();
+                defer self.stats.gossip_packets_received_total.inc();
 
                 const acquired_task_idx = VerifyMessageTask.awaitAndAcquireFirstAvailableTask(tasks, task_search_start_idx);
                 task_search_start_idx = (acquired_task_idx + 1) % tasks.len;
@@ -676,7 +676,7 @@ pub const GossipService = struct {
             if (msg_count == 0) continue;
 
             // track metrics
-            self.stats.gossip_packets_verified.add(msg_count);
+            self.stats.gossip_packets_verified_total.add(msg_count);
             self.stats.ping_messages_recv.add(ping_messages.items.len);
             self.stats.pong_messages_recv.add(pong_messages.items.len);
             self.stats.push_messages_recv.add(push_messages.items.len);
@@ -684,16 +684,16 @@ pub const GossipService = struct {
             self.stats.pull_responses_recv.add(pull_responses.items.len);
             self.stats.prune_messages_recv.add(prune_messages.items.len);
 
-            var gossip_packets_processed: usize = 0;
-            gossip_packets_processed += ping_messages.items.len;
-            gossip_packets_processed += pong_messages.items.len;
-            gossip_packets_processed += push_messages.items.len;
-            gossip_packets_processed += pull_requests.items.len;
-            gossip_packets_processed += pull_responses.items.len;
-            gossip_packets_processed += prune_messages.items.len;
+            var gossip_packets_processed_total: usize = 0;
+            gossip_packets_processed_total += ping_messages.items.len;
+            gossip_packets_processed_total += pong_messages.items.len;
+            gossip_packets_processed_total += push_messages.items.len;
+            gossip_packets_processed_total += pull_requests.items.len;
+            gossip_packets_processed_total += pull_responses.items.len;
+            gossip_packets_processed_total += prune_messages.items.len;
 
             // only add the count once we've finished processing
-            defer self.stats.gossip_packets_processed.add(gossip_packets_processed);
+            defer self.stats.gossip_packets_processed_total.add(gossip_packets_processed_total);
 
             self.stats.maybeLog();
 
@@ -1942,9 +1942,9 @@ pub const GossipService = struct {
 
 /// stats that we publish to prometheus
 pub const GossipStats = struct {
-    gossip_packets_received: *Counter,
-    gossip_packets_verified: *Counter,
-    gossip_packets_processed: *Counter,
+    gossip_packets_received_total: *Counter,
+    gossip_packets_verified_total: *Counter,
+    gossip_packets_processed_total: *Counter,
 
     ping_messages_recv: *Counter,
     pong_messages_recv: *Counter,
@@ -2012,7 +2012,7 @@ pub const GossipStats = struct {
     const GaugeU64 = Gauge(u64);
 
     const StatsToLog = struct {
-        gossip_packets_received: u64 = 0,
+        gossip_packets_received_total: u64 = 0,
 
         ping_messages_recv: u64 = 0,
         pong_messages_recv: u64 = 0,
@@ -2076,7 +2076,7 @@ pub const GossipStats = struct {
         if (interval < logging_fields.log_interval_micros) return;
 
         const current_stats = StatsToLog{
-            .gossip_packets_received = self.gossip_packets_received.get(),
+            .gossip_packets_received_total = self.gossip_packets_received_total.get(),
             .ping_messages_recv = self.ping_messages_recv.get(),
             .pong_messages_recv = self.pong_messages_recv.get(),
             .push_messages_recv = self.push_messages_recv.get(),
@@ -2095,7 +2095,7 @@ pub const GossipStats = struct {
         logging_fields.logger.infof(
             "gossip: recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
-                current_stats.gossip_packets_received - logging_fields.last_logged_snapshot.gossip_packets_received,
+                current_stats.gossip_packets_received_total - logging_fields.last_logged_snapshot.gossip_packets_received_total,
                 current_stats.ping_messages_recv - logging_fields.last_logged_snapshot.ping_messages_recv,
                 current_stats.pong_messages_recv - logging_fields.last_logged_snapshot.pong_messages_recv,
                 current_stats.push_messages_recv - logging_fields.last_logged_snapshot.push_messages_recv,
