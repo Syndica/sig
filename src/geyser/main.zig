@@ -147,9 +147,9 @@ pub fn getAccountFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(si
 
 pub fn csvDump() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = if (builtin.mode == .Debug) 
-        gpa.allocator() 
-    else 
+    const allocator = if (builtin.mode == .Debug)
+        gpa.allocator()
+    else
         std.heap.c_allocator;
     defer _ = gpa.deinit();
 
@@ -289,6 +289,7 @@ pub fn csvDumpIOWriter(
     const total_payloads_estimate: u64 = 405_721;
     var payloads_written: u64 = 0;
     var timer = try sig.time.Timer.start();
+    errdefer exit.store(true, .monotonic);
 
     while (!exit.load(.monotonic)) {
         while (io_channel.receive()) |csv_row| {
