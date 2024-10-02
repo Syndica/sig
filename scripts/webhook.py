@@ -34,6 +34,11 @@ def verify_signature(body, signature):
 
 async def handle_webhook(request):
     body = await request.read()
+    json_body = json.loads(body)
+
+    if not json_body['ref'] == "refs/heads/main":
+        print("Ignoring request")
+        return web.Response(text="Ignoring request", status=200)
 
     # verify that the request really came from github
     signature = request.headers.get("X-Hub-Signature-256", "")
