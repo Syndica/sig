@@ -37,7 +37,7 @@ pub fn runRetransmitService(
     epoch_schedule: EpochSchedule,
     bank_fields: *const BankFields,
     leader_schedule_cache: *LeaderScheduleCache,
-    shreds_receiver: *Channel(std.ArrayList(sig.net.Packet)),
+    shreds_receiver: *Channel(sig.net.Packet),
     retransmit_sockets: []const UdpSocket,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     rand: std.rand.Random,
@@ -81,7 +81,7 @@ fn retransmit(
     allocator: std.mem.Allocator,
     bank_fields: *const BankFields,
     leader_schedule_cache: *LeaderScheduleCache,
-    shreds_receiver: *Channel(std.ArrayList(sig.net.Packet)),
+    shreds_receiver: *Channel(sig.net.Packet),
     sockets: []const UdpSocket,
     turbine_tree_cache: *TurbineTreeCache,
     shred_deduper: *ShredDeduper(2),
@@ -90,10 +90,11 @@ fn retransmit(
 ) !void {
     // Drain shred receiver into raw shreds
     logger.debug("Draining shreds receiver");
-    const raw_shred_batches = try shreds_receiver.try_drain() orelse return;
-    defer {
-        for (raw_shred_batches) |batch| batch.deinit();
-        allocator.free(raw_shred_batches);
+    var raw_shred_batch = std.ArrayList(sig.net.Packet).init(allocator);
+    defer raw_shred_batch.deinit();
+
+    while (shreds_receiver.receive()) |packet| {
+        try raw_shred_batch.append(packet);
     }
 
     // Reset dedupers
@@ -113,21 +114,19 @@ fn retransmit(
         slot_shreds.deinit();
     }
 
-    for (raw_shred_batches) |raw_shred_batch| {
-        for (raw_shred_batch.items) |raw_shred| {
-            const shred_id = try sig.ledger.shred.layout.getShredId(&raw_shred);
+    for (raw_shred_batch.items) |raw_shred| {
+        const shred_id = try sig.ledger.shred.layout.getShredId(&raw_shred);
 
-            if (shred_deduper.dedup(&shred_id, &raw_shred.data, MAX_DUPLICATE_COUNT)) {
-                continue;
-            }
+        if (shred_deduper.dedup(&shred_id, &raw_shred.data, MAX_DUPLICATE_COUNT)) {
+            continue;
+        }
 
-            if (slot_shreds.getEntry(shred_id.slot)) |entry| {
-                try entry.value_ptr.append(.{ shred_id, &raw_shred.data });
-            } else {
-                var new_slot_shreds = ShredsArray.init(allocator);
-                try new_slot_shreds.append(.{ shred_id, &raw_shred.data });
-                try slot_shreds.put(shred_id.slot, new_slot_shreds);
-            }
+        if (slot_shreds.getEntry(shred_id.slot)) |entry| {
+            try entry.value_ptr.append(.{ shred_id, &raw_shred.data });
+        } else {
+            var new_slot_shreds = ShredsArray.init(allocator);
+            try new_slot_shreds.append(.{ shred_id, &raw_shred.data });
+            try slot_shreds.put(shred_id.slot, new_slot_shreds);
         }
     }
 
