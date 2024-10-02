@@ -27,17 +27,17 @@ pub const SlotLeaderProvider = sig.utils.closure.PointerClosure(Slot, ?Pubkey);
 /// to an end, not the end itself. It may then follow that we could remove the
 /// above pointer closure in favor of passing the SlotLeaderProvider directly.
 pub const LeaderScheduleCache = struct {
-    allocator: std.mem.Allocator,
     epoch_schedule: EpochSchedule,
-    leader_schedules: RwMux(std.AutoArrayHashMapUnmanaged(Epoch, LeaderSchedule)),
+    leader_schedules: RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)),
 
     const Self = @This();
 
     pub fn init(allocator: Allocator, epoch_schedule: EpochSchedule) Self {
         return .{
-            .allocator = allocator,
             .epoch_schedule = epoch_schedule,
-            .leader_schedules = .{},
+            .leader_schedules = RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)).init(
+                std.AutoArrayHashMap(Epoch, LeaderSchedule).init(allocator),
+            ),
         };
     }
 
@@ -53,7 +53,7 @@ pub const LeaderScheduleCache = struct {
             _ = leader_schedules.swapRemove(std.mem.min(Epoch, leader_schedules.keys()));
         }
 
-        try leader_schedules.put(self.allocator, epoch, leader_schedule);
+        try leader_schedules.put(epoch, leader_schedule);
     }
 
     pub fn slotLeader(self: *Self, slot: Slot) ?Pubkey {
@@ -63,11 +63,11 @@ pub const LeaderScheduleCache = struct {
         return if (leader_schedules.get(epoch)) |schedule| schedule.slot_leaders[slot_index] else null;
     }
 
-    pub fn uniqueLeaders(self: *Self) !std.AutoArrayHashMap(Pubkey, void) {
+    pub fn uniqueLeaders(self: *Self, allocator: std.mem.Allocator) !std.AutoArrayHashMap(Pubkey, void) {
         const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
         defer leader_schedules_lg.unlock();
 
-        var unique_leaders = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
+        var unique_leaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
 
         for (leader_schedules.values()) |leader_schedule| {
             for (leader_schedule.slot_leaders) |leader| {

@@ -75,7 +75,7 @@ pub const LeaderInfo = struct {
             const gossip_table: *const GossipTable, var gossip_table_lg = self.gossip_table_rw.readWithLock();
             defer gossip_table_lg.unlock();
 
-            var unique_leaders = try self.leader_schedule_cache.uniqueLeaders();
+            var unique_leaders = try self.leader_schedule_cache.uniqueLeaders(self.allocator);
             defer unique_leaders.deinit();
 
             for (unique_leaders.keys()) |leader| {
