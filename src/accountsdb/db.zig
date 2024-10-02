@@ -2477,9 +2477,9 @@ pub const AccountsDB = struct {
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
-            sig.version.CURRENT_CLIENT_VERSION,
-            StatusCache.default(),
-            snapshot_fields,
+            &sig.version.CURRENT_CLIENT_VERSION,
+            &StatusCache.default(),
+            &snapshot_fields,
             file_map,
         );
         try zstd_write_ctx.finish();
@@ -2673,9 +2673,9 @@ pub const AccountsDB = struct {
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
-            sig.version.CURRENT_CLIENT_VERSION,
-            StatusCache.default(),
-            snapshot_fields,
+            &sig.version.CURRENT_CLIENT_VERSION,
+            &StatusCache.default(),
+            &snapshot_fields,
             file_map,
         );
         try zstd_write_ctx.finish();
@@ -2934,62 +2934,85 @@ const FreeCounterAllocator = struct {
 /// with the association defined by the file id (a field of the value of the former, the key of the latter).
 pub fn writeSnapshotTarWithFields(
     archive_writer: anytype,
-    version: ClientVersion,
-    status_cache: StatusCache,
-    snapshot_fields: SnapshotFields,
+    version: *const ClientVersion,
+    status_cache: *const StatusCache,
+    snapshot_fields: *const SnapshotFields,
     file_map: *const AccountsDB.FileMap,
 ) !void {
-    const slot: Slot = snapshot_fields.bank_fields.slot;
+    try snapgen.writeMetadataFiles(archive_writer, version, status_cache, snapshot_fields);
 
-    var counting_writer_state = std.io.countingWriter(archive_writer);
-    const writer = counting_writer_state.writer();
+    try snapgen.writeAccountsDirHeader(archive_writer);
+    const file_info_map = snapshot_fields.accounts_db_fields.file_map;
+    for (file_info_map.keys(), file_info_map.values()) |file_slot, file_info| {
+        const account_file = file_map.getPtr(file_info.id) orelse unreachable;
+        std.debug.assert(account_file.id == file_info.id);
 
-    // write the version file
-    const version_str_bounded = sig.utils.fmt.boundedFmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
-    const version_str = version_str_bounded.constSlice();
-    try sig.utils.tar.writeTarHeader(writer, .regular, "version", version_str.len);
-    try writer.writeAll(version_str);
-    try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+        try snapgen.writeAccountFileHeader(archive_writer, file_slot, file_info);
+        try archive_writer.writeAll(account_file.memory);
+        try snapgen.writeAccountFilePadding(archive_writer, file_info.length);
+    }
 
-    // create the snapshots dir
-    try sig.utils.tar.writeTarHeader(writer, .directory, "snapshots/", 0);
+    try archive_writer.writeAll(&sig.utils.tar.sentinel_blocks);
+}
 
-    // write the status cache
-    try sig.utils.tar.writeTarHeader(writer, .regular, "snapshots/status_cache", bincode.sizeOf(status_cache, .{}));
-    try bincode.write(writer, status_cache, .{});
-    try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+pub const snapgen = struct {
+    /// Writes the version, status cache, and manifest files.
+    /// Should call this first to begin generating the snapshot archive.
+    pub fn writeMetadataFiles(
+        archive_writer: anytype,
+        version: *const ClientVersion,
+        status_cache: *const StatusCache,
+        manifest: *const SnapshotFields,
+    ) !void {
+        const slot: Slot = manifest.bank_fields.slot;
 
-    // write the manifest
-    const manifest = snapshot_fields;
-    const manifest_encoded_size = bincode.sizeOf(manifest, .{});
+        var counting_writer_state = std.io.countingWriter(archive_writer);
+        const writer = counting_writer_state.writer();
 
-    const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot});
-    try sig.utils.tar.writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
-
-    const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot});
-    try sig.utils.tar.writeTarHeader(writer, .regular, file_name_bounded.constSlice(), manifest_encoded_size);
-    try bincode.write(writer, manifest, .{});
-    try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
-
-    // create the accounts dir
-    try sig.utils.tar.writeTarHeader(writer, .directory, "accounts/", 0);
-
-    const file_info_map = &snapshot_fields.accounts_db_fields.file_map;
-    for (file_info_map.keys(), file_info_map.values()) |account_slot, account_file_info| {
-        const account_file = file_map.getPtr(account_file_info.id) orelse unreachable;
-        std.debug.assert(account_file.id == account_file_info.id);
-
-        const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ account_slot, account_file_info.id.toInt() });
-        try sig.utils.tar.writeTarHeader(writer, .regular, name_bounded.constSlice(), account_file.memory.len);
-        try writer.writeAll(account_file.memory);
+        // write the version file
+        const version_str_bounded = sig.utils.fmt.boundedFmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+        const version_str = version_str_bounded.constSlice();
+        try sig.utils.tar.writeTarHeader(writer, .regular, "version", version_str.len);
+        try writer.writeAll(version_str);
         try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
-        counting_writer_state.bytes_written %= 512;
+
+        // create the snapshots dir
+        try sig.utils.tar.writeTarHeader(writer, .directory, "snapshots/", 0);
+
+        // write the status cache
+        try sig.utils.tar.writeTarHeader(writer, .regular, "snapshots/status_cache", bincode.sizeOf(status_cache, .{}));
+        try bincode.write(writer, status_cache, .{});
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+
+        // write the manifest
+        const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot});
+        try sig.utils.tar.writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
+
+        const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot});
+        try sig.utils.tar.writeTarHeader(writer, .regular, file_name_bounded.constSlice(), bincode.sizeOf(manifest, .{}));
+        try bincode.write(writer, manifest, .{});
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+
         std.debug.assert(counting_writer_state.bytes_written == 0);
     }
 
-    // write the sentinel blocks
-    try writer.writeByteNTimes(0, 512 * 2);
-}
+    /// Writes the accounts dir header. Do this after writing the metadata files.
+    pub fn writeAccountsDirHeader(archive_writer: anytype) !void {
+        try sig.utils.tar.writeTarHeader(archive_writer, .directory, "accounts/", 0);
+    }
+
+    /// Writes the account file header - follow this up by writing the file content to `archive_writer`,
+    /// and then follow that up with `writeAccountFilePadding(archive_writer, file_info.length)`.
+    /// Do this for each account file included in the snapshot.
+    pub fn writeAccountFileHeader(archive_writer: anytype, file_slot: Slot, file_info: AccountFileInfo) !void {
+        const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ file_slot, file_info.id.toInt() });
+        try sig.utils.tar.writeTarHeader(archive_writer, .regular, name_bounded.constSlice(), file_info.length);
+    }
+
+    pub fn writeAccountFilePadding(archive_writer: anytype, file_length: usize) !void {
+        try archive_writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(file_length));
+    }
+};
 
 fn testWriteSnapshotFull(
     allocator: std.mem.Allocator,
