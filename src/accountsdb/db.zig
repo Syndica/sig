@@ -327,12 +327,17 @@ pub const AccountsDB = struct {
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.full;
-            const validate_duration = try self.validateLoadFromSnapshot(
-                snapshot_fields.bank_fields_inc.snapshot_persistence,
-                full_snapshot.bank_fields.slot,
-                full_snapshot.bank_fields.capitalization,
-                snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
-            );
+            const validate_duration = try self.validateLoadFromSnapshot(.{
+                .full_slot = full_snapshot.bank_fields.slot,
+                .expected_full = .{
+                    .accounts_hash = snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
+                    .capitalization = full_snapshot.bank_fields.capitalization,
+                },
+                .expected_incremental = if (snapshot_fields.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+                    .accounts_hash = inc_persistence.incremental_hash,
+                    .capitalization = inc_persistence.incremental_capitalization,
+                } else null,
+            });
             self.logger.info().logf("validated from snapshot in {s}", .{validate_duration});
         }
 
@@ -915,16 +920,25 @@ pub const AccountsDB = struct {
         };
     }
 
+    pub const ValidateLoadFromSnapshotParams = struct {
+        /// used to verify the full snapshot.
+        full_slot: Slot,
+        /// The expected full snapshot values to verify against.
+        expected_full: ExpectedSnapInfo,
+        /// Optionally used to verify the incremental snapshot relative to the full snapshot.
+        expected_incremental: ?ExpectedSnapInfo,
+
+        pub const ExpectedSnapInfo = struct {
+            accounts_hash: Hash,
+            capitalization: u64,
+        };
+    };
+
     /// validates the accounts_db which was loaded from a snapshot (
     /// including the accounts hash and total lamports matches the expected values)
     pub fn validateLoadFromSnapshot(
         self: *Self,
-        // used to verify the incremental snapshot
-        incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence,
-        // used to verify the full snapshot
-        full_snapshot_slot: Slot,
-        expected_full_lamports: u64,
-        expected_accounts_hash: Hash,
+        params: ValidateLoadFromSnapshotParams,
     ) !sig.time.Duration {
         var timer = try sig.time.Timer.start();
 
@@ -932,54 +946,51 @@ pub const AccountsDB = struct {
         self.logger.info().logf("validating the full snapshot", .{});
         const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
             .FullAccountHash = .{
-                .max_slot = full_snapshot_slot,
+                .max_slot = params.full_slot,
             },
         });
 
-        if (expected_accounts_hash.order(&accounts_hash) != .eq) {
+        if (params.expected_full.accounts_hash.order(&accounts_hash) != .eq) {
             self.logger.err().logf(
                 \\ incorrect accounts hash
                 \\ expected vs calculated: {d} vs {d}
-            , .{ expected_accounts_hash, accounts_hash });
+            , .{ params.expected_full.accounts_hash, accounts_hash });
             return error.IncorrectAccountsHash;
         }
-        if (expected_full_lamports != total_lamports) {
+
+        if (params.expected_full.capitalization != total_lamports) {
             self.logger.err().logf(
                 \\ incorrect total lamports
                 \\ expected vs calculated: {d} vs {d}
-            , .{ expected_full_lamports, total_lamports });
+            , .{ params.expected_full.capitalization, total_lamports });
             return error.IncorrectTotalLamports;
         }
 
         // validate the incremental snapshot
-        if (incremental_snapshot_persistence == null) {
-            return timer.read();
-        }
+        if (params.expected_incremental) |expected_incremental| {
+            self.logger.info().logf("validating the incremental snapshot", .{});
 
-        self.logger.info().logf("validating the incremental snapshot", .{});
-        const expected_accounts_delta_hash = incremental_snapshot_persistence.?.incremental_hash;
-        const expected_incremental_lamports = incremental_snapshot_persistence.?.incremental_capitalization;
+            const accounts_delta_hash, const incremental_lamports = try self.computeAccountHashesAndLamports(.{
+                .IncrementalAccountHash = .{
+                    .min_slot = params.full_slot,
+                },
+            });
 
-        const accounts_delta_hash, const incremental_lamports = try self.computeAccountHashesAndLamports(.{
-            .IncrementalAccountHash = .{
-                .min_slot = full_snapshot_slot,
-            },
-        });
+            if (expected_incremental.capitalization != incremental_lamports) {
+                self.logger.err().logf(
+                    \\ incorrect incremental lamports
+                    \\ expected vs calculated: {d} vs {d}
+                , .{ expected_incremental.capitalization, incremental_lamports });
+                return error.IncorrectIncrementalLamports;
+            }
 
-        if (expected_incremental_lamports != incremental_lamports) {
-            self.logger.err().logf(
-                \\ incorrect incremental lamports
-                \\ expected vs calculated: {d} vs {d}
-            , .{ expected_incremental_lamports, incremental_lamports });
-            return error.IncorrectIncrementalLamports;
-        }
-
-        if (expected_accounts_delta_hash.order(&accounts_delta_hash) != .eq) {
-            self.logger.err().logf(
-                \\ incorrect accounts delta hash
-                \\ expected vs calculated: {d} vs {d}
-            , .{ expected_accounts_delta_hash, accounts_delta_hash });
-            return error.IncorrectAccountsDeltaHash;
+            if (expected_incremental.accounts_hash.order(&accounts_delta_hash) != .eq) {
+                self.logger.err().logf(
+                    \\ incorrect accounts delta hash
+                    \\ expected vs calculated: {d} vs {d}
+                , .{ expected_incremental.accounts_hash, accounts_delta_hash });
+                return error.IncorrectAccountsDeltaHash;
+            }
         }
 
         return timer.read();
@@ -2375,7 +2386,17 @@ pub const AccountsDB = struct {
         zstd_buffer: []u8,
         params: FullSnapshotGenParams,
     ) !FullSnapshotGenerationInfo {
+        // NOTE: we hold the lock for the rest of the duration of the procedure to ensure
+        // flush and clean do not create files while generating a snapshot.
+        self.file_map_fd_rw.lockShared();
+        defer self.file_map_fd_rw.unlockShared();
+
+        const file_map, var file_map_lg = self.file_map.readWithLock();
+        defer file_map_lg.unlock();
+
         std.debug.assert(zstd_buffer.len != 0);
+        std.debug.assert(params.target_slot <= self.largest_flushed_slot.load(.monotonic));
+
         const full_hash, const full_capitalization = try self.computeAccountHashesAndLamports(.{
             .FullAccountHash = .{
                 .max_slot = params.target_slot,
@@ -2385,22 +2406,22 @@ pub const AccountsDB = struct {
         // TODO: this is a temporary value
         const delta_hash = Hash.default();
 
+        const archive_file = blk: {
+            const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+                .slot = params.target_slot,
+                .hash = full_hash,
+                .compression = .zstd,
+            });
+            const archive_file_name = archive_file_name_bounded.constSlice();
+            break :blk try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
+        };
+        defer archive_file.close();
+
         const SerializableFileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
 
-        const bank_hash_stats, //
         var serializable_file_map: SerializableFileMap, //
-        var file_map_rw: RwMux(FileMap).RLockGuard //
+        const bank_hash_stats //
         = blk: {
-            self.file_map_fd_rw.lockShared();
-            defer self.file_map_fd_rw.unlockShared();
-
-            var file_map_rw = self.file_map.read();
-            errdefer file_map_rw.unlock();
-
-            const file_map = file_map_rw.get();
-
-            std.debug.assert(params.target_slot <= self.largest_flushed_slot.load(.monotonic));
-
             var serializable_file_map = SerializableFileMap.init(self.allocator);
             errdefer serializable_file_map.deinit();
             try serializable_file_map.ensureTotalCapacity(file_map.count());
@@ -2425,10 +2446,9 @@ pub const AccountsDB = struct {
                 });
             }
 
-            break :blk .{ bank_hash_stats, serializable_file_map, file_map_rw };
+            break :blk .{ serializable_file_map, bank_hash_stats };
         };
         defer serializable_file_map.deinit();
-        defer file_map_rw.unlock();
 
         params.bank_fields.slot = params.target_slot; // !
         params.bank_fields.capitalization = full_capitalization; // !
@@ -2454,23 +2474,13 @@ pub const AccountsDB = struct {
             .bank_fields_inc = .{}, // default to null for full snapshot,
         };
 
-        const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
-            .slot = params.target_slot,
-            .hash = full_hash,
-            .compression = .zstd,
-        });
-        const archive_file_name = archive_file_name_bounded.constSlice();
-        const archive_file = try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
-        defer archive_file.close();
-
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
-
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
             sig.version.CURRENT_CLIENT_VERSION,
             StatusCache.default(),
             snapshot_fields,
-            file_map_rw.get(),
+            file_map,
         );
         try zstd_write_ctx.finish();
 
@@ -2507,7 +2517,7 @@ pub const AccountsDB = struct {
         return snapshot_gen_info;
     }
 
-    pub const IncSnapshotGenerationInfo = struct {
+    const IncSnapshotGenerationInfo = struct {
         base_slot: Slot,
         slot: Slot,
         hash: Hash,
@@ -2532,7 +2542,7 @@ pub const AccountsDB = struct {
     pub fn generateIncrementalSnapshot(
         self: *Self,
         params: IncSnapshotGenParams,
-    ) !struct { IncSnapshotGenerationInfo, BankIncrementalSnapshotPersistence } {
+    ) !BankIncrementalSnapshotPersistence {
         const zstd_compressor = try zstd.Compressor.init(.{});
         defer zstd_compressor.deinit();
 
@@ -2549,47 +2559,60 @@ pub const AccountsDB = struct {
         zstd_compressor: zstd.Compressor,
         zstd_buffer: []u8,
         params: IncSnapshotGenParams,
-    ) !struct { IncSnapshotGenerationInfo, BankIncrementalSnapshotPersistence } {
+    ) !BankIncrementalSnapshotPersistence {
+        // NOTE: we hold the lock for the rest of the duration of the procedure to ensure
+        // flush and clean do not create files while generating a snapshot.
+        self.file_map_fd_rw.lockShared();
+        defer self.file_map_fd_rw.unlockShared();
+
+        const file_map, var file_map_lg = self.file_map.readWithLock();
+        defer file_map_lg.unlock();
+
+        // lock this now such that, if under any circumstance this method was invoked twice in parallel
+        // on separate threads, there wouldn't be any overlapping work being done.
+        const latest_incremental_snapshot_info, var latest_incremental_snapshot_info_lg = self.latest_incremental_snapshot_info.writeWithLock();
+        defer latest_incremental_snapshot_info_lg.unlock();
+
+        const full_snapshot_info = snap_info: {
+            const p_maybe_full_snapshot_info, var full_snapshot_info_lg = self.latest_full_snapshot_info.readWithLock();
+            defer full_snapshot_info_lg.unlock();
+            break :snap_info p_maybe_full_snapshot_info.* orelse return error.NoFullSnapshotExists;
+        };
+
+        const incremental_hash, //
+        const incremental_capitalization //
+        = try self.computeAccountHashesAndLamports(.{
+            .IncrementalAccountHash = .{
+                .min_slot = full_snapshot_info.slot,
+                .max_slot = params.target_slot,
+            },
+        });
+
         // TODO: compute the correct value during account writes
         const delta_hash = Hash.default();
 
+        const archive_file = blk: {
+            const archive_file_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
+                .base_slot = full_snapshot_info.slot,
+                .slot = params.target_slot,
+                .hash = incremental_hash,
+                .compression = .zstd,
+            });
+            const archive_file_name = archive_file_name_bounded.constSlice();
+            break :blk try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
+        };
+        defer archive_file.close();
+
         const SerializableFileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
 
-        const full_snapshot_info, //
-        const bank_hash_stats, //
-        const incremental_hash, //
-        const incremental_capitalization, //
         var serializable_file_map: SerializableFileMap, //
-        var file_map_rw: RwMux(FileMap).RLockGuard //
+        const bank_hash_stats: BankHashStats //
         = blk: {
-            // NOTE: we hold the lock for the entire duration of the procedure to ensure
-            // flush and clean do not create files while generating a snapshot.
-            self.file_map_fd_rw.lockShared();
-            defer self.file_map_fd_rw.unlockShared();
-
-            var file_map_rw = self.file_map.read();
-            errdefer file_map_rw.unlock();
-            const file_map = file_map_rw.get();
-
-            const p_maybe_full_snapshot_info, var full_snapshot_info_lg = self.latest_full_snapshot_info.readWithLock();
-            defer full_snapshot_info_lg.unlock();
-            const full_snapshot_info = p_maybe_full_snapshot_info.* orelse return error.NoFullSnapshotExists;
-
-            const incremental_hash, //
-            const incremental_capitalization //
-            = try self.computeAccountHashesAndLamports(.{
-                .IncrementalAccountHash = .{
-                    .min_slot = full_snapshot_info.slot,
-                    .max_slot = params.target_slot,
-                },
-            });
-
-            var serializable_file_map = std.AutoArrayHashMap(Slot, AccountFileInfo).init(self.allocator);
+            var serializable_file_map = SerializableFileMap.init(self.allocator);
             errdefer serializable_file_map.deinit();
             try serializable_file_map.ensureTotalCapacity(file_map.count());
 
             var bank_hash_stats = BankHashStats.zero_init;
-
             for (file_map.values()) |account_file| {
                 if (account_file.slot <= full_snapshot_info.slot) continue;
                 if (account_file.slot > params.target_slot) continue;
@@ -2609,28 +2632,19 @@ pub const AccountsDB = struct {
                 });
             }
 
-            break :blk .{
-                full_snapshot_info,
-                bank_hash_stats,
-                incremental_hash,
-                incremental_capitalization,
-                serializable_file_map,
-                file_map_rw,
-            };
+            break :blk .{ serializable_file_map, bank_hash_stats };
         };
         defer serializable_file_map.deinit();
-        defer file_map_rw.unlock();
 
-        params.bank_fields.slot = params.target_slot; // !
-        // params.bank_fields.capitalization = incremental_capitalization; // !? TODO
-
-        const snapshot_persistence: BankIncrementalSnapshotPersistence = .{
+        const snap_persistence: BankIncrementalSnapshotPersistence = .{
             .full_slot = full_snapshot_info.slot,
             .full_hash = full_snapshot_info.hash,
             .full_capitalization = full_snapshot_info.capitalization,
             .incremental_hash = incremental_hash,
             .incremental_capitalization = incremental_capitalization,
         };
+
+        params.bank_fields.slot = params.target_slot; // !
 
         const snapshot_fields: SnapshotFields = .{
             .bank_fields = params.bank_fields.*,
@@ -2651,34 +2665,20 @@ pub const AccountsDB = struct {
             },
             .lamports_per_signature = params.lamports_per_signature,
             .bank_fields_inc = .{
-                .snapshot_persistence = snapshot_persistence,
+                .snapshot_persistence = snap_persistence,
                 // TODO: the other fields default to null, but this may not always be correct.
             },
         };
 
-        const archive_file_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
-            .base_slot = full_snapshot_info.slot,
-            .slot = params.target_slot,
-            .hash = incremental_hash,
-            .compression = .zstd,
-        });
-        const archive_file_name = archive_file_name_bounded.constSlice();
-        const archive_file = try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
-        errdefer archive_file.close();
-
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
-
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
             sig.version.CURRENT_CLIENT_VERSION,
             StatusCache.default(),
             snapshot_fields,
-            file_map_rw.get(),
+            file_map,
         );
         try zstd_write_ctx.finish();
-
-        const latest_incremental_snapshot_info, var latest_incremental_snapshot_info_lg = self.latest_incremental_snapshot_info.writeWithLock();
-        defer latest_incremental_snapshot_info_lg.unlock();
 
         const snapshot_gen_info: IncSnapshotGenerationInfo = .{
             .base_slot = full_snapshot_info.slot,
@@ -2690,9 +2690,10 @@ pub const AccountsDB = struct {
         const maybe_old_snapshot_info: ?IncSnapshotGenerationInfo = latest_incremental_snapshot_info.*;
         latest_incremental_snapshot_info.* = snapshot_gen_info;
         if (maybe_old_snapshot_info) |old_snapshot_info| {
-            std.debug.assert(old_snapshot_info.slot <= snapshot_gen_info.slot);
+            std.debug.assert(old_snapshot_info.slot <= params.target_slot);
         }
 
+        // do specified action to the old snapshot
         switch (params.old_snapshot_action) {
             .ignore_old => {},
             .delete_old => if (maybe_old_snapshot_info) |old_snapshot_info| {
@@ -2709,7 +2710,7 @@ pub const AccountsDB = struct {
             },
         }
 
-        return .{ snapshot_gen_info, snapshot_persistence };
+        return snap_persistence;
     }
 
     inline fn lessThanIf(
@@ -3019,12 +3020,14 @@ fn testWriteSnapshotFull(
         try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
     }
 
-    _ = try accounts_db.validateLoadFromSnapshot(
-        null,
-        slot,
-        snapshot_gen_info.capitalization,
-        snapshot_gen_info.hash,
-    );
+    _ = try accounts_db.validateLoadFromSnapshot(.{
+        .full_slot = slot,
+        .expected_full = .{
+            .capitalization = snapshot_gen_info.capitalization,
+            .accounts_hash = snapshot_gen_info.hash,
+        },
+        .expected_incremental = null,
+    });
 }
 
 fn testWriteSnapshotIncremental(
@@ -3044,7 +3047,7 @@ fn testWriteSnapshotIncremental(
 
     _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 1_500);
 
-    const snapshot_gen_info, const incremental_persistence = try accounts_db.generateIncrementalSnapshot(.{
+    const snapshot_gen_info = try accounts_db.generateIncrementalSnapshot(.{
         .target_slot = slot,
         .bank_fields = &snap_fields.bank_fields,
         .lamports_per_signature = snap_fields.lamports_per_signature,
@@ -3052,18 +3055,22 @@ fn testWriteSnapshotIncremental(
         .deprecated_stored_meta_write_version = snap_fields.accounts_db_fields.stored_meta_write_version,
     });
 
-    try std.testing.expectEqual(slot, snapshot_gen_info.slot);
     if (maybe_expected_incremental_hash) |expected_hash| {
-        try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
+        try std.testing.expectEqual(expected_hash, snapshot_gen_info.incremental_hash);
     }
-    try std.testing.expectEqual(incremental_persistence.incremental_hash, snapshot_gen_info.hash);
+    try std.testing.expectEqual(snapshot_gen_info.incremental_hash, snapshot_gen_info.incremental_hash);
 
-    _ = try accounts_db.validateLoadFromSnapshot(
-        incremental_persistence,
-        incremental_persistence.full_slot,
-        incremental_persistence.full_capitalization,
-        incremental_persistence.full_hash,
-    );
+    _ = try accounts_db.validateLoadFromSnapshot(.{
+        .full_slot = snapshot_gen_info.full_slot,
+        .expected_full = .{
+            .capitalization = snapshot_gen_info.full_capitalization,
+            .accounts_hash = snapshot_gen_info.full_hash,
+        },
+        .expected_incremental = .{
+            .accounts_hash = snapshot_gen_info.incremental_hash,
+            .capitalization = snapshot_gen_info.incremental_capitalization,
+        },
+    });
 }
 
 test "testWriteSnapshot" {
@@ -3292,12 +3299,17 @@ test "load and validate from test snapshot using disk index" {
         snapshots.deinit(allocator);
     }
 
-    _ = try accounts_db.validateLoadFromSnapshot(
-        snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
-        snapshots.full.bank_fields.slot,
-        snapshots.full.bank_fields.capitalization,
-        snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
-    );
+    _ = try accounts_db.validateLoadFromSnapshot(.{
+        .full_slot = snapshots.full.bank_fields.slot,
+        .expected_full = .{
+            .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
+            .capitalization = snapshots.full.bank_fields.capitalization,
+        },
+        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+            .accounts_hash = inc_persistence.incremental_hash,
+            .capitalization = inc_persistence.incremental_capitalization,
+        } else null,
+    });
 }
 
 test "load and validate from test snapshot parallel" {
@@ -3309,12 +3321,17 @@ test "load and validate from test snapshot parallel" {
         snapshots.deinit(allocator);
     }
 
-    _ = try accounts_db.validateLoadFromSnapshot(
-        snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
-        snapshots.full.bank_fields.slot,
-        snapshots.full.bank_fields.capitalization,
-        snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
-    );
+    _ = try accounts_db.validateLoadFromSnapshot(.{
+        .full_slot = snapshots.full.bank_fields.slot,
+        .expected_full = .{
+            .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
+            .capitalization = snapshots.full.bank_fields.capitalization,
+        },
+        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+            .accounts_hash = inc_persistence.incremental_hash,
+            .capitalization = inc_persistence.incremental_capitalization,
+        } else null,
+    });
 }
 
 test "load and validate from test snapshot" {
@@ -3326,12 +3343,17 @@ test "load and validate from test snapshot" {
         snapshots.deinit(allocator);
     }
 
-    _ = try accounts_db.validateLoadFromSnapshot(
-        snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
-        snapshots.full.bank_fields.slot,
-        snapshots.full.bank_fields.capitalization,
-        snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
-    );
+    _ = try accounts_db.validateLoadFromSnapshot(.{
+        .full_slot = snapshots.full.bank_fields.slot,
+        .expected_full = .{
+            .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
+            .capitalization = snapshots.full.bank_fields.capitalization,
+        },
+        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+            .accounts_hash = inc_persistence.incremental_hash,
+            .capitalization = inc_persistence.incremental_capitalization,
+        } else null,
+    });
 }
 
 test "load clock sysvar" {
