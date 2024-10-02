@@ -561,7 +561,7 @@ pub const AccountsDB = struct {
                     });
                     return err;
                 };
-                errdefer accounts_file.close();
+                defer accounts_file.close();
 
                 break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
                     self.logger.errf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });
@@ -1456,6 +1456,7 @@ pub const AccountsDB = struct {
         }
 
         const file, const file_id, const memory = try self.createAccountFile(size, slot);
+        defer file.close();
 
         const offsets = try self.allocator.alloc(u64, accounts.len);
         defer self.allocator.free(offsets);
@@ -1858,6 +1859,7 @@ pub const AccountsDB = struct {
                 accounts_alive_size,
                 slot,
             );
+            defer new_file.close();
 
             // write the alive accounts
             var offsets = try std.ArrayList(u64).initCapacity(self.allocator, accounts_alive_count);
@@ -3996,9 +3998,9 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
     pub const args = [_]BenchArgs{
         BenchArgs{
-            .name = "RAM index (8 threads)",
+            .name = "RAM index (2 threads)",
             .use_disk = false,
-            .n_threads = 8,
+            .n_threads = 2,
         },
         // BenchArgs{
         //     .use_disk = true,
@@ -4059,14 +4061,8 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             snapshot.accounts_db_fields,
             bench_args.n_threads,
             allocator,
-            1_500,
+            250, // should be safe for testnet snapshots
         );
-
-        // sanity check
-        const accounts_hash, const total_lamports = try accounts_db.computeAccountHashesAndLamports(.{
-            .FullAccountHash = .{ .max_slot = accounts_db.largest_rooted_slot.load(.monotonic) },
-        });
-        std.debug.print("r: hash: {}, lamports: {}\n", .{ accounts_hash, total_lamports });
 
         return duration.asNanos();
     }
@@ -4272,18 +4268,17 @@ pub const BenchmarkAccountsDB = struct {
         const slot_list_len = bench_args.slot_list_len;
         const total_n_accounts = n_accounts * slot_list_len;
 
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        var allocator = gpa.allocator();
-
+        const allocator = std.heap.c_allocator;
         const disk_path = sig.TEST_DATA_DIR ++ "tmp/";
         std.fs.cwd().makeDir(disk_path) catch {};
+        defer std.fs.cwd().deleteTreeMinStackSize(disk_path) catch {};
 
         var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
         defer snapshot_dir.close();
 
         const logger = Logger{ .noop = {} };
         var accounts_db: AccountsDB = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-            .number_of_index_bins = ACCOUNT_INDEX_BINS,
+            .number_of_index_bins = 32,
             .use_disk_index = bench_args.index == .disk,
         }, null);
         defer accounts_db.deinit();
@@ -4322,7 +4317,7 @@ pub const BenchmarkAccountsDB = struct {
                 );
             }
 
-            var timer = try std.time.Timer.start();
+            var timer = try sig.time.Timer.start();
             for (0..slot_list_len) |i| {
                 const start_index = i * n_accounts;
                 const end_index = start_index + n_accounts;
@@ -4332,8 +4327,7 @@ pub const BenchmarkAccountsDB = struct {
                     @as(u64, @intCast(i)),
                 );
             }
-            const elapsed = timer.read();
-            std.debug.print("WRITE: {d}\n", .{elapsed});
+            std.debug.print("WRITE: {d}\n", .{timer.read()});
         } else {
             var account_files = try ArrayList(AccountFile).initCapacity(allocator, slot_list_len);
             defer account_files.deinit();
@@ -4384,7 +4378,7 @@ pub const BenchmarkAccountsDB = struct {
 
                 var account_file = blk: {
                     const file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
-                    errdefer file.close();
+                    defer file.close();
                     break :blk try AccountFile.init(file, .{ .id = FileId.fromInt(@intCast(s)), .length = length }, s);
                 };
                 errdefer account_file.deinit();
@@ -4398,16 +4392,14 @@ pub const BenchmarkAccountsDB = struct {
                 all_filenames.appendAssumeCapacity(filepath);
             }
 
-            var timer = try std.time.Timer.start();
+            var timer = try sig.time.Timer.start();
             for (account_files.items) |*account_file| {
                 try accounts_db.putAccountFile(account_file, n_accounts);
             }
-            const elapsed = timer.read();
-
-            std.debug.print("WRITE: {d}\n", .{elapsed});
+            std.debug.print("WRITE: {d}\n", .{timer.read()});
         }
 
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         for (0..n_accounts) |i| {
             const pubkey = &pubkeys[i];
             const account = try accounts_db.getAccount(pubkey);
@@ -4415,7 +4407,8 @@ pub const BenchmarkAccountsDB = struct {
                 std.debug.panic("account data len dnm {}: {} != {}", .{ i, account.data.len, (i % 1_000) });
             }
         }
-        const elapsed = timer.read();
-        return elapsed;
+        std.debug.print("READ: {d}\n", .{timer.read()});
+
+        return 0; // doesnt matter
     }
 };
