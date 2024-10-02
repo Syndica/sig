@@ -83,7 +83,9 @@ pub fn RecycleFBA(config: struct {
                     // not enough memory to allocate and no possible recycles will be perma stuck
                     // TODO(x19): loop this and have a comptime limit?
                     self.tryCollapse();
-                    // TODO(x19): check if we can allocate now (ie, is_possible_to_recycle)
+                    if (!self.isPossibleToAllocate(n, log2_align)) {
+                        @panic("RecycleFBA.alloc: no possible recycles and not enough memory to allocate");
+                    }
 
                     // try again : TODO(x19): remove the extra lock/unlock
                     if (config.thread_safe) self.mux.unlock(); // no deadlock
@@ -146,6 +148,25 @@ pub fn RecycleFBA(config: struct {
             }
 
             // not supported
+            return false;
+        }
+
+        pub fn isPossibleToAllocate(self: *Self, n: u64, log2_align: u8) bool {
+            // direct alloc check
+            const fba_size_left = self.fba_allocator.buffer.len - self.fba_allocator.end_index;
+            if (fba_size_left >= n) {
+                return true;
+            }
+
+            // check for a buf to recycle
+            for (self.records.items) |*item| {
+                if (item.len >= n and
+                    std.mem.isAlignedLog2(@intFromPtr(item.buf), log2_align))
+                {
+                    return true;
+                }
+            }
+
             return false;
         }
 
