@@ -18,6 +18,7 @@ const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 const EpochSchedule = sig.core.epoch_schedule.EpochSchedule;
 const Logger = sig.trace.log.Logger;
 const Config = sig.transaction_sender.service.Config;
+const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 
 /// LeaderInfo contains information about the cluster that is used to send transactions.
 /// It uses the RpcClient to get the epoch info and leader schedule.
@@ -27,10 +28,12 @@ const Config = sig.transaction_sender.service.Config;
 /// - It could be moved into its own thread to make improve speed of getting leader addresses.
 /// - It's probably not a big deal for now though, because ultimately this implementation will be replaced.
 pub const LeaderInfo = struct {
+    allocator: Allocator,
     config: Config,
+    logger: Logger,
     rpc_client: RpcClient,
     leader_schedule_cache: LeaderScheduleCache,
-    leader_addresses_cache: AutoArrayHashMap(Pubkey, SocketAddr),
+    leader_addresses_cache: std.AutoArrayHashMapUnmanaged(Pubkey, SocketAddr),
     gossip_table_rw: *RwMux(GossipTable),
 
     pub fn init(
@@ -40,14 +43,16 @@ pub const LeaderInfo = struct {
         logger: Logger,
     ) !LeaderInfo {
         return .{
+            .allocator = allocator,
             .config = config,
+            .logger = logger,
             .rpc_client = RpcClient.init(
                 allocator,
                 config.cluster,
                 .{ .max_retries = config.rpc_retries, .logger = logger },
             ),
             .leader_schedule_cache = LeaderScheduleCache.init(allocator, try EpochSchedule.default()),
-            .leader_addresses_cache = std.AutoArrayHashMap(Pubkey, SocketAddr).init(allocator),
+            .leader_addresses_cache = .{},
             .gossip_table_rw = gossip_table_rw,
         };
     }
@@ -62,7 +67,7 @@ pub const LeaderInfo = struct {
         var leader_addresses = std.ArrayList(SocketAddr).init(allocator);
         for (0..self.config.max_leaders_to_send_to) |i| {
             const slot = current_slot + i * self.config.number_of_consecutive_leader_slots;
-            const leader = try self.leader_schedule_cache.getOrComputeSlotLeaderRpc(slot, &self.rpc_client);
+            const leader = try self.slotLeader(slot) orelse continue;
             const socket = self.leader_addresses_cache.get(leader) orelse continue;
             try leader_addresses.append(socket);
         }
@@ -71,16 +76,42 @@ pub const LeaderInfo = struct {
             const gossip_table: *const GossipTable, var gossip_table_lg = self.gossip_table_rw.readWithLock();
             defer gossip_table_lg.unlock();
 
-            var unique_leaders = try self.leader_schedule_cache.getUniqueLeaders();
+            var unique_leaders = try self.leader_schedule_cache.uniqueLeaders();
             defer unique_leaders.deinit();
 
             for (unique_leaders.keys()) |leader| {
                 const contact_info = gossip_table.getThreadSafeContactInfo(leader);
                 if (contact_info == null or contact_info.?.tpu_addr == null) continue;
-                try self.leader_addresses_cache.put(leader, contact_info.?.tpu_addr.?);
+                try self.leader_addresses_cache.put(self.allocator, leader, contact_info.?.tpu_addr.?);
             }
         }
 
         return leader_addresses;
+    }
+
+    fn slotLeader(self: *LeaderInfo, slot: Slot) !?Pubkey {
+        const epoch, const slot_index =
+            self.leader_schedule_cache.epoch_schedule.getEpochAndSlotIndex(slot);
+
+        const leader_schedule = if (self.leader_schedule_cache.get(epoch)) |leader_schedule|
+            leader_schedule
+        else blk: {
+            const leader_schedule = self.getLeaderSchedule(slot) catch |e| {
+                self.logger.errf("Error getting leader schedule via rpc for slot {}: {}", .{ slot, e });
+                return e;
+            };
+            try self.leader_schedule_cache.put(epoch, leader_schedule);
+            break :blk leader_schedule;
+        };
+
+        return leader_schedule.slot_leaders[slot_index];
+    }
+
+    fn getLeaderSchedule(self: *LeaderInfo, slot: Slot) !LeaderSchedule {
+        const rpc_leader_schedule_response = try self.rpc_client
+            .getLeaderSchedule(self.allocator, slot, .{});
+        defer rpc_leader_schedule_response.deinit();
+        const rpc_leader_schedule = try rpc_leader_schedule_response.result();
+        return try LeaderSchedule.fromMap(self.allocator, rpc_leader_schedule);
     }
 };

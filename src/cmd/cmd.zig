@@ -642,13 +642,14 @@ fn validator() !void {
     // leader schedule cache
     var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
     if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
-        try leader_schedule_cache.insertLeaderSchedule(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
+        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
     } else {
-        try leader_schedule_cache.insertLeaderScheduleFromBank(snapshot.bank.bank_fields);
+        const schedule = try snapshot.bank.bank_fields.leaderSchedule(allocator);
+        _ = try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, schedule);
     }
     // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
-    // i.e. called leader_schedule_cache.getOrComputeSlotLeader(slot, bank_fields);
-    const leader_provider = leader_schedule_cache.getSlotLeaderProvider();
+    // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
+    const leader_provider = leader_schedule_cache.slotLeaderProvider();
 
     // blockstore
     const blockstore_db = try sig.ledger.BlockstoreDB.open(
@@ -750,9 +751,9 @@ fn shredCollector() !void {
     // This is a sort of hack to get the epoch of the leader schedule and then insert into the cache
     const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
     const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(start_slot); // first_slot is non null iff leader schedule is built from cli
-    try leader_schedule_cache.insertLeaderSchedule(leader_schedule_epoch, leader_schedule);
+    try leader_schedule_cache.put(leader_schedule_epoch, leader_schedule);
 
-    const leader_provider = leader_schedule_cache.getSlotLeaderProvider();
+    const leader_provider = leader_schedule_cache.slotLeaderProvider();
 
     // blockstore
     const blockstore_db = try sig.ledger.BlockstoreDB.open(
@@ -976,11 +977,10 @@ fn printLeaderSchedule() !void {
                 return err;
             }
         };
-
         _, const slot_index = loaded_snapshot.bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(loaded_snapshot.bank.bank_fields.slot);
         break :b .{
             loaded_snapshot.bank.bank_fields.slot - slot_index,
-            try LeaderSchedule.fromBank(allocator, loaded_snapshot.bank.bank_fields.epoch, loaded_snapshot.bank.bank_fields),
+            try loaded_snapshot.bank.bank_fields.leaderSchedule(allocator),
         };
     };
 

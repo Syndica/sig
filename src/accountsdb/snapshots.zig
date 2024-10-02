@@ -894,6 +894,34 @@ pub const BankFields = struct {
         const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
         return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
     }
+
+    /// Returns the leader schedule for this bank's epoch
+    pub fn leaderSchedule(
+        self: *const BankFields,
+        allocator: std.mem.Allocator,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        return self.leaderScheduleForEpoch(allocator, self.epoch);
+    }
+
+    /// Returns the leader schedule for an arbitrary epoch.
+    /// Only works if the bank is aware of the staked nodes for that epoch.
+    pub fn leaderScheduleForEpoch(
+        self: *const BankFields,
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
+        const staked_nodes = try self.getStakedNodes(allocator, epoch);
+        return .{
+            .allocator = allocator,
+            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule.fromStakedNodes(
+                allocator,
+                epoch,
+                slots_in_epoch,
+                staked_nodes,
+            ),
+        };
+    }
 };
 
 /// Analogous to [SerializableAccountStorageEntry](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/serde_snapshot/storage.rs#L11)

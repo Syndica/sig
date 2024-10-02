@@ -26,110 +26,63 @@ pub const SlotLeaderProvider = sig.utils.closure.PointerClosure(Slot, ?Pubkey);
 pub const LeaderScheduleCache = struct {
     allocator: std.mem.Allocator,
     epoch_schedule: EpochSchedule,
-    leader_schedules_rw: RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)),
+    rwlock: std.Thread.RwLock,
+    leader_schedules: std.AutoArrayHashMapUnmanaged(Epoch, LeaderSchedule),
 
-    pub fn init(allocator: std.mem.Allocator, epoch_schedule: EpochSchedule) LeaderScheduleCache {
+    const Self = @This();
+
+    pub fn init(allocator: Allocator, epoch_schedule: EpochSchedule) Self {
         return .{
             .allocator = allocator,
             .epoch_schedule = epoch_schedule,
-            .leader_schedules_rw = RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)).init(
-                std.AutoArrayHashMap(Epoch, LeaderSchedule).init(allocator),
-            ),
+            .rwlock = .{},
+            .leader_schedules = .{},
         };
     }
 
-    pub fn deinit(self: LeaderScheduleCache) void {
-        const leader_schedules, var leader_schedule_lg = self.leader_schedules_rw.writeWithLock();
-        defer leader_schedule_lg.unlock();
-
-        for (leader_schedules.values()) |v| v.deinit();
-        leader_schedules.deinit();
+    pub fn slotLeaderProvider(self: *Self) SlotLeaderProvider {
+        return SlotLeaderProvider.init(self, LeaderScheduleCache.slotLeader);
     }
 
-    pub fn getUniqueLeaders(self: *LeaderScheduleCache) !std.AutoArrayHashMap(Pubkey, void) {
-        const leader_schedules, var leader_schedules_lg = self.leader_schedules_rw.readWithLock();
-        defer leader_schedules_lg.unlock();
+    pub fn put(self: *Self, epoch: Epoch, leader_schedule: LeaderSchedule) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+        try self.leader_schedules.put(self.allocator, epoch, leader_schedule);
+    }
+
+    pub fn putSlot(self: *Self, slot: Slot, leader_schedule: LeaderSchedule) !void {
+        const epoch, _ = self.epoch_schedule.getEpochAndSlotIndex(slot);
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+        try self.leader_schedules.put(self.allocator, epoch, leader_schedule);
+    }
+
+    pub fn get(self: *Self, epoch: Epoch) ?LeaderSchedule {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+        return self.leader_schedules.get(epoch);
+    }
+
+    pub fn slotLeader(self: *Self, slot: Slot) ?Pubkey {
+        const epoch, const slot_index = self.epoch_schedule.getEpochAndSlotIndex(slot);
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+        return if (self.leader_schedules.get(epoch)) |schedule| schedule.slot_leaders[slot_index] else null;
+    }
+
+    pub fn uniqueLeaders(self: *Self) !std.AutoArrayHashMap(Pubkey, void) {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
 
         var unique_leaders = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
 
-        for (leader_schedules.values()) |leader_schedule| {
+        for (self.leader_schedules.values()) |leader_schedule| {
             for (leader_schedule.slot_leaders) |leader| {
                 try unique_leaders.put(leader, {});
             }
         }
 
         return unique_leaders;
-    }
-
-    pub fn getSlotLeaderProvider(self: *LeaderScheduleCache) SlotLeaderProvider {
-        return SlotLeaderProvider.init(self, LeaderScheduleCache.getSlotLeader);
-    }
-
-    pub fn getSlotLeader(self: *LeaderScheduleCache, slot: Slot) ?Pubkey {
-        const epoch, const slot_index = self.epoch_schedule.getEpochAndSlotIndex(slot);
-
-        const leader_schedules, var leader_schedule_lg = self.leader_schedules_rw.readWithLock();
-        defer leader_schedule_lg.unlock();
-
-        if (leader_schedules.getEntry(epoch)) |entry| {
-            return entry.value_ptr.slot_leaders[slot_index];
-        } else {
-            return null;
-        }
-    }
-
-    pub fn getOrComputeSlotLeader(self: *LeaderScheduleCache, slot: Slot, bank: *const BankFields) !sig.core.Pubkey {
-        if (self.getSlotLeader(slot)) |leader| return leader;
-
-        const epoch, const slot_index = self.epoch_schedule.getEpochAndSlotIndex(slot);
-
-        const leader_schedule = try LeaderSchedule.fromBank(
-            self.allocator,
-            epoch,
-            bank,
-        );
-
-        try self.insertLeaderSchedule(epoch, leader_schedule);
-
-        return leader_schedule.slot_leaders[slot_index];
-    }
-
-    pub fn getOrComputeSlotLeaderRpc(self: *LeaderScheduleCache, slot: Slot, rpc_client: *RpcClient) !sig.core.Pubkey {
-        if (self.getSlotLeader(slot)) |leader| return leader;
-
-        const epoch, const slot_index = self.epoch_schedule.getEpochAndSlotIndex(slot);
-
-        const leader_schedule = try LeaderSchedule.fromRpc(
-            self.allocator,
-            slot,
-            rpc_client,
-        );
-
-        try self.insertLeaderSchedule(epoch, leader_schedule);
-
-        return leader_schedule.slot_leaders[slot_index];
-    }
-
-    pub fn insertLeaderScheduleFromBank(self: *LeaderScheduleCache, bank: *const BankFields) !void {
-        const leader_schedule = try LeaderSchedule.fromBank(
-            self.allocator,
-            bank.epoch,
-            bank,
-        );
-
-        try self.insertLeaderSchedule(bank.epoch, leader_schedule);
-    }
-
-    // Clobbers existing leader schedule for `epoch`
-    pub fn insertLeaderSchedule(self: *LeaderScheduleCache, epoch: Epoch, leader_schedule: LeaderSchedule) !void {
-        const leader_schedules, var leader_schedule_lg = self.leader_schedules_rw.writeWithLock();
-        defer leader_schedule_lg.unlock();
-
-        if (leader_schedules.count() == MAX_CACHED_LEADER_SCHEDULES) {
-            _ = leader_schedules.swapRemove(std.mem.min(Epoch, leader_schedules.keys()));
-        }
-
-        try leader_schedules.put(epoch, leader_schedule);
     }
 };
 
@@ -148,35 +101,12 @@ pub const LeaderSchedule = struct {
         self.allocator.free(self.slot_leaders);
     }
 
-    pub fn fromBank(
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-        bank: *const BankFields,
-    ) !LeaderSchedule {
-        const slots_in_epoch = bank.epoch_schedule.getSlotsInEpoch(epoch);
-        const staked_nodes = try bank.getStakedNodes(allocator, epoch);
-        return .{
-            .allocator = allocator,
-            .slot_leaders = try LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                slots_in_epoch,
-                staked_nodes,
-            ),
-        };
-    }
-
-    pub fn fromRpc(
+    pub fn fromMap(
         allocator: Allocator,
-        for_slot: Slot,
-        rpc_client: *RpcClient,
+        leader_to_slots: std.StringArrayHashMap([]const u64),
     ) !LeaderSchedule {
-        const rpc_leader_schedule_response = try rpc_client.getLeaderSchedule(allocator, for_slot, .{});
-        defer rpc_leader_schedule_response.deinit();
-        const rpc_leader_schedule = try rpc_leader_schedule_response.result();
-
         var num_leaders: u64 = 0;
-        for (rpc_leader_schedule.values()) |leader_slots| {
+        for (leader_to_slots.values()) |leader_slots| {
             num_leaders += leader_slots.len;
         }
 
@@ -186,7 +116,7 @@ pub const LeaderSchedule = struct {
         var leaders = try allocator.alloc(Record, num_leaders);
         defer allocator.free(leaders);
 
-        var rpc_leader_iter = rpc_leader_schedule.iterator();
+        var rpc_leader_iter = leader_to_slots.iterator();
         while (rpc_leader_iter.next()) |entry| {
             const key = try Pubkey.fromString(entry.key_ptr.*);
             for (entry.value_ptr.*) |slot| {
