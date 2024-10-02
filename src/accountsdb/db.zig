@@ -30,6 +30,7 @@ const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 const LruCache = sig.common.lru.LruCache;
+const LruCacheCustom = sig.common.lru.LruCacheCustom;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
 const StandardErrLogger = sig.trace.log.ChannelPrintLogger;
@@ -60,14 +61,56 @@ pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
 /// Stores read-only in-memory copies of commonly used accounts
 pub const AccountsLRU = struct {
+    /// Atomically refcounted account
     const CachedAccount = struct {
         account: Account,
         ref_count: std.atomic.Value(usize),
+
+        fn init(account: Account) CachedAccount {
+            return .{
+                .account = account,
+                .ref_count = std.atomic.Value(usize).init(1),
+            };
+        }
+
+        fn releaseOrDestroy(self: *CachedAccount, allocator: std.mem.Allocator) void {
+            const current_count = self.ref_count.load(.acquire);
+            if (current_count == 0) {
+                allocator.destroy(self);
+            } else {
+                _ = self.ref_count.fetchSub(1, .acq_rel);
+            }
+        }
+
+        fn copyRef(self: *CachedAccount) *CachedAccount {
+            _ = self.ref_count.fetchAdd(1, .acq_rel);
+            return self;
+        }
+
+        fn clone(self: *const CachedAccount, allocator: std.mem.Allocator) !*CachedAccount {
+            const cloned = try allocator.create(CachedAccount);
+            cloned.* = .{
+                .account = self.account,
+                .ref_count = std.atomic.Value(usize).init(1),
+            };
+            return cloned;
+        }
+
+        fn cloneAccount(self: *const CachedAccount, allocator: std.mem.Allocator) !*Account {
+            const cloned = try allocator.create(Account);
+            cloned.* = self.account;
+            return cloned;
+        }
+
+        fn move(self: *CachedAccount, allocator: std.mem.Allocator) !*CachedAccount {
+            const cloned = self.clone(allocator);
+            self.releaseOrDestroy(allocator);
+            return cloned;
+        }
     };
 
-    // TODO: use LruCacheCustom, and decrement .ref_count when evicted
-    // TODO: should maybe use bins
-    const LRU = LruCache(.locking, Pubkey, CachedAccount);
+    // TODO: should we be using bins?
+    const LRU = LruCacheCustom(.locking, Pubkey, CachedAccount, std.mem.Allocator, CachedAccount.releaseOrDestroy);
     const SlotLRU = std.AutoHashMap(Slot, LRU);
 
     slot_lrus: SlotLRU,
@@ -82,23 +125,39 @@ pub const AccountsLRU = struct {
     }
 
     fn get(self: *const AccountsLRU, slot: Slot, pubkey: Pubkey) ?CachedAccount {
-        const slot_lru = self.slot_lrus.get(slot) orelse return null;
+        var slot_lru = self.slot_lrus.get(slot) orelse return null;
         return slot_lru.get(pubkey);
+    }
+
+    /// should only be called iff account is not already present
+    fn putAccount(self: *const AccountsLRU, slot: Slot, pubkey: Pubkey, account: Account) !void {
+        var slot_lru = self.slot_lrus.get(slot) orelse return error.SlotNotFound;
+        if (slot_lru.put(pubkey, CachedAccount.init(account)) != null) return error.InvalidPut;
     }
 
     /// remove slot lru, decreasing ref_counts on CachedAccounts (optionally removing)
     fn purgeSlot(self: *AccountsLRU, slot: Slot) !void {
-        _ = self;
-        _ = slot;
-        @compileError("TODO");
+        var slot_lru = self.slot_lrus.get(slot) orelse return error.SlotNotFound;
+        slot_lru.deinit();
     }
 
     // bring slot lru forward to new slot, increasing ref_counts
     fn copySlot(self: *AccountsLRU, old_slot: Slot, new_slot: Slot) !void {
-        _ = self;
-        _ = old_slot;
-        _ = new_slot;
-        @compileError("TODO");
+        var old_slot_lru = self.slot_lrus.get(old_slot) orelse return error.SlotNotFound;
+        var new_slot_lru = try LRU.init(self.slot_lrus.allocator, self.max_items);
+
+        // copy from old to new slot lru
+        {
+            old_slot_lru.mux.lock();
+            defer old_slot_lru.mux.unlock();
+
+            var it = old_slot_lru.dbl_link_list.first;
+            while (it) |node| : (it = node.next) {
+                new_slot_lru.put(node.data.key, node.data.value.copyRef());
+            }
+        }
+
+        try self.slot_lrus.put(new_slot, new_slot_lru);
     }
 
     fn deinit(self: *AccountsLRU) void {
@@ -1921,11 +1980,32 @@ pub const AccountsDB = struct {
     pub fn getAccountFromRef(self: *Self, account_ref: *const AccountRef) !Account {
         switch (account_ref.location) {
             .File => |ref_info| {
-                return try self.getAccountInFile(
-                    self.allocator,
-                    ref_info.file_id,
-                    ref_info.offset,
-                );
+                const account_in_lru = blk: {
+                    const accounts_lru, var accounts_lru_lock = self.accounts_lru.writeWithLock();
+                    defer accounts_lru_lock.unlock();
+
+                    const cached_account = accounts_lru.get(account_ref.slot, account_ref.pubkey) orelse break :blk null;
+
+                    break :blk cached_account.account;
+                };
+
+                if (account_in_lru) |account| {
+                    return account;
+                } else {
+                    const account = try self.getAccountInFile(
+                        self.allocator,
+                        ref_info.file_id,
+                        ref_info.offset,
+                    );
+
+                    {
+                        const accounts_lru, var accounts_lru_lock = self.accounts_lru.writeWithLock();
+                        defer accounts_lru_lock.unlock();
+                        try accounts_lru.putAccount(account_ref.slot, account_ref.pubkey, account);
+                    }
+
+                    return account;
+                }
             },
             .Cache => |ref_info| {
                 const account_cache, var account_cache_lg = self.slot_pubkeyaccounts.readWithLock();
@@ -1939,12 +2019,11 @@ pub const AccountsDB = struct {
         }
     }
 
-    pub const AccountInCacheOrFileTag = enum { file, cache, lru };
-    pub const AccountInCacheOrFile = union(AccountInCacheOrFileTag) { file: AccountInFile, cache: Account, lru: Account };
+    pub const AccountInCacheOrFileTag = enum { file, cache };
+    pub const AccountInCacheOrFile = union(AccountInCacheOrFileTag) { file: AccountInFile, cache: Account };
     pub const AccountInCacheOrFileLock = union(AccountInCacheOrFileTag) {
         file: *std.Thread.RwLock,
         cache: RwMux(SlotPubkeyAccounts).RLockGuard,
-        lru: RwMux(AccountsLRU).RLockGuard,
 
         pub fn unlock(lock: *AccountInCacheOrFileLock) void {
             switch (lock.*) {
@@ -1978,17 +2057,6 @@ pub const AccountsDB = struct {
                 return .{
                     .{ .cache = accounts[ref_info.index] },
                     .{ .cache = account_cache_lg },
-                };
-            },
-            .CachedInLru => {
-                const accounts_lru, var accounts_lru_lg = self.accounts_lru.readWithLock();
-                errdefer accounts_lru_lg.unlock();
-
-                const account = accounts_lru.get(account_ref.slot, account_ref.pubkey) orelse return error.SlotNotFound;
-
-                return .{
-                    .{ .lru = account.account },
-                    .{ .lru = accounts_lru_lg },
                 };
             },
         }
@@ -2065,7 +2133,7 @@ pub const AccountsDB = struct {
                 };
             },
             // we dont use this method for cache
-            .CachedInLru || .Cache => @panic("getAccountHashAndLamportsFromRef is not implemented on cache references"),
+            .Cache => @panic("getAccountHashAndLamportsFromRef is not implemented on cache references"),
         }
     }
 

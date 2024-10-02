@@ -80,7 +80,6 @@ pub const AccountRef = struct {
         Cache: struct {
             index: usize,
         },
-        CachedInLru,
     };
 
     pub fn default() AccountRef {
