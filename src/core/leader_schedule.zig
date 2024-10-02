@@ -21,6 +21,11 @@ pub const SlotLeaderProvider = sig.utils.closure.PointerClosure(Slot, ?Pubkey);
 /// recomputing leader schedules for the same epoch.
 /// LeaderScheduleCache also keeps a copy of the epoch_schedule so that it can
 /// compute epoch and slot index from a slot.
+/// NOTE: This struct is not really a 'cache', we should consider renaming it
+/// to a SlotLeaderProvider and maybe even moving it outside of the core module.
+/// This more accurately describes the purpose of this struct as caching is a means
+/// to an end, not the end itself. It may then follow that we could remove the
+/// above pointer closure in favor of passing the SlotLeaderProvider directly.
 pub const LeaderScheduleCache = struct {
     allocator: std.mem.Allocator,
     epoch_schedule: EpochSchedule,
@@ -53,18 +58,18 @@ pub const LeaderScheduleCache = struct {
 
     pub fn slotLeader(self: *Self, slot: Slot) ?Pubkey {
         const epoch, const slot_index = self.epoch_schedule.getEpochAndSlotIndex(slot);
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
-        return if (self.leader_schedules.get(epoch)) |schedule| schedule.slot_leaders[slot_index] else null;
+        const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
+        defer leader_schedules_lg.unlock();
+        return if (leader_schedules.get(epoch)) |schedule| schedule.slot_leaders[slot_index] else null;
     }
 
     pub fn uniqueLeaders(self: *Self) !std.AutoArrayHashMap(Pubkey, void) {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
+        defer leader_schedules_lg.unlock();
 
         var unique_leaders = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
 
-        for (self.leader_schedules.values()) |leader_schedule| {
+        for (leader_schedules.values()) |leader_schedule| {
             for (leader_schedule.slot_leaders) |leader| {
                 try unique_leaders.put(leader, {});
             }
