@@ -7,83 +7,94 @@ pub const Config = struct {
     measure_rate_secs: u64 = 5,
     geyser_bincode_buf_len: u64 = 1 << 29,
     geyser_io_buf_len: u64 = 1 << 29,
-    owner_accounts: [][]const u8 = &.{},
+    owner_accounts: []const []const u8 = &.{},
+    accounts: []const []const u8 = &.{},
 };
 
 var default_config = Config{};
 const config = &default_config;
 
-var owner_accounts_option = cli.Option{
-    .long_name = "owner-accounts",
-    .short_alias = 'o',
-    .help = "list of owner accounts to filter to csv",
-    .value_ref = cli.mkRef(&config.owner_accounts),
-    .required = false,
-    .value_name = "owner_accounts",
-};
+pub fn main() !void {
+    var accounts_option = cli.Option{
+        .long_name = "accounts",
+        .short_alias = 'a',
+        .help = "list of accounts to filter to csv",
+        .value_ref = cli.mkRef(&config.accounts),
+        .required = false,
+        .value_name = "accounts",
+    };
 
-var geyser_bincode_buf_len_option = cli.Option{
-    .long_name = "geyser-bincode-buf-len",
-    .help = "size of the bincode buffer",
-    .value_ref = cli.mkRef(&config.geyser_bincode_buf_len),
-    .required = false,
-    .value_name = "geyser_bincode_buf_len",
-};
+    var owner_accounts_option = cli.Option{
+        .long_name = "owner-accounts",
+        .short_alias = 'o',
+        .help = "list of owner accounts to filter to csv",
+        .value_ref = cli.mkRef(&config.owner_accounts),
+        .required = false,
+        .value_name = "owner_accounts",
+    };
 
-var geyser_io_buf_len_option = cli.Option{
-    .long_name = "geyser-io-buf-len",
-    .help = "size of the io buffer",
-    .value_ref = cli.mkRef(&config.geyser_io_buf_len),
-    .required = false,
-    .value_name = "geyser_io_buf_len",
-};
+    var geyser_bincode_buf_len_option = cli.Option{
+        .long_name = "geyser-bincode-buf-len",
+        .help = "size of the bincode buffer",
+        .value_ref = cli.mkRef(&config.geyser_bincode_buf_len),
+        .required = false,
+        .value_name = "geyser_bincode_buf_len",
+    };
 
-var pipe_path_option = cli.Option{
-    .long_name = "geyser-pipe-path",
-    .help = "path to the geyser pipe",
-    .value_ref = cli.mkRef(&config.pipe_path),
-    .required = false,
-    .value_name = "geyser_pipe_path",
-};
+    var geyser_io_buf_len_option = cli.Option{
+        .long_name = "geyser-io-buf-len",
+        .help = "size of the io buffer",
+        .value_ref = cli.mkRef(&config.geyser_io_buf_len),
+        .required = false,
+        .value_name = "geyser_io_buf_len",
+    };
 
-var measure_rate_option = cli.Option{
-    .long_name = "measure-rate",
-    .help = "rate at which to measure reads",
-    .value_ref = cli.mkRef(&config.measure_rate_secs),
-    .required = false,
-    .value_name = "measure_rate_secs",
-};
+    var pipe_path_option = cli.Option{
+        .long_name = "geyser-pipe-path",
+        .help = "path to the geyser pipe",
+        .value_ref = cli.mkRef(&config.pipe_path),
+        .required = false,
+        .value_name = "geyser_pipe_path",
+    };
 
-const cli_app = cli.App{ .version = "0.0.19", .author = "Syndica & Contributors", .command = .{
-    .name = "geyser",
-    .description = .{ .one_line = "read from a geyser stream" },
-    .target = .{
-        .subcommands = &.{
-            &cli.Command{
-                .name = "benchmark",
-                .description = .{ .one_line = "benchmarks reads from a geyser pipe" },
-                .target = .{ .action = .{ .exec = benchmark } },
-                .options = &.{
-                    &pipe_path_option,
-                    &measure_rate_option,
+    var measure_rate_option = cli.Option{
+        .long_name = "measure-rate",
+        .help = "rate at which to measure reads",
+        .value_ref = cli.mkRef(&config.measure_rate_secs),
+        .required = false,
+        .value_name = "measure_rate_secs",
+    };
+
+    const cli_app = cli.App{ .version = "0.0.19", .author = "Syndica & Contributors", .command = .{
+        .name = "geyser",
+        .description = .{ .one_line = "read from a geyser stream" },
+        .target = .{
+            .subcommands = &.{
+                &cli.Command{
+                    .name = "benchmark",
+                    .description = .{ .one_line = "benchmarks reads from a geyser pipe" },
+                    .target = .{ .action = .{ .exec = benchmark } },
+                    .options = &.{
+                        &pipe_path_option,
+                        &measure_rate_option,
+                    },
                 },
-            },
-            &cli.Command{
-                .name = "csv",
-                .description = .{ .one_line = "dumps accounts into a csv" },
-                .target = .{ .action = .{ .exec = csvDump } },
-                .options = &.{
-                    &pipe_path_option,
-                    &geyser_bincode_buf_len_option,
-                    &geyser_io_buf_len_option,
-                    &owner_accounts_option,
+                &cli.Command{
+                    .name = "csv",
+                    .description = .{ .one_line = "dumps accounts into a csv" },
+                    .target = .{ .action = .{ .exec = csvDump } },
+                    .options = &.{
+                        &pipe_path_option,
+                        &geyser_bincode_buf_len_option,
+                        &geyser_io_buf_len_option,
+                        &owner_accounts_option,
+                        &accounts_option,
+                    },
                 },
             },
         },
-    },
-} };
+    } };
 
-pub fn main() !void {
     try cli.run(&cli_app, std.heap.page_allocator);
 }
 
@@ -94,6 +105,8 @@ pub fn getOwnerFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(sig.
     }
 
     var owner_pubkeys = std.AutoArrayHashMap(sig.core.Pubkey, void).init(allocator);
+    errdefer owner_pubkeys.deinit();
+
     try owner_pubkeys.ensureTotalCapacity(@intCast(owner_accounts_str.len));
     for (owner_accounts_str) |owner_str| {
         const owner_pubkey = try sig.core.Pubkey.fromString(owner_str);
@@ -106,41 +119,36 @@ pub fn getOwnerFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(sig.
 pub fn csvDump() !void {
     const allocator = std.heap.c_allocator;
 
+    var logger = sig.trace.Logger.init(allocator, .info);
+    defer logger.deinit();
+    logger.spawn();
+
     const metrics_thread = try sig.prometheus.spawnMetrics(allocator, 12355);
     metrics_thread.detach();
-    std.debug.print("spawing metrics thread on port 12355\n", .{});
+    logger.info("spawing metrics thread on port 12355");
 
     const pipe_path = config.pipe_path;
-    std.debug.print("using pipe path: {s}\n", .{pipe_path});
+    logger.infof("using pipe path: {s}", .{pipe_path});
 
     // owner filters
     var maybe_owner_pubkeys = try getOwnerFilters(allocator);
     defer if (maybe_owner_pubkeys) |*owners| owners.deinit();
     if (maybe_owner_pubkeys) |owner_pubkeys| {
-        std.debug.print("owner filters: {s}\n", .{owner_pubkeys.keys()});
+        logger.infof("owner filters: {s}", .{owner_pubkeys.keys()});
     } else {
-        std.debug.print("owner filters: none\n", .{});
+        logger.info("owner filters: none");
     }
 
     // csv file to dump to
-    const dump_csv_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}{s}",
-        .{ sig.VALIDATOR_DIR, "accounts.csv" },
-    );
-    defer allocator.free(dump_csv_path);
-
+    const dump_csv_path = sig.VALIDATOR_DIR ++ "accounts.csv";
     const csv_file = try std.fs.cwd().createFile(dump_csv_path, .{});
     defer csv_file.close();
-
-    std.debug.print("dumping to csv: {s}\n", .{dump_csv_path});
+    logger.infof("dumping to csv: {s}", .{dump_csv_path});
 
     // setup reader
-    const exit = try allocator.create(std.atomic.Value(bool));
-    defer allocator.destroy(exit);
-    exit.* = std.atomic.Value(bool).init(false);
+    var exit = std.atomic.Value(bool).init(false);
 
-    var reader = try sig.geyser.GeyserReader.init(allocator, pipe_path, exit, .{
+    var reader = try sig.geyser.GeyserReader.init(allocator, pipe_path, &exit, .{
         .bincode_buf_len = config.geyser_bincode_buf_len,
         .io_buf_len = config.geyser_io_buf_len,
     });
@@ -155,32 +163,26 @@ pub fn csvDump() !void {
     }
 
     // setup thread to write to csv
-    var io_channel = try sig.sync.Channel([]u8).create(allocator);
+    var io_channel = try sig.sync.Channel([]const u8).create(allocator);
     defer {
         io_channel.deinit();
         allocator.destroy(io_channel);
     }
 
-    const io_handle = try std.Thread.spawn(.{}, csvDumpIOWriter, .{ exit, csv_file, io_channel, recycle_fba });
+    const io_handle = try std.Thread.spawn(.{}, csvDumpIOWriter, .{ &exit, csv_file, io_channel, recycle_fba });
     defer io_handle.join();
-    errdefer {
-        exit.store(true, .release);
-    }
+    errdefer exit.store(true, .release);
 
     // start to read from geyser
     while (true) {
         _, const payload = try reader.readPayload();
         defer reader.resetMemory();
 
-        if (std.meta.activeTag(payload) == .EndOfSnapshotLoading) {
-            break;
-        }
-
-        switch (std.meta.activeTag(payload)) {
+        switch (payload) {
             .AccountPayloadV1 => {},
             .EndOfSnapshotLoading => {
-                std.debug.print("recv end of snapshot loading signal\n", .{});
-                exit.store(true, .release);
+                logger.infof("recv end of snapshot loading signal", .{});
+                exit.store(true, .monotonic);
                 break;
             },
         }
@@ -198,7 +200,7 @@ pub fn csvDump() !void {
             fmt_count += 120 + 5 * account.data.len;
         }
 
-        var csv_string = try recycle_fba.allocator().alloc(u8, fmt_count);
+        const csv_string = try recycle_fba.allocator().alloc(u8, fmt_count);
         var offset: u64 = 0;
 
         // write the rows
@@ -223,14 +225,14 @@ pub fn csvDump() !void {
 pub fn csvDumpIOWriter(
     exit: *std.atomic.Value(bool),
     csv_file: std.fs.File,
-    io_channel: *sig.sync.Channel([]u8),
+    io_channel: *sig.sync.Channel([]const u8),
     recycle_fba: *sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }),
 ) !void {
     const total_payloads_estimate: u64 = 405_721;
     var payloads_written: u64 = 0;
     var timer = try sig.time.Timer.start();
 
-    while (!exit.load(.acquire)) {
+    while (!exit.load(.monotonic)) {
         while (io_channel.receive()) |csv_row| {
             // write to file
             try csv_file.writeAll(csv_row);
@@ -261,13 +263,10 @@ pub fn benchmark() !void {
     const pipe_path = config.pipe_path;
     std.debug.print("using pipe path: {s}\n", .{pipe_path});
 
-    const exit = try allocator.create(std.atomic.Value(bool));
-    defer allocator.destroy(exit);
-    exit.* = std.atomic.Value(bool).init(false);
-
+    var exit = std.atomic.Value(bool).init(false);
     try sig.geyser.core.streamReader(
         allocator,
-        exit,
+        &exit,
         pipe_path,
         sig.time.Duration.fromSecs(config.measure_rate_secs),
         .{
