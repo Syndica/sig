@@ -384,7 +384,7 @@ pub const AccountsDB = struct {
 
             // if geyser, send end of data signal
             if (self.geyser_writer) |geyser_writer| {
-                const end_of_snapshot = sig.geyser.core.VersionedAccountPayload{ .EndOfSnapshotLoading = {} };
+                const end_of_snapshot: sig.geyser.core.VersionedAccountPayload = .EndOfSnapshotLoading;
                 try geyser_writer.writePayloadToPipe(end_of_snapshot);
             }
 
@@ -461,7 +461,7 @@ pub const AccountsDB = struct {
 
         // if geyser, send end of data signal
         if (self.geyser_writer) |geyser_writer| {
-            const end_of_snapshot = sig.geyser.core.VersionedAccountPayload{ .EndOfSnapshotLoading = {} };
+            const end_of_snapshot: sig.geyser.core.VersionedAccountPayload = .EndOfSnapshotLoading;
             try geyser_writer.writePayloadToPipe(end_of_snapshot);
         }
 

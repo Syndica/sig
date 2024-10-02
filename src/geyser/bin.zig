@@ -95,7 +95,7 @@ pub fn main() !void {
         },
     } };
 
-    try cli.run(&cli_app, std.heap.page_allocator);
+    try cli.run(&cli_app, std.heap.c_allocator);
 }
 
 pub fn getOwnerFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(sig.core.Pubkey, void) {
@@ -114,6 +114,24 @@ pub fn getOwnerFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(sig.
     }
 
     return owner_pubkeys;
+}
+
+pub fn getAccountFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(sig.core.Pubkey, void) {
+    const accounts_str = config.accounts;
+    if (accounts_str.len == 0) {
+        return null;
+    }
+
+    var account_pubkeys = std.AutoArrayHashMap(sig.core.Pubkey, void).init(allocator);
+    errdefer account_pubkeys.deinit();
+
+    try account_pubkeys.ensureTotalCapacity(@intCast(accounts_str.len));
+    for (accounts_str) |account_str| {
+        const account_pubkey = try sig.core.Pubkey.fromString(account_str);
+        account_pubkeys.putAssumeCapacity(account_pubkey, {});
+    }
+
+    return account_pubkeys;
 }
 
 pub fn csvDump() !void {
@@ -137,6 +155,15 @@ pub fn csvDump() !void {
         logger.infof("owner filters: {s}", .{owner_pubkeys.keys()});
     } else {
         logger.info("owner filters: none");
+    }
+
+    // account filters
+    var maybe_account_pubkeys = try getAccountFilters(allocator);
+    defer if (maybe_account_pubkeys) |*accounts| accounts.deinit();
+    if (maybe_account_pubkeys) |account_pubkeys| {
+        logger.infof("account filters: {s}", .{account_pubkeys.keys()});
+    } else {
+        logger.info("account filters: none");
     }
 
     // csv file to dump to
@@ -181,6 +208,9 @@ pub fn csvDump() !void {
         switch (payload) {
             .AccountPayloadV1 => {},
             .EndOfSnapshotLoading => {
+                // NOTE: since accounts-db isnt hooked up to the rest to the validator (svm, consensus, etc.)
+                // valid account state is only from snapshots. we can safely exit here because no new accounts
+                // are expected.
                 logger.infof("recv end of snapshot loading signal", .{});
                 exit.store(true, .monotonic);
                 break;
@@ -190,10 +220,15 @@ pub fn csvDump() !void {
         // compute how much memory we need for the rows
         const account_payload = payload.AccountPayloadV1;
         var fmt_count: u64 = 0;
-        for (account_payload.accounts) |account| {
-            // only dump accounts that match owner filters
+        for (account_payload.accounts, account_payload.pubkeys) |account, pubkey| {
+            // only dump accounts that match the filters
             if (maybe_owner_pubkeys) |owners| {
                 if (!owners.contains(account.owner)) {
+                    continue;
+                }
+            }
+            if (maybe_account_pubkeys) |accounts| {
+                if (!accounts.contains(pubkey)) {
                     continue;
                 }
             }
@@ -205,12 +240,19 @@ pub fn csvDump() !void {
 
         // write the rows
         for (account_payload.accounts, account_payload.pubkeys) |account, pubkey| {
-            // only dump accounts that match owner filters
+            // only dump accounts that match the filters
             if (maybe_owner_pubkeys) |owners| {
                 if (!owners.contains(account.owner)) {
                     continue;
                 }
             }
+            if (maybe_account_pubkeys) |accounts| {
+                if (!accounts.contains(pubkey)) {
+                    continue;
+                }
+            }
+
+            // build the csv row
             const x = try std.fmt.bufPrint(csv_string[offset..], "{d};{s};{s};{any}\n", .{ account_payload.slot, pubkey, account.owner, account.data });
             offset += x.len;
         }

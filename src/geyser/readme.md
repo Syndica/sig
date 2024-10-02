@@ -24,7 +24,6 @@ zig build -Doptimize=ReleaseSafe
 you can also benchmark an dummy reader
 
 ```bash
-```bash
 # in terminal 1 -- read the snapshot accounts to geyser
 ./zig-out/bin/sig snapshot-validate -g data/genesis-files/testnet_genesis.bin --enable-geyser -a 250 -t 2
 
