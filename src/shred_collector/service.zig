@@ -51,7 +51,7 @@ pub const ShredCollectorDependencies = struct {
     my_shred_version: *const Atomic(u16),
     leader_schedule: SlotLeaderProvider,
     shred_inserter: sig.ledger.ShredInserter,
-    retransmit_shred_sender: *Channel(ArrayList(Packet)),
+    retransmit_shred_sender: *Channel(Packet),
 };
 
 /// Start the Shred Collector.

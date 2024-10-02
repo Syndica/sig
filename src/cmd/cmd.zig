@@ -750,7 +750,7 @@ fn validator() !void {
     // Shred retransmit channel
     // Channel populated by the shred collector after the signature verification phase
     // Channel read by the retransmit service to retransmit shreds to peers
-    const retransmit_shred_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(allocator, 100);
+    var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
     defer retransmit_shred_channel.deinit();
 
     // Sockets used to retransmit shreds to peers
@@ -774,7 +774,7 @@ fn validator() !void {
         snapshot.bank.bank_fields.epoch_schedule,
         snapshot.bank.bank_fields,
         &leader_schedule_cache,
-        retransmit_shred_channel,
+        &retransmit_shred_channel,
         &.{
             retransmit_send_socket,
         },
@@ -800,12 +800,13 @@ fn validator() !void {
             .my_shred_version = &gossip_service.my_shred_version,
             .leader_schedule = leader_provider,
             .shred_inserter = shred_inserter,
-            .retransmit_shred_sender = retransmit_shred_channel,
+            .retransmit_shred_sender = &retransmit_shred_channel,
         },
     );
     defer shred_collector_manager.deinit();
 
     service_manager.join();
+    retransmit_service_handle.join();
     shred_collector_manager.join();
 }
 
@@ -884,7 +885,7 @@ fn shredCollector() !void {
     });
     defer cleanup_service_handle.join();
 
-    const retransmit_shred_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(allocator, 100);
+    var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
     defer retransmit_shred_channel.deinit();
 
     // shred collector
@@ -904,7 +905,7 @@ fn shredCollector() !void {
             .my_shred_version = &gossip_service.my_shred_version,
             .leader_schedule = leader_provider,
             .shred_inserter = shred_inserter,
-            .retransmit_shred_sender = retransmit_shred_channel,
+            .retransmit_shred_sender = &retransmit_shred_channel,
         },
     );
     defer shred_collector_manager.deinit();
