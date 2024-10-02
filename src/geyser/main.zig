@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("sig");
 const cli = @import("zig-cli");
@@ -145,7 +146,12 @@ pub fn getAccountFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(si
 }
 
 pub fn csvDump() !void {
-    const allocator = std.heap.c_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = if (builtin.mode == .Debug) 
+        gpa.allocator() 
+    else 
+        std.heap.c_allocator;
+    defer _ = gpa.deinit();
 
     var logger = sig.trace.Logger.init(allocator, .info);
     defer logger.deinit();
