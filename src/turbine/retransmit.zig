@@ -29,6 +29,7 @@ const Shred = sig.ledger.shred.Shred;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const RwMux = sig.sync.RwMux;
+const Logger = sig.trace.log.Logger;
 
 pub fn runRetransmitService(
     allocator: std.mem.Allocator,
@@ -41,7 +42,10 @@ pub fn runRetransmitService(
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     rand: std.rand.Random,
     exit: *AtomicBool,
+    logger: *Logger,
 ) !void {
+    logger.debug("Initialising retransmit service");
+    logger.debug("Initialising TurbineTreeCache");
     var turbine_tree_cache = TurbineTreeCache.init(
         allocator,
         my_contact_info,
@@ -49,6 +53,7 @@ pub fn runRetransmitService(
         gossip_table_rw,
     );
 
+    logger.debug("Initialising ShredDeduper");
     var shred_deduper = try ShredDeduper(2).init(
         allocator,
         rand,
@@ -56,6 +61,7 @@ pub fn runRetransmitService(
     );
     defer shred_deduper.deinit();
 
+    logger.debug("Entering retransmit loop");
     while (exit.load(.unordered)) {
         try retransmit(
             allocator,
@@ -66,6 +72,7 @@ pub fn runRetransmitService(
             &turbine_tree_cache,
             &shred_deduper,
             rand,
+            logger,
         );
     }
 }
@@ -79,8 +86,10 @@ fn retransmit(
     turbine_tree_cache: *TurbineTreeCache,
     shred_deduper: *ShredDeduper(2),
     rand: std.rand.Random,
+    logger: *Logger,
 ) !void {
     // Drain shred receiver into raw shreds
+    logger.debug("Draining shreds receiver");
     const raw_shred_batches = try shreds_receiver.try_drain() orelse return;
     defer {
         for (raw_shred_batches) |batch| batch.deinit();
@@ -88,6 +97,7 @@ fn retransmit(
     }
 
     // Reset dedupers
+    logger.info("Resetting dedupers");
     shred_deduper.maybeReset(
         rand,
         DEDUPER_FALSE_POSITIVE_RATE,
@@ -95,6 +105,7 @@ fn retransmit(
     );
 
     // Group shreds by slot
+    logger.debug("Grouping shreds by slot");
     const ShredsArray = std.ArrayList(struct { ShredId, []const u8 });
     var slot_shreds = std.AutoArrayHashMap(Slot, ShredsArray).init(allocator);
     defer {
@@ -121,7 +132,9 @@ fn retransmit(
     }
 
     // Retransmit shreds
+    logger.debug("Retransmitting shreds");
     for (slot_shreds.keys(), slot_shreds.values()) |slot, shreds| {
+        logger.debugf("Getting leader and turbine tree for slot {}", .{slot});
         const slot_leader = if (leader_schedule_cache.slotLeader(slot)) |leader| leader else blk: {
             const epoch, _ = bank_fields.epoch_schedule.getEpochAndSlotIndex(slot);
             try leader_schedule_cache.put(epoch, try bank_fields.leaderSchedule(allocator));
@@ -130,6 +143,7 @@ fn retransmit(
         const turbine_tree = try turbine_tree_cache.getTurbineTree(slot, bank_fields);
 
         // PERF: Move outside for loop and parallelize
+        logger.debugf("Sending {} shreds for slot {}", .{ shreds.items.len, slot });
         for (shreds.items, 0..) |shred, i| {
             const shred_id, const shred_bytes = shred;
             defer allocator.free(shred_bytes);

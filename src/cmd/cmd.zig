@@ -758,6 +758,7 @@ fn validator() !void {
         &gossip_service.gossip_table_rw,
         rng.random(),
         &app_base.exit,
+        &app_base.logger,
     });
 
     // shred collector
