@@ -122,7 +122,11 @@ fn retransmit(
 
     // Retransmit shreds
     for (slot_shreds.keys(), slot_shreds.values()) |slot, shreds| {
-        const slot_leader = try leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
+        const slot_leader = if (leader_schedule_cache.slotLeader(slot)) |leader| leader else blk: {
+            const epoch, _ = bank_fields.epoch_schedule.getEpochAndSlotIndex(slot);
+            try leader_schedule_cache.put(epoch, try bank_fields.leaderSchedule(allocator));
+            break :blk leader_schedule_cache.slotLeader(slot) orelse unreachable;
+        };
         const turbine_tree = try turbine_tree_cache.getTurbineTree(slot, bank_fields);
 
         // PERF: Move outside for loop and parallelize
