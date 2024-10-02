@@ -4,7 +4,6 @@ const base58 = @import("base58-zig");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const AutoArrayHashMap = std.AutoArrayHashMap;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
 
@@ -90,19 +89,17 @@ pub const LeaderInfo = struct {
     }
 
     fn slotLeader(self: *LeaderInfo, slot: Slot) !?Pubkey {
+        if (self.leader_schedule_cache.slotLeader(slot)) |leader| return leader;
+
         const epoch, const slot_index =
             self.leader_schedule_cache.epoch_schedule.getEpochAndSlotIndex(slot);
 
-        const leader_schedule = if (self.leader_schedule_cache.get(epoch)) |leader_schedule|
-            leader_schedule
-        else blk: {
-            const leader_schedule = self.getLeaderSchedule(slot) catch |e| {
-                self.logger.errf("Error getting leader schedule via rpc for slot {}: {}", .{ slot, e });
-                return e;
-            };
-            try self.leader_schedule_cache.put(epoch, leader_schedule);
-            break :blk leader_schedule;
+        const leader_schedule = self.getLeaderSchedule(slot) catch |e| {
+            self.logger.errf("Error getting leader schedule via rpc for slot {}: {}", .{ slot, e });
+            return e;
         };
+
+        try self.leader_schedule_cache.put(epoch, leader_schedule);
 
         return leader_schedule.slot_leaders[slot_index];
     }

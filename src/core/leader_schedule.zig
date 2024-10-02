@@ -8,9 +8,7 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const WeightedRandomSampler = sig.rand.WeightedRandomSampler;
-const RpcClient = sig.rpc.Client;
 const EpochSchedule = sig.core.EpochSchedule;
-const BankFields = sig.accounts_db.snapshots.BankFields;
 const RwMux = sig.sync.RwMux;
 
 pub const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
@@ -26,8 +24,7 @@ pub const SlotLeaderProvider = sig.utils.closure.PointerClosure(Slot, ?Pubkey);
 pub const LeaderScheduleCache = struct {
     allocator: std.mem.Allocator,
     epoch_schedule: EpochSchedule,
-    rwlock: std.Thread.RwLock,
-    leader_schedules: std.AutoArrayHashMapUnmanaged(Epoch, LeaderSchedule),
+    leader_schedules: RwMux(std.AutoArrayHashMapUnmanaged(Epoch, LeaderSchedule)),
 
     const Self = @This();
 
@@ -35,7 +32,6 @@ pub const LeaderScheduleCache = struct {
         return .{
             .allocator = allocator,
             .epoch_schedule = epoch_schedule,
-            .rwlock = .{},
             .leader_schedules = .{},
         };
     }
@@ -45,22 +41,14 @@ pub const LeaderScheduleCache = struct {
     }
 
     pub fn put(self: *Self, epoch: Epoch, leader_schedule: LeaderSchedule) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
-        try self.leader_schedules.put(self.allocator, epoch, leader_schedule);
-    }
+        const leader_schedules, var leader_schedules_lg = self.leader_schedules.writeWithLock();
+        defer leader_schedules_lg.unlock();
 
-    pub fn putSlot(self: *Self, slot: Slot, leader_schedule: LeaderSchedule) !void {
-        const epoch, _ = self.epoch_schedule.getEpochAndSlotIndex(slot);
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
-        try self.leader_schedules.put(self.allocator, epoch, leader_schedule);
-    }
+        if (leader_schedules.count() >= MAX_CACHED_LEADER_SCHEDULES) {
+            _ = leader_schedules.swapRemove(std.mem.min(Epoch, leader_schedules.keys()));
+        }
 
-    pub fn get(self: *Self, epoch: Epoch) ?LeaderSchedule {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
-        return self.leader_schedules.get(epoch);
+        try leader_schedules.put(self.allocator, epoch, leader_schedule);
     }
 
     pub fn slotLeader(self: *Self, slot: Slot) ?Pubkey {
