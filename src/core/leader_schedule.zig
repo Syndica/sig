@@ -69,7 +69,7 @@ pub const LeaderScheduleCache = struct {
 
         var unique_leaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
 
-        for (self.leader_schedules.values()) |leader_schedule| {
+        for (leader_schedules.values()) |leader_schedule| {
             for (leader_schedule.slot_leaders) |leader| {
                 try unique_leaders.put(leader, {});
             }
