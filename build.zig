@@ -152,7 +152,7 @@ pub fn build(b: *Build) void {
     // geyser reader
     const geyser_reader_exe = b.addExecutable(.{
         .name = "geyser",
-        .root_source_file = b.path("src/geyser/bin.zig"),
+        .root_source_file = b.path("src/geyser/main.zig"),
         .target = target,
         .optimize = optimize,
         .sanitize_thread = enable_tsan,
