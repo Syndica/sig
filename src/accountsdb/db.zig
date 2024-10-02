@@ -854,6 +854,9 @@ pub const AccountsDB = struct {
     /// using index data. depending on the config, this can compute either full or incremental
     /// snapshot values.
     /// Returns `.{ accounts_hash, total_lamports }`.
+    /// NOTE: acquires a shared/read lock on `file_map_fd_rw` and `file_map` - those fields
+    /// must not be under exclusive/write locks before calling this function on the same
+    /// thread, or else this will dead lock.
     pub fn computeAccountHashesAndLamports(
         self: *Self,
         config: AccountHashesConfig,
