@@ -409,20 +409,25 @@ pub const ShredInserter = struct {
         //     .record_shred(shred.slot(), shred.fec_set_index(), shred_source, None);
         _ = shred_source;
 
-        const result = if (insertCodeShred(index_meta, shred, write_batch)) |_| blk: {
+        const was_inserted = !std.meta.isError(insertCodeShred(index_meta, shred, write_batch));
+
+        if (was_inserted) {
             index_meta_working_set_entry.did_insert_occur = true;
             self.metrics.num_inserted.inc();
             try state.initMerkleRootMetaIfMissing(erasure_set_id, shred);
-            break :blk true;
-        } else |_| false; // TODO: should this return immediately on error?
+        }
 
+        // NOTE: it's not accurate to say the shred was "just inserted" if was_inserted is false,
+        // but it is added to just_inserted_shreds regardless because it would be nice to have
+        // access to these shreds later on, for example when recovery is attempted. also, this is
+        // the same approach used in agave.
         const shred_entry = try state.just_inserted_shreds.getOrPut(shred.fields.id());
         if (!shred_entry.found_existing) {
             self.metrics.num_code_shreds_inserted.inc();
             shred_entry.value_ptr.* = .{ .code = shred }; // TODO lifetime
         }
 
-        return result;
+        return was_inserted;
     }
 
     fn shouldInsertCodeShred(
