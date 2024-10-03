@@ -327,7 +327,8 @@ pub const AccountsDB = struct {
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.full;
-            const validate_duration = try self.validateLoadFromSnapshot(.{
+            var validate_timer = try sig.time.Timer.start();
+            try self.validateLoadFromSnapshot(.{
                 .full_slot = full_snapshot.bank_fields.slot,
                 .expected_full = .{
                     .accounts_hash = snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
@@ -338,7 +339,7 @@ pub const AccountsDB = struct {
                     .capitalization = inc_persistence.incremental_capitalization,
                 } else null,
             });
-            self.logger.info().logf("validated from snapshot in {s}", .{validate_duration});
+            self.logger.info().logf("validated from snapshot in {s}", .{validate_timer.read()});
         }
 
         return snapshot_fields;
@@ -925,7 +926,7 @@ pub const AccountsDB = struct {
         full_slot: Slot,
         /// The expected full snapshot values to verify against.
         expected_full: ExpectedSnapInfo,
-        /// Optionally used to verify the incremental snapshot relative to the full snapshot.
+        /// The optionally expected incremental snapshot values to verify against.
         expected_incremental: ?ExpectedSnapInfo,
 
         pub const ExpectedSnapInfo = struct {
@@ -934,14 +935,19 @@ pub const AccountsDB = struct {
         };
     };
 
-    /// validates the accounts_db which was loaded from a snapshot (
-    /// including the accounts hash and total lamports matches the expected values)
+    pub const ValidateLoadFromSnapshotError = error{
+        IncorrectAccountsHash,
+        IncorrectTotalLamports,
+        IncorrectIncrementalLamports,
+        IncorrectAccountsDeltaHash,
+    };
+
+    /// Validates accountsdb against some snapshot info - if used, it must
+    /// be after loading the snapshot(s) whose information is supplied.
     pub fn validateLoadFromSnapshot(
         self: *Self,
         params: ValidateLoadFromSnapshotParams,
-    ) !sig.time.Duration {
-        var timer = try sig.time.Timer.start();
-
+    ) (ValidateLoadFromSnapshotError || ComputeAccountHashesAndLamportsError)!void {
         // validate the full snapshot
         self.logger.info().logf("validating the full snapshot", .{});
         const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
@@ -992,8 +998,6 @@ pub const AccountsDB = struct {
                 return error.IncorrectAccountsDeltaHash;
             }
         }
-
-        return timer.read();
     }
 
     /// multithread entrypoint for getHashesFromIndex
@@ -3043,7 +3047,7 @@ fn testWriteSnapshotFull(
         try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
     }
 
-    _ = try accounts_db.validateLoadFromSnapshot(.{
+    try accounts_db.validateLoadFromSnapshot(.{
         .full_slot = slot,
         .expected_full = .{
             .capitalization = snapshot_gen_info.capitalization,
@@ -3083,7 +3087,7 @@ fn testWriteSnapshotIncremental(
     }
     try std.testing.expectEqual(snapshot_gen_info.incremental_hash, snapshot_gen_info.incremental_hash);
 
-    _ = try accounts_db.validateLoadFromSnapshot(.{
+    try accounts_db.validateLoadFromSnapshot(.{
         .full_slot = snapshot_gen_info.full_slot,
         .expected_full = .{
             .capitalization = snapshot_gen_info.full_capitalization,
@@ -3322,7 +3326,7 @@ test "load and validate from test snapshot using disk index" {
         snapshots.deinit(allocator);
     }
 
-    _ = try accounts_db.validateLoadFromSnapshot(.{
+    try accounts_db.validateLoadFromSnapshot(.{
         .full_slot = snapshots.full.bank_fields.slot,
         .expected_full = .{
             .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
@@ -3344,7 +3348,7 @@ test "load and validate from test snapshot parallel" {
         snapshots.deinit(allocator);
     }
 
-    _ = try accounts_db.validateLoadFromSnapshot(.{
+    try accounts_db.validateLoadFromSnapshot(.{
         .full_slot = snapshots.full.bank_fields.slot,
         .expected_full = .{
             .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
@@ -3366,7 +3370,7 @@ test "load and validate from test snapshot" {
         snapshots.deinit(allocator);
     }
 
-    _ = try accounts_db.validateLoadFromSnapshot(.{
+    try accounts_db.validateLoadFromSnapshot(.{
         .full_slot = snapshots.full.bank_fields.slot,
         .expected_full = .{
             .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
