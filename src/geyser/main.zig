@@ -304,7 +304,7 @@ pub fn csvDumpIOWriter(
                 timer.reset();
             }
             if (payloads_written % 1_000 == 0 or total_payloads_estimate - payloads_written < 1_000) {
-                sig.time.estimate.printTimeEstimateStd(
+                sig.time.estimate.printTimeEstimateStderr(
                     &timer,
                     total_payloads_estimate,
                     payloads_written,
