@@ -8,7 +8,6 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Atomic = std.atomic.Value;
 
 const Lazy = sig.utils.lazy.Lazy;
-const Level = sig.trace.Level;
 const Logger = sig.trace.Logger;
 
 /// High level manager for long-running threads and the state

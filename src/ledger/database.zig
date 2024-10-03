@@ -4,7 +4,6 @@ const blockstore = @import("lib.zig");
 const log = @import("../trace/log.zig");
 
 const Allocator = std.mem.Allocator;
-const TestingLogger = log.TestLogger;
 
 const Logger = sig.trace.Logger;
 

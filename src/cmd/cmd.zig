@@ -22,7 +22,6 @@ const IpAddr = sig.net.IpAddr;
 const Logger = sig.trace.Logger;
 const Network = config.Network;
 const StandardErrLogger = sig.trace.StandardErrLogger;
-const Level = sig.trace.Level;
 const Pubkey = sig.core.Pubkey;
 const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;

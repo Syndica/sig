@@ -7,7 +7,6 @@ const logfmt = @import("logfmt.zig");
 const sig = @import("../sig.zig");
 // TODO Improve import.
 const Channel = @import("../sync/channel.zig").Channel;
-const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
