@@ -4304,7 +4304,8 @@ pub const BenchmarkAccountsDB = struct {
                     );
                 }
                 const aligned_size = std.mem.alignForward(usize, size, std.mem.page_size);
-                const filepath = try std.fmt.allocPrint(allocator, disk_path ++ "slot{d}.bin", .{s});
+                const filepath_bounded = sig.utils.fmt.boundedFmt(disk_path ++ "slot{d}.bin", .{s});
+                const filepath = filepath_bounded.constSlice();
 
                 const length = blk: {
                     var file = try std.fs.cwd().createFile(filepath, .{ .read = true });
