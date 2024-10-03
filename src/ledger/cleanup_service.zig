@@ -33,20 +33,19 @@ const LOOP_LIMITER = Duration.fromMillis(DEFAULT_CLEANUP_SLOT_INTERVAL * DEFAULT
 pub fn run(
     logger: sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
-    db: BlockstoreDB,
+    db: *BlockstoreDB,
     lowest_cleanup_slot: *sig.sync.RwMux(Slot),
     max_ledger_shreds: u64,
     exit: *AtomicBool,
 ) !void {
     var last_purge_slot: Slot = 0;
-    var mut_db = db;
 
     logger.info("Starting blockstore cleanup service");
     while (!exit.load(.acquire)) {
         last_purge_slot = try cleanBlockstore(
             logger,
             blockstore_reader,
-            &mut_db,
+            db,
             lowest_cleanup_slot,
             max_ledger_shreds,
             last_purge_slot,

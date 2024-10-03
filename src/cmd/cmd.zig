@@ -670,7 +670,7 @@ fn validator() !void {
     const leader_provider = leader_schedule.provider();
 
     // blockstore
-    const blockstore_db = try sig.ledger.BlockstoreDB.open(
+    var blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger,
         sig.VALIDATOR_DIR ++ "blockstore",
@@ -705,7 +705,7 @@ fn validator() !void {
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         app_base.logger,
         blockstore_reader,
-        blockstore_db,
+        &blockstore_db,
         lowest_cleanup_slot,
         config.current.max_shreds,
         &app_base.exit,
@@ -760,7 +760,7 @@ fn shredCollector() !void {
     const leader_provider = leader_schedule.provider();
 
     // blockstore
-    const blockstore_db = try sig.ledger.BlockstoreDB.open(
+    var blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger,
         sig.VALIDATOR_DIR ++ "blockstore",
@@ -795,7 +795,7 @@ fn shredCollector() !void {
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         app_base.logger,
         blockstore_reader,
-        blockstore_db,
+        &blockstore_db,
         lowest_cleanup_slot,
         config.current.max_shreds,
         &app_base.exit,
