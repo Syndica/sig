@@ -1385,10 +1385,10 @@ pub const GossipService = struct {
 
             const endpoint_str = try endpointToString(self.allocator, ping_message.from_endpoint);
             defer endpoint_str.deinit();
-            self.logger.debug().logWithFields("gossip: recv ping", .{
-                .from_endpoint = endpoint_str.items,
-                .from_pubkey = ping_message.ping.from.string().slice(),
-            });
+            self.logger.debug()
+                .field("from_endpoint", endpoint_str.items)
+                .field("from_pubkey", ping_message.ping.from.string().slice())
+                .log("gossip: recv ping");
         }
         self.stats.pong_messages_sent.add(n_ping_messages);
         try self.packet_outgoing_channel.send(ping_packet_batch);
@@ -1660,10 +1660,11 @@ pub const GossipService = struct {
             prune_data.sign(&self.my_keypair) catch return error.SignatureError;
             const msg = GossipMessage{ .PruneMessage = .{ self.my_pubkey, prune_data } };
 
-            self.logger.debug().logWithFields("gossip: send prune_message", .{
-                .n_pruned_origins = prune_size,
-                .to_addr = from_pubkey.string().slice(),
-            });
+            self.logger
+                .debug()
+                .field("n_pruned_origins", prune_size)
+                .field("to_addr", from_pubkey.string().slice())
+                .log("gossip: send prune_message");
 
             var packet = &prune_packet_batch.items[count];
             const written_slice = bincode.writeToSlice(&packet.data, msg, bincode.Params{}) catch unreachable;

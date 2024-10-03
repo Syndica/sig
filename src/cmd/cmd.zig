@@ -834,7 +834,7 @@ const GeyserWriter = sig.geyser.GeyserWriter;
 fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWriter {
     var geyser_writer: ?*GeyserWriter = null;
     if (config.current.geyser.enable) {
-        logger.info("Starting GeyserWriter...");
+        logger.info().log("Starting GeyserWriter...");
 
         const exit = try allocator.create(Atomic(bool));
         exit.* = Atomic(bool).init(false);
@@ -850,7 +850,7 @@ fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWrit
         // start the geyser writer
         try geyser_writer.?.spawnIOLoop();
     } else {
-        logger.info("GeyserWriter is disabled.");
+        logger.info().log("GeyserWriter is disabled.");
     }
 
     return geyser_writer;
@@ -953,7 +953,7 @@ fn printLeaderSchedule() !void {
     var app_base = try AppBase.init(allocator);
 
     const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
-        app_base.logger.info("Downloading a snapshot to calculate the leader schedule.");
+        app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
         const loaded_snapshot = loadSnapshot(
             allocator,
             app_base.logger,
@@ -962,7 +962,7 @@ fn printLeaderSchedule() !void {
             null,
         ) catch |err| {
             if (err == error.SnapshotsNotFoundAndNoGossipService) {
-                app_base.logger.err(
+                app_base.logger.err().log(
                     \\\ No snapshot found and no gossip service to download a snapshot from.
                     \\\ Download using the `snapshot-download` command.
                 );
@@ -1268,7 +1268,10 @@ pub const Network = enum {
 
 fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
-        logger.errWithFields("entrypoint port missing", .{ .entrypoint = entrypoint });
+        logger.err()
+            .field("entrypoint", entrypoint)
+            .log("entrypoint port missing");
+
         return error.EntrypointPortMissing;
     };
     const domain_str = entrypoint[0..domain_port_sep];

@@ -1738,7 +1738,7 @@ pub const AllSnapshotFields = struct {
 
                 break :blk incremental_fields;
             } else {
-                logger.info("no incremental snapshot fields found");
+                logger.info().log("no incremental snapshot fields found");
                 break :blk null;
             }
         };
