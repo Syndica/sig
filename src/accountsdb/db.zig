@@ -355,7 +355,7 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
     ) !sig.time.Duration {
-        self.logger.info().logf("loading from snapshot...", .{});
+        self.logger.info().log("loading from snapshot...");
 
         // used to read account files
         const n_parse_threads = n_threads;
