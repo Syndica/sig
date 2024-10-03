@@ -30,18 +30,49 @@ const SlotMeta = meta.SlotMeta;
 
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
-/// Working state that lives for a single call to ShredInserter.insertShreds.
+/// Acts as a proxy to the database during a single call to
+/// ShredInserter.insertShreds. Contains pending items that need to be written to
+/// and read from the database.
 ///
-/// This struct is responsible for tracking working entries for items that need to be loaded
-/// from the database if they are present there, otherwise initialized to some default value.
-/// Then, they need to be used throughout the lifetime of the insertShreds call (when they may
-/// or may not be mutated). And at the end, they need to be persisted into the database.
+/// Only intended for use within a single thread. The lifetime is not expected to
+/// exceed a single call to insertShreds.
 ///
-/// This struct should not have any business logic about how to verify shreds or anything like
-/// that. It is only used for negotiating state between the database and working sets.
+/// This struct is not a catchall bucket for whatever kind of state may exist
+/// during insertShreds. It is only supposed to contain the following:
 ///
-/// Only intended for use within a single thread
-pub const InsertShredsWorkingState = struct {
+/// 1. Data that insertShreds needs to insert into the database. Those insertions
+///    won't take place until the write batch is committed at the end of
+///    insertShreds. This struct manages those items and the write batch, and
+///    processes the commit of the write batch.
+///
+/// 2. Data of the same type as the items being inserted, but it may have simply
+///    been read from the database, instead of being inserted by insertShreds.
+///
+/// The insertShreds implementation is simplest if it can just behave as if it's
+/// instantly modifying the database, instead of using a write batch. But the
+/// write batch is needed for atomicity. So, during the course of insert shreds
+/// being executed, the database itself becomes stale. If insertShreds tries to
+/// read from the database, while assuming that its previous mutations to the
+/// database were applied immediately, the state that it reads directly from the
+/// database won't be consistent with its assumption.
+///
+/// This struct's goal is to be usable by insertShreds as if it *is* the database
+/// itself, as if all modifications are applied instantly. It acts as a local
+/// view into the future state of the database. This will be the actual state,
+/// once the write batch is committed. This struct handles the negotiation
+/// between atomicity and staleness, so the shred inserter doesn't need to.
+///
+/// Since this is treated as the authoritative view of the database, it needs to
+/// support reading arbitrary items out of the database, regardless of whether
+/// they were actually modified by the shred inserter. Unmodified items that were
+/// simply loaded from the database are classified internally as "clean" working
+/// entries, and they will not be inserted into the database on commit, since
+/// they were already present.
+///
+/// This struct should not have any business logic about how to validate shreds,
+/// or anything like that. It is only used for negotiating state between the
+/// database and working sets.
+pub const PendingInsertShredsState = struct {
     allocator: Allocator,
     logger: sig.trace.Logger,
     db: *BlockstoreDB,

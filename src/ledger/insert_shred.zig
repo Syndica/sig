@@ -29,7 +29,7 @@ const Timer = sig.time.Timer;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const IndexMetaWorkingSetEntry = ledger.insert_shreds_working_state.IndexMetaWorkingSetEntry;
-const InsertShredsWorkingState = ledger.insert_shreds_working_state.InsertShredsWorkingState;
+const PendingInsertShredsState = ledger.insert_shreds_working_state.PendingInsertShredsState;
 const PossibleDuplicateShred = ledger.insert_shreds_working_state.PossibleDuplicateShred;
 const WorkingEntry = ledger.insert_shreds_working_state.WorkingEntry;
 const WorkingShredStore = ledger.insert_shreds_working_state.WorkingShredStore;
@@ -156,7 +156,7 @@ pub const ShredInserter = struct {
         //
         const allocator = self.allocator;
         var total_timer = try Timer.start();
-        var state = try InsertShredsWorkingState.init(self.allocator, self.logger, &self.db);
+        var state = try PendingInsertShredsState.init(self.allocator, self.logger, &self.db);
         defer state.deinit();
         var write_batch = state.write_batch;
 
@@ -387,7 +387,7 @@ pub const ShredInserter = struct {
     fn checkInsertCodeShred(
         self: *Self,
         shred: CodeShred,
-        state: *InsertShredsWorkingState,
+        state: *PendingInsertShredsState,
         write_batch: *WriteBatch,
         is_trusted: bool,
         shred_source: ShredSource,
@@ -432,7 +432,7 @@ pub const ShredInserter = struct {
 
     fn shouldInsertCodeShred(
         self: *Self,
-        state: *InsertShredsWorkingState,
+        state: *PendingInsertShredsState,
         shred: CodeShred,
         index_meta: *const Index,
         is_trusted: bool,
@@ -497,7 +497,7 @@ pub const ShredInserter = struct {
     /// some error and warn messages.
     fn recordShredConflict(
         self: *Self,
-        state: *InsertShredsWorkingState,
+        state: *PendingInsertShredsState,
         shred: CodeShred,
         erasure_meta: *const ErasureMeta,
     ) !void {
@@ -577,7 +577,7 @@ pub const ShredInserter = struct {
     fn checkInsertDataShred(
         self: *Self,
         shred: DataShred,
-        state: *InsertShredsWorkingState,
+        state: *PendingInsertShredsState,
         write_batch: *WriteBatch,
         is_trusted: bool,
         leader_schedule: ?SlotLeaderProvider,
@@ -1169,7 +1169,7 @@ const ShredInserterTestState = struct {
     fn checkInsertCodeShred(
         self: *ShredInserterTestState,
         shred: Shred,
-        state: *InsertShredsWorkingState,
+        state: *PendingInsertShredsState,
         write_batch: *WriteBatch,
     ) !bool {
         return try self.inserter.checkInsertCodeShred(
@@ -1329,7 +1329,7 @@ test "merkle root metas coding" {
         var write_batch = try state.db.initWriteBatch();
         defer write_batch.deinit();
         const this_shred = shreds[0];
-        var insert_state = try InsertShredsWorkingState.init(state.allocator(), .noop, &state.db);
+        var insert_state = try PendingInsertShredsState.init(state.allocator(), .noop, &state.db);
         defer insert_state.deinit();
         const merkle_root_metas = &insert_state.merkle_root_metas;
 
@@ -1360,7 +1360,7 @@ test "merkle root metas coding" {
         try state.db.commit(write_batch);
     }
 
-    var insert_state = try InsertShredsWorkingState.init(state.allocator(), .noop, &state.db);
+    var insert_state = try PendingInsertShredsState.init(state.allocator(), .noop, &state.db);
     defer insert_state.deinit();
 
     { // second shred (same index as first, should conflict with merkle root)
