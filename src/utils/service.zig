@@ -103,13 +103,13 @@ pub const ServiceManager = struct {
     /// 2. Wait for threads to exit.
     /// 3. Deinit the shared state from those threads.
     pub fn deinit(self: Self) void {
-        self.logger.infof("Cleaning up: {s}", .{self.name});
+        self.logger.info().logf("Cleaning up: {s}", .{self.name});
         self.exit.store(true, .monotonic);
         for (self.threads.items) |t| t.join();
         self.threads.deinit();
         self.defers.deinit();
         self._arena.deinit();
-        self.logger.infof("Finished cleaning up: {s}", .{self.name});
+        self.logger.info().logf("Finished cleaning up: {s}", .{self.name});
     }
 };
 
@@ -155,7 +155,7 @@ pub fn runService(
         "thread {d}",
         .{std.Thread.getCurrentId()},
     );
-    logger.infof("Starting {s}", .{name});
+    logger.info().logf("Starting {s}", .{name});
     var timer = try std.time.Timer.start();
     var last_iteration: u64 = 0;
     var num_oks: u64 = 0;
@@ -165,25 +165,23 @@ pub fn runService(
 
         // identify result
         if (result) |_| num_oks += 1 else |_| num_errors += 1;
-        const handler, const num_events, const event_name, const level = if (result) |_|
-            .{ config.return_handler, num_oks, "return", Level.info }
+        const handler, const num_events, const event_name, const level_logger = if (result) |_|
+            .{ config.return_handler, num_oks, "return", logger.info() }
         else |_|
-            .{ config.error_handler, num_errors, "error", Level.err };
+            .{ config.error_handler, num_errors, "error", logger.warn() };
 
         // handle result
         if (handler.log_return) {
-            logger.logf(level, "{s} has {s}ed: {any}", .{ name, event_name, result });
+            level_logger.logf("{s} has {s}ed: {any}", .{ name, event_name, result });
         }
         if (handler.max_iterations) |max| if (num_events >= max) {
             if (handler.set_exit_on_completion) {
-                if (handler.log_exit) logger.logf(
-                    level,
+                if (handler.log_exit) level_logger.logf(
                     "Signaling exit due to {} {s}s from {s}",
                     .{ num_events, event_name, name },
                 );
                 exit.store(true, .monotonic);
-            } else if (handler.log_exit) logger.logf(
-                level,
+            } else if (handler.log_exit) level_logger.logf(
                 "Exiting {s} due to {} {s}s",
                 .{ name, num_events, event_name },
             );
@@ -197,7 +195,7 @@ pub fn runService(
             config.min_loop_duration_ns -| last_iteration,
         ));
     }
-    logger.infof("Exiting {s} because the exit signal was received.", .{name});
+    logger.info().logf("Exiting {s} because the exit signal was received.", .{name});
 }
 
 /// Defer actions until later.

@@ -165,7 +165,7 @@ pub const GossipService = struct {
             .max_threads = n_threads,
             .stack_size = 2 * 1024 * 1024,
         });
-        logger.debugf("using n_threads in gossip: {}", .{n_threads});
+        logger.debug().logf("using n_threads in gossip: {}", .{n_threads});
 
         var gossip_table = try GossipTable.init(gossip_value_allocator, thread_pool);
         errdefer gossip_table.deinit();
@@ -361,18 +361,18 @@ pub const GossipService = struct {
                     packet.data[0..packet.size],
                     bincode.Params.standard,
                 ) catch {
-                    self.logger.errf("gossip: packet_verify: failed to deserialize", .{});
+                    self.logger.err().logf("gossip: packet_verify: failed to deserialize", .{});
                     continue;
                 };
 
                 message.sanitize() catch {
-                    self.logger.errf("gossip: packet_verify: failed to sanitize", .{});
+                    self.logger.err().logf("gossip: packet_verify: failed to sanitize", .{});
                     bincode.free(self.gossip_value_allocator, message);
                     continue;
                 };
 
                 message.verifySignature() catch |e| {
-                    self.logger.errf(
+                    self.logger.err().logf(
                         "gossip: packet_verify: failed to verify signature: {} from {}",
                         .{ e, packet.addr },
                     );
@@ -427,7 +427,7 @@ pub const GossipService = struct {
 
                 const task_ptr = &tasks[acquired_task_idx];
                 task_ptr.entry.packet_batch = packet_batch;
-                task_ptr.result catch |err| self.logger.errf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
+                task_ptr.result catch |err| self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
 
                 const batch = Batch.from(&task_ptr.task);
                 self.thread_pool.schedule(batch);
@@ -436,10 +436,10 @@ pub const GossipService = struct {
 
         for (tasks) |*task| {
             task.blockUntilCompletion();
-            task.result catch |err| self.logger.errf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
+            task.result catch |err| self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
         }
 
-        self.logger.debugf("verify_packets loop closed", .{});
+        self.logger.debug().logf("verify_packets loop closed", .{});
     }
 
     // structs used in process_messages loop
@@ -670,7 +670,7 @@ pub const GossipService = struct {
             if (push_messages.items.len > 0) {
                 var x_timer = sig.time.Timer.start() catch unreachable;
                 self.handleBatchPushMessages(&push_messages) catch |err| {
-                    self.logger.errf("handleBatchPushMessages failed: {}", .{err});
+                    self.logger.err().logf("handleBatchPushMessages failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_push_time.observe(@floatFromInt(elapsed));
@@ -690,7 +690,7 @@ pub const GossipService = struct {
             if (pull_requests.items.len > 0) {
                 var x_timer = sig.time.Timer.start() catch unreachable;
                 self.handleBatchPullRequest(pull_requests, seed + msg_count) catch |err| {
-                    self.logger.errf("handleBatchPullRequest failed: {}", .{err});
+                    self.logger.err().logf("handleBatchPullRequest failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_pull_req_time.observe(@floatFromInt(elapsed));
@@ -701,7 +701,7 @@ pub const GossipService = struct {
             if (pull_responses.items.len > 0) {
                 var x_timer = sig.time.Timer.start() catch unreachable;
                 self.handleBatchPullResponses(&pull_responses) catch |err| {
-                    self.logger.errf("handleBatchPullResponses failed: {}", .{err});
+                    self.logger.err().logf("handleBatchPullResponses failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_pull_resp_time.observe(@floatFromInt(elapsed));
@@ -712,7 +712,7 @@ pub const GossipService = struct {
             if (ping_messages.items.len > 0) {
                 var x_timer = sig.time.Timer.start() catch unreachable;
                 self.handleBatchPingMessages(&ping_messages) catch |err| {
-                    self.logger.errf("handleBatchPingMessages failed: {}", .{err});
+                    self.logger.err().logf("handleBatchPingMessages failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_ping_time.observe(@floatFromInt(elapsed));
@@ -736,7 +736,7 @@ pub const GossipService = struct {
             }
         }
 
-        self.logger.debugf("process_messages loop closed", .{});
+        self.logger.debug().logf("process_messages loop closed", .{});
     }
 
     /// uses a read lock to first check if the gossip table should be trimmed,
@@ -765,7 +765,7 @@ pub const GossipService = struct {
                 var x_timer = sig.time.Timer.start() catch unreachable;
                 const now = getWallclockMs();
                 const n_pubkeys_dropped = gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY) catch |err| err_blk: {
-                    self.logger.warnf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
+                    self.logger.warn().logf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
                     break :err_blk 0;
                 };
                 const elapsed = x_timer.read().asMillis();
@@ -809,7 +809,7 @@ pub const GossipService = struct {
                     pull_request.MAX_BLOOM_SIZE,
                     now,
                 ) catch |e| {
-                    self.logger.errf("failed to generate pull requests: {any}", .{e});
+                    self.logger.err().logf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
                 self.stats.pull_requests_sent.add(packets.items.len);
@@ -819,7 +819,7 @@ pub const GossipService = struct {
             // new push msgs
             self.drainPushQueueToGossipTable(getWallclockMs());
             const maybe_push_packets = self.buildPushMessages(&push_cursor) catch |e| blk: {
-                self.logger.errf("failed to generate push messages: {any}", .{e});
+                self.logger.err().logf("failed to generate push messages: {any}", .{e});
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {
@@ -875,7 +875,7 @@ pub const GossipService = struct {
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
-        self.logger.infof("build_messages loop closed", .{});
+        self.logger.info().logf("build_messages loop closed", .{});
     }
 
     // collect gossip table metrics and pushes them to stats
@@ -1385,7 +1385,7 @@ pub const GossipService = struct {
 
             const endpoint_str = try endpointToString(self.allocator, ping_message.from_endpoint);
             defer endpoint_str.deinit();
-            self.logger.debugWithFields("gossip: recv ping", .{
+            self.logger.debug().logWithFields("gossip: recv ping", .{
                 .from_endpoint = endpoint_str.items,
                 .from_pubkey = ping_message.ping.from.string().slice(),
             });
@@ -1660,7 +1660,7 @@ pub const GossipService = struct {
             prune_data.sign(&self.my_keypair) catch return error.SignatureError;
             const msg = GossipMessage{ .PruneMessage = .{ self.my_pubkey, prune_data } };
 
-            self.logger.debugWithFields("gossip: send prune_message", .{
+            self.logger.debug().logWithFields("gossip: send prune_message", .{
                 .n_pruned_origins = prune_size,
                 .to_addr = from_pubkey.string().slice(),
             });
@@ -1741,7 +1741,7 @@ pub const GossipService = struct {
             if (entrypoint.info) |info| {
                 if (info.shred_version != 0) {
                     var addr_str = entrypoint.addr.toString();
-                    self.logger.infof(
+                    self.logger.info().logf(
                         "shred version: {} - from entrypoint contact info: {s}",
                         .{ info.shred_version, addr_str[0][0..addr_str[1]] },
                     );
@@ -2055,7 +2055,7 @@ pub const GossipStats = struct {
             .prune_messages_sent = self.prune_messages_sent.get(),
         };
 
-        logging_fields.logger.infof(
+        logging_fields.logger.info().logf(
             "gossip: recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
                 current_stats.gossip_packets_received - logging_fields.last_logged_snapshot.gossip_packets_received,
@@ -2067,7 +2067,7 @@ pub const GossipStats = struct {
                 current_stats.prune_messages_recv - logging_fields.last_logged_snapshot.prune_messages_recv,
             },
         );
-        logging_fields.logger.infof(
+        logging_fields.logger.info().logf(
             "gossip: sent: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
                 current_stats.ping_messages_sent - logging_fields.last_logged_snapshot.ping_messages_sent,
@@ -2232,7 +2232,7 @@ test "handle pong messages" {
 }
 
 test "build messages startup and shutdown" {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     const allocator = std.testing.allocator;
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -2291,7 +2291,7 @@ test "build messages startup and shutdown" {
 }
 
 test "handling prune messages" {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     var rng = std.rand.DefaultPrng.init(91);
 
     const allocator = std.testing.allocator;
@@ -2370,7 +2370,7 @@ test "handling prune messages" {
 }
 
 test "handling pull responses" {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     const allocator = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(91);
@@ -2563,7 +2563,7 @@ test "handle old prune & pull request message" {
 }
 
 test "handle pull request" {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     const allocator = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(91);
@@ -2683,7 +2683,7 @@ test "handle pull request" {
 }
 
 test "test build prune messages and handle push messages" {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -2776,7 +2776,7 @@ test "test build prune messages and handle push messages" {
 }
 
 test "build pull requests" {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -2835,7 +2835,7 @@ test "build pull requests" {
 }
 
 test "test build push messages" {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -2914,7 +2914,7 @@ test "test build push messages" {
 }
 
 test "test large push messages" {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -3115,7 +3115,7 @@ test "test packet verification" {
 }
 
 test "process contact info push packet" {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     const allocator = std.testing.allocator;
     const gossip_value_allocator = allocator;
     var exit = AtomicBool.init(false);
@@ -3224,7 +3224,7 @@ test "process contact info push packet" {
 }
 
 test "init, exit, and deinit" {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     const gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     const my_keypair = try KeyPair.create(null);
     var rng = std.rand.DefaultPrng.init(getWallclockMs());

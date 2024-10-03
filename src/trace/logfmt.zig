@@ -23,34 +23,25 @@ pub fn fmtMsg(
 
 pub fn fmtField(
     writer: anytype,
-    args: anytype,
+    key: []const u8,
+    value: anytype,
 ) void {
-    if (@typeInfo(@TypeOf(args)) == .Null) {
-        return;
-    }
-    switch (@typeInfo(@TypeOf(args))) {
-        .Struct => |struc| {
-            inline for (struc.fields) |field| {
-                const field_value = @field(args, field.name);
-                // Check the field's type and format accordingly
-                switch (@typeInfo(@TypeOf(field_value))) {
-                    .Pointer, .Array => {
-                        // Assume it's a string type
-                        std.fmt.format(writer, "{s}={s} ", .{ field.name, field_value }) catch return;
-                    },
-                    .Int, .ComptimeInt, .Float, .ComptimeFloat => {
-                        // Handle numeric types
-                        std.fmt.format(writer, "{s}={} ", .{ field.name, field_value }) catch return;
-                    },
-                    else => {
-                        // Fallback for unsupported types
-                        std.fmt.format(writer, "{s}=<?> ", .{field.name}) catch return;
-                    },
-                }
-            }
+    switch (@typeInfo(@TypeOf(value))) {
+        .Pointer, .Array => {
+            // Assume it's a string type
+            std.fmt.format(writer, "{s}={s} ", .{ key, value }) catch return;
+        },
+        .Int, .ComptimeInt, .Float, .ComptimeFloat => {
+            // Handle numeric types
+            std.fmt.format(writer, "{s}={} ", .{ key, value }) catch return;
+        },
+        .Null => {
+            // Handle null values
+            std.fmt.format(writer, "{s}=null ", .{key}) catch return;
         },
         else => {
-            return;
+            // Fallback for unsupported types
+            std.fmt.format(writer, "{s}=<?> ", .{key}) catch return;
         },
     }
 }

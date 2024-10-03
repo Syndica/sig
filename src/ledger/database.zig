@@ -242,7 +242,7 @@ pub const BytesRef = struct {
 
 /// Test cases that can be applied to any implementation of Database
 fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
-    const TestingLogger = @import("../trace/log.zig").TestingLogger;
+    const TestingLogger = @import("../trace/log.zig").TestLogger;
     @setEvalBranchQuota(10_000);
     const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
     const test_dir = std.fmt.comptimePrint(sig.TEST_DATA_DIR ++ "blockstore/database/{s}", .{impl_id.buffer});

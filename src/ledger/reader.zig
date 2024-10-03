@@ -446,12 +446,12 @@ pub const BlockstoreReader = struct {
         allow_dead_slots: bool,
     ) !VersionedConfirmedBlockWithEntries {
         var slot_meta: SlotMeta = try self.db.get(schema.slot_meta, slot) orelse {
-            self.logger.debugf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
+            self.logger.debug().logf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
             return error.SlotUnavailable;
         };
         defer slot_meta.deinit();
         if (!slot_meta.isFull()) {
-            self.logger.debugf("getCompleteBlockWithEntries failed for slot {} (slot not full)", .{slot});
+            self.logger.debug().logf("getCompleteBlockWithEntries failed for slot {} (slot not full)", .{slot});
             return error.SlotUnavailable;
         }
 
@@ -461,7 +461,7 @@ pub const BlockstoreReader = struct {
             slot_entries.deinit();
         }
         if (slot_entries.items.len == 0) {
-            self.logger.debugf("getCompleteBlockWithEntries failed for slot {} (missing slot entries)", .{slot});
+            self.logger.debug().logf("getCompleteBlockWithEntries failed for slot {} (missing slot entries)", .{slot});
             return error.SlotUnavailable;
         }
 
@@ -507,7 +507,7 @@ pub const BlockstoreReader = struct {
         }
         for (slot_transactions.items) |transaction| {
             transaction.sanitize() catch |err| {
-                self.logger.warnf(
+                self.logger.warn().logf(
                     "getCompleteeBlockWithEntries sanitize failed: {any}, slot: {any}, {any}",
                     .{ err, slot, transaction },
                 );
@@ -709,7 +709,7 @@ pub const BlockstoreReader = struct {
             for (entry.transactions.items) |transaction| {
                 // NOTE perf: redundant calls to sanitize every time this is called
                 if (transaction.sanitize()) |_| {} else |err| {
-                    self.logger.warnf(
+                    self.logger.warn().logf(
                         "BlockstoreReader.findTransactionInSlot sanitize failed: {any}, slot: {}, {any}",
                         .{ err, slot, transaction },
                     );
@@ -1120,7 +1120,7 @@ pub const BlockstoreReader = struct {
                     var lcs = self.lowest_cleanup_slot.read();
                     defer lcs.unlock();
                     if (slot > lcs.get().*) {
-                        self.logger.errf(
+                        self.logger.err().logf(
                             // TODO write a function to clean up newlines for cases like this
                             \\Shred with slot: {}, index: {}, consumed: {}, completed_indexes: {any}
                             \\must exist if shred index was included in a range: {} {}
@@ -1137,7 +1137,7 @@ pub const BlockstoreReader = struct {
                         return error.CorruptedBlockstore;
                     }
                 }
-                self.logger.errf("Missing shred for slot {}, index {}", .{ slot, index });
+                self.logger.err().logf("Missing shred for slot {}, index {}", .{ slot, index });
                 return error.InvalidShredData;
             }
         }
@@ -1162,13 +1162,13 @@ pub const BlockstoreReader = struct {
             // self.logger.tracef("{any} data shreds in last FEC set", data_shreds.items.len);
 
             const bytes = shredder.deshred(allocator, range_shreds) catch |e| {
-                self.logger.errf("failed to deshred entries buffer from shreds: {}", .{e});
+                self.logger.err().logf("failed to deshred entries buffer from shreds: {}", .{e});
                 return e;
             };
             defer bytes.deinit();
             const these_entries = sig.bincode
                 .readFromSlice(allocator, []Entry, bytes.items, .{}) catch |e| {
-                self.logger.errf("failed to deserialize entries from shreds: {}", .{e});
+                self.logger.err().logf("failed to deserialize entries from shreds: {}", .{e});
                 return e;
             };
             defer allocator.free(these_entries);
@@ -1315,7 +1315,7 @@ pub const BlockstoreReader = struct {
 
         if (shred.retransmitterSignature()) |signature| {
             shred_layout.setRetransmitterSignature(other.items, signature) catch |err| {
-                self.logger.errf("set retransmitter signature failed: {any}", .{err});
+                self.logger.err().logf("set retransmitter signature failed: {any}", .{err});
             };
         } else |_| {
             // TODO: agave does nothing here. is that correct?

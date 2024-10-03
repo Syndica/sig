@@ -54,7 +54,7 @@ pub fn readSocket(
         try incoming_channel.send(packet_batch);
     }
 
-    logger.debugf("readSocket loop closed", .{});
+    logger.debug().logf("readSocket loop closed", .{});
 }
 
 pub fn sendSocket(
@@ -82,7 +82,7 @@ pub fn sendSocket(
         for (packet_batches) |*packet_batch| {
             for (packet_batch.items) |*p| {
                 const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
-                    logger.debugf("send_socket error: {s}", .{@errorName(e)});
+                    logger.debug().logf("send_socket error: {s}", .{@errorName(e)});
                     continue;
                 };
                 packets_sent +|= 1;
@@ -90,7 +90,7 @@ pub fn sendSocket(
             }
         }
     }
-    logger.debugf("sendSocket loop closed", .{});
+    logger.debug().logf("sendSocket loop closed", .{});
 }
 
 /// A thread that is dedicated to either sending or receiving data over a socket.

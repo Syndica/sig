@@ -906,13 +906,13 @@ fn createSnapshot() !void {
         defer bin_lg.unlock();
         n_accounts_indexed += bin.count();
     }
-    app_base.logger.infof("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
+    app_base.logger.info().logf("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
 
     const output_dir_name = "alt_" ++ sig.VALIDATOR_DIR; // TODO: pull out to cli arg
     var output_dir = try std.fs.cwd().makeOpenPath(output_dir_name, .{});
     defer output_dir.close();
 
-    app_base.logger.infof("accountsdb[manager]: generating full snapshot for slot {d}", .{slot});
+    app_base.logger.info().logf("accountsdb[manager]: generating full snapshot for slot {d}", .{slot});
     try accounts_db.buildFullSnapshot(
         slot,
         output_dir,
@@ -1064,7 +1064,7 @@ const AppBase = struct {
         errdefer logger.deinit();
 
         const metrics_registry = globalRegistry();
-        logger.infof("metrics port: {d}", .{config.current.metrics_port});
+        logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
         const metrics_thread = try spawnMetrics(gpa_allocator, config.current.metrics_port);
         errdefer metrics_thread.detach();
 
@@ -1105,8 +1105,8 @@ fn initGossip(
     sockets: []const struct { tag: SocketTag, port: u16 },
 ) !GossipService {
     const gossip_port: u16 = config.current.gossip.port;
-    logger.infof("gossip host: {any}", .{gossip_host_ip});
-    logger.infof("gossip port: {d}", .{gossip_port});
+    logger.info().logf("gossip host: {any}", .{gossip_host_ip});
+    logger.info().logf("gossip port: {d}", .{gossip_port});
 
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
@@ -1133,8 +1133,8 @@ fn startGossip(
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
 ) !struct { *GossipService, sig.utils.service_manager.ServiceManager } {
     const gossip_port = config.current.gossip.port;
-    app_base.logger.infof("gossip host: {any}", .{app_base.my_ip});
-    app_base.logger.infof("gossip port: {d}", .{gossip_port});
+    app_base.logger.info().logf("gossip host: {any}", .{app_base.my_ip});
+    app_base.logger.info().logf("gossip port: {d}", .{gossip_port});
 
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
@@ -1191,7 +1191,7 @@ fn getMyDataFromIpEcho(
             if (my_ip_from_entrypoint == null) my_ip_from_entrypoint = response.address;
             if (response.shred_version) |shred_version| {
                 var addr_str = entrypoint.toString();
-                logger.infof(
+                logger.info().logf(
                     "shred version: {} - from entrypoint ip echo: {s}",
                     .{ shred_version.value, addr_str[0][0..addr_str[1]] },
                 );
@@ -1199,11 +1199,11 @@ fn getMyDataFromIpEcho(
             }
         } else |_| {}
     } else {
-        logger.warn("could not get a shred version from an entrypoint");
+        logger.warn().log("could not get a shred version from an entrypoint");
         break :loop 0;
     };
     const my_ip = try (config.current.gossip.getHost() orelse (my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1)));
-    logger.infof("my ip: {}", .{my_ip});
+    logger.info().logf("my ip: {}", .{my_ip});
     return .{
         .shred_version = my_shred_version,
         .ip = my_ip,
@@ -1259,7 +1259,7 @@ pub const Network = enum {
         }
 
         for (predefined_entrypoints[0..len]) |entrypoint| {
-            logger.infof("adding predefined entrypoint: {s}", .{entrypoint.slice()});
+            logger.info().logf("adding predefined entrypoint: {s}", .{entrypoint.slice()});
             const socket_addr = try resolveSocketAddr(entrypoint.slice(), Logger{ .noop = {} });
             try socket_addrs.append(socket_addr);
         }
@@ -1273,12 +1273,12 @@ fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     };
     const domain_str = entrypoint[0..domain_port_sep];
     if (domain_str.len == 0) {
-        logger.errf("'{s}': entrypoint domain not valid", .{entrypoint});
+        logger.err().logf("'{s}': entrypoint domain not valid", .{entrypoint});
         return error.EntrypointDomainNotValid;
     }
     // parse port from string
     const port = std.fmt.parseInt(u16, entrypoint[domain_port_sep + 1 ..], 10) catch {
-        logger.errf("'{s}': entrypoint port not valid", .{entrypoint});
+        logger.err().logf("'{s}': entrypoint port not valid", .{entrypoint});
         return error.EntrypointPortNotValid;
     };
 
@@ -1287,7 +1287,7 @@ fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     defer addr_list.deinit();
 
     if (addr_list.addrs.len == 0) {
-        logger.errf("'{s}': entrypoint resolve dns failed (no records found)", .{entrypoint});
+        logger.err().logf("'{s}': entrypoint resolve dns failed (no records found)", .{entrypoint});
         return error.EntrypointDnsResolutionFailure;
     }
 
@@ -1312,7 +1312,7 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 
     if (config.current.gossip.network) |network_str| {
         const network_t: Network = std.meta.stringToEnum(Network, network_str) orelse {
-            logger.errf("'{s}': network not valid", .{network_str});
+            logger.err().logf("'{s}': network not valid", .{network_str});
             return error.NetworkNotValid;
         };
         try network_t.getPredefinedEntrypoints(&entrypoints, logger);
@@ -1330,7 +1330,7 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     }
 
     // log entrypoints
-    logger.infof("entrypoints: {any}", .{entrypoints.items});
+    logger.info().logf("entrypoints: {any}", .{entrypoints.items});
 
     return entrypoints;
 }
@@ -1389,11 +1389,11 @@ fn loadSnapshot(
     });
     result.snapshot_fields = all_snapshot_fields;
 
-    logger.infof("full snapshot: {s}", .{
+    logger.info().logf("full snapshot: {s}", .{
         sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full_snapshot.snapshotNameStr().constSlice()),
     });
     if (snapshot_files.incremental_snapshot) |inc_snap| {
-        logger.infof("incremental snapshot: {s}", .{
+        logger.info().logf("incremental snapshot: {s}", .{
             sig.utils.fmt.tryRealPath(snapshot_dir, inc_snap.snapshotNameStr().constSlice()),
         });
     }
@@ -1408,7 +1408,7 @@ fn loadSnapshot(
             break :blk cli_n_threads_snapshot_load;
         }
     };
-    logger.infof("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
+    logger.info().logf("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
     result.accounts_db = try AccountsDB.init(
         allocator,
@@ -1434,24 +1434,24 @@ fn loadSnapshot(
     const bank_fields = &snapshot_fields.bank_fields;
 
     // this should exist before we start to unpack
-    logger.infof("reading genesis...", .{});
+    logger.info().logf("reading genesis...", .{});
     const genesis_file_path = config.current.genesis_file_path orelse return error.GenesisNotProvided;
     result.genesis_config = readGenesisConfig(allocator, genesis_file_path) catch |err| {
         if (err == error.GenesisNotFound) {
-            logger.errf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
+            logger.err().logf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
         }
         return err;
     };
     errdefer result.genesis_config.deinit(allocator);
 
-    logger.infof("validating bank...", .{});
+    logger.info().logf("validating bank...", .{});
     result.bank = Bank.init(&result.accounts_db, bank_fields);
     try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
     // validate the status cache
     result.status_cache = readStatusCache(allocator, snapshot_dir) catch |err| {
         if (err == error.StatusCacheNotFound) {
-            logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
+            logger.err().logf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
         }
         return err;
     };
@@ -1461,7 +1461,7 @@ fn loadSnapshot(
     defer slot_history.deinit(result.accounts_db.allocator);
     try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
-    logger.infof("accounts-db setup done...", .{});
+    logger.info().logf("accounts-db setup done...", .{});
 
     return result;
 }
@@ -1602,7 +1602,7 @@ fn getOrDownloadSnapshots(
     };
 
     if (snapshot_files.incremental_snapshot == null) {
-        logger.infof("no incremental snapshot found", .{});
+        logger.info().logf("no incremental snapshot found", .{});
     }
 
     // if this exists, we wont look for a .tar.zstd
@@ -1627,19 +1627,19 @@ fn getOrDownloadSnapshots(
         const dir_size = (try accounts_dir.stat()).size;
         if (dir_size <= 100) {
             should_unpack_snapshot = true;
-            logger.infof("empty accounts/ directory found, will unpack snapshot...", .{});
+            logger.info().logf("empty accounts/ directory found, will unpack snapshot...", .{});
         } else {
-            logger.infof("accounts/ directory found, will not unpack snapshot...", .{});
+            logger.info().logf("accounts/ directory found, will not unpack snapshot...", .{});
         }
     }
 
     var timer = try std.time.Timer.start();
     if (should_unpack_snapshot) {
-        logger.infof("unpacking snapshots...", .{});
+        logger.info().logf("unpacking snapshots...", .{});
         // if accounts/ doesnt exist then we unpack the found snapshots
         // TODO: delete old accounts/ dir if it exists
         timer.reset();
-        logger.infof("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
+        logger.info().logf("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
         {
             const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
             defer archive_file.close();
@@ -1652,12 +1652,12 @@ fn getOrDownloadSnapshots(
                 true,
             );
         }
-        logger.infof("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+        logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
 
         // TODO: can probs do this in parallel with full snapshot
         if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
             timer.reset();
-            logger.infof("unpacking {s}...", .{incremental_snapshot.snapshotNameStr().constSlice()});
+            logger.info().logf("unpacking {s}...", .{incremental_snapshot.snapshotNameStr().constSlice()});
 
             const archive_file = try snapshot_dir.openFile(incremental_snapshot.snapshotNameStr().constSlice(), .{});
             defer archive_file.close();
@@ -1670,16 +1670,16 @@ fn getOrDownloadSnapshots(
                 n_threads_snapshot_unpack,
                 false,
             );
-            logger.infof("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+            logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
         }
     } else {
-        logger.infof("not unpacking snapshot...", .{});
+        logger.info().logf("not unpacking snapshot...", .{});
     }
 
     timer.reset();
-    logger.infof("reading snapshot metadata...", .{});
+    logger.info().logf("reading snapshot metadata...", .{});
     const snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
-    logger.infof("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
+    logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
     return .{ snapshots, snapshot_files };
 }

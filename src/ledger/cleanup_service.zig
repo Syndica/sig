@@ -94,7 +94,7 @@ pub fn cleanBlockstore(
         root,
         max_ledger_shreds,
     );
-    logger.infof("findSlotsToClean result: {any}", .{result});
+    logger.info().logf("findSlotsToClean result: {any}", .{result});
 
     if (result.should_clean) {
         blockstore_writer.setLowestCleanupSlot(result.highest_slot_to_purge);

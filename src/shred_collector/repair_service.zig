@@ -105,11 +105,11 @@ pub const RepairService = struct {
             if (self.sendNecessaryRepairs()) |_| {
                 if (waiting_for_peers) {
                     waiting_for_peers = false;
-                    self.logger.infof("Acquired some repair peers.", .{});
+                    self.logger.info().logf("Acquired some repair peers.", .{});
                 }
             } else |e| switch (e) {
                 error.NoRepairPeers => if (!waiting_for_peers) {
-                    self.logger.infof("Waiting for repair peers...", .{});
+                    self.logger.info().logf("Waiting for repair peers...", .{});
                     waiting_for_peers = true;
                 },
                 else => return e,
@@ -143,7 +143,7 @@ pub const RepairService = struct {
 
         // TODO less often
         if (addressed_requests.items.len > 0) {
-            self.logger.debugf(
+            self.logger.debug().logf(
                 "sent {} repair requests",
                 .{addressed_requests.items.len},
             );

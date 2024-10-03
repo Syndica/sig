@@ -307,7 +307,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
     var err_str: ?rocks.Data = null;
     return @call(.auto, func, args ++ .{&err_str}) catch |e| {
-        logger.errf("{} - {s}", .{ e, err_str.? });
+        logger.err().logf("{} - {s}", .{ e, err_str.? });
         return e;
     };
 }

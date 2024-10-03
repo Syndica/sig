@@ -264,7 +264,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 true,
             );
 
-            logger.infof("fuzz[validate]: unpacked full snapshot at slot: {}", .{snapshot_info.slot});
+            logger.info().logf("fuzz[validate]: unpacked full snapshot at slot: {}", .{snapshot_info.slot});
             var snapshot_files: sig.accounts_db.SnapshotFiles = .{
                 .full_snapshot = .{
                     .hash = snapshot_info.hash,
@@ -313,7 +313,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     5,
                     true,
                 );
-                logger.infof("fuzz[validate]: unpacked inc snapshot at slot: {}", .{inc_snapshot_info.slot});
+                logger.info().logf("fuzz[validate]: unpacked inc snapshot at slot: {}", .{inc_snapshot_info.slot});
 
                 snapshot_files.incremental_snapshot = .{
                     .base_slot = inc_snapshot_info.base_slot,
@@ -336,7 +336,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true, 1_500);
             const maybe_inc_slot = if (snapshot_files.incremental_snapshot) |inc| inc.slot else null;
-            logger.infof("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})", .{ snapshot_info.slot, maybe_inc_slot });
+            logger.info().logf("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})", .{ snapshot_info.slot, maybe_inc_slot });
         }
     }
 

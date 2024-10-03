@@ -514,7 +514,7 @@ pub const ShredInserter = struct {
                         .shred2 = shred.fields.payload,
                     }) catch |e| {
                         // TODO: only log a database error?
-                        self.logger.errf(
+                        self.logger.err().logf(
                             "Unable to store conflicting erasure meta duplicate proof for: {} {any} {}",
                             .{ slot, erasure_set_id, e },
                         );
@@ -527,7 +527,7 @@ pub const ShredInserter = struct {
                         },
                     });
                 } else {
-                    self.logger.errf(
+                    self.logger.err().logf(
                     // TODO: clean up newlines from all logs in this file
                         \\Unable to find the conflicting code shred that set {any}.
                         \\This should only happen in extreme cases where blockstore cleanup has
@@ -536,8 +536,8 @@ pub const ShredInserter = struct {
                 }
             }
             // TODO (agave): This is a potential slashing condition
-            self.logger.warn("Received multiple erasure configs for the same erasure set!!!");
-            self.logger.warnf("Slot: {}, shred index: {}, erasure_set: {any}, is_duplicate: {}, stored config: {any}, new shred: {any}", .{
+            self.logger.warn().log("Received multiple erasure configs for the same erasure set!!!");
+            self.logger.warn().logf("Slot: {}, shred index: {}, erasure_set: {any}, is_duplicate: {}, stored config: {any}, new shred: {any}", .{
                 slot,
                 shred.fields.common.index,
                 erasure_set_id,
@@ -673,7 +673,7 @@ pub const ShredInserter = struct {
                 // just purge all shreds > the new last index slot, but because replay may have already
                 // replayed entries past the newly detected "last" shred, then mark the slot as dead
                 // and wait for replay to dump and repair the correct version.
-                self.logger.warnf(
+                self.logger.warn().logf(
                     "Received *last* shred index {} less than previous shred index {}, and slot {} is not full, marking slot dead",
                     .{ shred_index, slot_meta.received, slot },
                 );
@@ -846,7 +846,7 @@ pub const ShredInserter = struct {
                 // FIXME: leak - decide how to free shred
                 const maybe_shred = try self.getShredFromJustInsertedOrDb(just_inserted_shreds, shred_id);
                 const ending_shred = if (maybe_shred) |s| s else {
-                    self.logger.errf(&newlinesToSpaces(
+                    self.logger.err().logf(&newlinesToSpaces(
                         \\Last received data shred {any} indicated by slot meta \
                         \\{any} is missing from blockstore. This should only happen in \
                         \\extreme cases where blockstore cleanup has caught up to the root. \
@@ -860,7 +860,7 @@ pub const ShredInserter = struct {
                 };
                 self.db.put(schema.duplicate_slots, slot, dupe) catch |e| {
                     // TODO: only log a database error?
-                    self.logger.errf("failed to store duplicate slot: {}", .{e});
+                    self.logger.err().logf("failed to store duplicate slot: {}", .{e});
                 };
                 // FIXME data ownership
                 try duplicate_shreds.append(.{ .LastIndexConflict = .{
@@ -870,7 +870,7 @@ pub const ShredInserter = struct {
             }
 
             const leader_pubkey = slotLeader(leader_schedule, slot);
-            self.logger.errf(
+            self.logger.err().logf(
                 "Leader {any}, slot {}: received shred_index {} < slot.received {}, shred_source: {any}",
                 .{ leader_pubkey, slot, shred_index_u32, slot_meta.received, shred_source },
             );
@@ -919,7 +919,7 @@ pub const ShredInserter = struct {
             return true;
         }
 
-        self.logger.warnf(&newlinesToSpaces(
+        self.logger.warn().logf(&newlinesToSpaces(
             \\Received conflicting merkle roots for slot: {}, erasure_set: {any} original merkle
             \\root meta {any} vs conflicting merkle root {any} shred index {} type {any}. Reporting
             \\as duplicate
@@ -946,7 +946,7 @@ pub const ShredInserter = struct {
                     },
                 });
             } else {
-                self.logger.errf(&newlinesToSpaces(
+                self.logger.err().logf(&newlinesToSpaces(
                     \\Shred {any} indiciated by merkle root meta {any} is 
                     \\missing from blockstore. This should only happen in extreme cases where 
                     \\blockstore cleanup has caught up to the root. Skipping the merkle root 
@@ -1096,7 +1096,7 @@ pub const ShredInserter = struct {
         } else |e| {
             // TODO: submit_self.metrics
             // TODO: consider returning error (agave does not return an error or log)
-            self.logger.errf("shred recovery error: {}", .{e});
+            self.logger.err().logf("shred recovery error: {}", .{e});
             return std.ArrayList(Shred).init(self.allocator);
         }
     }
@@ -1121,7 +1121,7 @@ pub const ShredInserter = struct {
                 try available_shreds.append(shred);
             } else if (index.contains(i)) {
                 const shred = try self.db.getBytes(column_family, .{ slot, i }) orelse {
-                    self.logger.errf(
+                    self.logger.err().logf(
                         \\Unable to read the {s} with slot {}, index {} for shred
                         \\recovery. The shred is marked present in the slot's {s} index,
                         \\but the shred could not be found in the {s} column.
@@ -1335,7 +1335,7 @@ pub const ShredInserter = struct {
 
         // If a shred from the next fec set has already been inserted, check the chaining
         const next_fec_set_index = if (erasure_meta.nextFecSetIndex()) |n| n else {
-            self.logger.errf(
+            self.logger.err().logf(
                 "Invalid erasure meta, unable to compute next fec set index {any}",
                 .{erasure_meta},
             );
@@ -1358,7 +1358,7 @@ pub const ShredInserter = struct {
         const next_shred = if (try self.getShredFromJustInsertedOrDb(just_inserted_shreds, next_shred_id)) |ns|
             ns
         else {
-            self.logger.errf(
+            self.logger.err().logf(
                 \\Shred {any} indicated by merkle root meta {any} \
                 \\is missing from blockstore. This should only happen in extreme cases where \
                 \\blockstore cleanup has caught up to the root. Skipping the forward chained \
@@ -1370,7 +1370,7 @@ pub const ShredInserter = struct {
         const chained_merkle_root = shred_mod.layout.getChainedMerkleRoot(next_shred);
 
         if (!checkChaining(merkle_root, chained_merkle_root)) {
-            self.logger.warnf(
+            self.logger.warn().logf(
                 \\Received conflicting chained merkle roots for slot: {}, shred \
                 \\{any} type {any} has merkle root {any}, however next fec set \
                 \\shred {any} type {any} chains to merkle root \
@@ -1446,7 +1446,7 @@ pub const ShredInserter = struct {
         };
         const prev_shred =
             if (try self.getShredFromJustInsertedOrDb(just_inserted_shreds, prev_shred_id)) |ps| ps else {
-            self.logger.warnf(
+            self.logger.warn().logf(
                 \\Shred {any} indicated by the erasure meta {any} \
                 \\is missing from blockstore. This can happen if you have recently upgraded \
                 \\from a version < v1.18.13, or if blockstore cleanup has caught up to the root. \
@@ -1458,7 +1458,7 @@ pub const ShredInserter = struct {
         const chained_merkle_root = shred.chainedMerkleRoot() catch null;
 
         if (!checkChaining(merkle_root, chained_merkle_root)) {
-            self.logger.warnf(
+            self.logger.warn().logf(
                 \\Received conflicting chained merkle roots for slot: {}, shred {any} type {any} \
                 \\chains to merkle root {any}, however previous fec set code \
                 \\shred {any} has merkle root {any}. Reporting as duplicate
@@ -1862,7 +1862,7 @@ fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
 const test_shreds = @import("test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
 const TestState = ledger.tests.TestState("insert_shred");
-const TestingLogger = @import("../trace/log.zig").TestingLogger;
+const TestingLogger = @import("../trace/log.zig").TestLogger;
 const Logger = @import("../trace/log.zig").Logger;
 
 fn assertOk(result: anytype) void {

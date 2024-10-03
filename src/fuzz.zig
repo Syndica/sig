@@ -39,7 +39,7 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
-    logger.infof("metrics port: {d}", .{config.current.metrics_port});
+    logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
     const metrics_thread = try spawnMetrics(allocator, config.current.metrics_port);
     errdefer metrics_thread.detach();
 

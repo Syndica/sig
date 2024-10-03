@@ -223,14 +223,14 @@ pub const AccountsDB = struct {
 
                 const disk_file_suffix = try index_bin_dir.realpathAlloc(allocator, ".");
                 errdefer allocator.free(disk_file_suffix);
-                logger.infof("using disk index in {s}", .{disk_file_suffix});
+                logger.info().logf("using disk index in {s}", .{disk_file_suffix});
 
                 const ptr = try allocator.create(DiskMemoryAllocator);
                 ptr.* = DiskMemoryAllocator.init(disk_file_suffix);
 
                 break :blk .{ ptr, ptr.allocator() };
             } else {
-                logger.infof("using ram index", .{});
+                logger.info().logf("using ram index", .{});
                 break :blk .{ null, std.heap.page_allocator };
             }
         };
@@ -330,7 +330,7 @@ pub const AccountsDB = struct {
             std.heap.page_allocator,
             accounts_per_file_estimate,
         );
-        self.logger.infof("loaded from snapshot in {s}", .{load_duration});
+        self.logger.info().logf("loaded from snapshot in {s}", .{load_duration});
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.full;
@@ -340,7 +340,7 @@ pub const AccountsDB = struct {
                 full_snapshot.bank_fields.capitalization,
                 snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
             );
-            self.logger.infof("validated from snapshot in {s}", .{validate_duration});
+            self.logger.info().logf("validated from snapshot in {s}", .{validate_duration});
         }
 
         return snapshot_fields;
@@ -355,7 +355,7 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
     ) !sig.time.Duration {
-        self.logger.infof("loading from snapshot...", .{});
+        self.logger.info().logf("loading from snapshot...", .{});
 
         // used to read account files
         const n_parse_threads = n_threads;
@@ -368,7 +368,7 @@ pub const AccountsDB = struct {
         var timer = try sig.time.Timer.start();
 
         const n_account_files = snapshot_manifest.file_map.count();
-        self.logger.infof("found {d} account files", .{n_account_files});
+        self.logger.info().logf("found {d} account files", .{n_account_files});
 
         std.debug.assert(n_account_files > 0);
 
@@ -438,7 +438,7 @@ pub const AccountsDB = struct {
             loading_threads.deinit();
         }
 
-        self.logger.infof("reading and indexing accounts...", .{});
+        self.logger.info().logf("reading and indexing accounts...", .{});
         {
             var handles = std.ArrayList(std.Thread).init(self.allocator);
             defer {
@@ -460,12 +460,12 @@ pub const AccountsDB = struct {
             );
         }
 
-        self.logger.infof("total time: {s}", .{timer.read()});
+        self.logger.info().logf("total time: {s}", .{timer.read()});
 
-        self.logger.infof("combining thread accounts...", .{});
+        self.logger.info().logf("combining thread accounts...", .{});
         var merge_timer = try sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads.items, n_combine_threads);
-        self.logger.debugf("combining thread indexes took: {s}", .{merge_timer.read()});
+        self.logger.debug().logf("combining thread indexes took: {s}", .{merge_timer.read()});
 
         return timer.read();
     }
@@ -568,13 +568,13 @@ pub const AccountsDB = struct {
                 const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id.toInt() });
 
                 const accounts_file_file = accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write }) catch |err| {
-                    self.logger.errf("Failed to open accounts/{s}: {s}", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    self.logger.err().logf("Failed to open accounts/{s}: {s}", .{ file_name_bounded.constSlice(), @errorName(err) });
                     return err;
                 };
                 errdefer accounts_file_file.close();
 
                 break :blk AccountFile.init(accounts_file_file, file_info, slot) catch |err| {
-                    self.logger.errf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    self.logger.err().logf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });
                     return err;
                 };
             };
@@ -587,7 +587,7 @@ pub const AccountsDB = struct {
                 &references,
                 geyser_slot_storage,
             ) catch |err| {
-                self.logger.errf("failed to *validate/index* AccountsFile: {d}.{d}: {s}\n", .{
+                self.logger.err().logf("failed to *validate/index* AccountsFile: {d}.{d}: {s}\n", .{
                     accounts_file.slot,
                     accounts_file.id.toInt(),
                     @errorName(err),
@@ -667,7 +667,7 @@ pub const AccountsDB = struct {
 
         // NOTE: this is good for debugging what to set `accounts_per_file_est` to
         if (print_progress) {
-            self.logger.infof("accounts_per_file: actual vs estimated: {d} vs {d}", .{
+            self.logger.info().logf("accounts_per_file: actual vs estimated: {d} vs {d}", .{
                 total_accounts / n_account_files,
                 accounts_per_file_est,
             });
@@ -883,7 +883,7 @@ pub const AccountsDB = struct {
         @memset(lamports, 0);
 
         // split processing the bins over muliple threads
-        self.logger.infof("collecting hashes from accounts...", .{});
+        self.logger.info().logf("collecting hashes from accounts...", .{});
 
         {
             var handles = std.ArrayList(std.Thread).init(self.allocator);
@@ -906,13 +906,13 @@ pub const AccountsDB = struct {
             );
         }
 
-        self.logger.debugf("took: {s}", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.debug().logf("took: {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
-        self.logger.infof("computing the merkle root over accounts...", .{});
+        self.logger.info().logf("computing the merkle root over accounts...", .{});
         var hash_tree = NestedHashTree{ .hashes = hashes };
         const accounts_hash = try hash_tree.computeMerkleRoot(MERKLE_FANOUT);
-        self.logger.debugf("took {s}", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.debug().logf("took {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
         var total_lamports: u64 = 0;
@@ -940,7 +940,7 @@ pub const AccountsDB = struct {
         var timer = try sig.time.Timer.start();
 
         // validate the full snapshot
-        self.logger.infof("validating the full snapshot", .{});
+        self.logger.info().logf("validating the full snapshot", .{});
         const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
             .FullAccountHash = .{
                 .max_slot = full_snapshot_slot,
@@ -948,14 +948,14 @@ pub const AccountsDB = struct {
         });
 
         if (expected_accounts_hash.order(&accounts_hash) != .eq) {
-            self.logger.errf(
+            self.logger.err().logf(
                 \\ incorrect accounts hash
                 \\ expected vs calculated: {d} vs {d}
             , .{ expected_accounts_hash, accounts_hash });
             return error.IncorrectAccountsHash;
         }
         if (expected_full_lamports != total_lamports) {
-            self.logger.errf(
+            self.logger.err().logf(
                 \\ incorrect total lamports
                 \\ expected vs calculated: {d} vs {d}
             , .{ expected_full_lamports, total_lamports });
@@ -967,7 +967,7 @@ pub const AccountsDB = struct {
             return timer.read();
         }
 
-        self.logger.infof("validating the incremental snapshot", .{});
+        self.logger.info().logf("validating the incremental snapshot", .{});
         const expected_accounts_delta_hash = incremental_snapshot_persistence.?.incremental_hash;
         const expected_incremental_lamports = incremental_snapshot_persistence.?.incremental_capitalization;
 
@@ -978,7 +978,7 @@ pub const AccountsDB = struct {
         });
 
         if (expected_incremental_lamports != incremental_lamports) {
-            self.logger.errf(
+            self.logger.err().logf(
                 \\ incorrect incremental lamports
                 \\ expected vs calculated: {d} vs {d}
             , .{ expected_incremental_lamports, incremental_lamports });
@@ -986,7 +986,7 @@ pub const AccountsDB = struct {
         }
 
         if (expected_accounts_delta_hash.order(&accounts_delta_hash) != .eq) {
-            self.logger.errf(
+            self.logger.err().logf(
                 \\ incorrect accounts delta hash
                 \\ expected vs calculated: {d} vs {d}
             , .{ expected_accounts_delta_hash, accounts_delta_hash });
@@ -1254,7 +1254,7 @@ pub const AccountsDB = struct {
             };
 
             if (must_flush_slots) {
-                self.logger.debugf("flushing slots: min: {}...{}", std.mem.minMax(Slot, flush_slots.items));
+                self.logger.debug().logf("flushing slots: min: {}...{}", std.mem.minMax(Slot, flush_slots.items));
 
                 // flush the slots
                 try unclean_account_files.ensureTotalCapacityPrecise(flush_slots.items.len);
@@ -1263,7 +1263,7 @@ pub const AccountsDB = struct {
                 for (flush_slots.items) |flush_slot| {
                     const unclean_file_id = self.flushSlot(flush_slot) catch |err| {
                         // flush fail = loss of account data on slot -- should never happen
-                        self.logger.errf("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
+                        self.logger.err().logf("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
                         continue;
                     };
                     unclean_account_files.appendAssumeCapacity(unclean_file_id);
@@ -1280,7 +1280,7 @@ pub const AccountsDB = struct {
                 break :blk if (latest_full_snapshot_info.*) |info| info.slot else 0;
             };
             if (largest_flushed_slot - latest_full_snapshot_slot >= slots_per_full_snapshot) {
-                self.logger.infof("accountsdb[manager]: generating full snapshot for slot {d}", .{largest_flushed_slot});
+                self.logger.info().logf("accountsdb[manager]: generating full snapshot for slot {d}", .{largest_flushed_slot});
 
                 var snapshot_gen_pkg, const snapshot_gen_info = try self.makeFullSnapshotGenerationPackage(
                     largest_flushed_slot,
@@ -1322,7 +1322,7 @@ pub const AccountsDB = struct {
                     if (largest_flushed_slot < latest_full_snapshot_info.*.?.slot + slots_per_incremental_snapshot) break :inc_blk;
                 }
 
-                self.logger.infof("accountsdb[manager]: generating incremental snapshot from {d} to {d}", .{
+                self.logger.info().logf("accountsdb[manager]: generating incremental snapshot from {d} to {d}", .{
                     latest_full_snapshot_slot,
                     largest_flushed_slot,
                 });
@@ -1362,7 +1362,7 @@ pub const AccountsDB = struct {
                     &delete_account_files,
                 );
                 _ = clean_result;
-                // self.logger.debugf("clean_result: {any}", .{clean_result});
+                // self.logger.debug().logf("clean_result: {any}", .{clean_result});
 
                 // shrink any account files which have been cleaned
                 const shrink_result = try self.shrinkAccountFiles(
@@ -1370,7 +1370,7 @@ pub const AccountsDB = struct {
                     &delete_account_files,
                 );
                 _ = shrink_result;
-                // self.logger.debugf("shrink_results: {any}", .{shrink_results});
+                // self.logger.debug().logf("shrink_results: {any}", .{shrink_results});
 
                 // delete any empty account files
                 if (delete_account_files.count() > DELETE_ACCOUNT_FILES_MIN) {
@@ -1419,14 +1419,14 @@ pub const AccountsDB = struct {
 
         const full_path = try archive_dir.realpathAlloc(self.allocator, archive_file_name);
         defer self.allocator.free(full_path);
-        self.logger.infof("writing full snapshot to {s}", .{full_path});
+        self.logger.info().logf("writing full snapshot to {s}", .{full_path});
 
         // write the snapshot to disk, compressed
         var timer = try sig.time.Timer.start();
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try snapshot_gen_pkg.write(zstd_write_ctx.writer(), status_cache);
         try zstd_write_ctx.finish();
-        self.logger.infof("writing full snapshot took {any}", .{timer.read()});
+        self.logger.info().logf("writing full snapshot took {any}", .{timer.read()});
 
         // track new snapshot
         try self.commitFullSnapshotInfo(snapshot_gen_info, .ignore_old);
@@ -1507,7 +1507,7 @@ pub const AccountsDB = struct {
             std.debug.assert(did_update);
         }
 
-        self.logger.debugf("flushed {} accounts, totalling size {}", .{ account_file.number_of_accounts, size });
+        self.logger.debug().logf("flushed {} accounts, totalling size {}", .{ account_file.number_of_accounts, size });
 
         // remove old references
         {
@@ -1676,7 +1676,7 @@ pub const AccountsDB = struct {
             }
             references_to_delete.clearRetainingCapacity();
             self.stats.clean_references_deleted.set(references_to_delete.items.len);
-            self.logger.debugf(
+            self.logger.debug().logf(
                 "cleaned slot {} - old_state: {}, zero_lamports: {}",
                 .{ account_file.slot, num_old_states, num_zero_lamports },
             );
@@ -1736,13 +1736,13 @@ pub const AccountsDB = struct {
 
         for (delete_queue.items) |account_file| {
             const slot = account_file.slot;
-            self.logger.infof("deleting slot: {}...", .{slot});
+            self.logger.info().logf("deleting slot: {}...", .{slot});
             account_file.deinit();
 
             // delete file from disk
             self.deleteAccountFile(slot, account_file.id) catch |err| {
                 // NOTE: this should always succeed or something is wrong
-                self.logger.errf(
+                self.logger.err().logf(
                     "failed to delete account file slot.file_id: {d}.{d}: {s}",
                     .{ slot, account_file.id, @errorName(err) },
                 );
@@ -1771,7 +1771,7 @@ pub const AccountsDB = struct {
         const file_path_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() });
         self.snapshot_dir.deleteFile(file_path_bounded.constSlice()) catch |err| switch (err) {
             error.FileNotFound => {
-                self.logger.warnf("trying to delete accounts file which does not exist: {s}", .{sig.utils.fmt.tryRealPath(self.snapshot_dir, file_path_bounded.constSlice())});
+                self.logger.warn().logf("trying to delete accounts file which does not exist: {s}", .{sig.utils.fmt.tryRealPath(self.snapshot_dir, file_path_bounded.constSlice())});
                 return error.InvalidAccountFile;
             },
             else => |e| return e,
@@ -1808,7 +1808,7 @@ pub const AccountsDB = struct {
             };
 
             const slot = shrink_account_file.slot;
-            self.logger.debugf("shrinking slot: {}...", .{slot});
+            self.logger.debug().logf("shrinking slot: {}...", .{slot});
 
             // compute size of alive accounts (read)
             var is_alive_flags = try std.ArrayList(bool).initCapacity(
@@ -1854,9 +1854,9 @@ pub const AccountsDB = struct {
             self.stats.shrink_dead_accounts.observe(@floatFromInt(accounts_dead_count));
             self.stats.shrink_file_shrunk_by.observe(@floatFromInt(accounts_dead_size));
 
-            self.logger.debugf("n alive accounts: {}", .{accounts_alive_count});
-            self.logger.debugf("n dead accounts: {}", .{accounts_dead_count});
-            self.logger.debugf("shrunk by: {}", .{accounts_dead_size});
+            self.logger.debug().logf("n alive accounts: {}", .{accounts_alive_count});
+            self.logger.debug().logf("n dead accounts: {}", .{accounts_dead_count});
+            self.logger.debug().logf("shrunk by: {}", .{accounts_dead_size});
 
             // alloc account file for accounts
             const new_file, const new_file_id, const new_memory = try self.createAccountFile(
@@ -2276,7 +2276,7 @@ pub const AccountsDB = struct {
             const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
             if (!was_inserted) {
                 accounts_dead_count += 1;
-                self.logger.warnf(
+                self.logger.warn().logf(
                     "account was not referenced because its slot was a duplicate: {any}",
                     .{.{
                         .slot = ref.slot,
@@ -2378,7 +2378,7 @@ pub const AccountsDB = struct {
 
             const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref_ptr);
             if (!was_inserted) {
-                self.logger.warnf(
+                self.logger.warn().logf(
                     "duplicate reference not inserted: slot: {d} pubkey: {s}",
                     .{ ref_ptr.slot, ref_ptr.pubkey },
                 );
@@ -2525,7 +2525,7 @@ pub const AccountsDB = struct {
             if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
                 bank_hash_stats.accumulate(other_stats);
             } else {
-                self.logger.warnf("No bank hash stats for slot {}.", .{account_file.slot});
+                self.logger.warn().logf("No bank hash stats for slot {}.", .{account_file.slot});
             }
 
             serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
@@ -2601,7 +2601,7 @@ pub const AccountsDB = struct {
                 });
                 const old_name = old_name_bounded.constSlice();
 
-                self.logger.infof("deleting old full snapshot archive: {s}", .{old_name});
+                self.logger.info().logf("deleting old full snapshot archive: {s}", .{old_name});
                 try self.snapshot_dir.deleteFile(old_name);
             },
         }
@@ -2717,7 +2717,7 @@ pub const AccountsDB = struct {
             if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
                 bank_hash_stats.accumulate(other_stats);
             } else {
-                self.logger.warnf("No bank hash stats for slot {}.", .{account_file.slot});
+                self.logger.warn().logf("No bank hash stats for slot {}.", .{account_file.slot});
             }
 
             serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
@@ -2802,7 +2802,7 @@ pub const AccountsDB = struct {
                 });
                 const old_name = old_name_bounded.constSlice();
 
-                self.logger.infof("deleting old incremental snapshot archive: {s}", .{old_name});
+                self.logger.info().logf("deleting old incremental snapshot archive: {s}", .{old_name});
                 try self.snapshot_dir.deleteFile(old_name);
             },
         }

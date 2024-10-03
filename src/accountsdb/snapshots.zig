@@ -1714,7 +1714,7 @@ pub const AllSnapshotFields = struct {
             const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full_snapshot.slot});
             const rel_path = rel_path_bounded.constSlice();
 
-            logger.infof("reading snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+            logger.info().logf("reading snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
 
             const full_file = try snapshot_dir.openFile(rel_path, .{});
             defer full_file.close();
@@ -1728,7 +1728,7 @@ pub const AllSnapshotFields = struct {
                 const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{incremental_snapshot_path.slot});
                 const rel_path = rel_path_bounded.constSlice();
 
-                logger.infof("reading inc snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+                logger.info().logf("reading inc snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
 
                 const incremental_file = try snapshot_dir.openFile(rel_path, .{});
                 defer incremental_file.close();
