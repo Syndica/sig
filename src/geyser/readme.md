@@ -143,13 +143,21 @@ we dont know exactly how many bytes we will need.
 
 ## Metrics
 
+we use a few metrics to understand how fast data is being written/read:
+
 - 'MB/Sec': how many bytes the reader/writer is reading/writing per second
 - 'Payloads': how many payloads the reader/writer has read/wrote
+
+we also have metrics to understand what could be causing slow reads/writes (specific stalls/no-op conditions):
+
 - 'Reader Stalls': How many times the reader has tried to read a payload but was unable to because 
 the pipe was empty
 - 'Writer Stalls': How many times the writer has tried to write a payload but was unable to because
 either 
     - the pipe was full ('pipe_full')
     - ther recycle_fba doesnt have any memory available to write the bincode bytes ('no_memory_available')
+
+the reader has dynamic state which uses up some memory (ie, if the buffer isnt big enough to read the incoming data, we resize and try again):
+
 - 'Reader State': The reader has two buffers for state, the 'io_buf' is used to read data from
 the pipe, and 'bincode_buf' is used to deserialize the data from the io_buf into this buffer
