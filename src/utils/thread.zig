@@ -7,8 +7,14 @@ const Mutex = std.Thread.Mutex;
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Batch = ThreadPool.Batch;
 
+pub const TaskParams = struct {
+    start_index: usize,
+    end_index: usize,
+    thread_id: usize,
+};
+
 /// Spawns tasks and outputs the list of handles for the spawned threads.
-/// Task function should accept `params ++ .{ start_index, end_index, thread_id }` as its parameter tuple.
+/// Task function should accept `params ++ .{ TaskParams{} }` as its parameter tuple.
 pub fn spawnThreadTasks(
     /// This list is cleared, and then filled with the handles for the spawned task threads.
     /// On successful call, all threads were appropriately spawned.
@@ -34,11 +40,17 @@ pub fn spawnThreadTasks(
     var start_index: usize = 0;
     for (0..n_threads) |thread_id| {
         const end_index = if (thread_id == n_threads - 1) data_len else (start_index + chunk_size);
+        const task_params: TaskParams = .{
+            .start_index = start_index,
+            .end_index = end_index,
+            .thread_id = thread_id,
+        };
+
         // NOTE(trevor): instead of just `try`ing, we could fill an optional diagnostic struct
         //               which inform the caller how much coverage over `data_len` was achieved,
         //               so that they could handle its coverage themselves instead of just having
         //               to kill all the successfully spawned threads.
-        const handle = try std.Thread.spawn(.{}, taskFn, params ++ .{ start_index, end_index, thread_id });
+        const handle = try std.Thread.spawn(.{}, taskFn, params ++ .{task_params});
         handles.appendAssumeCapacity(handle);
         start_index = end_index;
     }

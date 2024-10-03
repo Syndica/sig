@@ -479,20 +479,16 @@ pub const AccountsDB = struct {
         accounts_dir: std.fs.Dir,
         file_info_map: AccountsDbFields.FileMap,
         accounts_per_file_estimate: u64,
-        // task specific
-        start_index: usize,
-        end_index: usize,
-        thread_id: usize,
+        task: sig.utils.thread.TaskParams,
     ) !void {
-        const thread_db = &loading_threads[thread_id];
-
+        const thread_db = &loading_threads[task.thread_id];
         try thread_db.loadAndVerifyAccountsFiles(
             accounts_dir,
             accounts_per_file_estimate,
             file_info_map,
-            start_index,
-            end_index,
-            thread_id == 0,
+            task.start_index,
+            task.end_index,
+            task.thread_id == 0,
         );
     }
 
@@ -787,15 +783,15 @@ pub const AccountsDB = struct {
         logger: Logger,
         index: *AccountIndex,
         thread_dbs: []const AccountsDB,
-        // task specific
-        bin_start_index: usize,
-        bin_end_index: usize,
-        thread_id: usize,
+        task: sig.utils.thread.TaskParams,
     ) !void {
+        const bin_start_index = task.start_index;
+        const bin_end_index = task.end_index;
+
         const total_bins = bin_end_index - bin_start_index;
         var timer = try sig.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
-        const print_progress = thread_id == 0;
+        const print_progress = task.thread_id == 0;
 
         for (bin_start_index..bin_end_index, 1..) |bin_index, iteration_count| {
             // sum size across threads
@@ -1007,19 +1003,16 @@ pub const AccountsDB = struct {
         hashes_allocator: std.mem.Allocator,
         hashes: []ArrayListUnmanaged(Hash),
         total_lamports: []u64,
-        // spawing thread specific params
-        bin_start_index: usize,
-        bin_end_index: usize,
-        thread_index: usize,
+        task: sig.utils.thread.TaskParams,
     ) !void {
         try getHashesFromIndex(
             self,
             config,
-            self.account_index.bins[bin_start_index..bin_end_index],
+            self.account_index.bins[task.start_index..task.end_index],
             hashes_allocator,
-            &hashes[thread_index],
-            &total_lamports[thread_index],
-            thread_index == 0,
+            &hashes[task.thread_id],
+            &total_lamports[task.thread_id],
+            task.thread_id == 0,
         );
     }
 
