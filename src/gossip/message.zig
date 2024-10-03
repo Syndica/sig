@@ -96,30 +96,6 @@ pub const GossipMessage = union(enum(u32)) {
             .PongMessage => {},
         }
     }
-
-    /// Frees the ephemeral messaging data that is only needed
-    /// for the initial processing of an incoming message.
-    ///
-    /// Does not free the contained gossip data that
-    /// needs to be stored in the gossip table.
-    pub fn shallowFree(self: *Self, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .PullRequest => |*msg| {
-                msg[0].deinit();
-            },
-            .PullResponse => |*msg| {
-                allocator.free(msg[1]);
-            },
-            .PushMessage => |*msg| {
-                allocator.free(msg[1]);
-            },
-            .PruneMessage => |*msg| {
-                allocator.free(msg[1].prunes);
-            },
-            .PingMessage => {},
-            .PongMessage => {},
-        }
-    }
 };
 
 pub fn sanitizeWallclock(wallclock: u64) !void {
@@ -132,7 +108,7 @@ pub const PruneData = struct {
     /// Pubkey of the node that sent this prune data
     pubkey: Pubkey,
     /// Pubkeys of nodes that should be pruned
-    prunes: []Pubkey,
+    prunes: []const Pubkey,
     /// Signature of this Prune Message
     signature: Signature,
     /// The Pubkey of the intended node/destination for this message
@@ -154,7 +130,7 @@ pub const PruneData = struct {
 
     const PruneSignableData = struct {
         pubkey: Pubkey,
-        prunes: []Pubkey,
+        prunes: []const Pubkey,
         destination: Pubkey,
         wallclock: u64,
     };

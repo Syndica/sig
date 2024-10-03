@@ -34,6 +34,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // setup
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     var std_logger = StandardErrLogger.init(.{
         .allocator = allocator,
@@ -124,9 +125,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     signed_data.wallclockPtr().* = now;
 
                     // !
-                    logger.debug().logf("putting pubkey: {}", .{pubkey});
-                    const did_insert = try gossip_table.insert(signed_data, now);
-                    std.debug.assert(did_insert);
+                    logger.debug.logf("putting pubkey: {}", .{pubkey});
+                    const result = try gossip_table.insert(signed_data, now);
+                    std.debug.assert(result.wasInserted());
 
                     try keys.append(GossipKey{ .ContactInfo = pubkey });
                     try keypairs.append(keypair);
@@ -157,20 +158,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     }
 
                     // !
-                    const did_insert = gossip_table.insert(signed_data, now) catch |err| blk: {
-                        switch (err) {
-                            GossipTable.InsertionError.OldValue => {
-                                std.debug.assert(!should_overwrite);
-                            },
-                            GossipTable.InsertionError.DuplicateValue => {
-                                logger.debug().logf("duplicate value: {}", .{pubkey});
-                            },
-                            else => {
-                                return err;
-                            },
-                        }
-                        break :blk false;
-                    };
+                    const result = try gossip_table.insert(signed_data, now);
+                    const did_insert = result.wasInserted();
+                    if (result == .IgnoredOldValue) {
+                        std.debug.assert(!should_overwrite);
+                    }
+                    if (result == .IgnoredDuplicateValue) {
+                        logger.debug.logf("duplicate value: {}", .{pubkey});
+                    }
 
                     if (!should_overwrite and did_insert) {
                         return error.ValueDidNotOverwrite;

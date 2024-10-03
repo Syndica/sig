@@ -1,6 +1,8 @@
 const std = @import("std");
 const sig = @import("sig.zig");
 
+// TODO: there is *no* guarantee that this is the first test to be ran.
+// we will need to rework this to not use a global logger.
 test {
     std.testing.log_level = std.log.Level.err;
     refAllDeclsRecursive(sig, 2);

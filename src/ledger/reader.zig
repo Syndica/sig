@@ -83,7 +83,7 @@ pub const BlockstoreReader = struct {
     ///
     /// Analogous to [is_full](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L500)
     pub fn isFull(self: *Self, slot: Slot) !bool {
-        return if (try self.db.get(schema.slot_meta, slot)) |meta|
+        return if (try self.db.get(self.allocator, schema.slot_meta, slot)) |meta|
             meta.isFull()
         else
             false;
@@ -114,7 +114,11 @@ pub const BlockstoreReader = struct {
             return true;
         }
 
-        var start_slot_meta = try self.db.get(schema.slot_meta, starting_slot) orelse return false;
+        var start_slot_meta = try self.db.get(
+            self.allocator,
+            schema.slot_meta,
+            starting_slot,
+        ) orelse return false;
         defer start_slot_meta.deinit();
         // need a reference so the start_slot_meta.deinit works correctly
         var next_slots: *ArrayList(Slot) = &start_slot_meta.next_slots;
@@ -127,7 +131,7 @@ pub const BlockstoreReader = struct {
         var last_slot = starting_slot;
         while (i < next_slots.items.len) : (i += 1) {
             const slot = next_slots.items[i];
-            if (try self.db.get(schema.slot_meta, slot)) |_slot_meta| {
+            if (try self.db.get(self.allocator, schema.slot_meta, slot)) |_slot_meta| {
                 var slot_meta = _slot_meta;
                 defer slot_meta.deinit();
 
@@ -310,7 +314,8 @@ pub const BlockstoreReader = struct {
         defer lock.unlock();
 
         if (try self.isRoot(slot)) {
-            return try self.db.get(schema.blocktime, slot) orelse error.SlotUnavailable;
+            return try self.db.get(self.allocator, schema.blocktime, slot) orelse
+                error.SlotUnavailable;
         }
         return error.SlotNotRooted;
     }
@@ -320,7 +325,7 @@ pub const BlockstoreReader = struct {
         self.rpc_api_metrics.num_get_block_height.inc();
         var lock = try self.checkLowestCleanupSlot(slot);
         defer lock.unlock();
-        return try self.db.get(schema.block_height, slot);
+        return try self.db.get(self.allocator, schema.block_height, slot);
     }
 
     /// Acquires the `lowest_cleanup_slot` lock and returns a tuple of the held lock
@@ -445,6 +450,8 @@ pub const BlockstoreReader = struct {
         populate_entries: bool,
         allow_dead_slots: bool,
     ) !VersionedConfirmedBlockWithEntries {
+        var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
+            self.logger.debug().logf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
         var slot_meta: SlotMeta = try self.db.get(schema.slot_meta, slot) orelse {
             self.logger.debug().logf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
             return error.SlotUnavailable;
@@ -515,7 +522,11 @@ pub const BlockstoreReader = struct {
             const signature = transaction.signatures[0];
             txns_with_statuses.appendAssumeCapacity(.{
                 .transaction = transaction,
-                .meta = try self.db.get(schema.transaction_status, .{ signature, slot }) orelse
+                .meta = try self.db.get(
+                    self.allocator,
+                    schema.transaction_status,
+                    .{ signature, slot },
+                ) orelse
                     return error.MissingTransactionMetadata,
             });
             num_moved_slot_transactions += 1;
@@ -541,16 +552,14 @@ pub const BlockstoreReader = struct {
         else
             Hash.default();
 
-        const rewards = try self.db.get(schema.rewards, slot) orelse schema.rewards.Value{
-            .rewards = &.{},
-            .num_partitions = null,
-        };
+        const rewards = try self.db.get(self.allocator, schema.rewards, slot) orelse
+            schema.rewards.Value{ .rewards = &.{}, .num_partitions = null };
 
         // The Blocktime and BlockHeight column families are updated asynchronously; they
         // may not be written by the time the complete slot entries are available. In this
         // case, these fields will be null.
-        const block_time = try self.db.get(schema.blocktime, slot);
-        const block_height = try self.db.get(schema.block_height, slot);
+        const block_time = try self.db.get(self.allocator, schema.blocktime, slot);
+        const block_height = try self.db.get(self.allocator, schema.block_height, slot);
 
         return VersionedConfirmedBlockWithEntries{
             .block = VersionedConfirmedBlock{
@@ -625,7 +634,8 @@ pub const BlockstoreReader = struct {
                 continue;
             }
             // TODO get from iterator
-            const status = try self.db.get(schema.transaction_status, key) orelse return error.Unwrap;
+            const status = try self.db.get(self.allocator, schema.transaction_status, key) orelse
+                return error.Unwrap;
             return .{ .{ slot, status }, counter };
         }
 
@@ -691,7 +701,7 @@ pub const BlockstoreReader = struct {
     fn getBlockTime(self: *Self, slot: Slot) !?UnixTimestamp {
         var lock = try self.checkLowestCleanupSlot(slot);
         defer lock.unlock();
-        return self.db.get(schema.blocktime, slot);
+        return self.db.get(self.allocator, schema.blocktime, slot);
     }
 
     /// Analogous to [find_transaction_in_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3115)
@@ -1026,7 +1036,7 @@ pub const BlockstoreReader = struct {
         slot: Slot,
         start_index: u64,
     ) !struct { CompletedRanges, ?SlotMeta } {
-        const maybe_slot_meta = try self.db.get(schema.slot_meta, slot);
+        const maybe_slot_meta = try self.db.get(self.allocator, schema.slot_meta, slot);
         if (maybe_slot_meta == null) {
             return .{ CompletedRanges.init(self.allocator), null };
         }
@@ -1195,7 +1205,7 @@ pub const BlockstoreReader = struct {
             map.deinit();
         }
         for (slots) |slot| {
-            if (try self.db.get(schema.slot_meta, slot)) |meta| {
+            if (try self.db.get(self.allocator, schema.slot_meta, slot)) |meta| {
                 errdefer meta.next_slots.deinit();
                 var cdi = meta.completed_data_indexes;
                 cdi.deinit();
@@ -1210,7 +1220,7 @@ pub const BlockstoreReader = struct {
     /// agave handles DB errors with placeholder values, which seems like a mistake.
     /// this implementation instead returns errors.
     pub fn isRoot(self: *Self, slot: Slot) !bool {
-        return try self.db.get(schema.roots, slot) orelse false;
+        return try self.db.get(self.allocator, schema.roots, slot) orelse false;
     }
 
     /// Returns true if a slot is between the rooted slot bounds of the ledger, but has not itself
@@ -1225,7 +1235,7 @@ pub const BlockstoreReader = struct {
         var iterator = try self.db.iterator(schema.roots, .forward, 0);
         defer iterator.deinit();
         const lowest_root = try iterator.nextKey() orelse 0;
-        return if (try self.db.get(schema.roots, slot)) |_|
+        return if (try self.db.get(self.allocator, schema.roots, slot)) |_|
             false
         else
             slot < self.max_root.load(.monotonic) and slot > lowest_root;
@@ -1233,7 +1243,7 @@ pub const BlockstoreReader = struct {
 
     /// Analogous to [get_bank_hash](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3873)
     pub fn getBankHash(self: *Self, slot: Slot) !?Hash {
-        return if (try self.db.get(schema.bank_hash, slot)) |versioned|
+        return if (try self.db.get(self.allocator, schema.bank_hash, slot)) |versioned|
             versioned.frozenHash()
         else
             null;
@@ -1241,7 +1251,7 @@ pub const BlockstoreReader = struct {
 
     /// Analogous to [is_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3880)
     pub fn isDuplicateConfirmed(self: *Self, slot: Slot) !bool {
-        return if (try self.db.get(schema.bank_hash, slot)) |versioned|
+        return if (try self.db.get(self.allocator, schema.bank_hash, slot)) |versioned|
             versioned.isDuplicateConfirmed()
         else
             false;
@@ -1251,7 +1261,8 @@ pub const BlockstoreReader = struct {
     ///
     /// Analogous to [get_optimistic_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3899)
     pub fn getOptimisticSlot(self: *Self, slot: Slot) !?struct { Hash, UnixTimestamp } {
-        const meta = try self.db.get(schema.optimistic_slots, slot) orelse return null;
+        const meta = try self.db.get(self.allocator, schema.optimistic_slots, slot) orelse
+            return null;
         return .{ meta.V0.hash, meta.V0.timestamp };
     }
 
@@ -1282,7 +1293,7 @@ pub const BlockstoreReader = struct {
 
     /// Analogous to [is_dead](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3962)
     pub fn isDead(self: *Self, slot: Slot) !bool {
-        return try self.db.get(schema.dead_slots, slot) orelse false;
+        return try self.db.get(self.allocator, schema.dead_slots, slot) orelse false;
     }
 
     /// Analogous to [get_first_duplicate_proof](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3983)
@@ -1506,7 +1517,8 @@ pub const AncestorIterator = struct {
         if (self.next_slot) |slot| {
             if (slot == 0) {
                 self.next_slot = null;
-            } else if (try self.db.get(schema.slot_meta, slot)) |slot_meta| {
+            } else if (try self.db.get(self.db.allocator, schema.slot_meta, slot)) |slot_meta| {
+                defer slot_meta.deinit();
                 self.next_slot = slot_meta.parent_slot;
             } else {
                 self.next_slot = null;
@@ -1551,6 +1563,7 @@ test "getLatestOptimisticSlots" {
 
     {
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         const hash = Hash{ .data = .{1} ** 32 };
         try write_batch.put(schema.optimistic_slots, 1, .{
             .V0 = .{
@@ -1575,6 +1588,7 @@ test "getLatestOptimisticSlots" {
 
     {
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         const hash = Hash{ .data = .{10} ** 32 };
         try write_batch.put(schema.optimistic_slots, 10, .{
             .V0 = .{
@@ -1626,6 +1640,7 @@ test "getFirstDuplicateProof" {
             .shred2 = test_shreds.mainnet_shreds[1],
         };
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(schema.duplicate_slots, 19, proof);
         try db.commit(write_batch);
 
@@ -1659,6 +1674,7 @@ test "isDead" {
 
     {
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(schema.dead_slots, 19, true);
         try db.commit(write_batch);
     }
@@ -1666,6 +1682,7 @@ test "isDead" {
 
     {
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(schema.dead_slots, 19, false);
         try db.commit(write_batch);
     }
@@ -1692,6 +1709,7 @@ test "getBlockHeight" {
     );
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(schema.block_height, 19, 19);
     try db.commit(write_batch);
 
@@ -1720,6 +1738,7 @@ test "getRootedBlockTime" {
     );
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(schema.blocktime, 19, 19);
     try db.commit(write_batch);
 
@@ -1729,6 +1748,7 @@ test "getRootedBlockTime" {
 
     // root it
     var write_batch2 = try db.initWriteBatch();
+    defer write_batch2.deinit();
     try write_batch2.put(schema.roots, 19, true);
     try db.commit(write_batch2);
 
@@ -1765,6 +1785,7 @@ test "slotMetaIterator" {
     }
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     // 1 -> 2 -> 3
     const roots: [3]Slot = .{ 1, 2, 3 };
     var parent_slot: ?Slot = null;
@@ -1818,6 +1839,7 @@ test "rootedSlotIterator" {
     );
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     const roots: [3]Slot = .{ 2, 3, 4 };
     for (roots) |slot| {
         try write_batch.put(schema.roots, slot, true);
@@ -1853,6 +1875,7 @@ test "slotRangeConnected" {
     );
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     const roots: [3]Slot = .{ 1, 2, 3 };
 
     // 1 -> 2 -> 3
@@ -1917,6 +1940,7 @@ test "highestSlot" {
         slot_meta.received = 1;
 
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(
             schema.slot_meta,
             shred_slot,
@@ -1935,6 +1959,7 @@ test "highestSlot" {
         slot_meta2.received = 1;
 
         var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
         try write_batch.put(
             schema.slot_meta,
             slot_meta2.slot,
@@ -1981,6 +2006,7 @@ test "lowestSlot" {
     slot_meta.received = 1;
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(
         schema.slot_meta,
         shred_slot,
@@ -2029,6 +2055,7 @@ test "isShredDuplicate" {
 
     // insert a shred
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(
         schema.data_shred,
         .{ shred_slot, shred_index },
@@ -2084,6 +2111,7 @@ test "findMissingDataIndexes" {
     slot_meta.last_index = 4;
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(
         schema.data_shred,
         .{ shred_slot, shred_index },
@@ -2150,6 +2178,7 @@ test "getCodeShred" {
     const shred_index = shred.commonHeader().index;
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(
         schema.code_shred,
         .{ shred_slot, shred_index },
@@ -2218,6 +2247,7 @@ test "getDataShred" {
     defer shred.deinit();
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(
         schema.data_shred,
         .{ shred_slot, shred_index },

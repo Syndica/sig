@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Atomic = std.atomic.Value;
 
 const Lazy = sig.utils.lazy.Lazy;
@@ -18,12 +18,11 @@ const Logger = sig.trace.Logger;
 /// clean up their state.
 pub const ServiceManager = struct {
     logger: Logger,
-    /// Signal that is expected to tell all threads to exit.
-    exit: *Atomic(bool),
     /// Threads to join.
-    threads: ArrayList(std.Thread),
+    threads: ArrayListUnmanaged(std.Thread),
+    exit: *Atomic(bool),
     /// State to free after all threads join.
-    _arena: ArenaAllocator,
+    arena: ArenaAllocator,
     /// Logic to run after all threads join.
     defers: DeferList,
     name: []const u8,
@@ -33,7 +32,7 @@ pub const ServiceManager = struct {
     const Self = @This();
 
     pub fn init(
-        allocator: Allocator,
+        backing_allocator: Allocator,
         logger: Logger,
         exit: *Atomic(bool),
         name: []const u8,
@@ -43,24 +42,13 @@ pub const ServiceManager = struct {
         return .{
             .logger = logger,
             .exit = exit,
-            .threads = ArrayList(std.Thread).init(allocator),
-            ._arena = ArenaAllocator.init(allocator),
-            .defers = DeferList.init(allocator),
+            .threads = .{},
+            .arena = ArenaAllocator.init(backing_allocator),
+            .defers = .{ .allocator = backing_allocator },
             .name = name,
             .default_run_config = default_run_config,
             .default_spawn_config = default_spawn_config,
         };
-    }
-
-    /// Allocator for state to manage with this struct.
-    ///
-    /// Use this for state that should outlive the managed threads,
-    /// but may be freed as soon as those threads are joined.
-    ///
-    /// You must ensure that this is not used to allocate anything
-    /// that will be used after this struct is deinitialized.
-    pub fn arena(self: *Self) Allocator {
-        return self._arena.allocator();
     }
 
     /// Spawn a thread to be managed.
@@ -70,13 +58,30 @@ pub const ServiceManager = struct {
         name: ?[]const u8,
         comptime function: anytype,
         args: anytype,
+        comptime needs_exit_order: bool,
     ) !void {
-        return self.spawnCustom(name, self.default_run_config, self.default_spawn_config, function, args);
+        if (comptime needs_exit_order)
+            try self.spawnCustomIdx(
+                name,
+                self.default_run_config,
+                self.default_spawn_config,
+                function,
+                args,
+            )
+        else {
+            try self.spawnCustom(
+                name,
+                self.default_run_config,
+                self.default_spawn_config,
+                function,
+                args,
+            );
+        }
     }
 
     /// Spawn a thread to be managed.
     /// The function may be restarted periodically, according to the provided config.
-    pub fn spawnCustom(
+    fn spawnCustom(
         self: *Self,
         maybe_name: ?[]const u8,
         run_config: ?RunConfig,
@@ -84,31 +89,68 @@ pub const ServiceManager = struct {
         comptime function: anytype,
         args: anytype,
     ) !void {
+        const allocator = self.arena.allocator();
+
         var thread = try std.Thread.spawn(
             spawn_config,
             runService,
-            .{ self.logger, self.exit, maybe_name, run_config orelse self.default_run_config, function, args },
+            .{
+                self.logger,
+                self.exit,
+                maybe_name,
+                run_config orelse self.default_run_config,
+                function,
+                args,
+            },
         );
+
         if (maybe_name) |name| thread.setName(name) catch {};
-        try self.threads.append(thread);
+        try self.threads.append(allocator, thread);
+    }
+
+    /// Does the same thing as `spawnCustom`, however appends the index of the service
+    /// in the shutdown chain to the arguments.
+    fn spawnCustomIdx(
+        self: *Self,
+        maybe_name: ?[]const u8,
+        run_config: ?RunConfig,
+        spawn_config: std.Thread.SpawnConfig,
+        comptime function: anytype,
+        args: anytype,
+    ) !void {
+        const allocator = self.arena.allocator();
+
+        var thread = try std.Thread.spawn(
+            spawn_config,
+            runService,
+            .{
+                self.logger,
+                self.exit,
+                maybe_name,
+                run_config orelse self.default_run_config,
+                function,
+                args ++ .{(self.threads.items.len + 1)},
+            },
+        );
+
+        if (maybe_name) |name| thread.setName(name) catch {};
+        try self.threads.append(allocator, thread);
     }
 
     /// Wait for all threads to exit, then return.
     pub fn join(self: *Self) void {
         for (self.threads.items) |t| t.join();
-        self.threads.clearRetainingCapacity();
+        self.threads.clearAndFree(self.arena.allocator());
     }
 
     /// 1. Signal the threads to exit.
     /// 2. Wait for threads to exit.
     /// 3. Deinit the shared state from those threads.
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: *Self) void {
         self.logger.info().logf("Cleaning up: {s}", .{self.name});
-        self.exit.store(true, .monotonic);
-        for (self.threads.items) |t| t.join();
-        self.threads.deinit();
+        self.join();
         self.defers.deinit();
-        self._arena.deinit();
+        self.arena.deinit();
         self.logger.info().logf("Finished cleaning up: {s}", .{self.name});
     }
 };
@@ -141,6 +183,9 @@ pub const ReturnHandler = struct {
 
 /// Convert a short-lived task into a long-lived service by looping it,
 /// or make a service resilient by restarting it on failure.
+///
+/// It's guaranteed to run at least once in order to not race initialization with
+/// the `exit` flag.
 pub fn runService(
     logger: Logger,
     exit: *Atomic(bool),
@@ -160,7 +205,11 @@ pub fn runService(
     var last_iteration: u64 = 0;
     var num_oks: u64 = 0;
     var num_errors: u64 = 0;
-    while (!exit.load(.unordered)) {
+
+    var first_run: bool = true;
+    while (first_run or !exit.load(.acquire)) {
+        first_run = false;
+
         const result = @call(.auto, function, args);
 
         // identify result
@@ -180,8 +229,9 @@ pub fn runService(
                     "Signaling exit due to {} {s}s from {s}",
                     .{ num_events, event_name, name },
                 );
-                exit.store(true, .monotonic);
+                exit.store(true, .release);
             } else if (handler.log_exit) level_logger.logf(
+                level,
                 "Exiting {s} due to {} {s}s",
                 .{ name, num_events, event_name },
             );
@@ -195,6 +245,7 @@ pub fn runService(
             config.min_loop_duration_ns -| last_iteration,
         ));
     }
+
     logger.info().logf("Exiting {s} because the exit signal was received.", .{name});
 }
 
@@ -210,28 +261,25 @@ pub fn runService(
 /// 2. Return this struct to the broader scope.
 /// 3. Call `deinit` to run all the defers.
 pub const DeferList = struct {
-    defers: ArrayList(Lazy(void)),
+    allocator: Allocator,
+    defers: ArrayListUnmanaged(Lazy(void)) = .{},
 
     const Self = @This();
-
-    pub fn init(allocator: Allocator) Self {
-        return .{ .defers = ArrayList(Lazy(void)).init(allocator) };
-    }
 
     pub fn deferCall(
         self: *Self,
         comptime function: anytype,
         args: anytype,
     ) !void {
-        const lazy = try Lazy(void).init(self.defers.allocator, function, args);
-        try self.defers.append(lazy);
+        const lazy = try Lazy(void).init(self.allocator, function, args);
+        try self.defers.append(self.allocator, lazy);
     }
 
     /// Runs all the defers, then deinits this struct.
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: *Self) void {
         for (1..self.defers.items.len + 1) |i| {
             self.defers.items[self.defers.items.len - i].call();
         }
-        self.defers.deinit();
+        self.defers.deinit(self.allocator);
     }
 };

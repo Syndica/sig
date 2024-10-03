@@ -11,6 +11,8 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var gpa_allocator = gpa.allocator();
 
 pub const Config = struct {
     max_level: Level = Level.debug,
@@ -137,8 +139,8 @@ pub const StandardErrLogger = struct {
             .max_buffer = max_buffer,
             .exit_sig = AtomicBool.init(false),
             .max_level = config.max_level,
+            .handle = null,
             .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
-            .handle = try std.Thread.spawn(.{}, run, .{self}),
         };
         return self;
     }

@@ -1,5 +1,4 @@
 pub const channel = @import("channel.zig");
-pub const mpmc = @import("mpmc.zig");
 pub const ref = @import("ref.zig");
 pub const mux = @import("mux.zig");
 pub const once_cell = @import("once_cell.zig");

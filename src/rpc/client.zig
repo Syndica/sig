@@ -3,11 +3,9 @@ const sig = @import("../sig.zig");
 
 const types = sig.rpc.types;
 
-const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
-const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
@@ -23,12 +21,13 @@ pub const Client = struct {
         logger: Logger = Logger{ .noop = {} },
     };
 
-    pub fn init(allocator: std.mem.Allocator, cluster_type: ClusterType, options: Options) Client {
+    pub fn init(allocator: std.mem.Allocator, cluster_type: types.ClusterType, options: Options) Client {
         const http_endpoint = switch (cluster_type) {
             .MainnetBeta => "https://api.mainnet-beta.solana.com",
             .Testnet => "https://api.testnet.solana.com",
             .Devnet => "https://api.devnet.solana.com",
-            .Development => @panic("Unsupported cluster type 'Development'"),
+            .LocalHost => "http://localhost:8899",
+            .Custom => |cluster| cluster.url,
         };
         return .{
             .http_endpoint = http_endpoint,
@@ -159,10 +158,10 @@ pub const Client = struct {
     /// }
     /// however, this introduces another layer of indirection.
     /// Not a big deal here but I am curious if there is a way to do this.
-    pub fn getLeaderSchedule(self: *Client, allocator: std.mem.Allocator, maybe_epoch: ?Epoch, config: GetLeaderScheduleConfig) !Response(types.LeaderSchedule) {
+    pub fn getLeaderSchedule(self: *Client, allocator: std.mem.Allocator, maybe_slot: ?Slot, config: GetLeaderScheduleConfig) !Response(types.LeaderSchedule) {
         var request = try Request.init(allocator, "getLeaderSchedule");
         defer request.deinit();
-        try request.addParameter(maybe_epoch);
+        try request.addParameter(maybe_slot);
         try request.addConfig(config);
         const json_response = try self.sendFetchRequest(allocator, std.json.Value, request, .{});
 

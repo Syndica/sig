@@ -92,7 +92,7 @@ pub const BlockstoreWriter = struct {
         frozen_hash: Hash,
         is_duplicate_confirmed: bool,
     ) !void {
-        if (try self.db.get(schema.bank_hash, slot)) |prev_value| {
+        if (try self.db.get(self.allocator, schema.bank_hash, slot)) |prev_value| {
             if (frozen_hash.eql(prev_value.frozenHash()) and prev_value.isDuplicateConfirmed()) {
                 // Don't overwrite is_duplicate_confirmed == true with is_duplicate_confirmed == false,
                 // which may happen on startup when procesing from blockstore processor because the
@@ -127,6 +127,7 @@ pub const BlockstoreWriter = struct {
     /// agave: set_roots
     pub fn setRoots(self: *Self, rooted_slots: []const Slot) !void {
         var write_batch = try self.db.initWriteBatch();
+        defer write_batch.deinit();
         var max_new_rooted_slot: Slot = 0;
         for (rooted_slots) |slot| {
             max_new_rooted_slot = @max(max_new_rooted_slot, slot);
@@ -213,7 +214,7 @@ pub const BlockstoreWriter = struct {
             if (!try self.isRoot(slot)) {
                 try roots_to_fix.append(slot);
             }
-            if (exit.load(.monotonic)) {
+            if (exit.load(.acquire)) {
                 return 0;
             }
         }
@@ -224,7 +225,7 @@ pub const BlockstoreWriter = struct {
             const chunk_size = 100;
             const num_chunks = (roots_to_fix.items.len - 1) / chunk_size + 1;
             for (0..num_chunks) |chunk_index| {
-                if (exit.load(.monotonic)) {
+                if (exit.load(.acquire)) {
                     return chunk_index * chunk_size;
                 }
                 const start_index = chunk_index * chunk_size;
@@ -257,7 +258,7 @@ pub const BlockstoreWriter = struct {
     /// have their slots considered connected.
     /// agave: set_and_chain_connected_on_root_and_next_slots
     pub fn setAndChainConnectedOnRootAndNextSlots(self: *Self, root: Slot) !void {
-        var root_slot_meta: SlotMeta = try self.db.get(schema.slot_meta, root) orelse
+        var root_slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, root) orelse
             SlotMeta.init(self.allocator, root, null);
         defer root_slot_meta.deinit();
 
@@ -268,6 +269,7 @@ pub const BlockstoreWriter = struct {
         }
         self.logger.info().logf("Marking slot {} and any full children slots as connected", .{root});
         var write_batch = try self.db.initWriteBatch();
+        defer write_batch.deinit();
 
         // Mark both connected bits on the root slot so that the flags for this
         // slot match the flags of slots that become connected the typical way.
@@ -284,7 +286,7 @@ pub const BlockstoreWriter = struct {
         var i: usize = 0;
         while (i < next_slots.items.len) : (i += 1) {
             const slot = next_slots.items[i];
-            var slot_meta: SlotMeta = try self.db.get(schema.slot_meta, slot) orelse {
+            var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
                 self.logger.err().logf("Slot {} is a child but has no SlotMeta in blockstore", .{slot});
                 return error.CorruptedBlockstore;
             };
@@ -310,6 +312,7 @@ pub const BlockstoreWriter = struct {
     /// analog to [`run_purge_with_stats`](https://github.com/anza-xyz/agave/blob/26692e666454d340a6691e2483194934e6a8ddfc/ledger/src/blockstore/blockstore_purge.rs#L202)
     pub fn purgeSlots(self: *Self, from_slot: Slot, to_slot: Slot) !bool {
         var write_batch = try self.db.initWriteBatch();
+        defer write_batch.deinit();
 
         // the methods used below are exclusive [from_slot, to_slot), so we add 1 to purge inclusive
         const purge_to_slot = to_slot + 1;
@@ -425,12 +428,12 @@ pub const BlockstoreWriter = struct {
         to_key: cf.Key,
         count: *u32,
     ) !void {
-        try db.deleteFilesRange(cf, from_key, to_key);
+        try db.deleteFilesInRange(cf, from_key, to_key);
         count.* += 1;
     }
 
     fn isRoot(self: *Self, slot: Slot) !bool {
-        return try self.db.get(schema.roots, slot) orelse false;
+        return try self.db.get(self.allocator, schema.roots, slot) orelse false;
     }
 };
 
@@ -498,6 +501,7 @@ test "purgeSlots" {
 
     // write another type
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     for (0..roots.len + 1) |i| {
         const merkle_root_meta = sig.ledger.shred.ErasureSetId{
             .fec_set_index = i,
@@ -518,12 +522,20 @@ test "purgeSlots" {
     try std.testing.expectEqual(true, did_purge2);
 
     for (0..5 + 1) |i| {
-        const r = try db.get(schema.merkle_root_meta, .{ .slot = i, .fec_set_index = i });
+        const r = try db.get(
+            std.testing.allocator,
+            schema.merkle_root_meta,
+            .{ .slot = i, .fec_set_index = i },
+        );
         try std.testing.expectEqual(null, r);
     }
 
     for (6..10 + 1) |i| {
-        const r = try db.get(schema.merkle_root_meta, .{ .slot = i, .fec_set_index = i });
+        const r = try db.get(
+            std.testing.allocator,
+            schema.merkle_root_meta,
+            .{ .slot = i, .fec_set_index = i },
+        );
         try std.testing.expect(r != null);
     }
 }
@@ -584,6 +596,7 @@ test "scanAndFixRoots" {
     const slot_meta_3 = SlotMeta.init(allocator, 3, 2);
 
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
     try write_batch.put(schema.slot_meta, slot_meta_2.slot, slot_meta_2);
     try write_batch.put(schema.slot_meta, slot_meta_3.slot, slot_meta_3);
@@ -621,6 +634,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     try writer.setRoots(&roots);
     const slot_meta_1 = SlotMeta.init(allocator, 1, null);
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
     try db.commit(write_batch);
 
@@ -629,13 +643,15 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     try writer.setAndChainConnectedOnRootAndNextSlots(1);
 
     // should be connected
-    const db_slot_meta_1 = (try db.get(schema.slot_meta, 1)) orelse return error.MissingSlotMeta;
+    const db_slot_meta_1 = (try db.get(allocator, schema.slot_meta, 1)) orelse
+        return error.MissingSlotMeta;
     try std.testing.expectEqual(true, db_slot_meta_1.isConnected());
 
     // write some roots past 1
     const other_roots: [3]Slot = .{ 2, 3, 4 };
     var parent_slot: ?Slot = 1;
     var write_batch2 = try db.initWriteBatch();
+    defer write_batch2.deinit();
     try writer.setRoots(&other_roots);
 
     for (other_roots, 0..) |slot, i| {
@@ -659,7 +675,8 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     try writer.setAndChainConnectedOnRootAndNextSlots(other_roots[0]);
 
     for (other_roots) |slot| {
-        var db_slot_meta = (try db.get(schema.slot_meta, slot)) orelse return error.MissingSlotMeta;
+        var db_slot_meta = (try db.get(allocator, schema.slot_meta, slot)) orelse
+            return error.MissingSlotMeta;
         defer db_slot_meta.deinit();
         try std.testing.expectEqual(true, db_slot_meta.isConnected());
     }
@@ -686,6 +703,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
 
     // 1 is a root and full
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     const roots: [3]Slot = .{ 1, 2, 3 };
     try writer.setRoots(&roots);
 
@@ -716,16 +734,19 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     try writer.setAndChainConnectedOnRootAndNextSlots(1);
 
     // should be connected
-    var db_slot_meta_1 = (try db.get(schema.slot_meta, 1)) orelse return error.MissingSlotMeta;
+    var db_slot_meta_1 = (try db.get(allocator, schema.slot_meta, 1)) orelse
+        return error.MissingSlotMeta;
     defer db_slot_meta_1.deinit();
     try std.testing.expectEqual(true, db_slot_meta_1.isConnected());
 
-    var db_slot_meta_2: SlotMeta = (try db.get(schema.slot_meta, 2)) orelse return error.MissingSlotMeta;
+    var db_slot_meta_2: SlotMeta = (try db.get(allocator, schema.slot_meta, 2)) orelse
+        return error.MissingSlotMeta;
     defer db_slot_meta_2.deinit();
     try std.testing.expectEqual(true, db_slot_meta_2.isParentConnected());
     try std.testing.expectEqual(false, db_slot_meta_2.isConnected());
 
-    var db_slot_meta_3: SlotMeta = (try db.get(schema.slot_meta, 3)) orelse return error.MissingSlotMeta;
+    var db_slot_meta_3: SlotMeta = (try db.get(allocator, schema.slot_meta, 3)) orelse
+        return error.MissingSlotMeta;
     defer db_slot_meta_3.deinit();
     try std.testing.expectEqual(false, db_slot_meta_3.isParentConnected());
     try std.testing.expectEqual(false, db_slot_meta_3.isConnected());

@@ -49,7 +49,6 @@ const IpEchoServerResponse = struct {
 pub const Server = struct {
     allocator: std.mem.Allocator,
     server: httpz.ServerCtx(void, void),
-    exit: *const Atomic(bool),
     port: u16,
     killed: Atomic(bool),
 
@@ -58,12 +57,10 @@ pub const Server = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         port: u16,
-        exit: *const Atomic(bool),
     ) Self {
         return Self{
             .allocator = allocator,
             .server = httpz.Server().init(allocator, .{ .port = port }) catch unreachable,
-            .exit = exit,
             .port = port,
             .killed = Atomic(bool).init(false),
         };

@@ -26,9 +26,10 @@ pub const FuzzFilter = enum {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     var std_logger = StandardErrLogger.init(.{
-        .allocator = allocator,
+        .allocator = std.heap.c_allocator,
         .max_level = Level.debug,
         .max_buffer = 2048,
     }) catch @panic("Logger init failed");
@@ -39,9 +40,14 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
-    logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
-    const metrics_thread = try spawnMetrics(allocator, config.current.metrics_port);
-    errdefer metrics_thread.detach();
+    logger.default_logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
+    const metrics_thread = try spawnMetrics(
+        // TODO: use the GPA here, the server is just leaking because we're losing the handle
+        // to it and never deiniting.
+        std.heap.c_allocator,
+        config.current.metrics_port,
+    );
+    metrics_thread.detach();
 
     _ = cli_args.skip();
     const filter = blk: {

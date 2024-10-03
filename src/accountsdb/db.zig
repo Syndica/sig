@@ -218,24 +218,25 @@ pub const AccountsDB = struct {
         const reference_allocator: std.mem.Allocator //
         = blk: {
             if (config.use_disk_index) {
-                var index_bin_dir = try snapshot_dir.makeOpenPath("index/bin", .{});
-                defer index_bin_dir.close();
+                var index_bin_dir = try snapshot_dir.makeOpenPath("index", .{});
+                errdefer index_bin_dir.close();
 
-                const disk_file_suffix = try index_bin_dir.realpathAlloc(allocator, ".");
-                errdefer allocator.free(disk_file_suffix);
-                logger.info().logf("using disk index in {s}", .{disk_file_suffix});
+                logger.info().logf("using disk index in {s}", .{sig.utils.fmt.tryRealPath(index_bin_dir, ".")});
 
                 const ptr = try allocator.create(DiskMemoryAllocator);
-                ptr.* = DiskMemoryAllocator.init(disk_file_suffix);
+                ptr.* = .{
+                    .dir = index_bin_dir,
+                    .logger = logger,
+                };
 
                 break :blk .{ ptr, ptr.allocator() };
             } else {
                 logger.info().logf("using ram index", .{});
-                break :blk .{ null, std.heap.page_allocator };
+                break :blk .{ null, allocator };
             }
         };
         errdefer if (maybe_disk_allocator_ptr) |ptr| {
-            ptr.deinit(allocator);
+            ptr.dir.close();
             allocator.destroy(ptr);
         };
 
@@ -268,19 +269,10 @@ pub const AccountsDB = struct {
         };
     }
 
-    pub fn deinit(
-        self: *Self,
-        delete_index_files: bool,
-    ) void {
+    pub fn deinit(self: *Self) void {
         self.account_index.deinit(true);
         if (self.disk_allocator_ptr) |ptr| {
-            // note: we dont always deinit the allocator so we keep the index files
-            // because they are expensive to generate
-            if (delete_index_files) {
-                ptr.deinit(self.allocator);
-            } else {
-                self.allocator.free(ptr.filepath);
-            }
+            ptr.dir.close();
             self.allocator.destroy(ptr);
         }
 
@@ -317,6 +309,8 @@ pub const AccountsDB = struct {
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *Self,
+        /// needs to be a thread-safe allocator
+        allocator: std.mem.Allocator,
         snapshot_fields_and_paths: *AllSnapshotFields,
         n_threads: u32,
         validate: bool,
@@ -327,7 +321,7 @@ pub const AccountsDB = struct {
         const load_duration = try self.loadFromSnapshot(
             snapshot_fields.accounts_db_fields,
             n_threads,
-            std.heap.page_allocator,
+            allocator,
             accounts_per_file_estimate,
         );
         self.logger.info().logf("loaded from snapshot in {s}", .{load_duration});
@@ -352,6 +346,7 @@ pub const AccountsDB = struct {
         /// Account file info map from the snapshot manifest.
         snapshot_manifest: AccountsDbFields,
         n_threads: u32,
+        /// needs to be a thread-safe allocator
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
     ) !sig.time.Duration {
@@ -635,8 +630,8 @@ pub const AccountsDB = struct {
 
             file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
             self.largest_file_id = FileId.max(self.largest_file_id, file_id);
-            _ = self.largest_rooted_slot.fetchMax(slot, .monotonic);
-            self.largest_flushed_slot.store(self.largest_rooted_slot.load(.monotonic), .monotonic);
+            _ = self.largest_rooted_slot.fetchMax(slot, .release);
+            self.largest_flushed_slot.store(self.largest_rooted_slot.load(.acquire), .release);
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
@@ -760,7 +755,7 @@ pub const AccountsDB = struct {
                 }
             }
             self.largest_file_id = FileId.max(self.largest_file_id, thread_db.largest_file_id);
-            _ = self.largest_rooted_slot.fetchMax(thread_db.largest_rooted_slot.load(.unordered), .monotonic);
+            _ = self.largest_rooted_slot.fetchMax(thread_db.largest_rooted_slot.load(.acquire), .monotonic);
             self.largest_flushed_slot.store(self.largest_rooted_slot.load(.monotonic), .monotonic);
 
             // combine underlying memory
@@ -1210,7 +1205,7 @@ pub const AccountsDB = struct {
         var tmp_bank_fields = try BankFields.random(self.allocator, rand.random(), 128);
         defer tmp_bank_fields.deinit(self.allocator);
 
-        while (!exit.load(.monotonic)) {
+        while (!exit.load(.acquire)) {
             defer {
                 const elapsed = timer.lap();
                 if (elapsed < DB_MANAGER_LOOP_MIN.asNanos()) {
@@ -3086,11 +3081,11 @@ pub fn writeSnapshotTarWithFields(
 }
 
 fn testWriteSnapshotFull(
+    allocator: std.mem.Allocator,
     accounts_db: *AccountsDB,
     slot: Slot,
     maybe_expected_hash: ?Hash,
 ) !void {
-    const allocator = std.testing.allocator;
     const snapshot_dir = accounts_db.snapshot_dir;
 
     const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot});
@@ -3146,11 +3141,11 @@ fn testWriteSnapshotFull(
 }
 
 fn testWriteSnapshotIncremental(
+    allocator: std.mem.Allocator,
     accounts_db: *AccountsDB,
     slot: Slot,
     maybe_expected_incremental_hash: ?Hash,
 ) !void {
-    const allocator = std.testing.allocator;
     const snapshot_dir = accounts_db.snapshot_dir;
 
     const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot});
@@ -3207,10 +3202,11 @@ fn testWriteSnapshotIncremental(
 }
 
 test "testWriteSnapshot" {
+    const allocator = std.testing.allocator;
     var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer test_data_dir.close();
 
-    const snap_files = try SnapshotFiles.find(std.testing.allocator, test_data_dir);
+    const snap_files = try SnapshotFiles.find(allocator, test_data_dir);
 
     var tmp_snap_dir_root = std.testing.tmpDir(.{});
     defer tmp_snap_dir_root.cleanup();
@@ -3219,22 +3215,33 @@ test "testWriteSnapshot" {
     {
         const archive_file = try test_data_dir.openFile(snap_files.full_snapshot.snapshotNameStr().constSlice(), .{});
         defer archive_file.close();
-        try parallelUnpackZstdTarBall(std.testing.allocator, Logger{ .noop = {} }, archive_file, tmp_snap_dir, 4, true);
+        try parallelUnpackZstdTarBall(allocator, Logger{ .noop = {} }, archive_file, tmp_snap_dir, 4, true);
     }
 
     if (snap_files.incremental_snapshot) |inc_snap| {
         const archive_file = try test_data_dir.openFile(inc_snap.snapshotNameStr().constSlice(), .{});
         defer archive_file.close();
-        try parallelUnpackZstdTarBall(std.testing.allocator, Logger{ .noop = {} }, archive_file, tmp_snap_dir, 4, false);
+        try parallelUnpackZstdTarBall(allocator, Logger{ .noop = {} }, archive_file, tmp_snap_dir, 4, false);
     }
-    var accounts_db = try AccountsDB.init(std.testing.allocator, Logger{ .noop = {} }, tmp_snap_dir, .{
+
+    var accounts_db = try AccountsDB.init(allocator, Logger{ .noop = {} }, tmp_snap_dir, .{
         .number_of_index_bins = ACCOUNT_INDEX_BINS,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
-    try testWriteSnapshotFull(&accounts_db, snap_files.full_snapshot.slot, snap_files.full_snapshot.hash);
-    try testWriteSnapshotIncremental(&accounts_db, snap_files.incremental_snapshot.?.slot, snap_files.incremental_snapshot.?.hash);
+    try testWriteSnapshotFull(
+        allocator,
+        &accounts_db,
+        snap_files.full_snapshot.slot,
+        snap_files.full_snapshot.hash,
+    );
+    try testWriteSnapshotIncremental(
+        allocator,
+        &accounts_db,
+        snap_files.incremental_snapshot.?.slot,
+        snap_files.incremental_snapshot.?.hash,
+    );
 }
 
 fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
@@ -3289,7 +3296,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
         .number_of_index_bins = 4,
         .use_disk_index = use_disk,
     }, null);
-    errdefer accounts_db.deinit(true);
+    errdefer accounts_db.deinit();
 
     _ = try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator, 1_500);
 
@@ -3336,13 +3343,14 @@ test "geyser stream on load" {
     try geyser_writer.?.spawnIOLoop();
 
     const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
+        allocator,
         geyser_exit,
         geyser_pipe_path,
         null,
         null,
     });
     defer {
-        geyser_exit.store(true, .unordered);
+        geyser_exit.store(true, .release);
         _ = reader_handle.join();
     }
 
@@ -3358,7 +3366,7 @@ test "geyser stream on load" {
         geyser_writer,
     );
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3376,9 +3384,9 @@ test "geyser stream on load" {
 test "write and read an account" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3413,9 +3421,9 @@ test "write and read an account" {
 test "load and validate from test snapshot using disk index" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3430,9 +3438,9 @@ test "load and validate from test snapshot using disk index" {
 test "load and validate from test snapshot parallel" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 2);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 2);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3447,9 +3455,9 @@ test "load and validate from test snapshot parallel" {
 test "load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3464,9 +3472,9 @@ test "load and validate from test snapshot" {
 test "load clock sysvar" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3484,9 +3492,9 @@ test "load clock sysvar" {
 test "load other sysvars" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
-        accounts_db.deinit(true);
+        accounts_db.deinit();
         snapshots.deinit(allocator);
     }
 
@@ -3513,7 +3521,7 @@ test "flushing slots works" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -3534,7 +3542,7 @@ test "flushing slots works" {
     try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     // this writes to disk
-    var unclean_account_files = ArrayList(FileId).init(std.testing.allocator);
+    var unclean_account_files = ArrayList(FileId).init(allocator);
     defer unclean_account_files.deinit();
     try unclean_account_files.append(try accounts_db.flushSlot(slot));
 
@@ -3564,7 +3572,7 @@ test "purge accounts in cache works" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -3621,7 +3629,7 @@ test "clean to shrink account file works with zero-lamports" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -3697,7 +3705,7 @@ test "clean to shrink account file works" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -3765,7 +3773,7 @@ test "full clean account file works" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -3850,7 +3858,7 @@ test "shrink account file works" {
         .number_of_index_bins = 4,
         .use_disk_index = false,
     }, null);
-    defer accounts_db.deinit(true);
+    defer accounts_db.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -4009,7 +4017,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
     };
 
     pub fn loadSnapshot(bench_args: BenchArgs) !u64 {
-        const allocator = std.heap.page_allocator;
+        const allocator = std.heap.c_allocator;
 
         // unpack the snapshot
         // NOTE: usually this will be an incremental snapshot
@@ -4055,7 +4063,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             .number_of_index_bins = 32,
             .use_disk_index = bench_args.use_disk,
         }, null);
-        defer accounts_db.deinit(false);
+        defer accounts_db.deinit();
 
         var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
         defer accounts_dir.close();
@@ -4225,8 +4233,7 @@ pub const BenchmarkAccountsDB = struct {
         const slot_list_len = bench_args.slot_list_len;
         const total_n_accounts = n_accounts * slot_list_len;
 
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        var allocator = gpa.allocator();
+        var allocator = std.heap.c_allocator;
 
         const disk_path = sig.TEST_DATA_DIR ++ "tmp/";
         std.fs.cwd().makeDir(disk_path) catch {};
@@ -4239,7 +4246,7 @@ pub const BenchmarkAccountsDB = struct {
             .number_of_index_bins = ACCOUNT_INDEX_BINS,
             .use_disk_index = bench_args.index == .disk,
         }, null);
-        defer accounts_db.deinit(true);
+        defer accounts_db.deinit();
 
         var random = std.Random.DefaultPrng.init(19);
         const rng = random.random();
@@ -4302,7 +4309,8 @@ pub const BenchmarkAccountsDB = struct {
                     );
                 }
                 const aligned_size = std.mem.alignForward(usize, size, std.mem.page_size);
-                const filepath = try std.fmt.allocPrint(allocator, disk_path ++ "slot{d}.bin", .{s});
+                const filepath_bounded = sig.utils.fmt.boundedFmt(disk_path ++ "slot{d}.bin", .{s});
+                const filepath = filepath_bounded.constSlice();
 
                 const length = blk: {
                     var file = try std.fs.cwd().createFile(filepath, .{ .read = true });

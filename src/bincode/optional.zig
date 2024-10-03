@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const bincode = sig.bincode;
-const hashMapInfo = sig.utils.types.hashMapInfo;
 
 pub fn defaultToNullOnEof(
     comptime T: type,
@@ -11,7 +10,6 @@ pub fn defaultToNullOnEof(
         encode_optional: bool = false,
 
         free: ?fn (allocator: std.mem.Allocator, data: anytype) void = null,
-        hashmap: if (hashMapInfo(T)) |hm_info| bincode.HashMapConfig(hm_info) else void = if (hashMapInfo(T) != null) .{} else {},
     },
 ) bincode.FieldConfig(?T) {
     const S = struct {
@@ -45,6 +43,5 @@ pub fn defaultToNullOnEof(
         .serializer = S.serializer,
         .free = options.free,
         .skip = false,
-        .hashmap = options.hashmap,
     };
 }

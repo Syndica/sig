@@ -174,11 +174,16 @@ to support disk-based account references, we created a general purpose
 disk allocator which creates memory from mmap-ing files stored on disk.
 
 ```zig
-// files are created using `data/test-data/tmp_{i}` format where `i` is 
-// incremented by one for each alloc call.
-var allocator = try DiskMemoryAllocator.init("data/test-data/tmp");
-defer allocator.deinit(null);
+// files are created using `data/test-data/bin_{i}` format where `i` is 
+// incremented by one for each new allocation.
+var dma_dir = try std.fs.cwd().makeOpenPath("data/test-data");
+defer dma_dir.close();
+var dma_state: DiskMemoryAllocator = .{};
+const dma = dma_state.allocator();
 ```
+
+Unlike a simpler page allocator, it stores certain metadata after the user-facing
+buffer which tracks the associated file, and the true mmap'd size to allow for resizes.
 
 ### background-threads
 

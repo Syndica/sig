@@ -5,30 +5,40 @@ const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipTable = sig.gossip.table.GossipTable;
+const Duration = sig.time.Duration;
 const Logger = sig.trace.log.Logger;
 const RwMux = sig.sync.mux.RwMux;
+
+pub const DUMP_INTERVAL = Duration.fromSecs(10);
 
 pub const GossipDumpService = struct {
     allocator: Allocator,
     logger: Logger,
     gossip_table_rw: *RwMux(GossipTable),
-    exit: *Atomic(bool),
+    counter: *Atomic(usize),
 
     const Self = @This();
 
-    pub fn run(self: Self) !void {
+    pub fn run(self: Self, idx: usize) !void {
+        defer {
+            // this should be the last service in the chain,
+            // but we still kick off anything after it just in case
+            self.counter.store(idx + 1, .release);
+        }
+
         const start_time = std.time.timestamp();
-        const dir = try std.fmt.allocPrint(self.allocator, "gossip-dumps/{}", .{start_time});
-        defer self.allocator.free(dir);
-        try std.fs.cwd().makePath(dir);
-        while (true) {
-            if (self.exit.load(.unordered)) return;
+        const dir_name_bounded = sig.utils.fmt.boundedFmt("gossip-dumps/{}", .{start_time});
+
+        var dir = try std.fs.cwd().makeOpenPath(dir_name_bounded.constSlice(), .{});
+        defer dir.close();
+
+        while (self.counter.load(.acquire) != idx) {
             try self.dumpGossip(dir, start_time);
-            std.time.sleep(10_000_000_000);
+            std.time.sleep(DUMP_INTERVAL.asNanos());
         }
     }
 
-    fn dumpGossip(self: *const Self, dir: []const u8, start_time: i64) !void {
+    fn dumpGossip(self: *const Self, dir: std.fs.Dir, start_time: i64) !void {
         const data = blk: {
             var gossip_table_lock = self.gossip_table_rw.read();
             defer gossip_table_lock.unlock();
@@ -71,9 +81,9 @@ pub const GossipDumpService = struct {
 
         // create file
         const now = std.time.timestamp();
-        const filename = try std.fmt.allocPrint(self.allocator, "{s}/gossip-dump-{}.csv", .{ dir, now });
-        defer self.allocator.free(filename);
-        var file = try std.fs.cwd().createFile(filename, .{});
+        const filename_bounded = sig.utils.fmt.boundedFmt("gossip-dump-{}.csv", .{now});
+
+        var file = try dir.createFile(filename_bounded.constSlice(), .{});
         defer file.close();
 
         // output results
