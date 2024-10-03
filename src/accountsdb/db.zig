@@ -400,10 +400,9 @@ pub const AccountsDB = struct {
         );
         for (0..n_parse_threads) |_| {
             var thread_db = loading_threads.addOneAssumeCapacity();
-            const noopLogger = Logger{ .noop = {} };
             thread_db.* = try AccountsDB.init(
                 per_thread_allocator,
-                noopLogger, // dont spam the logs with init information (we set it after)
+                Logger{ .noop = {} }, // dont spam the logs with init information (we set it after)
                 self.snapshot_dir,
                 self.config,
                 self.geyser_writer,
