@@ -152,8 +152,7 @@ pub const StdEntry = struct {
     }
 };
 
-/// An instance of `Entry` that logs to an internal array
-/// that allows asserting the log message in tests.
+/// An instance of `Entry` that logs directly to std.debug.print, instead of sending to channel.
 pub const TestingEntry = struct {
     const builtin = @import("builtin");
 
