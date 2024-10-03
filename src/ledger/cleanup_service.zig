@@ -367,20 +367,6 @@ test "findSlotsToClean" {
     try std.testing.expectEqual(false, r.should_clean);
     try std.testing.expectEqual(0, r.total_shreds);
     try std.testing.expectEqual(0, r.highest_slot_to_purge);
-
-    // // TODO: understand how live files are created
-    // // add data shreds
-    // var data_shred = try ledger.shred.DataShred.default(allocator);
-    // defer data_shred.fields.deinit();
-    // {
-    //     var write_batch = try db.initWriteBatch();
-    //     for (0..1000) |i| {
-    //         try write_batch.put(ledger.schema.schema.data_shred, .{ 19, i }, data_shred.fields.payload);
-    //     }
-    //     try db.commit(write_batch);
-    // }
-    // const r2 = try findSlotsToClean(allocator, &reader, 0, 1);
-    // std.debug.print("r2: {any}\n", .{r2});
 }
 
 test "purgeSlots" {
