@@ -62,7 +62,7 @@ pub fn printTimeEstimate(
     }
 }
 
-pub fn printTimeEstimateStd(
+pub fn printTimeEstimateStderr(
     // timer should be started at the beginning of the loop
     timer: *sig.time.Timer,
     total: usize,
