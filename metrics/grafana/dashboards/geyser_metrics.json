@@ -227,7 +227,7 @@
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "reader_payloads",
+          "legendFormat": "writer_payloads",
           "range": true,
           "refId": "A",
           "useBackend": false
@@ -249,7 +249,7 @@
           "useBackend": false
         }
       ],
-      "title": "Writer Payloads",
+      "title": "Payloads",
       "type": "timeseries"
     },
     {

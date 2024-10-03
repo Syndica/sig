@@ -7,10 +7,10 @@ opening a file-based pipe using the `mkfifo` syscall which is then
 written to like any other file. the key method used to setup 
 the pipes is `openPipe` in `src/geyser/core.zig`.
 
-## Usage
+## cli commands
 
 while running, grafana stats will be available. the main binary code is in 
-`src/geyser/bin.zig`
+`src/geyser/main.zig`
 
 ### benchmarking 
 
@@ -46,7 +46,9 @@ csv geyser command, for example:
 ./zig-out/bin/geyser csv -o dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH
 ```
 
-## data
+## Architecture
+
+### how data is written/read
 
 currently, data is serialized and written through the pipe using `bincode`
 
@@ -60,18 +62,18 @@ the data associated with that payload.
 
 the key struct used is `AccountPayload` which uses a versioned system to support different payload types (`VersionedAccountPayload`) while also being backwards compatibility.
 
-## GeyserWriter
+### GeyserWriter
 
 ![](imgs/2024-08-07-17-27-36.png)
 
-### IO Thread
+#### IO Thread
 
 the writer uses a separate thread to write to the pipe due to expensive i/o operations.
 to spawn this thread, use the `spawnIOLoop` method.
 
 it loops, draining the channel for payloads with type (`[]u8`) and then writes the bufs to the pipe and then frees the payload using the `RecycleFBA`
 
-### RecycleFBA 
+#### RecycleFBA 
 
 one of the most common operations when streaming accounts is to allocate a buffer to serialize
 the `AccountPayload` into and then free the buffer after the bytes have been written to the pipe.
@@ -93,7 +95,7 @@ records field.
 
 when free is called, we find the buffer in the records and set the record's `is_free = true`.
 
-### usage 
+#### usage 
 
 ```zig 
 // setup writer
@@ -118,7 +120,7 @@ const v_payload = VersionedAccountPayload{
 try stream_writer.writePayloadToPipe(v_payload);
 ```
 
-## GeyserReader
+### GeyserReader
 
 the reader has two main buffers: 
 - `io_buf` : which is used to read from the pipe into this buf
@@ -138,3 +140,16 @@ before reading the io_buf, since we know how much bytes to read for the full pay
 
 if the bincode_buf is not big enough then we double the buffer length and try again since
 we dont know exactly how many bytes we will need.
+
+## Metrics
+
+- 'MB/Sec': how many bytes the reader/writer is reading/writing per second
+- 'Payloads': how many payloads the reader/writer has read/wrote
+- 'Reader Stalls': How many times the reader has tried to read a payload but was unable to because 
+the pipe was empty
+- 'Writer Stalls': How many times the writer has tried to write a payload but was unable to because
+either 
+    - the pipe was full ('pipe_full')
+    - ther recycle_fba doesnt have any memory available to write the bincode bytes ('no_memory_available')
+- 'Reader State': The reader has two buffers for state, the 'io_buf' is used to read data from
+the pipe, and 'bincode_buf' is used to deserialize the data from the io_buf into this buffer
