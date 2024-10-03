@@ -19,11 +19,11 @@ pub fn readSocket(
     idx: if (needs_exit_order) usize else void,
 ) !void {
     defer {
-        logger.infof("leaving with: {}, {}, {}", .{ incoming_channel.len(), counter.load(.acquire), idx });
+        logger.info().logf("leaving with: {}, {}, {}", .{ incoming_channel.len(), counter.load(.acquire), idx });
         if (needs_exit_order) {
             counter.store(idx + 1, .release);
         }
-        logger.infof("readSocket loop closed", .{});
+        logger.info().logf("readSocket loop closed", .{});
     }
 
     // NOTE: we set to non-blocking to periodically check if we should exit
@@ -58,7 +58,7 @@ pub fn sendSocket(
             // exit the next service in the chain
             counter.store(idx + 1, .release);
         }
-        logger.debugf("sendSocket loop closed", .{});
+        logger.debug().logf("sendSocket loop closed", .{});
     }
 
     const exit_condition = if (needs_exit_order) idx else true;

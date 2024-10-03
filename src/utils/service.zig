@@ -231,7 +231,6 @@ pub fn runService(
                 );
                 exit.store(true, .release);
             } else if (handler.log_exit) level_logger.logf(
-                level,
                 "Exiting {s} due to {} {s}s",
                 .{ name, num_events, event_name },
             );

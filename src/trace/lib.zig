@@ -6,5 +6,5 @@ pub const entry = @import("entry.zig");
 pub const Logger = log.Logger;
 pub const Level = level.Level;
 pub const Entry = entry.StdEntry;
-pub const TestingLogger = log.TestLogger;
+pub const TestLogger = log.TestLogger;
 pub const StandardErrLogger = log.StandardErrLogger;

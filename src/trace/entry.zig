@@ -86,6 +86,7 @@ pub const StdEntry = struct {
 
     pub fn deinit(self: *Self) void {
         self.fields.deinit();
+        self.channel.deinit();
         self.allocator.destroy(self);
     }
 

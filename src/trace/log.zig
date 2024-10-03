@@ -21,8 +21,6 @@ pub const Config = struct {
     max_buffer: ?u64 = null,
 };
 
-const INITIAL_LOG_CHANNEL_SIZE: usize = 1024;
-
 const LogKind = enum {
     standard,
     test_logger,
@@ -139,14 +137,14 @@ pub const StandardErrLogger = struct {
             .max_buffer = max_buffer,
             .exit_sig = AtomicBool.init(false),
             .max_level = config.max_level,
-            .handle = null,
-            .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
+            .handle = try std.Thread.spawn(.{}, run, .{self}),
+            .channel = Channel(logfmt.LogMsg).create(config.allocator) catch
+                @panic("could not allocate LogMsg channel"),
         };
         return self;
     }
 
     pub fn deinit(self: *Self) void {
-        self.channel.close();
         if (self.handle) |*handle| {
             std.time.sleep(std.time.ns_per_ms * 5);
             self.exit_sig.store(true, .seq_cst);
@@ -155,6 +153,7 @@ pub const StandardErrLogger = struct {
         self.channel.deinit();
         self.log_allocator_state.deinit();
         self.allocator.destroy(self.log_allocator_state);
+        self.allocator.destroy(self.channel);
         self.allocator.destroy(self);
     }
 
@@ -168,24 +167,21 @@ pub const StandardErrLogger = struct {
 
     pub fn run(self: *Self) void {
         while (!self.exit_sig.load(.seq_cst)) {
-            const messages = self.channel.drain() orelse {
+            const message = self.channel.receive() orelse {
                 // channel is closed
                 return;
             };
-            defer self.channel.allocator.free(messages);
             const writer = std.io.getStdErr().writer();
-            for (messages) |message| {
-                { // Scope to limit the span of the lock on std err.
-                    std.debug.lockStdErr();
-                    defer std.debug.unlockStdErr();
-                    logfmt.writeLog(writer, message) catch {};
-                }
-                if (message.maybe_fields) |fields| {
-                    self.log_allocator.free(fields);
-                }
-                if (message.maybe_fmt) |fmt_msg| {
-                    self.log_allocator.free(fmt_msg);
-                }
+            { // Scope to limit the span of the lock on std err.
+                std.debug.lockStdErr();
+                defer std.debug.unlockStdErr();
+                logfmt.writeLog(writer, message) catch {};
+            }
+            if (message.maybe_fields) |fields| {
+                self.log_allocator.free(fields);
+            }
+            if (message.maybe_fmt) |fmt_msg| {
+                self.log_allocator.free(fmt_msg);
             }
         }
     }

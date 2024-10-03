@@ -452,8 +452,6 @@ pub const BlockstoreReader = struct {
     ) !VersionedConfirmedBlockWithEntries {
         var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
             self.logger.debug().logf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
-        var slot_meta: SlotMeta = try self.db.get(schema.slot_meta, slot) orelse {
-            self.logger.debug().logf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
             return error.SlotUnavailable;
         };
         defer slot_meta.deinit();

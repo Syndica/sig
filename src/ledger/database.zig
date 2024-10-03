@@ -1,8 +1,10 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const blockstore = @import("lib.zig");
+const log = @import("../trace/log.zig");
 
 const Allocator = std.mem.Allocator;
+const TestingLogger = log.TestLogger;
 
 const Logger = sig.trace.Logger;
 
@@ -274,7 +276,6 @@ pub const BytesRef = struct {
 
 /// Test cases that can be applied to any implementation of Database
 fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
-    const TestingLogger = @import("../trace/log.zig").TestLogger;
     @setEvalBranchQuota(10_000);
     const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
     const test_dir = sig.TEST_DATA_DIR ++ "blockstore/database/" ++ impl_id.buffer ++ "/";
@@ -295,7 +296,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     };
     const DB = Database(Impl(&.{ cf1, cf2 }));
 
-    const logger = sig.trace.TestLogger.default.logger();
+    const logger = Logger{ .noop = {} };
 
     return struct {
         pub fn basic() !void {

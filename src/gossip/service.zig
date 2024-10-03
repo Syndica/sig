@@ -454,7 +454,7 @@ pub const GossipService = struct {
         defer {
             // trigger the next service in the chain to close
             self.counter.store(idx + 1, .release);
-            self.logger.debugf("verifyPackets loop closed", .{});
+            self.logger.debug().logf("verifyPackets loop closed", .{});
         }
 
         const tasks = try VerifyMessageTask.init(self.allocator, VERIFY_PACKET_PARALLEL_TASKS);
@@ -532,7 +532,7 @@ pub const GossipService = struct {
         defer {
             // even if we fail, trigger the next thing
             self.counter.store(idx + 1, .release);
-            self.logger.debugf("processMessages loop closed", .{});
+            self.logger.debug().log("processMessages loop closed");
         }
 
         // we batch messages bc:
@@ -808,7 +808,7 @@ pub const GossipService = struct {
     fn buildMessages(self: *Self, seed: u64, idx: usize) !void {
         defer {
             self.counter.store(idx + 1, .release);
-            self.logger.infof("buildMessages loop closed", .{});
+            self.logger.info().logf("buildMessages loop closed", .{});
         }
 
         var loop_timer = try sig.time.Timer.start();
@@ -1414,7 +1414,7 @@ pub const GossipService = struct {
             self.logger.debug()
                 .field("from_endpoint", endpoint_str.items)
                 .field("from_pubkey", ping_message.ping.from.string().slice())
-                .debug("gossip: recv ping");
+                .log("gossip: recv ping");
 
             try self.packet_outgoing_channel.send(packet);
             self.stats.pong_messages_sent.add(1);

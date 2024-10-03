@@ -304,7 +304,7 @@ pub const DiskMemoryAllocator = struct {
     }
 
     fn logFailure(self: Self, err: anyerror, file_name: []const u8) void {
-        self.logger.errf("Disk Memory Allocator error: {s}, filepath: {s}", .{
+        self.logger.err().logf("Disk Memory Allocator error: {s}, filepath: {s}", .{
             @errorName(err), sig.utils.fmt.tryRealPath(self.dir, file_name),
         });
     }
