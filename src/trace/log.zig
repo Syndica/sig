@@ -125,8 +125,8 @@ pub const StandardErrLogger = struct {
     handle: ?std.Thread,
 
     pub fn init(config: Config) !*Self {
-        const recycle_fba = try config.allocator.create(RecycleFBA(.{}));
         const max_buffer = config.max_buffer orelse return error.MaxBufferNotSet;
+        const recycle_fba = try config.allocator.create(RecycleFBA(.{}));
         recycle_fba.* = try RecycleFBA(.{}).init(config.allocator, max_buffer);
         const self = try config.allocator.create(Self);
         self.* = .{
@@ -151,8 +151,8 @@ pub const StandardErrLogger = struct {
         }
         self.channel.deinit();
         self.log_allocator_state.deinit();
-        self.allocator.destroy(self.log_allocator_state);
         self.allocator.destroy(self.channel);
+        self.allocator.destroy(self.log_allocator_state);
         self.allocator.destroy(self);
     }
 
@@ -165,23 +165,21 @@ pub const StandardErrLogger = struct {
     }
 
     pub fn run(self: *Self) void {
-        while (!self.exit_sig.load(.seq_cst)) {
-            const message = self.channel.receive() orelse {
-                // channel is closed
-                return;
-            };
-            const writer = std.io.getStdErr().writer();
-            { // Scope to limit the span of the lock on std err.
-                std.debug.lockStdErr();
-                defer std.debug.unlockStdErr();
-                logfmt.writeLog(writer, message) catch {};
-            }
-            if (message.maybe_fields) |fields| {
-                self.log_allocator.free(fields);
-            }
-            if (message.maybe_fmt) |fmt_msg| {
-                self.log_allocator.free(fmt_msg);
-            }
+        while (!self.exit_sig.load(.acquire)) {
+            // while (self.channel.receive()) |message| {
+            //     const writer = std.io.getStdErr().writer();
+            //     { // Scope to limit the span of the lock on std err.
+            //         std.debug.lockStdErr();
+            //         defer std.debug.unlockStdErr();
+            //         logfmt.writeLog(writer, message) catch {};
+            //     }
+            //     if (message.maybe_fields) |fields| {
+            //         self.log_allocator.free(fields);
+            //     }
+            //     if (message.maybe_fmt) |fmt_msg| {
+            //         self.log_allocator.free(fmt_msg);
+            //     }
+            // }
         }
     }
 
