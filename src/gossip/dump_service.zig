@@ -32,8 +32,7 @@ pub const GossipDumpService = struct {
         var dir = try std.fs.cwd().makeOpenPath(dir_name_bounded.constSlice(), .{});
         defer dir.close();
 
-        while (true) {
-            if (self.exit.load(.unordered)) return;
+        while (self.counter.load(.acquire) != idx) {
             try self.dumpGossip(dir, start_time);
             std.time.sleep(DUMP_INTERVAL.asNanos());
         }
