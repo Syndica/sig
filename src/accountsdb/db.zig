@@ -225,6 +225,38 @@ pub const AccountsDB = struct {
         }
     }
 
+    pub fn fastLoadWithDiskIndexes(
+        self: *Self, 
+    ) !void { 
+        var index_dir = try self.snapshot_dir.openDir("index", .{});
+        defer index_dir.close();
+
+        var index_dir_iter = index_dir.iterate();
+        while (try index_dir_iter.next()) |file_entry| { 
+            const index_file = try index_dir.openFile(file_entry.name, .{ .mode = .read_write });
+            defer index_file.close();
+
+            const file_stat = try index_file.stat();
+            const file_size: u64 = @intCast(file_stat.size);
+
+            const memory = try std.posix.mmap(
+                null,
+                file_size,
+                std.posix.PROT.READ | std.posix.PROT.WRITE,
+                std.posix.MAP{ .TYPE = .SHARED },
+                index_file.handle,
+                0,
+            );
+
+            const metadata_size = @sizeOf(DiskMemoryAllocator.Metadata);
+            const references = std.mem.bytesAsSlice(AccountRef, memory[0..memory.len - metadata_size]);
+            std.debug.print("ref1: {any}\n", .{references[0]});
+        }
+
+        if (self.config.use_disk_index) { @panic("ahhh"); }
+        if (self.config.use_disk_index) { @panic("ahhh"); }
+    }
+
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *Self,
@@ -440,12 +472,13 @@ pub const AccountsDB = struct {
         // allocate all the references in one shot with a wrapper allocator
         // without this large allocation, snapshot loading is very slow
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
-        var references = try ArrayList(AccountRef).initCapacity(
+        // NOTE: need exact slice for fastboot to work as expected
+        const reference_slice = try self.account_index.reference_allocator.alloc(AccountRef, n_accounts_estimate);
+        const references_ptr = reference_slice.ptr;
+        var references = ArrayList(AccountRef).fromOwnedSlice(
             self.account_index.reference_allocator,
-            n_accounts_estimate,
+            reference_slice,
         );
-
-        const references_ptr = references.items.ptr;
 
         const counting_alloc = try FreeCounterAllocator.init(self.allocator, references);
         defer counting_alloc.deinitIfSafe();

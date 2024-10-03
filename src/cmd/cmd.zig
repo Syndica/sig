@@ -211,6 +211,7 @@ pub fn run() !void {
 
     var use_disk_index_option = cli.Option{
         .long_name = "use-disk-index",
+        .short_alias = 'd',
         .help = "use disk-memory for the account index",
         .value_ref = cli.mkRef(&config.current.accounts_db.use_disk_index),
         .required = false,
@@ -478,6 +479,7 @@ pub fn run() !void {
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
                             &geyser_writer_fba_bytes_option,
+                            &network_option,
                         },
                         .target = .{
                             .action = .{
@@ -1431,6 +1433,9 @@ fn loadSnapshot(
         geyser_writer,
     );
     errdefer result.accounts_db.deinit();
+    
+    // // TODO: load from disk index
+    // try result.accounts_db.fastLoadWithDiskIndexes();
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(
         allocator,

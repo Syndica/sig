@@ -214,7 +214,7 @@ pub const DiskMemoryAllocator = struct {
     pub const MmapRatio = u16;
 
     /// Metadata stored at the end of each allocation.
-    const Metadata = extern struct {
+    pub const Metadata = extern struct {
         file_index: u32,
         mmap_size: usize align(4),
     };
@@ -372,9 +372,9 @@ pub const DiskMemoryAllocator = struct {
         });
     }
 
-    const file_name_max_len = sig.utils.fmt.boundedLenValue("bin_{d}", .{std.math.maxInt(u32)});
+    const file_name_max_len = sig.utils.fmt.boundedLenValue("account_references_{d}", .{std.math.maxInt(u32)});
     inline fn fileNameBounded(file_index: u32) std.BoundedArray(u8, file_name_max_len) {
-        return sig.utils.fmt.boundedFmt("bin_{d}", .{file_index});
+        return sig.utils.fmt.boundedFmt("account_references_{d}", .{file_index});
     }
 };
 
