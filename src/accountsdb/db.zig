@@ -1169,6 +1169,7 @@ pub const AccountsDB = struct {
         exit: *std.atomic.Value(bool),
         slots_per_full_snapshot: u64,
         slots_per_incremental_snapshot: u64,
+        zstd_nb_workers: u31 = 0,
     };
 
     /// periodically runs flush/clean/shrink, and generates snapshots.
@@ -1197,7 +1198,9 @@ pub const AccountsDB = struct {
         var delete_account_files = std.AutoArrayHashMap(FileId, void).init(self.allocator);
         defer delete_account_files.deinit();
 
-        const zstd_compressor = try zstd.Compressor.init(.{});
+        const zstd_compressor = try zstd.Compressor.init(.{
+            .nb_workers = config.zstd_nb_workers,
+        });
         defer zstd_compressor.deinit();
 
         var zstd_sfba_state = std.heap.stackFallback(4096 * 4, self.allocator);
@@ -2481,8 +2484,8 @@ pub const AccountsDB = struct {
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
-            &sig.version.CURRENT_CLIENT_VERSION,
-            &StatusCache.default(),
+            sig.version.CURRENT_CLIENT_VERSION,
+            StatusCache.default(),
             &snapshot_fields,
             file_map,
         );
@@ -2677,8 +2680,8 @@ pub const AccountsDB = struct {
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
-            &sig.version.CURRENT_CLIENT_VERSION,
-            &StatusCache.default(),
+            sig.version.CURRENT_CLIENT_VERSION,
+            StatusCache.default(),
             &snapshot_fields,
             file_map,
         );
@@ -2938,15 +2941,15 @@ const FreeCounterAllocator = struct {
 /// with the association defined by the file id (a field of the value of the former, the key of the latter).
 pub fn writeSnapshotTarWithFields(
     archive_writer: anytype,
-    version: *const ClientVersion,
-    status_cache: *const StatusCache,
-    snapshot_fields: *const SnapshotFields,
+    version: ClientVersion,
+    status_cache: StatusCache,
+    manifest: *const SnapshotFields,
     file_map: *const AccountsDB.FileMap,
 ) !void {
-    try snapgen.writeMetadataFiles(archive_writer, version, status_cache, snapshot_fields);
+    try snapgen.writeMetadataFiles(archive_writer, version, status_cache, manifest);
 
     try snapgen.writeAccountsDirHeader(archive_writer);
-    const file_info_map = snapshot_fields.accounts_db_fields.file_map;
+    const file_info_map = manifest.accounts_db_fields.file_map;
     for (file_info_map.keys(), file_info_map.values()) |file_slot, file_info| {
         const account_file = file_map.getPtr(file_info.id) orelse unreachable;
         std.debug.assert(account_file.id == file_info.id);
@@ -2964,8 +2967,8 @@ pub const snapgen = struct {
     /// Should call this first to begin generating the snapshot archive.
     pub fn writeMetadataFiles(
         archive_writer: anytype,
-        version: *const ClientVersion,
-        status_cache: *const StatusCache,
+        version: ClientVersion,
+        status_cache: StatusCache,
         manifest: *const SnapshotFields,
     ) !void {
         const slot: Slot = manifest.bank_fields.slot;
@@ -2997,7 +3000,7 @@ pub const snapgen = struct {
         try bincode.write(writer, manifest, .{});
         try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
 
-        std.debug.assert(counting_writer_state.bytes_written == 0);
+        std.debug.assert(counting_writer_state.bytes_written % 512 == 0);
     }
 
     /// Writes the accounts dir header. Do this after writing the metadata files.
