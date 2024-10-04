@@ -1542,7 +1542,7 @@ const test_shreds = @import("test_shreds.zig");
 
 test "getLatestOptimisticSlots" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("getLatestOptimisticSlots");
@@ -1613,7 +1613,7 @@ test "getLatestOptimisticSlots" {
 test "getFirstDuplicateProof" {
     const allocator = std.testing.allocator;
 
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_DATA_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
@@ -1653,7 +1653,7 @@ test "getFirstDuplicateProof" {
 
 test "isDead" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("isDead");
@@ -1689,7 +1689,7 @@ test "isDead" {
 
 test "getBlockHeight" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("getBlockHeight");
@@ -1718,7 +1718,7 @@ test "getBlockHeight" {
 
 test "getRootedBlockTime" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("getRootedBlockTime");
@@ -1757,7 +1757,7 @@ test "getRootedBlockTime" {
 
 test "slotMetaIterator" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("slotMetaIterator");
@@ -1819,7 +1819,7 @@ test "slotMetaIterator" {
 
 test "rootedSlotIterator" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("rootedSlotIterator");
@@ -1855,7 +1855,7 @@ test "rootedSlotIterator" {
 
 test "slotRangeConnected" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("slotRangeConnected");
@@ -1913,7 +1913,7 @@ test "slotRangeConnected" {
 
 test "highestSlot" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("highestSlot");
@@ -1972,7 +1972,7 @@ test "highestSlot" {
 
 test "lowestSlot" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("lowestSlot");
@@ -2018,7 +2018,7 @@ test "lowestSlot" {
 
 test "isShredDuplicate" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("isShredDuplicate");
@@ -2070,7 +2070,7 @@ test "isShredDuplicate" {
 
 test "findMissingDataIndexes" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("findMissingDataIndexes");
@@ -2138,7 +2138,7 @@ test "findMissingDataIndexes" {
 
 test "getCodeShred" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("getCodeShred");
@@ -2218,7 +2218,7 @@ test "getCodeShred" {
 
 test "getDataShred" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.noop;
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("getDataShred");

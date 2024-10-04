@@ -16,7 +16,6 @@ const VersionedTransactionWithStatusMeta = ledger.reader.VersionedTransactionWit
 const comptimePrint = std.fmt.comptimePrint;
 
 const schema = ledger.schema.schema;
-var test_logger = sig.trace.noop;
 
 test "put/get data consistency for merkle root" {
     var rng = std.Random.DefaultPrng.init(100);
@@ -379,13 +378,13 @@ pub fn TestState(scope: []const u8) type {
         }
 
         pub fn shredInserter(self: *Self) !ledger.ShredInserter {
-            return ledger.ShredInserter.init(_allocator, test_logger, &self.registry, self.db);
+            return ledger.ShredInserter.init(_allocator, .noop, &self.registry, self.db);
         }
 
         pub fn writer(self: *Self) !ledger.BlockstoreWriter {
             return try ledger.BlockstoreWriter.init(
                 _allocator,
-                test_logger,
+                .noop,
                 self.db,
                 &self.registry,
                 &self.lowest_cleanup_slot,
@@ -396,7 +395,7 @@ pub fn TestState(scope: []const u8) type {
         pub fn reader(self: *Self) !ledger.BlockstoreReader {
             return try ledger.BlockstoreReader.init(
                 _allocator,
-                test_logger,
+                .noop,
                 self.db,
                 &self.registry,
                 &self.lowest_cleanup_slot,
@@ -425,7 +424,7 @@ pub fn TestDB(scope: []const u8) type {
         pub fn initCustom(allocator: Allocator, comptime test_name: []const u8) !BlockstoreDB {
             const path = comptimePrint("{s}/{s}/{s}", .{ dir, scope, test_name });
             try sig.ledger.tests.freshDir(path);
-            return try BlockstoreDB.open(allocator, test_logger, path);
+            return try BlockstoreDB.open(allocator, .noop, path);
         }
     };
 }

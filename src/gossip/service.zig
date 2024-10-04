@@ -3264,7 +3264,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         // defer logger.deinit();
         // logger.spawn();
 
-        const logger = sig.trace.noop;
+        const logger = .noop;
 
         // process incoming packets/messsages
         var counter = Atomic(usize).init(0);
@@ -3379,7 +3379,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         // defer logger.deinit();
         // logger.spawn();
 
-        const logger = sig.trace.noop;
+        const logger = .noop;
 
         // process incoming packets/messsages
         var counter = Atomic(usize).init(0);
