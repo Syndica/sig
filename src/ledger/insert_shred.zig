@@ -72,6 +72,10 @@ pub const ShredInserter = struct {
         };
     }
 
+    pub fn deinit(self: *Self) void {
+        self.logger.deinit();
+    }
+
     pub const InsertShredsResult = struct {
         completed_data_set_infos: ArrayList(CompletedDataSetInfo),
         duplicate_shreds: ArrayList(PossibleDuplicateShred),
@@ -1130,8 +1134,6 @@ const ShredInserterTestState = struct {
 
     pub fn init(comptime test_name: []const u8) !ShredInserterTestState {
         const test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-        defer test_logger.deinit();
-
         const logger = test_logger.logger();
         return initWithLogger(test_name, logger);
     }
@@ -1189,6 +1191,7 @@ const ShredInserterTestState = struct {
 
     pub fn deinit(self: *@This()) void {
         self.state.deinit();
+        self.inserter.deinit();
     }
 };
 
