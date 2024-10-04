@@ -25,7 +25,6 @@ const Hash = sig.core.hash.Hash;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Atomic = std.atomic.Value;
 const Duration = sig.time.Duration;
-const Logger = sig.trace.Logger;
 
 const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
 

@@ -908,7 +908,7 @@ pub const ShredInserter = struct {
             self.submitRecoveryMetrics(index.slot, erasure_meta, true, "complete", shreds.items.len);
             return shreds;
         } else |e| {
-            self.logger.errf("shred recovery error: {}", .{e});
+            self.logger.err().logf("shred recovery error: {}", .{e});
             self.submitRecoveryMetrics(index.slot, erasure_meta, true, "incomplete", 0);
             return std.ArrayList(Shred).init(self.allocator);
         }
@@ -940,7 +940,7 @@ pub const ShredInserter = struct {
         recovered: usize,
     ) void {
         const start, const end = erasure_meta.dataShredsIndices();
-        self.logger.debugf(
+        self.logger.debug().logf(
             \\datapoint: blockstore-erasure
             \\    slot: {[slot]}
             \\    start_index: {[start_index]}

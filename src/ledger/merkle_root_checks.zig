@@ -49,7 +49,7 @@ pub fn checkMerkleRootConsistency(
         return true;
     }
 
-    logger.warnf(&newlinesToSpaces(
+    logger.warn().logf(&newlinesToSpaces(
         \\Received conflicting merkle roots for slot: {}, erasure_set: {any} original merkle
         \\root meta {any} vs conflicting merkle root {any} shred index {} type {any}. Reporting
         \\as duplicate
@@ -77,7 +77,7 @@ pub fn checkMerkleRootConsistency(
                 },
             });
         } else {
-            logger.errf(&newlinesToSpaces(
+            logger.err().logf(&newlinesToSpaces(
                 \\Shred {any} indiciated by merkle root meta {any} is 
                 \\missing from blockstore. This should only happen in extreme cases where 
                 \\blockstore cleanup has caught up to the root. Skipping the merkle root 
@@ -116,7 +116,7 @@ pub fn checkForwardChainedMerkleRootConsistency(
 
     // If a shred from the next fec set has already been inserted, check the chaining
     const next_fec_set_index = if (erasure_meta.nextFecSetIndex()) |n| n else {
-        logger.errf(
+        logger.err().logf(
             "Invalid erasure meta, unable to compute next fec set index {any}",
             .{erasure_meta},
         );
@@ -139,7 +139,7 @@ pub fn checkForwardChainedMerkleRootConsistency(
     const next_shred = if (try shred_store.get(next_shred_id)) |ns|
         ns
     else {
-        logger.errf(&newlinesToSpaces(
+        logger.err().logf(&newlinesToSpaces(
             \\Shred {any} indicated by merkle root meta {any} \
             \\is missing from blockstore. This should only happen in extreme cases where \
             \\blockstore cleanup has caught up to the root. Skipping the forward chained \
@@ -151,7 +151,7 @@ pub fn checkForwardChainedMerkleRootConsistency(
     const chained_merkle_root = shred_mod.layout.getChainedMerkleRoot(next_shred);
 
     if (!checkChaining(merkle_root, chained_merkle_root)) {
-        logger.warnf(&newlinesToSpaces(
+        logger.warn().logf(&newlinesToSpaces(
             \\Received conflicting chained merkle roots for slot: {}, shred \
             \\{any} type {any} has merkle root {any}, however next fec set \
             \\shred {any} type {any} chains to merkle root \
@@ -229,7 +229,7 @@ pub fn checkBackwardsChainedMerkleRootConsistency(
     };
     const prev_shred =
         if (try shred_store.get(prev_shred_id)) |ps| ps else {
-        logger.warnf(&newlinesToSpaces(
+        logger.warn().logf(&newlinesToSpaces(
             \\Shred {any} indicated by the erasure meta {any} \
             \\is missing from blockstore. This can happen if you have recently upgraded \
             \\from a version < v1.18.13, or if blockstore cleanup has caught up to the root. \
@@ -241,7 +241,7 @@ pub fn checkBackwardsChainedMerkleRootConsistency(
     const chained_merkle_root = shred.chainedMerkleRoot() catch null;
 
     if (!checkChaining(merkle_root, chained_merkle_root)) {
-        logger.warnf(&newlinesToSpaces(
+        logger.warn().logf(&newlinesToSpaces(
             \\Received conflicting chained merkle roots for slot: {}, shred {any} type {any} \
             \\chains to merkle root {any}, however previous fec set code \
             \\shred {any} has merkle root {any}. Reporting as duplicate
