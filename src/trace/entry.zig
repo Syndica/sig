@@ -46,12 +46,12 @@ pub const Entry = union(enum) {
         switch (self) {
             .noop => {},
             .standard => |impl| {
-                var impll = impl;
-                impll.log(msg);
+                var logger = impl;
+                logger.log(msg);
             },
             .testing => |impl| {
-                var impll = impl;
-                impll.log(msg);
+                var logger = impl;
+                logger.log(msg);
             },
         }
     }
