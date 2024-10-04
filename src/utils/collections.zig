@@ -145,7 +145,7 @@ pub fn SortedMapCustom(
     comptime config: SortedMapConfig(K),
 ) type {
     return struct {
-        inner: std.ArrayHashMap(K, V, config.Context, config.store_hash),
+        inner: Inner,
         max: ?K = null,
         is_sorted: bool = true,
 
@@ -233,6 +233,11 @@ pub fn SortedMapCustom(
         pub fn items(self: *Self) struct { []const K, []const V } {
             self.sort();
             return .{ self.inner.keys(), self.inner.values() };
+        }
+
+        pub fn iterator(self: *Self) Inner.Iterator {
+            self.sort();
+            return self.inner.iterator();
         }
 
         /// subslice of items ranging from start (inclusive) to end (exclusive)

@@ -92,12 +92,12 @@ pub fn Database(comptime Impl: type) type {
         ///    case, getBytes is faster than get. But if you *do* need an owned slice,
         ///    then it's faster to call `get` insted of calling this function followed
         ///    by memcpy.
-        pub fn getBytes(
-            self: *Self,
-            comptime cf: ColumnFamily,
-            key: cf.Key,
-        ) anyerror!?BytesRef {
+        pub fn getBytes(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?BytesRef {
             return try self.impl.getBytes(cf, key);
+        }
+
+        pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!bool {
+            return try self.impl.contains(cf, key);
         }
 
         pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!void {

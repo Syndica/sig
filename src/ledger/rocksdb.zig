@@ -137,6 +137,10 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
+        pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!bool {
+            return try self.getBytes(cf, key) != null;
+        }
+
         pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!void {
             const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();

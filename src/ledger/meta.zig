@@ -187,13 +187,13 @@ pub const ErasureMeta = struct {
 
     pub fn fromCodeShred(shred: CodeShred) ?Self {
         return .{
-            .fec_set_index = @intCast(shred.fields.common.fec_set_index),
+            .fec_set_index = shred.fields.common.fec_set_index,
             .config = ErasureConfig{
-                .num_data = @intCast(shred.fields.custom.num_data_shreds),
-                .num_code = @intCast(shred.fields.custom.num_code_shreds),
+                .num_data = shred.fields.custom.num_data_shreds,
+                .num_code = shred.fields.custom.num_code_shreds,
             },
-            .first_code_index = @intCast(shred.firstCodeIndex() catch return null),
-            .first_received_code_index = @intCast(shred.fields.common.index),
+            .first_code_index = shred.firstCodeIndex() catch return null,
+            .first_received_code_index = shred.fields.common.index,
         };
     }
 
@@ -213,8 +213,8 @@ pub const ErasureMeta = struct {
     } {
         const c_start, const c_end = self.codeShredsIndices();
         const d_start, const d_end = self.dataShredsIndices();
-        const num_code = index.code.range(c_start, c_end).len;
-        const num_data = index.data.range(d_start, d_end).len;
+        const num_code = index.code_index.range(c_start, c_end).len;
+        const num_data = index.data_index.range(d_start, d_end).len;
 
         const data_missing = self.config.num_data -| num_data;
         const num_needed = data_missing -| num_code;
@@ -258,20 +258,20 @@ pub const ErasureConfig = struct {
 /// Index recording presence/absence of shreds
 pub const Index = struct {
     slot: Slot,
-    data: ShredIndex,
-    code: ShredIndex,
+    data_index: ShredIndex,
+    code_index: ShredIndex,
 
     pub fn init(allocator: std.mem.Allocator, slot: Slot) Index {
         return .{
             .slot = slot,
-            .data = ShredIndex.init(allocator),
-            .code = ShredIndex.init(allocator),
+            .data_index = ShredIndex.init(allocator),
+            .code_index = ShredIndex.init(allocator),
         };
     }
 
     pub fn deinit(self: *Index) void {
-        self.data.deinit();
-        self.code.deinit();
+        self.data_index.deinit();
+        self.code_index.deinit();
     }
 };
 
@@ -346,7 +346,7 @@ pub const MerkleRootMeta = struct {
     /// The shred type of the first received shred
     first_received_shred_type: sig.ledger.shred.ShredType,
 
-    pub fn fromShred(shred: anytype) MerkleRootMeta {
+    pub fn fromFirstReceivedShred(shred: anytype) MerkleRootMeta {
         comptime std.debug.assert(
             @TypeOf(shred) == sig.ledger.shred.DataShred or
                 @TypeOf(shred) == sig.ledger.shred.CodeShred,
