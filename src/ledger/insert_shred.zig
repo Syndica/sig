@@ -1878,10 +1878,7 @@ const ShredInserterTestState = struct {
     inserter: ShredInserter,
 
     pub fn init(comptime test_name: []const u8) !ShredInserterTestState {
-        const test_logger = DirectPrintLogger.init(.{
-            .allocator = std.testing.allocator,
-            .max_level = Logger.TEST_DEFAULT_LEVEL,
-        });
+        const test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
         defer test_logger.deinit();
 
         const logger = test_logger.logger();

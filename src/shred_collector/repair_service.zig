@@ -432,10 +432,7 @@ test "RepairService sends repair request to gossip peer" {
     const wallclock = 100;
     var gossip = try GossipTable.init(allocator, undefined);
     defer gossip.deinit();
-    const test_logger = TestLogger.init(.{
-        .allocator = allocator,
-        .max_level = Logger.TEST_DEFAULT_LEVEL,
-    });
+    const test_logger = TestLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
     defer test_logger.deinit();
 
     const logger = test_logger.logger();

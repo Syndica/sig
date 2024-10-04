@@ -243,12 +243,12 @@ pub const DirectPrintLogger = struct {
     const Self = @This();
     max_level: Level,
     allocator: Allocator,
-    pub fn init(config: Config) *Self {
+    pub fn init(allocator: std.mem.Allocator, max_level: Level) *Self {
         std.debug.assert(builtin.is_test);
-        const self = config.allocator.create(Self) catch @panic("could not allocator.create Logger");
+        const self = allocator.create(Self) catch @panic("could not allocator.create Logger");
         self.* = .{
-            .max_level = config.max_level,
-            .allocator = config.allocator,
+            .max_level = max_level,
+            .allocator = allocator,
         };
         return self;
     }
@@ -453,10 +453,7 @@ test "trace_ng: test_logger" {
     // That way, the logger can be configured to write to a file, stdout or an array list.
     const allocator = std.testing.allocator;
 
-    var test_logger = DirectPrintLogger.init(.{
-        .allocator = allocator,
-        .max_level = Level.info,
-    });
+    var test_logger = DirectPrintLogger.init(allocator, Level.info);
     defer test_logger.deinit();
 
     const logger = test_logger.logger();
