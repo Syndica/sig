@@ -322,7 +322,7 @@ test "trace_ng: direct" {
     const std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
-        .max_buffer = 2048,
+        .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
 
@@ -373,7 +373,7 @@ test "trace_ng: scope switch" {
     const std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
-        .max_buffer = 2048,
+        .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
 
@@ -417,7 +417,7 @@ test "trace_ng: level" {
     var std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
-        .max_buffer = 2048,
+        .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
 
     defer std_logger.deinit();

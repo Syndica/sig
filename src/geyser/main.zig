@@ -156,7 +156,7 @@ pub fn csvDump() !void {
     var std_logger = sig.trace.ChannelPrintLogger.init(.{
         .allocator = std.heap.c_allocator,
         .max_level = sig.trace.Level.debug,
-        .max_buffer = 2048,
+        .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
 

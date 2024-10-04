@@ -39,7 +39,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var std_logger = StandardErrLogger.init(.{
         .allocator = allocator,
         .max_level = Level.debug,
-        .max_buffer = 2048,
+        .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
 

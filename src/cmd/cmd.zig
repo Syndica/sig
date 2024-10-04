@@ -599,7 +599,7 @@ fn identity() !void {
     var std_logger = ChannelPrintLogger.init(.{
         .allocator = gpa_allocator,
         .max_level = config.current.log_level,
-        .max_buffer = 2048,
+        .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
 
@@ -1341,7 +1341,7 @@ fn spawnLogger() !Logger {
     var std_logger = ChannelPrintLogger.init(.{
         .allocator = gpa_allocator,
         .max_level = config.current.log_level,
-        .max_buffer = 2048,
+        .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
     return std_logger.logger();
 }
