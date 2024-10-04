@@ -4027,7 +4027,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         // },
     };
 
-    pub fn loadSnapshot(bench_args: BenchArgs) !u64 {
+    pub fn loadSnapshot(bench_args: BenchArgs) !sig.time.Duration {
         const allocator = std.heap.c_allocator;
 
         // unpack the snapshot
@@ -4044,7 +4044,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
         const snapshot_dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
             std.debug.print("need to setup a snapshot in {s} for this benchmark...\n", .{dir_path});
-            return 0;
+            return sig.time.Duration.fromNanos(0);
         };
 
         const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
@@ -4090,7 +4090,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         });
         std.debug.print("r: hash: {}, lamports: {}\n", .{ accounts_hash, total_lamports });
 
-        return duration.asNanos();
+        return duration;
     }
 };
 
@@ -4235,7 +4235,7 @@ pub const BenchmarkAccountsDB = struct {
         // },
     };
 
-    pub fn readWriteAccounts(bench_args: BenchArgs) !u64 {
+    pub fn readWriteAccounts(bench_args: BenchArgs) !sig.time.Duration {
         const n_accounts = bench_args.n_accounts;
         const slot_list_len = bench_args.slot_list_len;
         const total_n_accounts = n_accounts * slot_list_len;
@@ -4375,7 +4375,7 @@ pub const BenchmarkAccountsDB = struct {
             std.debug.print("WRITE: {d}\n", .{elapsed});
         }
 
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         for (0..n_accounts) |i| {
             const pubkey = &pubkeys[i];
             const account = try accounts_db.getAccount(pubkey);
