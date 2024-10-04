@@ -6,8 +6,8 @@ const AtomicBool = std.atomic.Value(bool);
 const Fields = std.ArrayList(u8);
 
 pub const Entry = union(enum) {
-    standard: *ChannelEntry,
-    testing: *StdErrEntry,
+    standard: ChannelEntry,
+    testing: StdErrEntry,
     noop,
 
     const Self = @This();
@@ -30,11 +30,13 @@ pub const Entry = union(enum) {
                 return self;
             },
             .standard => |entry| {
-                _ = entry.field(name, value);
+                var log_entry = entry;
+                _ = log_entry.field(name, value);
                 return self;
             },
             .testing => |entry| {
-                _ = entry.field(name, value);
+                var log_entry = entry;
+                _ = log_entry.field(name, value);
                 return self;
             },
         }
@@ -43,16 +45,28 @@ pub const Entry = union(enum) {
     pub fn log(self: Self, msg: []const u8) void {
         switch (self) {
             .noop => {},
-            .standard => |impl| impl.log(msg),
-            .testing => |impl| impl.log(msg),
+            .standard => |impl| {
+                var impll = impl;
+                impll.log(msg);
+            },
+            .testing => |impl| {
+                var impll = impl;
+                impll.log(msg);
+            },
         }
     }
 
     pub fn logf(self: Self, comptime fmt: []const u8, args: anytype) void {
         switch (self) {
             .noop => {},
-            .standard => |impl| impl.logf(fmt, args),
-            .testing => |impl| impl.logf(fmt, args),
+            .standard => |impl| {
+                var logger = impl;
+                logger.logf(fmt, args);
+            },
+            .testing => |impl| {
+                var logger = impl;
+                logger.logf(fmt, args);
+            },
         }
     }
 };
@@ -71,9 +85,8 @@ pub const ChannelEntry = struct {
         scope: ?[]const u8,
         channel: *Channel(logfmt.LogMsg),
         log_level: Level,
-    ) *Self {
-        const self = allocator.create(Self) catch @panic("could not allocate.Create Entry");
-        self.* = Self{
+    ) Self {
+        return .{
             .allocator = allocator,
             .scope = scope,
             .exit_sig = AtomicBool.init(false),
@@ -81,13 +94,11 @@ pub const ChannelEntry = struct {
             .fields = Fields.init(allocator),
             .channel = channel,
         };
-        return self;
     }
 
     pub fn deinit(self: *Self) void {
         self.fields.deinit();
         self.channel.deinit();
-        self.allocator.destroy(self);
     }
 
     pub fn field(self: *Self, name: []const u8, value: anytype) *Self {
@@ -167,22 +178,19 @@ pub const StdErrEntry = struct {
         allocator: std.mem.Allocator,
         scope: ?[]const u8,
         log_level: Level,
-    ) *Self {
-        const self = allocator.create(Self) catch @panic("could not allocate.Create Entry");
-        self.* = Self{
+    ) Self {
+        return .{
             .allocator = allocator,
             .scope = scope,
             .log_level = log_level,
             .log_msg = std.ArrayList(u8).init(allocator),
         };
-        return self;
     }
 
     pub fn deinit(self: *Self) void {
         if (self.log_msg) |log_msg| {
             log_msg.deinit();
         }
-        self.allocator.destroy(self);
     }
 
     pub fn field(self: *Self, name: []const u8, value: anytype) *Self {
