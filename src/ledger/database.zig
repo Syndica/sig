@@ -295,7 +295,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     };
     const DB = Database(Impl(&.{ cf1, cf2 }));
 
-    const logger = Logger{ .noop = {} };
+    const logger = .noop;
 
     return struct {
         pub fn basic() !void {

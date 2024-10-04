@@ -471,7 +471,7 @@ test "RepairService sends repair request to gossip peer" {
         &my_shred_version,
     );
 
-    var tracker = BasicShredTracker.init(13579, Logger{ .noop = {} });
+    var tracker = BasicShredTracker.init(13579, .noop);
     var service = RepairService.init(
         allocator,
         logger,

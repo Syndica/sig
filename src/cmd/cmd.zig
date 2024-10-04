@@ -1528,7 +1528,7 @@ fn downloadSnapshot() !void {
     const my_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
     var gossip_service = try initGossip(
-        Logger{ .noop = {} },
+        .noop,
         my_keypair,
         &counter,
         entrypoints.items,

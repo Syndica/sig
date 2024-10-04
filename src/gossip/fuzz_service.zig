@@ -277,7 +277,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 client_keypair,
                 null, // we will only recv packets
                 &counter,
-                Logger{ .noop = {} }, // no logs
+                .noop, // no logs
             );
 
             const client_handle = try std.Thread.spawn(.{}, GossipService.run, .{
@@ -294,7 +294,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 fuzz_keypair,
                 (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
                 &counter,
-                Logger{ .noop = {} }, // no logs
+                .noop, // no logs
             );
 
             // this is mainly used to just send packets through the fuzzer
@@ -316,7 +316,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 fuzz_keypair,
                 (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
                 &counter,
-                Logger{ .noop = {} }, // no logs
+                .noop, // no logs
             );
 
             // this is mainly used to just send packets through the fuzzer

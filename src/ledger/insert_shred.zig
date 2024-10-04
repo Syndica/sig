@@ -2088,7 +2088,7 @@ test "chaining basic" {
 
 // agave: test_merkle_root_metas_coding
 test "merkle root metas coding" {
-    var state = try ShredInserterTestState.initWithLogger("handle chaining basic", Logger{ .noop = {} });
+    var state = try ShredInserterTestState.initWithLogger("handle chaining basic", .noop);
     defer state.deinit();
     const allocator = state.allocator();
 

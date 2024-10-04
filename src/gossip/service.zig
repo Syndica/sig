@@ -2217,7 +2217,7 @@ test "handle pong messages" {
         keypair,
         null,
         &counter,
-        Logger{ .noop = {} },
+        .noop,
     );
     defer {
         gossip_service.shutdown();
@@ -2497,7 +2497,7 @@ test "handle old prune & pull request message" {
         my_keypair,
         null,
         &counter,
-        Logger{ .noop = {} },
+        .noop,
     );
     defer gossip_service.deinit();
 
@@ -2972,7 +2972,7 @@ test "test packet verification" {
         keypair,
         null,
         &counter,
-        Logger{ .noop = {} },
+        .noop,
     );
     defer gossip_service.deinit();
 
@@ -3264,7 +3264,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         // defer logger.deinit();
         // logger.spawn();
 
-        const logger = sig.trace.Logger{ .noop = {} };
+        const logger = sig.trace.noop;
 
         // process incoming packets/messsages
         var counter = Atomic(usize).init(0);
@@ -3379,7 +3379,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         // defer logger.deinit();
         // logger.spawn();
 
-        const logger = sig.trace.Logger{ .noop = {} };
+        const logger = sig.trace.noop;
 
         // process incoming packets/messsages
         var counter = Atomic(usize).init(0);

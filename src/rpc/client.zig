@@ -18,7 +18,7 @@ pub const Client = struct {
 
     pub const Options = struct {
         max_retries: usize = 0,
-        logger: Logger = Logger{ .noop = {} },
+        logger: Logger = .noop,
     };
 
     pub fn init(allocator: std.mem.Allocator, cluster_type: types.ClusterType, options: Options) Client {

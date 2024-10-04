@@ -464,7 +464,7 @@ const TestDB = sig.ledger.tests.TestDB("writer");
 
 test "purgeSlots" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.Logger{ .noop = {} };
+    const logger = sig.trace.noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setRoots");
@@ -542,7 +542,7 @@ test "purgeSlots" {
 
 test "setRoots" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.Logger{ .noop = {} };
+    const logger = sig.trace.noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setRoots");
@@ -570,7 +570,7 @@ test "setRoots" {
 
 test "scanAndFixRoots" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.Logger{ .noop = {} };
+    const logger = sig.trace.noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("scanAndFixRoots");
@@ -612,7 +612,7 @@ test "scanAndFixRoots" {
 
 test "setAndChainConnectedOnRootAndNextSlots" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.Logger{ .noop = {} };
+    const logger = sig.trace.noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setAndChainConnectedOnRootAndNextSlots");
@@ -684,7 +684,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
 
 test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.Logger{ .noop = {} };
+    const logger = sig.trace.noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("setAndChainConnectedOnRootAndNextSlots");

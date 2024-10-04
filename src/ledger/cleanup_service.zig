@@ -195,7 +195,7 @@ const TestDB = ledger.tests.TestDB("cleanup_service");
 
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
-    const logger = Logger{ .noop = {} };
+    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
     var db = try TestDB.init("findSlotsToClean");

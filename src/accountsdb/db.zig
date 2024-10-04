@@ -403,7 +403,7 @@ pub const AccountsDB = struct {
             var thread_db = loading_threads.addOneAssumeCapacity();
             thread_db.* = try AccountsDB.init(
                 per_thread_allocator,
-                Logger{ .noop = {} }, // dont spam the logs with init information (we set it after)
+                .noop, // dont spam the logs with init information (we set it after)
                 self.snapshot_dir,
                 self.config,
                 self.geyser_writer,
@@ -3225,16 +3225,16 @@ test "testWriteSnapshot" {
     {
         const archive_file = try test_data_dir.openFile(snap_files.full_snapshot.snapshotNameStr().constSlice(), .{});
         defer archive_file.close();
-        try parallelUnpackZstdTarBall(allocator, Logger{ .noop = {} }, archive_file, tmp_snap_dir, 4, true);
+        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, true);
     }
 
     if (snap_files.incremental_snapshot) |inc_snap| {
         const archive_file = try test_data_dir.openFile(inc_snap.snapshotNameStr().constSlice(), .{});
         defer archive_file.close();
-        try parallelUnpackZstdTarBall(allocator, Logger{ .noop = {} }, archive_file, tmp_snap_dir, 4, false);
+        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, false);
     }
 
-    var accounts_db = try AccountsDB.init(allocator, Logger{ .noop = {} }, tmp_snap_dir, .{
+    var accounts_db = try AccountsDB.init(allocator, .noop, tmp_snap_dir, .{
         .number_of_index_bins = ACCOUNT_INDEX_BINS,
         .use_disk_index = false,
     }, null);
@@ -3269,7 +3269,7 @@ fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
 
         try parallelUnpackZstdTarBall(
             allocator,
-            Logger{ .noop = {} },
+            .noop,
             full_archive,
             dir,
             n_threads,
@@ -3277,7 +3277,7 @@ fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
         );
         try parallelUnpackZstdTarBall(
             allocator,
-            Logger{ .noop = {} },
+            .noop,
             inc_archive,
             dir,
             n_threads,
@@ -3296,7 +3296,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
 
     const snapshot_files = try SnapshotFiles.find(allocator, dir);
 
-    const logger = Logger{ .noop = {} };
+    const logger = .noop;
 
     var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
     errdefer snapshots.deinit(allocator);
@@ -3323,7 +3323,7 @@ test "geyser stream on load" {
 
     const snapshot_files = try SnapshotFiles.find(allocator, dir);
 
-    const logger = Logger{ .noop = {} };
+    const logger = .noop;
 
     var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
     errdefer snapshots.deinit(allocator);
@@ -3524,7 +3524,7 @@ test "load other sysvars" {
 
 test "flushing slots works" {
     const allocator = std.testing.allocator;
-    const logger = Logger{ .noop = {} };
+    const logger = .noop;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
@@ -3575,7 +3575,7 @@ test "flushing slots works" {
 
 test "purge accounts in cache works" {
     const allocator = std.testing.allocator;
-    const logger = Logger{ .noop = {} };
+    const logger = .noop;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
@@ -3632,7 +3632,7 @@ test "purge accounts in cache works" {
 
 test "clean to shrink account file works with zero-lamports" {
     const allocator = std.testing.allocator;
-    const logger = Logger{ .noop = {} };
+    const logger = .noop;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
@@ -3708,7 +3708,7 @@ test "clean to shrink account file works with zero-lamports" {
 
 test "clean to shrink account file works" {
     const allocator = std.testing.allocator;
-    const logger = Logger{ .noop = {} };
+    const logger = .noop;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
@@ -3776,7 +3776,7 @@ test "clean to shrink account file works" {
 
 test "full clean account file works" {
     const allocator = std.testing.allocator;
-    const logger = Logger{ .noop = {} };
+    const logger = .noop;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
@@ -3861,7 +3861,7 @@ test "full clean account file works" {
 
 test "shrink account file works" {
     const allocator = std.testing.allocator;
-    const logger = Logger{ .noop = {} };
+    const logger = .noop;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
@@ -4251,7 +4251,7 @@ pub const BenchmarkAccountsDB = struct {
         var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
         defer snapshot_dir.close();
 
-        const logger = Logger{ .noop = {} };
+        const logger = .noop;
         var accounts_db: AccountsDB = try AccountsDB.init(allocator, logger, snapshot_dir, .{
             .number_of_index_bins = ACCOUNT_INDEX_BINS,
             .use_disk_index = bench_args.index == .disk,
