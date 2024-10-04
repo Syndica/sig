@@ -252,6 +252,36 @@ pub const AccountIndex = struct {
         return does_exist;
     }
 
+    pub fn indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(self: *Self, account_ref: *AccountRef) bool {
+        // UNSAFE: this function is unsafe because it does not lock the reference map
+        const bin = &self.getBinFromPubkey(&account_ref.pubkey).private.v;
+
+        const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{ .ref_ptr = account_ref };
+            return true;
+        }
+
+        // traverse until you find the end
+        const head_ref = gop.value_ptr.*;
+        var curr = head_ref.ref_ptr;
+        while (true) {
+            if (curr.slot == account_ref.slot) {
+                // found a duplicate => dont do the insertion
+                return false;
+            }
+
+            const next_ptr = curr.next_ptr orelse {
+                // end of the list => insert it here
+                curr.next_ptr = account_ref;
+                return true;
+            };
+
+            // keep traversing
+            curr = next_ptr;
+        }
+    }
+
     /// adds the reference to the index if there is not a duplicate (ie, the same slot).
     /// returns if the reference was inserted.
     pub fn indexRefIfNotDuplicateSlotAssumeCapacity(self: *Self, account_ref: *AccountRef) bool {
