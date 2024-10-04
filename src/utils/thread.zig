@@ -13,29 +13,38 @@ pub const TaskParams = struct {
     thread_id: usize,
 };
 
-/// Spawns tasks and outputs the list of handles for the spawned threads.
-/// Task function should accept `params ++ .{ TaskParams{} }` as its parameter tuple.
+fn chunkSizeAndThreadCount(data_len: usize, max_n_threads: usize) struct { usize, usize } {
+    var chunk_size = data_len / max_n_threads;
+    var n_threads = max_n_threads;
+    if (chunk_size == 0) {
+        n_threads = 1;
+        chunk_size = data_len;
+    }
+    return .{ chunk_size, n_threads };
+}
+
 pub fn spawnThreadTasks(
-    /// This list is cleared, and then filled with the handles for the spawned task threads.
-    /// On successful call, all threads were appropriately spawned.
-    handles: *std.ArrayList(std.Thread),
-    comptime taskFn: anytype,
-    params: anytype,
+    wait_group: *std.Thread.WaitGroup,
     data_len: usize,
     max_n_threads: usize,
-) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
-    const chunk_size, const n_threads = blk: {
-        var chunk_size = data_len / max_n_threads;
-        var n_threads = max_n_threads;
-        if (chunk_size == 0) {
-            n_threads = 1;
-            chunk_size = data_len;
-        }
-        break :blk .{ chunk_size, n_threads };
-    };
+    /// If non-null, set to the coverage over the data which was achieved.
+    /// On a successful call, this will be equal to `data_len`.
+    /// On a failed call, this will be less than `data_len`,
+    /// representing the length of the data which was successfully
+    maybe_coverage: ?*usize,
+    comptime taskFn: anytype,
+    params: anytype,
+) std.Thread.SpawnError!void {
+    const chunk_size, const n_threads = chunkSizeAndThreadCount(data_len, max_n_threads);
 
-    handles.clearRetainingCapacity();
-    try handles.ensureTotalCapacityPrecise(n_threads);
+    if (maybe_coverage) |coverage| coverage.* = 0;
+
+    const S = struct {
+        fn taskFnWg(wg: *std.Thread.WaitGroup, fn_params: @TypeOf(params), task_params: TaskParams) @typeInfo(@TypeOf(taskFn)).Fn.return_type.? {
+            defer wg.finish();
+            return @call(.auto, taskFn, fn_params ++ .{task_params});
+        }
+    };
 
     var start_index: usize = 0;
     for (0..n_threads) |thread_id| {
@@ -46,14 +55,16 @@ pub fn spawnThreadTasks(
             .thread_id = thread_id,
         };
 
-        // NOTE(trevor): instead of just `try`ing, we could fill an optional diagnostic struct
-        //               which inform the caller how much coverage over `data_len` was achieved,
-        //               so that they could handle its coverage themselves instead of just having
-        //               to kill all the successfully spawned threads.
-        const handle = try std.Thread.spawn(.{}, taskFn, params ++ .{task_params});
-        handles.appendAssumeCapacity(handle);
+        wait_group.start();
+        const handle = std.Thread.spawn(.{}, S.taskFnWg, .{ wait_group, params, task_params }) catch |err| {
+            if (maybe_coverage) |coverage| coverage.* = start_index;
+            return err;
+        };
+        handle.detach();
         start_index = end_index;
     }
+
+    if (maybe_coverage) |coverage| coverage.* = data_len;
 }
 
 pub fn ThreadPoolTask(comptime Entry: type) type {
