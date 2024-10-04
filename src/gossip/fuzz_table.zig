@@ -15,7 +15,7 @@ const GossipKey = sig.gossip.data.GossipKey;
 const Signature = sig.core.Signature;
 const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const Duration = sig.time.Duration;
-const StandardErrLogger = sig.trace.StandardErrLogger;
+const StandardErrLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
 
 const TRIM_INTERVAL = Duration.fromSecs(2);

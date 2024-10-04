@@ -6,7 +6,7 @@ const accountsdb_fuzz = sig.accounts_db.fuzz;
 const gossip_fuzz_service = sig.gossip.fuzz_service;
 const gossip_fuzz_table = sig.gossip.fuzz_table;
 const accountsdb_snapshot_fuzz = sig.accounts_db.fuzz_snapshot;
-const StandardErrLogger = sig.trace.StandardErrLogger;
+const StandardErrLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
 
 const spawnMetrics = sig.prometheus.spawnMetrics;

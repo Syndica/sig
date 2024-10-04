@@ -63,7 +63,7 @@ pub const HardForks = struct {
 
 test "core.hard_forks: test hardforks" {
     const Logger = @import("../trace/log.zig").Logger;
-    const TestingLogger = @import("../trace/log.zig").TestLogger;
+    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     const testing_alloc = std.testing.allocator;
 
     const test_logger = TestingLogger.init(.{

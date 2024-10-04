@@ -21,7 +21,7 @@ const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const Logger = sig.trace.Logger;
 const Network = config.Network;
-const StandardErrLogger = sig.trace.StandardErrLogger;
+const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.Pubkey;
 const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
@@ -597,7 +597,7 @@ pub fn run() !void {
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    var std_logger = StandardErrLogger.init(.{
+    var std_logger = ChannelPrintLogger.init(.{
         .allocator = gpa_allocator,
         .max_level = config.current.log_level,
         .max_buffer = 2048,
@@ -1363,7 +1363,7 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 }
 
 fn spawnLogger() !Logger {
-    var std_logger = StandardErrLogger.init(.{
+    var std_logger = ChannelPrintLogger.init(.{
         .allocator = gpa_allocator,
         .max_level = config.current.log_level,
         .max_buffer = 2048,

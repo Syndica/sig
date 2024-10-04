@@ -1,8 +1,8 @@
 const std = @import("std");
 const Level = @import("level.zig").Level;
 const Entry = @import("entry.zig").Entry;
-const StdEntry = @import("entry.zig").StdEntry;
-const TestingEntry = @import("entry.zig").TestingEntry;
+const StdEntry = @import("entry.zig").ChannelEntry;
+const StdErrEntry = @import("entry.zig").StdErrEntry;
 const logfmt = @import("logfmt.zig");
 const sig = @import("../sig.zig");
 // TODO Improve import.
@@ -32,8 +32,8 @@ const LogKind = enum {
 pub fn ScopedLogger(comptime scope: ?[]const u8) type {
     return union(LogKind) {
         const Self = @This();
-        standard: *StandardErrLogger,
-        test_logger: *TestLogger,
+        standard: *ChannelPrintLogger,
+        test_logger: *DirectPrintLogger,
         noop: void,
 
         /// Can be used in tests to minimize the amount of logging during tests.
@@ -112,8 +112,8 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
 
 pub const Logger = ScopedLogger(null);
 
-/// An instance of `ScopedLogger` that logs to the standard err.
-pub const StandardErrLogger = struct {
+/// An instance of `ScopedLogger` that logs via the channel.
+pub const ChannelPrintLogger = struct {
     const Self = @This();
     max_level: Level,
     exit_sig: std.atomic.Value(bool),
@@ -167,18 +167,18 @@ pub const StandardErrLogger = struct {
     pub fn run(self: *Self) void {
         while (!self.exit_sig.load(.acquire)) {
             // while (self.channel.receive()) |message| {
-                //     const writer = std.io.getStdErr().writer();
-                //     { // Scope to limit the span of the lock on std err.
-                //         std.debug.lockStdErr();
-                //         defer std.debug.unlockStdErr();
-                //         logfmt.writeLog(writer, message) catch {};
-                //     }
-                //     if (message.maybe_fields) |fields| {
-                //         self.log_allocator.free(fields);
-                //     }
-                //     if (message.maybe_fmt) |fmt_msg| {
-                //         self.log_allocator.free(fmt_msg);
-                //     }
+            //     const writer = std.io.getStdErr().writer();
+            //     { // Scope to limit the span of the lock on std err.
+            //         std.debug.lockStdErr();
+            //         defer std.debug.unlockStdErr();
+            //         logfmt.writeLog(writer, message) catch {};
+            //     }
+            //     if (message.maybe_fields) |fields| {
+            //         self.log_allocator.free(fields);
+            //     }
+            //     if (message.maybe_fmt) |fmt_msg| {
+            //         self.log_allocator.free(fmt_msg);
+            //     }
             // }
         }
     }
@@ -237,7 +237,7 @@ pub const StandardErrLogger = struct {
 /// Directly prints instead of running in a separate thread. This handles issues during tests
 /// where some log messages never get logged because the logger is deinitialized before the
 /// logging thread picks up the log message.
-pub const TestLogger = struct {
+pub const DirectPrintLogger = struct {
     const builtin = @import("builtin");
 
     const Self = @This();
@@ -267,28 +267,28 @@ pub const TestLogger = struct {
 
     pub fn err(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.err)) {
-            return Entry{ .testing = TestingEntry.init(self.allocator, scope, Level.err) };
+            return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.err) };
         }
         return Entry{ .noop = {} };
     }
 
     pub fn warn(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.warn)) {
-            return Entry{ .testing = TestingEntry.init(self.allocator, scope, Level.warn) };
+            return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.warn) };
         }
         return Entry{ .noop = {} };
     }
 
     pub fn info(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.info)) {
-            return Entry{ .testing = TestingEntry.init(self.allocator, scope, Level.info) };
+            return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.info) };
         }
         return Entry{ .noop = {} };
     }
 
     pub fn debug(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.debug)) {
-            return Entry{ .testing = TestingEntry.init(self.allocator, scope, Level.debug) };
+            return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.debug) };
         }
         return Entry{ .noop = {} };
     }
@@ -318,7 +318,7 @@ pub const TestLogger = struct {
 
 test "trace_ng: direct" {
     const allocator = std.testing.allocator;
-    const std_logger = StandardErrLogger.init(.{
+    const std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
         .max_buffer = 2048,
@@ -369,7 +369,7 @@ test "trace_ng: scope switch" {
 
     const allocator = std.testing.allocator;
 
-    const std_logger = StandardErrLogger.init(.{
+    const std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
         .max_buffer = 2048,
@@ -391,7 +391,7 @@ test "trace_ng: scope switch" {
 test "trace_ng: reclaim" {
     const allocator = std.testing.allocator;
 
-    var std_logger = StandardErrLogger.init(.{
+    var std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
         .max_buffer = 4048,
@@ -413,7 +413,7 @@ test "trace_ng: reclaim" {
 test "trace_ng: level" {
     const allocator = std.testing.allocator;
 
-    var std_logger = StandardErrLogger.init(.{
+    var std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
         .max_buffer = 2048,
@@ -453,7 +453,7 @@ test "trace_ng: test_logger" {
     // That way, the logger can be configured to write to a file, stdout or an array list.
     const allocator = std.testing.allocator;
 
-    var test_logger = TestLogger.init(.{
+    var test_logger = DirectPrintLogger.init(.{
         .allocator = allocator,
         .max_level = Level.info,
     });

@@ -6,14 +6,14 @@ const AtomicBool = std.atomic.Value(bool);
 const Fields = std.ArrayList(u8);
 
 pub const Entry = union(enum) {
-    standard: *StdEntry,
-    testing: *TestingEntry,
+    standard: *ChannelEntry,
+    testing: *StdErrEntry,
     noop,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, channel: *Channel(logfmt.LogMsg), log_level: Level) Self {
-        return .{ .standard = StdEntry.init(allocator, channel, log_level) };
+        return .{ .standard = ChannelEntry.init(allocator, channel, log_level) };
     }
 
     pub fn deinit(self: Self) void {
@@ -57,7 +57,7 @@ pub const Entry = union(enum) {
     }
 };
 
-pub const StdEntry = struct {
+pub const ChannelEntry = struct {
     allocator: std.mem.Allocator,
     scope: ?[]const u8,
     log_level: Level,
@@ -154,7 +154,7 @@ pub const StdEntry = struct {
 };
 
 /// An instance of `Entry` that logs directly to std.debug.print, instead of sending to channel.
-pub const TestingEntry = struct {
+pub const StdErrEntry = struct {
     const builtin = @import("builtin");
 
     const Self = @This();

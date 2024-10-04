@@ -1863,7 +1863,7 @@ fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
 const test_shreds = @import("test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
 const TestState = ledger.tests.TestState("insert_shred");
-const TestingLogger = @import("../trace/log.zig").TestLogger;
+const DirectPrintLogger = @import("../trace/log.zig").DirectPrintLogger;
 const Logger = @import("../trace/log.zig").Logger;
 
 fn assertOk(result: anytype) void {
@@ -1878,7 +1878,7 @@ const ShredInserterTestState = struct {
     inserter: ShredInserter,
 
     pub fn init(comptime test_name: []const u8) !ShredInserterTestState {
-        const test_logger = TestingLogger.init(.{
+        const test_logger = DirectPrintLogger.init(.{
             .allocator = std.testing.allocator,
             .max_level = Logger.TEST_DEFAULT_LEVEL,
         });

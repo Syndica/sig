@@ -38,7 +38,7 @@ pub const ShredVersion = struct {
 
 test "core.shred: test ShredVersion" {
     const Logger = @import("../trace/log.zig").Logger;
-    const TestingLogger = @import("../trace/log.zig").TestLogger;
+    const DirectPrintLogger = @import("../trace/log.zig").DirectPrintLogger;
 
     var hash = Hash{ .data = [_]u8{ 180, 194, 54, 239, 216, 26, 164, 170, 3, 72, 104, 87, 32, 189, 12, 254, 9, 103, 99, 155, 117, 158, 241, 0, 95, 128, 64, 174, 42, 158, 205, 26 } };
     const version = ShredVersion.versionFromHash(&hash);
@@ -46,7 +46,7 @@ test "core.shred: test ShredVersion" {
 
     const testing_alloc = std.testing.allocator;
 
-    const test_logger = TestingLogger.init(.{
+    const test_logger = DirectPrintLogger.init(.{
         .allocator = testing_alloc,
         .max_level = Logger.TEST_DEFAULT_LEVEL,
     });

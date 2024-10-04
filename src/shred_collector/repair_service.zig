@@ -424,7 +424,7 @@ test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(4328095);
     var random = rand.random();
-    const TestLogger = sig.trace.TestLogger;
+    const TestLogger = sig.trace.DirectPrintLogger;
 
     // my details
     const keypair = try KeyPair.create(null);

@@ -4,7 +4,7 @@ const zstd = @import("zstd");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const Logger = sig.trace.Logger;
-const StandardErrLogger = sig.trace.StandardErrLogger;
+const StandardErrLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
 const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
