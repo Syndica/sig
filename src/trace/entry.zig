@@ -98,7 +98,6 @@ pub const ChannelEntry = struct {
 
     pub fn deinit(self: *Self) void {
         self.fields.deinit();
-        self.channel.deinit();
     }
 
     pub fn field(self: *Self, name: []const u8, value: anytype) *Self {
@@ -107,6 +106,7 @@ pub const ChannelEntry = struct {
     }
 
     pub fn log(self: *Self, msg: []const u8) void {
+        defer self.deinit();
         const log_msg = logfmt.LogMsg{
             .level = self.log_level,
             .maybe_scope = self.scope,
@@ -122,6 +122,7 @@ pub const ChannelEntry = struct {
     }
 
     pub fn logf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        defer self.deinit();
         // Get memory for formatting message.
         const msg_buf = self.allocBuf(std.fmt.count(fmt, args)) catch |err| {
             std.debug.print("allocBuff failed with err: {any}", .{err});
