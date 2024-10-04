@@ -136,10 +136,11 @@ pub const ChannelPrintLogger = struct {
             .max_buffer = max_buffer,
             .exit_sig = AtomicBool.init(false),
             .max_level = config.max_level,
-            .handle = try std.Thread.spawn(.{}, run, .{self}),
+            .handle = null,
             .channel = Channel(logfmt.LogMsg).create(config.allocator) catch
                 @panic("could not allocate LogMsg channel"),
         };
+        self.handle = try std.Thread.spawn(.{}, run, .{self});
         return self;
     }
 
@@ -166,20 +167,20 @@ pub const ChannelPrintLogger = struct {
 
     pub fn run(self: *Self) void {
         while (!self.exit_sig.load(.acquire)) {
-            // while (self.channel.receive()) |message| {
-            //     const writer = std.io.getStdErr().writer();
-            //     { // Scope to limit the span of the lock on std err.
-            //         std.debug.lockStdErr();
-            //         defer std.debug.unlockStdErr();
-            //         logfmt.writeLog(writer, message) catch {};
-            //     }
-            //     if (message.maybe_fields) |fields| {
-            //         self.log_allocator.free(fields);
-            //     }
-            //     if (message.maybe_fmt) |fmt_msg| {
-            //         self.log_allocator.free(fmt_msg);
-            //     }
-            // }
+            while (self.channel.receive()) |message| {
+                const writer = std.io.getStdErr().writer();
+                { // Scope to limit the span of the lock on std err.
+                    std.debug.lockStdErr();
+                    defer std.debug.unlockStdErr();
+                    logfmt.writeLog(writer, message) catch {};
+                }
+                if (message.maybe_fields) |fields| {
+                    self.log_allocator.free(fields);
+                }
+                if (message.maybe_fmt) |fmt_msg| {
+                    self.log_allocator.free(fmt_msg);
+                }
+            }
         }
     }
 
