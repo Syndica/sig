@@ -115,6 +115,19 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
+        pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!bool {
+            const key_bytes = try key_serializer.serializeAlloc(self.allocator, key);
+            defer self.allocator.free(key_bytes);
+            var map = self.maps[cf.find(column_families)];
+
+            self.transaction_lock.lockShared();
+            defer self.transaction_lock.unlockShared();
+            map.lock.lockShared();
+            defer map.lock.unlockShared();
+
+            return map.map.contains(key_bytes);
+        }
+
         pub fn delete(
             self: *Self,
             comptime cf: ColumnFamily,
