@@ -226,13 +226,76 @@ pub const AccountsDB = struct {
     }
 
     pub fn fastLoadWithDiskIndexes(
-        self: *Self, 
-    ) !void { 
+        self: *Self,
+        snapshot_manifest: AccountsDbFields,
+    ) !void {
         var index_dir = try self.snapshot_dir.openDir("index", .{});
         defer index_dir.close();
 
+        var timer = try sig.time.Timer.start();
+        var progress_timer = try sig.time.Timer.start();
+
+        const n_account_files = snapshot_manifest.file_map.count();
+        self.logger.infof("found {d} account files", .{n_account_files});
+
+        const manifest_file_map = snapshot_manifest.file_map;
+
+        const file_map, var file_map_lg = self.file_map.writeWithLock();
+        defer file_map_lg.unlock();
+        try file_map.ensureTotalCapacity(self.allocator, n_account_files);
+
+        var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
+        defer accounts_dir.close();
+
+        for (
+            manifest_file_map.keys(),
+            manifest_file_map.values(),
+            1..,
+        ) |slot, file_info, file_count| {
+            // read accounts file
+            const accounts_file = blk: {
+                const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id.toInt() });
+
+                const accounts_file_file = accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write }) catch |err| {
+                    self.logger.errf("Failed to open accounts/{s}: {s}", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    return err;
+                };
+                errdefer accounts_file_file.close();
+
+                break :blk AccountFile.init(accounts_file_file, file_info, slot) catch |err| {
+                    self.logger.errf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    return err;
+                };
+            };
+
+            // record in filemap
+            const file_id = file_info.id;
+            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
+            self.largest_file_id = FileId.max(self.largest_file_id, file_id);
+            _ = self.largest_rooted_slot.fetchMax(slot, .release);
+            self.largest_flushed_slot.store(self.largest_rooted_slot.load(.acquire), .release);
+
+            if (progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
+                printTimeEstimate(
+                    self.logger,
+                    &timer,
+                    n_account_files,
+                    file_count,
+                    "loading account files",
+                    "thread0",
+                );
+                progress_timer.reset();
+            }
+        }
+
+        const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
+        defer self.allocator.free(bin_counts);
+        @memset(bin_counts, 0);
+
+        // load the account references from disk
+        var references = std.ArrayList([]AccountRef).init(self.allocator);
         var index_dir_iter = index_dir.iterate();
-        while (try index_dir_iter.next()) |file_entry| { 
+        while (try index_dir_iter.next()) |file_entry| {
             const index_file = try index_dir.openFile(file_entry.name, .{ .mode = .read_write });
             defer index_file.close();
 
@@ -242,19 +305,99 @@ pub const AccountsDB = struct {
             const memory = try std.posix.mmap(
                 null,
                 file_size,
+                // NOTE: need to have write access to modify the invalid `next_ptr`
                 std.posix.PROT.READ | std.posix.PROT.WRITE,
-                std.posix.MAP{ .TYPE = .SHARED },
+                std.posix.MAP{ .TYPE = .PRIVATE },
                 index_file.handle,
                 0,
             );
 
-            const metadata_size = @sizeOf(DiskMemoryAllocator.Metadata);
-            const references = std.mem.bytesAsSlice(AccountRef, memory[0..memory.len - metadata_size]);
-            std.debug.print("ref1: {any}\n", .{references[0]});
+            const n_accounts_written = std.mem.readInt(u32, memory[@sizeOf(u32) .. @sizeOf(u32) * 2], .little);
+            const reference_slice_aligned: [*]align(8) AccountRef = @alignCast(@ptrCast(memory[@sizeOf(u32) * 2 ..]));
+            const reference_slice = reference_slice_aligned[0..n_accounts_written];
+
+            for (reference_slice) |*ref| {
+                const bin_index = self.account_index.pubkey_bin_calculator.binIndex(&ref.pubkey);
+                bin_counts[bin_index] += 1;
+                // when indexing we need to reset the next_ptr since the memory addresses are new
+                ref.next_ptr = null;
+            }
+
+            try references.append(reference_slice);
         }
 
-        if (self.config.use_disk_index) { @panic("ahhh"); }
-        if (self.config.use_disk_index) { @panic("ahhh"); }
+        // pre-allocate the account bin memory
+        var total_accounts: u64 = 0;
+        for (bin_counts, 0..) |count, bin_index| {
+            if (count > 0) {
+                const bin_rw = self.account_index.getBin(bin_index);
+                const bin, var bin_lg = bin_rw.writeWithLock();
+                defer bin_lg.unlock();
+                try bin.ensureTotalCapacity(count);
+                total_accounts += count;
+            }
+        }
+
+        {
+            var handles = std.ArrayList(std.Thread).init(self.allocator);
+            defer {
+                for (handles.items) |*h| h.join();
+                handles.deinit();
+            }
+
+            try spawnThreadTasks(
+                &handles,
+                indexReferencesMultiThread,
+                .{
+                    self,
+                    references,
+                    total_accounts,
+                },
+                self.account_index.numberOfBins(),
+                12,
+            );
+        }
+    }
+
+    pub fn indexReferencesMultiThread(
+        self: *Self,
+        references: ArrayList([]AccountRef),
+        n_references_total: u64,
+        // task specific
+        start_index: usize,
+        end_index: usize,
+        thread_id: usize,
+    ) !void {
+        var progress_timer = try sig.time.Timer.start();
+        var timer = try sig.time.Timer.start();
+
+        var ref_count: u64 = 0;
+        for (references.items) |ref_batch| {
+            for (ref_batch) |*ref| {
+                // NOTE: this likely leads to a *large* number of page-faults which we dont want
+                // larger split up of original indexes -- validate with -t 12
+                // read-per index memory to make use of cache
+                // MAYBE: read-per without locks and then have a final combine step
+                const bin_index = self.account_index.pubkey_bin_calculator.binIndex(&ref.pubkey);
+                if (bin_index >= start_index and bin_index < end_index) {
+                    // this unsafe is fine because only one thread is indexing per bin
+                    _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(ref);
+                }
+                ref_count += 1;
+
+                if (thread_id == 0 and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
+                    printTimeEstimate(
+                        self.logger,
+                        &timer,
+                        n_references_total,
+                        ref_count,
+                        "building index",
+                        "thread0",
+                    );
+                    progress_timer.reset();
+                }
+            }
+        }
     }
 
     /// easier to use load function
@@ -472,13 +615,39 @@ pub const AccountsDB = struct {
         // allocate all the references in one shot with a wrapper allocator
         // without this large allocation, snapshot loading is very slow
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
-        // NOTE: need exact slice for fastboot to work as expected
-        const reference_slice = try self.account_index.reference_allocator.alloc(AccountRef, n_accounts_estimate);
+
+        const ref_memory_raw_ptr = self.account_index.reference_allocator.rawAlloc(
+            @sizeOf(u32) * 2 + @sizeOf(AccountRef) * n_accounts_estimate,
+            8,
+            @returnAddress(),
+        ) orelse @panic("failed to allocate references");
+
+        const reference_slice_aligned: [*]align(8) AccountRef = @alignCast(@ptrCast(ref_memory_raw_ptr[@sizeOf(u32) * 2 ..]));
+        const reference_slice = reference_slice_aligned[0..n_accounts_estimate];
         const references_ptr = reference_slice.ptr;
         var references = ArrayList(AccountRef).fromOwnedSlice(
             self.account_index.reference_allocator,
             reference_slice,
         );
+        references.items.len = 0; // zero valid items
+
+        // write the number of accounts allocated to the first 4 bytes
+        std.mem.writeInt(
+            u32,
+            ref_memory_raw_ptr[0..@sizeOf(u32)],
+            @intCast(n_accounts_estimate),
+            .little,
+        );
+        defer {
+            const n_accounts_written = references.items.len;
+            // write the number of accounts written to the second 4 bytes
+            std.mem.writeInt(
+                u32,
+                ref_memory_raw_ptr[@sizeOf(u32) .. @sizeOf(u32) * 2],
+                @intCast(n_accounts_written),
+                .little,
+            );
+        }
 
         const counting_alloc = try FreeCounterAllocator.init(self.allocator, references);
         defer counting_alloc.deinitIfSafe();
