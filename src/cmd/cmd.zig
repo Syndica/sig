@@ -1010,7 +1010,7 @@ fn printLeaderSchedule() !void {
     }
 
     const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
-        app_base.logger.info.log("Downloading a snapshot to calculate the leader schedule.");
+        app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
         const loaded_snapshot = loadSnapshot(
             allocator,
             app_base.logger,

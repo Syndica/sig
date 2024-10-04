@@ -35,7 +35,7 @@ pub fn run(
 ) !void {
     var last_purge_slot: Slot = 0;
 
-    logger.info.log("Starting blockstore cleanup service");
+    logger.info().log("Starting blockstore cleanup service");
     while (!exit.load(.acquire)) {
         last_purge_slot = try cleanBlockstore(
             logger,

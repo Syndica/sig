@@ -40,7 +40,7 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
-    logger.default_logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
+    logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
     const metrics_thread = try spawnMetrics(
         // TODO: use the GPA here, the server is just leaking because we're losing the handle
         // to it and never deiniting.

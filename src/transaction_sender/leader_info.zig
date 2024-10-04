@@ -95,7 +95,7 @@ pub const LeaderInfo = struct {
             self.leader_schedule_cache.epoch_schedule.getEpochAndSlotIndex(slot);
 
         const leader_schedule = self.getLeaderSchedule(slot) catch |e| {
-            self.logger.errf("Error getting leader schedule via rpc for slot {}: {}", .{ slot, e });
+            self.logger.err().logf("Error getting leader schedule via rpc for slot {}: {}", .{ slot, e });
             return e;
         };
 

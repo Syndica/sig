@@ -153,40 +153,45 @@ pub fn csvDump() !void {
         std.heap.c_allocator;
     defer _ = gpa.deinit();
 
-    var logger = sig.trace.Logger.init(allocator, .info);
-    defer logger.deinit();
-    logger.spawn();
+    var std_logger = sig.trace.StandardErrLogger.init(.{
+        .allocator = std.heap.c_allocator,
+        .max_level = sig.trace.Level.debug,
+        .max_buffer = 2048,
+    }) catch @panic("Logger init failed");
+    defer std_logger.deinit();
+
+    const logger = std_logger.logger();
 
     const metrics_thread = try sig.prometheus.spawnMetrics(allocator, 12355);
     metrics_thread.detach();
-    logger.info("spawing metrics thread on port 12355");
+    logger.info().log("spawing metrics thread on port 12355");
 
     const pipe_path = config.pipe_path;
-    logger.infof("using pipe path: {s}", .{pipe_path});
+    logger.info().logf("using pipe path: {s}", .{pipe_path});
 
     // owner filters
     var maybe_owner_pubkeys = try getOwnerFilters(allocator);
     defer if (maybe_owner_pubkeys) |*owners| owners.deinit();
     if (maybe_owner_pubkeys) |owner_pubkeys| {
-        logger.infof("owner filters: {s}", .{owner_pubkeys.keys()});
+        logger.info().logf("owner filters: {s}", .{owner_pubkeys.keys()});
     } else {
-        logger.info("owner filters: none");
+        logger.info().log("owner filters: none");
     }
 
     // account filters
     var maybe_account_pubkeys = try getAccountFilters(allocator);
     defer if (maybe_account_pubkeys) |*accounts| accounts.deinit();
     if (maybe_account_pubkeys) |account_pubkeys| {
-        logger.infof("account filters: {s}", .{account_pubkeys.keys()});
+        logger.info().logf("account filters: {s}", .{account_pubkeys.keys()});
     } else {
-        logger.info("account filters: none");
+        logger.info().log("account filters: none");
     }
 
     // csv file to dump to
     const dump_csv_path = sig.VALIDATOR_DIR ++ "accounts.csv";
     const csv_file = try std.fs.cwd().createFile(dump_csv_path, .{});
     defer csv_file.close();
-    logger.infof("dumping to csv: {s}", .{dump_csv_path});
+    logger.info().logf("dumping to csv: {s}", .{dump_csv_path});
 
     // setup reader
     var exit = std.atomic.Value(bool).init(false);
@@ -227,7 +232,7 @@ pub fn csvDump() !void {
                 // NOTE: since accounts-db isnt hooked up to the rest to the validator (svm, consensus, etc.)
                 // valid account state is only from snapshots. we can safely exit here because no new accounts
                 // are expected.
-                logger.infof("recv end of snapshot loading signal", .{});
+                logger.info().logf("recv end of snapshot loading signal", .{});
                 exit.store(true, .monotonic);
                 break;
             },

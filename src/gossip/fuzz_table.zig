@@ -125,7 +125,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     signed_data.wallclockPtr().* = now;
 
                     // !
-                    logger.debug.logf("putting pubkey: {}", .{pubkey});
+                    logger.debug().logf("putting pubkey: {}", .{pubkey});
                     const result = try gossip_table.insert(signed_data, now);
                     std.debug.assert(result.wasInserted());
 
@@ -164,7 +164,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                         std.debug.assert(!should_overwrite);
                     }
                     if (result == .IgnoredDuplicateValue) {
-                        logger.debug.logf("duplicate value: {}", .{pubkey});
+                        logger.debug().logf("duplicate value: {}", .{pubkey});
                     }
 
                     if (!should_overwrite and did_insert) {
