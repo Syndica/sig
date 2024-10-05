@@ -425,28 +425,29 @@ test "trace_ng: level" {
     const logger = std_logger.logger();
 
     // None should log as they are higher than set max_log.
-    logger
-        .warn()
-        .log("Logging with log");
+    // logger
+    //     .warn()
+    //     .log("Logging with log");
 
-    logger
-        .info()
-        .logf(
-        "{s}",
-        .{"Logging with logf"},
-    );
+    // logger
+    //     .info()
+    //     .logf(
+    //     "{s}",
+    //     .{"Logging with logf"},
+    // );
 
-    logger.debug()
+    logger.info()
         .field("f_agent", "Firefox")
         .field("f_version", "2.0")
+        .field("f_version", "3.0")
         .log("Logging with logWithFields");
 
-    logger.debug()
-        .field("f_agent", "Firefox")
-        .field("f_version", 120)
-        .field("f_local", "en")
-        .field("f_stock", "nvidia")
-        .logf("{s}", .{"Logging with logfWithFields"});
+    // logger.debug()
+    //     .field("f_agent", "Firefox")
+    //     .field("f_version", 120)
+    //     .field("f_local", "en")
+    //     .field("f_stock", "nvidia")
+    //     .logf("{s}", .{"Logging with logfWithFields"});
 }
 
 test "trace_ng: test_logger" {

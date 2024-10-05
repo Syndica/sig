@@ -2202,6 +2202,8 @@ pub fn chunkValuesIntoPacketIndexes(
     return packet_indexs;
 }
 
+const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
+
 test "handle pong messages" {
     const allocator = std.testing.allocator;
 
@@ -2273,7 +2275,6 @@ test "handle pong messages" {
 }
 
 test "build messages startup and shutdown" {
-    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     const allocator = std.testing.allocator;
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
@@ -2335,7 +2336,6 @@ test "build messages startup and shutdown" {
 }
 
 test "handling prune messages" {
-    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     var rng = std.rand.DefaultPrng.init(91);
 
     const allocator = std.testing.allocator;
@@ -2414,7 +2414,6 @@ test "handling prune messages" {
 }
 
 test "handling pull responses" {
-    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     const allocator = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(91);
@@ -2562,7 +2561,6 @@ test "handle old prune & pull request message" {
 }
 
 test "handle pull request" {
-    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     const allocator = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(91);
@@ -2674,7 +2672,6 @@ test "handle pull request" {
 }
 
 test "test build prune messages and handle push messages" {
-    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -2755,7 +2752,6 @@ test "test build prune messages and handle push messages" {
 }
 
 test "build pull requests" {
-    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -2815,7 +2811,6 @@ test "build pull requests" {
 }
 
 test "test build push messages" {
-    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -2896,7 +2891,6 @@ test "test build push messages" {
 }
 
 test "test large push messages" {
-    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -3074,7 +3068,6 @@ test "test packet verification" {
 }
 
 test "process contact info push packet" {
-    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     const allocator = std.testing.allocator;
 
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -3168,7 +3161,6 @@ test "process contact info push packet" {
 }
 
 test "init, exit, and deinit" {
-    const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
     const gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     const my_keypair = try KeyPair.create(null);
     var rng = std.rand.DefaultPrng.init(getWallclockMs());
