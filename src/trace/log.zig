@@ -116,7 +116,7 @@ pub const Logger = ScopedLogger(null);
 pub const ChannelPrintLogger = struct {
     const Self = @This();
     max_level: Level,
-    exit_sig: std.atomic.Value(bool),
+    exit: std.atomic.Value(bool),
     allocator: Allocator,
     log_allocator: Allocator,
     log_allocator_state: *RecycleFBA(.{}),
@@ -134,7 +134,7 @@ pub const ChannelPrintLogger = struct {
             .log_allocator = recycle_fba.allocator(),
             .log_allocator_state = recycle_fba,
             .max_buffer = max_buffer,
-            .exit_sig = AtomicBool.init(false),
+            .exit = AtomicBool.init(false),
             .max_level = config.max_level,
             .handle = null,
             .channel = Channel(logfmt.LogMsg).create(config.allocator) catch
@@ -147,7 +147,7 @@ pub const ChannelPrintLogger = struct {
     pub fn deinit(self: *Self) void {
         if (self.handle) |*handle| {
             std.time.sleep(std.time.ns_per_ms * 5);
-            self.exit_sig.store(true, .seq_cst);
+            self.exit.store(true, .seq_cst);
             handle.join();
         }
         self.channel.deinit();
@@ -166,7 +166,7 @@ pub const ChannelPrintLogger = struct {
     }
 
     pub fn run(self: *Self) void {
-        while (!self.exit_sig.load(.acquire)) {
+        while (!self.exit.load(.acquire)) {
             while (self.channel.receive()) |message| {
                 const writer = std.io.getStdErr().writer();
                 { // Scope to limit the span of the lock on std err.
