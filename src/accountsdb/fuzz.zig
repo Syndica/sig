@@ -50,8 +50,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
     };
 
-    var prng = std.Random.DefaultPrng.init(seed);
-    const rand = prng.random();
+    var rng = std.Random.DefaultPrng.init(seed);
+    const rand = rng.random();
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();

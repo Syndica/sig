@@ -19,7 +19,7 @@ pub const GOSSIP_PULL_TIMEOUT_MS: u64 = 15000;
 pub fn filterSignedGossipDatas(
     /// It is advised to use a PRNG, and not a true RNG, otherwise
     /// the runtime of this function may be unbounded.
-    rng: std.Random,
+    rand: std.Random,
     allocator: std.mem.Allocator,
     gossip_table: *const GossipTable,
     filter: *const GossipPullFilter,
@@ -30,7 +30,7 @@ pub fn filterSignedGossipDatas(
         return ArrayList(SignedGossipData).init(allocator);
     }
 
-    const jitter = rng.intRangeAtMost(u64, 0, GOSSIP_PULL_TIMEOUT_MS / 4);
+    const jitter = rand.intRangeAtMost(u64, 0, GOSSIP_PULL_TIMEOUT_MS / 4);
     const caller_wallclock_with_jitter = caller_wallclock + jitter;
 
     var bloom = filter.filter;

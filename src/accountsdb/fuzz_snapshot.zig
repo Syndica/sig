@@ -35,8 +35,8 @@ pub fn run(args: *std.process.ArgIterator) !void {
     }
     std.debug.print("seed: {}\n", .{seed});
 
-    var prng = std.rand.DefaultPrng.init(seed);
-    const rand = prng.random();
+    var rng = std.rand.DefaultPrng.init(seed);
+    const rand = rng.random();
 
     var bytes_buffer = std.ArrayList(u8).init(allocator);
     defer bytes_buffer.deinit();

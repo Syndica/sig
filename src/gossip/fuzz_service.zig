@@ -362,7 +362,7 @@ pub fn fuzz(
     allocator: std.mem.Allocator,
     loop_exit: *Atomic(bool),
     maybe_max_messages: ?usize,
-    rng: std.Random,
+    rand: std.Random,
     keypair: *const KeyPair,
     contact_info: LegacyContactInfo,
     to_endpoint: EndPoint,
@@ -378,7 +378,7 @@ pub fn fuzz(
             }
         }
 
-        const action = rng.enumValue(enum {
+        const action = rand.enumValue(enum {
             ping,
             pong,
             push,
@@ -388,17 +388,17 @@ pub fn fuzz(
         const packet = switch (action) {
             .ping => blk: {
                 // send ping message
-                const packet = randomPingPacket(rng, keypair, to_endpoint);
+                const packet = randomPingPacket(rand, keypair, to_endpoint);
                 break :blk packet;
             },
             .pong => blk: {
                 // send pong message
-                const packet = randomPongPacket(rng, keypair, to_endpoint);
+                const packet = randomPongPacket(rand, keypair, to_endpoint);
                 break :blk packet;
             },
             .push => blk: {
                 // send push message
-                const packets = randomPushMessage(allocator, rng, keypair, to_endpoint) catch |err| {
+                const packets = randomPushMessage(allocator, rand, keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -409,7 +409,7 @@ pub fn fuzz(
             },
             .pull_request => blk: {
                 // send pull response
-                const packets = randomPullResponse(rng, keypair, to_endpoint) catch |err| {
+                const packets = randomPullResponse(rand, keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -423,7 +423,7 @@ pub fn fuzz(
                 const packet = randomPullRequest(
                     allocator,
                     contact_info,
-                    rng,
+                    rand,
                     keypair,
                     to_endpoint,
                 );
@@ -440,7 +440,7 @@ pub fn fuzz(
         // send it
         try outgoing_channel.send(packet);
 
-        const send_duplicate = rng.boolean();
+        const send_duplicate = rand.boolean();
         if (send_duplicate) {
             msg_count +|= 1;
             try outgoing_channel.send(packet);

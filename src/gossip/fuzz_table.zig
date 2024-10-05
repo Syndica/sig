@@ -45,8 +45,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const logger = std_logger.logger();
 
-    var prng = std.rand.DefaultPrng.init(seed);
-    const rand = prng.random();
+    var rng = std.rand.DefaultPrng.init(seed);
+    const rand = rng.random();
 
     // init gossip table
     // MAX: 2 threads
