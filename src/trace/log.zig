@@ -416,7 +416,7 @@ test "trace_ng: level" {
 
     var std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.info,
+        .max_level = Level.debug,
         .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
 
@@ -442,7 +442,7 @@ test "trace_ng: level" {
         .field("f_version", "3.0")
         .log("Logging with logWithFields");
 
-    logger.debug()
+    logger.err()
         .field("f_agent", "Firefox")
         .field("f_version", 120)
         .field("f_local", "en")

@@ -31,12 +31,12 @@ pub const Entry = union(enum) {
             .standard => |entry| {
                 var log_entry = entry;
                 _ = log_entry.field(name, value);
-                return self;
+                return Entry{ .standard = log_entry };
             },
             .testing => |entry| {
                 var log_entry = entry;
                 _ = log_entry.field(name, value);
-                return self;
+                return Entry{ .testing = log_entry };
             },
         }
     }
@@ -110,7 +110,10 @@ pub const ChannelEntry = struct {
             .level = self.log_level,
             .maybe_scope = self.scope,
             .maybe_msg = msg,
-            .maybe_fields = self.fields.items,
+            .maybe_fields = self.fields.toOwnedSlice() catch |err| {
+                std.debug.print("Processing fields failed with err: {any}", .{err});
+                return;
+            },
             .maybe_fmt = null,
         };
 
@@ -135,7 +138,10 @@ pub const ChannelEntry = struct {
             .level = self.log_level,
             .maybe_scope = self.scope,
             .maybe_msg = null,
-            .maybe_fields = self.fields.items,
+            .maybe_fields = self.fields.toOwnedSlice() catch |err| {
+                std.debug.print("Processing fields failed with err: {any}", .{err});
+                return;
+            },
             .maybe_fmt = fmt_message.getWritten(),
         };
 
