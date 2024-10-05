@@ -177,12 +177,13 @@ test "init/denit" {
 test "gracefully rotates with duplicate contact ids" {
     const alloc = std.testing.allocator;
 
-    var rng = std.rand.DefaultPrng.init(100);
+    // NOTE: DefaultPrng == Xoshiro256, so mb it would be better to use only DefaultPrng
+    var default_rng = std.rand.DefaultPrng.init(100);
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
-    var data = try LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
-    var dupe = try LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
+    var data = try LegacyContactInfo.random(default_rng.random()).toContactInfo(alloc);
+    var dupe = try LegacyContactInfo.random(default_rng.random()).toContactInfo(alloc);
     defer data.deinit();
     defer dupe.deinit();
     dupe.pubkey = data.pubkey;
@@ -191,6 +192,6 @@ test "gracefully rotates with duplicate contact ids" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    var prng = std.rand.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
-    try active_set.rotate(prng.random(), gossip_peers.items);
+    var xoshiro_rng = std.rand.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    try active_set.rotate(xoshiro_rng.random(), gossip_peers.items);
 }

@@ -1111,8 +1111,8 @@ pub const AccountsDB = struct {
 
         // TODO: get rid of this once `makeFullSnapshotGenerationPackage` can actually
         // derive this data correctly by itself.
-        var rand = std.Random.DefaultPrng.init(1234);
-        var tmp_bank_fields = try BankFields.random(self.allocator, rand.random(), 128);
+        var rng = std.Random.DefaultPrng.init(1234);
+        var tmp_bank_fields = try BankFields.random(self.allocator, rng.random(), 128);
         defer tmp_bank_fields.deinit(self.allocator);
 
         while (!exit.load(.acquire)) {
@@ -1189,7 +1189,7 @@ pub const AccountsDB = struct {
                 var snapshot_gen_pkg, const snapshot_gen_info = try self.makeFullSnapshotGenerationPackage(
                     largest_flushed_slot,
                     &tmp_bank_fields,
-                    rand.random().int(u64),
+                    rng.random().int(u64),
                     0,
                 );
                 defer snapshot_gen_pkg.deinit();
@@ -1234,7 +1234,7 @@ pub const AccountsDB = struct {
                 var inc_snapshot_pkg, const snapshot_gen_info = try self.makeIncrementalSnapshotGenerationPackage(
                     largest_flushed_slot,
                     &tmp_bank_fields,
-                    rand.random().int(u64),
+                    rng.random().int(u64),
                     0,
                 );
                 defer inc_snapshot_pkg.deinit();
@@ -1292,7 +1292,7 @@ pub const AccountsDB = struct {
         bank_fields: *sig.accounts_db.snapshots.BankFields,
         status_cache: StatusCache,
     ) !void {
-        var rand = std.Random.DefaultPrng.init(1234);
+        var rng = std.Random.DefaultPrng.init(1234);
 
         // setup zstd
         const zstd_compressor = try zstd.Compressor.init(.{});
@@ -1306,7 +1306,7 @@ pub const AccountsDB = struct {
         var snapshot_gen_pkg, const snapshot_gen_info = try self.makeFullSnapshotGenerationPackage(
             slot,
             bank_fields,
-            rand.random().int(u64),
+            rng.random().int(u64),
             0,
         );
         defer snapshot_gen_pkg.deinit();
@@ -4224,13 +4224,13 @@ pub const BenchmarkAccountsDB = struct {
         }, null);
         defer accounts_db.deinit();
 
-        var random = std.Random.DefaultPrng.init(19);
-        const rng = random.random();
+        var rng = std.Random.DefaultPrng.init(19);
+        const rand = rng.random();
 
         var pubkeys = try allocator.alloc(Pubkey, n_accounts);
         defer allocator.free(pubkeys);
         for (0..n_accounts) |i| {
-            pubkeys[i] = Pubkey.random(rng);
+            pubkeys[i] = Pubkey.random(rand);
         }
 
         var all_filenames = try ArrayList([]const u8).initCapacity(allocator, slot_list_len + bench_args.n_accounts_multiple);
@@ -4247,7 +4247,7 @@ pub const BenchmarkAccountsDB = struct {
             const n_accounts_init = bench_args.n_accounts_multiple * bench_args.n_accounts;
             const accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));
             for (0..(total_n_accounts + n_accounts_init)) |i| {
-                accounts[i] = try Account.random(allocator, rng, i % 1_000);
+                accounts[i] = try Account.random(allocator, rand, i % 1_000);
             }
 
             if (n_accounts_init > 0) {
@@ -4311,7 +4311,7 @@ pub const BenchmarkAccountsDB = struct {
 
                     var offset: usize = 0;
                     for (0..n_accounts) |i| {
-                        const account = try Account.random(allocator, rng, i % 1_000);
+                        const account = try Account.random(allocator, rand, i % 1_000);
                         defer allocator.free(account.data);
                         var pubkey = pubkeys[i % n_accounts];
                         offset += account.writeToBuf(&pubkey, memory[offset..]);

@@ -600,17 +600,17 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
     []accounts_db.index.AccountRef,
     []sig.core.Pubkey,
 } {
-    var random = std.Random.DefaultPrng.init(0);
-    const rng = random.random();
+    var rng = std.Random.DefaultPrng.init(0);
+    const rand = rng.random();
 
     const accounts = try allocator.alloc(accounts_db.index.AccountRef, n_accounts);
     const pubkeys = try allocator.alloc(sig.core.Pubkey, n_accounts);
     for (0..n_accounts) |i| {
-        rng.bytes(&pubkeys[i].data);
+        rand.bytes(&pubkeys[i].data);
         accounts[i] = accounts_db.index.AccountRef.default();
         accounts[i].pubkey = pubkeys[i];
     }
-    rng.shuffle(sig.core.Pubkey, pubkeys);
+    rand.shuffle(sig.core.Pubkey, pubkeys);
 
     return .{ accounts, pubkeys };
 }

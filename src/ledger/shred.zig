@@ -1237,13 +1237,13 @@ test "merkleProof" {
 test "merkle tree round trip" {
     const allocator = std.testing.allocator;
     var rng = std.Random.DefaultPrng.init(123);
-    const random = rng.random();
+    const rand = rng.random();
     const size = 100;
 
     var nodes = try std.ArrayList(Hash).initCapacity(allocator, size);
     defer nodes.deinit();
     for (0..size) |_| {
-        nodes.appendAssumeCapacity(Hash.random(random));
+        nodes.appendAssumeCapacity(Hash.random(rand));
     }
     var tree = try nodes.clone();
     defer tree.deinit();

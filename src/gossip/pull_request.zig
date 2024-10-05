@@ -25,7 +25,7 @@ pub const KEYS: f64 = 8;
 /// corresponding filters. Note: make sure to call deinit_gossip_filters.
 pub fn buildGossipPullFilters(
     alloc: std.mem.Allocator,
-    rng: std.Random,
+    rand: std.Random,
     gossip_table_rw: *RwMux(GossipTable),
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
@@ -38,7 +38,7 @@ pub fn buildGossipPullFilters(
 
         const num_items = gossip_table.len() + gossip_table.purged.len() + failed_pull_hashes.items.len;
 
-        var filter_set = try GossipPullFilterSet.init(alloc, rng, num_items, bloom_size);
+        var filter_set = try GossipPullFilterSet.init(alloc, rand, num_items, bloom_size);
         errdefer filter_set.deinit();
 
         // add all gossip values
@@ -62,7 +62,7 @@ pub fn buildGossipPullFilters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consumeForGossipPullFilters(alloc, rng, max_n_filters);
+    const filters = try filter_set.consumeForGossipPullFilters(alloc, rand, max_n_filters);
     return filters;
 }
 
@@ -158,7 +158,7 @@ pub const GossipPullFilterSet = struct {
     pub fn consumeForGossipPullFilters(
         self: *Self,
         allocator: std.mem.Allocator,
-        rng: std.Random,
+        rand: std.Random,
         max_size: usize,
     ) error{OutOfMemory}!ArrayList(GossipPullFilter) {
         defer self.deinit(); // !
@@ -175,7 +175,7 @@ pub const GossipPullFilterSet = struct {
 
         if (!can_consume_all) {
             // shuffle the indexs
-            shuffleFirstN(rng, usize, indexs.items, n_filters);
+            shuffleFirstN(rand, usize, indexs.items, n_filters);
 
             // release others
             for (n_filters..set_size) |i| {
@@ -314,8 +314,8 @@ test "building pull filters" {
 }
 
 test "filter set deinits correct" {
-    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
-    const rand = prng.random();
+    var rng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    const rand = rng.random();
 
     var filter_set = try GossipPullFilterSet.init(std.testing.allocator, rand, 10000, 200);
 

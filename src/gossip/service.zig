@@ -817,8 +817,8 @@ pub const GossipService = struct {
         var stats_publish_timer = try sig.time.Timer.start();
         var trim_memory_timer = try sig.time.Timer.start();
 
-        var prng = std.rand.DefaultPrng.init(seed);
-        const rng = prng.random();
+        var rng = std.rand.DefaultPrng.init(seed);
+        const rand = rng.random();
 
         var push_cursor: u64 = 0;
         var entrypoints_identified = false;
@@ -832,7 +832,7 @@ pub const GossipService = struct {
                 // this also includes sending ping messages to other peers
                 const now = getWallclockMs();
                 const packets = self.buildPullRequests(
-                    rng,
+                    rand,
                     pull_request.MAX_BLOOM_SIZE,
                     now,
                 ) catch |e| {
@@ -891,7 +891,7 @@ pub const GossipService = struct {
                     try push_msg_queue.append(my_legacy_contact_info_value);
                 }
 
-                try self.rotateActiveSet(rng);
+                try self.rotateActiveSet(rand);
             }
 
             // publish metrics
@@ -2289,8 +2289,8 @@ test "build messages startup and shutdown" {
     );
     defer gossip_service.deinit();
 
-    var prng = std.Random.Xoshiro256.init(0);
-    const rng = prng.random();
+    var rng = std.Random.Xoshiro256.init(0);
+    const rand = rng.random();
 
     var build_messages_handle = try Thread.spawn(
         .{},
@@ -2312,7 +2312,7 @@ test "build messages startup and shutdown" {
 
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = try SignedGossipData.randomWithIndex(rng, &rand_keypair, 0); // contact info
+        var value = try SignedGossipData.randomWithIndex(rand, &rand_keypair, 0); // contact info
         // make gossip valid
         value.data.LegacyContactInfo.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000);
         _ = try lg.mut().insert(value, getWallclockMs());
@@ -2325,7 +2325,8 @@ test "build messages startup and shutdown" {
 }
 
 test "handling prune messages" {
-    var rng = std.rand.DefaultPrng.init(91);
+    // NOTE: DefaultPrng == Xoshiro256, so mb it would be better to use only DefaultPrng
+    var default_rng = std.rand.DefaultPrng.init(91);
 
     const allocator = std.testing.allocator;
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -2357,7 +2358,7 @@ test "handling prune messages" {
     defer peers.deinit();
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        const value = try SignedGossipData.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
+        const value = try SignedGossipData.randomWithIndex(default_rng.random(), &rand_keypair, 0); // contact info
         _ = try lg.mut().insert(value, getWallclockMs());
         try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
@@ -2367,8 +2368,8 @@ test "handling prune messages" {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
         const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-        var prng = std.Random.Xoshiro256.init(prng_seed);
-        try as.rotate(prng.random(), peers.items);
+        var xoshiro_rng = std.Random.Xoshiro256.init(prng_seed);
+        try as.rotate(xoshiro_rng.random(), peers.items);
         as_lock.unlock();
     }
 
@@ -2379,7 +2380,7 @@ test "handling prune messages" {
     const peer0 = iter.next().?.*;
     as_lock.unlock();
 
-    var prunes = [_]Pubkey{Pubkey.random(rng.random())};
+    var prunes = [_]Pubkey{Pubkey.random(default_rng.random())};
     var prune_data = PruneData{
         .pubkey = peer0,
         .destination = gossip_service.my_pubkey,
@@ -2738,7 +2739,8 @@ test "test build prune messages and handle push messages" {
 
 test "build pull requests" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(91);
+    // NOTE: DefaultPrng == Xoshiro256, so mb it would be better to use only DefaultPrng
+    var default_rng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2775,7 +2777,7 @@ test "build pull requests" {
         var pc: *PingCache = ping_lock.mut();
         for (0..20) |i| {
             var rando_keypair = try KeyPair.create(null);
-            var value = try SignedGossipData.randomWithIndex(prng.random(), &rando_keypair, 0);
+            var value = try SignedGossipData.randomWithIndex(default_rng.random(), &rando_keypair, 0);
             value.wallclockPtr().* = now + 10 * i;
             value.data.LegacyContactInfo.shred_version = contact_info.shred_version;
 
@@ -2784,7 +2786,7 @@ test "build pull requests" {
         }
     }
 
-    var packets = gossip_service.buildPullRequests(prng.random(), 2, now) catch |err| {
+    var packets = gossip_service.buildPullRequests(default_rng.random(), 2, now) catch |err| {
         std.log.err("\nThe failing now time is: '{d}'\n", .{now});
         return err;
     };
@@ -2841,8 +2843,8 @@ test "test build push messages" {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
         const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-        var prng = std.Random.Xoshiro256.init(prng_seed);
-        try as.rotate(prng.random(), peers.items);
+        var xoshiro_rng = std.Random.Xoshiro256.init(prng_seed);
+        try as.rotate(xoshiro_rng.random(), peers.items);
         as_lock.unlock();
         try std.testing.expect(as.len() > 0);
     }
@@ -2875,7 +2877,8 @@ test "test build push messages" {
 
 test "test large push messages" {
     const allocator = std.testing.allocator;
-    var rng = std.rand.DefaultPrng.init(91);
+    // NOTE: DefaultPrng == Xoshiro256, so mb it would be better to use only DefaultPrng
+    var default_rng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2909,7 +2912,7 @@ test "test large push messages" {
         defer lock_guard.unlock();
         for (0..2_000) |_| {
             var keypair = try KeyPair.create(null);
-            const value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
+            const value = try SignedGossipData.randomWithIndex(default_rng.random(), &keypair, 0); // contact info
             _ = try lock_guard.mut().insert(value, getWallclockMs());
             try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
         }
@@ -2920,8 +2923,8 @@ test "test large push messages" {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
         const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-        var prng = std.Random.Xoshiro256.init(prng_seed);
-        try as.rotate(prng.random(), peers.items);
+        var xoshiro_rng = std.Random.Xoshiro256.init(prng_seed);
+        try as.rotate(xoshiro_rng.random(), peers.items);
         as_lock.unlock();
         try std.testing.expect(as.len() > 0);
     }
