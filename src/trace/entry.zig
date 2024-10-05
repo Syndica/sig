@@ -3,7 +3,6 @@ const logfmt = @import("logfmt.zig");
 const Level = @import("level.zig").Level;
 const Channel = @import("../sync/channel.zig").Channel;
 const AtomicBool = std.atomic.Value(bool);
-const Fields = std.ArrayList(u8);
 
 pub const Entry = union(enum) {
     standard: ChannelEntry,
@@ -75,7 +74,7 @@ pub const ChannelEntry = struct {
     allocator: std.mem.Allocator,
     scope: ?[]const u8,
     log_level: Level,
-    fields: Fields,
+    fields: std.ArrayList(u8),
     exit_sig: std.atomic.Value(bool),
     channel: *Channel(logfmt.LogMsg),
     const Self = @This();
@@ -91,7 +90,7 @@ pub const ChannelEntry = struct {
             .scope = scope,
             .exit_sig = AtomicBool.init(false),
             .log_level = log_level,
-            .fields = Fields.init(allocator),
+            .fields = std.ArrayList(u8).init(allocator),
             .channel = channel,
         };
     }
