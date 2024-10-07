@@ -7,10 +7,11 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const RwMux = sig.sync.RwMux;
 
-pub const SwissMap = sig.accounts_db.swiss_map.SwissMap;
-pub const SwissMapUnmanaged = sig.accounts_db.swiss_map.SwissMapUnmanaged;
-pub const BenchHashMap = sig.accounts_db.swiss_map.BenchHashMap;
-pub const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
+const SwissMap = sig.accounts_db.swiss_map.SwissMap;
+const SwissMapUnmanaged = sig.accounts_db.swiss_map.SwissMapUnmanaged;
+const BenchHashMap = sig.accounts_db.swiss_map.BenchHashMap;
+const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
+const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 
 pub const AccountReferenceHead = struct {
     ref_ptr: *AccountRef,
@@ -93,6 +94,10 @@ pub const AccountRef = struct {
     }
 };
 
+pub const DiskIndexConfig = struct {
+    accountsdb_dir: std.fs.Dir,
+};
+
 /// stores the mapping from Pubkey to the account location (AccountRef)
 ///
 /// Analogous to [AccountsIndex](https://github.com/anza-xyz/agave/blob/a6b2283142192c5360ad0f53bec1eb4a9fb36154/accounts-db/src/accounts_index.rs#L644)
@@ -102,6 +107,7 @@ pub const AccountIndex = struct {
     reference_memory: RwMux(ReferenceMemory),
     bins: []RwMux(RefMap),
     pubkey_bin_calculator: PubkeyBinCalculator,
+    disk_allocator_ptr: ?*DiskMemoryAllocator = null,
     const Self = @This();
 
     pub const ReferenceMemory = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
@@ -112,11 +118,37 @@ pub const AccountIndex = struct {
     pub fn init(
         /// used to allocate the hashmap data
         allocator: std.mem.Allocator,
-        /// used to allocate the references
-        reference_allocator: std.mem.Allocator,
+        logger: sig.trace.Logger,
+        /// use disk memory for the index
+        maybe_disk_index_config: ?DiskIndexConfig,
         /// number of bins to shard across
         number_of_bins: usize,
     ) !Self {
+        const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
+        const reference_allocator: std.mem.Allocator //
+        = blk: {
+            if (maybe_disk_index_config) |config| {
+                var index_bin_dir = try config.accountsdb_dir.makeOpenPath("index", .{});
+                errdefer index_bin_dir.close();
+                logger.infof("using disk index in {s}", .{sig.utils.fmt.tryRealPath(index_bin_dir, ".")});
+
+                const ptr = try allocator.create(DiskMemoryAllocator);
+                ptr.* = .{
+                    .dir = index_bin_dir,
+                    .logger = logger,
+                };
+
+                break :blk .{ ptr, ptr.allocator() };
+            } else {
+                logger.infof("using ram index", .{});
+                break :blk .{ null, allocator };
+            }
+        };
+        errdefer if (maybe_disk_allocator_ptr) |ptr| {
+            ptr.dir.close();
+            allocator.destroy(ptr);
+        };
+
         const bins = try allocator.alloc(RwMux(RefMap), number_of_bins);
         errdefer allocator.free(number_of_bins);
         @memset(bins, RwMux(RefMap).init(RefMap.init(allocator)));
@@ -127,10 +159,16 @@ pub const AccountIndex = struct {
             .bins = bins,
             .pubkey_bin_calculator = PubkeyBinCalculator.init(number_of_bins),
             .reference_memory = RwMux(ReferenceMemory).init(ReferenceMemory.init(allocator)),
+            .disk_allocator_ptr = maybe_disk_allocator_ptr,
         };
     }
 
     pub fn deinit(self: *Self, free_memory: bool) void {
+        if (self.disk_allocator_ptr) |ptr| {
+            ptr.dir.close();
+            self.allocator.destroy(ptr);
+        }
+
         for (self.bins) |*bin_rw| {
             const bin, var bin_lg = bin_rw.writeWithLock();
             defer bin_lg.unlock();
@@ -464,7 +502,7 @@ pub const PubkeyBinCalculator = struct {
 test "account index update/remove reference" {
     const allocator = std.testing.allocator;
 
-    var index = try AccountIndex.init(allocator, allocator, 8);
+    var index = try AccountIndex.init(allocator, .noop, null, 8);
     defer index.deinit(true);
     try index.ensureTotalCapacity(100);
 

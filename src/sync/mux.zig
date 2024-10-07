@@ -276,13 +276,6 @@ pub fn RwMux(comptime T: type) type {
             return .{ t, lock_guard };
         }
 
-        pub fn readField(self: *Self, comptime field: []const u8) @TypeOf(@field(self.private.v, field)) {
-            self.private.r.lockShared();
-            const value = @field(self.private.v, field);
-            self.private.r.unlockShared();
-            return value;
-        }
-
         // directly unlocks the lock guard. note: 99% of the time you should
         // not use this method except in cases where you need to pass around
         // rw_lock guards and unlock them later.
