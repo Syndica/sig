@@ -93,6 +93,13 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
             };
         }
 
+        pub fn trace(self: *const Self) Entry {
+            return switch (self.*) {
+                .noop => .noop,
+                inline else => |impl| impl.trace(scope),
+            };
+        }
+
         pub fn log(self: Self, level: Level, message: []const u8) void {
             switch (self) {
                 .noop => {},
@@ -212,6 +219,13 @@ pub const ChannelPrintLogger = struct {
         return .noop;
     }
 
+    pub fn trace(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
+        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.trace)) {
+            return Entry{ .standard = StdEntry.init(self.log_allocator, maybe_scope, self.channel, Level.trace) };
+        }
+        return .noop;
+    }
+
     pub fn log(self: *Self, comptime scope: ?[]const u8, level: Level, message: []const u8) void {
         if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
             switch (level) {
@@ -219,6 +233,7 @@ pub const ChannelPrintLogger = struct {
                 .warn => self.warn(scope).log(message),
                 .info => self.info(scope).log(message),
                 .debug => self.debug(scope).log(message),
+                .trace => self.trace(scope).log(message),
             }
         }
     }
@@ -230,6 +245,7 @@ pub const ChannelPrintLogger = struct {
                 .warn => self.warn(scope).logf(fmt, args),
                 .info => self.info(scope).logf(fmt, args),
                 .debug => self.debug(scope).logf(fmt, args),
+                .trace => self.trace(scope).logf(fmt, args),
             }
         }
     }
@@ -295,6 +311,13 @@ pub const DirectPrintLogger = struct {
         return .noop;
     }
 
+    pub fn trace(self: *Self, comptime scope: ?[]const u8) Entry {
+        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.trace)) {
+            return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.trace) };
+        }
+        return .noop;
+    }
+
     pub fn log(self: *Self, comptime scope: ?[]const u8, level: Level, message: []const u8) void {
         if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
             switch (level) {
@@ -302,6 +325,7 @@ pub const DirectPrintLogger = struct {
                 .warn => self.warn(scope).log(message),
                 .info => self.info(scope).log(message),
                 .debug => self.debug(scope).log(message),
+                .trace => self.trace(scope).log(message),
             }
         }
     }
@@ -313,6 +337,7 @@ pub const DirectPrintLogger = struct {
                 .warn => self.warn(scope).logf(fmt, args),
                 .info => self.info(scope).logf(fmt, args),
                 .debug => self.debug(scope).logf(fmt, args),
+                .trace => self.trace(scope).logf(fmt, args),
             }
         }
     }
