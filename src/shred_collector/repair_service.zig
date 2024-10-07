@@ -14,6 +14,8 @@ const Socket = zig_network.Socket;
 
 const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
 const ContactInfo = sig.gossip.ContactInfo;
+const Counter = sig.prometheus.Counter;
+const Gauge = sig.prometheus.Gauge;
 const GossipTable = sig.gossip.GossipTable;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const Logger = sig.trace.Logger;
@@ -22,6 +24,7 @@ const MultiSlotReport = shred_collector.shred_tracker.MultiSlotReport;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
+const Registry = sig.prometheus.Registry;
 const RwMux = sig.sync.RwMux;
 const SignedGossipData = sig.gossip.SignedGossipData;
 const SocketAddr = sig.net.SocketAddr;
@@ -48,11 +51,10 @@ pub const RepairService = struct {
     logger: Logger,
     exit: *Atomic(bool),
     last_big_request_timestamp_ms: i64 = 0,
-
     /// memory to re-use across iterations. initialized to empty
     report: MultiSlotReport,
-
     thread_pool: RequestBatchThreadPool,
+    metrics: Metrics,
 
     pub const RequestBatchThreadPool = HomogeneousThreadPool(struct {
         requester: *RepairRequester,
@@ -63,16 +65,28 @@ pub const RepairService = struct {
         }
     });
 
+    const Metrics = struct {
+        repair_request_count: *Counter,
+        requests_in_latest_batch: *Gauge(u64),
+        oldest_slot_needing_repair: *Gauge(u64),
+        newest_slot_needing_repair: *Gauge(u64),
+        newest_slot_to_request: *Gauge(u64),
+        oldest_slot_to_request: *Gauge(u64),
+
+        const prefix = "repair";
+    };
+
     const Self = @This();
 
     pub fn init(
         allocator: Allocator,
         logger: Logger,
         exit: *Atomic(bool),
+        registry: *Registry(.{}),
         requester: RepairRequester,
         peer_provider: RepairPeerProvider,
         shred_tracker: *BasicShredTracker,
-    ) Self {
+    ) !Self {
         return RepairService{
             .allocator = allocator,
             .requester = requester,
@@ -82,6 +96,7 @@ pub const RepairService = struct {
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
             .thread_pool = RequestBatchThreadPool.init(allocator, NUM_REQUESTER_THREADS),
+            .metrics = try registry.initStruct(Metrics),
         };
     }
 
@@ -122,10 +137,12 @@ pub const RepairService = struct {
     pub fn sendNecessaryRepairs(self: *Self) !void {
         const repair_requests = try self.getRepairs();
         defer repair_requests.deinit();
+        self.metrics.repair_request_count.add(repair_requests.items.len);
         const addressed_requests = try self.assignRequestsToPeers(repair_requests.items);
         defer addressed_requests.deinit();
 
         if (addressed_requests.items.len < 4) {
+            self.metrics.requests_in_latest_batch.set(addressed_requests.items.len);
             try self.requester.sendRepairRequestBatch(addressed_requests.items);
         } else {
             for (0..4) |i| {
@@ -153,6 +170,8 @@ pub const RepairService = struct {
     const MAX_HIGHEST_REPAIRS = 200;
 
     fn getRepairs(self: *Self) !ArrayList(RepairRequest) {
+        var oldest_slot_needing_repair: u64 = 0;
+        var newest_slot_needing_repair: u64 = 0;
         var repairs = ArrayList(RepairRequest).init(self.allocator);
         if (!try self.shred_tracker.identifyMissing(&self.report)) {
             return repairs;
@@ -169,6 +188,8 @@ pub const RepairService = struct {
 
         for (self.report.items()) |*report| outer: {
             slot = report.slot;
+            oldest_slot_needing_repair = @min(slot, oldest_slot_needing_repair);
+            newest_slot_needing_repair = @max(slot, newest_slot_needing_repair);
             for (report.missing_shreds.items) |shred_window| {
                 if (shred_window.end) |end| {
                     for (shred_window.start..end) |i| {
@@ -186,11 +207,21 @@ pub const RepairService = struct {
             }
         }
 
+        var newest_slot_to_request: u64 = newest_slot_needing_repair;
+        var oldest_slot_to_request: u64 = oldest_slot_needing_repair;
         if (highest_count < num_highest_repairs) {
             for (slot..slot + num_highest_repairs - highest_count) |s| {
+                newest_slot_to_request = @max(slot, newest_slot_to_request);
+                oldest_slot_to_request = @min(slot, oldest_slot_to_request);
                 try repairs.append(.{ .HighestShred = .{ s, 0 } });
             }
         }
+
+        self.metrics.oldest_slot_needing_repair.set(oldest_slot_needing_repair);
+        self.metrics.newest_slot_needing_repair.set(newest_slot_needing_repair);
+        self.metrics.newest_slot_to_request.set(newest_slot_to_request);
+        self.metrics.oldest_slot_to_request.set(oldest_slot_to_request);
+
         return repairs;
     }
 
@@ -220,13 +251,22 @@ pub const RepairRequester = struct {
     rng: Random,
     keypair: *const KeyPair,
     sender: SocketThread,
+    metrics: Metrics,
 
     const Self = @This();
+
+    const Metrics = struct {
+        sent_request_count: *Counter,
+        pending_requests: *Gauge(u64),
+
+        const prefix = "repair";
+    };
 
     pub fn init(
         allocator: Allocator,
         logger: Logger,
         rng: Random,
+        registry: *Registry(.{}),
         keypair: *const KeyPair,
         udp_send_socket: Socket,
         exit: *Atomic(bool),
@@ -238,6 +278,7 @@ pub const RepairRequester = struct {
             .rng = rng,
             .keypair = keypair,
             .sender = sndr,
+            .metrics = try registry.initStruct(Metrics),
         };
     }
 
@@ -249,6 +290,8 @@ pub const RepairRequester = struct {
         self: *const Self,
         requests: []const AddressedRepairRequest,
     ) !void {
+        self.metrics.pending_requests.add(requests.len);
+        defer self.metrics.pending_requests.set(0);
         const timestamp = std.time.milliTimestamp();
         for (requests) |request| {
             var packet: Packet = .{
@@ -266,6 +309,8 @@ pub const RepairRequester = struct {
             );
             packet.size = data.len;
             try self.sender.channel.send(packet);
+            self.metrics.pending_requests.dec();
+            self.metrics.sent_request_count.inc();
         }
     }
 };
@@ -309,6 +354,16 @@ pub const RepairPeerProvider = struct {
     cache: LruCacheCustom(.non_locking, Slot, RepairPeers, Allocator, RepairPeers.deinit),
     my_pubkey: Pubkey,
     my_shred_version: *const Atomic(u16),
+    metrics: Metrics,
+
+    pub const Metrics = struct {
+        latest_count_from_gossip: *Gauge(u64),
+        cache_hit_count: *Counter,
+        cache_miss_count: *Counter,
+        cache_expired_count: *Counter,
+
+        const prefix = "repair_peers";
+    };
 
     const Self = @This();
 
@@ -324,10 +379,11 @@ pub const RepairPeerProvider = struct {
     pub fn init(
         allocator: Allocator,
         rng: Random,
+        registry: *Registry(.{}),
         gossip: *RwMux(GossipTable),
         my_pubkey: Pubkey,
         my_shred_version: *const Atomic(u16),
-    ) error{OutOfMemory}!RepairPeerProvider {
+    ) !RepairPeerProvider {
         return .{
             .allocator = allocator,
             .gossip_table_rw = gossip,
@@ -336,6 +392,7 @@ pub const RepairPeerProvider = struct {
             .my_pubkey = my_pubkey,
             .my_shred_version = my_shred_version,
             .rng = rng,
+            .metrics = try registry.initStruct(Metrics),
         };
     }
 
@@ -364,11 +421,14 @@ pub const RepairPeerProvider = struct {
 
         if (self.cache.get(slot)) |peers| {
             if (now - peers.insertion_time_secs <= REPAIR_PEERS_CACHE_TTL_SECONDS) {
+                self.metrics.cache_hit_count.inc();
                 return peers.peers;
             }
-        }
+            self.metrics.cache_expired_count.inc();
+        } else self.metrics.cache_miss_count.inc();
 
         const peers = try self.getRepairPeersFromGossip(self.allocator, slot);
+        self.metrics.latest_count_from_gossip.set(peers.len);
         try self.cache.insert(slot, .{
             .insertion_time_secs = now,
             .peers = peers,
@@ -422,6 +482,7 @@ pub const RepairPeerProvider = struct {
 
 test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
+    const registry = sig.prometheus.globalRegistry();
     var rand = std.rand.DefaultPrng.init(4328095);
     var random = rand.random();
     const TestLogger = sig.trace.DirectPrintLogger;
@@ -465,20 +526,23 @@ test "RepairService sends repair request to gossip peer" {
     const peers = try RepairPeerProvider.init(
         allocator,
         random,
+        registry,
         &gossip_mux,
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
     );
 
-    var tracker = BasicShredTracker.init(13579, .noop);
-    var service = RepairService.init(
+    var tracker = try BasicShredTracker.init(13579, .noop, registry);
+    var service = try RepairService.init(
         allocator,
         logger,
         &exit,
+        registry,
         try RepairRequester.init(
             allocator,
             logger,
             random,
+            registry,
             &keypair,
             repair_socket,
             &exit,
@@ -536,6 +600,7 @@ test "RepairPeerProvider selects correct peers" {
     var peers = try RepairPeerProvider.init(
         allocator,
         random,
+        sig.prometheus.globalRegistry(),
         &gossip_mux,
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,

@@ -1,14 +1,20 @@
 const std = @import("std");
+const prometheus = @import("lib.zig");
+
 const mem = std.mem;
 const testing = std.testing;
 
-const Metric = @import("metric.zig").Metric;
+const Metric = prometheus.metric.Metric;
+const MetricType = prometheus.metric.MetricType;
 
+/// Monotonically increasing value.
 pub const Counter = struct {
-    const Self = @This();
-
     metric: Metric = Metric{ .getResultFn = getResult },
     value: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    const Self = @This();
+
+    pub const metric_type: MetricType = .counter;
 
     pub fn inc(self: *Self) void {
         _ = self.value.fetchAdd(1, .monotonic);
@@ -29,14 +35,6 @@ pub const Counter = struct {
 
     pub fn reset(self: *Self) void {
         _ = self.value.store(0, .monotonic);
-    }
-
-    pub fn set(self: *Self, value: anytype) void {
-        switch (@typeInfo(@TypeOf(value))) {
-            .Int, .Float, .ComptimeInt, .ComptimeFloat => {},
-            else => @compileError("can't set a non-number"),
-        }
-        self.value.store(@intCast(value), .monotonic);
     }
 
     fn getResult(metric: *Metric, _: mem.Allocator) Metric.Error!Metric.Result {

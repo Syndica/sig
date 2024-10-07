@@ -704,7 +704,7 @@ pub const GossipService = struct {
                     self.logger.err().logf("handleBatchPushMessages failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
-                self.stats.handle_batch_push_time.observe(@floatFromInt(elapsed));
+                self.stats.handle_batch_push_time.observe(elapsed);
 
                 push_messages.clearRetainingCapacity();
             }
@@ -713,7 +713,7 @@ pub const GossipService = struct {
                 var x_timer = try sig.time.Timer.start();
                 self.handleBatchPruneMessages(&prune_messages);
                 const elapsed = x_timer.read().asMillis();
-                self.stats.handle_batch_prune_time.observe(@floatFromInt(elapsed));
+                self.stats.handle_batch_prune_time.observe(elapsed);
 
                 prune_messages.clearRetainingCapacity();
             }
@@ -724,7 +724,7 @@ pub const GossipService = struct {
                     self.logger.err().logf("handleBatchPullRequest failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
-                self.stats.handle_batch_pull_req_time.observe(@floatFromInt(elapsed));
+                self.stats.handle_batch_pull_req_time.observe(elapsed);
 
                 pull_requests.clearRetainingCapacity();
             }
@@ -735,7 +735,7 @@ pub const GossipService = struct {
                     self.logger.err().logf("handleBatchPullResponses failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
-                self.stats.handle_batch_pull_resp_time.observe(@floatFromInt(elapsed));
+                self.stats.handle_batch_pull_resp_time.observe(elapsed);
 
                 pull_responses.clearRetainingCapacity();
             }
@@ -746,7 +746,7 @@ pub const GossipService = struct {
                     self.logger.err().logf("handleBatchPingMessages failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
-                self.stats.handle_batch_ping_time.observe(@floatFromInt(elapsed));
+                self.stats.handle_batch_ping_time.observe(elapsed);
 
                 ping_messages.clearRetainingCapacity();
             }
@@ -755,7 +755,7 @@ pub const GossipService = struct {
                 var x_timer = try sig.time.Timer.start();
                 self.handleBatchPongMessages(&pong_messages);
                 const elapsed = x_timer.read().asMillis();
-                self.stats.handle_batch_pong_time.observe(@floatFromInt(elapsed));
+                self.stats.handle_batch_pong_time.observe(elapsed);
 
                 pong_messages.clearRetainingCapacity();
             }
@@ -794,7 +794,7 @@ pub const GossipService = struct {
                 break :err_blk 0;
             };
             const elapsed = x_timer.read().asMillis();
-            self.stats.handle_trim_table_time.observe(@floatFromInt(elapsed));
+            self.stats.handle_trim_table_time.observe(elapsed);
 
             break :blk n_pubkeys_dropped;
         } else 0;
@@ -1578,7 +1578,7 @@ pub const GossipService = struct {
             var timer = try sig.time.Timer.start();
             defer {
                 const elapsed = timer.read().asMillis();
-                self.stats.push_messages_time_to_insert.observe(@floatFromInt(elapsed));
+                self.stats.push_messages_time_to_insert.observe(elapsed);
             }
 
             var gossip_table, var gossip_table_lg = self.gossip_table_rw.writeWithLock();
@@ -1681,7 +1681,7 @@ pub const GossipService = struct {
         var timer = try sig.time.Timer.start();
         defer {
             const elapsed = timer.read().asMillis();
-            self.stats.push_messages_time_build_prune.observe(@floatFromInt(elapsed));
+            self.stats.push_messages_time_build_prune.observe(elapsed);
         }
         var pubkey_to_failed_origins_iter = pubkey_to_failed_origins.iterator();
 
@@ -2032,28 +2032,18 @@ pub const GossipStats = struct {
 
     const Self = @This();
 
-    const HANDLE_TIME_BUCKETS_MS: [10]f64 = .{
+    pub const buckets: [10]f64 = .{
         10,   25,
         50,   100,
         250,  500,
         1000, 2500,
         5000, 10000,
     };
+
     pub fn init(logger: Logger) GetMetricError!Self {
         var self: Self = undefined;
         const registry = globalRegistry();
-        const stats_struct_info = @typeInfo(GossipStats).Struct;
-        inline for (stats_struct_info.fields) |field| {
-            if (field.name[0] != '_') {
-                @field(self, field.name) = switch (field.type) {
-                    *Counter => try registry.getOrCreateCounter(field.name),
-                    *GaugeU64 => try registry.getOrCreateGauge(field.name, u64),
-                    *Histogram => try registry.getOrCreateHistogram(field.name, &HANDLE_TIME_BUCKETS_MS),
-                    else => @compileError("Unhandled field type: " ++ field.name ++ ": " ++ @typeName(field.type)),
-                };
-            }
-        }
-
+        std.debug.assert(try registry.initFields(&self) == 1);
         self._logging_fields = .{ .logger = logger };
         return self;
     }

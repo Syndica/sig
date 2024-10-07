@@ -10,6 +10,7 @@ const OnceCell = @import("../sync/once_cell.zig").OnceCell;
 
 const Metric = @import("metric.zig").Metric;
 const Counter = @import("counter.zig").Counter;
+const VariantCounter = @import("variant_counter.zig").VariantCounter;
 const Gauge = @import("gauge.zig").Gauge;
 const GaugeFn = @import("gauge_fn.zig").GaugeFn;
 const GaugeCallFnType = @import("gauge_fn.zig").GaugeCallFnType;
@@ -47,6 +48,10 @@ const RegistryOptions = struct {
 
 pub fn Registry(comptime options: RegistryOptions) type {
     return struct {
+        arena_state: heap.ArenaAllocator,
+        mutex: std.Thread.Mutex,
+        metrics: MetricMap,
+
         const Self = @This();
 
         const MetricMap = hash_map.StringHashMapUnmanaged(struct {
@@ -54,10 +59,6 @@ pub fn Registry(comptime options: RegistryOptions) type {
             type_name: []const u8,
             metric: *Metric,
         });
-
-        arena_state: heap.ArenaAllocator,
-        mutex: std.Thread.Mutex,
-        metrics: MetricMap,
 
         pub fn init(allocator: mem.Allocator) Self {
             return .{
@@ -69,6 +70,75 @@ pub fn Registry(comptime options: RegistryOptions) type {
 
         pub fn deinit(self: *Self) void {
             self.arena_state.deinit();
+        }
+
+        /// Initialize a struct full of metrics.
+        /// Every field must be a supported metric type.
+        pub fn initStruct(self: *Self, comptime Struct: type) GetMetricError!Struct {
+            var metrics_struct: Struct = undefined;
+            inline for (@typeInfo(Struct).Struct.fields) |field| {
+                try self.initMetric(Struct, &@field(metrics_struct, field.name), field.name);
+            }
+            return metrics_struct;
+        }
+
+        /// Initialize any fields within the struct that are supported metric types.
+        /// Leaves other fields untouched.
+        ///
+        /// Returns the number of fields that were *not* initialized.
+        pub fn initFields(
+            self: *Self,
+            /// Mutable pointer to a struct containing metrics.
+            metrics_struct: anytype,
+        ) GetMetricError!usize {
+            const Struct = @typeInfo(@TypeOf(metrics_struct)).Pointer.child;
+            const fields = @typeInfo(Struct).Struct.fields;
+            var num_fields_skipped: usize = fields.len;
+            inline for (@typeInfo(Struct).Struct.fields) |field| {
+                if (@typeInfo(field.type) == .Pointer) {
+                    const MetricType = @typeInfo(field.type).Pointer.child;
+                    if (@hasDecl(MetricType, "metric_type")) {
+                        try self.initMetric(Struct, &@field(metrics_struct, field.name), field.name);
+                        num_fields_skipped -= 1;
+                    }
+                }
+            }
+            return num_fields_skipped;
+        }
+
+        /// Assumes the metric type is **SomeMetric and initializes it.
+        ///
+        /// Uses the following declarations from Config:
+        /// - `prefix` if it exists
+        /// - `buckets` - required if metric is a *Histogram
+        ///
+        /// NOTE: does not support GaugeFn
+        ///
+        /// If expectations are violated, throws a compile error.
+        fn initMetric(
+            self: *Self,
+            Config: type,
+            /// Should be a mutable pointer to the location containing the
+            /// pointer to the metric, so `**SomeMetric` (ptr to a ptr)
+            metric: anytype,
+            comptime local_name: []const u8,
+        ) GetMetricError!void {
+            const MetricType = @typeInfo(@typeInfo(@TypeOf(metric)).Pointer.child).Pointer.child;
+            const prefix = if (@hasDecl(Config, "prefix")) Config.prefix ++ "_" else "";
+            const name = prefix ++ local_name;
+            metric.* = switch (MetricType.metric_type) {
+                .counter => try self.getOrCreateCounter(name),
+                .variant_counter => try self.getOrCreateVariantCounter(name, MetricType.Type),
+                .gauge => try self.getOrCreateGauge(name, MetricType.Data),
+                .gauge_fn => @compileError("GaugeFn does not support auto-init."),
+                .histogram => try self.getOrCreateHistogram(
+                    name,
+                    if (@typeInfo(@TypeOf(Config.buckets)) == .Fn)
+                        Config.buckets(name)
+                    else
+                        &Config.buckets,
+                ),
+            };
         }
 
         fn nbMetrics(self: *const Self) usize {
@@ -102,6 +172,14 @@ pub fn Registry(comptime options: RegistryOptions) type {
             buckets: []const f64,
         ) GetMetricError!*Histogram {
             return self.getOrCreateMetric(name, Histogram, .{buckets});
+        }
+
+        pub fn getOrCreateVariantCounter(
+            self: *Self,
+            name: []const u8,
+            ErrorSet: type,
+        ) GetMetricError!*VariantCounter(ErrorSet) {
+            return self.getOrCreateMetric(name, VariantCounter(ErrorSet), .{});
         }
 
         /// MetricType must be initializable in one of these ways:

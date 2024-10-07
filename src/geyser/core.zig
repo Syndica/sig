@@ -77,13 +77,7 @@ pub const GeyserWriterStats = struct {
     geyser_writer_total_bytes: *Counter,
 
     pub fn init() !GeyserWriterStats {
-        var self: GeyserWriterStats = undefined;
-        const registry = globalRegistry();
-        const stats_struct_info = @typeInfo(GeyserWriterStats).Struct;
-        inline for (stats_struct_info.fields) |field| {
-            @field(self, field.name) = try registry.getOrCreateCounter(field.name);
-        }
-        return self;
+        return try globalRegistry().initStruct(GeyserWriterStats);
     }
 };
 
@@ -260,17 +254,7 @@ pub const GeyserReaderStats = struct {
     const GaugeU64 = Gauge(u64);
 
     pub fn init() !GeyserReaderStats {
-        var self: GeyserReaderStats = undefined;
-        const registry = globalRegistry();
-        const stats_struct_info = @typeInfo(GeyserReaderStats).Struct;
-        inline for (stats_struct_info.fields) |field| {
-            @field(self, field.name) = switch (field.type) {
-                *Counter => try registry.getOrCreateCounter(field.name),
-                *GaugeU64 => try registry.getOrCreateGauge(field.name, u64),
-                else => @compileError("Unhandled field type: " ++ field.name ++ ": " ++ @typeName(field.type)),
-            };
-        }
-        return self;
+        return try globalRegistry().initStruct(GeyserReaderStats);
     }
 };
 
