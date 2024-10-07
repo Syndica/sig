@@ -54,7 +54,7 @@ pub fn main() !void {
         try benchmarkCSV(
             allocator,
             logger,
-            @import("accountsdb/index.zig").BenchmarkSwissMap,
+            @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
             max_time_per_bench,
             output_runtimes,
         );

@@ -1439,7 +1439,6 @@ fn loadSnapshot(
     try result.accounts_db.fastLoadWithDiskIndexes(
         manifest.accounts_db_fields,
     );
-
     const full_snapshot = all_snapshot_fields.full;
     const validate_duration = try result.accounts_db.validateLoadFromSnapshot(
         manifest.bank_fields_inc.snapshot_persistence,

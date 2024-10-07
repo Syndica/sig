@@ -65,7 +65,6 @@ pub const AccountsDB = struct {
 
     /// maps a pubkey to the account location
     account_index: AccountIndex,
-    disk_allocator_ptr: ?*DiskMemoryAllocator = null,
 
     /// track per-slot for purge/flush
     account_cache: RwMux(AccountCache),
@@ -134,32 +133,6 @@ pub const AccountsDB = struct {
         config: InitConfig,
         geyser_writer: ?*GeyserWriter,
     ) !Self {
-        const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
-        const reference_allocator: std.mem.Allocator //
-        = blk: {
-            if (config.use_disk_index) {
-                var index_bin_dir = try snapshot_dir.makeOpenPath("index", .{});
-                errdefer index_bin_dir.close();
-
-                logger.info().logf("using disk index in {s}", .{sig.utils.fmt.tryRealPath(index_bin_dir, ".")});
-
-                const ptr = try allocator.create(DiskMemoryAllocator);
-                ptr.* = .{
-                    .dir = index_bin_dir,
-                    .logger = logger,
-                };
-
-                break :blk .{ ptr, ptr.allocator() };
-            } else {
-                logger.info().logf("using ram index", .{});
-                break :blk .{ null, allocator };
-            }
-        };
-        errdefer if (maybe_disk_allocator_ptr) |ptr| {
-            ptr.dir.close();
-            allocator.destroy(ptr);
-        };
-
         // ensure accounts/ exists
         snapshot_dir.makePath("accounts") catch |err| switch (err) {
             error.PathAlreadyExists => {},
@@ -168,7 +141,8 @@ pub const AccountsDB = struct {
 
         var account_index = try AccountIndex.init(
             allocator,
-            reference_allocator,
+            logger,
+            if (config.use_disk_index) .{ .accountsdb_dir = snapshot_dir } else null,
             config.number_of_index_bins,
         );
         errdefer account_index.deinit(true);
@@ -176,12 +150,11 @@ pub const AccountsDB = struct {
         const metrics = try AccountsDBMetrics.init();
         return .{
             .allocator = allocator,
-            .disk_allocator_ptr = maybe_disk_allocator_ptr,
+            .snapshot_dir = snapshot_dir,
             .account_index = account_index,
             .logger = logger,
             .config = config,
             .account_cache = RwMux(AccountCache).init(AccountCache.init(allocator)),
-            .snapshot_dir = snapshot_dir,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .metrics = metrics,
             .geyser_writer = geyser_writer,
@@ -190,10 +163,6 @@ pub const AccountsDB = struct {
 
     pub fn deinit(self: *Self) void {
         self.account_index.deinit(true);
-        if (self.disk_allocator_ptr) |ptr| {
-            ptr.dir.close();
-            self.allocator.destroy(ptr);
-        }
 
         {
             const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
@@ -229,8 +198,12 @@ pub const AccountsDB = struct {
         self: *Self,
         snapshot_manifest: AccountsDbFields,
     ) !void {
-        var index_dir = try self.snapshot_dir.openDir("index", .{});
-        defer index_dir.close();
+        // this dir contains the account references memory
+        var ref_dir = try self.snapshot_dir.openDir("index", .{});
+        defer ref_dir.close();
+        // this dir contains the hashmap memory
+        var ref_map_dir = try self.snapshot_dir.makeOpenPath("index_ref_map", .{}); 
+        defer ref_map_dir.close();
 
         var timer = try sig.time.Timer.start();
         var progress_timer = try sig.time.Timer.start();
@@ -240,6 +213,7 @@ pub const AccountsDB = struct {
 
         const manifest_file_map = snapshot_manifest.file_map;
 
+        // populate the account files
         const file_map, var file_map_lg = self.file_map.writeWithLock();
         defer file_map_lg.unlock();
         try file_map.ensureTotalCapacity(self.allocator, n_account_files);
@@ -294,109 +268,67 @@ pub const AccountsDB = struct {
 
         // load the account references from disk
         var references = std.ArrayList([]AccountRef).init(self.allocator);
-        var index_dir_iter = index_dir.iterate();
-        while (try index_dir_iter.next()) |file_entry| {
-            const index_file = try index_dir.openFile(file_entry.name, .{ .mode = .read_write });
-            defer index_file.close();
+        var ref_dir_iter = ref_dir.iterate();
+        while (try ref_dir_iter.next()) |file_entry| {
+            const reference_file = try ref_dir.openFile(file_entry.name, .{ .mode = .read_write });
+            defer reference_file.close();
 
-            const file_stat = try index_file.stat();
+            const fixed_addr = try reference_file.reader().readInt(u64, .little);
+            const file_stat = try reference_file.stat();
             const file_size: u64 = @intCast(file_stat.size);
 
             const memory = try std.posix.mmap(
-                null,
+                @ptrFromInt(fixed_addr),
                 file_size,
                 // NOTE: need to have write access to modify the invalid `next_ptr`
-                std.posix.PROT.READ | std.posix.PROT.WRITE,
+                std.posix.PROT.READ | std.posix.PROT.WRITE | 0x10, // MAP_FIXED
                 std.posix.MAP{ .TYPE = .PRIVATE },
-                index_file.handle,
+                reference_file.handle,
                 0,
             );
 
-            const n_accounts_written = std.mem.readInt(u32, memory[@sizeOf(u32) .. @sizeOf(u32) * 2], .little);
-            const reference_slice_aligned: [*]align(8) AccountRef = @alignCast(@ptrCast(memory[@sizeOf(u32) * 2 ..]));
+            const n_accounts_written = std.mem.readInt(u64, memory[@sizeOf(u64) .. @sizeOf(u64) * 2], .little);
+            const reference_slice_aligned: [*]align(8) AccountRef = @alignCast(@ptrCast(memory[@sizeOf(u64) * 2 ..]));
             const reference_slice = reference_slice_aligned[0..n_accounts_written];
 
             for (reference_slice) |*ref| {
                 const bin_index = self.account_index.pubkey_bin_calculator.binIndex(&ref.pubkey);
                 bin_counts[bin_index] += 1;
-                // when indexing we need to reset the next_ptr since the memory addresses are new
-                ref.next_ptr = null;
             }
 
             try references.append(reference_slice);
         }
 
-        // pre-allocate the account bin memory
-        var total_accounts: u64 = 0;
-        for (bin_counts, 0..) |count, bin_index| {
-            if (count > 0) {
-                const bin_rw = self.account_index.getBin(bin_index);
-                const bin, var bin_lg = bin_rw.writeWithLock();
-                defer bin_lg.unlock();
-                try bin.ensureTotalCapacity(count);
-                total_accounts += count;
-            }
+        var ref_map_file = try ref_map_dir.openFile("account_references_0", .{});
+        defer ref_map_file.close();
+
+        const ref_map_reader = ref_map_file.reader();
+        const n_bins = try ref_map_reader.readInt(u64, .little);
+        if (n_bins != self.account_index.numberOfBins()) { 
+            self.logger.errf("number of bins in ref map does not match account index: {d} vs {d}", .{n_bins, self.account_index.numberOfBins()});
+            return error.InvalidBinCount;
         }
 
-        {
-            var handles = std.ArrayList(std.Thread).init(self.allocator);
-            defer {
-                for (handles.items) |*h| h.join();
-                handles.deinit();
-            }
-
-            try spawnThreadTasks(
-                &handles,
-                indexReferencesMultiThread,
-                .{
-                    self,
-                    references,
-                    total_accounts,
-                },
-                self.account_index.numberOfBins(),
-                12,
-            );
+        // read the bin lengths
+        const bin_lens = try self.allocator.alloc(u64, n_bins);
+        defer self.allocator.free(bin_lens);
+        for (0..n_bins) |i| {
+            const bin_memory_len = try ref_map_reader.readInt(u64, .little);
+            bin_lens[i] = bin_memory_len;
         }
-    }
 
-    pub fn indexReferencesMultiThread(
-        self: *Self,
-        references: ArrayList([]AccountRef),
-        n_references_total: u64,
-        // task specific
-        start_index: usize,
-        end_index: usize,
-        thread_id: usize,
-    ) !void {
-        var progress_timer = try sig.time.Timer.start();
-        var timer = try sig.time.Timer.start();
+        // populate the memory
+        for (0..n_bins) |i| { 
+            const bin, var bin_lg = self.account_index.bins[i].writeWithLock();
+            defer bin_lg.unlock();
 
-        var ref_count: u64 = 0;
-        for (references.items) |ref_batch| {
-            for (ref_batch) |*ref| {
-                // NOTE: this likely leads to a *large* number of page-faults which we dont want
-                // larger split up of original indexes -- validate with -t 12
-                // read-per index memory to make use of cache
-                // MAYBE: read-per without locks and then have a final combine step
-                const bin_index = self.account_index.pubkey_bin_calculator.binIndex(&ref.pubkey);
-                if (bin_index >= start_index and bin_index < end_index) {
-                    // this unsafe is fine because only one thread is indexing per bin
-                    _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(ref);
-                }
-                ref_count += 1;
-
-                if (thread_id == 0 and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
-                    printTimeEstimate(
-                        self.logger,
-                        &timer,
-                        n_references_total,
-                        ref_count,
-                        "building index",
-                        "thread0",
-                    );
-                    progress_timer.reset();
-                }
+            const memory = try self.allocator.alloc(u8, bin_lens[i]);
+            const amount_read = try ref_map_file.readAll(memory);
+            if (amount_read != bin_lens[i]) {
+                self.logger.errf("failed to read all bin memory: {d} vs {d}", .{amount_read, bin_lens[i]});
+                return error.InvalidBinMemory;
             }
+            bin.unmanaged.setFromMemory(memory);
         }
     }
 
@@ -419,6 +351,59 @@ pub const AccountsDB = struct {
             accounts_per_file_estimate,
         );
         self.logger.info().logf("loaded from snapshot in {s}", .{load_duration});
+
+        // TODO: change to fastload cli
+        if (self.config.use_disk_index) {
+            // save for fast load option
+            var ref_map_dir = try self.snapshot_dir.makeOpenPath("index_ref_map", .{});
+            defer ref_map_dir.close();
+
+            var disk_allocator = DiskMemoryAllocator{
+                .dir = ref_map_dir,
+                .logger = self.logger
+            };
+            // TODO: push to var
+            std.debug.print("saving index reference map to disk @ index_ref_map/\n", .{});
+
+            const n_bins = self.account_index.numberOfBins();
+            var map_data_len: u64 = 0;
+            for (0..n_bins) |bin_i| {
+                const bin_rw = self.account_index.getBin(bin_i);
+                const bin, var bin_lg = bin_rw.readWithLock();
+                defer bin_lg.unlock();
+
+                map_data_len += bin.unmanaged.memory.len;
+            }
+
+            const map_memory = try disk_allocator.allocator().alloc(
+                u8,
+                @sizeOf(u64) + @sizeOf(u64) * n_bins + map_data_len,
+            );
+
+            // write the number of bins and then length of each bin
+            var offset: u64 = 0;
+            std.mem.writeInt(u64, map_memory[offset..][0..@sizeOf(u64)], n_bins, .little);
+            offset += @sizeOf(u64);
+            for (0..n_bins) |bin_i| {
+                const bin_rw = self.account_index.getBin(bin_i);
+                const bin, var bin_lg = bin_rw.readWithLock();
+                defer bin_lg.unlock();
+
+                std.mem.writeInt(u64, map_memory[offset..][0..@sizeOf(u64)], bin.unmanaged.memory.len, .little);
+                offset += @sizeOf(u64);
+            }
+
+            // write the underlying memory of the bin
+            for (0..n_bins) |bin_i| {
+                const bin_rw = self.account_index.getBin(bin_i);
+                const bin, var bin_lg = bin_rw.readWithLock();
+                defer bin_lg.unlock();
+
+                const bin_memory = bin.unmanaged.memory;
+                @memcpy(map_memory[offset..][0..bin_memory.len], bin_memory);
+                offset += bin_memory.len;
+            }
+        }
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.full;
@@ -510,8 +495,9 @@ pub const AccountsDB = struct {
 
             // set the disk allocator after init() doesnt create a new one
             if (use_disk_index) {
-                thread_db.disk_allocator_ptr = self.disk_allocator_ptr;
-                thread_db.account_index.reference_allocator = thread_db.disk_allocator_ptr.?.allocator();
+                const disk_allocator = self.account_index.disk_allocator_ptr;
+                thread_db.account_index.disk_allocator_ptr = disk_allocator;
+                thread_db.account_index.reference_allocator = disk_allocator.?.allocator();
             }
         }
         defer {
@@ -532,6 +518,7 @@ pub const AccountsDB = struct {
                 file_map.deinit(per_thread_allocator);
 
                 // NOTE: important `false` (ie, 1)
+                loading_thread.account_index.disk_allocator_ptr = null; // dont free the allocator
                 loading_thread.account_index.deinit(false);
             }
         }
@@ -617,12 +604,12 @@ pub const AccountsDB = struct {
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
 
         const ref_memory_raw_ptr = self.account_index.reference_allocator.rawAlloc(
-            @sizeOf(u32) * 2 + @sizeOf(AccountRef) * n_accounts_estimate,
+            @sizeOf(u64) * 2 + @sizeOf(AccountRef) * n_accounts_estimate,
             8,
             @returnAddress(),
         ) orelse @panic("failed to allocate references");
 
-        const reference_slice_aligned: [*]align(8) AccountRef = @alignCast(@ptrCast(ref_memory_raw_ptr[@sizeOf(u32) * 2 ..]));
+        const reference_slice_aligned: [*]align(8) AccountRef = @alignCast(@ptrCast(ref_memory_raw_ptr[@sizeOf(u64) * 2 ..]));
         const reference_slice = reference_slice_aligned[0..n_accounts_estimate];
         const references_ptr = reference_slice.ptr;
         var references = ArrayList(AccountRef).fromOwnedSlice(
@@ -633,17 +620,17 @@ pub const AccountsDB = struct {
 
         // write the number of accounts allocated to the first 4 bytes
         std.mem.writeInt(
-            u32,
-            ref_memory_raw_ptr[0..@sizeOf(u32)],
-            @intCast(n_accounts_estimate),
+            u64,
+            ref_memory_raw_ptr[0..@sizeOf(u64)],
+            @intFromPtr(ref_memory_raw_ptr),
             .little,
         );
         defer {
             const n_accounts_written = references.items.len;
             // write the number of accounts written to the second 4 bytes
             std.mem.writeInt(
-                u32,
-                ref_memory_raw_ptr[@sizeOf(u32) .. @sizeOf(u32) * 2],
+                u64,
+                ref_memory_raw_ptr[@sizeOf(u64) .. @sizeOf(u64) * 2],
                 @intCast(n_accounts_written),
                 .little,
             );
@@ -1205,33 +1192,38 @@ pub const AccountsDB = struct {
                 const max_slot_ref = switch (config) {
                     .FullAccountHash => |full_config| slotListMaxWithinBounds(ref_ptr, full_config.min_slot, full_config.max_slot),
                     .IncrementalAccountHash => |inc_config| slotListMaxWithinBounds(ref_ptr, inc_config.min_slot, inc_config.max_slot),
-                } orelse continue;
+                } orelse {
+                    // TODO: metrics
+                    continue;
+                };
+
                 var account_hash, const lamports = try self.getAccountHashAndLamportsFromRef(max_slot_ref.location);
                 if (lamports == 0) {
                     switch (config) {
                         // for full snapshots, only include non-zero lamport accounts
-                        .FullAccountHash => continue,
+                        .FullAccountHash => { 
+                            // TODO: metrics
+                            continue;
+                        },
                         // zero-lamport accounts for incrementals = hash(pubkey)
                         .IncrementalAccountHash => Blake3.hash(&key.data, &account_hash.data, .{}),
                     }
-                } else {
-                    // hashes aren't always stored correctly in snapshots
-                    if (account_hash.order(&Hash.default()) == .eq) {
-                        const account, var lock_guard = try self.getAccountFromRefWithReadLock(max_slot_ref);
-                        defer lock_guard.unlock();
+                } else if (account_hash.order(&Hash.default()) == .eq) {
+                    // hashes arent always stored correctly in snapshots
+                    const account, var lock_guard = try self.getAccountFromRefWithReadLock(max_slot_ref);
+                    defer lock_guard.unlock();
 
-                        account_hash = switch (account) {
-                            .file => |in_file| sig.core.account.hashAccount(
-                                in_file.lamports().*,
-                                in_file.data,
-                                &in_file.owner().data,
-                                in_file.executable().*,
-                                in_file.rent_epoch().*,
-                                &in_file.pubkey().data,
-                            ),
-                            .cache => |cached| cached.hash(&key),
-                        };
-                    }
+                    account_hash = switch (account) {
+                        .file => |in_file| sig.core.account.hashAccount(
+                            in_file.lamports().*,
+                            in_file.data,
+                            &in_file.owner().data,
+                            in_file.executable().*,
+                            in_file.rent_epoch().*,
+                            &in_file.pubkey().data,
+                        ),
+                        .cache => |cached| cached.hash(&key),
+                    };
                 }
 
                 hashes.appendAssumeCapacity(account_hash);
