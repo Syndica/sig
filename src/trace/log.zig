@@ -175,8 +175,8 @@ pub const ChannelPrintLogger = struct {
     pub fn run(self: *Self) void {
         while (!self.exit.load(.acquire)) {
             while (self.channel.receive()) |message| {
-                const writer = std.io.getStdErr().writer();
-                { // Scope to limit the span of the lock on std err.
+                {
+                    const writer = std.io.getStdErr().writer();
                     std.debug.lockStdErr();
                     defer std.debug.unlockStdErr();
                     logfmt.writeLog(writer, message) catch {};
