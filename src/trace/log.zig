@@ -10,8 +10,6 @@ const Channel = @import("../sync/channel.zig").Channel;
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-var gpa_allocator = gpa.allocator();
 
 pub const Config = struct {
     max_level: Level = Level.debug,
@@ -68,28 +66,28 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
 
         pub fn err(self: *const Self) Entry {
             return switch (self.*) {
-                .noop => Entry{ .noop = {} },
+                .noop => .noop,
                 inline else => |impl| impl.err(scope),
             };
         }
 
         pub fn warn(self: *const Self) Entry {
             return switch (self.*) {
-                .noop => Entry{ .noop = {} },
+                .noop => .noop,
                 inline else => |impl| impl.err(scope),
             };
         }
 
         pub fn info(self: *const Self) Entry {
             return switch (self.*) {
-                .noop => Entry{ .noop = {} },
+                .noop => .noop,
                 inline else => |impl| impl.info(scope),
             };
         }
 
         pub fn debug(self: *const Self) Entry {
             return switch (self.*) {
-                .noop => Entry{ .noop = {} },
+                .noop => .noop,
                 inline else => |impl| impl.debug(scope),
             };
         }
@@ -188,28 +186,28 @@ pub const ChannelPrintLogger = struct {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.err)) {
             return Entry{ .standard = StdEntry.init(self.log_allocator, maybe_scope, self.channel, Level.err) };
         }
-        return Entry{ .noop = {} };
+        return .noop;
     }
 
     pub fn warn(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.warn)) {
             return Entry{ .standard = StdEntry.init(self.log_allocator, maybe_scope, self.channel, Level.warn) };
         }
-        return Entry{ .noop = {} };
+        return .noop;
     }
 
     pub fn info(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.info)) {
             return Entry{ .standard = StdEntry.init(self.log_allocator, maybe_scope, self.channel, Level.info) };
         }
-        return Entry{ .noop = {} };
+        return .noop;
     }
 
     pub fn debug(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.debug)) {
             return Entry{ .standard = StdEntry.init(self.log_allocator, maybe_scope, self.channel, Level.debug) };
         }
-        return Entry{ .noop = {} };
+        return .noop;
     }
 
     pub fn log(self: *Self, comptime scope: ?[]const u8, level: Level, message: []const u8) void {
@@ -270,28 +268,28 @@ pub const DirectPrintLogger = struct {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.err)) {
             return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.err) };
         }
-        return Entry{ .noop = {} };
+        return .noop;
     }
 
     pub fn warn(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.warn)) {
             return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.warn) };
         }
-        return Entry{ .noop = {} };
+        return .noop;
     }
 
     pub fn info(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.info)) {
             return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.info) };
         }
-        return Entry{ .noop = {} };
+        return .noop;
     }
 
     pub fn debug(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.debug)) {
             return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.debug) };
         }
-        return Entry{ .noop = {} };
+        return .noop;
     }
 
     pub fn log(self: *Self, comptime scope: ?[]const u8, level: Level, message: []const u8) void {
