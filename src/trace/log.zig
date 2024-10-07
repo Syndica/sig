@@ -45,6 +45,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
                 .noop => .noop,
             };
         }
+
         pub fn withScope(self: Self, comptime new_scope: []const u8) ScopedLogger(new_scope) {
             return switch (self) {
                 .standard => |logger| .{ .standard = logger },
