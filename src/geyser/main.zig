@@ -232,7 +232,7 @@ pub fn csvDump() !void {
                 // NOTE: since accounts-db isnt hooked up to the rest to the validator (svm, consensus, etc.)
                 // valid account state is only from snapshots. we can safely exit here because no new accounts
                 // are expected.
-                logger.info().logf("recv end of snapshot loading signal", .{});
+                logger.info().log("recv end of snapshot loading signal");
                 exit.store(true, .monotonic);
                 break;
             },

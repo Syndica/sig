@@ -1440,7 +1440,7 @@ fn loadSnapshot(
     const bank_fields = &snapshot_fields.bank_fields;
 
     // this should exist before we start to unpack
-    logger.info().logf("reading genesis...", .{});
+    logger.info().log("reading genesis...");
     result.genesis_config = readGenesisConfig(allocator, genesis_file_path) catch |err| {
         if (err == error.GenesisNotFound) {
             logger.err().logf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
@@ -1449,7 +1449,7 @@ fn loadSnapshot(
     };
     errdefer result.genesis_config.deinit(allocator);
 
-    logger.info().logf("validating bank...", .{});
+    logger.info().log("validating bank...");
     result.bank = Bank.init(&result.accounts_db, bank_fields);
     try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
@@ -1466,7 +1466,7 @@ fn loadSnapshot(
     defer slot_history.deinit(result.accounts_db.allocator);
     try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
-    logger.info().logf("accounts-db setup done...", .{});
+    logger.info().log("accounts-db setup done...");
 
     return result;
 }
@@ -1611,7 +1611,7 @@ fn getOrDownloadSnapshots(
     };
 
     if (snapshot_files.incremental_snapshot == null) {
-        logger.info().logf("no incremental snapshot found", .{});
+        logger.info().log("no incremental snapshot found");
     }
 
     // if this exists, we wont look for a .tar.zstd
@@ -1636,15 +1636,15 @@ fn getOrDownloadSnapshots(
         const dir_size = (try accounts_dir.stat()).size;
         if (dir_size <= 100) {
             should_unpack_snapshot = true;
-            logger.info().logf("empty accounts/ directory found, will unpack snapshot...", .{});
+            logger.info().log("empty accounts/ directory found, will unpack snapshot...");
         } else {
-            logger.info().logf("accounts/ directory found, will not unpack snapshot...", .{});
+            logger.info().log("accounts/ directory found, will not unpack snapshot...");
         }
     }
 
     var timer = try std.time.Timer.start();
     if (should_unpack_snapshot) {
-        logger.info().logf("unpacking snapshots...", .{});
+        logger.info().log("unpacking snapshots...");
         // if accounts/ doesnt exist then we unpack the found snapshots
         // TODO: delete old accounts/ dir if it exists
         timer.reset();
@@ -1682,11 +1682,11 @@ fn getOrDownloadSnapshots(
             logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
         }
     } else {
-        logger.info().logf("not unpacking snapshot...", .{});
+        logger.info().log("not unpacking snapshot...");
     }
 
     timer.reset();
-    logger.info().logf("reading snapshot metadata...", .{});
+    logger.info().log("reading snapshot metadata...");
     const snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
     logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 

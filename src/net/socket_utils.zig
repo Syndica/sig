@@ -23,7 +23,7 @@ pub fn readSocket(
         if (needs_exit_order) {
             counter.store(idx + 1, .release);
         }
-        logger.info().logf("readSocket loop closed", .{});
+        logger.info().log("readSocket loop closed");
     }
 
     // NOTE: we set to non-blocking to periodically check if we should exit
@@ -58,7 +58,7 @@ pub fn sendSocket(
             // exit the next service in the chain
             counter.store(idx + 1, .release);
         }
-        logger.debug().logf("sendSocket loop closed", .{});
+        logger.debug().log("sendSocket loop closed");
     }
 
     const exit_condition = if (needs_exit_order) idx else true;
