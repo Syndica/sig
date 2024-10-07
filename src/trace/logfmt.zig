@@ -41,7 +41,7 @@ pub fn fmtField(
         },
         else => {
             // Fallback for unsupported types
-            std.fmt.format(writer, "{s}=<?> ", .{key}) catch return;
+            std.fmt.format(writer, "{s}={any} ", .{key, value}) catch return;
         },
     }
 }
