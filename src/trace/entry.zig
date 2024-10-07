@@ -174,11 +174,12 @@ pub const ChannelEntry = struct {
 pub const StdErrEntry = struct {
     const builtin = @import("builtin");
 
-    const Self = @This();
     log_level: Level,
     scope: ?[]const u8,
     allocator: std.mem.Allocator,
     log_msg: ?std.ArrayList(u8),
+
+    const Self = @This();
 
     pub fn init(
         allocator: std.mem.Allocator,

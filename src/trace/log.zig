@@ -29,10 +29,11 @@ const LogKind = enum {
 /// - A TestingLogger
 pub fn ScopedLogger(comptime scope: ?[]const u8) type {
     return union(LogKind) {
-        const Self = @This();
         standard: *ChannelPrintLogger,
         test_logger: *DirectPrintLogger,
         noop: void,
+
+        const Self = @This();
 
         /// Can be used in tests to minimize the amount of logging during tests.
         pub const TEST_DEFAULT_LEVEL: Level = .warn;
@@ -112,7 +113,6 @@ pub const Logger = ScopedLogger(null);
 
 /// An instance of `ScopedLogger` that logs via the channel.
 pub const ChannelPrintLogger = struct {
-    const Self = @This();
     max_level: Level,
     exit: std.atomic.Value(bool),
     allocator: Allocator,
@@ -121,6 +121,8 @@ pub const ChannelPrintLogger = struct {
     max_buffer: u64,
     channel: *Channel(logfmt.LogMsg),
     handle: ?std.Thread,
+
+    const Self = @This();
 
     pub fn init(config: Config) !*Self {
         const max_buffer = config.max_buffer orelse return error.MaxBufferNotSet;
@@ -238,10 +240,11 @@ pub const ChannelPrintLogger = struct {
 /// logging thread picks up the log message.
 pub const DirectPrintLogger = struct {
     const builtin = @import("builtin");
-
-    const Self = @This();
     max_level: Level,
     allocator: Allocator,
+
+    const Self = @This();
+
     pub fn init(allocator: std.mem.Allocator, max_level: Level) *Self {
         std.debug.assert(builtin.is_test);
         const self = allocator.create(Self) catch @panic("could not allocator.create Logger");
