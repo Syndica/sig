@@ -1126,14 +1126,14 @@ const ShredInserterTestState = struct {
     db: BlockstoreDB,
     inserter: ShredInserter,
 
-    pub fn init(comptime test_name: []const u8) !ShredInserterTestState {
-        return initWithLogger(test_name, sig.trace.TestLogger.default.logger());
+    pub fn init(allocator_: std.mem.Allocator, comptime test_name: []const u8) !ShredInserterTestState {
+        return initWithLogger(allocator_, test_name, sig.trace.TestLogger.default.logger());
     }
 
-    fn initWithLogger(comptime test_name: []const u8, logger: sig.trace.Logger) !ShredInserterTestState {
-        const state = try TestState.init(test_name);
+    fn initWithLogger(allocator_: std.mem.Allocator, comptime test_name: []const u8, logger: sig.trace.Logger) !ShredInserterTestState {
+        const state = try TestState.init(allocator_, test_name);
         const inserter = try ShredInserter.init(
-            state.allocator(),
+            state.allocator,
             logger,
             &state.registry,
             state.db,
@@ -1142,7 +1142,7 @@ const ShredInserterTestState = struct {
     }
 
     pub fn allocator(self: ShredInserterTestState) Allocator {
-        return self.state.allocator();
+        return self.state.allocator;
     }
 
     /// Test helper to convert raw bytes into shreds and pass them to insertShreds
@@ -1199,7 +1199,7 @@ pub fn insertShredsForTest(
 }
 
 test "insertShreds single shred" {
-    var state = try ShredInserterTestState.init("insertShreds single shred");
+    var state = try ShredInserterTestState.init(std.testing.allocator, "insertShreds single shred");
     defer state.deinit();
     const allocator = std.testing.allocator;
     const shred = try Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
@@ -1214,7 +1214,7 @@ test "insertShreds single shred" {
 }
 
 test "insertShreds 100 shreds from mainnet" {
-    var state = try ShredInserterTestState.init("insertShreds 32 shreds");
+    var state = try ShredInserterTestState.init(std.testing.allocator, "insertShreds 32 shreds");
     defer state.deinit();
 
     const shred_bytes = test_shreds.mainnet_shreds;
@@ -1239,7 +1239,7 @@ test "insertShreds 100 shreds from mainnet" {
 
 // agave: test_handle_chaining_basic
 test "chaining basic" {
-    var state = try ShredInserterTestState.init("handle chaining basic");
+    var state = try ShredInserterTestState.init(std.testing.allocator, "handle chaining basic");
     defer state.deinit();
 
     const shreds = test_shreds.handle_chaining_basic_shreds;
@@ -1312,7 +1312,7 @@ test "chaining basic" {
 
 // agave: test_merkle_root_metas_coding
 test "merkle root metas coding" {
-    var state = try ShredInserterTestState.initWithLogger("handle chaining basic", .noop);
+    var state = try ShredInserterTestState.initWithLogger(std.testing.allocator, "handle chaining basic", .noop);
     defer state.deinit();
     const allocator = state.allocator();
 
@@ -1445,7 +1445,7 @@ test "merkle root metas coding" {
 
 // agave: test_recovery
 test "recovery" {
-    var state = try ShredInserterTestState.init("handle chaining basic");
+    var state = try ShredInserterTestState.init(std.testing.allocator, "handle chaining basic");
     defer state.deinit();
     const allocator = state.allocator();
 

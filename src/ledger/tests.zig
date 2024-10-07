@@ -50,9 +50,9 @@ test "put/get data consistency for merkle root" {
 
 // Analogous to [test_get_rooted_block](https://github.com/anza-xyz/agave/blob/a72f981370c3f566fc1becf024f3178da041547a/ledger/src/blockstore.rs#L8271)
 test "insert shreds and transaction statuses then get blocks" {
-    var state = try State.init("insert shreds and transaction statuses then get blocks");
+    var state = try State.init(std.testing.allocator, "insert shreds and transaction statuses then get blocks");
     defer state.deinit();
-    const allocator = state.allocator();
+    const allocator = state.allocator;
 
     var db = state.db;
     var inserter = try state.shredInserter();
@@ -349,42 +349,29 @@ pub fn TestState(scope: []const u8) type {
         registry: sig.prometheus.Registry(.{}),
         lowest_cleanup_slot: sig.sync.RwMux(Slot),
         max_root: std.atomic.Value(Slot),
-
-        // if this leaks, you forgot to call `TestState.deinit`
-        _leak_check: *u8,
-
-        /// This is used instead of std.testing.allocator because it includes more stack trace frames
-        /// std.testing.allocator is already the same exact allocator, just with a call to detectLeaks
-        /// run at the end of the test. TestState does the same, so we can use the gpa directly.
-        var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
-        /// This is private to ensure _leak_check is initialized before this is used.
-        const _allocator = gpa.allocator();
+        allocator: std.mem.Allocator,
 
         const Self = @This();
 
-        pub fn init(comptime test_name: []const u8) !*Self {
-            const self = try _allocator.create(Self);
+        pub fn init(allocator: std.mem.Allocator, comptime test_name: []const u8) !*Self {
+            const self = try allocator.create(Self);
             self.* = .{
-                .db = try TestDB(scope).initCustom(_allocator, test_name),
-                .registry = sig.prometheus.Registry(.{}).init(_allocator),
+                .allocator = allocator,
+                .db = try TestDB(scope).initCustom(allocator, test_name),
+                .registry = sig.prometheus.Registry(.{}).init(allocator),
                 .lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0),
                 .max_root = std.atomic.Value(Slot).init(0),
-                ._leak_check = try std.testing.allocator.create(u8),
             };
             return self;
         }
 
-        pub fn allocator(_: Self) Allocator {
-            return _allocator;
-        }
-
         pub fn shredInserter(self: *Self) !ledger.ShredInserter {
-            return ledger.ShredInserter.init(_allocator, test_logger, &self.registry, self.db);
+            return ledger.ShredInserter.init(self.allocator, test_logger, &self.registry, self.db);
         }
 
         pub fn writer(self: *Self) !ledger.BlockstoreWriter {
             return try ledger.BlockstoreWriter.init(
-                _allocator,
+                self.allocator,
                 test_logger,
                 self.db,
                 &self.registry,
@@ -395,7 +382,7 @@ pub fn TestState(scope: []const u8) type {
 
         pub fn reader(self: *Self) !ledger.BlockstoreReader {
             return try ledger.BlockstoreReader.init(
-                _allocator,
+                self.allocator,
                 test_logger,
                 self.db,
                 &self.registry,
@@ -407,9 +394,7 @@ pub fn TestState(scope: []const u8) type {
         pub fn deinit(self: *Self) void {
             self.db.deinit();
             self.registry.deinit();
-            std.testing.allocator.destroy(self._leak_check);
-            _allocator.destroy(self);
-            _ = gpa.detectLeaks();
+            self.allocator.destroy(self);
         }
     };
 }
