@@ -6,16 +6,13 @@ const ledger = @import("lib.zig");
 const Reward = ledger.transaction_status.Reward;
 const Rewards = ledger.transaction_status.Rewards;
 const RewardType = ledger.transaction_status.RewardType;
-const Shred = ledger.shred.Shred;
 const Pubkey = sig.core.Pubkey;
 const TestState = ledger_tests.TestState;
 const TestDB = ledger_tests.TestDB;
 
 const schema = ledger.schema.schema;
-const loadShredsFromFile = ledger_tests.loadShredsFromFile;
 const deinitShreds = ledger_tests.deinitShreds;
 const testShreds = ledger_tests.testShreds;
-const comptimePrint = std.fmt.comptimePrint;
 
 const test_shreds_dir = sig.TEST_DATA_DIR ++ "/shreds";
 const State = TestState("global");
