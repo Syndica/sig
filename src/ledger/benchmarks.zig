@@ -1,6 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const ledge_test = @import("./tests.zig");
+const ledger_tests = @import("./tests.zig");
 const ledger = @import("lib.zig");
 const transaction_status = @import("./transaction_status.zig");
 
@@ -8,13 +8,13 @@ const Reward = transaction_status.Reward;
 const Rewards = transaction_status.Rewards;
 const RewardType = transaction_status.RewardType;
 const Pubkey = sig.core.Pubkey;
-const TestState = ledge_test.TestState;
-const TestDB = ledge_test.TestDB;
+const TestState = ledger_tests.TestState;
+const TestDB = ledger_tests.TestDB;
 const Shred = ledger.shred.Shred;
 
 const schema = ledger.schema.schema;
-const loadShredsFromFile = ledge_test.loadShredsFromFile;
-const deinitShreds = ledge_test.deinitShreds;
+const loadShredsFromFile = ledger_tests.loadShredsFromFile;
+const deinitShreds = ledger_tests.deinitShreds;
 const comptimePrint = std.fmt.comptimePrint;
 
 const test_shreds_dir = sig.TEST_DATA_DIR ++ "/shreds";
