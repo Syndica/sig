@@ -10,13 +10,13 @@ const BlockstoreDB = ledger.BlockstoreDB;
 const Entry = sig.core.Entry;
 const Shred = ledger.shred.Shred;
 const Slot = sig.core.Slot;
+const DirectPrintLogger = sig.trace.DirectPrintLogger;
+const Logger = sig.trace.Logger;
 const SlotMeta = ledger.meta.SlotMeta;
 const VersionedTransactionWithStatusMeta = ledger.reader.VersionedTransactionWithStatusMeta;
 const comptimePrint = std.fmt.comptimePrint;
 
 const schema = ledger.schema.schema;
-const test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-const logger = test_logger.logger();
 
 test "put/get data consistency for merkle root" {
     var rng = std.Random.DefaultPrng.init(100);
@@ -50,7 +50,11 @@ test "put/get data consistency for merkle root" {
 
 // Analogous to [test_get_rooted_block](https://github.com/anza-xyz/agave/blob/a72f981370c3f566fc1becf024f3178da041547a/ledger/src/blockstore.rs#L8271)
 test "insert shreds and transaction statuses then get blocks" {
-    var state = try State.init(std.testing.allocator, "insert shreds and transaction statuses then get blocks");
+    const test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+    defer test_logger.deinit();
+    const logger = test_logger.logger();
+
+    var state = try State.init(std.testing.allocator, "insert shreds and transaction statuses then get blocks", logger);
     defer state.deinit();
     const allocator = state.allocator;
 
@@ -350,10 +354,11 @@ pub fn TestState(scope: []const u8) type {
         lowest_cleanup_slot: sig.sync.RwMux(Slot),
         max_root: std.atomic.Value(Slot),
         allocator: std.mem.Allocator,
+        logger: sig.trace.Logger,
 
         const Self = @This();
 
-        pub fn init(allocator: std.mem.Allocator, comptime test_name: []const u8) !*Self {
+        pub fn init(allocator: std.mem.Allocator, comptime test_name: []const u8, logger: sig.trace.Logger) !*Self {
             const self = try allocator.create(Self);
             self.* = .{
                 .allocator = allocator,
@@ -361,18 +366,19 @@ pub fn TestState(scope: []const u8) type {
                 .registry = sig.prometheus.Registry(.{}).init(allocator),
                 .lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0),
                 .max_root = std.atomic.Value(Slot).init(0),
+                .logger = logger,
             };
             return self;
         }
 
         pub fn shredInserter(self: *Self) !ledger.ShredInserter {
-            return ledger.ShredInserter.init(self.allocator, test_logger, &self.registry, self.db);
+            return ledger.ShredInserter.init(self.allocator, self.logger, &self.registry, self.db);
         }
 
         pub fn writer(self: *Self) !ledger.BlockstoreWriter {
             return try ledger.BlockstoreWriter.init(
                 self.allocator,
-                test_logger,
+                self.logger,
                 self.db,
                 &self.registry,
                 &self.lowest_cleanup_slot,
@@ -383,7 +389,7 @@ pub fn TestState(scope: []const u8) type {
         pub fn reader(self: *Self) !ledger.BlockstoreReader {
             return try ledger.BlockstoreReader.init(
                 self.allocator,
-                test_logger,
+                self.logger,
                 self.db,
                 &self.registry,
                 &self.lowest_cleanup_slot,

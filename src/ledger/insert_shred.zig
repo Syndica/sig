@@ -1139,7 +1139,7 @@ const ShredInserterTestState = struct {
     }
 
     fn initWithLogger(allocator_: std.mem.Allocator, comptime test_name: []const u8, logger: sig.trace.Logger) !ShredInserterTestState {
-        const state = try TestState.init(allocator_, test_name);
+        const state = try TestState.init(allocator_, test_name, logger);
         const inserter = try ShredInserter.init(
             state.allocator,
             logger,
