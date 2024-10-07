@@ -3,10 +3,8 @@ const prometheus = @import("lib.zig");
 
 const Atomic = std.atomic.Value;
 
-const Counter = prometheus.Counter;
 const Metric = prometheus.metric.Metric;
 const MetricType = prometheus.metric.MetricType;
-const Registry = prometheus.Registry;
 
 /// Separately count the occurrence of each variant within an enum or error set.
 ///

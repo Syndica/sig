@@ -7,7 +7,6 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
 // sig common
-const GetMetricError = sig.prometheus.GetMetricError;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
 const Logger = sig.trace.Logger;
@@ -15,7 +14,6 @@ const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
-const Registry = sig.prometheus.Registry;
 const Timer = sig.time.Timer;
 
 // ledger

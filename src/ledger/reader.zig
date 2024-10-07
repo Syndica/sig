@@ -10,7 +10,6 @@ const AutoHashMap = std.AutoHashMap;
 // sig common
 const Counter = sig.prometheus.Counter;
 const Entry = sig.core.Entry;
-const GetMetricError = sig.prometheus.GetMetricError;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
 const Logger = sig.trace.Logger;
