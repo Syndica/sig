@@ -132,8 +132,6 @@ pub const AccountsLRU = struct {
     /// should only be called iff account is not already present
     fn putAccount(self: *AccountsLRU, slot: Slot, pubkey: Pubkey, account: Account) !void {
         const slot_lru = self.slot_lrus.get(slot) orelse blk: {
-            std.debug.print("making new slot_lru at slot: {}\n", .{slot});
-
             const lru = try self.slot_lrus.allocator.create(LRU);
             lru.* = try LRU.initWithContext(self.slot_lrus.allocator, self.max_items, self.slot_lrus.allocator);
 
