@@ -102,7 +102,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, filter, "ledger") or run_all_benchmarks) {
         try benchmark(
-            @import("ledger/tests.zig").BenchmarLegger,
+            @import("ledger/benchmarks.zig").BenchmarLegder,
             max_time_per_bench,
             TimeUnits.microseconds,
         );
