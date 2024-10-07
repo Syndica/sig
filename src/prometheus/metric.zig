@@ -46,7 +46,7 @@ pub const Metric = struct {
             .variant_counter => |counts| {
                 for (counts.counts, counts.names) |counter, label| {
                     try writer.print(
-                        "{s}_{s}_count {d}\n",
+                        "{s}_count{{variant=\"{s}\"}} {d}\n",
                         .{ name, label, counter.load(.monotonic) },
                     );
                 }
