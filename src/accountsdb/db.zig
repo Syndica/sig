@@ -4027,40 +4027,47 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         // },
     };
 
-    pub fn loadSnapshot(bench_args: BenchArgs) !u64 {
+    pub fn loadSnapshot(bench_args: BenchArgs) !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-
-        // unpack the snapshot
-        // NOTE: usually this will be an incremental snapshot
-        // renamed as a full snapshot (mv {inc-snap-fmt}.tar.zstd {full-snap-fmt}.tar.zstd)
-        // (because test snapshots are too small and full snapshots are too big)
-        const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
-        const accounts_path = dir_path ++ "accounts";
 
         // const logger = Logger{ .noop = {} };
         const logger = Logger.init(allocator, .debug);
         defer logger.deinit();
         logger.spawn();
 
-        const snapshot_dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
+        // unpack the snapshot
+        // NOTE: usually this will be an incremental snapshot
+        // renamed as a full snapshot (mv {inc-snap-fmt}.tar.zstd {full-snap-fmt}.tar.zstd)
+        // (because test snapshots are too small and full snapshots are too big)
+        const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
+        var snapshot_dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
             std.debug.print("need to setup a snapshot in {s} for this benchmark...\n", .{dir_path});
-            return 0;
+            return sig.time.Duration.fromNanos(0);
         };
+        defer snapshot_dir.close();
 
         const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
 
-        std.fs.cwd().access(accounts_path, .{}) catch {
-            const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
-            defer archive_file.close();
-            try parallelUnpackZstdTarBall(
-                allocator,
-                logger,
-                archive_file,
-                snapshot_dir,
-                try std.Thread.getCpuCount() / 2,
-                true,
-            );
-        };
+        var accounts_dir = inline for (0..2) |attempt| {
+            if (snapshot_dir.openDir("accounts", .{ .iterate = true })) |accounts_dir|
+                break accounts_dir
+            else |err| switch (err) {
+                else => |e| return e,
+                error.FileNotFound => if (attempt == 0) {
+                    const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
+                    defer archive_file.close();
+                    try parallelUnpackZstdTarBall(
+                        allocator,
+                        logger,
+                        archive_file,
+                        snapshot_dir,
+                        try std.Thread.getCpuCount() / 2,
+                        true,
+                    );
+                },
+            }
+        } else return error.SnapshotMissingAccountsDir;
+        defer accounts_dir.close();
 
         var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
         defer snapshots.deinit(allocator);
@@ -4071,9 +4078,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             .use_disk_index = bench_args.use_disk,
         }, null);
         defer accounts_db.deinit();
-
-        var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
-        defer accounts_dir.close();
 
         const duration = try accounts_db.loadFromSnapshot(
             snapshot.accounts_db_fields,
@@ -4090,7 +4094,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         });
         std.debug.print("r: hash: {}, lamports: {}\n", .{ accounts_hash, total_lamports });
 
-        return duration.asNanos();
+        return duration;
     }
 };
 
@@ -4235,7 +4239,7 @@ pub const BenchmarkAccountsDB = struct {
         // },
     };
 
-    pub fn readWriteAccounts(bench_args: BenchArgs) !u64 {
+    pub fn readWriteAccounts(bench_args: BenchArgs) !sig.time.Duration {
         const n_accounts = bench_args.n_accounts;
         const slot_list_len = bench_args.slot_list_len;
         const total_n_accounts = n_accounts * slot_list_len;
@@ -4375,7 +4379,7 @@ pub const BenchmarkAccountsDB = struct {
             std.debug.print("WRITE: {d}\n", .{elapsed});
         }
 
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         for (0..n_accounts) |i| {
             const pubkey = &pubkeys[i];
             const account = try accounts_db.getAccount(pubkey);
