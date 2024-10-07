@@ -56,12 +56,8 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
 
         pub fn deinit(self: *const Self) void {
             switch (self.*) {
-                .standard => |*logger| {
-                    logger.*.deinit();
-                },
-                .test_logger => |*logger| {
-                    logger.*.deinit();
-                },
+                .standard => |logger| logger.deinit(),
+                .test_logger => |logger| logger.deinit(),
                 .noop => {},
             }
         }
