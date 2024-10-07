@@ -2,15 +2,14 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const ledger_tests = @import("./tests.zig");
 const ledger = @import("lib.zig");
-const transaction_status = @import("./transaction_status.zig");
 
-const Reward = transaction_status.Reward;
-const Rewards = transaction_status.Rewards;
-const RewardType = transaction_status.RewardType;
+const Reward = ledger.transaction_status.Reward;
+const Rewards = ledger.transaction_status.Rewards;
+const RewardType = ledger.transaction_status.RewardType;
+const Shred = ledger.shred.Shred;
 const Pubkey = sig.core.Pubkey;
 const TestState = ledger_tests.TestState;
 const TestDB = ledger_tests.TestDB;
-const Shred = ledger.shred.Shred;
 
 const schema = ledger.schema.schema;
 const loadShredsFromFile = ledger_tests.loadShredsFromFile;
