@@ -74,9 +74,9 @@ test "insert shreds and transaction statuses then get blocks" {
     const blockhash = entries[entries.len - 1].hash;
     const blockhash_string = blockhash.base58String();
 
-    const shreds = try testShreds(prefix ++ "shreds.bin");
-    const more_shreds = try testShreds(prefix ++ "more_shreds.bin");
-    const unrooted_shreds = try testShreds(prefix ++ "unrooted_shreds.bin");
+    const shreds = try testShreds(std.testing.allocator, prefix ++ "shreds.bin");
+    const more_shreds = try testShreds(std.testing.allocator, prefix ++ "more_shreds.bin");
+    const unrooted_shreds = try testShreds(std.testing.allocator, prefix ++ "unrooted_shreds.bin");
     defer inline for (.{ shreds, more_shreds, unrooted_shreds }) |slice| {
         deinitShreds(std.testing.allocator, slice);
     };
@@ -252,9 +252,9 @@ pub fn freshDir(path: []const u8) !void {
 
 const test_shreds_dir = sig.TEST_DATA_DIR ++ "/shreds";
 
-fn testShreds(comptime filename: []const u8) ![]const Shred {
+pub fn testShreds(allocator: std.mem.Allocator, comptime filename: []const u8) ![]const Shred {
     const path = comptimePrint("{s}/{s}", .{ test_shreds_dir, filename });
-    return loadShredsFromFile(std.testing.allocator, path);
+    return loadShredsFromFile(allocator, path);
 }
 
 /// Read shreds from binary file structured like this:

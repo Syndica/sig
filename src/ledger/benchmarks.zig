@@ -14,6 +14,7 @@ const TestDB = ledger_tests.TestDB;
 const schema = ledger.schema.schema;
 const loadShredsFromFile = ledger_tests.loadShredsFromFile;
 const deinitShreds = ledger_tests.deinitShreds;
+const testShreds = ledger_tests.testShreds;
 const comptimePrint = std.fmt.comptimePrint;
 
 const test_shreds_dir = sig.TEST_DATA_DIR ++ "/shreds";
@@ -36,13 +37,6 @@ fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
     return rewards;
 }
 
-/// Differs from testShreds in that it uses the std.heap.c_allocator instead
-/// of the test allocator.
-fn benchShreds(comptime filename: []const u8) ![]const Shred {
-    const path = comptimePrint("{s}/{s}", .{ test_shreds_dir, filename });
-    return loadShredsFromFile(std.heap.c_allocator, path);
-}
-
 pub const BenchmarLegder = struct {
     pub const min_iterations = 5;
     pub const max_iterations = 5;
@@ -55,7 +49,7 @@ pub const BenchmarLegder = struct {
         var inserter = try state.shredInserter();
 
         const prefix = "agave.blockstore.bench_write_small.";
-        const shreds = try benchShreds(prefix ++ "shreds.bin");
+        const shreds = try testShreds(std.heap.c_allocator, prefix ++ "shreds.bin");
         defer inline for (.{shreds}) |slice| {
             deinitShreds(allocator, slice);
         };
@@ -80,7 +74,7 @@ pub const BenchmarLegder = struct {
         var reader = try state.reader();
 
         const prefix = "agave.blockstore.bench_read.";
-        const shreds = try benchShreds(prefix ++ "shreds.bin");
+        const shreds = try testShreds(std.heap.c_allocator, prefix ++ "shreds.bin");
         defer inline for (.{shreds}) |slice| {
             deinitShreds(allocator, slice);
         };
@@ -112,7 +106,7 @@ pub const BenchmarLegder = struct {
         var reader = try state.reader();
 
         const prefix = "agave.blockstore.bench_read.";
-        const shreds = try benchShreds(prefix ++ "shreds.bin");
+        const shreds = try testShreds(std.heap.c_allocator, prefix ++ "shreds.bin");
         defer inline for (.{shreds}) |slice| {
             deinitShreds(allocator, slice);
         };
