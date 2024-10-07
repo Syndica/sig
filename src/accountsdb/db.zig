@@ -111,7 +111,7 @@ pub const AccountsLRU = struct {
 
     // TODO: should we be using bins?
     const LRU = LruCacheCustom(.locking, Pubkey, CachedAccount, std.mem.Allocator, CachedAccount.releaseOrDestroy);
-    const SlotLRU = std.AutoHashMap(Slot, LRU);
+    const SlotLRU = std.AutoHashMap(Slot, *LRU);
 
     slot_lrus: SlotLRU,
     max_items: usize,
@@ -125,13 +125,22 @@ pub const AccountsLRU = struct {
     }
 
     fn get(self: *const AccountsLRU, slot: Slot, pubkey: Pubkey) ?CachedAccount {
-        var slot_lru = self.slot_lrus.get(slot) orelse return null;
+        const slot_lru = self.slot_lrus.get(slot) orelse return null;
         return slot_lru.get(pubkey);
     }
 
     /// should only be called iff account is not already present
-    fn putAccount(self: *const AccountsLRU, slot: Slot, pubkey: Pubkey, account: Account) !void {
-        var slot_lru = self.slot_lrus.get(slot) orelse return error.SlotNotFound;
+    fn putAccount(self: *AccountsLRU, slot: Slot, pubkey: Pubkey, account: Account) !void {
+        const slot_lru = self.slot_lrus.get(slot) orelse blk: {
+            std.debug.print("making new slot_lru at slot: {}\n", .{slot});
+
+            const lru = try self.slot_lrus.allocator.create(LRU);
+            lru.* = try LRU.initWithContext(self.slot_lrus.allocator, self.max_items, self.slot_lrus.allocator);
+
+            try self.slot_lrus.put(slot, lru);
+
+            break :blk lru;
+        };
         if (slot_lru.put(pubkey, CachedAccount.init(account)) != null) return error.InvalidPut;
     }
 
@@ -163,7 +172,9 @@ pub const AccountsLRU = struct {
     fn deinit(self: *AccountsLRU) void {
         var slot_iter = self.slot_lrus.iterator();
         while (slot_iter.next()) |entry| {
-            entry.value_ptr.deinit();
+            const slot_lru_ptr = entry.value_ptr.*;
+            slot_lru_ptr.deinit();
+            self.slot_lrus.allocator.destroy(slot_lru_ptr);
         }
         self.slot_lrus.deinit();
     }
@@ -1985,7 +1996,6 @@ pub const AccountsDB = struct {
                     defer accounts_lru_lock.unlock();
 
                     const cached_account = accounts_lru.get(account_ref.slot, account_ref.pubkey) orelse break :blk null;
-
                     break :blk cached_account.account;
                 };
 
