@@ -3189,7 +3189,7 @@ const fuzz_service = @import("./fuzz_service.zig");
 
 pub const BenchmarkGossipServiceGeneral = struct {
     pub const min_iterations = 3;
-    pub const max_iterations = 5;
+    pub const max_iterations = 10;
 
     pub const MessageCounts = struct {
         n_ping: usize,
@@ -3324,7 +3324,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
 /// pull requests require some additional setup to work
 pub const BenchmarkGossipServicePullRequests = struct {
     pub const min_iterations = 3;
-    pub const max_iterations = 5;
+    pub const max_iterations = 10;
 
     pub const BenchmarkArgs = struct {
         name: []const u8 = "",

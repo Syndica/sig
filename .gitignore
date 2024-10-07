@@ -2,6 +2,7 @@
 zig-cache/
 zig-out/
 data/
+scripts/__pycache__/
 
 /validator/
 alt_validator/

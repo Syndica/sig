@@ -228,7 +228,6 @@ pub const AccountInFile = struct {
 
 /// Analogous to [AccountStorageEntry](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1069)
 pub const AccountFile = struct {
-    // file contents
     memory: []align(std.mem.page_size) u8,
     id: FileId,
     slot: Slot,
@@ -236,7 +235,6 @@ pub const AccountFile = struct {
     length: usize,
     // total bytes available
     file_size: usize,
-    file: std.fs.File,
 
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
@@ -253,7 +251,7 @@ pub const AccountFile = struct {
             null,
             file_size,
             std.posix.PROT.READ | std.posix.PROT.WRITE,
-            std.posix.MAP{ .TYPE = .SHARED },
+            std.posix.MAP{ .TYPE = .PRIVATE },
             file.handle,
             0,
         );
@@ -263,14 +261,12 @@ pub const AccountFile = struct {
             .length = accounts_file_info.length,
             .id = accounts_file_info.id,
             .file_size = file_size,
-            .file = file,
             .slot = slot,
         };
     }
 
     pub fn deinit(self: Self) void {
         std.posix.munmap(self.memory);
-        self.file.close();
     }
 
     pub fn validate(self: *const Self) !usize {
