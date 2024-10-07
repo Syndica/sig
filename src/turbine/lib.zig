@@ -1,4 +1,5 @@
 pub const retransmit = @import("retransmit.zig");
+pub const shred_deduper = @import("shred_deduper.zig");
 pub const turbine_tree = @import("turbine_tree.zig");
 
 pub const TurbineTree = turbine_tree.TurbineTree;

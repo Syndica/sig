@@ -166,8 +166,23 @@ pub const AHasher = struct {
     pub fn hash(self: *AHasher, comptime T: type, data: *const T) void {
         switch (@typeInfo(T)) {
             .Int => self.update(@intCast(data.*)),
-            .Array => |array| self.hashSlice(array.child, data),
-            else => unreachable,
+            .Pointer => |pointer| {
+                switch (pointer.size) {
+                    .Slice => self.hashSlice(pointer.child, data.*),
+                    else => unreachable,
+                }
+            },
+            .Struct => |struct_info| {
+                inline for (struct_info.fields) |field| {
+                    self.hash(field.type, &@field(data, field.name));
+                }
+            },
+            // TODO: This is a lazy incorrect impl for enums
+            .Enum => |_| self.hash(u32, &@as(u32, @intFromEnum(data.*))),
+            else => {
+                std.debug.print("Unsupported type: type={} data={any}\n", .{ T, data });
+                std.debug.panic("Unsupported type", .{});
+            },
         }
     }
 

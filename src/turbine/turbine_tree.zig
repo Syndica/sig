@@ -9,21 +9,21 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
-const EpochSchedule = sig.core.EpochSchedule;
 const Slot = sig.core.Slot;
 const Duration = sig.time.Duration;
 const Instant = sig.time.Instant;
 const GossipTable = sig.gossip.GossipTable;
 const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
+const Logger = sig.trace.log.Logger;
 
 pub const TurbineTreeCache = struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
-    epoch_schedule: EpochSchedule,
     gossip_table_rw: *RwMux(GossipTable),
     cache: std.AutoArrayHashMap(Epoch, CacheEntry),
     cache_entry_ttl: Duration,
+    logger: Logger,
 
     pub const CacheEntry = struct {
         created: Instant,
@@ -37,49 +37,69 @@ pub const TurbineTreeCache = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
-        epoch_schedule: EpochSchedule,
         gossip_table_rw: *RwMux(GossipTable),
+        logger: Logger,
     ) TurbineTreeCache {
         return .{
             .allocator = allocator,
             .my_contact_info = my_contact_info,
-            .epoch_schedule = epoch_schedule,
             .gossip_table_rw = gossip_table_rw,
             .cache = std.AutoArrayHashMap(Epoch, CacheEntry).init(allocator),
-            .cache_entry_ttl = Duration.fromSecs(60 * 60),
+            .cache_entry_ttl = Duration.fromSecs(5), // From Agave
+            .logger = logger,
         };
+    }
+
+    pub fn deinit(self: *TurbineTreeCache) void {
+        for (self.cache.values()) |_entry| {
+            var entry = _entry;
+            entry.turbine_tree.deinit();
+        }
+        self.cache.deinit();
     }
 
     pub fn getTurbineTree(
         self: *TurbineTreeCache,
-        slot: Slot,
+        epoch: Epoch,
         bank_fields: *const BankFields,
     ) !*const TurbineTree {
-        const epoch = self.epoch_schedule.getEpoch(slot);
-        const entry = try self.cache.getOrPut(epoch);
-
-        if (entry.found_existing and entry.value_ptr.alive(self.cache_entry_ttl)) {
-            return &entry.value_ptr.turbine_tree;
+        if (self.cache.get(epoch)) |entry| {
+            if (entry.alive(self.cache_entry_ttl)) {
+                self.logger.infof("returning cached turbine tree for epoch {}", .{epoch});
+                return &entry.turbine_tree;
+            } else {
+                // NOTE: Have to be careful of use after free here
+                self.logger.infof("removing cached turbine tree for epoch {}", .{epoch});
+                _ = self.cache.swapRemove(epoch);
+                var var_entry = entry;
+                var_entry.turbine_tree.deinit();
+            }
         }
+
+        self.logger.infof("creating turbine tree for epoch {}", .{epoch});
 
         const tvu_peers = try self.getTvuPeers();
         defer tvu_peers.deinit();
 
         const epoch_staked_nodes = try bank_fields.getStakedNodes(self.allocator, epoch);
 
-        entry.value_ptr.* = .{
+        const entry = .{
             .created = Instant.now(),
             .turbine_tree = try TurbineTree.initForRetransmit(
                 self.allocator,
                 self.my_contact_info,
                 tvu_peers.items,
                 epoch_staked_nodes,
+                self.logger,
             ),
         };
 
-        return &entry.value_ptr.turbine_tree;
+        try self.cache.put(epoch, entry);
+
+        return &entry.turbine_tree;
     }
 
+    // Get the contact info of all gossip peers which have a matching shred version
     fn getTvuPeers(self: *const TurbineTreeCache) !std.ArrayList(ThreadSafeContactInfo) {
         const gossip_table, var gossip_table_lg = self.gossip_table_rw.readWithLock();
         defer gossip_table_lg.unlock();
@@ -104,6 +124,7 @@ pub const TurbineTree = struct {
     nodes: []const Node,
     index: std.AutoArrayHashMap(Pubkey, usize),
     weighted_shuffle: WeightedShuffle,
+    logger: Logger,
 
     const DATA_PLANE_FANOUT = 200;
     const MAX_NODES_PER_IP = 2;
@@ -146,12 +167,14 @@ pub const TurbineTree = struct {
         my_contact_info: ThreadSafeContactInfo,
         tvu_peers: []const ThreadSafeContactInfo,
         stakes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
+        logger: Logger,
     ) !TurbineTree {
         var tree = try initForRetransmit(
             allocator,
             my_contact_info,
             tvu_peers,
             stakes,
+            logger,
         );
         tree.weighted_shuffle.removeIndex(tree.index.get(my_contact_info.pubkey).?);
         return tree;
@@ -162,6 +185,7 @@ pub const TurbineTree = struct {
         my_contact_info: ThreadSafeContactInfo,
         tvu_peers: []const ThreadSafeContactInfo,
         stakes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
+        logger: Logger,
     ) !TurbineTree {
         const nodes = try getNodes(allocator, my_contact_info, tvu_peers, stakes);
         errdefer allocator.free(nodes);
@@ -182,6 +206,7 @@ pub const TurbineTree = struct {
             .nodes = nodes,
             .index = index,
             .weighted_shuffle = weighted_shuffle,
+            .logger = logger,
         };
     }
 
@@ -189,15 +214,6 @@ pub const TurbineTree = struct {
         self.allocator.free(self.nodes);
         self.index.deinit();
         self.weighted_shuffle.deinit();
-    }
-
-    pub fn getBroadcastPeer(
-        self: *const TurbineTree,
-        shred: ShredId,
-    ) ?*ThreadSafeContactInfo {
-        const rng = getSeededRng(self.my_pubkey, shred);
-        const index = self.weighted_shuffle.first(rng).?;
-        return self.nodes[index].contactInfo();
     }
 
     pub fn getRetransmitAddresses(
@@ -217,7 +233,9 @@ pub const TurbineTree = struct {
         var retransmit_addresses = std.ArrayList(SocketAddr).init(allocator);
         for (children) |child| {
             if (child.contactInfo()) |ci| {
-                if (addresses.get(ci.tvu_addr.?).?.equals(&ci.pubkey)) try retransmit_addresses.append(ci.tvu_addr.?);
+                if (ci.tvu_addr) |tvu_addr| {
+                    if (addresses.get(tvu_addr).?.equals(&ci.pubkey)) try retransmit_addresses.append(ci.tvu_addr.?);
+                }
             }
         }
 
@@ -242,7 +260,9 @@ pub const TurbineTree = struct {
 
         var nodes = std.ArrayList(Node).init(allocator);
         var addresses = std.AutoArrayHashMap(SocketAddr, Pubkey).init(allocator);
-        var shuffled = weighted_shuffle.shuffle(getSeededRng(slot_leader, shred_id));
+        var chacha = getSeededRng(slot_leader, shred_id);
+        var shuffled = weighted_shuffle.shuffle(chacha.random());
+
         while (shuffled.next()) |index| {
             const node = self.nodes[index];
             if (node.contactInfo()) |ci| {
@@ -258,11 +278,13 @@ pub const TurbineTree = struct {
                 my_index = index;
             }
         }
+
+        // TODO: Set constants and evaluate branch to 2 conditional
         const root_distance: usize = if (my_index == 0)
             0
         else if (my_index <= fanout)
             1
-        else if (my_index <= fanout +| 1 *| fanout)
+        else if (my_index <= (fanout +| 1) *| fanout)
             2
         else
             3;
@@ -273,6 +295,8 @@ pub const TurbineTree = struct {
             my_index,
             nodes.items,
         );
+
+        std.debug.print("TURBINE_TREE: Number of children: {}\n", .{peers.len});
 
         return .{ root_distance, peers, addresses };
     }
@@ -346,10 +370,9 @@ pub const TurbineTree = struct {
         return DATA_PLANE_FANOUT;
     }
 
-    fn getSeededRng(leader: Pubkey, shred: ShredId) std.rand.Random {
+    fn getSeededRng(leader: Pubkey, shred: ShredId) ChaChaRng {
         const seed = shred.seed(leader);
-        var r = ChaChaRng.fromSeed(seed);
-        return r.random();
+        return ChaChaRng.fromSeed(seed);
     }
 
     fn getNodes(
@@ -364,10 +387,22 @@ pub const TurbineTree = struct {
         var has_contact_info = std.AutoArrayHashMap(Pubkey, void).init(allocator);
         defer has_contact_info.deinit();
 
+        // HACK TO SET OUR STAKE
+        var max_stake: u64 = 0;
+        for (stakes.values()) |stake| {
+            if (stake > max_stake) max_stake = stake;
+        }
         try nodes.append(.{
             .id = .{ .contact_info = my_contact_info },
-            .stake = if (stakes.get(my_contact_info.pubkey)) |stake| stake else 0,
+            .stake = @divFloor(max_stake, 2),
         });
+        // REPLACES
+        // try nodes.append(.{
+        //     .id = .{ .contact_info = my_contact_info },
+        //     .stake = if (stakes.get(my_contact_info.pubkey)) |stake| stake else 0,
+        // });
+        // END
+
         try has_contact_info.put(my_contact_info.pubkey, void{});
 
         for (tvu_peers) |peer| {
@@ -470,13 +505,7 @@ const TestEnvironment = struct {
     }
 };
 
-test "initForBroadcast" {
-    // TODO: Check that tree initialisation is correct for broadcasting
-
-}
-
 test "initForRetransmit" {
-    // TODO: Check that tree initialisation is correct for retransmitting
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
@@ -490,6 +519,7 @@ test "initForRetransmit" {
         env.my_contact_info,
         env.tvu_peers,
         &env.node_stakes.unmanaged,
+        .noop,
     );
     defer turbine_tree.deinit();
 

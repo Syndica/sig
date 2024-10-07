@@ -54,12 +54,15 @@ pub fn WeightedShuffle(comptime T: type) type {
                     }
                 }
             }
-            if (num_negative > 0) {
-                std.debug.print("WeightedShuffle: {} negative weights were set to zero.\n", .{num_negative});
-            }
-            if (num_overflow > 0) {
-                std.debug.print("WeightedShuffle: {} weights were set to zero due to overflow.\n", .{num_overflow});
-            }
+
+            // TODO: Log error instead
+            // if (num_negative > 0) {
+            //     std.debug.print("WeightedShuffle: {} negative weights were set to zero.\n", .{num_negative});
+            // }
+            // if (num_overflow > 0) {
+            //     std.debug.print("WeightedShuffle: {} weights were set to zero due to overflow.\n", .{num_overflow});
+            // }
+
             return .{
                 .tree = tree,
                 .weight = sum,
