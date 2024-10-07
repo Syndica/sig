@@ -700,13 +700,23 @@ fn validator() !void {
         }
     }
 
-    const snapshot = try loadSnapshot(
+    // const snapshot = try loadSnapshot(
+    //     allocator,
+    //     app_base.logger,
+    //     gossip_service,
+    //     true,
+    //     geyser_writer,
+    // );
+
+    const snapshot = loadSnapshotMetatdata(
         allocator,
         app_base.logger,
         gossip_service,
-        true,
         geyser_writer,
-    );
+    ) catch |err| {
+        std.debug.print("Failed to load snapshot metadata: {any}\n", .{err});
+        return;
+    };
 
     var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
     if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
@@ -786,7 +796,6 @@ fn validator() !void {
     const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.runRetransmitService, .{
         allocator,
         thread_safe_contact_info,
-        snapshot.bank.bank_fields.epoch_schedule,
         snapshot.bank.bank_fields,
         &leader_schedule_cache,
         &retransmit_shred_channel,
@@ -796,7 +805,7 @@ fn validator() !void {
         &gossip_service.gossip_table_rw,
         rng.random(),
         &app_base.exit,
-        &app_base.logger,
+        app_base.logger,
     });
 
     // shred collector
@@ -1484,6 +1493,10 @@ const LoadedSnapshot = struct {
     /// contains pointers to `accounts_db` and `snapshot_fields`
     bank: Bank,
     genesis_config: GenesisConfig,
+    // Snapshot resulting from collapse needs to be retained here for
+    // valid lifetime as it is used by bank. This was a quick fix, a minor
+    // refactor is probably not a bad idea.
+    collapsed_snapshot_fields: sig.accounts_db.snapshots.SnapshotFields,
 
     pub fn deinit(self: *@This()) void {
         self.genesis_config.deinit(self.allocator);
@@ -1491,6 +1504,7 @@ const LoadedSnapshot = struct {
         self.snapshot_fields.deinit(self.allocator);
         self.accounts_db.deinit();
         self.allocator.destroy(self);
+        self.collapsed_snapshot_fields.deinit(self.allocator);
     }
 };
 
@@ -1557,17 +1571,16 @@ fn loadSnapshot(
     });
     errdefer result.accounts_db.deinit();
 
-    var snapshot_fields = try result.accounts_db.loadWithDefaults(
+    result.collapsed_snapshot_fields = try result.accounts_db.loadWithDefaults(
         allocator,
         &all_snapshot_fields,
         n_threads_snapshot_load,
         validate_snapshot,
         config.current.accounts_db.accounts_per_file_estimate,
     );
-    errdefer snapshot_fields.deinit(allocator);
-    result.snapshot_fields.was_collapsed = true;
+    errdefer result.collapsed_snapshot_fields.deinit(allocator);
 
-    const bank_fields = &snapshot_fields.bank_fields;
+    const bank_fields = &result.collapsed_snapshot_fields.bank_fields;
 
     // this should exist before we start to unpack
     logger.info().log("reading genesis...");
@@ -1597,6 +1610,65 @@ fn loadSnapshot(
     try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
     logger.info().log("accounts-db setup done...");
+
+    return result;
+}
+
+fn loadSnapshotMetatdata(
+    allocator: Allocator,
+    logger: Logger,
+    /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
+    gossip_service: ?*GossipService,
+    /// optional geyser to write snapshot data to
+    geyser_writer: ?*GeyserWriter,
+) !*LoadedSnapshot {
+    const result = try allocator.create(LoadedSnapshot);
+    errdefer allocator.destroy(result);
+    result.allocator = allocator;
+
+    const genesis_file_path = try config.current.genesisFilePath() orelse
+        return error.GenesisPathNotProvided;
+
+    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
+    defer snapshot_dir.close();
+
+    const all_snapshot_fields, _ = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{
+        .snapshot_dir = snapshot_dir,
+        .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
+        .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
+        .num_threads_snapshot_unpack = config.current.accounts_db.num_threads_snapshot_unpack,
+        .min_snapshot_download_speed_mbs = config.current.accounts_db.min_snapshot_download_speed_mbs,
+    });
+    result.snapshot_fields = all_snapshot_fields;
+
+    result.accounts_db = try AccountsDB.init(
+        allocator,
+        logger,
+        snapshot_dir,
+        .{
+            .number_of_index_bins = config.current.accounts_db.number_of_index_bins,
+            .use_disk_index = config.current.accounts_db.use_disk_index,
+        },
+        geyser_writer,
+    );
+    errdefer result.accounts_db.deinit();
+
+    result.collapsed_snapshot_fields = try result.snapshot_fields.collapse();
+    const bank_fields = &result.collapsed_snapshot_fields.bank_fields;
+
+    logger.infof("reading genesis...", .{});
+    result.genesis_config = readGenesisConfig(allocator, genesis_file_path) catch |err| {
+        if (err == error.GenesisNotFound) {
+            logger.errf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
+        }
+        return err;
+    };
+    errdefer result.genesis_config.deinit(allocator);
+
+    logger.infof("validating bank...", .{});
+    result.bank = Bank.init(&result.accounts_db, bank_fields);
+    try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
     return result;
 }
