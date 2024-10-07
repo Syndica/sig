@@ -20,7 +20,7 @@ const test_shreds_dir = sig.TEST_DATA_DIR ++ "/shreds";
 const State = TestState("global");
 const DB = TestDB("global");
 
-fn create_rewards(allocator: std.mem.Allocator, count: usize) !Rewards {
+fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
     var rng = std.Random.DefaultPrng.init(100);
     const rand = rng.random();
     var rewards: Rewards = Rewards.init(allocator);
@@ -144,7 +144,7 @@ pub const BenchmarLegder = struct {
         defer state.deinitBench();
         const slot: u32 = 0;
 
-        var rewards: Rewards = try create_rewards(allocator, 100);
+        var rewards: Rewards = try createRewards(allocator, 100);
         var timer = try std.time.Timer.start();
         try state.db.put(schema.rewards, slot, .{
             .rewards = try rewards.toOwnedSlice(),
@@ -159,7 +159,7 @@ pub const BenchmarLegder = struct {
         defer state.deinitBench();
         const slot: u32 = 1;
 
-        var rewards: Rewards = try create_rewards(allocator, 100);
+        var rewards: Rewards = try createRewards(allocator, 100);
         try state.db.put(schema.rewards, slot, .{
             .rewards = try rewards.toOwnedSlice(),
             .num_partitions = null,
