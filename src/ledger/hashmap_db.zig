@@ -46,6 +46,13 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             self.allocator.free(self.maps);
         }
 
+        pub fn count(self: *Self, comptime cf: ColumnFamily) anyerror!u64 {
+            self.transaction_lock.lockShared();
+            defer self.transaction_lock.unlockShared();
+
+            return self.maps[cf.find(column_families)].count();
+        }
+
         pub fn put(
             self: *Self,
             comptime cf: ColumnFamily,
@@ -66,6 +73,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
         pub fn get(
             self: *Self,
+            allocator: Allocator,
             comptime cf: ColumnFamily,
             key: cf.Key,
         ) anyerror!?cf.Value {
@@ -80,7 +88,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
             const val_bytes = map.getPreLocked(key_bytes) orelse return null;
 
-            return try value_serializer.deserialize(cf.Value, self.allocator, val_bytes);
+            return try value_serializer.deserialize(cf.Value, allocator, val_bytes);
         }
 
         pub fn getBytes(
@@ -107,6 +115,19 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
+        pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!bool {
+            const key_bytes = try key_serializer.serializeAlloc(self.allocator, key);
+            defer self.allocator.free(key_bytes);
+            var map = self.maps[cf.find(column_families)];
+
+            self.transaction_lock.lockShared();
+            defer self.transaction_lock.unlockShared();
+            map.lock.lockShared();
+            defer map.lock.unlockShared();
+
+            return map.map.contains(key_bytes);
+        }
+
         pub fn delete(
             self: *Self,
             comptime cf: ColumnFamily,
@@ -119,7 +140,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             _ = self.maps[cf.find(column_families)].delete(self.allocator, key_bytes);
         }
 
-        pub fn deleteFilesRange(
+        pub fn deleteFilesInRange(
             self: *Self,
             comptime cf: ColumnFamily,
             start: cf.Key,
@@ -130,10 +151,13 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             _ = end;
         }
 
-        pub fn initWriteBatch(self: *Self) error{}!WriteBatch {
+        pub fn initWriteBatch(self: *Self) Allocator.Error!WriteBatch {
+            const executed = try self.allocator.create(bool);
+            executed.* = false;
             return .{
                 .allocator = self.allocator,
                 .instructions = .{},
+                .executed = executed,
             };
         }
 
@@ -151,14 +175,15 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                     },
                     .delete => |delete_ix| {
                         const cf_index, const key = delete_ix;
-                        self.maps[cf_index].delete(batch.allocator, key);
+                        self.maps[cf_index].delete(self.allocator, key);
                     },
                     .delete_range => {
-                        // TODO
+                        // TODO: also add to database tests
                         @panic("not implemented");
                     },
                 }
             }
+            batch.executed.* = true;
         }
 
         /// A write batch is a sequence of operations that execute atomically.
@@ -174,6 +199,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         pub const WriteBatch = struct {
             allocator: Allocator,
             instructions: std.ArrayListUnmanaged(Instruction),
+            executed: *bool,
 
             const Instruction = union(enum) {
                 put: struct { usize, []const u8, []const u8 },
@@ -181,8 +207,22 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 delete_range: struct { usize, []const u8, []const u8 },
             };
 
-            fn deinit(self: WriteBatch) void {
+            pub fn deinit(self: *WriteBatch) void {
+                for (self.instructions.items) |ix| switch (ix) {
+                    .put => |data| if (!self.executed.*) {
+                        self.allocator.free(data[1]);
+                        self.allocator.free(data[2]);
+                    },
+                    .delete => |data| {
+                        self.allocator.free(data[1]);
+                    },
+                    .delete_range => |data| {
+                        self.allocator.free(data[1]);
+                        self.allocator.free(data[2]);
+                    },
+                };
                 self.instructions.deinit(self.allocator);
+                self.allocator.destroy(self.executed);
             }
 
             pub fn put(
@@ -243,6 +283,8 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
             shared_map.lock.lockShared();
             defer shared_map.lock.unlockShared();
+            self.transaction_lock.lockShared();
+            defer self.transaction_lock.unlockShared();
 
             const keys, const vals = if (start) |start_| b: {
                 const search_bytes = try key_serializer.serializeAlloc(self.allocator, start_);
@@ -255,18 +297,28 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             std.debug.assert(keys.len == vals.len);
 
             // TODO perf: reduce copying, e.g. copy-on-write or reference counting
-            const copied_keys = self.allocator.alloc([]const u8, keys.len);
-            const copied_vals = self.allocator.alloc([]const u8, vals.len);
+            const copied_keys = try self.allocator.alloc([]const u8, keys.len);
+            errdefer self.allocator.free(copied_keys);
+            const copied_vals = try self.allocator.alloc([]const u8, vals.len);
+            errdefer self.allocator.free(copied_vals);
             for (0..keys.len) |i| {
-                copied_keys[i] = self.allocator.dupe(u8, keys[i]);
-                copied_vals[i] = self.allocator.dupe(u8, vals[i]);
+                errdefer for (0..i) |n| {
+                    self.allocator.free(copied_keys[n]);
+                    self.allocator.free(copied_vals[n]);
+                };
+                copied_keys[i] = try self.allocator.dupe(u8, keys[i]);
+                errdefer self.allocator.free(copied_keys[i]);
+                copied_vals[i] = try self.allocator.dupe(u8, vals[i]);
             }
 
             return .{
                 .allocator = self.allocator,
                 .keys = copied_keys,
                 .vals = copied_vals,
-                .cursor = 0,
+                .cursor = switch (direction) {
+                    .forward => 0,
+                    .reverse => keys.len,
+                },
                 .size = keys.len,
             };
         }
@@ -291,8 +343,8 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 pub fn next(self: *@This()) anyerror!?cf.Entry() {
                     const index = self.nextIndex() orelse return null;
                     return .{
-                        key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]),
-                        value_serializer.deserialize(cf.Value, self.allocator, self.vals[index]),
+                        try key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]),
+                        try value_serializer.deserialize(cf.Value, self.allocator, self.vals[index]),
                     };
                 }
 
@@ -354,10 +406,21 @@ const SharedHashMap = struct {
         self.map.deinit();
     }
 
+    pub fn count(self: *Self) usize {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        return self.map.count();
+    }
+
     pub fn put(self: *Self, key: []const u8, value: []const u8) Allocator.Error!void {
         self.lock.lock();
         defer self.lock.unlock();
-        try self.map.put(key, value);
+        const entry = try self.map.getOrPut(key);
+        if (entry.found_existing) {
+            self.allocator.free(key);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        entry.value_ptr.* = value;
     }
 
     /// Only call this while holding the lock

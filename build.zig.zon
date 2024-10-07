@@ -24,16 +24,16 @@
             .hash = "1220b8a918dfcee4fc8326ec337776e2ffd3029511c35f6b96d10aa7be98ca2faf99",
         },
         .zstd = .{
-            .url = "https://github.com/Syndica/zstd.zig/archive/b5078c9da8588d4b133ed93b6b13c01288346be5.tar.gz",
-            .hash = "1220409db8254e909be7277ec0ef0e26bf3f9daf089dcc5f8bb24c473ddc2adc9dfa",
+            .url = "git+https://github.com/Syndica/zstd.zig#c6cde4f358a394dd0f332e873ae49d5b6f0dad4a",
+            .hash = "12203115da879b68a6631e2272cd3418280375d4f41acfe9ea48301f8aab535691ec",
         },
         .curl = .{
             .url = "https://github.com/jiacai2050/zig-curl/archive/8a3f45798a80a5de4c11c6fa44dab8785c421d27.tar.gz",
             .hash = "1220f70ac854b59315a8512861e039648d677feb4f9677bd873d6b9b7074a5906485",
         },
         .rocksdb = .{
-            .url = "https://github.com/Syndica/rocksdb-zig/archive/6fa5e95875941236768e87a8e0c5ef45c75c9b56.tar.gz",
-            .hash = "122067ae3d6a64b0e1401dd40059535cb782d0c1a99c39a83f24c2385391e0b22876",
+            .url = "https://github.com/Syndica/rocksdb-zig/archive/9c09659a5e41f226b6b8f3fa21149247eb26dfae.tar.gz",
+            .hash = "1220aeb80b2f8bb48c131ef306fe48ddfcb537210c5f77742e921cbf40fc4c19b41e",
         },
     },
 }

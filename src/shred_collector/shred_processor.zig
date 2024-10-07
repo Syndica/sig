@@ -5,7 +5,6 @@ const shred_collector = @import("lib.zig");
 const layout = sig.ledger.shred.layout;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Atomic = std.atomic.Value;
 
@@ -24,41 +23,35 @@ pub fn runShredProcessor(
     exit: *Atomic(bool),
     logger: Logger,
     // shred verifier --> me
-    verified_shred_receiver: *Channel(ArrayList(Packet)),
+    verified_shred_receiver: *Channel(Packet),
     tracker: *BasicShredTracker,
     shred_inserter_: ShredInserter,
     leader_schedule: sig.core.leader_schedule.SlotLeaderProvider,
 ) !void {
     var shred_inserter = shred_inserter_;
-    var packet_buf = ArrayList(ArrayList(Packet)).init(allocator);
-    var shreds = ArrayListUnmanaged(Shred){};
-    var is_repaired = ArrayListUnmanaged(bool){};
-    var error_context = ErrorContext{};
+    var shreds: ArrayListUnmanaged(Shred) = .{};
+    var is_repaired: ArrayListUnmanaged(bool) = .{};
+    var error_context: ErrorContext = .{};
 
-    while (!exit.load(.unordered)) {
+    while (!exit.load(.acquire) or
+        verified_shred_receiver.len() != 0)
+    {
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
-        try verified_shred_receiver.tryDrainRecycle(&packet_buf);
-        if (packet_buf.items.len == 0) {
-            std.time.sleep(10 * std.time.ns_per_ms);
-            continue;
-        }
-        for (packet_buf.items) |packet_batch| {
-            for (packet_batch.items) |*packet| if (!packet.flags.isSet(.discard)) {
-                processShred(
-                    allocator,
-                    tracker,
-                    packet,
-                    &shreds,
-                    &is_repaired,
-                    &error_context,
-                ) catch |e| {
-                    logger.errf(
-                        "failed to process verified shred {?}.{?}: {}",
-                        .{ error_context.slot, error_context.index, e },
-                    );
-                    error_context = .{};
-                };
+        while (verified_shred_receiver.receive()) |packet| {
+            processShred(
+                allocator,
+                tracker,
+                &packet,
+                &shreds,
+                &is_repaired,
+                &error_context,
+            ) catch |e| {
+                logger.errf(
+                    "failed to process verified shred {?}.{?}: {}",
+                    .{ error_context.slot, error_context.index, e },
+                );
+                error_context = .{};
             };
         }
         _ = try shred_inserter.insertShreds(

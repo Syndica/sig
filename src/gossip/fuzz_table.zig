@@ -32,6 +32,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // setup
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     const logger = Logger.init(allocator, .debug);
     defer logger.deinit();
@@ -118,8 +119,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                     // !
                     logger.debugf("putting pubkey: {}", .{pubkey});
-                    const did_insert = try gossip_table.insert(signed_data, now);
-                    std.debug.assert(did_insert);
+                    const result = try gossip_table.insert(signed_data, now);
+                    std.debug.assert(result.wasInserted());
 
                     try keys.append(GossipKey{ .ContactInfo = pubkey });
                     try keypairs.append(keypair);
@@ -150,20 +151,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     }
 
                     // !
-                    const did_insert = gossip_table.insert(signed_data, now) catch |err| blk: {
-                        switch (err) {
-                            GossipTable.InsertionError.OldValue => {
-                                std.debug.assert(!should_overwrite);
-                            },
-                            GossipTable.InsertionError.DuplicateValue => {
-                                logger.debugf("duplicate value: {}", .{pubkey});
-                            },
-                            else => {
-                                return err;
-                            },
-                        }
-                        break :blk false;
-                    };
+                    const result = try gossip_table.insert(signed_data, now);
+                    const did_insert = result.wasInserted();
+                    if (result == .IgnoredOldValue) {
+                        std.debug.assert(!should_overwrite);
+                    }
+                    if (result == .IgnoredDuplicateValue) {
+                        logger.debugf("duplicate value: {}", .{pubkey});
+                    }
 
                     if (!should_overwrite and did_insert) {
                         return error.ValueDidNotOverwrite;

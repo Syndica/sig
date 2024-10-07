@@ -995,7 +995,7 @@ pub const ThreadPool = struct {
 
             fn push(noalias self: *Buffer, noalias list: *List) error{Overflow}!void {
                 var head = self.head.load(.monotonic);
-                var tail = self.tail.load(.unordered); // we're the only thread that can change this
+                var tail = self.tail.load(.acquire); // we're the only thread that can change this
 
                 while (true) {
                     var size = tail -% head;
@@ -1009,7 +1009,7 @@ pub const ThreadPool = struct {
                             nodes = node.next;
 
                             // Array written atomically with weakest ordering since it could be getting atomically read by steal().
-                            self.array[tail % capacity].store(node, .unordered);
+                            self.array[tail % capacity].store(node, .release);
                             tail +%= 1;
                         }
 
@@ -1034,15 +1034,15 @@ pub const ThreadPool = struct {
                         .monotonic,
                     ) orelse {
                         // Link the migrated Nodes together
-                        const first = self.array[head % capacity].load(.unordered);
+                        const first = self.array[head % capacity].load(.acquire);
                         while (migrate > 0) : (migrate -= 1) {
-                            const prev = self.array[head % capacity].load(.unordered);
+                            const prev = self.array[head % capacity].load(.acquire);
                             head +%= 1;
-                            prev.next = self.array[head % capacity].load(.unordered);
+                            prev.next = self.array[head % capacity].load(.acquire);
                         }
 
                         // Append the list that was supposed to be pushed to the end of the migrated Nodes
-                        const last = self.array[(head -% 1) % capacity].load(.unordered);
+                        const last = self.array[(head -% 1) % capacity].load(.acquire);
                         last.next = list.head;
                         list.tail.next = null;
 
@@ -1055,7 +1055,7 @@ pub const ThreadPool = struct {
 
             fn pop(self: *Buffer) ?*Node {
                 var head = self.head.load(.monotonic);
-                const tail = self.tail.load(.unordered); // we're the only thread that can change this
+                const tail = self.tail.load(.acquire); // we're the only thread that can change this
 
                 while (true) {
                     // Quick sanity check and return null when not empty
@@ -1072,7 +1072,7 @@ pub const ThreadPool = struct {
                         head +% 1,
                         .acquire,
                         .monotonic,
-                    ) orelse return self.array[head % capacity].load(.unordered);
+                    ) orelse return self.array[head % capacity].load(.acquire);
                 }
             }
 
@@ -1086,7 +1086,7 @@ pub const ThreadPool = struct {
                 defer queue.releaseConsumer(consumer);
 
                 const head = self.head.load(.monotonic);
-                const tail = self.tail.load(.unordered); // we're the only thread that can change this
+                const tail = self.tail.load(.acquire); // we're the only thread that can change this
 
                 const size = tail -% head;
                 assert(size <= capacity);
@@ -1097,7 +1097,7 @@ pub const ThreadPool = struct {
                 var pushed: Index = 0;
                 while (pushed < capacity) : (pushed += 1) {
                     const node = queue.pop(&consumer) orelse break;
-                    self.array[(tail +% pushed) % capacity].store(node, .unordered);
+                    self.array[(tail +% pushed) % capacity].store(node, .release);
                 }
 
                 // We will be returning one node that we stole from the queue.
@@ -1105,7 +1105,7 @@ pub const ThreadPool = struct {
                 const node = queue.pop(&consumer) orelse blk: {
                     if (pushed == 0) return null;
                     pushed -= 1;
-                    break :blk self.array[(tail +% pushed) % capacity].load(.unordered);
+                    break :blk self.array[(tail +% pushed) % capacity].load(.acquire);
                 };
 
                 // Update the array tail with the nodes we pushed to it.
@@ -1119,7 +1119,7 @@ pub const ThreadPool = struct {
 
             fn steal(noalias self: *Buffer, noalias buffer: *Buffer) ?Stole {
                 const head = self.head.load(.monotonic);
-                const tail = self.tail.load(.unordered); // we're the only thread that can change this
+                const tail = self.tail.load(.acquire); // we're the only thread that can change this
 
                 const size = tail -% head;
                 assert(size <= capacity);
@@ -1147,8 +1147,8 @@ pub const ThreadPool = struct {
                     // Atomic store to our array as other steal() threads may be atomically loading from it as above.
                     var i: Index = 0;
                     while (i < steal_size) : (i += 1) {
-                        const node = buffer.array[(buffer_head +% i) % capacity].load(.unordered);
-                        self.array[(tail +% i) % capacity].store(node, .unordered);
+                        const node = buffer.array[(buffer_head +% i) % capacity].load(.acquire);
+                        self.array[(tail +% i) % capacity].store(node, .release);
                     }
 
                     // Try to commit the steal from the target buffer using:
@@ -1163,7 +1163,7 @@ pub const ThreadPool = struct {
                     ) orelse {
                         // Pop one from the nodes we stole as we'll be returning it
                         const pushed = steal_size - 1;
-                        const node = self.array[(tail +% pushed) % capacity].load(.unordered);
+                        const node = self.array[(tail +% pushed) % capacity].load(.acquire);
 
                         // Update the array tail with the nodes we pushed to it.
                         // Release barrier to synchronize with Acquire barrier in steal()'s to see the written array Nodes.

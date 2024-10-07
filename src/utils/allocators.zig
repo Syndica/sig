@@ -11,7 +11,7 @@ pub fn RecycleFBA(config: struct {
         // (only used on init/deinit + arraylist expansion)
         backing_allocator: std.mem.Allocator,
         // this does the data allocations (data is returned from alloc)
-        alloc_allocator: std.heap.FixedBufferAllocator,
+        fba_allocator: std.heap.FixedBufferAllocator,
         // recycling depot
         records: std.ArrayList(Record),
 
@@ -23,18 +23,18 @@ pub fn RecycleFBA(config: struct {
 
         pub fn init(backing_allocator: std.mem.Allocator, n_bytes: u64) !Self {
             const buf = try backing_allocator.alloc(u8, n_bytes);
-            const alloc_allocator = std.heap.FixedBufferAllocator.init(buf);
+            const fba_allocator = std.heap.FixedBufferAllocator.init(buf);
             const records = std.ArrayList(Record).init(backing_allocator);
 
             return .{
                 .backing_allocator = backing_allocator,
-                .alloc_allocator = alloc_allocator,
+                .fba_allocator = fba_allocator,
                 .records = records,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.backing_allocator.free(self.alloc_allocator.buffer);
+            self.backing_allocator.free(self.fba_allocator.buffer);
             self.records.deinit();
         }
 
@@ -56,25 +56,42 @@ pub fn RecycleFBA(config: struct {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
-            if (n > self.alloc_allocator.buffer.len) {
+            if (n > self.fba_allocator.buffer.len) {
                 @panic("RecycleFBA.alloc: requested size too large, make the buffer larger");
             }
 
             // check for a buf to recycle
+            var is_possible_to_recycle = false;
             for (self.records.items) |*item| {
-                if (item.is_free and
-                    item.len >= n and
+                if (item.len >= n and
                     std.mem.isAlignedLog2(@intFromPtr(item.buf), log2_align))
                 {
-                    item.is_free = false;
-                    return item.buf;
+                    if (item.is_free) {
+                        item.is_free = false;
+                        return item.buf;
+                    } else {
+                        // additional saftey check
+                        is_possible_to_recycle = true;
+                    }
                 }
             }
 
             // TODO(PERF, x19): allocate len+1 and store is_free at index 0, `free` could then be O(1)
             // otherwise, allocate a new one
-            const buf = self.alloc_allocator.allocator().rawAlloc(n, log2_align, return_address) orelse {
-                // std.debug.print("RecycleFBA alloc error: {}\n", .{ err });
+            const buf = self.fba_allocator.allocator().rawAlloc(n, log2_align, return_address) orelse {
+                if (!is_possible_to_recycle) {
+                    // not enough memory to allocate and no possible recycles will be perma stuck
+                    // TODO(x19): loop this and have a comptime limit?
+                    self.tryCollapse();
+                    if (!self.isPossibleToAllocate(n, log2_align)) {
+                        @panic("RecycleFBA.alloc: no possible recycles and not enough memory to allocate");
+                    }
+
+                    // try again : TODO(x19): remove the extra lock/unlock
+                    if (config.thread_safe) self.mux.unlock(); // no deadlock
+                    defer if (config.thread_safe) self.mux.lock();
+                    return alloc(ctx, n, log2_align, return_address);
+                }
                 return null;
             };
 
@@ -120,7 +137,7 @@ pub fn RecycleFBA(config: struct {
                     if (item.len >= new_size) {
                         return true;
                     } else {
-                        return self.alloc_allocator.allocator().rawResize(
+                        return self.fba_allocator.allocator().rawResize(
                             buf,
                             log2_align,
                             new_size,
@@ -133,41 +150,90 @@ pub fn RecycleFBA(config: struct {
             // not supported
             return false;
         }
+
+        pub fn isPossibleToAllocate(self: *Self, n: u64, log2_align: u8) bool {
+            // direct alloc check
+            const fba_size_left = self.fba_allocator.buffer.len - self.fba_allocator.end_index;
+            if (fba_size_left >= n) {
+                return true;
+            }
+
+            // check for a buf to recycle
+            for (self.records.items) |*item| {
+                if (item.len >= n and
+                    std.mem.isAlignedLog2(@intFromPtr(item.buf), log2_align))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// collapses adjacent free records into a single record
+        pub fn tryCollapse(self: *Self) void {
+            var new_records = std.ArrayList(Record).init(self.backing_allocator);
+            var last_was_free = false;
+
+            for (self.records.items) |record| {
+                if (record.is_free) {
+                    if (last_was_free) {
+                        new_records.items[new_records.items.len - 1].len += record.len;
+                    } else {
+                        last_was_free = true;
+                        new_records.append(record) catch {
+                            @panic("RecycleFBA.tryCollapse: unable to append to new_records");
+                        };
+                    }
+                } else {
+                    new_records.append(record) catch {
+                        @panic("RecycleFBA.tryCollapse: unable to append to new_records");
+                    };
+                    last_was_free = false;
+                }
+            }
+
+            self.records.deinit();
+            self.records = new_records;
+        }
     };
 }
 
 /// thread safe disk memory allocator
 pub const DiskMemoryAllocator = struct {
-    filepath: []const u8,
-    count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-
+    dir: std.fs.Dir,
+    logger: sig.trace.Logger,
+    /// The amount of memory mmap'd for a particular allocation will be `file_size * mmap_ratio`.
+    /// See `alignedFileSize` and its usages to understand the relationship between an allocation
+    /// size, and the size of a file, and by extension, how this then relates to the allocated
+    /// address space.
+    mmap_ratio: MmapRatio = 1,
+    count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     const Self = @This();
 
-    pub fn init(filepath: []const u8) Self {
-        return Self{
-            .filepath = filepath,
-        };
+    pub const MmapRatio = u16;
+
+    /// Metadata stored at the end of each allocation.
+    const Metadata = extern struct {
+        file_index: u32,
+        mmap_size: usize align(4),
+    };
+
+    /// Returns the aligned size with enough space for `size` and `Metadata` at the end.
+    inline fn alignedFileSize(size: usize) usize {
+        return std.mem.alignForward(usize, size + @sizeOf(Metadata), std.mem.page_size);
     }
 
-    /// deletes all allocated files + optionally frees the filepath with the allocator
-    pub fn deinit(self: *Self, str_allocator: ?std.mem.Allocator) void {
-        // delete all files
-        var buf: [1024]u8 = undefined;
-        for (0..self.count.load(.acquire)) |i| {
-            // this should never fail since we know the file exists in alloc()
-            const filepath = std.fmt
-                .bufPrint(&buf, "{s}_{d}", .{ self.filepath, i }) catch unreachable;
-            std.fs.cwd().deleteFile(filepath) catch |err| {
-                std.debug.print("Disk Memory Allocator deinit: error: {}\n", .{err});
-            };
-        }
-        if (str_allocator) |a| {
-            a.free(self.filepath);
-        }
+    inline fn alignedMmapSize(
+        /// Must be `= alignedFileSize(size)`.
+        aligned_file_size: usize,
+        mmap_ratio: MmapRatio,
+    ) usize {
+        return aligned_file_size *| mmap_ratio;
     }
 
-    pub fn allocator(self: *Self) std.mem.Allocator {
-        return std.mem.Allocator{
+    pub inline fn allocator(self: *Self) std.mem.Allocator {
+        return .{
             .ptr = self,
             .vtable = &.{
                 .alloc = alloc,
@@ -177,167 +243,140 @@ pub const DiskMemoryAllocator = struct {
         };
     }
 
-    /// creates a new file with size aligned to page_size and returns a pointer to it
-    pub fn alloc(ctx: *anyopaque, n: usize, log2_align: u8, return_address: usize) ?[*]u8 {
-        _ = log2_align;
+    /// creates a new file with size aligned to page_size and returns a pointer to it.
+    ///
+    /// mmaps at least enough memory to the file for `size`, the metadata, and optionally
+    /// more based on the `mmap_ratio` field, in order to accommodate potential growth
+    /// from `resize` calls.
+    fn alloc(ctx: *anyopaque, size: usize, log2_align: u8, return_address: usize) ?[*]u8 {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
+        std.debug.assert(self.mmap_ratio != 0);
 
-        const count = self.count.fetchAdd(1, .monotonic);
+        const alignment = @as(usize, 1) << @intCast(log2_align);
+        std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
 
-        var buf: [1024]u8 = undefined;
-        const filepath = std.fmt.bufPrint(&buf, "{s}_{d}", .{ self.filepath, count }) catch |err| {
-            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
-            return null;
-        };
+        const file_aligned_size = alignedFileSize(size);
+        const aligned_mmap_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
 
-        var file = std.fs.cwd().createFile(filepath, .{ .read = true }) catch |err| {
-            std.debug.print("Disk Memory Allocator error: {} filepath: {s}\n", .{ err, filepath });
+        const file_index = self.count.fetchAdd(1, .monotonic);
+        const file_name_bounded = fileNameBounded(file_index);
+        const file_name = file_name_bounded.constSlice();
+
+        const file = self.dir.createFile(file_name, .{ .read = true, .truncate = true }) catch |err| {
+            self.logFailure(err, file_name);
             return null;
         };
         defer file.close();
 
-        const aligned_size = std.mem.alignForward(usize, n, std.mem.page_size);
-        const file_size = (file.stat() catch |err| {
-            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
+        // resize the file
+        file.setEndPos(file_aligned_size) catch |err| {
+            self.logFailure(err, file_name);
             return null;
-        }).size;
+        };
 
-        if (file_size < aligned_size) {
-            // resize the file
-            file.seekTo(aligned_size - 1) catch |err| {
-                std.debug.print("Disk Memory Allocator error: {}\n", .{err});
-                return null;
-            };
-            _ = file.write(&[_]u8{1}) catch |err| {
-                std.debug.print("Disk Memory Allocator error: {}\n", .{err});
-                return null;
-            };
-            file.seekTo(0) catch |err| {
-                std.debug.print("Disk Memory Allocator error: {}\n", .{err});
-                return null;
-            };
-        }
-
-        const memory = std.posix.mmap(
+        const full_alloc = std.posix.mmap(
             null,
-            aligned_size,
+            aligned_mmap_size,
             std.posix.PROT.READ | std.posix.PROT.WRITE,
             std.posix.MAP{ .TYPE = .SHARED },
             file.handle,
             0,
         ) catch |err| {
-            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
+            self.logFailure(err, file_name);
             return null;
         };
 
-        return memory.ptr;
+        std.debug.assert(size <= file_aligned_size - @sizeOf(Metadata)); // sanity check
+        std.mem.bytesAsValue(Metadata, full_alloc[size..][0..@sizeOf(Metadata)]).* = .{
+            .file_index = file_index,
+            .mmap_size = aligned_mmap_size,
+        };
+        return full_alloc.ptr;
     }
 
-    /// unmaps the memory (file still exists and is removed on deinit())
-    pub fn free(_: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
-        _ = log2_align;
-        _ = return_address;
-        // TODO: build a mapping from ptr to file so we can delete the corresponding file on free
-        const buf_aligned_len = std.mem.alignForward(usize, buf.len, std.mem.page_size);
-        std.posix.munmap(@alignCast(buf.ptr[0..buf_aligned_len]));
-    }
-
-    /// not supported rn
+    /// Resizes the allocation within the bounds of the mmap'd address space if possible.
     fn resize(
-        _: *anyopaque,
-        buf_unaligned: []u8,
-        log2_buf_align: u8,
+        ctx: *anyopaque,
+        buf: []u8,
+        log2_align: u8,
         new_size: usize,
         return_address: usize,
     ) bool {
-        // not supported
-        _ = buf_unaligned;
-        _ = log2_buf_align;
-        _ = new_size;
         _ = return_address;
-        return false;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        std.debug.assert(self.mmap_ratio != 0);
+
+        const alignment = @as(usize, 1) << @intCast(log2_align);
+        std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
+
+        const old_file_aligned_size = alignedFileSize(buf.len);
+        const new_file_aligned_size = alignedFileSize(new_size);
+
+        if (new_file_aligned_size == old_file_aligned_size) {
+            return true;
+        }
+
+        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
+        const metadata: Metadata = @bitCast(buf_ptr[old_file_aligned_size - @sizeOf(Metadata) ..][0..@sizeOf(Metadata)].*);
+
+        if (new_file_aligned_size > metadata.mmap_size) {
+            return false;
+        }
+
+        const file_name_bounded = fileNameBounded(metadata.file_index);
+        const file_name = file_name_bounded.constSlice();
+
+        const file = self.dir.openFile(file_name, .{ .mode = .read_write }) catch |err| {
+            self.logFailure(err, file_name);
+            return false;
+        };
+        defer file.close();
+
+        file.setEndPos(new_file_aligned_size) catch return false;
+
+        std.debug.assert(new_size <= new_file_aligned_size - @sizeOf(Metadata)); // sanity check
+        std.mem.bytesAsValue(Metadata, buf_ptr[new_size..][0..@sizeOf(Metadata)]).* = metadata;
+
+        return true;
+    }
+
+    /// unmaps the memory and deletes the associated file.
+    fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
+        _ = return_address;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        std.debug.assert(self.mmap_ratio != 0);
+        std.debug.assert(buf.len != 0); // should be ensured by the allocator interface
+
+        const alignment = @as(usize, 1) << @intCast(log2_align);
+        std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
+
+        const file_aligned_size = alignedFileSize(buf.len);
+        const mmap_aligned_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
+
+        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
+        const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
+
+        const file_name_bounded = fileNameBounded(metadata.file_index);
+        const file_name = file_name_bounded.constSlice();
+
+        std.posix.munmap(buf_ptr[0..mmap_aligned_size]);
+        self.dir.deleteFile(file_name) catch |err| {
+            self.logFailure(err, file_name);
+        };
+    }
+
+    fn logFailure(self: Self, err: anyerror, file_name: []const u8) void {
+        self.logger.errf("Disk Memory Allocator error: {s}, filepath: {s}", .{
+            @errorName(err), sig.utils.fmt.tryRealPath(self.dir, file_name),
+        });
+    }
+
+    const file_name_max_len = sig.utils.fmt.boundedLenValue("bin_{d}", .{std.math.maxInt(u32)});
+    inline fn fileNameBounded(file_index: u32) std.BoundedArray(u8, file_name_max_len) {
+        return sig.utils.fmt.boundedFmt("bin_{d}", .{file_index});
     }
 };
-
-test "recycle allocator" {
-    const backing_allocator = std.testing.allocator;
-    var allocator = try RecycleFBA(.{}).init(backing_allocator, 1024);
-    defer allocator.deinit();
-
-    // alloc a slice of 100 bytes
-    const bytes = try allocator.allocator().alloc(u8, 100);
-    const ptr = bytes.ptr;
-    // free the slice
-    allocator.allocator().free(bytes);
-
-    // realloc should be the same (ie, recycled data)
-    const bytes2 = try allocator.allocator().alloc(u8, 100);
-    try std.testing.expectEqual(ptr, bytes2.ptr);
-    allocator.allocator().free(bytes2);
-
-    // same result with smaller slice
-    const bytes3 = try allocator.allocator().alloc(u8, 50);
-    try std.testing.expectEqual(ptr, bytes3.ptr);
-    allocator.allocator().free(bytes3);
-
-    // diff result with larger slice
-    const bytes4 = try allocator.allocator().alloc(u8, 200);
-    try std.testing.expect(ptr != bytes4.ptr);
-    allocator.allocator().free(bytes4);
-}
-
-test "disk allocator on hashmaps" {
-    var allocator = DiskMemoryAllocator.init(sig.TEST_DATA_DIR ++ "tmp");
-    defer allocator.deinit(null);
-
-    var refs = std.AutoHashMap(u8, u8).init(allocator.allocator());
-    try refs.ensureTotalCapacity(100);
-
-    try refs.put(10, 19);
-
-    const r = refs.get(10) orelse return error.Unreachable;
-    try std.testing.expectEqual(19, r);
-}
-
-test "disk allocator on arraylists" {
-    var allocator = DiskMemoryAllocator.init(sig.TEST_DATA_DIR ++ "tmp");
-
-    var disk_account_refs = try std.ArrayList(u8).initCapacity(
-        allocator.allocator(),
-        1,
-    );
-    defer disk_account_refs.deinit();
-
-    disk_account_refs.appendAssumeCapacity(19);
-
-    try std.testing.expectEqual(19, disk_account_refs.items[0]);
-
-    // this will lead to another allocation
-    try disk_account_refs.append(21);
-
-    try std.testing.expectEqual(19, disk_account_refs.items[0]);
-    try std.testing.expectEqual(21, disk_account_refs.items[1]);
-
-    // these should exist
-    try std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_0", .{});
-    try std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_1", .{});
-
-    // this should delete them
-    allocator.deinit(null);
-
-    // these should no longer exist
-    var did_error = false;
-    std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_0", .{}) catch {
-        did_error = true;
-    };
-    try std.testing.expect(did_error);
-    did_error = false;
-    std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_1", .{}) catch {
-        did_error = true;
-    };
-    try std.testing.expect(did_error);
-}
 
 /// Namespace housing the different components for the stateless failing allocator.
 /// This allows easily importing everything related therein.
@@ -400,3 +439,159 @@ pub const failing = struct {
         };
     }
 };
+
+test "recycle allocator: tryCollapse" {
+    const backing_allocator = std.testing.allocator;
+    var allocator = try RecycleFBA(.{}).init(backing_allocator, 200);
+    defer allocator.deinit();
+
+    // alloc a slice of 100 bytes
+    const bytes = try allocator.allocator().alloc(u8, 100);
+    // alloc a slice of 100 bytes
+    const bytes2 = try allocator.allocator().alloc(u8, 100);
+
+    // free both slices
+    allocator.allocator().free(bytes);
+    allocator.allocator().free(bytes2);
+
+    allocator.tryCollapse();
+    // this should be ok now
+    const bytes3 = try allocator.allocator().alloc(u8, 150);
+    allocator.allocator().free(bytes3);
+}
+
+test "recycle allocator" {
+    const backing_allocator = std.testing.allocator;
+    var allocator = try RecycleFBA(.{}).init(backing_allocator, 1024);
+    defer allocator.deinit();
+
+    // alloc a slice of 100 bytes
+    const bytes = try allocator.allocator().alloc(u8, 100);
+    const ptr = bytes.ptr;
+    // free the slice
+    allocator.allocator().free(bytes);
+
+    // realloc should be the same (ie, recycled data)
+    const bytes2 = try allocator.allocator().alloc(u8, 100);
+    try std.testing.expectEqual(ptr, bytes2.ptr);
+    allocator.allocator().free(bytes2);
+
+    // same result with smaller slice
+    const bytes3 = try allocator.allocator().alloc(u8, 50);
+    try std.testing.expectEqual(ptr, bytes3.ptr);
+    allocator.allocator().free(bytes3);
+
+    // diff result with larger slice
+    const bytes4 = try allocator.allocator().alloc(u8, 200);
+    try std.testing.expect(ptr != bytes4.ptr);
+    allocator.allocator().free(bytes4);
+}
+
+test "disk allocator stdlib test" {
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    for ([_]DiskMemoryAllocator.MmapRatio{
+        1,  2,  3,  4,  5,
+        10, 11, 12, 13, 14,
+        15, 20, 21, 22, 23,
+        24, 25, 30, 31, 32,
+        33, 34, 35, 40, 41,
+        42, 43, 44, 45, 50,
+        51, 52, 53, 54, 55,
+    }) |ratio| {
+        var dma_state: DiskMemoryAllocator = .{
+            .dir = tmp_dir,
+            .logger = .noop,
+            .mmap_ratio = ratio,
+        };
+        const dma = dma_state.allocator();
+
+        try std.heap.testAllocator(dma);
+        try std.heap.testAllocatorAligned(dma);
+        try std.heap.testAllocatorLargeAlignment(dma);
+        try std.heap.testAllocatorAlignedShrink(dma);
+    }
+}
+
+test "disk allocator on hashmaps" {
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    var dma_state: DiskMemoryAllocator = .{
+        .dir = tmp_dir,
+        .logger = .noop,
+    };
+    const dma = dma_state.allocator();
+
+    var refs = std.AutoHashMap(u8, u8).init(dma);
+    defer refs.deinit();
+
+    try refs.ensureTotalCapacity(100);
+
+    try refs.put(10, 19);
+
+    const r = refs.get(10) orelse return error.Unreachable;
+    try std.testing.expectEqual(19, r);
+}
+
+test "disk allocator on arraylists" {
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    var dma_state: DiskMemoryAllocator = .{
+        .dir = tmp_dir,
+        .logger = .noop,
+    };
+    const dma = dma_state.allocator();
+
+    {
+        try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_0", .{})); // this should not exist
+
+        var disk_account_refs = try std.ArrayList(u8).initCapacity(dma, 1);
+        defer disk_account_refs.deinit();
+
+        disk_account_refs.appendAssumeCapacity(19);
+
+        try std.testing.expectEqual(19, disk_account_refs.items[0]);
+
+        try disk_account_refs.append(21);
+
+        try std.testing.expectEqual(19, disk_account_refs.items[0]);
+        try std.testing.expectEqual(21, disk_account_refs.items[1]);
+
+        try tmp_dir.access("bin_0", .{}); // this should exist
+        try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_1", .{})); // this should not exist
+
+        const array_ptr = try dma.create([4096]u8);
+        defer dma.destroy(array_ptr);
+        @memset(array_ptr, 0);
+
+        try tmp_dir.access("bin_1", .{}); // this should now exist
+    }
+
+    try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_0", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_1", .{}));
+}
+
+test "disk allocator large realloc" {
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    var dma_state: DiskMemoryAllocator = .{
+        .dir = tmp_dir,
+        .logger = .noop,
+    };
+    const dma = dma_state.allocator();
+
+    var page1 = try dma.alloc(u8, std.mem.page_size);
+    defer dma.free(page1);
+
+    page1 = try dma.realloc(page1, std.mem.page_size * 15);
+
+    page1[page1.len - 1] = 10;
+}

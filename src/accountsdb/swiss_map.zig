@@ -640,7 +640,7 @@ pub const BenchmarkSwissMap = struct {
     };
 
     pub fn swissmapReadWriteBenchmark(bench_args: BenchArgs) !u64 {
-        const allocator = std.heap.page_allocator;
+        const allocator = std.heap.c_allocator;
         const n_accounts = bench_args.n_accounts;
 
         const accounts, const pubkeys = try generateData(allocator, n_accounts);

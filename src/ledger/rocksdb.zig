@@ -42,7 +42,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             const cfs: []const rocks.ColumnFamily //
             = try callRocks(
                 logger,
-                rocks.DB.openCf,
+                rocks.DB.open,
                 .{
                     allocator,
                     path,
@@ -76,6 +76,20 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             self.allocator.free(self.path);
         }
 
+        pub fn count(self: *Self, comptime cf: ColumnFamily) Allocator.Error!u64 {
+            const live_files = try self.db.liveFiles(self.allocator);
+            defer live_files.deinit();
+
+            var sum: u64 = 0;
+            for (live_files.items) |live_file| {
+                if (std.mem.eql(u8, live_file.column_family_name, cf.name)) {
+                    sum += live_file.num_entries;
+                }
+            }
+
+            return sum;
+        }
+
         pub fn put(
             self: *Self,
             comptime cf: ColumnFamily,
@@ -98,10 +112,15 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             );
         }
 
-        pub fn get(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?cf.Value {
+        pub fn get(
+            self: *Self,
+            allocator: Allocator,
+            comptime cf: ColumnFamily,
+            key: cf.Key,
+        ) anyerror!?cf.Value {
             const val_bytes = try self.getBytes(cf, key) orelse return null;
             defer val_bytes.deinit();
-            return try value_serializer.deserialize(cf.Value, self.allocator, val_bytes.data);
+            return try value_serializer.deserialize(cf.Value, allocator, val_bytes.data);
         }
 
         pub fn getBytes(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?BytesRef {
@@ -118,6 +137,10 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
+        pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!bool {
+            return try self.getBytes(cf, key) != null;
+        }
+
         pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!void {
             const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
@@ -128,7 +151,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             );
         }
 
-        pub fn deleteFilesRange(
+        pub fn deleteFilesInRange(
             self: *Self,
             comptime cf: ColumnFamily,
             start: cf.Key,
@@ -142,7 +165,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 
             return try callRocks(
                 self.logger,
-                rocks.DB.deleteFileInRange,
+                rocks.DB.deleteFilesInRange,
                 .{ &self.db, self.cf_handles[cf.find(column_families)], start_bytes.data, end_bytes.data },
             );
         }
@@ -173,6 +196,10 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             allocator: Allocator,
             inner: rocks.WriteBatch,
             cf_handles: []const rocks.ColumnFamilyHandle,
+
+            pub fn deinit(self: *WriteBatch) void {
+                self.inner.deinit();
+            }
 
             pub fn put(
                 self: *WriteBatch,
@@ -296,7 +323,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             RocksDBPut,
             RocksDBGet,
             RocksDBDelete,
-            RocksDBDeleteFileInRange,
+            RocksDBDeleteFilesInRange,
             RocksDBIterator,
             RocksDBWrite,
         } || Allocator.Error;
