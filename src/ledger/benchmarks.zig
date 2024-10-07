@@ -50,8 +50,8 @@ pub const BenchmarLegder = struct {
     // Analogous to [bench_write_small](https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L59)
     pub fn benchWriteSmall() !u64 {
         const allocator = std.heap.c_allocator;
-        var state = try State.initBench("bench write small");
-        defer state.deinitBench();
+        var state = try State.init(allocator, "bench write small");
+        defer state.deinit();
         var inserter = try state.shredInserter();
 
         const prefix = "agave.blockstore.bench_write_small.";
@@ -74,8 +74,8 @@ pub const BenchmarLegder = struct {
     // Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
     pub fn benchReadSequential() !u64 {
         const allocator = std.heap.c_allocator;
-        var state = try State.initBench("bentch read sequential");
-        defer state.deinitBench();
+        var state = try State.init(allocator, "bentch read sequential");
+        defer state.deinit();
         var inserter = try state.shredInserter();
         var reader = try state.reader();
 
@@ -106,8 +106,8 @@ pub const BenchmarLegder = struct {
     // Analogous to [bench_read_random]https://github.com/anza-xyz/agave/blob/92eca1192b055d896558a78759d4e79ab4721ff1/ledger/benches/blockstore.rs#L103
     pub fn benchReadRandom() !u64 {
         const allocator = std.heap.c_allocator;
-        var state = try State.initBench("bench read randmom");
-        defer state.deinitBench();
+        var state = try State.init(allocator, "bench read randmom");
+        defer state.deinit();
         var inserter = try state.shredInserter();
         var reader = try state.reader();
 
@@ -140,8 +140,8 @@ pub const BenchmarLegder = struct {
     // Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
     pub fn benchSerializeWriteBincode() !u64 {
         const allocator = std.heap.c_allocator;
-        var state = try State.initBench("bench serialize write bincode");
-        defer state.deinitBench();
+        var state = try State.init(allocator, "bench serialize write bincode");
+        defer state.deinit();
         const slot: u32 = 0;
 
         var rewards: Rewards = try createRewards(allocator, 100);
@@ -155,8 +155,8 @@ pub const BenchmarLegder = struct {
 
     pub fn benchReadBincode() !u64 {
         const allocator = std.heap.c_allocator;
-        var state = try State.initBench("bench read bincode");
-        defer state.deinitBench();
+        var state = try State.init(allocator, "bench read bincode");
+        defer state.deinit();
         const slot: u32 = 1;
 
         var rewards: Rewards = try createRewards(allocator, 100);

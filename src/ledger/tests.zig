@@ -409,14 +409,6 @@ pub fn TestState(scope: []const u8) type {
             self.registry.deinit();
             self.allocator.destroy(self);
         }
-
-        pub fn deinitBench(self: *Self) void {
-            self.db.deinit();
-            self.registry.deinit();
-            std.heap.c_allocator.destroy(self._leak_check);
-            _allocator.destroy(self);
-            _ = gpa.detectLeaks();
-        }
     };
 }
 
