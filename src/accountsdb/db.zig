@@ -329,7 +329,9 @@ pub const AccountsDB = struct {
 
         // setup the parallel indexing
         const use_disk_index = self.config.use_disk_index;
+
         const loading_threads = try self.allocator.alloc(AccountsDB, n_parse_threads);
+        defer self.allocator.free(loading_threads);
         for (loading_threads) |*thread_db| {
             thread_db.* = try AccountsDB.init(
                 per_thread_allocator,
@@ -372,7 +374,6 @@ pub const AccountsDB = struct {
                     accounts_cache.deinit();
                 }
             }
-            self.allocator.free(loading_threads);
         }
 
         self.logger.info().logf("[{d} threads]: reading and indexing accounts...", .{n_parse_threads});
