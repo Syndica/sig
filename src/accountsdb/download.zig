@@ -353,8 +353,10 @@ const DownloadProgress = struct {
         var typed_data: [*]u8 = @ptrCast(ptr.?);
         const buf = typed_data[0..len];
 
-        self.file.writeAll(buf) catch |err|
-            std.debug.panic("failed to write to file: {s}", .{@errorName(err)});
+        self.file.writeAll(buf) catch |err| {
+            std.debug.print("failed to write to file: {s}", .{@errorName(err)});
+            return 0; // trigger a callback error, "size" will always be > 0
+        };
         self.bytes_read += len;
         self.total_read += len;
 
