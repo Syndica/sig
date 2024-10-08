@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const logger = @import("./trace/log.zig");
+
+const sig = @import("sig.zig");
 
 const Decl = std.builtin.Type.Declaration;
 
@@ -212,12 +213,13 @@ pub fn benchmark(
             while (i < min_iterations or
                 (i < max_iterations and runtime_sum < max_time)) : (i += 1)
             {
-                const ns_time = try switch (@TypeOf(arg)) {
-                    void => @field(B, def.name)(),
-                    else => @field(B, def.name)(arg),
+                const benchFunction = @field(B, def.name);
+                const ns_duration: sig.time.Duration = try switch (@TypeOf(arg)) {
+                    void => benchFunction(),
+                    else => benchFunction(arg),
                 };
 
-                const runtime = try time_unit.unitsfromNanoseconds(ns_time);
+                const runtime = try time_unit.unitsfromNanoseconds(ns_duration.asNanos());
 
                 runtimes[i] = runtime;
                 runtime_sum += runtime;

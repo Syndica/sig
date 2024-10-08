@@ -1,11 +1,14 @@
+const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
+
+const sig = @import("../sig.zig");
+const Packet = sig.net.Packet;
+const PACKET_DATA_SIZE = sig.net.PACKET_DATA_SIZE;
+const Channel = sig.sync.Channel;
+const Logger = sig.trace.Logger;
+
 const UdpSocket = @import("zig-network").Socket;
-const Packet = @import("packet.zig").Packet;
-const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
-const Channel = @import("../sync/channel.zig").Channel;
-const std = @import("std");
-const Logger = @import("../trace/log.zig").Logger;
 
 pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
@@ -147,7 +150,7 @@ pub const BenchmarkPacketProcessing = struct {
         },
     };
 
-    pub fn benchmarkReadSocket(bench_args: BenchmarkArgs) !u64 {
+    pub fn benchmarkReadSocket(bench_args: BenchmarkArgs) !sig.time.Duration {
         const n_packets = bench_args.n_packets;
         const allocator = std.heap.c_allocator;
 
@@ -174,7 +177,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
 
         // NOTE: send more packets than we need because UDP drops some
         for (1..(n_packets * 2 + 1)) |i| {
@@ -186,8 +189,8 @@ pub const BenchmarkPacketProcessing = struct {
             // = 10 packets per second
             if (i % 10 == 0) {
                 const elapsed = timer.read();
-                if (elapsed < std.time.ns_per_s) {
-                    std.time.sleep(std.time.ns_per_s - elapsed);
+                if (elapsed.asNanos() < std.time.ns_per_s) {
+                    std.time.sleep(std.time.ns_per_s - elapsed.asNanos());
                 }
             }
         }

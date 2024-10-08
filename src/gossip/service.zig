@@ -3232,7 +3232,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         },
     };
 
-    pub fn benchmarkGossipService(bench_args: BenchmarkArgs) !usize {
+    pub fn benchmarkGossipService(bench_args: BenchmarkArgs) !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
@@ -3315,7 +3315,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         });
 
         // wait for all messages to be processed
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
 
         gossip_service.shutdown();
         packet_handle.join();
@@ -3348,7 +3348,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         },
     };
 
-    pub fn benchmarkPullRequests(bench_args: BenchmarkArgs) !usize {
+    pub fn benchmarkPullRequests(bench_args: BenchmarkArgs) !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
@@ -3437,7 +3437,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
             },
         });
 
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
 
         // wait for all messages to be processed
         gossip_service.shutdown();

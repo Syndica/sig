@@ -2,7 +2,8 @@ const std = @import("std");
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
-const Mux = @import("mux.zig").Mux;
+
+const sig = @import("../sig.zig");
 const Backoff = @import("backoff.zig").Backoff;
 
 pub fn Channel(T: type) type {
@@ -532,12 +533,12 @@ pub const BenchmarkChannel = struct {
         },
     };
 
-    pub fn benchmarkSimpleUsizeBetterChannel(argss: BenchmarkArgs) !usize {
+    pub fn benchmarkSimpleUsizeBetterChannel(argss: BenchmarkArgs) !sig.time.Duration {
         var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
         const n_items = argss.n_items;
         const senders_count = argss.n_senders;
         const receivers_count = argss.n_receivers;
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
 
         const allocator = std.heap.c_allocator;
         var channel = try Channel(usize).init(allocator);
@@ -567,12 +568,12 @@ pub const BenchmarkChannel = struct {
         return elapsed;
     }
 
-    pub fn benchmarkSimplePacketBetterChannel(argss: BenchmarkArgs) !usize {
+    pub fn benchmarkSimplePacketBetterChannel(argss: BenchmarkArgs) !sig.time.Duration {
         var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
         const n_items = argss.n_items;
         const senders_count = argss.n_senders;
         const receivers_count = argss.n_receivers;
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
 
         const allocator = std.heap.c_allocator;
         var channel = try Channel(Packet).init(allocator);
