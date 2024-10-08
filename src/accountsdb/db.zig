@@ -202,7 +202,7 @@ pub const AccountsDB = struct {
         var ref_dir = try self.snapshot_dir.openDir("index", .{});
         defer ref_dir.close();
         // this dir contains the hashmap memory
-        var ref_map_dir = try self.snapshot_dir.makeOpenPath("index_ref_map", .{}); 
+        var ref_map_dir = try self.snapshot_dir.makeOpenPath("index_ref_map", .{});
         defer ref_map_dir.close();
 
         var timer = try sig.time.Timer.start();
@@ -261,6 +261,7 @@ pub const AccountsDB = struct {
                 progress_timer.reset();
             }
         }
+        self.logger.info("loaded account files");
 
         const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
         defer self.allocator.free(bin_counts);
@@ -276,9 +277,10 @@ pub const AccountsDB = struct {
             const fixed_addr = try reference_file.reader().readInt(u64, .little);
             const file_stat = try reference_file.stat();
             const file_size: u64 = @intCast(file_stat.size);
+            const fixed_addr_ptr: [*]align(std.mem.page_size) u8 = @ptrFromInt(fixed_addr);
 
             const memory = try std.posix.mmap(
-                @ptrFromInt(fixed_addr),
+                fixed_addr_ptr,
                 file_size,
                 // NOTE: need to have write access to modify the invalid `next_ptr`
                 std.posix.PROT.READ | std.posix.PROT.WRITE | 0x10, // MAP_FIXED
@@ -287,25 +289,27 @@ pub const AccountsDB = struct {
                 0,
             );
 
+            std.debug.print("memory ptr {*} fixed_addr_ptr {*}\n", .{ memory.ptr, fixed_addr_ptr });
+            if (memory.ptr != fixed_addr_ptr) {
+                self.logger.err("failed to mmap reference memory");
+                return error.MmapFailed;
+            }
+
             const n_accounts_written = std.mem.readInt(u64, memory[@sizeOf(u64) .. @sizeOf(u64) * 2], .little);
             const reference_slice_aligned: [*]align(8) AccountRef = @alignCast(@ptrCast(memory[@sizeOf(u64) * 2 ..]));
             const reference_slice = reference_slice_aligned[0..n_accounts_written];
 
-            for (reference_slice) |*ref| {
-                const bin_index = self.account_index.pubkey_bin_calculator.binIndex(&ref.pubkey);
-                bin_counts[bin_index] += 1;
-            }
-
             try references.append(reference_slice);
         }
+        self.logger.info("loaded account references");
 
         var ref_map_file = try ref_map_dir.openFile("account_references_0", .{});
         defer ref_map_file.close();
 
         const ref_map_reader = ref_map_file.reader();
         const n_bins = try ref_map_reader.readInt(u64, .little);
-        if (n_bins != self.account_index.numberOfBins()) { 
-            self.logger.errf("number of bins in ref map does not match account index: {d} vs {d}", .{n_bins, self.account_index.numberOfBins()});
+        if (n_bins != self.account_index.numberOfBins()) {
+            self.logger.errf("number of bins in ref map does not match account index: {d} vs {d}", .{ n_bins, self.account_index.numberOfBins() });
             return error.InvalidBinCount;
         }
 
@@ -318,17 +322,39 @@ pub const AccountsDB = struct {
         }
 
         // populate the memory
-        for (0..n_bins) |i| { 
+        for (0..n_bins) |i| {
             const bin, var bin_lg = self.account_index.bins[i].writeWithLock();
             defer bin_lg.unlock();
 
             const memory = try self.allocator.alloc(u8, bin_lens[i]);
             const amount_read = try ref_map_file.readAll(memory);
             if (amount_read != bin_lens[i]) {
-                self.logger.errf("failed to read all bin memory: {d} vs {d}", .{amount_read, bin_lens[i]});
+                self.logger.errf("failed to read all bin memory: {d} vs {d}", .{ amount_read, bin_lens[i] });
                 return error.InvalidBinMemory;
             }
             bin.unmanaged.setFromMemory(memory);
+        }
+        self.logger.info("loaded account reference maps");
+
+        var ref_count: u64 = 0;
+        for (references.items) |ref_batch| {
+            for (ref_batch) |ref| {
+                const bin_rw = self.account_index.getBinFromPubkey(&ref.pubkey);
+                const bin, var bin_lg = bin_rw.writeWithLock();
+                defer bin_lg.unlock();
+
+                _ = bin.get(ref.pubkey) orelse {
+                    std.debug.panic("reference {any} not found in bin\n", .{ref});
+                };
+
+                var curr_ref = &ref;
+                while (curr_ref.next_ptr) |next_ref| {
+                    std.debug.assert(next_ref.pubkey.equals(&ref.pubkey));
+                    curr_ref = next_ref;
+                }
+
+                ref_count += 1;
+            }
         }
     }
 
@@ -358,10 +384,7 @@ pub const AccountsDB = struct {
             var ref_map_dir = try self.snapshot_dir.makeOpenPath("index_ref_map", .{});
             defer ref_map_dir.close();
 
-            var disk_allocator = DiskMemoryAllocator{
-                .dir = ref_map_dir,
-                .logger = self.logger
-            };
+            var disk_allocator = DiskMemoryAllocator{ .dir = ref_map_dir, .logger = self.logger };
             // TODO: push to var
             std.debug.print("saving index reference map to disk @ index_ref_map/\n", .{});
 
@@ -1201,7 +1224,7 @@ pub const AccountsDB = struct {
                 if (lamports == 0) {
                     switch (config) {
                         // for full snapshots, only include non-zero lamport accounts
-                        .FullAccountHash => { 
+                        .FullAccountHash => {
                             // TODO: metrics
                             continue;
                         },

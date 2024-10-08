@@ -150,8 +150,8 @@ pub fn SwissMapUnmanaged(
             return self;
         }
 
-        pub fn setFromMemory(self: *Self, memory: []u8) void { 
-            // from ensureTotalCapacity: 
+        pub fn setFromMemory(self: *Self, memory: []u8) void {
+            // from ensureTotalCapacity:
             // memory.len === n_groups * (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State))
             const n_groups = memory.len / (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State));
 
@@ -172,7 +172,7 @@ pub fn SwissMapUnmanaged(
                 const state_vec = self.states[i];
                 for (0..GROUP_SIZE) |j| {
                     const state: State = @bitCast(state_vec[j]);
-                    if (state.state == .occupied) { 
+                    if (state.state == .occupied) {
                         self._count += 1;
                     }
                 }
