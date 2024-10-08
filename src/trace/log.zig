@@ -1,8 +1,8 @@
 const std = @import("std");
 const Level = @import("level.zig").Level;
 const Entry = @import("entry.zig").Entry;
-const StdEntry = @import("entry.zig").ChannelEntry;
-const StdErrEntry = @import("entry.zig").StdErrEntry;
+const ChannelPrintEntry = @import("entry.zig").ChannelPrintEntry;
+const DirectPrintEntry = @import("entry.zig").DirectPrintEntry;
 const logfmt = @import("logfmt.zig");
 const sig = @import("../sig.zig");
 // TODO Improve import.
@@ -19,8 +19,8 @@ pub const Config = struct {
 };
 
 const LogKind = enum {
-    standard,
-    test_logger,
+    channel_print,
+    direct_print,
     noop,
 };
 
@@ -29,8 +29,8 @@ const LogKind = enum {
 /// - A TestingLogger
 pub fn ScopedLogger(comptime scope: ?[]const u8) type {
     return union(LogKind) {
-        standard: *ChannelPrintLogger,
-        test_logger: *DirectPrintLogger,
+        channel_print: *ChannelPrintLogger,
+        direct_print: *DirectPrintLogger,
         noop: void,
 
         const Self = @This();
@@ -40,24 +40,24 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
 
         pub fn unscoped(self: Self) Logger {
             return switch (self) {
-                .standard => |logger| .{ .standard = logger },
-                .test_logger => |logger| .{ .test_logger = logger },
+                .channel_print => |logger| .{ .channel_print = logger },
+                .direct_print => |logger| .{ .direct_print = logger },
                 .noop => .noop,
             };
         }
 
         pub fn withScope(self: Self, comptime new_scope: []const u8) ScopedLogger(new_scope) {
             return switch (self) {
-                .standard => |logger| .{ .standard = logger },
-                .test_logger => |logger| .{ .test_logger = logger },
+                .channel_print => |logger| .{ .channel_print = logger },
+                .direct_print => |logger| .{ .direct_print = logger },
                 .noop => .noop,
             };
         }
 
         pub fn deinit(self: *const Self) void {
             switch (self.*) {
-                .standard => |logger| logger.deinit(),
-                .test_logger, .noop => {},
+                .channel_print => |logger| logger.deinit(),
+                .direct_print, .noop => {},
             }
         }
 
@@ -161,11 +161,11 @@ pub const ChannelPrintLogger = struct {
     }
 
     pub fn logger(self: *Self) Logger {
-        return .{ .standard = self };
+        return .{ .channel_print = self };
     }
 
     pub fn scopedLogger(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
-        return .{ .standard = self };
+        return .{ .channel_print = self };
     }
 
     pub fn run(self: *Self) void {
@@ -189,35 +189,35 @@ pub const ChannelPrintLogger = struct {
 
     pub fn err(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.err)) {
-            return Entry{ .standard = StdEntry.init(self.log_allocator, maybe_scope, self.channel, Level.err) };
+            return Entry{ .channel_print = ChannelPrintEntry.init(self.log_allocator, maybe_scope, self.channel, Level.err) };
         }
         return .noop;
     }
 
     pub fn warn(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.warn)) {
-            return Entry{ .standard = StdEntry.init(self.log_allocator, maybe_scope, self.channel, Level.warn) };
+            return Entry{ .channel_print = ChannelPrintEntry.init(self.log_allocator, maybe_scope, self.channel, Level.warn) };
         }
         return .noop;
     }
 
     pub fn info(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.info)) {
-            return Entry{ .standard = StdEntry.init(self.log_allocator, maybe_scope, self.channel, Level.info) };
+            return Entry{ .channel_print = ChannelPrintEntry.init(self.log_allocator, maybe_scope, self.channel, Level.info) };
         }
         return .noop;
     }
 
     pub fn debug(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.debug)) {
-            return Entry{ .standard = StdEntry.init(self.log_allocator, maybe_scope, self.channel, Level.debug) };
+            return Entry{ .channel_print = ChannelPrintEntry.init(self.log_allocator, maybe_scope, self.channel, Level.debug) };
         }
         return .noop;
     }
 
     pub fn trace(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.trace)) {
-            return Entry{ .standard = StdEntry.init(self.log_allocator, maybe_scope, self.channel, Level.trace) };
+            return Entry{ .channel_print = ChannelPrintEntry.init(self.log_allocator, maybe_scope, self.channel, Level.trace) };
         }
         return .noop;
     }
@@ -265,44 +265,44 @@ pub const DirectPrintLogger = struct {
     }
 
     pub fn logger(self: *Self) Logger {
-        return .{ .test_logger = self };
+        return .{ .direct_print = self };
     }
 
     pub fn scopedLogger(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
-        return .{ .testing = self };
+        return .{ .direct_print = self };
     }
 
     pub fn err(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.err)) {
-            return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.err) };
+            return Entry{ .direct_print = DirectPrintEntry.init(self.allocator, scope, Level.err) };
         }
         return .noop;
     }
 
     pub fn warn(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.warn)) {
-            return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.warn) };
+            return Entry{ .direct_print = DirectPrintEntry.init(self.allocator, scope, Level.warn) };
         }
         return .noop;
     }
 
     pub fn info(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.info)) {
-            return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.info) };
+            return Entry{ .direct_print = DirectPrintEntry.init(self.allocator, scope, Level.info) };
         }
         return .noop;
     }
 
     pub fn debug(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.debug)) {
-            return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.debug) };
+            return Entry{ .direct_print = DirectPrintEntry.init(self.allocator, scope, Level.debug) };
         }
         return .noop;
     }
 
     pub fn trace(self: *Self, comptime scope: ?[]const u8) Entry {
         if (@intFromEnum(self.max_level) >= @intFromEnum(Level.trace)) {
-            return Entry{ .testing = StdErrEntry.init(self.allocator, scope, Level.trace) };
+            return Entry{ .direct_print = DirectPrintEntry.init(self.allocator, scope, Level.trace) };
         }
         return .noop;
     }

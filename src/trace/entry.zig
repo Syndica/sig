@@ -5,21 +5,21 @@ const Channel = @import("../sync/channel.zig").Channel;
 const AtomicBool = std.atomic.Value(bool);
 
 pub const Entry = union(enum) {
-    standard: ChannelEntry,
-    testing: StdErrEntry,
+    channel_print: ChannelPrintEntry,
+    direct_print: DirectPrintEntry,
     noop,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, channel: *Channel(logfmt.LogMsg), log_level: Level) Self {
-        return .{ .standard = ChannelEntry.init(allocator, channel, log_level) };
+        return .{ .channel_print = ChannelPrintEntry.init(allocator, channel, log_level) };
     }
 
     pub fn deinit(self: Self) void {
         switch (self) {
             .noop => {},
-            .standard => |impl| impl.deinit(),
-            .testing => |impl| impl.deinit(),
+            .channel_print => |impl| impl.deinit(),
+            .direct_print => |impl| impl.deinit(),
         }
     }
 
@@ -28,15 +28,15 @@ pub const Entry = union(enum) {
             .noop => {
                 return self;
             },
-            .standard => |entry| {
+            .channel_print => |entry| {
                 var log_entry = entry;
                 _ = log_entry.field(name, value);
-                return Entry{ .standard = log_entry };
+                return Entry{ .channel_print = log_entry };
             },
-            .testing => |entry| {
+            .direct_print => |entry| {
                 var log_entry = entry;
                 _ = log_entry.field(name, value);
-                return Entry{ .testing = log_entry };
+                return Entry{ .direct_print = log_entry };
             },
         }
     }
@@ -44,11 +44,11 @@ pub const Entry = union(enum) {
     pub fn log(self: Self, comptime msg: []const u8) void {
         switch (self) {
             .noop => {},
-            .standard => |impl| {
+            .channel_print => |impl| {
                 var logger = impl;
                 logger.log(msg);
             },
-            .testing => |impl| {
+            .direct_print => |impl| {
                 var logger = impl;
                 logger.log(msg);
             },
@@ -58,11 +58,11 @@ pub const Entry = union(enum) {
     pub fn logf(self: Self, comptime fmt: []const u8, args: anytype) void {
         switch (self) {
             .noop => {},
-            .standard => |impl| {
+            .channel_print => |impl| {
                 var logger = impl;
                 logger.logf(fmt, args);
             },
-            .testing => |impl| {
+            .direct_print => |impl| {
                 var logger = impl;
                 logger.logf(fmt, args);
             },
@@ -70,7 +70,7 @@ pub const Entry = union(enum) {
     }
 };
 
-pub const ChannelEntry = struct {
+pub const ChannelPrintEntry = struct {
     allocator: std.mem.Allocator,
     scope: ?[]const u8,
     log_level: Level,
@@ -173,7 +173,7 @@ pub const ChannelEntry = struct {
 };
 
 /// An instance of `Entry` that logs directly to std.debug.print, instead of sending to channel.
-pub const StdErrEntry = struct {
+pub const DirectPrintEntry = struct {
     const builtin = @import("builtin");
 
     log_level: Level,

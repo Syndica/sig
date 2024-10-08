@@ -5,6 +5,5 @@ pub const entry = @import("entry.zig");
 
 pub const Logger = log.Logger;
 pub const Level = level.Level;
-pub const ChannelEntry = entry.ChannelEntry;
 pub const DirectPrintLogger = log.DirectPrintLogger;
 pub const ChannelPrintLogger = log.ChannelPrintLogger;
