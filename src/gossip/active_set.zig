@@ -177,7 +177,6 @@ test "init/denit" {
 test "gracefully rotates with duplicate contact ids" {
     const alloc = std.testing.allocator;
 
-    // NOTE: DefaultPrng == Xoshiro256, so mb it would be better to use only DefaultPrng
     var default_rng = std.rand.DefaultPrng.init(100);
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();

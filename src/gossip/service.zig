@@ -2325,7 +2325,6 @@ test "build messages startup and shutdown" {
 }
 
 test "handling prune messages" {
-    // NOTE: DefaultPrng == Xoshiro256, so mb it would be better to use only DefaultPrng
     var default_rng = std.rand.DefaultPrng.init(91);
 
     const allocator = std.testing.allocator;
@@ -2739,7 +2738,6 @@ test "test build prune messages and handle push messages" {
 
 test "build pull requests" {
     const allocator = std.testing.allocator;
-    // NOTE: DefaultPrng == Xoshiro256, so mb it would be better to use only DefaultPrng
     var default_rng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
@@ -2877,7 +2875,6 @@ test "test build push messages" {
 
 test "test large push messages" {
     const allocator = std.testing.allocator;
-    // NOTE: DefaultPrng == Xoshiro256, so mb it would be better to use only DefaultPrng
     var default_rng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
