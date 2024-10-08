@@ -454,7 +454,7 @@ pub const GossipService = struct {
         defer {
             // trigger the next service in the chain to close
             self.counter.store(idx + 1, .release);
-            self.logger.debug().logf("verifyPackets loop closed", .{});
+            self.logger.debug().log("verifyPackets loop closed");
         }
 
         const tasks = try VerifyMessageTask.init(self.allocator, VERIFY_PACKET_PARALLEL_TASKS);
@@ -808,7 +808,7 @@ pub const GossipService = struct {
     fn buildMessages(self: *Self, seed: u64, idx: usize) !void {
         defer {
             self.counter.store(idx + 1, .release);
-            self.logger.info().logf("buildMessages loop closed", .{});
+            self.logger.info().log("buildMessages loop closed");
         }
 
         var loop_timer = try sig.time.Timer.start();
@@ -2342,7 +2342,7 @@ test "handling prune messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var  test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
 
