@@ -71,7 +71,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
         pub fn warn(self: *const Self) Entry {
             return switch (self.*) {
                 .noop => .noop,
-                inline else => |impl| impl.err(scope),
+                inline else => |impl| impl.warn(scope),
             };
         }
 
@@ -332,28 +332,26 @@ pub const DirectPrintLogger = struct {
     }
 };
 
-test "trace_ng: direct" {
+test "direct" {
     const allocator = std.testing.allocator;
     const std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.info,
+        .max_level = Level.err,
         .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
-    logger.log(.err, "err");
     logger.log(.warn, "warn");
     logger.log(.info, "info");
     logger.log(.debug, "debug");
 
-    logger.logf(.err, "{s}", .{"err"});
     logger.logf(.warn, "{s}", .{"warn"});
     logger.logf(.info, "{s}", .{"info"});
     logger.logf(.debug, "{s}", .{"debug"});
 }
 
-test "trace_ng: scope switch" {
+test "trace_ngswitch" {
     const StuffChild = struct {
         const StuffChild = @This();
         logger: ScopedLogger(@typeName(StuffChild)),
@@ -387,7 +385,7 @@ test "trace_ng: scope switch" {
 
     const std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.info,
+        .max_level = Level.warn,
         .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
@@ -404,12 +402,12 @@ test "trace_ng: scope switch" {
     std_logger.info(null).log("Log from main");
 }
 
-test "trace_ng: reclaim" {
+test "reclaim" {
     const allocator = std.testing.allocator;
 
     var std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.info,
+        .max_level = Level.warn,
         .max_buffer = 4048,
     }) catch @panic("Logger init failed");
 
@@ -426,12 +424,12 @@ test "trace_ng: reclaim" {
     }
 }
 
-test "trace_ng: level" {
+test "level" {
     const allocator = std.testing.allocator;
 
     var std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.debug,
+        .max_level = Level.err,
         .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
 
@@ -457,7 +455,7 @@ test "trace_ng: level" {
         .field("f_version", "3.0")
         .log("Logging with logWithFields");
 
-    logger.err()
+    logger.trace()
         .field("f_agent", "Firefox")
         .field("f_version", 120)
         .field("f_local", "en")
@@ -465,12 +463,12 @@ test "trace_ng: level" {
         .logf("{s}", .{"Logging with logfWithFields"});
 }
 
-test "trace_ng: test_logger" {
+test "test_logger" {
     // TODO Replace this with a logger that is configurable with a writer
     // That way, the logger can be configured to write to a file, stdout or an array list.
     const allocator = std.testing.allocator;
 
-    var test_logger = DirectPrintLogger.init(allocator, Level.info);
+    var test_logger = DirectPrintLogger.init(allocator, Level.warn);
 
     const logger = test_logger.logger();
 
