@@ -440,11 +440,16 @@ pub const AccountsDB = struct {
         {
             var wg: std.Thread.WaitGroup = .{};
             defer wg.wait();
-            try spawnThreadTasks(&wg, n_account_files, n_parse_threads, null, loadAndVerifyAccountsFilesMultiThread, .{
-                loading_threads.items,
-                accounts_dir,
-                snapshot_manifest.file_map,
-                accounts_per_file_estimate,
+            try spawnThreadTasks(loadAndVerifyAccountsFilesMultiThread, .{
+                .wg = &wg,
+                .data_len = n_account_files,
+                .max_threads = n_parse_threads,
+                .params = .{
+                    loading_threads.items,
+                    accounts_dir,
+                    snapshot_manifest.file_map,
+                    accounts_per_file_estimate,
+                },
             });
         }
         self.logger.infof("total time: {s}", .{timer.read()});
@@ -698,10 +703,15 @@ pub const AccountsDB = struct {
     ) !void {
         var combine_indexes_wg: std.Thread.WaitGroup = .{};
         defer combine_indexes_wg.wait();
-        try spawnThreadTasks(&combine_indexes_wg, self.account_index.numberOfBins(), n_threads, null, combineThreadIndexesMultiThread, .{
-            self.logger,
-            &self.account_index,
-            thread_dbs,
+        try spawnThreadTasks(combineThreadIndexesMultiThread, .{
+            .wg = &combine_indexes_wg,
+            .data_len = self.account_index.numberOfBins(),
+            .max_threads = n_threads,
+            .params = .{
+                self.logger,
+                &self.account_index,
+                thread_dbs,
+            },
         });
 
         // ensure enough capacity
@@ -868,12 +878,17 @@ pub const AccountsDB = struct {
         {
             var wg: std.Thread.WaitGroup = .{};
             defer wg.wait();
-            try spawnThreadTasks(&wg, self.account_index.numberOfBins(), n_threads, null, getHashesFromIndexMultiThread, .{
-                self,
-                config,
-                self.allocator,
-                hashes,
-                lamports,
+            try spawnThreadTasks(getHashesFromIndexMultiThread, .{
+                .wg = &wg,
+                .data_len = self.account_index.numberOfBins(),
+                .max_threads = n_threads,
+                .params = .{
+                    self,
+                    config,
+                    self.allocator,
+                    hashes,
+                    lamports,
+                },
             });
         }
 

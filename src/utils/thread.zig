@@ -23,24 +23,37 @@ fn chunkSizeAndThreadCount(data_len: usize, max_n_threads: usize) struct { usize
     return .{ chunk_size, n_threads };
 }
 
-pub fn spawnThreadTasks(
-    wait_group: *std.Thread.WaitGroup,
-    data_len: usize,
-    max_n_threads: usize,
-    /// If non-null, set to the coverage over the data which was achieved.
-    /// On a successful call, this will be equal to `data_len`.
-    /// On a failed call, this will be less than `data_len`,
-    /// representing the length of the data which was successfully
-    maybe_coverage: ?*usize,
-    comptime taskFn: anytype,
-    params: anytype,
-) std.Thread.SpawnError!void {
-    const chunk_size, const n_threads = chunkSizeAndThreadCount(data_len, max_n_threads);
+pub fn SpawnThreadTasksConfig(comptime TaskFn: type) type {
+    return struct {
+        wg: *std.Thread.WaitGroup,
+        data_len: usize,
+        max_threads: usize,
+        /// If non-null, set to the coverage over the data which was achieved.
+        /// On a successful call, this will be equal to `data_len`.
+        /// On a failed call, this will be less than `data_len`,
+        /// representing the length of the data which was successfully
+        coverage: ?*usize = null,
+        params: Params,
 
-    if (maybe_coverage) |coverage| coverage.* = 0;
+        pub const Params = std.meta.ArgsTuple(@Type(.{ .Fn = blk: {
+            var info = @typeInfo(TaskFn).Fn;
+            info.params = info.params[0 .. info.params.len - 1];
+            break :blk info;
+        } }));
+    };
+}
+
+pub fn spawnThreadTasks(
+    comptime taskFn: anytype,
+    config: SpawnThreadTasksConfig(@TypeOf(taskFn)),
+) std.Thread.SpawnError!void {
+    const Config = SpawnThreadTasksConfig(@TypeOf(taskFn));
+    const chunk_size, const n_threads = chunkSizeAndThreadCount(config.data_len, config.max_threads);
+
+    if (config.coverage) |coverage| coverage.* = 0;
 
     const S = struct {
-        fn taskFnWg(wg: *std.Thread.WaitGroup, fn_params: @TypeOf(params), task_params: TaskParams) @typeInfo(@TypeOf(taskFn)).Fn.return_type.? {
+        fn taskFnWg(wg: *std.Thread.WaitGroup, fn_params: Config.Params, task_params: TaskParams) @typeInfo(@TypeOf(taskFn)).Fn.return_type.? {
             defer wg.finish();
             return @call(.auto, taskFn, fn_params ++ .{task_params});
         }
@@ -48,23 +61,23 @@ pub fn spawnThreadTasks(
 
     var start_index: usize = 0;
     for (0..n_threads) |thread_id| {
-        const end_index = if (thread_id == n_threads - 1) data_len else (start_index + chunk_size);
+        const end_index = if (thread_id == n_threads - 1) config.data_len else (start_index + chunk_size);
         const task_params: TaskParams = .{
             .start_index = start_index,
             .end_index = end_index,
             .thread_id = thread_id,
         };
 
-        wait_group.start();
-        const handle = std.Thread.spawn(.{}, S.taskFnWg, .{ wait_group, params, task_params }) catch |err| {
-            if (maybe_coverage) |coverage| coverage.* = start_index;
+        config.wg.start();
+        const handle = std.Thread.spawn(.{}, S.taskFnWg, .{ config.wg, config.params, task_params }) catch |err| {
+            if (config.coverage) |coverage| coverage.* = start_index;
             return err;
         };
         handle.detach();
         start_index = end_index;
     }
 
-    if (maybe_coverage) |coverage| coverage.* = data_len;
+    if (config.coverage) |coverage| coverage.* = config.data_len;
 }
 
 pub fn ThreadPoolTask(comptime Entry: type) type {
