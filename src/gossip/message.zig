@@ -135,12 +135,12 @@ pub const PruneData = struct {
         wallclock: u64,
     };
 
-    pub fn random(rng: std.rand.Random, keypair: *KeyPair) !PruneData {
+    pub fn random(rand: std.rand.Random, keypair: *KeyPair) !PruneData {
         var self = PruneData{
             .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
             .prunes = &[0]Pubkey{},
             .signature = Signature.init(.{0} ** 64),
-            .destination = Pubkey.random(rng),
+            .destination = Pubkey.random(rand),
             .wallclock = getWallclockMs(),
         };
         try self.sign(keypair);
@@ -179,15 +179,15 @@ pub const PruneData = struct {
 };
 
 test "gossip.message: push message serialization is predictable" {
-    var rng = DefaultPrng.init(getWallclockMs());
-    const pubkey = Pubkey.random(rng.random());
+    var prng = DefaultPrng.init(0);
+    const pubkey = Pubkey.random(prng.random());
     var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
 
     const msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
     const empty_size = bincode.sizeOf(msg, .{});
 
-    const value = try SignedGossipData.random(rng.random(), &(try KeyPair.create(null)));
+    const value = try SignedGossipData.random(prng.random(), &(try KeyPair.create(null)));
     const value_size = bincode.sizeOf(value, .{});
     try values.append(value);
     try std.testing.expect(values.items.len == 1);
@@ -205,8 +205,8 @@ test "gossip.message: test prune data sig verify" {
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
 
-    var rng = DefaultPrng.init(getWallclockMs());
-    var prune = try PruneData.random(rng.random(), &keypair);
+    var prng = DefaultPrng.init(0);
+    var prune = try PruneData.random(prng.random(), &keypair);
 
     try prune.verify();
 
@@ -228,9 +228,9 @@ test "gossip.message: test prune data sig verify" {
 test "gossip.message: ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var rng = std.rand.DefaultPrng.init(0);
+    var prng = std.rand.DefaultPrng.init(0);
 
-    var original = GossipMessage{ .PingMessage = try Ping.random(rng.random(), &keypair) };
+    var original = GossipMessage{ .PingMessage = try Ping.random(prng.random(), &keypair) };
     var buf = [_]u8{0} ** 1232;
 
     const serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
@@ -245,8 +245,8 @@ test "gossip.message: ping message serializes and deserializes correctly" {
 test "gossip.message: test ping pong sig verify" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var rng = std.rand.DefaultPrng.init(0);
-    var ping = try Ping.random(rng.random(), &keypair);
+    var prng = std.rand.DefaultPrng.init(0);
+    var ping = try Ping.random(prng.random(), &keypair);
     var msg = GossipMessage{ .PingMessage = ping };
     try msg.verifySignature();
 

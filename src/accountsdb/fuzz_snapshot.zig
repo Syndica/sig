@@ -30,13 +30,13 @@ pub fn run(args: *std.process.ArgIterator) !void {
         const SEED_FILE_PATH = sig.TEST_DATA_DIR ++ "fuzz_snapshot_seeds.txt";
         const seed_file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{ .truncate = false });
         defer seed_file.close();
-        // try seed_file.seekFromEnd(0);
+
         try seed_file.writer().print("{}\n", .{seed});
     }
     std.debug.print("seed: {}\n", .{seed});
 
-    var rng = std.rand.DefaultPrng.init(seed);
-    const rand = rng.random();
+    var prng = std.rand.DefaultPrng.init(seed);
+    const random = prng.random();
 
     var bytes_buffer = std.ArrayList(u8).init(allocator);
     defer bytes_buffer.deinit();
@@ -47,7 +47,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
     while (timer.read() < MAX_FUZZ_TIME_NS) : (i += 1) {
         bytes_buffer.clearRetainingCapacity();
 
-        const snapshot_original: SnapshotFields = try randomSnapshotFields(allocator, rand);
+        const snapshot_original: SnapshotFields = try randomSnapshotFields(allocator, random);
         defer snapshot_original.deinit(allocator);
 
         try bytes_buffer.ensureUnusedCapacity(bincode.sizeOf(snapshot_original, .{}) * 2);

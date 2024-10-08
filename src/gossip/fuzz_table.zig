@@ -45,8 +45,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const logger = std_logger.logger();
 
-    var rng = std.rand.DefaultPrng.init(seed);
-    const rand = rng.random();
+    var prng = std.rand.DefaultPrng.init(seed);
+    const random = prng.random();
 
     // init gossip table
     // MAX: 2 threads
@@ -104,19 +104,19 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             total_action_count += 1;
         }
 
-        const action = rand.enumValue(enum { put, get });
+        const action = random.enumValue(enum { put, get });
         switch (action) {
             .put => {
                 defer put_count += 1;
-                const new_keypair = rand.boolean();
+                const new_keypair = random.boolean();
 
                 var data = GossipData{
-                    .ContactInfo = try ContactInfo.random(allocator, rand, Pubkey.random(rand), 0, 0, 0),
+                    .ContactInfo = try ContactInfo.random(allocator, random, Pubkey.random(random), 0, 0, 0),
                 };
 
                 if (new_keypair) {
                     var seed_buf: [32]u8 = undefined;
-                    rand.bytes(&seed_buf);
+                    random.bytes(&seed_buf);
                     const keypair = try KeyPair.create(seed_buf);
                     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
@@ -139,7 +139,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                         continue;
                     }
 
-                    const index = rand.intRangeAtMost(usize, 0, pubkeys.items.len - 1);
+                    const index = random.intRangeAtMost(usize, 0, pubkeys.items.len - 1);
                     const keypair = keypairs.items[index];
                     const pubkey = pubkeys.items[index];
 
@@ -147,14 +147,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     var signed_data = try SignedGossipData.initSigned(data, &keypair);
                     signed_data.wallclockPtr().* = now;
 
-                    const should_overwrite = rand.boolean();
+                    const should_overwrite = random.boolean();
                     if (should_overwrite) {
                         logger.debug().logf("overwriting pubkey: {}", .{pubkey});
                         signed_data.wallclockPtr().* = now;
                     } else {
                         logger.debug().logf("writing old pubkey: {}", .{pubkey});
                         const other_insertion_time = insertion_times.items[index];
-                        signed_data.wallclockPtr().* = other_insertion_time -| rand.intRangeAtMost(u64, 10, 100);
+                        signed_data.wallclockPtr().* = other_insertion_time -| random.intRangeAtMost(u64, 10, 100);
                     }
 
                     // !
@@ -184,7 +184,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     continue;
                 }
 
-                const index = rand.intRangeAtMost(usize, 0, pubkeys.items.len - 1);
+                const index = random.intRangeAtMost(usize, 0, pubkeys.items.len - 1);
                 const pubkey = pubkeys.items[index];
                 const search_key = keys.items[index];
 
@@ -228,7 +228,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             defer timer.reset();
             const size = gossip_table.len();
 
-            if (rand.boolean()) {
+            if (random.boolean()) {
                 // trim the table in half
                 const max_pubkey_capacity = size / 2;
                 const pubkeys_droppped_count = try gossip_table.attemptTrim(now, max_pubkey_capacity);

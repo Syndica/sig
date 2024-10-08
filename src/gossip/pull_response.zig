@@ -83,13 +83,12 @@ test "gossip.pull_response: test filtering values works" {
     // insert a some value
     const kp = try KeyPair.create([_]u8{1} ** 32);
 
-    const seed: u64 = 18;
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
+    var prng = std.rand.DefaultPrng.init(18);
+    const random = prng.random();
 
     var lg = gossip_table_rw.write();
     for (0..100) |_| {
-        const gossip_value = try SignedGossipData.random(rng, &kp);
+        const gossip_value = try SignedGossipData.random(random, &kp);
         _ = try lg.mut().insert(gossip_value, 0);
     }
     lg.unlock();
@@ -100,7 +99,7 @@ test "gossip.pull_response: test filtering values works" {
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
     var filters = try buildGossipPullFilters(
         std.testing.allocator,
-        rng,
+        random,
         &gossip_table_rw,
         &failed_pull_hashes,
         max_bytes,
@@ -123,7 +122,7 @@ test "gossip.pull_response: test filtering values works" {
     // insert more values which the filters should be missing
     lg = gossip_table_rw.write();
     for (0..64) |_| {
-        const v2 = try SignedGossipData.random(rng, &kp);
+        const v2 = try SignedGossipData.random(random, &kp);
         _ = try lg.mut().insert(v2, 0);
     }
 

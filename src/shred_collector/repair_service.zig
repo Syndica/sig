@@ -217,7 +217,7 @@ pub const RepairService = struct {
 pub const RepairRequester = struct {
     allocator: Allocator,
     logger: Logger,
-    rng: Random,
+    rand: Random,
     keypair: *const KeyPair,
     sender: SocketThread,
 
@@ -226,7 +226,7 @@ pub const RepairRequester = struct {
     pub fn init(
         allocator: Allocator,
         logger: Logger,
-        rng: Random,
+        rand: Random,
         keypair: *const KeyPair,
         udp_send_socket: Socket,
         exit: *Atomic(bool),
@@ -235,7 +235,7 @@ pub const RepairRequester = struct {
         return .{
             .allocator = allocator,
             .logger = logger,
-            .rng = rng,
+            .rand = rand,
             .keypair = keypair,
             .sender = sndr,
         };
@@ -262,7 +262,7 @@ pub const RepairRequester = struct {
                 self.keypair,
                 request.recipient,
                 @intCast(timestamp),
-                self.rng.int(Nonce),
+                self.rand.int(Nonce),
             );
             packet.size = data.len;
             try self.sender.channel.send(packet);
@@ -304,7 +304,7 @@ pub const RepairPeer = struct {
 /// of requests. Naive benchmarks will optimize the wrong behaviors.
 pub const RepairPeerProvider = struct {
     allocator: Allocator,
-    rng: Random,
+    rand: Random,
     gossip_table_rw: *RwMux(GossipTable),
     cache: LruCacheCustom(.non_locking, Slot, RepairPeers, Allocator, RepairPeers.deinit),
     my_pubkey: Pubkey,
@@ -323,7 +323,7 @@ pub const RepairPeerProvider = struct {
 
     pub fn init(
         allocator: Allocator,
-        rng: Random,
+        rand: Random,
         gossip: *RwMux(GossipTable),
         my_pubkey: Pubkey,
         my_shred_version: *const Atomic(u16),
@@ -335,7 +335,7 @@ pub const RepairPeerProvider = struct {
                 .initWithContext(allocator, REPAIR_PEERS_CACHE_CAPACITY, allocator),
             .my_pubkey = my_pubkey,
             .my_shred_version = my_shred_version,
-            .rng = rng,
+            .rand = rand,
         };
     }
 
@@ -354,7 +354,7 @@ pub const RepairPeerProvider = struct {
     pub fn getRandomPeer(self: *Self, slot: Slot) Error!?RepairPeer {
         const peers = try self.getPeers(slot);
         if (peers.len == 0) return null;
-        const index = self.rng.intRangeLessThan(usize, 0, peers.len);
+        const index = self.rand.intRangeLessThan(usize, 0, peers.len);
         return peers[index];
     }
 

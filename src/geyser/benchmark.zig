@@ -18,17 +18,17 @@ pub fn streamWriter(allocator: std.mem.Allocator, exit: *std.atomic.Value(bool))
 
     try geyser_writer.spawnIOLoop();
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
     // PERF: one allocation slice
     const N_ACCOUNTS_PER_SLOT = 700;
     const accounts = try allocator.alloc(Account, N_ACCOUNTS_PER_SLOT);
     const pubkeys = try allocator.alloc(Pubkey, N_ACCOUNTS_PER_SLOT);
     for (0..N_ACCOUNTS_PER_SLOT) |i| {
-        const data_len = rng.intRangeAtMost(u64, 2000, 10_000);
-        accounts[i] = try Account.random(allocator, rng, data_len);
-        pubkeys[i] = Pubkey.random(rng);
+        const data_len = random.intRangeAtMost(u64, 2000, 10_000);
+        accounts[i] = try Account.random(allocator, random, data_len);
+        pubkeys[i] = Pubkey.random(random);
     }
     var slot: Slot = 0;
 

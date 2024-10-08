@@ -19,8 +19,8 @@ const comptimePrint = std.fmt.comptimePrint;
 const schema = ledger.schema.schema;
 
 test "put/get data consistency for merkle root" {
-    var rng = std.Random.DefaultPrng.init(100);
-    const rand = rng.random();
+    var prng = std.Random.DefaultPrng.init(100);
+    const random = prng.random();
 
     var db = try DB.init("bsdbMerkleRootDatabaseConsistency");
     defer db.deinit();
@@ -29,7 +29,7 @@ test "put/get data consistency for merkle root" {
         .slot = 1234127498,
         .fec_set_index = 4932874234,
     };
-    const root = sig.core.Hash.random(rand);
+    const root = sig.core.Hash.random(random);
 
     try db.put(
         schema.merkle_root_meta,
