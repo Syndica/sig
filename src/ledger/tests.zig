@@ -50,8 +50,8 @@ test "put/get data consistency for merkle root" {
 
 // Analogous to [test_get_rooted_block](https://github.com/anza-xyz/agave/blob/a72f981370c3f566fc1becf024f3178da041547a/ledger/src/blockstore.rs#L8271)
 test "insert shreds and transaction statuses then get blocks" {
-    const test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+
     const logger = test_logger.logger();
 
     var state = try State.init(std.testing.allocator, "insert shreds and transaction statuses then get blocks", logger);

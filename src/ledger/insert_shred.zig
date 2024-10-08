@@ -1133,7 +1133,7 @@ const ShredInserterTestState = struct {
     inserter: ShredInserter,
 
     pub fn init(allocator_: std.mem.Allocator, comptime test_name: []const u8) !ShredInserterTestState {
-        const test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+        var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
         const logger = test_logger.logger();
         return initWithLogger(allocator_, test_name, logger);
     }

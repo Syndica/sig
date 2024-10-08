@@ -46,8 +46,7 @@ test "core.shred: test ShredVersion" {
 
     const testing_alloc = std.testing.allocator;
 
-    const test_logger = DirectPrintLogger.init(testing_alloc, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var test_logger = DirectPrintLogger.init(testing_alloc, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
 

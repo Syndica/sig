@@ -57,7 +57,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
         pub fn deinit(self: *const Self) void {
             switch (self.*) {
                 .standard => |logger| logger.deinit(),
-                .test_logger => |logger| logger.deinit(),
+                .test_logger => {}, // DADE
                 .noop => {},
             }
         }
@@ -258,14 +258,11 @@ pub const DirectPrintLogger = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, max_level: Level) *Self {
-        std.debug.assert(builtin.is_test);
-        const self = allocator.create(Self) catch @panic("could not allocator.create Logger");
-        self.* = .{
+    pub fn init(allocator: std.mem.Allocator, max_level: Level) Self {
+        return .{
             .max_level = max_level,
             .allocator = allocator,
         };
-        return self;
     }
 
     pub fn logger(self: *Self) Logger {
@@ -274,10 +271,6 @@ pub const DirectPrintLogger = struct {
 
     pub fn scopedLogger(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
         return .{ .testing = self };
-    }
-
-    pub fn deinit(self: *const Self) void {
-        self.allocator.destroy(self);
     }
 
     pub fn err(self: *Self, comptime scope: ?[]const u8) Entry {
@@ -479,7 +472,6 @@ test "trace_ng: test_logger" {
     const allocator = std.testing.allocator;
 
     var test_logger = DirectPrintLogger.init(allocator, Level.info);
-    defer test_logger.deinit();
 
     const logger = test_logger.logger();
 

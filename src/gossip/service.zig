@@ -2280,11 +2280,10 @@ test "build messages startup and shutdown" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const test_logger = TestingLogger.init(
+    var test_logger = TestingLogger.init(
         std.testing.allocator,
         Logger.TEST_DEFAULT_LEVEL,
     );
-    defer test_logger.deinit();
 
     const logger = test_logger.logger();
 
@@ -2343,8 +2342,7 @@ test "handling prune messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var  test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
 
@@ -2421,8 +2419,7 @@ test "handling pull responses" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
 
@@ -2569,8 +2566,7 @@ test "handle pull request" {
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
-    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
     var counter = Atomic(usize).init(0);
@@ -2678,8 +2674,7 @@ test "test build prune messages and handle push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
 
@@ -2758,8 +2753,7 @@ test "build pull requests" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
 
@@ -2817,8 +2811,7 @@ test "test build push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
 
@@ -2897,8 +2890,7 @@ test "test large push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
 
@@ -3074,8 +3066,7 @@ test "process contact info push packet" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    const test_logger = TestingLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var test_logger = TestingLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
 
@@ -3170,8 +3161,7 @@ test "init, exit, and deinit" {
 
     var counter = Atomic(usize).init(0);
 
-    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer test_logger.deinit();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
     const logger = test_logger.logger();
 
