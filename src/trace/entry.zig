@@ -107,13 +107,13 @@ pub const ChannelPrintEntry = struct {
     }
 
     pub fn log(self: *Self, comptime msg: []const u8) void {
-        defer self.deinit();
         const log_msg = logfmt.LogMsg{
             .level = self.log_level,
             .maybe_scope = self.scope,
             .maybe_msg = msg,
             .maybe_fields = self.fields.toOwnedSlice() catch |err| {
                 std.debug.print("Processing fields failed with err: {any}", .{err});
+                self.deinit();
                 return;
             },
             .maybe_fmt = null,
@@ -121,15 +121,16 @@ pub const ChannelPrintEntry = struct {
 
         self.channel.send(log_msg) catch |err| {
             std.debug.print("Send msg through channel failed with err: {any}", .{err});
+            self.deinit();
             return;
         };
     }
 
     pub fn logf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        defer self.deinit();
         // Get memory for formatting message.
         const msg_buf = self.allocBuf(std.fmt.count(fmt, args)) catch |err| {
             std.debug.print("allocBuff failed with err: {any}", .{err});
+            self.deinit();
             return;
         };
         var fmt_message = std.io.fixedBufferStream(msg_buf);
@@ -142,6 +143,7 @@ pub const ChannelPrintEntry = struct {
             .maybe_msg = null,
             .maybe_fields = self.fields.toOwnedSlice() catch |err| {
                 std.debug.print("Processing fields failed with err: {any}", .{err});
+                self.deinit();
                 return;
             },
             .maybe_fmt = fmt_message.getWritten(),
@@ -149,12 +151,13 @@ pub const ChannelPrintEntry = struct {
 
         self.channel.send(log_msg) catch |err| {
             std.debug.print("Send msg through channel failed with err: {any}", .{err});
+            self.deinit();
             return;
         };
     }
 
     // Utility function for allocating memory from RecycleFBA for part of the log message.
-    fn allocBuf(self: *Self, size: u64) ![]u8 {
+    fn allocBuf(self: *const Self, size: u64) ![]u8 {
         const buf = blk: while (true) {
             const buf = self.allocator.alloc(u8, size) catch {
                 std.time.sleep(std.time.ns_per_ms);
@@ -179,7 +182,7 @@ pub const DirectPrintEntry = struct {
     log_level: Level,
     scope: ?[]const u8,
     allocator: std.mem.Allocator,
-    log_msg: ?std.ArrayList(u8),
+    log_msg: std.ArrayList(u8),
 
     const Self = @This();
 
@@ -197,13 +200,11 @@ pub const DirectPrintEntry = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        if (self.log_msg) |log_msg| {
-            log_msg.deinit();
-        }
+        self.log_msg.deinit();
     }
 
     pub fn field(self: *Self, name: []const u8, value: anytype) *Self {
-        logfmt.fmtField(self.log_msg.?.writer(), name, value);
+        logfmt.fmtField(self.log_msg.writer(), name, value);
         return self;
     }
 
@@ -217,9 +218,9 @@ pub const DirectPrintEntry = struct {
             .maybe_fmt = null,
         };
 
-        const writer = self.log_msg.?.writer();
+        const writer = self.log_msg.writer();
         logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
-        std.debug.print("{?s}", .{self.log_msg.?.items});
+        std.debug.print("{s}", .{self.log_msg.items});
     }
 
     pub fn logf(self: *Self, comptime fmt: []const u8, args: anytype) void {
@@ -237,8 +238,8 @@ pub const DirectPrintEntry = struct {
             .maybe_fmt = fmt_msg.items,
         };
 
-        const writer = self.log_msg.?.writer();
+        const writer = self.log_msg.writer();
         logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
-        std.debug.print("{?s}", .{self.log_msg.?.items});
+        std.debug.print("{s}", .{self.log_msg.items});
     }
 };
