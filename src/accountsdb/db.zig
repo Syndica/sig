@@ -29,7 +29,6 @@ const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
-const LruCache = sig.common.lru.LruCache;
 const LruCacheCustom = sig.common.lru.LruCacheCustom;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
@@ -109,13 +108,11 @@ pub const AccountsLRU = struct {
         }
     };
 
-    // TODO: should we be using bins?
     const LRU = LruCacheCustom(.locking, Pubkey, CachedAccount, std.mem.Allocator, CachedAccount.releaseOrDestroy);
     const SlotLRU = std.AutoHashMap(Slot, *LRU);
 
     slot_lrus: SlotLRU,
     max_items: usize,
-    // TODO: should merge this struct with AccountsDb, using filemap as backing
 
     fn init(allocator: std.mem.Allocator, max_items: usize) !AccountsLRU {
         return .{
