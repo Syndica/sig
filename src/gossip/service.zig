@@ -200,7 +200,7 @@ pub const GossipService = struct {
             .max_threads = @intCast(n_threads),
             .stack_size = 2 * 1024 * 1024,
         });
-        logger.debugf("using n_threads in gossip: {}", .{n_threads});
+        logger.debug().logf("using n_threads in gossip: {}", .{n_threads});
 
         var gossip_table = try GossipTable.init(gossip_value_allocator, thread_pool);
         errdefer gossip_table.deinit();
@@ -420,18 +420,18 @@ pub const GossipService = struct {
                 packet.data[0..packet.size],
                 bincode.Params.standard,
             ) catch |e| {
-                self.logger.errf("gossip: packet_verify: failed to deserialize: {s}", .{@errorName(e)});
+                self.logger.err().logf("gossip: packet_verify: failed to deserialize: {s}", .{@errorName(e)});
                 return;
             };
 
             message.sanitize() catch |e| {
-                self.logger.errf("gossip: packet_verify: failed to sanitize: {s}", .{@errorName(e)});
+                self.logger.err().logf("gossip: packet_verify: failed to sanitize: {s}", .{@errorName(e)});
                 bincode.free(self.gossip_value_allocator, message);
                 return;
             };
 
             message.verifySignature() catch |e| {
-                self.logger.errf(
+                self.logger.err().logf(
                     "gossip: packet_verify: failed to verify signature from {}: {s}",
                     .{ packet.addr, @errorName(e) },
                 );
@@ -454,7 +454,7 @@ pub const GossipService = struct {
         defer {
             // trigger the next service in the chain to close
             self.counter.store(idx + 1, .release);
-            self.logger.debugf("verifyPackets loop closed", .{});
+            self.logger.debug().log("verifyPackets loop closed");
         }
 
         const tasks = try VerifyMessageTask.init(self.allocator, VERIFY_PACKET_PARALLEL_TASKS);
@@ -486,7 +486,7 @@ pub const GossipService = struct {
 
                 const task_ptr = &tasks[acquired_task_idx];
                 task_ptr.entry.packet = packet;
-                task_ptr.result catch |err| self.logger.errf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
+                task_ptr.result catch |err| self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
 
                 const batch = Batch.from(&task_ptr.task);
                 self.thread_pool.schedule(batch);
@@ -495,7 +495,7 @@ pub const GossipService = struct {
 
         for (tasks) |*task| {
             task.blockUntilCompletion();
-            task.result catch |err| self.logger.errf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
+            task.result catch |err| self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
         }
     }
 
@@ -532,7 +532,7 @@ pub const GossipService = struct {
         defer {
             // even if we fail, trigger the next thing
             self.counter.store(idx + 1, .release);
-            self.logger.debugf("processMessages loop closed", .{});
+            self.logger.debug().log("processMessages loop closed");
         }
 
         // we batch messages bc:
@@ -701,7 +701,7 @@ pub const GossipService = struct {
             if (push_messages.items.len > 0) {
                 var x_timer = try sig.time.Timer.start();
                 self.handleBatchPushMessages(&push_messages) catch |err| {
-                    self.logger.errf("handleBatchPushMessages failed: {}", .{err});
+                    self.logger.err().logf("handleBatchPushMessages failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_push_time.observe(@floatFromInt(elapsed));
@@ -721,7 +721,7 @@ pub const GossipService = struct {
             if (pull_requests.items.len > 0) {
                 var x_timer = try sig.time.Timer.start();
                 self.handleBatchPullRequest(pull_requests, seed + msg_count) catch |err| {
-                    self.logger.errf("handleBatchPullRequest failed: {}", .{err});
+                    self.logger.err().logf("handleBatchPullRequest failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_pull_req_time.observe(@floatFromInt(elapsed));
@@ -732,7 +732,7 @@ pub const GossipService = struct {
             if (pull_responses.items.len > 0) {
                 var x_timer = try sig.time.Timer.start();
                 self.handleBatchPullResponses(pull_responses.items) catch |err| {
-                    self.logger.errf("handleBatchPullResponses failed: {}", .{err});
+                    self.logger.err().logf("handleBatchPullResponses failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_pull_resp_time.observe(@floatFromInt(elapsed));
@@ -743,7 +743,7 @@ pub const GossipService = struct {
             if (ping_messages.items.len > 0) {
                 var x_timer = try sig.time.Timer.start();
                 self.handleBatchPingMessages(&ping_messages) catch |err| {
-                    self.logger.errf("handleBatchPingMessages failed: {}", .{err});
+                    self.logger.err().logf("handleBatchPingMessages failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
                 self.stats.handle_batch_ping_time.observe(@floatFromInt(elapsed));
@@ -790,7 +790,7 @@ pub const GossipService = struct {
             var x_timer = sig.time.Timer.start() catch unreachable;
             const now = getWallclockMs();
             const n_pubkeys_dropped = gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY) catch |err| err_blk: {
-                self.logger.warnf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
+                self.logger.warn().logf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
                 break :err_blk 0;
             };
             const elapsed = x_timer.read().asMillis();
@@ -808,7 +808,7 @@ pub const GossipService = struct {
     fn buildMessages(self: *Self, seed: u64, idx: usize) !void {
         defer {
             self.counter.store(idx + 1, .release);
-            self.logger.infof("buildMessages loop closed", .{});
+            self.logger.info().log("buildMessages loop closed");
         }
 
         var loop_timer = try sig.time.Timer.start();
@@ -836,7 +836,7 @@ pub const GossipService = struct {
                     pull_request.MAX_BLOOM_SIZE,
                     now,
                 ) catch |e| {
-                    self.logger.errf("failed to generate pull requests: {any}", .{e});
+                    self.logger.err().logf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
                 for (packets.items) |packet| {
@@ -848,7 +848,7 @@ pub const GossipService = struct {
             // new push msgs
             self.drainPushQueueToGossipTable(getWallclockMs());
             const maybe_push_packets = self.buildPushMessages(&push_cursor) catch |e| blk: {
-                self.logger.errf("failed to generate push messages: {any}", .{e});
+                self.logger.err().logf("failed to generate push messages: {any}", .{e});
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {
@@ -1411,10 +1411,10 @@ pub const GossipService = struct {
 
             const endpoint_str = try endpointToString(self.allocator, ping_message.from_endpoint);
             defer endpoint_str.deinit();
-            self.logger
+            self.logger.debug()
                 .field("from_endpoint", endpoint_str.items)
                 .field("from_pubkey", ping_message.ping.from.string().slice())
-                .debug("gossip: recv ping");
+                .log("gossip: recv ping");
 
             try self.packet_outgoing_channel.send(packet);
             self.stats.pong_messages_sent.add(1);
@@ -1707,9 +1707,10 @@ pub const GossipService = struct {
             const msg = GossipMessage{ .PruneMessage = .{ self.my_pubkey, prune_data } };
 
             self.logger
+                .debug()
                 .field("n_pruned_origins", prune_size)
                 .field("to_addr", from_pubkey.string().slice())
-                .debug("gossip: send prune_message");
+                .log("gossip: send prune_message");
 
             var packet = Packet.default();
             const written_slice = bincode.writeToSlice(&packet.data, msg, bincode.Params{}) catch unreachable;
@@ -1785,7 +1786,7 @@ pub const GossipService = struct {
             if (entrypoint.info) |info| {
                 if (info.shred_version != 0) {
                     var addr_str = entrypoint.addr.toString();
-                    self.logger.infof(
+                    self.logger.info().logf(
                         "shred version: {} - from entrypoint contact info: {s}",
                         .{ info.shred_version, addr_str[0][0..addr_str[1]] },
                     );
@@ -2092,7 +2093,7 @@ pub const GossipStats = struct {
             .prune_messages_sent = self.prune_messages_sent.get(),
         };
 
-        logging_fields.logger.infof(
+        logging_fields.logger.info().logf(
             "gossip: recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
                 current_stats.gossip_packets_received_total - logging_fields.last_logged_snapshot.gossip_packets_received_total,
@@ -2104,7 +2105,7 @@ pub const GossipStats = struct {
                 current_stats.prune_messages_recv - logging_fields.last_logged_snapshot.prune_messages_recv,
             },
         );
-        logging_fields.logger.infof(
+        logging_fields.logger.info().logf(
             "gossip: sent: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
                 current_stats.ping_messages_sent - logging_fields.last_logged_snapshot.ping_messages_sent,
@@ -2201,6 +2202,8 @@ pub fn chunkValuesIntoPacketIndexes(
     return packet_indexs;
 }
 
+const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
+
 test "handle pong messages" {
     const allocator = std.testing.allocator;
 
@@ -2277,9 +2280,12 @@ test "build messages startup and shutdown" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var test_logger = TestingLogger.init(
+        std.testing.allocator,
+        Logger.TEST_DEFAULT_LEVEL,
+    );
+
+    const logger = test_logger.logger();
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2336,9 +2342,9 @@ test "handling prune messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+
+    const logger = test_logger.logger();
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2413,9 +2419,9 @@ test "handling pull responses" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+
+    const logger = test_logger.logger();
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2560,10 +2566,9 @@ test "handle pull request" {
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
+    const logger = test_logger.logger();
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
@@ -2669,9 +2674,9 @@ test "test build prune messages and handle push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+
+    const logger = test_logger.logger();
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2748,9 +2753,9 @@ test "build pull requests" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+
+    const logger = test_logger.logger();
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2806,9 +2811,9 @@ test "test build push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+
+    const logger = test_logger.logger();
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2885,9 +2890,9 @@ test "test large push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+
+    const logger = test_logger.logger();
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2945,8 +2950,6 @@ test "test packet verification" {
     const contact_info = try localhostTestContactInfo(id);
 
     // noop for this case because this tests error failed verification
-    const logger: Logger = .noop;
-
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
@@ -2955,7 +2958,7 @@ test "test packet verification" {
         keypair,
         null,
         &counter,
-        logger,
+        .noop,
     );
     defer gossip_service.deinit();
 
@@ -3063,9 +3066,9 @@ test "process contact info push packet" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var test_logger = TestingLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
+
+    const logger = test_logger.logger();
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -3158,9 +3161,9 @@ test "init, exit, and deinit" {
 
     var counter = Atomic(usize).init(0);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
+    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+
+    const logger = test_logger.logger();
 
     var gossip_service = try GossipService.init(
         std.testing.allocator,
@@ -3239,11 +3242,11 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
         try contact_info.setSocket(.gossip, address);
 
-        // var logger = Logger.init(allocator, .debug);
+        // const logger = Logger.init(allocator, .debug);
         // defer logger.deinit();
         // logger.spawn();
 
-        const logger: Logger = .noop;
+        const logger = .noop;
 
         // process incoming packets/messsages
         var counter = Atomic(usize).init(0);
@@ -3354,11 +3357,11 @@ pub const BenchmarkGossipServicePullRequests = struct {
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
         try contact_info.setSocket(.gossip, address);
 
-        // var logger = Logger.init(allocator, .debug);
+        // const logger = Logger.init(allocator, .debug);
         // defer logger.deinit();
         // logger.spawn();
 
-        const logger: Logger = .noop;
+        const logger = .noop;
 
         // process incoming packets/messsages
         var counter = Atomic(usize).init(0);

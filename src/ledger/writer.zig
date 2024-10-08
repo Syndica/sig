@@ -220,7 +220,7 @@ pub const BlockstoreWriter = struct {
         const find_missing_roots_us = find_missing_roots_timer.read().asMicros();
         var fix_roots_timer = try Timer.start();
         if (roots_to_fix.items.len != 0) {
-            self.logger.infof("{} slots to be rooted", .{roots_to_fix.items.len});
+            self.logger.info().logf("{} slots to be rooted", .{roots_to_fix.items.len});
             const chunk_size = 100;
             const num_chunks = (roots_to_fix.items.len - 1) / chunk_size + 1;
             for (0..num_chunks) |chunk_index| {
@@ -234,7 +234,7 @@ pub const BlockstoreWriter = struct {
                 try self.setRoots(chunk);
             }
         } else {
-            self.logger.debugf("No missing roots found in range {} to {}", .{ start_root, end_slot });
+            self.logger.debug().logf("No missing roots found in range {} to {}", .{ start_root, end_slot });
         }
         const fix_roots_us = fix_roots_timer.read().asMicros();
         const num_roots_fixed = roots_to_fix.items.len;
@@ -266,7 +266,7 @@ pub const BlockstoreWriter = struct {
         if (root_slot_meta.isConnected()) {
             return;
         }
-        self.logger.infof("Marking slot {} and any full children slots as connected", .{root});
+        self.logger.info().logf("Marking slot {} and any full children slots as connected", .{root});
         var write_batch = try self.db.initWriteBatch();
         defer write_batch.deinit();
 
@@ -286,7 +286,7 @@ pub const BlockstoreWriter = struct {
         while (i < next_slots.items.len) : (i += 1) {
             const slot = next_slots.items[i];
             var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
-                self.logger.errf("Slot {} is a child but has no SlotMeta in blockstore", .{slot});
+                self.logger.err().logf("Slot {} is a child but has no SlotMeta in blockstore", .{slot});
                 return error.CorruptedBlockstore;
             };
             defer slot_meta.deinit();

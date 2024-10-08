@@ -40,7 +40,7 @@ pub fn run(
 ) !void {
     var last_purge_slot: Slot = 0;
 
-    logger.info("Starting blockstore cleanup service");
+    logger.info().log("Starting blockstore cleanup service");
     while (!exit.load(.acquire)) {
         last_purge_slot = try cleanBlockstore(
             logger,
@@ -93,7 +93,7 @@ pub fn cleanBlockstore(
     // NOTE: this will clean everything past the lowest slot in the blockstore
     const root: Slot = try blockstore_reader.lowestSlot();
     const result = try findSlotsToClean(blockstore_reader, root, max_ledger_shreds);
-    logger.infof("findSlotsToClean result: {any}", .{result});
+    logger.info().logf("findSlotsToClean result: {any}", .{result});
 
     if (result.should_clean) {
         const slot, var lock = lowest_cleanup_slot.writeWithLock();
@@ -101,9 +101,9 @@ pub fn cleanBlockstore(
         slot.* = result.highest_slot_to_purge;
         const did_purge = try purgeSlots(db, 0, result.highest_slot_to_purge);
         if (did_purge) {
-            logger.info("Purged slots...");
+            logger.info().log("Purged slots...");
         } else {
-            logger.info("No slots purged");
+            logger.info().log("No slots purged");
         }
         // // TODO: Is this needed, it updates the OldestSlot data structure in
         // // agave which is owned and used by the blockstore database backend.

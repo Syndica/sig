@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const net = @import("net.zig");
 const ShredVersion = @import("../core/shred.zig").ShredVersion;
 const SocketAddr = @import("net.zig").SocketAddr;
-const logger = @import("../trace/log.zig").default_logger;
 const Atomic = std.atomic.Value;
 const assert = std.debug.assert;
 const testing = std.testing;
@@ -99,13 +98,13 @@ pub fn handleEchoRequest(req: *httpz.Request, res: *httpz.Response) !void {
     defer ip_echo_server_message.deinit();
 
     std.debug.print("ip echo server message received: {}\n", .{ip_echo_server_message});
-    // logger.debugf("ip echo server message: {any}", .{ip_echo_server_message.value});
+    // logger.debug().logf("ip echo server message: {any}", .{ip_echo_server_message.value});
 
     // convert a u32 to Ipv4
     const socket_addr = SocketAddr.fromIpV4Address(res.conn.address);
 
     std.json.stringify(IpEchoServerResponse.init(net.IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, res.writer()) catch |err| {
-        // logger.errf("could not json stringify IpEchoServerResponse: {any}", .{err});
+        // logger.err().logf("could not json stringify IpEchoServerResponse: {any}", .{err});
         std.debug.print("could not json stringify ip echo server response message: {}\n", .{err});
     };
 }

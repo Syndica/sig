@@ -103,11 +103,11 @@ pub const RepairService = struct {
             if (self.sendNecessaryRepairs()) |_| {
                 if (waiting_for_peers) {
                     waiting_for_peers = false;
-                    self.logger.infof("Acquired some repair peers.", .{});
+                    self.logger.info().logf("Acquired some repair peers.", .{});
                 }
             } else |e| switch (e) {
                 error.NoRepairPeers => if (!waiting_for_peers) {
-                    self.logger.infof("Waiting for repair peers...", .{});
+                    self.logger.info().logf("Waiting for repair peers...", .{});
                     waiting_for_peers = true;
                 },
                 else => return e,
@@ -141,7 +141,7 @@ pub const RepairService = struct {
 
         // TODO less often
         if (addressed_requests.items.len > 0) {
-            self.logger.debugf(
+            self.logger.debug().logf(
                 "sent {} repair requests",
                 .{addressed_requests.items.len},
             );
@@ -424,6 +424,7 @@ test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(4328095);
     var random = rand.random();
+    const TestLogger = sig.trace.DirectPrintLogger;
 
     // my details
     const keypair = try KeyPair.create(null);
@@ -431,8 +432,9 @@ test "RepairService sends repair request to gossip peer" {
     const wallclock = 100;
     var gossip = try GossipTable.init(allocator, undefined);
     defer gossip.deinit();
-    var logger = Logger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
+    var test_logger = TestLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
+
+    const logger = test_logger.logger();
 
     // connectivity
     const repair_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
@@ -509,8 +511,6 @@ test "RepairPeerProvider selects correct peers" {
     const my_shred_version = Atomic(u16).init(random.int(u16));
     var gossip = try GossipTable.init(allocator, undefined);
     defer gossip.deinit();
-    var logger = Logger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
 
     // peers
     const peer_generator = TestPeerGenerator{

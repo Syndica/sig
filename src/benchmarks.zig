@@ -13,7 +13,6 @@ const meta = std.meta;
 /// zig build benchmark -- gossip
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
-    sig.trace.log.default_logger.* = sig.trace.Logger.init(allocator, .debug);
 
     if (builtin.mode == .Debug) std.debug.print("warning: running benchmark in Debug mode\n", .{});
 

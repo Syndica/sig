@@ -9,6 +9,8 @@ pub const Level = enum {
     info,
     /// Debug: messages only useful for debugging.
     debug,
+    /// Trace: fine-grained messages that track execution flow.
+    trace,
 
     /// Returns a string literal of the given level in full text form.
     pub fn asText(self: Level) []const u8 {
@@ -17,6 +19,7 @@ pub const Level = enum {
             .warn => "warning",
             .info => "info",
             .debug => "debug",
+            .trace => "trace",
         };
     }
 };

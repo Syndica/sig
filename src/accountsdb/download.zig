@@ -164,7 +164,9 @@ pub fn downloadSnapshotsFromGossip(
     output_dir: std.fs.Dir,
     min_mb_per_sec: usize,
 ) !void {
-    logger.infof("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
+    logger
+        .info()
+        .logf("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
 
     // TODO: maybe make this bigger? or dynamic?
     var contact_info_buf: [1_000]ThreadSafeContactInfo = undefined;
@@ -208,7 +210,9 @@ pub fn downloadSnapshotsFromGossip(
                     i += r.len;
                 }
             }
-            logger.infof("searched for snapshot peers: {s}", .{write_buf[0..i]});
+            logger
+                .info()
+                .logf("searched for snapshot peers: {s}", .{write_buf[0..i]});
         }
 
         for (available_snapshot_peers.items) |peer| {
@@ -230,7 +234,10 @@ pub fn downloadSnapshotsFromGossip(
             });
             defer allocator.free(snapshot_url);
 
-            logger.infof("downloading full_snapshot from: {s}", .{snapshot_url});
+            logger
+                .info()
+                .logf("downloading full_snapshot from: {s}", .{snapshot_url});
+
             downloadFile(
                 allocator,
                 logger,
@@ -244,11 +251,11 @@ pub fn downloadSnapshotsFromGossip(
                     // downloadFile function
                     error.Unexpected => {},
                     error.TooSlow => {
-                        logger.infof("peer is too slow, skipping", .{});
+                        logger.info().logf("peer is too slow, skipping", .{});
                         try slow_peer_pubkeys.append(peer.contact_info.pubkey);
                     },
                     else => {
-                        logger.infof("failed to download full_snapshot: {s}", .{@errorName(err)});
+                        logger.info().logf("failed to download full_snapshot: {s}", .{@errorName(err)});
                     },
                 }
                 continue;
@@ -271,7 +278,7 @@ pub fn downloadSnapshotsFromGossip(
                 });
                 defer allocator.free(inc_snapshot_url);
 
-                logger.infof("downloading inc_snapshot from: {s}", .{inc_snapshot_url});
+                logger.info().logf("downloading inc_snapshot from: {s}", .{inc_snapshot_url});
                 _ = downloadFile(
                     allocator,
                     logger,
@@ -282,13 +289,13 @@ pub fn downloadSnapshotsFromGossip(
                     null,
                 ) catch |err| {
                     // failure here is ok (for now?)
-                    logger.warnf("failed to download inc_snapshot: {s}", .{@errorName(err)});
+                    logger.warn().logf("failed to download inc_snapshot: {s}", .{@errorName(err)});
                     return;
                 };
             }
 
             // success
-            logger.infof("snapshot downloaded finished", .{});
+            logger.info().logf("snapshot downloaded finished", .{});
             return;
         }
     }
@@ -359,7 +366,7 @@ const DownloadProgress = struct {
             // each MB
             const mb_read = self.bytes_read / 1024 / 1024;
             if (mb_read == 0) {
-                self.logger.infof("download speed is too slow (<1MB/s) -- disconnecting", .{});
+                self.logger.info().logf("download speed is too slow (<1MB/s) -- disconnecting", .{});
                 return 0;
             }
 
@@ -379,14 +386,14 @@ const DownloadProgress = struct {
                 self.has_checked_speed = true;
                 if (mb_per_second < self.min_mb_per_second.?) {
                     // not fast enough => abort
-                    self.logger.infof("[download progress]: speed is too slow ({d} MB/s) -- disconnecting", .{mb_per_second});
+                    self.logger.info().logf("[download progress]: speed is too slow ({d} MB/s) -- disconnecting", .{mb_per_second});
                     return 0;
                 } else {
-                    self.logger.infof("[download progress]: speed is ok ({d} MB/s) -- maintaining", .{mb_per_second});
+                    self.logger.info().logf("[download progress]: speed is ok ({d} MB/s) -- maintaining", .{mb_per_second});
                 }
             }
 
-            self.logger.infof("[download progress]: {d}% done ({d} MB/s - {d}/{d}) (time left: {d})", .{
+            self.logger.info().logf("[download progress]: {d}% done ({d} MB/s - {d}/{d}) (time left: {d})", .{
                 self.file_memory_index * 100 / self.download_size,
                 mb_per_second,
                 self.file_memory_index,
@@ -437,7 +444,7 @@ pub fn downloadFile(
     if (try head_resp.getHeader("content-length")) |content_length| {
         download_size = try std.fmt.parseInt(usize, content_length.get(), 10);
     } else {
-        logger.debugf("header request didnt have content-length...", .{});
+        logger.debug().logf("header request didnt have content-length...", .{});
         return error.NoContentLength;
     }
 

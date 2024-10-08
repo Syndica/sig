@@ -47,7 +47,7 @@ pub fn runShredProcessor(
                 &is_repaired,
                 &error_context,
             ) catch |e| {
-                logger.errf(
+                logger.err().logf(
                     "failed to process verified shred {?}.{?}: {}",
                     .{ error_context.slot, error_context.index, e },
                 );

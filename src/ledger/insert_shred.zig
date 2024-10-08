@@ -72,6 +72,10 @@ pub const ShredInserter = struct {
         };
     }
 
+    pub fn deinit(self: *Self) void {
+        self.logger.deinit();
+    }
+
     pub const InsertShredsResult = struct {
         completed_data_set_infos: ArrayList(CompletedDataSetInfo),
         duplicate_shreds: ArrayList(PossibleDuplicateShred),
@@ -518,7 +522,7 @@ pub const ShredInserter = struct {
                     .shred2 = shred.fields.payload,
                 }) catch |e| {
                     // TODO: only log a database error?
-                    self.logger.errf(
+                    self.logger.err().logf(
                         "Unable to store conflicting erasure meta duplicate proof for: {} {any} {}",
                         .{ slot, erasure_set_id, e },
                     );
@@ -531,7 +535,7 @@ pub const ShredInserter = struct {
                     },
                 });
             } else {
-                self.logger.errf(&newlinesToSpaces(
+                self.logger.err().logf(&newlinesToSpaces(
                     \\Unable to find the conflicting code shred that set {any}.
                     \\This should only happen in extreme cases where blockstore cleanup has
                     \\caught up to the root. Skipping the erasure meta duplicate shred check
@@ -539,8 +543,8 @@ pub const ShredInserter = struct {
             }
         }
         // TODO (agave): This is a potential slashing condition
-        self.logger.warn("Received multiple erasure configs for the same erasure set!!!");
-        self.logger.warnf(&newlinesToSpaces(
+        self.logger.warn().log("Received multiple erasure configs for the same erasure set!!!");
+        self.logger.warn().logf(&newlinesToSpaces(
             \\Slot: {}, shred index: {}, erasure_set: {any}, is_duplicate: {},
             \\stored config: {any}, new shred: {any}
         ), .{
@@ -613,7 +617,7 @@ pub const ShredInserter = struct {
                 // just purge all shreds > the new last index slot, but because replay may have already
                 // replayed entries past the newly detected "last" shred, then mark the slot as dead
                 // and wait for replay to dump and repair the correct version.
-                self.logger.warnf(
+                self.logger.warn().logf(
                     "Received *last* shred index {} less than previous shred index {}, and slot {} is not full, marking slot dead",
                     .{ shred_index, slot_meta.received, slot },
                 );
@@ -726,7 +730,7 @@ pub const ShredInserter = struct {
                 // FIXME: leak - decide how to free shred
                 const maybe_shred = try shred_store.get(shred_id);
                 const ending_shred = if (maybe_shred) |s| s else {
-                    self.logger.errf(&newlinesToSpaces(
+                    self.logger.err().logf(&newlinesToSpaces(
                         \\Last received data shred {any} indicated by slot meta \
                         \\{any} is missing from blockstore. This should only happen in \
                         \\extreme cases where blockstore cleanup has caught up to the root. \
@@ -740,7 +744,7 @@ pub const ShredInserter = struct {
                 };
                 self.db.put(schema.duplicate_slots, slot, dupe) catch |e| {
                     // TODO: only log a database error?
-                    self.logger.errf("failed to store duplicate slot: {}", .{e});
+                    self.logger.err().logf("failed to store duplicate slot: {}", .{e});
                 };
                 // FIXME data ownership
                 try duplicate_shreds.append(.{ .LastIndexConflict = .{
@@ -750,7 +754,7 @@ pub const ShredInserter = struct {
             }
 
             const leader_pubkey = slotLeader(leader_schedule, slot);
-            self.logger.errf(
+            self.logger.err().logf(
                 "Leader {any}, slot {}: received shred_index {} < slot.received {}, shred_source: {any}",
                 .{ leader_pubkey, slot, shred_index_u32, slot_meta.received, shred_source },
             );
@@ -908,7 +912,7 @@ pub const ShredInserter = struct {
             self.submitRecoveryMetrics(index.slot, erasure_meta, true, "complete", shreds.items.len);
             return shreds;
         } else |e| {
-            self.logger.errf("shred recovery error: {}", .{e});
+            self.logger.err().logf("shred recovery error: {}", .{e});
             self.submitRecoveryMetrics(index.slot, erasure_meta, true, "incomplete", 0);
             return std.ArrayList(Shred).init(self.allocator);
         }
@@ -940,7 +944,7 @@ pub const ShredInserter = struct {
         recovered: usize,
     ) void {
         const start, const end = erasure_meta.dataShredsIndices();
-        self.logger.debugf(
+        self.logger.debug().logf(
             \\datapoint: blockstore-erasure
             \\    slot: {[slot]}
             \\    start_index: {[start_index]}
@@ -1114,6 +1118,8 @@ pub const BlockstoreInsertionMetrics = struct {
 const test_shreds = @import("test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
 const TestState = ledger.tests.TestState("insert_shred");
+const DirectPrintLogger = @import("../trace/log.zig").DirectPrintLogger;
+const Logger = @import("../trace/log.zig").Logger;
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
@@ -1127,11 +1133,13 @@ const ShredInserterTestState = struct {
     inserter: ShredInserter,
 
     pub fn init(allocator_: std.mem.Allocator, comptime test_name: []const u8) !ShredInserterTestState {
-        return initWithLogger(allocator_, test_name, sig.trace.TestLogger.default.logger());
+        var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+        const logger = test_logger.logger();
+        return initWithLogger(allocator_, test_name, logger);
     }
 
     fn initWithLogger(allocator_: std.mem.Allocator, comptime test_name: []const u8, logger: sig.trace.Logger) !ShredInserterTestState {
-        const state = try TestState.init(allocator_, test_name);
+        const state = try TestState.init(allocator_, test_name, logger);
         const inserter = try ShredInserter.init(
             state.allocator,
             logger,
@@ -1183,6 +1191,7 @@ const ShredInserterTestState = struct {
 
     pub fn deinit(self: *@This()) void {
         self.state.deinit();
+        self.inserter.deinit();
     }
 };
 

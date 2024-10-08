@@ -1,17 +1,9 @@
 const std = @import("std");
 const sig = @import("sig.zig");
-const logger = @import("./trace/log.zig");
 
 // TODO: there is *no* guarantee that this is the first test to be ran.
 // we will need to rework this to not use a global logger.
 test {
-    logger.default_logger.* = logger.Logger.init(
-        // NOTE: we're going to ignore the leaks
-        // here since they're never going to be cleaned up.
-        std.heap.c_allocator,
-        .debug,
-    );
-
     std.testing.log_level = std.log.Level.err;
     refAllDeclsRecursive(sig, 2);
 }
