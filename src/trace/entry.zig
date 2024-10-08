@@ -100,6 +100,8 @@ pub const ChannelEntry = struct {
     }
 
     pub fn field(self: *Self, name: []const u8, value: anytype) *Self {
+        const min_capacity = self.fields.items.len + logfmt.countField(name, value);
+        self.fields.ensureTotalCapacity(min_capacity) catch return self;
         logfmt.fmtField(self.fields.writer(), name, value);
         return self;
     }

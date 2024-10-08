@@ -11,45 +11,38 @@ pub const LogMsg = struct {
     maybe_fmt: ?[]const u8 = null,
 };
 
-pub fn fmtMsg(
-    writer: anytype,
-    comptime maybe_fmt: ?[]const u8,
-    args: anytype,
-) void {
+pub fn fmtMsg(writer: anytype, comptime maybe_fmt: ?[]const u8, args: anytype) void {
     if (maybe_fmt) |fmt| {
         std.fmt.format(writer, fmt, args) catch @panic("could not format");
     }
 }
 
-pub fn fmtField(
-    writer: anytype,
-    key: []const u8,
-    value: anytype,
-) void {
-    switch (@typeInfo(@TypeOf(value))) {
-        .Pointer, .Array => {
-            // Assume it's a string type
-            std.fmt.format(writer, "{s}={s} ", .{ key, value }) catch return;
-        },
-        .Int, .ComptimeInt, .Float, .ComptimeFloat => {
-            // Handle numeric types
-            std.fmt.format(writer, "{s}={} ", .{ key, value }) catch return;
-        },
-        .Null => {
-            // Handle null values
-            std.fmt.format(writer, "{s}=null ", .{key}) catch return;
-        },
-        else => {
-            // Fallback for unsupported types
-            std.fmt.format(writer, "{s}={any} ", .{ key, value }) catch return;
-        },
-    }
+pub fn fmtField(writer: anytype, key: []const u8, value: anytype) void {
+    std.fmt.format(writer, fieldFmtString(@TypeOf(value)), .{ key, value }) catch return;
 }
 
-pub fn writeLog(
-    writer: anytype,
-    message: LogMsg,
-) !void {
+/// Return the number of bytes needed to write the field.
+pub fn countField(key: []const u8, value: anytype) u64 {
+    return std.fmt.count(fieldFmtString(@TypeOf(value)), .{ key, value });
+}
+
+/// Return the format string for the type when used as a value in a field.
+fn fieldFmtString(comptime Value: type) []const u8 {
+    return switch (@typeInfo(Value)) {
+        // Assume arrays of u8 are strings.
+        .Pointer => |ptr| if (ptr.size == .One)
+            fieldFmtString(ptr.child)
+        else if (ptr.size == .One and ptr.child == u8)
+            "{s}={s} "
+        else
+            "{s}={any} ",
+        .Array => |arr| if (arr.child == u8) "{s}={s} " else "{s}={any} ",
+        .Int, .ComptimeInt, .Float, .ComptimeFloat => "{s}={} ",
+        else => "{s}={any} ",
+    };
+}
+
+pub fn writeLog(writer: anytype, message: LogMsg) !void {
     if (message.maybe_scope) |scope| {
         try std.fmt.format(writer, "[{s}] ", .{scope});
     }
