@@ -728,14 +728,14 @@ fn validator() !void {
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
-    var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng = std.rand.DefaultPrng.init(91);
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
         ShredCollectorDependencies{
             .allocator = allocator,
             .logger = app_base.logger,
-            .random = rng.random(),
             .registry = app_base.metrics_registry,
+            .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
             .exit = &app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
@@ -825,14 +825,14 @@ fn shredCollector() !void {
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
-    var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng = std.rand.DefaultPrng.init(91);
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
         .{
             .allocator = allocator,
             .logger = app_base.logger,
-            .random = rng.random(),
             .registry = app_base.metrics_registry,
+            .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
             .exit = &app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,

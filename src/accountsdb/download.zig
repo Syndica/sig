@@ -488,17 +488,17 @@ test "accounts_db.download: test remove untrusted peers" {
     var table = try GossipTable.init(allocator, &thread_pool);
     defer table.deinit();
 
-    var random = std.rand.DefaultPrng.init(0);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(0);
+    const random = prng.random();
 
     const my_shred_version: usize = 19;
-    const my_pubkey = Pubkey.random(rng);
+    const my_pubkey = Pubkey.random(random);
 
     const contact_infos: []ThreadSafeContactInfo = try allocator.alloc(ThreadSafeContactInfo, 10);
     defer allocator.free(contact_infos);
 
     for (contact_infos) |*ci| {
-        var lci = LegacyContactInfo.default(Pubkey.random(rng));
+        var lci = LegacyContactInfo.default(Pubkey.random(random));
         lci.rpc.setPort(19); // no long unspecified = valid
         ci.* = ThreadSafeContactInfo.fromLegacyContactInfo(lci);
         ci.shred_version = 19; // matching shred version
@@ -512,7 +512,7 @@ test "accounts_db.download: test remove untrusted peers" {
 
     for (contact_infos) |*ci| {
         var kp = try KeyPair.create(null);
-        var data = try SignedGossipData.randomWithIndex(rng, &kp, 9);
+        var data = try SignedGossipData.randomWithIndex(random, &kp, 9);
         data.data.SnapshotHashes.from = ci.pubkey;
         try trusted_validators.append(ci.pubkey);
         _ = try table.insert(data, 0);
@@ -564,17 +564,17 @@ test "accounts_db.download: test finding peers" {
     var table = try GossipTable.init(allocator, &thread_pool);
     defer table.deinit();
 
-    var random = std.rand.DefaultPrng.init(0);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(0);
+    const random = prng.random();
 
     const my_shred_version: usize = 19;
-    const my_pubkey = Pubkey.random(rng);
+    const my_pubkey = Pubkey.random(random);
 
     const contact_infos: []ThreadSafeContactInfo = try allocator.alloc(ThreadSafeContactInfo, 10);
     defer allocator.free(contact_infos);
 
     for (contact_infos) |*ci| {
-        var lci = LegacyContactInfo.default(Pubkey.random(rng));
+        var lci = LegacyContactInfo.default(Pubkey.random(random));
         lci.rpc.setPort(19); // no long unspecified = valid
         ci.* = ThreadSafeContactInfo.fromLegacyContactInfo(lci);
         ci.shred_version = 19; // matching shred version
@@ -604,7 +604,7 @@ test "accounts_db.download: test finding peers" {
 
     for (contact_infos) |*ci| {
         var kp = try KeyPair.create(null);
-        var data = try SignedGossipData.randomWithIndex(rng, &kp, 9);
+        var data = try SignedGossipData.randomWithIndex(random, &kp, 9);
         data.data.SnapshotHashes.from = ci.pubkey;
         _ = try table.insert(data, 0);
     }

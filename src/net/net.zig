@@ -121,19 +121,19 @@ pub const SocketAddr = union(enum(u8)) {
         } };
     }
 
-    pub fn random(rng: std.rand.Random) Self {
-        const pport = rng.int(u16);
+    pub fn random(rand: std.rand.Random) Self {
+        const pport = rand.int(u16);
 
-        const version = rng.int(u8);
+        const version = rand.int(u8);
         if (version % 2 == 0) {
             var octets: [4]u8 = undefined;
-            rng.bytes(&octets);
+            rand.bytes(&octets);
             return Self{
                 .V4 = .{ .ip = Ipv4Addr.init(octets[0], octets[1], octets[2], octets[3]), .port = pport },
             };
         } else {
             var octets: [16]u8 = undefined;
-            rng.bytes(&octets);
+            rand.bytes(&octets);
             return Self{
                 .V6 = .{ .ip = Ipv6Addr.init(octets), .port = pport, .flowinfo = 0, .scope_id = 0 },
             };
@@ -540,8 +540,8 @@ test "valid ipv4 socket parsing" {
 }
 
 test "SocketAddr.random" {
-    var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-    const addr = SocketAddr.random(rng.random());
+    var prng = std.rand.DefaultPrng.init(100);
+    const addr = SocketAddr.random(prng.random());
     _ = addr;
 }
 

@@ -108,10 +108,10 @@ test "GossipTableShards" {
     var shards = try GossipTableShards.init(std.testing.allocator);
     defer shards.deinit();
 
-    var default_prng = std.rand.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
-    const rand = default_prng.random();
+    var prng = std.rand.DefaultPrng.init(91);
+    const random = prng.random();
 
-    const v = Hash.random(rand);
+    const v = Hash.random(random);
     try shards.insert(10, &v);
     shards.remove(10, &v);
 
@@ -120,9 +120,9 @@ test "GossipTableShards" {
 }
 
 // test helper fcns
-fn newTestGossipVersionedData(rng: std.rand.Random, gossip_table: *GossipTable) !GossipVersionedData {
+fn newTestGossipVersionedData(rand: std.rand.Random, gossip_table: *GossipTable) !GossipVersionedData {
     const keypair = try KeyPair.create(null);
-    var value = try SignedGossipData.random(rng, &keypair);
+    var value = try SignedGossipData.random(rand, &keypair);
     _ = try gossip_table.insert(value, 0);
     const label = value.label();
     const x = gossip_table.get(label).?;
@@ -161,19 +161,18 @@ test "gossip.gossip_shards: test shard find" {
     var values = try std.ArrayList(GossipVersionedData).initCapacity(std.testing.allocator, 1000);
     defer values.deinit();
 
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
+    var prng = std.rand.DefaultPrng.init(91);
+    const random = prng.random();
 
     while (values.items.len < 50) {
-        const value = try newTestGossipVersionedData(rng, &gossip_table);
+        const value = try newTestGossipVersionedData(random, &gossip_table);
         try values.append(value);
     }
 
     var gossip_shards = gossip_table.shards;
     // test find with different mask bit sizes  (< > == shard bits)
     for (0..10) |_| {
-        const mask = rng.int(u64);
+        const mask = random.int(u64);
         for (0..12) |mask_bits| {
             var set = try filterGossipVersionedDatas(std.testing.allocator, values.items, mask, @intCast(mask_bits));
             defer set.deinit();

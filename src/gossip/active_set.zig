@@ -137,12 +137,12 @@ test "init/denit" {
     defer table.deinit();
 
     // insert some contacts
-    var rng = std.rand.DefaultPrng.init(100);
+    var prng = std.rand.DefaultPrng.init(100);
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
     for (0..GOSSIP_PUSH_FANOUT) |_| {
-        const data = LegacyContactInfo.random(rng.random());
+        const data = LegacyContactInfo.random(prng.random());
         try gossip_peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(data));
 
         var keypair = try KeyPair.create(null);
@@ -154,11 +154,11 @@ test "init/denit" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    try active_set.rotate(rng.random(), gossip_peers.items);
+    try active_set.rotate(prng.random(), gossip_peers.items);
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
-    const origin = Pubkey.random(rng.random());
+    const origin = Pubkey.random(prng.random());
 
     var fanout = try active_set.getFanoutPeers(alloc, origin, &table);
     defer fanout.deinit();
@@ -177,12 +177,12 @@ test "init/denit" {
 test "gracefully rotates with duplicate contact ids" {
     const alloc = std.testing.allocator;
 
-    var default_rng = std.rand.DefaultPrng.init(100);
+    var prng = std.rand.DefaultPrng.init(100);
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
-    var data = try LegacyContactInfo.random(default_rng.random()).toContactInfo(alloc);
-    var dupe = try LegacyContactInfo.random(default_rng.random()).toContactInfo(alloc);
+    var data = try LegacyContactInfo.random(prng.random()).toContactInfo(alloc);
+    var dupe = try LegacyContactInfo.random(prng.random()).toContactInfo(alloc);
     defer data.deinit();
     defer dupe.deinit();
     dupe.pubkey = data.pubkey;
@@ -191,6 +191,5 @@ test "gracefully rotates with duplicate contact ids" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    var xoshiro_rng = std.rand.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
-    try active_set.rotate(xoshiro_rng.random(), gossip_peers.items);
+    try active_set.rotate(prng.random(), gossip_peers.items);
 }

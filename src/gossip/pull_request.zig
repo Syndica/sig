@@ -267,12 +267,11 @@ test "building pull filters" {
     // insert a some value
     const kp = try KeyPair.create([_]u8{1} ** 32);
 
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
+    var prng = std.rand.DefaultPrng.init(0);
+    const random = prng.random();
 
     for (0..64) |_| {
-        const id = Pubkey.random(rng);
+        const id = Pubkey.random(random);
         var legacy_contact_info = LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
         const gossip_value = try SignedGossipData.initSigned(.{
@@ -291,7 +290,7 @@ test "building pull filters" {
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
     var filters = try buildGossipPullFilters(
         std.testing.allocator,
-        rng,
+        random,
         &gossip_table_rw,
         &failed_pull_hashes,
         max_bytes,
@@ -314,12 +313,12 @@ test "building pull filters" {
 }
 
 test "filter set deinits correct" {
-    var rng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
-    const rand = rng.random();
+    var prng = std.Random.Xoshiro256.init(123);
+    const random = prng.random();
 
-    var filter_set = try GossipPullFilterSet.init(std.testing.allocator, rand, 10000, 200);
+    var filter_set = try GossipPullFilterSet.init(std.testing.allocator, random, 10000, 200);
 
-    const hash = Hash.random(rand);
+    const hash = Hash.random(random);
     filter_set.add(&hash);
 
     const index = GossipPullFilterSet.hashIndex(filter_set.mask_bits, &hash);
@@ -328,7 +327,7 @@ test "filter set deinits correct" {
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, rand, 10);
+    var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, random, 10);
     defer deinitGossipPullFilters(&f);
 
     try std.testing.expect(f.capacity == filter_set.len());

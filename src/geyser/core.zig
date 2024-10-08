@@ -497,8 +497,8 @@ test "streaming accounts" {
     const allocator = std.testing.allocator;
     const batch_len = 2;
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
     // generate some data
     const accounts = try allocator.alloc(Account, batch_len);
@@ -510,8 +510,8 @@ test "streaming accounts" {
     defer allocator.free(pubkeys);
 
     for (0..batch_len) |i| {
-        accounts[i] = try Account.random(allocator, rng, 10);
-        pubkeys[i] = Pubkey.random(rng);
+        accounts[i] = try Account.random(allocator, random, 10);
+        pubkeys[i] = Pubkey.random(random);
     }
 
     const exit = try allocator.create(std.atomic.Value(bool));
@@ -569,8 +569,8 @@ test "streaming accounts" {
     const pubkeys2 = try allocator.alloc(Pubkey, batch_len);
     defer allocator.free(pubkeys2);
     for (0..batch_len) |i| {
-        accounts2[i] = try Account.random(allocator, rng, 10);
-        pubkeys2[i] = Pubkey.random(rng);
+        accounts2[i] = try Account.random(allocator, random, 10);
+        pubkeys2[i] = Pubkey.random(random);
     }
 
     // #2
@@ -598,8 +598,8 @@ test "buf resizing" {
     const allocator = std.testing.allocator;
     const batch_len = 2;
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
     // generate some data
     const accounts = try allocator.alloc(Account, batch_len);
@@ -611,8 +611,8 @@ test "buf resizing" {
     defer allocator.free(pubkeys);
 
     for (0..batch_len) |i| {
-        accounts[i] = try Account.random(allocator, rng, 10);
-        pubkeys[i] = Pubkey.random(rng);
+        accounts[i] = try Account.random(allocator, random, 10);
+        pubkeys[i] = Pubkey.random(random);
     }
 
     // setup writer
