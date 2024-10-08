@@ -30,6 +30,8 @@ const AccountRef = sig.accounts_db.index.AccountRef;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
+const StandardErrLogger = sig.trace.log.ChannelPrintLogger;
+const Level = sig.trace.level.Level;
 const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Counter = sig.prometheus.counter.Counter;
@@ -4027,10 +4029,14 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
     pub fn loadSnapshot(bench_args: BenchArgs) !sig.time.Duration {
         const allocator = std.heap.c_allocator;
 
-        // const logger = Logger{ .noop = {} };
-        const logger = Logger.init(allocator, .debug);
-        defer logger.deinit();
-        logger.spawn();
+        var std_logger = StandardErrLogger.init(.{
+            .allocator = allocator,
+            .max_level = Level.debug,
+            .max_buffer = 1 << 30,
+        }) catch @panic("Logger init failed");
+        defer std_logger.deinit();
+
+        const logger = std_logger.logger();
 
         // unpack the snapshot
         // NOTE: usually this will be an incremental snapshot
