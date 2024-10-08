@@ -1604,7 +1604,6 @@ pub const AccountsDB = struct {
         num_old_states: usize,
     } {
         var timer = try sig.time.Timer.start();
-
         defer {
             const number_of_files = unclean_account_files.len;
             self.metrics.number_files_cleaned.add(number_of_files);

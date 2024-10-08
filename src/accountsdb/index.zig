@@ -164,11 +164,6 @@ pub const AccountIndex = struct {
     }
 
     pub fn deinit(self: *Self, free_memory: bool) void {
-        if (self.disk_allocator_ptr) |ptr| {
-            ptr.dir.close();
-            self.allocator.destroy(ptr);
-        }
-
         for (self.bins) |*bin_rw| {
             const bin, var bin_lg = bin_rw.writeWithLock();
             defer bin_lg.unlock();
@@ -187,6 +182,11 @@ pub const AccountIndex = struct {
                 }
             }
             reference_memory.deinit();
+        }
+
+        if (self.disk_allocator_ptr) |ptr| {
+            ptr.dir.close();
+            self.allocator.destroy(ptr);
         }
     }
 
