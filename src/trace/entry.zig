@@ -1,245 +1,90 @@
 const std = @import("std");
-const logfmt = @import("logfmt.zig");
-const Level = @import("level.zig").Level;
-const Channel = @import("../sync/channel.zig").Channel;
+const sig = @import("../sig.zig");
+const trace = @import("lib.zig");
+
+const logfmt = trace.logfmt;
+
+const Level = trace.level.Level;
+const ScopedLogger = trace.log.ScopedLogger;
+const Channel = sig.sync.Channel;
 const AtomicBool = std.atomic.Value(bool);
 
-pub const Entry = union(enum) {
-    channel_print: ChannelPrintEntry,
-    direct_print: DirectPrintEntry,
-    noop,
+pub fn NewEntry(comptime scope: ?[]const u8) type {
+    return Entry(struct {}, scope);
+}
 
-    const Self = @This();
+pub fn Entry(comptime Fields: type, comptime scope: ?[]const u8) type {
+    return struct {
+        logger: ScopedLogger(scope),
+        level: Level,
+        fields: Fields,
 
-    pub fn init(allocator: std.mem.Allocator, channel: *Channel(logfmt.LogMsg), log_level: Level) Self {
-        return .{ .channel_print = ChannelPrintEntry.init(allocator, channel, log_level) };
-    }
+        const Self = @This();
 
-    pub fn deinit(self: Self) void {
-        switch (self) {
-            .noop => {},
-            .channel_print => |impl| impl.deinit(),
-            .direct_print => |impl| impl.deinit(),
+        pub inline fn init(logger: ScopedLogger(scope), level: Level) Self {
+            return .{ .logger = logger, .level = level, .fields = .{} };
         }
-    }
 
-    pub fn field(self: Self, name: []const u8, value: anytype) Self {
-        switch (self) {
-            .noop => {
-                return self;
-            },
-            .channel_print => |entry| {
-                var log_entry = entry;
-                _ = log_entry.field(name, value);
-                return Entry{ .channel_print = log_entry };
-            },
-            .direct_print => |entry| {
-                var log_entry = entry;
-                _ = log_entry.field(name, value);
-                return Entry{ .direct_print = log_entry };
-            },
-        }
-    }
-
-    pub fn log(self: Self, comptime msg: []const u8) void {
-        switch (self) {
-            .noop => {},
-            .channel_print => |impl| {
-                var logger = impl;
-                logger.log(msg);
-            },
-            .direct_print => |impl| {
-                var logger = impl;
-                logger.log(msg);
-            },
-        }
-    }
-
-    pub fn logf(self: Self, comptime fmt: []const u8, args: anytype) void {
-        switch (self) {
-            .noop => {},
-            .channel_print => |impl| {
-                var logger = impl;
-                logger.logf(fmt, args);
-            },
-            .direct_print => |impl| {
-                var logger = impl;
-                logger.logf(fmt, args);
-            },
-        }
-    }
-};
-
-pub const ChannelPrintEntry = struct {
-    allocator: std.mem.Allocator,
-    scope: ?[]const u8,
-    log_level: Level,
-    fields: std.ArrayList(u8),
-    exit_sig: std.atomic.Value(bool),
-    channel: *Channel(logfmt.LogMsg),
-    const Self = @This();
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        scope: ?[]const u8,
-        channel: *Channel(logfmt.LogMsg),
-        log_level: Level,
-    ) Self {
-        return .{
-            .allocator = allocator,
-            .scope = scope,
-            .exit_sig = AtomicBool.init(false),
-            .log_level = log_level,
-            .fields = std.ArrayList(u8).init(allocator),
-            .channel = channel,
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.fields.deinit();
-    }
-
-    pub fn field(self: *Self, name: []const u8, value: anytype) *Self {
-        const min_capacity = self.fields.items.len + logfmt.countField(name, value);
-        self.fields.ensureTotalCapacity(min_capacity) catch return self;
-        logfmt.fmtField(self.fields.writer(), name, value);
-        return self;
-    }
-
-    pub fn log(self: *Self, comptime msg: []const u8) void {
-        const log_msg = logfmt.LogMsg{
-            .level = self.log_level,
-            .maybe_scope = self.scope,
-            .maybe_msg = msg,
-            .maybe_fields = self.fields.toOwnedSlice() catch |err| {
-                std.debug.print("Processing fields failed with err: {any}", .{err});
-                self.deinit();
-                return;
-            },
-            .maybe_fmt = null,
-        };
-
-        self.channel.send(log_msg) catch |err| {
-            std.debug.print("Send msg through channel failed with err: {any}", .{err});
-            self.deinit();
-            return;
-        };
-    }
-
-    pub fn logf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        // Get memory for formatting message.
-        const msg_buf = self.allocBuf(std.fmt.count(fmt, args)) catch |err| {
-            std.debug.print("allocBuff failed with err: {any}", .{err});
-            self.deinit();
-            return;
-        };
-        var fmt_message = std.io.fixedBufferStream(msg_buf);
-        // Format message.
-        logfmt.fmtMsg(fmt_message.writer(), fmt, args);
-
-        const log_msg = logfmt.LogMsg{
-            .level = self.log_level,
-            .maybe_scope = self.scope,
-            .maybe_msg = null,
-            .maybe_fields = self.fields.toOwnedSlice() catch |err| {
-                std.debug.print("Processing fields failed with err: {any}", .{err});
-                self.deinit();
-                return;
-            },
-            .maybe_fmt = fmt_message.getWritten(),
-        };
-
-        self.channel.send(log_msg) catch |err| {
-            std.debug.print("Send msg through channel failed with err: {any}", .{err});
-            self.deinit();
-            return;
-        };
-    }
-
-    // Utility function for allocating memory from RecycleFBA for part of the log message.
-    fn allocBuf(self: *const Self, size: u64) ![]u8 {
-        const buf = blk: while (true) {
-            const buf = self.allocator.alloc(u8, size) catch {
-                std.time.sleep(std.time.ns_per_ms);
-                if (self.exit_sig.load(.unordered)) {
-                    return error.MemoryBlockedWithExitSignaled;
-                }
-                continue;
+        /// Add a field to the log message.
+        pub inline fn field(
+            self: Self,
+            comptime name: [:0]const u8,
+            value: anytype,
+        ) Entry(FieldsPlus(name, @TypeOf(value)), scope) {
+            if (self.logger == .noop) return .{
+                .logger = .noop,
+                .level = undefined,
+                .fields = undefined,
             };
-            break :blk buf;
-        };
-        errdefer {
-            self.allocator.free(buf);
+            var new_fields: FieldsPlus(name, @TypeOf(value)) = undefined;
+            inline for (@typeInfo(Fields).Struct.fields) |existing_field| {
+                @field(new_fields, existing_field.name) = @field(self.fields, existing_field.name);
+            }
+            @field(new_fields, name) = value;
+            return .{
+                .logger = self.logger,
+                .level = self.level,
+                .fields = new_fields,
+            };
         }
-        return buf;
-    }
-};
 
-/// An instance of `Entry` that logs directly to std.debug.print, instead of sending to channel.
-pub const DirectPrintEntry = struct {
-    const builtin = @import("builtin");
+        /// Log the message using the logger, including all fields that are saved in the entry.
+        pub inline fn log(self: Self, comptime message: []const u8) void {
+            self.logger.private_log(self.level, self.fields, message, .{});
+        }
 
-    log_level: Level,
-    scope: ?[]const u8,
-    allocator: std.mem.Allocator,
-    log_msg: std.ArrayList(u8),
+        /// Log the message using the logger, including all fields that are saved in the entry.
+        pub inline fn logf(self: Self, comptime fmt: []const u8, args: anytype) void {
+            self.logger.private_log(self.level, self.fields, fmt, args);
+        }
 
-    const Self = @This();
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        scope: ?[]const u8,
-        log_level: Level,
-    ) Self {
-        return .{
-            .allocator = allocator,
-            .scope = scope,
-            .log_level = log_level,
-            .log_msg = std.ArrayList(u8).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.log_msg.deinit();
-    }
-
-    pub fn field(self: *Self, name: []const u8, value: anytype) *Self {
-        logfmt.fmtField(self.log_msg.writer(), name, value);
-        return self;
-    }
-
-    pub fn log(self: *Self, comptime msg: []const u8) void {
-        defer self.deinit();
-        const log_msg = logfmt.LogMsg{
-            .level = self.log_level,
-            .maybe_scope = self.scope,
-            .maybe_msg = msg,
-            .maybe_fields = null,
-            .maybe_fmt = null,
-        };
-
-        const writer = self.log_msg.writer();
-        logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
-        std.debug.print("{s}", .{self.log_msg.items});
-    }
-
-    pub fn logf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        defer self.deinit();
-        // Format message.
-        var fmt_msg = std.ArrayList(u8).initCapacity(self.allocator, 256) catch @panic("could not initCapacity for message");
-        defer fmt_msg.deinit();
-        logfmt.fmtMsg(fmt_msg.writer(), fmt, args);
-
-        const log_msg = logfmt.LogMsg{
-            .level = self.log_level,
-            .maybe_scope = self.scope,
-            .maybe_msg = null,
-            .maybe_fields = null,
-            .maybe_fmt = fmt_msg.items,
-        };
-
-        const writer = self.log_msg.writer();
-        logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
-        std.debug.print("{s}", .{self.log_msg.items});
-    }
-};
+        /// Returns a new struct type based on Fields, just with one more field added.
+        fn FieldsPlus(comptime field_name: [:0]const u8, comptime FieldType: type) type {
+            const info = @typeInfo(Fields);
+            var new_fields: [1 + info.Struct.fields.len]std.builtin.Type.StructField = undefined;
+            for (info.Struct.fields, 0..) |existing_field, i| {
+                new_fields[i] = existing_field;
+            }
+            const ActualFieldType = switch (@typeInfo(FieldType)) {
+                .ComptimeFloat => f64,
+                .ComptimeInt => u64,
+                else => FieldType,
+            };
+            new_fields[info.Struct.fields.len] = .{
+                .name = field_name,
+                .type = ActualFieldType,
+                .default_value = null,
+                .is_comptime = false,
+                .alignment = @alignOf(FieldType),
+            };
+            const new_struct = std.builtin.Type.Struct{
+                .layout = .auto,
+                .backing_integer = null,
+                .fields = &new_fields,
+                .decls = &.{},
+                .is_tuple = false,
+            };
+            return @Type(.{ .Struct = new_struct });
+        }
+    };
+}

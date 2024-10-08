@@ -1,15 +1,17 @@
 const std = @import("std");
-const Level = @import("level.zig").Level;
-const Entry = @import("entry.zig").Entry;
-const ChannelPrintEntry = @import("entry.zig").ChannelPrintEntry;
-const DirectPrintEntry = @import("entry.zig").DirectPrintEntry;
-const logfmt = @import("logfmt.zig");
 const sig = @import("../sig.zig");
-// TODO Improve import.
-const Channel = @import("../sync/channel.zig").Channel;
+const trace = @import("lib.zig");
+
+const logfmt = trace.logfmt;
+
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
+const Channel = sig.sync.Channel;
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
+
+const Level = trace.level.Level;
+const Entry = trace.entry.Entry;
+const NewEntry = trace.entry.NewEntry;
 
 pub const Config = struct {
     max_level: Level = Level.debug,
@@ -18,17 +20,8 @@ pub const Config = struct {
     max_buffer: ?u64 = null,
 };
 
-const LogKind = enum {
-    channel_print,
-    direct_print,
-    noop,
-};
-
-/// A ScopedLogger could either be:
-/// - A StandardErrLogger
-/// - A TestingLogger
 pub fn ScopedLogger(comptime scope: ?[]const u8) type {
-    return union(LogKind) {
+    return union(enum) {
         channel_print: *ChannelPrintLogger,
         direct_print: *DirectPrintLogger,
         noop: void,
@@ -61,52 +54,58 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
             }
         }
 
-        pub fn err(self: *const Self) Entry {
-            return switch (self.*) {
-                .noop => .noop,
-                inline else => |impl| impl.err(scope),
-            };
+        pub fn err(self: Self) NewEntry(scope) {
+            return self.entry(.err);
         }
 
-        pub fn warn(self: *const Self) Entry {
-            return switch (self.*) {
-                .noop => .noop,
-                inline else => |impl| impl.warn(scope),
-            };
+        pub fn warn(self: Self) NewEntry(scope) {
+            return self.entry(.warn);
         }
 
-        pub fn info(self: *const Self) Entry {
-            return switch (self.*) {
-                .noop => .noop,
-                inline else => |impl| impl.info(scope),
-            };
+        pub fn info(self: Self) NewEntry(scope) {
+            return self.entry(.info);
         }
 
-        pub fn debug(self: *const Self) Entry {
-            return switch (self.*) {
-                .noop => .noop,
-                inline else => |impl| impl.debug(scope),
-            };
+        pub fn debug(self: Self) NewEntry(scope) {
+            return self.entry(.debug);
         }
 
-        pub fn trace(self: *const Self) Entry {
-            return switch (self.*) {
+        pub fn trace(self: Self) NewEntry(scope) {
+            return self.entry(.trace);
+        }
+
+        fn entry(self: Self, level: Level) NewEntry(scope) {
+            const logger = switch (self) {
                 .noop => .noop,
-                inline else => |impl| impl.trace(scope),
+                inline else => |impl| if (@intFromEnum(impl.max_level) >= @intFromEnum(level))
+                    self
+                else
+                    .noop,
             };
+            return NewEntry(scope).init(logger, level);
         }
 
         pub fn log(self: Self, level: Level, comptime message: []const u8) void {
-            switch (self) {
-                .noop => {},
-                inline else => |*impl| impl.*.log(scope, level, message),
-            }
+            self.private_log(level, .{}, message, .{});
         }
 
         pub fn logf(self: Self, level: Level, comptime fmt: []const u8, args: anytype) void {
+            self.private_log(level, .{}, fmt, args);
+        }
+
+        /// Only intended for use within trace module.
+        ///
+        /// Passthrough to the logger implementation
+        pub fn private_log(
+            self: Self,
+            level: Level,
+            fields: anytype,
+            comptime fmt: []const u8,
+            args: anytype,
+        ) void {
             switch (self) {
                 .noop => {},
-                inline else => |*impl| impl.*.logf(scope, level, fmt, args),
+                inline else => |impl| impl.log(scope, level, fields, fmt, args),
             }
         }
     };
@@ -122,7 +121,7 @@ pub const ChannelPrintLogger = struct {
     log_allocator: Allocator,
     log_allocator_state: *RecycleFBA(.{}),
     max_buffer: u64,
-    channel: *Channel(logfmt.LogMsg),
+    channel: *Channel([]const u8),
     handle: ?std.Thread,
 
     const Self = @This();
@@ -140,7 +139,7 @@ pub const ChannelPrintLogger = struct {
             .exit = AtomicBool.init(false),
             .max_level = config.max_level,
             .handle = null,
-            .channel = Channel(logfmt.LogMsg).create(config.allocator) catch
+            .channel = Channel([]const u8).create(config.allocator) catch
                 @panic("could not allocate LogMsg channel"),
         };
         self.handle = try std.Thread.spawn(.{}, run, .{self});
@@ -171,79 +170,55 @@ pub const ChannelPrintLogger = struct {
     pub fn run(self: *Self) void {
         while (!self.exit.load(.acquire)) {
             while (self.channel.receive()) |message| {
-                {
-                    const writer = std.io.getStdErr().writer();
-                    std.debug.lockStdErr();
-                    defer std.debug.unlockStdErr();
-                    logfmt.writeLog(writer, message) catch {};
-                }
-                if (message.maybe_fields) |fields| {
-                    self.log_allocator.free(fields);
-                }
-                if (message.maybe_fmt) |fmt_msg| {
-                    self.log_allocator.free(fmt_msg);
-                }
+                const writer = std.io.getStdErr().writer();
+                std.debug.lockStdErr();
+                defer std.debug.unlockStdErr();
+                writer.writeAll(message) catch {};
             }
         }
     }
 
-    pub fn err(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.err)) {
-            return Entry{ .channel_print = ChannelPrintEntry.init(self.log_allocator, maybe_scope, self.channel, Level.err) };
-        }
-        return .noop;
+    pub fn log(
+        self: *Self,
+        comptime scope: ?[]const u8,
+        level: Level,
+        fields: anytype,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) void {
+        if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
+        const size = logfmt.countLog(scope, level, fields, fmt, args);
+        const msg_buf = self.allocBuf(size) catch |err| {
+            std.debug.print("allocBuff failed with err: {any}", .{err});
+            return;
+        };
+        var stream = std.io.fixedBufferStream(msg_buf);
+        logfmt.writeLog(stream.writer(), scope, level, fields, fmt, args) catch |err| {
+            std.debug.print("writeLog failed with err: {any}", .{err});
+            self.log_allocator.free(msg_buf);
+            return;
+        };
+        std.debug.assert(size == stream.pos);
+
+        self.channel.send(msg_buf) catch |err| {
+            std.debug.print("Send msg through channel failed with err: {any}", .{err});
+            self.log_allocator.free(msg_buf);
+            return;
+        };
     }
 
-    pub fn warn(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.warn)) {
-            return Entry{ .channel_print = ChannelPrintEntry.init(self.log_allocator, maybe_scope, self.channel, Level.warn) };
+    // Utility function for allocating memory from RecycleFBA for part of the log message.
+    fn allocBuf(self: *const Self, size: u64) ![]u8 {
+        for (0..100) |_| {
+            return self.log_allocator.alloc(u8, size) catch {
+                std.time.sleep(std.time.ns_per_ms);
+                if (self.exit.load(.unordered)) {
+                    return error.MemoryBlockedWithExitSignaled;
+                }
+                continue;
+            };
         }
-        return .noop;
-    }
-
-    pub fn info(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.info)) {
-            return Entry{ .channel_print = ChannelPrintEntry.init(self.log_allocator, maybe_scope, self.channel, Level.info) };
-        }
-        return .noop;
-    }
-
-    pub fn debug(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.debug)) {
-            return Entry{ .channel_print = ChannelPrintEntry.init(self.log_allocator, maybe_scope, self.channel, Level.debug) };
-        }
-        return .noop;
-    }
-
-    pub fn trace(self: *Self, comptime maybe_scope: ?[]const u8) Entry {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.trace)) {
-            return Entry{ .channel_print = ChannelPrintEntry.init(self.log_allocator, maybe_scope, self.channel, Level.trace) };
-        }
-        return .noop;
-    }
-
-    pub fn log(self: *Self, comptime scope: ?[]const u8, level: Level, comptime message: []const u8) void {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
-            switch (level) {
-                .err => self.err(scope).log(message),
-                .warn => self.warn(scope).log(message),
-                .info => self.info(scope).log(message),
-                .debug => self.debug(scope).log(message),
-                .trace => self.trace(scope).log(message),
-            }
-        }
-    }
-
-    pub fn logf(self: *Self, comptime scope: ?[]const u8, level: Level, comptime fmt: []const u8, args: anytype) void {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
-            switch (level) {
-                .err => self.err(scope).logf(fmt, args),
-                .warn => self.warn(scope).logf(fmt, args),
-                .info => self.info(scope).logf(fmt, args),
-                .debug => self.debug(scope).logf(fmt, args),
-                .trace => self.trace(scope).logf(fmt, args),
-            }
-        }
+        return error.OutOfMemory;
     }
 };
 
@@ -272,71 +247,31 @@ pub const DirectPrintLogger = struct {
         return .{ .direct_print = self };
     }
 
-    pub fn err(self: *Self, comptime scope: ?[]const u8) Entry {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.err)) {
-            return Entry{ .direct_print = DirectPrintEntry.init(self.allocator, scope, Level.err) };
-        }
-        return .noop;
-    }
-
-    pub fn warn(self: *Self, comptime scope: ?[]const u8) Entry {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.warn)) {
-            return Entry{ .direct_print = DirectPrintEntry.init(self.allocator, scope, Level.warn) };
-        }
-        return .noop;
-    }
-
-    pub fn info(self: *Self, comptime scope: ?[]const u8) Entry {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.info)) {
-            return Entry{ .direct_print = DirectPrintEntry.init(self.allocator, scope, Level.info) };
-        }
-        return .noop;
-    }
-
-    pub fn debug(self: *Self, comptime scope: ?[]const u8) Entry {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.debug)) {
-            return Entry{ .direct_print = DirectPrintEntry.init(self.allocator, scope, Level.debug) };
-        }
-        return .noop;
-    }
-
-    pub fn trace(self: *Self, comptime scope: ?[]const u8) Entry {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(Level.trace)) {
-            return Entry{ .direct_print = DirectPrintEntry.init(self.allocator, scope, Level.trace) };
-        }
-        return .noop;
-    }
-
-    pub fn log(self: *Self, comptime scope: ?[]const u8, level: Level, comptime message: []const u8) void {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
-            switch (level) {
-                .err => self.err(scope).log(message),
-                .warn => self.warn(scope).log(message),
-                .info => self.info(scope).log(message),
-                .debug => self.debug(scope).log(message),
-                .trace => self.trace(scope).log(message),
-            }
-        }
-    }
-
-    pub fn logf(self: *Self, comptime scope: ?[]const u8, level: Level, comptime fmt: []const u8, args: anytype) void {
-        if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
-            switch (level) {
-                .err => self.err(scope).logf(fmt, args),
-                .warn => self.warn(scope).logf(fmt, args),
-                .info => self.info(scope).logf(fmt, args),
-                .debug => self.debug(scope).logf(fmt, args),
-                .trace => self.trace(scope).logf(fmt, args),
-            }
-        }
+    pub fn log(
+        self: *Self,
+        comptime scope: ?[]const u8,
+        level: Level,
+        fields: anytype,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) void {
+        if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
+        const writer = std.io.getStdErr().writer();
+        std.debug.lockStdErr();
+        defer std.debug.unlockStdErr();
+        logfmt.writeLog(writer, scope, level, fields, fmt, args) catch {};
     }
 };
+
+/// change this locally for temporary visibility into tests.
+/// normally this should be err since we don't want any output from well-behaved passing tests.
+const test_level = Level.err;
 
 test "direct" {
     const allocator = std.testing.allocator;
     const std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.err,
+        .max_level = test_level,
         .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
@@ -385,7 +320,7 @@ test "trace_ngswitch" {
 
     const std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.warn,
+        .max_level = test_level,
         .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
     defer std_logger.deinit();
@@ -399,7 +334,7 @@ test "trace_ngswitch" {
     var stuff = Stuff.init(logger);
     stuff.doStuff();
     // Log using the concrete instance also works.
-    std_logger.info(null).log("Log from main");
+    std_logger.log(null, .info, .{}, "Log from main", .{});
 }
 
 test "reclaim" {
@@ -407,7 +342,7 @@ test "reclaim" {
 
     var std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.warn,
+        .max_level = test_level,
         .max_buffer = 4048,
     }) catch @panic("Logger init failed");
 
@@ -429,7 +364,7 @@ test "level" {
 
     var std_logger = ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.err,
+        .max_level = test_level,
         .max_buffer = 1 << 30,
     }) catch @panic("Logger init failed");
 
@@ -452,7 +387,7 @@ test "level" {
     logger.info()
         .field("f_agent", "Firefox")
         .field("f_version", "2.0")
-        .field("f_version", "3.0")
+        .field("f_version_other", "3.0")
         .log("Logging with logWithFields");
 
     logger.trace()
