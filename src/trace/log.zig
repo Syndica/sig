@@ -96,7 +96,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
             };
         }
 
-        pub fn log(self: Self, level: Level, message: []const u8) void {
+        pub fn log(self: Self, level: Level, comptime message: []const u8) void {
             switch (self) {
                 .noop => {},
                 inline else => |*impl| impl.*.log(scope, level, message),
@@ -222,7 +222,7 @@ pub const ChannelPrintLogger = struct {
         return .noop;
     }
 
-    pub fn log(self: *Self, comptime scope: ?[]const u8, level: Level, message: []const u8) void {
+    pub fn log(self: *Self, comptime scope: ?[]const u8, level: Level, comptime message: []const u8) void {
         if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
             switch (level) {
                 .err => self.err(scope).log(message),
@@ -307,7 +307,7 @@ pub const DirectPrintLogger = struct {
         return .noop;
     }
 
-    pub fn log(self: *Self, comptime scope: ?[]const u8, level: Level, message: []const u8) void {
+    pub fn log(self: *Self, comptime scope: ?[]const u8, level: Level, comptime message: []const u8) void {
         if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
             switch (level) {
                 .err => self.err(scope).log(message),

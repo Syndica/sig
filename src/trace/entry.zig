@@ -41,7 +41,7 @@ pub const Entry = union(enum) {
         }
     }
 
-    pub fn log(self: Self, msg: []const u8) void {
+    pub fn log(self: Self, comptime msg: []const u8) void {
         switch (self) {
             .noop => {},
             .standard => |impl| {
@@ -104,7 +104,7 @@ pub const ChannelEntry = struct {
         return self;
     }
 
-    pub fn log(self: *Self, msg: []const u8) void {
+    pub fn log(self: *Self, comptime msg: []const u8) void {
         defer self.deinit();
         const log_msg = logfmt.LogMsg{
             .level = self.log_level,
@@ -205,7 +205,7 @@ pub const StdErrEntry = struct {
         return self;
     }
 
-    pub fn log(self: *Self, msg: []const u8) void {
+    pub fn log(self: *Self, comptime msg: []const u8) void {
         defer self.deinit();
         const log_msg = logfmt.LogMsg{
             .level = self.log_level,
