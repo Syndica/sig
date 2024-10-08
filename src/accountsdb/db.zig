@@ -1670,7 +1670,6 @@ pub const AccountsDB = struct {
         num_old_states: usize,
     } {
         var timer = try sig.time.Timer.start();
-
         defer {
             const number_of_files = unclean_account_files.len;
             self.metrics.number_files_cleaned.add(number_of_files);
@@ -4434,8 +4433,8 @@ pub const BenchmarkAccountsDB = struct {
         var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
         defer snapshot_dir.close();
 
-        const logger = .noop;
-        var accounts_db: AccountsDB = try AccountsDB.init(allocator, logger, snapshot_dir, .{
+        const logger = Logger{ .noop = {} };
+        var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
             .number_of_index_bins = ACCOUNT_INDEX_BINS,
             .use_disk_index = bench_args.index == .disk,
         }, null);
