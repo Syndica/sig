@@ -10,7 +10,6 @@ const Channel = sig.sync.Channel;
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
 const Level = trace.level.Level;
-const Entry = trace.entry.Entry;
 const NewEntry = trace.entry.NewEntry;
 
 pub const Config = struct {

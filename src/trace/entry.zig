@@ -2,11 +2,8 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const trace = @import("lib.zig");
 
-const logfmt = trace.logfmt;
-
 const Level = trace.level.Level;
 const ScopedLogger = trace.log.ScopedLogger;
-const Channel = sig.sync.Channel;
 const AtomicBool = std.atomic.Value(bool);
 
 pub fn NewEntry(comptime scope: ?[]const u8) type {
