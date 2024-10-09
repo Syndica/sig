@@ -2401,6 +2401,9 @@ pub const AccountsDB = struct {
         const file_map, var file_map_lg = self.file_map.readWithLock();
         defer file_map_lg.unlock();
 
+        const latest_full_snapshot_info, var latest_full_snapshot_info_lg = self.latest_full_snapshot_info.writeWithLock();
+        defer latest_full_snapshot_info_lg.unlock();
+
         std.debug.assert(zstd_buffer.len != 0);
         std.debug.assert(params.target_slot <= self.largest_flushed_slot.load(.monotonic));
 
@@ -2493,9 +2496,7 @@ pub const AccountsDB = struct {
         );
         try zstd_write_ctx.finish();
 
-        const latest_full_snapshot_info, var latest_full_snapshot_info_lg = self.latest_full_snapshot_info.writeWithLock();
-        defer latest_full_snapshot_info_lg.unlock();
-
+        // update tracking for new snapshot
         const snapshot_gen_info: FullSnapshotGenerationInfo = .{
             .slot = params.target_slot,
             .hash = full_hash,
@@ -2693,6 +2694,7 @@ pub const AccountsDB = struct {
         );
         try zstd_write_ctx.finish();
 
+        // update tracking for new snapshot
         const snapshot_gen_info: IncSnapshotGenerationInfo = .{
             .base_slot = full_snapshot_info.slot,
             .slot = params.target_slot,
