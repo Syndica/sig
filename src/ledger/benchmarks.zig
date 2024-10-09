@@ -39,9 +39,9 @@ pub const BenchmarLegder = struct {
     pub const max_iterations = 5;
 
     // Analogous to [bench_write_small](https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L59)
-    pub fn benchWriteSmall() !u64 {
+    pub fn benchWriteSmall() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-        var state = try State.init(allocator, "bench write small");
+        var state = try State.init(allocator, "bench write small", .noop);
         defer state.deinit();
         var inserter = try state.shredInserter();
 
@@ -55,15 +55,15 @@ pub const BenchmarLegder = struct {
             is_repairs[i] = false;
         }
 
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         _ = try inserter.insertShreds(shreds, is_repairs, null, false, null);
         return timer.read();
     }
 
     // Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
-    pub fn benchReadSequential() !u64 {
+    pub fn benchReadSequential() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-        var state = try State.init(allocator, "bentch read sequential");
+        var state = try State.init(allocator, "bentch read sequential", .noop);
         defer state.deinit();
         var inserter = try state.shredInserter();
         var reader = try state.reader();
@@ -81,7 +81,7 @@ pub const BenchmarLegder = struct {
 
         var rng = std.Random.DefaultPrng.init(100);
 
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         const start_index = rng.random().intRangeAtMost(u32, 0, @intCast(total_shreds));
         for (start_index..start_index + num_reads) |i| {
             const shred_index = i % total_shreds;
@@ -91,9 +91,9 @@ pub const BenchmarLegder = struct {
     }
 
     // Analogous to [bench_read_random]https://github.com/anza-xyz/agave/blob/92eca1192b055d896558a78759d4e79ab4721ff1/ledger/benches/blockstore.rs#L103
-    pub fn benchReadRandom() !u64 {
+    pub fn benchReadRandom() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-        var state = try State.init(allocator, "bench read randmom");
+        var state = try State.init(allocator, "bench read randmom", .noop);
         defer state.deinit();
         var inserter = try state.shredInserter();
         var reader = try state.reader();
@@ -115,7 +115,7 @@ pub const BenchmarLegder = struct {
             indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
         }
 
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         for (indices.items) |shred_index| {
             _ = try reader.getDataShred(slot, shred_index);
         }
@@ -123,14 +123,14 @@ pub const BenchmarLegder = struct {
     }
 
     // Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
-    pub fn benchSerializeWriteBincode() !u64 {
+    pub fn benchSerializeWriteBincode() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-        var state = try State.init(allocator, "bench serialize write bincode");
+        var state = try State.init(allocator, "bench serialize write bincode", .noop);
         defer state.deinit();
         const slot: u32 = 0;
 
         var rewards: Rewards = try createRewards(allocator, 100);
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         try state.db.put(schema.rewards, slot, .{
             .rewards = try rewards.toOwnedSlice(),
             .num_partitions = null,
@@ -138,9 +138,9 @@ pub const BenchmarLegder = struct {
         return timer.read();
     }
 
-    pub fn benchReadBincode() !u64 {
+    pub fn benchReadBincode() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-        var state = try State.init(allocator, "bench read bincode");
+        var state = try State.init(allocator, "bench read bincode", .noop);
         defer state.deinit();
         const slot: u32 = 1;
 
@@ -149,7 +149,7 @@ pub const BenchmarLegder = struct {
             .rewards = try rewards.toOwnedSlice(),
             .num_partitions = null,
         });
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         _ = try state.db.getBytes(schema.rewards, slot);
         return timer.read();
     }
