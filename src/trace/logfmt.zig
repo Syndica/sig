@@ -34,6 +34,8 @@ fn fieldFmtString(comptime Value: type) []const u8 {
             fieldFmtString(ptr.child)
         else if (ptr.size == .One and ptr.child == u8)
             "{s}={s} "
+        else if (ptr.size == .Slice and ptr.child == u8)
+            "{s}={s} "
         else
             "{s}={any} ",
         .Array => |arr| if (arr.child == u8) "{s}={s} " else "{s}={any} ",
