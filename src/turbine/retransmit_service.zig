@@ -48,7 +48,7 @@ pub fn run(
     logger: Logger,
 ) !void {
     errdefer {
-        logger.info("retransmit service failed");
+        logger.info().log("retransmit service failed");
         exit.store(false, .monotonic);
     }
 
@@ -303,7 +303,7 @@ pub const Stats = struct {
     }
 
     pub fn log(self: *const Stats, logger: Logger) void {
-        logger.infof("RetransmitService: received={} skipped={} retransmitted={}", .{
+        logger.info().logf("RetransmitService: received={} skipped={} retransmitted={}", .{
             self.retransmit_shreds_received_count.get(),
             self.retransmit_shreds_skipped_count.get(),
             self.retransmit_shreds_sent_count.get(),
