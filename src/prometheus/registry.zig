@@ -1,23 +1,25 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const prometheus = @import("lib.zig");
+
 const fmt = std.fmt;
 const hash_map = std.hash_map;
 const heap = std.heap;
 const mem = std.mem;
 const testing = std.testing;
 
-const OnceCell = @import("../sync/once_cell.zig").OnceCell;
-
-const Metric = @import("metric.zig").Metric;
-const Counter = @import("counter.zig").Counter;
-const VariantCounter = @import("variant_counter.zig").VariantCounter;
-const Gauge = @import("gauge.zig").Gauge;
-const GaugeFn = @import("gauge_fn.zig").GaugeFn;
-const GaugeCallFnType = @import("gauge_fn.zig").GaugeCallFnType;
-const Histogram = @import("histogram.zig").Histogram;
-const DEFAULT_BUCKETS = @import("histogram.zig").DEFAULT_BUCKETS;
-
+const OnceCell = sig.sync.OnceCell;
 const ReturnType = sig.utils.types.ReturnType;
+
+const Metric = prometheus.metric.Metric;
+const Counter = prometheus.counter.Counter;
+const VariantCounter = prometheus.variant_counter.VariantCounter;
+const Gauge = prometheus.gauge.Gauge;
+const GaugeFn = prometheus.gauge_fn.GaugeFn;
+const GaugeCallFnType = prometheus.gauge_fn.GaugeCallFnType;
+const Histogram = prometheus.histogram.Histogram;
+
+const DEFAULT_BUCKETS = prometheus.histogram.DEFAULT_BUCKETS;
 
 pub const GetMetricError = error{
     /// Returned when trying to add a metric to an already full registry.
