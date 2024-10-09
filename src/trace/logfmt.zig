@@ -32,7 +32,7 @@ fn fieldFmtString(comptime Value: type) []const u8 {
         // Assume arrays of u8 are strings.
         .Pointer => |ptr| if (ptr.size == .One)
             fieldFmtString(ptr.child)
-        else if (ptr.size == .One and ptr.child == u8)
+        else if (ptr.child == u8)
             "{s}={s} "
         else
             "{s}={any} ",
