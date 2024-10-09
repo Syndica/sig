@@ -742,9 +742,7 @@ fn validator() !void {
 
     // Sockets used to retransmit shreds to peers
     // The number of sockets should be configurable
-    const retransmit_send_sockets: [3]network.Socket = .{
-        try network.Socket.create(.ipv4, .udp),
-        try network.Socket.create(.ipv4, .udp),
+    const retransmit_send_sockets: [1]network.Socket = .{
         try network.Socket.create(.ipv4, .udp),
     };
     defer {
