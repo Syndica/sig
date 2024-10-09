@@ -47,11 +47,10 @@ pub const VariantCounts = struct {
 /// it will assign the numbers 0-9 to each of the variants.
 ///
 /// Enums usually already have numbers with this property, but it's
-/// not guaranteed. This is particularly useful for variants, whose
+/// not guaranteed. This is particularly useful for errors, whose
 /// integers are likely not continuous.
 ///
-/// You can provide an variant to determine its index, or provide an
-/// index to get the respective variant.
+/// Call `index` to determine the index for a variant.
 ///
 /// This struct must be initialized at comptime, but it can be used
 /// at any time.
