@@ -2432,36 +2432,29 @@ pub const AccountsDB = struct {
 
         const SerializableFileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
 
-        var serializable_file_map: SerializableFileMap, //
-        const bank_hash_stats //
-        = blk: {
-            var serializable_file_map = SerializableFileMap.init(self.allocator);
-            errdefer serializable_file_map.deinit();
-            try serializable_file_map.ensureTotalCapacity(file_map.count());
+        var serializable_file_map = SerializableFileMap.init(self.allocator);
+        defer serializable_file_map.deinit();
+        var bank_hash_stats = BankHashStats.zero_init;
 
-            var bank_hash_stats = BankHashStats.zero_init;
+        // collect account files into serializable_file_map and compute bank_hash_stats
+        try serializable_file_map.ensureTotalCapacity(file_map.count());
+        for (file_map.values()) |account_file| {
+            if (account_file.slot > params.target_slot) continue;
 
-            for (file_map.values()) |account_file| {
-                if (account_file.slot > params.target_slot) continue;
+            const bank_hash_stats_map, var bank_hash_stats_map_lg = self.bank_hash_stats.readWithLock();
+            defer bank_hash_stats_map_lg.unlock();
 
-                const bank_hash_stats_map, var bank_hash_stats_map_lg = self.bank_hash_stats.readWithLock();
-                defer bank_hash_stats_map_lg.unlock();
-
-                if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
-                    bank_hash_stats.accumulate(other_stats);
-                } else {
-                    self.logger.warn().logf("No bank hash stats for slot {}.", .{account_file.slot});
-                }
-
-                serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
-                    .id = account_file.id,
-                    .length = account_file.length,
-                });
+            if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
+                bank_hash_stats.accumulate(other_stats);
+            } else {
+                self.logger.warn().logf("No bank hash stats for slot {}.", .{account_file.slot});
             }
 
-            break :blk .{ serializable_file_map, bank_hash_stats };
-        };
-        defer serializable_file_map.deinit();
+            serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
+                .id = account_file.id,
+                .length = account_file.length,
+            });
+        }
 
         params.bank_fields.slot = params.target_slot; // !
         params.bank_fields.capitalization = full_capitalization; // !
