@@ -242,6 +242,7 @@ pub const TurbineTree = struct {
         }
 
         var weighted_shuffle = try self.weighted_shuffle.clone();
+        defer weighted_shuffle.deinit();
         if (self.index.get(slot_leader)) |index| {
             weighted_shuffle.removeIndex(index);
         }
@@ -250,6 +251,7 @@ pub const TurbineTree = struct {
             allocator,
             self.nodes.items.len,
         );
+        defer nodes.deinit();
 
         var chacha = getSeededRng(slot_leader, shred_id);
         var shuffled = weighted_shuffle.shuffle(chacha.random());
@@ -307,29 +309,6 @@ pub const TurbineTree = struct {
         }
 
         return children;
-    }
-
-    pub fn getRetransmitParent(
-        self: *const TurbineTree,
-        allocator: std.mem.Allocator,
-        slot_leader: *Pubkey,
-        shred: *ShredId,
-        fanout: usize,
-    ) !?Pubkey {
-        if (slot_leader == self.my_pubkey) return error{LoopBack};
-        if (self.nodes.items[self.index.get(self.my_pubkey).?].stake == 0) return null;
-
-        var weighted_shuffle = try self.weighted_shuffle.clone();
-        if (self.index.get(slot_leader)) |index| weighted_shuffle.removeIndex(index);
-
-        var nodes = std.ArrayList(*Node).init(allocator);
-        var shuffled = weighted_shuffle.shuffle(getSeededRng(slot_leader, shred));
-        while (shuffled.next()) |index| {
-            if (self.nodes.items[index].pubkey() == self.my_pubkey) break;
-            try nodes.append(&self.nodes.items[index]);
-        }
-
-        return computeRetransmitParent(fanout, nodes.items.len, nodes);
     }
 
     fn computeRetransmitParent(
@@ -528,6 +507,7 @@ test "initForRetransmit" {
 fn checkRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: []const Node, node_expected_children: []const []const Node) !void {
     // Create an index of the nodes
     var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
+    defer index.deinit();
     for (nodes, 0..) |node, i| try index.put(node.pubkey(), i);
 
     // Root nodes parent is null
@@ -537,6 +517,7 @@ fn checkRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: []co
     for (node_expected_children, 0..) |expected_children, i| {
         // Check that the retransmit children for the ith node are correct
         const actual_peers = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, nodes);
+        defer actual_peers.deinit();
         for (expected_children, actual_peers.items) |expected, actual| {
             try std.testing.expectEqual(expected.pubkey(), actual.pubkey());
         }
@@ -552,6 +533,7 @@ fn checkRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: []co
     // Check that the remaining nodes have no children
     for (node_expected_children.len..nodes.len) |i| {
         const actual_peers = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, nodes);
+        defer actual_peers.deinit();
         try std.testing.expectEqual(0, actual_peers.items.len);
     }
 }
@@ -593,7 +575,7 @@ test "retransmit nodes computation: 20 nodes, 2 fanout" {
         &.{ nds[16], nds[9] },
         &.{nds[8]},
     };
-    try checkRetransmitNodes(std.heap.page_allocator, 2, nodes, peers);
+    try checkRetransmitNodes(std.testing.allocator, 2, nodes, peers);
 }
 
 test "retransmit nodes computation: 36 nodes, 3 fanout" {
@@ -641,7 +623,7 @@ test "retransmit nodes computation: 36 nodes, 3 fanout" {
         &.{ nds[24], nds[32] },
         &.{nds[34]},
     };
-    try checkRetransmitNodes(std.heap.page_allocator, 3, nodes, peers);
+    try checkRetransmitNodes(std.testing.allocator, 3, nodes, peers);
 }
 
 fn checkRetransmitNodesRoundTrip(allocator: std.mem.Allocator, fanout: usize, size: usize) !void {
