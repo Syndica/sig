@@ -532,6 +532,7 @@ pub const ShredId = struct {
     index: u32,
     shred_type: sig.ledger.shred.ShredType,
 
+    // TODO: Check for seed equivalence with agave
     pub fn seed(self: ShredId, leader: Pubkey) [32]u8 {
         var slot_bytes: [8]u8 = undefined;
         std.mem.writeInt(u64, &slot_bytes, self.slot, .little);
