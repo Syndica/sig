@@ -2505,19 +2505,21 @@ pub const AccountsDB = struct {
             std.debug.assert(old_snapshot_info.slot <= snapshot_gen_info.slot);
         }
 
-        switch (params.old_snapshot_action) {
-            .ignore_old => {},
-            .delete_old => if (maybe_old_snapshot_info) |old_snapshot_info| {
-                const old_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
-                    .slot = old_snapshot_info.slot,
-                    .hash = old_snapshot_info.hash,
-                    .compression = .zstd,
-                });
-                const old_name = old_name_bounded.constSlice();
+        if (maybe_old_snapshot_info) |old_snapshot_info| {
+            switch (params.old_snapshot_action) {
+                .ignore_old => {},
+                .delete_old => {
+                    const old_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+                        .slot = old_snapshot_info.slot,
+                        .hash = old_snapshot_info.hash,
+                        .compression = .zstd,
+                    });
+                    const old_name = old_name_bounded.constSlice();
 
-                self.logger.info().logf("deleting old full snapshot archive: {s}", .{old_name});
-                try self.snapshot_dir.deleteFile(old_name);
-            },
+                    self.logger.info().logf("deleting old full snapshot archive: {s}", .{old_name});
+                    try self.snapshot_dir.deleteFile(old_name);
+                },
+            }
         }
 
         return snapshot_gen_info;
@@ -2698,21 +2700,22 @@ pub const AccountsDB = struct {
             std.debug.assert(old_snapshot_info.slot <= params.target_slot);
         }
 
-        // do specified action to the old snapshot
-        switch (params.old_snapshot_action) {
-            .ignore_old => {},
-            .delete_old => if (maybe_old_snapshot_info) |old_snapshot_info| {
-                const old_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
-                    .base_slot = old_snapshot_info.base_slot,
-                    .slot = old_snapshot_info.slot,
-                    .hash = old_snapshot_info.hash,
-                    .compression = .zstd,
-                });
-                const old_name = old_name_bounded.constSlice();
+        if (maybe_old_snapshot_info) |old_snapshot_info| {
+            switch (params.old_snapshot_action) {
+                .ignore_old => {},
+                .delete_old => {
+                    const old_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
+                        .base_slot = old_snapshot_info.base_slot,
+                        .slot = old_snapshot_info.slot,
+                        .hash = old_snapshot_info.hash,
+                        .compression = .zstd,
+                    });
+                    const old_name = old_name_bounded.constSlice();
 
-                self.logger.info().logf("deleting old incremental snapshot archive: {s}", .{old_name});
-                try self.snapshot_dir.deleteFile(old_name);
-            },
+                    self.logger.info().logf("deleting old incremental snapshot archive: {s}", .{old_name});
+                    try self.snapshot_dir.deleteFile(old_name);
+                },
+            }
         }
 
         return snap_persistence;
