@@ -2464,16 +2464,13 @@ pub const AccountsDB = struct {
             .bank_fields = params.bank_fields.*,
             .accounts_db_fields = .{
                 .file_map = serializable_file_map,
-
                 .stored_meta_write_version = params.deprecated_stored_meta_write_version,
-
                 .slot = params.target_slot,
                 .bank_hash_info = .{
                     .accounts_delta_hash = delta_hash,
                     .accounts_hash = full_hash,
                     .stats = bank_hash_stats,
                 },
-
                 .rooted_slots = .{},
                 .rooted_slot_hashes = .{},
             },
@@ -2659,16 +2656,13 @@ pub const AccountsDB = struct {
             .bank_fields = params.bank_fields.*,
             .accounts_db_fields = .{
                 .file_map = serializable_file_map,
-
                 .stored_meta_write_version = params.deprecated_stored_meta_write_version,
-
                 .slot = params.target_slot,
                 .bank_hash_info = .{
                     .accounts_delta_hash = delta_hash,
                     .accounts_hash = Hash.default(),
                     .stats = bank_hash_stats,
                 },
-
                 .rooted_slots = .{},
                 .rooted_slot_hashes = .{},
             },
