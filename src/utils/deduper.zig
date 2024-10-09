@@ -1,6 +1,3 @@
-// fn new_random_state<R: Rng>(rng: &mut R) -> RandomState {
-//     RandomState::with_seeds(rng.gen(), rng.gen(), rng.gen(), rng.gen())
-// }
 const std = @import("std");
 const sig = @import("../sig.zig");
 
@@ -166,10 +163,14 @@ pub const AHasher = struct {
     pub fn hash(self: *AHasher, comptime T: type, data: *const T) void {
         switch (@typeInfo(T)) {
             .Int => self.update(@intCast(data.*)),
+            .Array => |array_info| self.hashSlice(array_info.child, data),
             .Pointer => |pointer| {
                 switch (pointer.size) {
                     .Slice => self.hashSlice(pointer.child, data.*),
-                    else => unreachable,
+                    else => {
+                        std.debug.print("Unsupported pointer size: type={} pointer.size={}\n", .{ T, pointer.size });
+                        std.debug.panic("Unsupported pointer size: type={} pointer.size={}\n", .{ T, pointer.size });
+                    },
                 }
             },
             .Struct => |struct_info| {
@@ -181,7 +182,7 @@ pub const AHasher = struct {
             .Enum => |_| self.hash(u32, &@as(u32, @intFromEnum(data.*))),
             else => {
                 std.debug.print("Unsupported type: type={} data={any}\n", .{ T, data });
-                std.debug.panic("Unsupported type", .{});
+                std.debug.panic("Unsupported type: type={} data={any}\n", .{ T, data });
             },
         }
     }

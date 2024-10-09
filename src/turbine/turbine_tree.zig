@@ -15,19 +15,24 @@ const Instant = sig.time.Instant;
 const GossipTable = sig.gossip.GossipTable;
 const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
-const Logger = sig.trace.log.Logger;
+const AtomicUsize = std.atomic.Value(usize);
 
-pub const TurbineTreeCache = struct {
+/// A TurbineTreeProvider is responsible for creating and caching TurbineTrees.
+/// It is used by the retransmit service to load TurbineTree's by reference.
+pub const TurbineTreeProvider = struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
     gossip_table_rw: *RwMux(GossipTable),
     cache: std.AutoArrayHashMap(Epoch, CacheEntry),
     cache_entry_ttl: Duration,
-    logger: Logger,
 
+    /// A cached TurbineTree for a given epoch
+    /// The cache entry is valid for a certain amount of time
+    /// before it is considered stale and evicted. This is required
+    /// to keep in sync with changes to gossip data.
     pub const CacheEntry = struct {
         created: Instant,
-        turbine_tree: TurbineTree,
+        turbine_tree: *TurbineTree,
 
         pub fn alive(self: *const CacheEntry, ttl: Duration) bool {
             return self.created.elapsed().asNanos() < ttl.asNanos();
@@ -38,19 +43,17 @@ pub const TurbineTreeCache = struct {
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
         gossip_table_rw: *RwMux(GossipTable),
-        logger: Logger,
-    ) TurbineTreeCache {
+    ) TurbineTreeProvider {
         return .{
             .allocator = allocator,
             .my_contact_info = my_contact_info,
             .gossip_table_rw = gossip_table_rw,
             .cache = std.AutoArrayHashMap(Epoch, CacheEntry).init(allocator),
-            .cache_entry_ttl = Duration.fromSecs(5), // From Agave
-            .logger = logger,
+            .cache_entry_ttl = Duration.fromSecs(5), // value from agave
         };
     }
 
-    pub fn deinit(self: *TurbineTreeCache) void {
+    pub fn deinit(self: *TurbineTreeProvider) void {
         for (self.cache.values()) |_entry| {
             var entry = _entry;
             entry.turbine_tree.deinit();
@@ -58,49 +61,56 @@ pub const TurbineTreeCache = struct {
         self.cache.deinit();
     }
 
+    /// Get the turbine tree for the given epoch. If the tree is not cached, create a new one
+    /// and cache it. The returned pointer is reference counted, however, is is NOT thread safe
+    /// in a general sense. See [TurbineTree.acquire] and [TurbineTree.release] for more details.
     pub fn getTurbineTree(
-        self: *TurbineTreeCache,
+        self: *TurbineTreeProvider,
         epoch: Epoch,
         bank_fields: *const BankFields,
-    ) !*const TurbineTree {
-        if (self.cache.get(epoch)) |entry| {
-            if (entry.alive(self.cache_entry_ttl)) {
-                self.logger.infof("returning cached turbine tree for epoch {}", .{epoch});
-                return &entry.turbine_tree;
+    ) !*TurbineTree {
+        const gopr = try self.cache.getOrPut(epoch);
+
+        if (gopr.found_existing) {
+            if (gopr.value_ptr.alive(self.cache_entry_ttl)) {
+                return gopr.value_ptr.turbine_tree;
             } else {
-                // NOTE: Have to be careful of use after free here
-                self.logger.infof("removing cached turbine tree for epoch {}", .{epoch});
-                _ = self.cache.swapRemove(epoch);
-                var var_entry = entry;
-                var_entry.turbine_tree.deinit();
+                gopr.value_ptr.turbine_tree.release();
             }
         }
 
-        self.logger.infof("creating turbine tree for epoch {}", .{epoch});
-
-        const tvu_peers = try self.getTvuPeers();
-        defer tvu_peers.deinit();
-
-        const epoch_staked_nodes = try bank_fields.getStakedNodes(self.allocator, epoch);
-
-        const entry = .{
+        gopr.value_ptr.* = .{
             .created = Instant.now(),
-            .turbine_tree = try TurbineTree.initForRetransmit(
-                self.allocator,
-                self.my_contact_info,
-                tvu_peers.items,
-                epoch_staked_nodes,
-                self.logger,
+            .turbine_tree = try self.createTurbineTree(
+                epoch,
+                bank_fields,
             ),
         };
 
-        try self.cache.put(epoch, entry);
-
-        return &entry.turbine_tree;
+        return gopr.value_ptr.turbine_tree;
     }
 
-    // Get the contact info of all gossip peers which have a matching shred version
-    fn getTvuPeers(self: *const TurbineTreeCache) !std.ArrayList(ThreadSafeContactInfo) {
+    /// Create a new TurbineTree for retransmit
+    fn createTurbineTree(self: *const TurbineTreeProvider, epoch: Epoch, bank_fields: *const BankFields) !*TurbineTree {
+        const tvu_peers = try self.getTvuPeers();
+        defer tvu_peers.deinit();
+
+        const turbine_tree = try self.allocator.create(TurbineTree);
+        turbine_tree.* = try TurbineTree.initForRetransmit(
+            self.allocator,
+            self.my_contact_info,
+            tvu_peers.items,
+            try bank_fields.getStakedNodes(
+                self.allocator,
+                epoch,
+            ),
+        );
+
+        return turbine_tree;
+    }
+
+    /// Get the contact info of all gossip peers which have a matching shred version
+    fn getTvuPeers(self: *const TurbineTreeProvider) !std.ArrayList(ThreadSafeContactInfo) {
         const gossip_table, var gossip_table_lg = self.gossip_table_rw.readWithLock();
         defer gossip_table_lg.unlock();
 
@@ -117,86 +127,74 @@ pub const TurbineTreeCache = struct {
     }
 };
 
-/// Analogous to [ClusterNodes](https://github.com/anza-xyz/agave/blob/efd47046c1bb9bb027757ddabe408315bc7865cc/turbine/src/cluster_nodes.rs#L65)
+pub const NodeId = union(enum) {
+    contact_info: ThreadSafeContactInfo,
+    pubkey: Pubkey,
+};
+
+pub const Node = struct {
+    id: NodeId,
+    stake: u64,
+
+    pub fn pubkey(self: Node) Pubkey {
+        return switch (self.id) {
+            .contact_info => |ci| ci.pubkey,
+            .pubkey => |pk| pk,
+        };
+    }
+
+    pub fn contactInfo(self: Node) ?ThreadSafeContactInfo {
+        return switch (self.id) {
+            .contact_info => |ci| ci,
+            .pubkey => null,
+        };
+    }
+
+    pub fn tvuAddress(self: Node) ?SocketAddr {
+        return switch (self.id) {
+            .contact_info => |ci| ci.tvu_addr,
+            .pubkey => null,
+        };
+    }
+
+    pub fn fromContactInfo(ci: ThreadSafeContactInfo) Node {
+        return .{ .id = .contact_info(ci), .stake = ci.stake };
+    }
+
+    pub fn random(rng: std.rand.Random) Node {
+        // TODO: use float for selecting probability of contact info vs pubkey
+        return .{ .id = .{ .pubkey = Pubkey.random(rng) }, .stake = rng.intRangeLessThan(u64, 0, 1_000) };
+    }
+};
+
+/// A TurbineTree is a data structure used to determine the set of nodes to retransmit
 pub const TurbineTree = struct {
     allocator: std.mem.Allocator,
     my_pubkey: Pubkey,
-    nodes: []const Node,
+    nodes: std.ArrayList(Node),
     index: std.AutoArrayHashMap(Pubkey, usize),
     weighted_shuffle: WeightedShuffle,
-    logger: Logger,
+    reference_count: AtomicUsize,
 
     const DATA_PLANE_FANOUT = 200;
     const MAX_NODES_PER_IP = 2;
-
-    const NodeId = union(enum) {
-        contact_info: ThreadSafeContactInfo,
-        pubkey: Pubkey,
-    };
-
-    const Node = struct {
-        id: NodeId,
-        stake: u64,
-
-        pub fn pubkey(self: Node) Pubkey {
-            return switch (self.id) {
-                .contact_info => |ci| ci.pubkey,
-                .pubkey => |pk| pk,
-            };
-        }
-
-        pub fn contactInfo(self: Node) ?ThreadSafeContactInfo {
-            return switch (self.id) {
-                .contact_info => |ci| ci,
-                .pubkey => null,
-            };
-        }
-
-        pub fn fromContactInfo(ci: ThreadSafeContactInfo) Node {
-            return .{ .id = .contact_info(ci), .stake = ci.stake };
-        }
-
-        pub fn random(rng: std.rand.Random) Node {
-            // TODO: use float for selecting probability of contact info vs pubkey
-            return .{ .id = .{ .pubkey = Pubkey.random(rng) }, .stake = rng.intRangeLessThan(u64, 0, 1_000) };
-        }
-    };
-
-    pub fn initForBroadcast(
-        allocator: std.mem.Allocator,
-        my_contact_info: ThreadSafeContactInfo,
-        tvu_peers: []const ThreadSafeContactInfo,
-        stakes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
-        logger: Logger,
-    ) !TurbineTree {
-        var tree = try initForRetransmit(
-            allocator,
-            my_contact_info,
-            tvu_peers,
-            stakes,
-            logger,
-        );
-        tree.weighted_shuffle.removeIndex(tree.index.get(my_contact_info.pubkey).?);
-        return tree;
-    }
 
     pub fn initForRetransmit(
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
         tvu_peers: []const ThreadSafeContactInfo,
         stakes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
-        logger: Logger,
     ) !TurbineTree {
         const nodes = try getNodes(allocator, my_contact_info, tvu_peers, stakes);
-        errdefer allocator.free(nodes);
+        errdefer nodes.deinit();
 
         var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
         errdefer index.deinit();
-        for (nodes, 0..) |node, i| try index.put(node.pubkey(), i);
+        for (nodes.items, 0..) |node, i| try index.put(node.pubkey(), i);
 
-        var node_stakes = try std.ArrayList(u64).initCapacity(allocator, nodes.len);
+        var node_stakes = try std.ArrayList(u64).initCapacity(allocator, nodes.items.len);
         defer node_stakes.deinit();
-        for (nodes) |node| try node_stakes.append(node.stake);
+        for (nodes.items) |node| node_stakes.appendAssumeCapacity(node.stake);
 
         const weighted_shuffle = try WeightedShuffle.init(allocator, node_stakes.items);
 
@@ -206,40 +204,27 @@ pub const TurbineTree = struct {
             .nodes = nodes,
             .index = index,
             .weighted_shuffle = weighted_shuffle,
-            .logger = logger,
+            .reference_count = AtomicUsize.init(1),
         };
     }
 
     pub fn deinit(self: *TurbineTree) void {
-        self.allocator.free(self.nodes);
+        self.nodes.deinit();
         self.index.deinit();
         self.weighted_shuffle.deinit();
     }
 
-    pub fn getRetransmitAddresses(
-        self: *const TurbineTree,
-        allocator: std.mem.Allocator,
-        slot_leader: Pubkey,
-        shred_id: ShredId,
-        fanout: usize,
-    ) ![]SocketAddr {
-        _, const children, const addresses = try self.getRetransmitChildren(
-            allocator,
-            slot_leader,
-            shred_id,
-            fanout,
-        );
+    /// CAUTION: use this method IFF you are CERTAIN that the TurbineTree has not been deinitialized.
+    /// - invalid usage will panic in debug and release safe mode
+    /// - invalid usage will result in use after free in release fast mode
+    pub fn acquireUnsafe(self: *TurbineTree) *TurbineTree {
+        const previous_references = self.reference_count.fetchAdd(1, .monotonic);
+        std.debug.assert(previous_references > 0);
+        return self;
+    }
 
-        var retransmit_addresses = std.ArrayList(SocketAddr).init(allocator);
-        for (children) |child| {
-            if (child.contactInfo()) |ci| {
-                if (ci.tvu_addr) |tvu_addr| {
-                    if (addresses.get(tvu_addr).?.equals(&ci.pubkey)) try retransmit_addresses.append(ci.tvu_addr.?);
-                }
-            }
-        }
-
-        return retransmit_addresses.toOwnedSlice();
+    pub fn release(self: *TurbineTree) void {
+        if (self.reference_count.fetchSub(1, .monotonic) == 1) self.deinit();
     }
 
     pub fn getRetransmitChildren(
@@ -249,56 +234,56 @@ pub const TurbineTree = struct {
         shred_id: ShredId,
         fanout: usize,
     ) !struct {
-        usize,
-        []const Node,
-        std.AutoArrayHashMap(SocketAddr, Pubkey),
+        usize, // root distance
+        std.ArrayList(Node), // children
     } {
-        if (slot_leader.equals(&self.my_pubkey)) return error.LoopBack;
+        if (slot_leader.equals(&self.my_pubkey)) {
+            return error.LoopBack;
+        }
 
         var weighted_shuffle = try self.weighted_shuffle.clone();
-        if (self.index.get(slot_leader)) |index| weighted_shuffle.removeIndex(index);
+        if (self.index.get(slot_leader)) |index| {
+            weighted_shuffle.removeIndex(index);
+        }
 
-        var nodes = std.ArrayList(Node).init(allocator);
-        var addresses = std.AutoArrayHashMap(SocketAddr, Pubkey).init(allocator);
+        var nodes = try std.ArrayList(Node).initCapacity(
+            allocator,
+            self.nodes.items.len,
+        );
+
         var chacha = getSeededRng(slot_leader, shred_id);
         var shuffled = weighted_shuffle.shuffle(chacha.random());
 
-        while (shuffled.next()) |index| {
-            const node = self.nodes[index];
-            if (node.contactInfo()) |ci| {
-                if (ci.tvu_addr) |addr| try addresses.put(addr, node.pubkey());
-            }
-            try nodes.append(node);
-        }
-
-        // TODO: Use proper search
         var my_index: usize = undefined;
-        for (nodes.items, 0..) |node, index| {
-            if (node.pubkey().equals(&self.my_pubkey)) {
-                my_index = index;
+        var found_my_index = false;
+
+        while (shuffled.next()) |index| {
+            nodes.appendAssumeCapacity(self.nodes.items[index]);
+            if (!found_my_index) {
+                if (self.nodes.items[index].pubkey().equals(&self.my_pubkey)) {
+                    my_index = nodes.items.len - 1;
+                    found_my_index = true;
+                }
             }
         }
 
-        // TODO: Set constants and evaluate branch to 2 conditional
-        const root_distance: usize = if (my_index == 0)
-            0
-        else if (my_index <= fanout)
-            1
-        else if (my_index <= (fanout +| 1) *| fanout)
-            2
-        else
-            3;
-
-        const peers = try computeRetransmitChildren(
+        const children = try computeRetransmitChildren(
             allocator,
             fanout,
             my_index,
             nodes.items,
         );
 
-        std.debug.print("TURBINE_TREE: Number of children: {}\n", .{peers.len});
+        const root_distance: usize = if (my_index == 0)
+            0
+        else if (my_index <= fanout)
+            1
+        else if (my_index <= (fanout +| 1) *| fanout) // Does this make sense?
+            2
+        else
+            3;
 
-        return .{ root_distance, peers, addresses };
+        return .{ root_distance, children };
     }
 
     fn computeRetransmitChildren(
@@ -306,22 +291,22 @@ pub const TurbineTree = struct {
         fanout: usize,
         index: usize,
         nodes: []const Node,
-    ) ![]Node {
-        var peers = std.ArrayList(Node).init(allocator);
-        errdefer peers.deinit();
+    ) !std.ArrayList(Node) {
+        var children = try std.ArrayList(Node).initCapacity(allocator, fanout);
 
         const offset = (index -| 1) % fanout;
         const anchor = index - offset;
         const step = if (index == 0) 1 else fanout;
         var curr = anchor * fanout + offset + 1;
         var steps: usize = 0;
+
         while (curr < nodes.len and steps < fanout) {
-            try peers.append(nodes[curr]);
+            children.appendAssumeCapacity(nodes[curr]);
             curr += step;
             steps += 1;
         }
 
-        return peers.toOwnedSlice();
+        return children;
     }
 
     pub fn getRetransmitParent(
@@ -340,8 +325,8 @@ pub const TurbineTree = struct {
         var nodes = std.ArrayList(*Node).init(allocator);
         var shuffled = weighted_shuffle.shuffle(getSeededRng(slot_leader, shred));
         while (shuffled.next()) |index| {
-            if (self.nodes[index].pubkey() == self.my_pubkey) break;
-            try nodes.append(&self.nodes[index]);
+            if (self.nodes.items[index].pubkey() == self.my_pubkey) break;
+            try nodes.append(&self.nodes.items[index]);
         }
 
         return computeRetransmitParent(fanout, nodes.items.len, nodes);
@@ -380,7 +365,7 @@ pub const TurbineTree = struct {
         my_contact_info: ThreadSafeContactInfo,
         tvu_peers: []const ThreadSafeContactInfo,
         stakes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
-    ) ![]Node {
+    ) !std.ArrayList(Node) {
         var nodes = std.ArrayList(Node).init(allocator);
         defer nodes.deinit();
 
@@ -451,7 +436,7 @@ pub const TurbineTree = struct {
             if (node.stake > 0) try result.append(node);
         }
 
-        return result.toOwnedSlice();
+        return result;
     }
 };
 
@@ -519,18 +504,17 @@ test "initForRetransmit" {
         env.my_contact_info,
         env.tvu_peers,
         &env.node_stakes.unmanaged,
-        .noop,
     );
     defer turbine_tree.deinit();
 
     // All nodes with contact-info or stakes should be in the index.
-    try std.testing.expect(turbine_tree.nodes.len > env.nodes.len);
+    try std.testing.expect(turbine_tree.nodes.items.len > env.nodes.len);
 
     // Assert that all nodes keep their contact-info.
     // and, all staked nodes are also included.
-    var node_map = std.AutoArrayHashMap(Pubkey, TurbineTree.Node).init(allocator);
+    var node_map = std.AutoArrayHashMap(Pubkey, Node).init(allocator);
     defer node_map.deinit();
-    for (turbine_tree.nodes) |node| try node_map.put(node.pubkey(), node);
+    for (turbine_tree.nodes.items) |node| try node_map.put(node.pubkey(), node);
     for (env.nodes) |node| {
         try std.testing.expectEqual(node.pubkey, node_map.get(node.pubkey).?.pubkey());
     }
@@ -541,7 +525,7 @@ test "initForRetransmit" {
     }
 }
 
-fn checkRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: []const TurbineTree.Node, node_expected_children: []const []const TurbineTree.Node) !void {
+fn checkRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: []const Node, node_expected_children: []const []const Node) !void {
     // Create an index of the nodes
     var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
     for (nodes, 0..) |node, i| try index.put(node.pubkey(), i);
@@ -553,7 +537,7 @@ fn checkRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: []co
     for (node_expected_children, 0..) |expected_children, i| {
         // Check that the retransmit children for the ith node are correct
         const actual_peers = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, nodes);
-        for (expected_children, actual_peers) |expected, actual| {
+        for (expected_children, actual_peers.items) |expected, actual| {
             try std.testing.expectEqual(expected.pubkey(), actual.pubkey());
         }
 
@@ -568,12 +552,11 @@ fn checkRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: []co
     // Check that the remaining nodes have no children
     for (node_expected_children.len..nodes.len) |i| {
         const actual_peers = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, nodes);
-        try std.testing.expectEqual(0, actual_peers.len);
+        try std.testing.expectEqual(0, actual_peers.items.len);
     }
 }
 
 test "retransmit nodes computation: 20 nodes, 2 fanout" {
-    const Node = TurbineTree.Node;
     var prng = std.rand.DefaultPrng.init(0);
     const nds = [_]Node{
         Node.random(prng.random()), Node.random(prng.random()), Node.random(prng.random()), Node.random(prng.random()),
@@ -614,7 +597,6 @@ test "retransmit nodes computation: 20 nodes, 2 fanout" {
 }
 
 test "retransmit nodes computation: 36 nodes, 3 fanout" {
-    const Node = TurbineTree.Node;
     var prng = std.rand.DefaultPrng.init(0);
     const nds = [_]Node{
         Node.random(prng.random()), Node.random(prng.random()), Node.random(prng.random()), Node.random(prng.random()),
@@ -666,25 +648,25 @@ fn checkRetransmitNodesRoundTrip(allocator: std.mem.Allocator, fanout: usize, si
     var prng = std.rand.DefaultPrng.init(0);
     const rand = prng.random();
 
-    const nodes = try allocator.alloc(TurbineTree.Node, size);
-    defer allocator.free(nodes);
-    for (0..size) |i| nodes[i] = TurbineTree.Node.random(rand);
+    var nodes = try std.ArrayList(Node).initCapacity(allocator, size);
+    defer nodes.deinit();
+    for (0..size) |_| nodes.appendAssumeCapacity(Node.random(rand));
 
     var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
     defer index.deinit();
-    for (nodes, 0..) |node, i| try index.put(node.pubkey(), i);
+    for (nodes.items, 0..) |node, i| try index.put(node.pubkey(), i);
 
     // Root nodes parent is null
-    try std.testing.expectEqual(null, TurbineTree.computeRetransmitParent(fanout, 0, nodes));
+    try std.testing.expectEqual(null, TurbineTree.computeRetransmitParent(fanout, 0, nodes.items));
 
     // Check that each node is contained in its parents computed children
     for (1..size) |i| {
-        const parent = TurbineTree.computeRetransmitParent(fanout, i, nodes).?;
-        const children = try TurbineTree.computeRetransmitChildren(allocator, fanout, index.get(parent).?, nodes);
-        defer allocator.free(children);
+        const parent = TurbineTree.computeRetransmitParent(fanout, i, nodes.items).?;
+        const children = try TurbineTree.computeRetransmitChildren(allocator, fanout, index.get(parent).?, nodes.items);
+        defer children.deinit();
         var node_i_in_children = false;
-        for (children) |child| {
-            if (child.pubkey().equals(&nodes[i].pubkey())) {
+        for (children.items) |child| {
+            if (child.pubkey().equals(&nodes.items[i].pubkey())) {
                 node_i_in_children = true;
                 break;
             }
@@ -694,11 +676,11 @@ fn checkRetransmitNodesRoundTrip(allocator: std.mem.Allocator, fanout: usize, si
 
     // Check that the computed parent of each nodes child the parent
     for (0..size) |i| {
-        const expected_parent_pubkey = nodes[i].pubkey();
-        const children = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, nodes);
-        defer allocator.free(children);
-        for (children) |child| {
-            const actual_parent_pubkey = TurbineTree.computeRetransmitParent(fanout, index.get(child.pubkey()).?, nodes).?;
+        const expected_parent_pubkey = nodes.items[i].pubkey();
+        const children = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, nodes.items);
+        defer children.deinit();
+        for (children.items) |child| {
+            const actual_parent_pubkey = TurbineTree.computeRetransmitParent(fanout, index.get(child.pubkey()).?, nodes.items).?;
             try std.testing.expectEqual(expected_parent_pubkey, actual_parent_pubkey);
         }
     }

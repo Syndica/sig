@@ -741,10 +741,21 @@ fn validator() !void {
     defer retransmit_shred_channel.deinit();
 
     // Sockets used to retransmit shreds to peers
-    // This should be configured at a higher level and may consist of multiple sockets
-    var retransmit_send_socket = try network.Socket.create(.ipv4, .udp);
-    defer retransmit_send_socket.close();
-    try retransmit_send_socket.bind(try network.EndPoint.parse("0.0.0.0:0"));
+    // The number of sockets should be configurable
+    const retransmit_send_sockets: [3]network.Socket = .{
+        try network.Socket.create(.ipv4, .udp),
+        try network.Socket.create(.ipv4, .udp),
+        try network.Socket.create(.ipv4, .udp),
+    };
+    defer {
+        for (retransmit_send_sockets) |socket| {
+            socket.close();
+        }
+    }
+    for (retransmit_send_sockets) |_socket| {
+        var socket = _socket;
+        try socket.bind(try network.EndPoint.parse("0.0.0.0:0"));
+    }
 
     // Retransmit service needs to know the nodes contact info
     // This should be replaced my a contact info provider which should be used by all services other than
@@ -755,18 +766,16 @@ fn validator() !void {
     var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
     // Retransmit service
-    const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.runRetransmitService, .{
+    const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.retransmit_service.run, .{
         allocator,
         thread_safe_contact_info,
         snapshot.bank.bank_fields,
         &leader_schedule_cache,
         &retransmit_shred_channel,
-        &.{
-            retransmit_send_socket,
-        },
+        &retransmit_send_sockets,
         &gossip_service.gossip_table_rw,
-        rng.random(),
         &app_base.exit,
+        rng.random(),
         app_base.logger,
     });
 
