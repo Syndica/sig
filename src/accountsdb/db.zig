@@ -2481,6 +2481,8 @@ pub const AccountsDB = struct {
             .bank_fields_inc = .{}, // default to null for full snapshot,
         };
 
+        // main snapshot writing logic
+        // writer() data flow: tar -> zstd -> archive_file
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
@@ -2677,6 +2679,8 @@ pub const AccountsDB = struct {
             },
         };
 
+        // main snapshot writing logic
+        // writer() data flow: tar -> zstd -> archive_file
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
