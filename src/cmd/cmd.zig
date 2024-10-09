@@ -234,6 +234,14 @@ pub fn run() !void {
         .value_name = "snapshot_dir",
     };
 
+    var snapshot_metadata_only = cli.Option{
+        .long_name = "snapshot-metadata-only",
+        .help = "load only the snapshot metadata",
+        .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_metadata_only),
+        .required = false,
+        .value_name = "snapshot_metadata_only",
+    };
+
     var genesis_file_path = cli.Option{
         .long_name = "genesis-file-path",
         .help = "path to the genesis file. defaults to 'data/genesis-files/<network>_genesis.bin' if --network option is set",
@@ -397,6 +405,7 @@ pub fn run() !void {
                             &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
+                            &snapshot_metadata_only,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -700,24 +709,17 @@ fn validator() !void {
         }
     }
 
-    // const snapshot = try loadSnapshot(
-    //     allocator,
-    //     app_base.logger,
-    //     gossip_service,
-    //     true,
-    //     geyser_writer,
-    // );
-
-    const snapshot = loadSnapshotMetatdata(
+    // snapshot
+    const snapshot = try loadSnapshot(
         allocator,
         app_base.logger,
         gossip_service,
+        true,
         geyser_writer,
-    ) catch |err| {
-        std.debug.print("Failed to load snapshot metadata: {any}\n", .{err});
-        return;
-    };
+        config.current.accounts_db.snapshot_metadata_only,
+    );
 
+    // leader schedule
     var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
     if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
         try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
@@ -1020,6 +1022,7 @@ fn createSnapshot() !void {
         null,
         false,
         null,
+        false,
     );
     defer snapshot_result.deinit();
 
@@ -1076,6 +1079,7 @@ fn validateSnapshot() !void {
         null,
         true,
         geyser_writer,
+        false,
     );
     defer snapshot_result.deinit();
 }
@@ -1097,6 +1101,7 @@ fn printLeaderSchedule() !void {
             null,
             true,
             null,
+            false,
         ) catch |err| {
             if (err == error.SnapshotsNotFoundAndNoGossipService) {
                 app_base.logger.err().log(
@@ -1524,6 +1529,8 @@ fn loadSnapshot(
     validate_snapshot: bool,
     /// optional geyser to write snapshot data to
     geyser_writer: ?*GeyserWriter,
+    /// whether to load only the metadata of the snapshot
+    metadata_only: bool,
 ) !*LoadedSnapshot {
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
@@ -1578,13 +1585,17 @@ fn loadSnapshot(
     });
     errdefer result.accounts_db.deinit();
 
-    result.collapsed_snapshot_fields = try result.accounts_db.loadWithDefaults(
-        allocator,
-        &all_snapshot_fields,
-        n_threads_snapshot_load,
-        validate_snapshot,
-        config.current.accounts_db.accounts_per_file_estimate,
-    );
+    if (metadata_only) {
+        result.collapsed_snapshot_fields = try result.snapshot_fields.collapse();
+    } else {
+        result.collapsed_snapshot_fields = try result.accounts_db.loadWithDefaults(
+            allocator,
+            &all_snapshot_fields,
+            n_threads_snapshot_load,
+            validate_snapshot,
+            config.current.accounts_db.accounts_per_file_estimate,
+        );
+    }
     errdefer result.collapsed_snapshot_fields.deinit(allocator);
 
     const bank_fields = &result.collapsed_snapshot_fields.bank_fields;
@@ -1603,6 +1614,10 @@ fn loadSnapshot(
     result.bank = Bank.init(&result.accounts_db, bank_fields);
     try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
+    if (metadata_only) {
+        return result;
+    }
+
     // validate the status cache
     result.status_cache = readStatusCache(allocator, snapshot_dir) catch |err| {
         if (err == error.StatusCacheNotFound) {
@@ -1617,65 +1632,6 @@ fn loadSnapshot(
     try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
     logger.info().log("accounts-db setup done...");
-
-    return result;
-}
-
-fn loadSnapshotMetatdata(
-    allocator: Allocator,
-    logger: Logger,
-    /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
-    gossip_service: ?*GossipService,
-    /// optional geyser to write snapshot data to
-    geyser_writer: ?*GeyserWriter,
-) !*LoadedSnapshot {
-    const result = try allocator.create(LoadedSnapshot);
-    errdefer allocator.destroy(result);
-    result.allocator = allocator;
-
-    const genesis_file_path = try config.current.genesisFilePath() orelse
-        return error.GenesisPathNotProvided;
-
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
-    defer snapshot_dir.close();
-
-    const all_snapshot_fields, _ = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{
-        .snapshot_dir = snapshot_dir,
-        .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
-        .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
-        .num_threads_snapshot_unpack = config.current.accounts_db.num_threads_snapshot_unpack,
-        .min_snapshot_download_speed_mbs = config.current.accounts_db.min_snapshot_download_speed_mbs,
-    });
-    result.snapshot_fields = all_snapshot_fields;
-
-    result.accounts_db = try AccountsDB.init(
-        allocator,
-        logger,
-        snapshot_dir,
-        .{
-            .number_of_index_bins = config.current.accounts_db.number_of_index_bins,
-            .use_disk_index = config.current.accounts_db.use_disk_index,
-        },
-        geyser_writer,
-    );
-    errdefer result.accounts_db.deinit();
-
-    result.collapsed_snapshot_fields = try result.snapshot_fields.collapse();
-    const bank_fields = &result.collapsed_snapshot_fields.bank_fields;
-
-    logger.info().log("reading genesis...");
-    result.genesis_config = readGenesisConfig(allocator, genesis_file_path) catch |err| {
-        if (err == error.GenesisNotFound) {
-            logger.err().logf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
-        }
-        return err;
-    };
-    errdefer result.genesis_config.deinit(allocator);
-
-    logger.info().log("validating bank...");
-    result.bank = Bank.init(&result.accounts_db, bank_fields);
-    try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
     return result;
 }
