@@ -1628,16 +1628,16 @@ fn loadSnapshotMetatdata(
     result.collapsed_snapshot_fields = try result.snapshot_fields.collapse();
     const bank_fields = &result.collapsed_snapshot_fields.bank_fields;
 
-    logger.infof("reading genesis...", .{});
+    logger.info().log("reading genesis...");
     result.genesis_config = readGenesisConfig(allocator, genesis_file_path) catch |err| {
         if (err == error.GenesisNotFound) {
-            logger.errf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
+            logger.err().logf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
         }
         return err;
     };
     errdefer result.genesis_config.deinit(allocator);
 
-    logger.infof("validating bank...", .{});
+    logger.info().log("validating bank...");
     result.bank = Bank.init(&result.accounts_db, bank_fields);
     try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
