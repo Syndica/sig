@@ -47,9 +47,7 @@ pub const BenchmarLegder = struct {
 
         const prefix = "agave.blockstore.bench_write_small.";
         const shreds = try testShreds(std.heap.c_allocator, prefix ++ "shreds.bin");
-        defer inline for (.{shreds}) |slice| {
-            deinitShreds(allocator, slice);
-        };
+        defer deinitShreds(allocator, shreds);
 
         const is_repairs = try inserter.allocator.alloc(bool, shreds.len);
         defer inserter.allocator.free(is_repairs);
@@ -72,9 +70,7 @@ pub const BenchmarLegder = struct {
 
         const prefix = "agave.blockstore.bench_read.";
         const shreds = try testShreds(std.heap.c_allocator, prefix ++ "shreds.bin");
-        defer inline for (.{shreds}) |slice| {
-            deinitShreds(allocator, slice);
-        };
+        defer deinitShreds(allocator, shreds);
 
         const total_shreds = shreds.len;
 
@@ -104,9 +100,7 @@ pub const BenchmarLegder = struct {
 
         const prefix = "agave.blockstore.bench_read.";
         const shreds = try testShreds(std.heap.c_allocator, prefix ++ "shreds.bin");
-        defer inline for (.{shreds}) |slice| {
-            deinitShreds(allocator, slice);
-        };
+        defer deinitShreds(allocator, shreds);
 
         const total_shreds = shreds.len;
         _ = try ledger.insert_shred.insertShredsForTest(&inserter, shreds);
