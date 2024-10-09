@@ -855,8 +855,7 @@ pub const HashTimeQueue = struct {
 test "remove old values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rng = std.rand.DefaultPrng.init(seed);
+    var prng = std.rand.DefaultPrng.init(91);
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
@@ -868,7 +867,7 @@ test "remove old values" {
 
     for (0..5) |_| {
         const value = try SignedGossipData.initSigned(
-            GossipData.random(rng.random()),
+            GossipData.random(prng.random()),
             &keypair,
         );
         // TS = 100
@@ -890,8 +889,7 @@ test "remove old values" {
 test "insert and remove value" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rng = std.rand.DefaultPrng.init(seed);
+    var prng = std.rand.DefaultPrng.init(91);
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
@@ -902,7 +900,7 @@ test "insert and remove value" {
     }
 
     const value = try SignedGossipData.initSigned(
-        GossipData.randomFromIndex(rng.random(), 0),
+        GossipData.randomFromIndex(prng.random(), 0),
         &keypair,
     );
     _ = try table.insert(value, 100);
@@ -914,8 +912,7 @@ test "insert and remove value" {
 test "trim pruned values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rng = std.rand.DefaultPrng.init(seed);
+    var prng = std.rand.DefaultPrng.init(91);
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
@@ -933,7 +930,7 @@ test "trim pruned values" {
 
     for (0..N_VALUES) |_| {
         const value = try SignedGossipData.initSigned(
-            GossipData.random(rng.random()),
+            GossipData.random(prng.random()),
             &keypair,
         );
         _ = try table.insert(value, 100);
@@ -962,18 +959,18 @@ test "gossip.HashTimeQueue: insert multiple values" {
     var htq = HashTimeQueue.init(std.testing.allocator);
     defer htq.deinit();
 
-    var default_prng = std.rand.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
-    const rand = default_prng.random();
+    var prng = std.rand.DefaultPrng.init(91);
+    const random = prng.random();
 
-    try htq.insert(Hash.random(rand), 100);
-    try htq.insert(Hash.random(rand), 102);
-    try htq.insert(Hash.random(rand), 103);
+    try htq.insert(Hash.random(random), 100);
+    try htq.insert(Hash.random(random), 102);
+    try htq.insert(Hash.random(random), 103);
 
     try htq.trim(102);
     try std.testing.expect(htq.len() == 2);
 
-    try htq.insert(Hash.random(rand), 101);
-    try htq.insert(Hash.random(rand), 120);
+    try htq.insert(Hash.random(random), 101);
+    try htq.insert(Hash.random(random), 120);
     try std.testing.expect(htq.len() == 4);
 
     try htq.trim(150);
@@ -983,11 +980,10 @@ test "gossip.HashTimeQueue: insert multiple values" {
 test "gossip.HashTimeQueue: trim pruned values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
+    var prng = std.rand.DefaultPrng.init(91);
+    const random = prng.random();
     const data = GossipData{
-        .LegacyContactInfo = LegacyContactInfo.random(rng),
+        .LegacyContactInfo = LegacyContactInfo.random(random),
     };
     var value = try SignedGossipData.initSigned(data, &keypair);
 
@@ -1004,7 +1000,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
 
     // should lead to prev being pruned
     var new_data = GossipData{
-        .LegacyContactInfo = LegacyContactInfo.random(rng),
+        .LegacyContactInfo = LegacyContactInfo.random(random),
     };
     new_data.LegacyContactInfo.id = data.LegacyContactInfo.id;
     // older wallclock
@@ -1023,10 +1019,9 @@ test "gossip.HashTimeQueue: trim pruned values" {
 test "insert and get" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
-    var value = try SignedGossipData.random(rng, &keypair);
+    var prng = std.rand.DefaultPrng.init(91);
+    const random = prng.random();
+    var value = try SignedGossipData.random(random, &keypair);
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);

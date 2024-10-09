@@ -13,8 +13,6 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const SocketAddr = sig.net.SocketAddr;
 const Duration = sig.time.Duration;
 
-const getWallclockMs = sig.time.getWallclockMs;
-
 const PING_TOKEN_SIZE: usize = 32;
 const PING_PONG_HASH_PREFIX: [16]u8 = .{
     'S', 'O', 'L', 'A', 'N', 'A', '_', 'P', 'I', 'N', 'G', '_', 'P', 'O', 'N', 'G',
@@ -39,9 +37,9 @@ pub const Ping = struct {
         return self;
     }
 
-    pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
+    pub fn random(rand: std.rand.Random, keypair: *const KeyPair) !Self {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
-        rng.bytes(&token);
+        rand.bytes(&token);
         var signature = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
 
         return Self{
@@ -83,8 +81,8 @@ pub const Pong = struct {
         }
     }
 
-    pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
-        const ping = try Ping.random(rng, keypair);
+    pub fn random(rand: std.rand.Random, keypair: *const KeyPair) !Self {
+        const ping = try Ping.random(rand, keypair);
         return try Pong.init(&ping, keypair);
     }
 
@@ -176,8 +174,8 @@ pub const PingCache = struct {
                 return null;
             }
         }
-        var rng = DefaultPrng.init(getWallclockMs());
-        const ping = Ping.random(rng.random(), keypair) catch return null;
+        var prng = DefaultPrng.init(0);
+        const ping = Ping.random(prng.random(), keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         const hash = Hash.generateSha256Hash(token_with_prefix[0..]);
         _ = self.pending_cache.put(hash, peer_and_addr);
@@ -254,11 +252,10 @@ test "PingCache works" {
     );
     defer ping_cache.deinit();
 
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
+    var prng = std.rand.DefaultPrng.init(0);
+    const random = prng.random();
 
-    const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(rng), .socket_addr = SocketAddr.UNSPECIFIED };
+    const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(random), .socket_addr = SocketAddr.UNSPECIFIED };
     const now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 

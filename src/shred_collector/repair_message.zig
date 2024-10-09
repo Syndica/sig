@@ -198,20 +198,20 @@ pub const RepairRequestHeader = struct {
 
 test "signed/serialized RepairRequest is valid" {
     const allocator = std.testing.allocator;
-    var rand = std.rand.DefaultPrng.init(392138);
-    const rng = rand.random();
+    var prng = std.rand.DefaultPrng.init(392138);
+    const random = prng.random();
 
     inline for (.{
-        RepairRequest{ .Orphan = rng.int(Slot) },
-        RepairRequest{ .Shred = .{ rng.int(Slot), rng.int(u64) } },
-        RepairRequest{ .HighestShred = .{ rng.int(Slot), rng.int(u64) } },
+        RepairRequest{ .Orphan = random.int(Slot) },
+        RepairRequest{ .Shred = .{ random.int(Slot), random.int(u64) } },
+        RepairRequest{ .HighestShred = .{ random.int(Slot), random.int(u64) } },
     }) |request| {
         var kp_noise: [32]u8 = undefined;
-        rng.bytes(&kp_noise);
+        random.bytes(&kp_noise);
         const keypair = try KeyPair.create(kp_noise);
-        const recipient = Pubkey.random(rng);
-        const timestamp = rng.int(u64);
-        const nonce = rng.int(Nonce);
+        const recipient = Pubkey.random(random);
+        const timestamp = random.int(u64);
+        const nonce = random.int(Nonce);
 
         var buf: [1232]u8 = undefined;
         var serialized = try serializeRepairRequest(
@@ -228,21 +228,21 @@ test "signed/serialized RepairRequest is valid" {
 
         var deserialized = try bincode.readFromSlice(allocator, RepairMessage, serialized, .{});
         try deserialized.verify(serialized, recipient, timestamp);
-        rng.bytes(serialized[10..15]); // >99.99% chance that this invalidates the signature
+        random.bytes(serialized[10..15]); // >99.99% chance that this invalidates the signature
         var bad = try bincode.readFromSlice(allocator, RepairMessage, serialized, .{});
         if (bad.verify(serialized, recipient, timestamp)) |_| @panic("should err") else |_| {}
     }
 }
 
 test "RepairRequestHeader serialization round trip" {
-    var rng = std.rand.DefaultPrng.init(5224);
+    var prng = std.rand.DefaultPrng.init(5224);
     var signature: [Signature.size]u8 = undefined;
-    rng.fill(&signature);
+    prng.fill(&signature);
 
     const header = RepairRequestHeader{
         .signature = Signature.init(signature),
-        .sender = Pubkey.random(rng.random()),
-        .recipient = Pubkey.random(rng.random()),
+        .sender = Pubkey.random(prng.random()),
+        .recipient = Pubkey.random(prng.random()),
         .timestamp = 5924,
         .nonce = 123,
     };
@@ -345,11 +345,11 @@ test "RepairProtocolMessage.AncestorHashes serialization round trip" {
 }
 
 test "RepairProtocolMessage serializes to size <= MAX_SERIALIZED_SIZE" {
-    var rng = std.rand.DefaultPrng.init(184837);
+    var prng = std.rand.DefaultPrng.init(184837);
     for (0..10) |_| {
         inline for (@typeInfo(RepairMessage.Tag).Enum.fields) |enum_field| {
             const tag = @field(RepairMessage.Tag, enum_field.name);
-            const msg = testHelpers.randomRepairProtocolMessage(rng.random(), tag);
+            const msg = testHelpers.randomRepairProtocolMessage(prng.random(), tag);
             var buf: [RepairMessage.MAX_SERIALIZED_SIZE]u8 = undefined;
             _ = try bincode.writeToSlice(&buf, msg, .{});
         }
@@ -362,8 +362,8 @@ const testHelpers = struct {
         tag: RepairMessage.Tag,
         expected: []const u8,
     ) !void {
-        var rng = std.rand.DefaultPrng.init(seed);
-        const msg = testHelpers.randomRepairProtocolMessage(rng.random(), tag);
+        var prng = std.rand.DefaultPrng.init(seed);
+        const msg = testHelpers.randomRepairProtocolMessage(prng.random(), tag);
         debugMessage(&msg);
 
         var buf: [RepairMessage.MAX_SERIALIZED_SIZE]u8 = undefined;
@@ -402,47 +402,47 @@ const testHelpers = struct {
         // println!("{data:?}");
     }
 
-    fn randomRepairRequestHeader(rng: std.rand.Random) RepairRequestHeader {
+    fn randomRepairRequestHeader(rand: std.rand.Random) RepairRequestHeader {
         var signature: [Signature.size]u8 = undefined;
-        rng.bytes(&signature);
+        rand.bytes(&signature);
 
         return RepairRequestHeader{
             .signature = Signature.init(signature),
-            .sender = Pubkey.random(rng),
-            .recipient = Pubkey.random(rng),
-            .timestamp = rng.int(u64),
-            .nonce = rng.int(u32),
+            .sender = Pubkey.random(rand),
+            .recipient = Pubkey.random(rand),
+            .timestamp = rand.int(u64),
+            .nonce = rand.int(u32),
         };
     }
 
     fn randomRepairProtocolMessage(
-        rng: std.rand.Random,
+        rand: std.rand.Random,
         message_type: RepairMessage.Tag,
     ) RepairMessage {
         return switch (message_type) {
             .Pong => x: {
                 var buf: [32]u8 = undefined;
-                rng.bytes(&buf);
+                rand.bytes(&buf);
                 const kp = KeyPair.create(buf) catch unreachable;
-                break :x .{ .Pong = Pong.random(rng, &(kp)) catch unreachable };
+                break :x .{ .Pong = Pong.random(rand, &(kp)) catch unreachable };
             },
             .WindowIndex => .{ .WindowIndex = .{
-                .header = randomRepairRequestHeader(rng),
-                .slot = rng.int(Slot),
-                .shred_index = rng.int(u64),
+                .header = randomRepairRequestHeader(rand),
+                .slot = rand.int(Slot),
+                .shred_index = rand.int(u64),
             } },
             .HighestWindowIndex => .{ .HighestWindowIndex = .{
-                .header = randomRepairRequestHeader(rng),
-                .slot = rng.int(Slot),
-                .shred_index = rng.int(u64),
+                .header = randomRepairRequestHeader(rand),
+                .slot = rand.int(Slot),
+                .shred_index = rand.int(u64),
             } },
             .Orphan => .{ .Orphan = .{
-                .header = randomRepairRequestHeader(rng),
-                .slot = rng.int(Slot),
+                .header = randomRepairRequestHeader(rand),
+                .slot = rand.int(Slot),
             } },
             .AncestorHashes => .{ .AncestorHashes = .{
-                .header = randomRepairRequestHeader(rng),
-                .slot = rng.int(Slot),
+                .header = randomRepairRequestHeader(rand),
+                .slot = rand.int(Slot),
             } },
         };
     }

@@ -20,16 +20,16 @@ pub const Account = struct {
         allocator.free(self.data);
     }
 
-    pub fn random(allocator: std.mem.Allocator, rng: std.Random, data_len: usize) !Account {
+    pub fn random(allocator: std.mem.Allocator, rand: std.Random, data_len: usize) !Account {
         const data = try allocator.alloc(u8, data_len);
-        rng.bytes(data);
+        rand.bytes(data);
 
         return .{
-            .lamports = rng.int(u64),
+            .lamports = rand.int(u64),
             .data = data,
-            .owner = Pubkey.random(rng),
-            .executable = rng.boolean(),
-            .rent_epoch = rng.int(Epoch),
+            .owner = Pubkey.random(rand),
+            .executable = rand.boolean(),
+            .rent_epoch = rand.int(Epoch),
         };
     }
 

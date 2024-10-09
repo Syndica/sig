@@ -175,13 +175,13 @@ pub const BenchmarkPacketProcessing = struct {
         }
         var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ &channel, n_packets });
 
-        var rand = std.rand.DefaultPrng.init(0);
+        var prng = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
         var timer = try sig.time.Timer.start();
 
         // NOTE: send more packets than we need because UDP drops some
         for (1..(n_packets * 2 + 1)) |i| {
-            rand.fill(&packet_buf);
+            prng.fill(&packet_buf);
             _ = try socket.sendTo(to_endpoint, &packet_buf);
 
             // 10Kb per second

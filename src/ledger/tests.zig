@@ -19,8 +19,8 @@ const comptimePrint = std.fmt.comptimePrint;
 const schema = ledger.schema.schema;
 
 test "put/get data consistency for merkle root" {
-    var rng = std.Random.DefaultPrng.init(100);
-    const random = rng.random();
+    var prng = std.Random.DefaultPrng.init(100);
+    const random = prng.random();
 
     var db = try DB.init("bsdbMerkleRootDatabaseConsistency");
     defer db.deinit();
