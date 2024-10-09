@@ -142,6 +142,8 @@ pub const AccountsDBConfig = struct {
     fastload: bool = false,
     /// saves the accounts index to disk after loading to support fastloading
     save_index: bool = false,
+    /// only load snapshot metadata when starting up
+    snapshot_metadata_only: bool = false,
 };
 
 pub const GeyserConfig = struct {
