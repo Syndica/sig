@@ -41,8 +41,8 @@ pub const ShredReceiver = struct {
     /// Run threads to listen/send over socket and handle all incoming packets.
     /// Returns when exit is set to true.
     pub fn run(self: *Self) !void {
-        defer self.logger.err("exiting shred receiver");
-        errdefer self.logger.err("error in shred receiver");
+        defer self.logger.err().log("exiting shred receiver");
+        errdefer self.logger.err().log("error in shred receiver");
 
         var response_sender = try SocketThread
             .initSender(self.allocator, self.logger, self.repair_socket, self.exit);

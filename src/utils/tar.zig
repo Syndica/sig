@@ -78,7 +78,9 @@ pub fn parallelUntarToFileSystem(
         thread_pool.deinit();
     }
 
-    logger.infof("using {d} threads to unpack snapshot", .{n_threads});
+    logger
+        .info()
+        .logf("using {d} threads to unpack snapshot", .{n_threads});
     const tasks = try UnTarTask.init(allocator, n_threads);
     defer allocator.free(tasks);
 
@@ -148,7 +150,7 @@ pub fn parallelUntarToFileSystem(
                 try reader.skipBytes(pad_len, .{});
 
                 const task_ptr = &tasks[UnTarTask.awaitAndAcquireFirstAvailableTask(tasks, 0)];
-                task_ptr.result catch |err| logger.errf("UnTarTask encountered error: {s}", .{@errorName(err)});
+                task_ptr.result catch |err| logger.err().logf("UnTarTask encountered error: {s}", .{@errorName(err)});
                 task_ptr.entry = .{
                     .allocator = allocator,
                     .contents = contents,
@@ -173,7 +175,7 @@ pub fn parallelUntarToFileSystem(
     // wait for all tasks
     for (tasks) |*task| {
         task.blockUntilCompletion();
-        task.result catch |err| logger.errf("UnTarTask encountered error: {s}", .{@errorName(err)});
+        task.result catch |err| logger.err().logf("UnTarTask encountered error: {s}", .{@errorName(err)});
     }
 }
 

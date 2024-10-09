@@ -1,217 +1,245 @@
 const std = @import("std");
-const time = @import("../time/time.zig");
-const Field = @import("field.zig").Field;
-const Level = @import("level.zig").Level;
 const logfmt = @import("logfmt.zig");
-const Logger = @import("./log.zig").Logger;
+const Level = @import("level.zig").Level;
 const Channel = @import("../sync/channel.zig").Channel;
-const testing = std.testing;
 const AtomicBool = std.atomic.Value(bool);
 
 pub const Entry = union(enum) {
-    standard: *StandardEntry,
+    channel_print: ChannelPrintEntry,
+    direct_print: DirectPrintEntry,
     noop,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, channel: *Channel(*StandardEntry), max_level: Level) Self {
-        return .{ .standard = StandardEntry.init(allocator, channel, max_level) };
+    pub fn init(allocator: std.mem.Allocator, channel: *Channel(logfmt.LogMsg), log_level: Level) Self {
+        return .{ .channel_print = ChannelPrintEntry.init(allocator, channel, log_level) };
     }
 
     pub fn deinit(self: Self) void {
         switch (self) {
-            .standard => |entry| {
-                entry.deinit();
-            },
             .noop => {},
+            .channel_print => |impl| impl.deinit(),
+            .direct_print => |impl| impl.deinit(),
         }
     }
 
     pub fn field(self: Self, name: []const u8, value: anytype) Self {
         switch (self) {
-            .standard => |entry| {
-                _ = entry.field(name, value);
-                return self;
-            },
             .noop => {
                 return self;
             },
+            .channel_print => |entry| {
+                var log_entry = entry;
+                _ = log_entry.field(name, value);
+                return Entry{ .channel_print = log_entry };
+            },
+            .direct_print => |entry| {
+                var log_entry = entry;
+                _ = log_entry.field(name, value);
+                return Entry{ .direct_print = log_entry };
+            },
         }
     }
 
-    pub fn debugf(self: Self, comptime fmt: []const u8, args: anytype) void {
-        self.logf(.debug, fmt, args);
-    }
-
-    pub fn errf(self: Self, comptime fmt: []const u8, args: anytype) void {
-        self.logf(.err, fmt, args);
-    }
-
-    pub fn warnf(self: Self, comptime fmt: []const u8, args: anytype) void {
-        self.logf(.warn, fmt, args);
-    }
-
-    pub fn infof(self: Self, comptime fmt: []const u8, args: anytype) void {
-        self.logf(.info, fmt, args);
-    }
-
-    pub fn info(self: Self, msg: []const u8) void {
-        self.log(.info, msg);
-    }
-
-    pub fn debug(self: Self, msg: []const u8) void {
-        self.log(.debug, msg);
-    }
-
-    pub fn err(self: Self, msg: []const u8) void {
-        self.log(.err, msg);
-    }
-
-    pub fn warn(self: Self, msg: []const u8) void {
-        self.log(.warn, msg);
-    }
-
-    pub fn logf(self: Self, level: Level, comptime fmt: []const u8, args: anytype) void {
+    pub fn log(self: Self, comptime msg: []const u8) void {
         switch (self) {
-            .standard => |entry| {
-                entry.logf(level, fmt, args);
-            },
             .noop => {},
+            .channel_print => |impl| {
+                var logger = impl;
+                logger.log(msg);
+            },
+            .direct_print => |impl| {
+                var logger = impl;
+                logger.log(msg);
+            },
         }
     }
 
-    pub fn log(self: Self, level: Level, msg: []const u8) void {
+    pub fn logf(self: Self, comptime fmt: []const u8, args: anytype) void {
         switch (self) {
-            .standard => |entry| {
-                entry.log(level, msg);
-            },
             .noop => {},
-        }
-    }
-
-    pub fn format(
-        self: *const Self,
-        fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        switch (self) {
-            .standard => |entry| {
-                try entry.format(fmt, options, writer);
+            .channel_print => |impl| {
+                var logger = impl;
+                logger.logf(fmt, args);
             },
-            .noop => {},
-        }
-    }
-
-    pub fn custom_format(self: *const Self, formatter: anytype, writer: anytype) !void {
-        switch (self) {
-            .standard => |entry| {
-                try formatter(entry, writer);
+            .direct_print => |impl| {
+                var logger = impl;
+                logger.logf(fmt, args);
             },
-            .noop => {},
         }
     }
 };
 
-pub const StandardEntry = struct {
-    /// Log levels more granular than this will not be logged.
-    max_level: Level,
-    /// Level to log this message as.
-    level: Level,
+pub const ChannelPrintEntry = struct {
     allocator: std.mem.Allocator,
-    fields: std.ArrayList(Field),
-    time: time.DateTime,
-    message: std.ArrayList(u8),
-    channel: *Channel(*StandardEntry),
-
+    scope: ?[]const u8,
+    log_level: Level,
+    fields: std.ArrayList(u8),
+    exit_sig: std.atomic.Value(bool),
+    channel: *Channel(logfmt.LogMsg),
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, channel: *Channel(*StandardEntry), max_level: Level) *Self {
-        const self = allocator.create(Self) catch @panic("could not allocate.Create Entry");
-        self.* = Self{
+    pub fn init(
+        allocator: std.mem.Allocator,
+        scope: ?[]const u8,
+        channel: *Channel(logfmt.LogMsg),
+        log_level: Level,
+    ) Self {
+        return .{
             .allocator = allocator,
-            .fields = std.ArrayList(Field).init(allocator),
-            .max_level = max_level,
-            .level = Level.debug,
+            .scope = scope,
+            .exit_sig = AtomicBool.init(false),
+            .log_level = log_level,
+            .fields = std.ArrayList(u8).init(allocator),
             .channel = channel,
-            .time = time.DateTime.epoch_unix,
-            .message = std.ArrayList(u8).init(allocator),
         };
-        return self;
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.fields.items) |*f| {
-            f.deinit(self.allocator);
-        }
         self.fields.deinit();
-        self.message.deinit();
-        self.allocator.destroy(self);
     }
 
     pub fn field(self: *Self, name: []const u8, value: anytype) *Self {
-        self.fields.append(Field.init(self.allocator, name, value)) catch @panic("could not append Field");
+        const min_capacity = self.fields.items.len + logfmt.countField(name, value);
+        self.fields.ensureTotalCapacity(min_capacity) catch return self;
+        logfmt.fmtField(self.fields.writer(), name, value);
         return self;
     }
 
-    pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
-        if (@intFromEnum(self.max_level) < @intFromEnum(level)) {
+    pub fn log(self: *Self, comptime msg: []const u8) void {
+        const log_msg = logfmt.LogMsg{
+            .level = self.log_level,
+            .maybe_scope = self.scope,
+            .maybe_msg = msg,
+            .maybe_fields = self.fields.toOwnedSlice() catch |err| {
+                std.debug.print("Processing fields failed with err: {any}", .{err});
+                self.deinit();
+                return;
+            },
+            .maybe_fmt = null,
+        };
+
+        self.channel.send(log_msg) catch |err| {
+            std.debug.print("Send msg through channel failed with err: {any}", .{err});
             self.deinit();
             return;
-        }
-        var message = std.ArrayList(u8).initCapacity(self.allocator, fmt.len * 2) catch @panic("could not initCapacity for message");
-        std.fmt.format(message.writer(), fmt, args) catch @panic("could not format");
-        self.message = message;
-        self.time = time.DateTime.now();
-        self.level = level;
-        self.channel.send(self) catch @panic("could not send to channel");
+        };
     }
 
-    pub fn log(self: *Self, level: Level, msg: []const u8) void {
-        if (@intFromEnum(self.max_level) < @intFromEnum(level)) {
+    pub fn logf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        // Get memory for formatting message.
+        const msg_buf = self.allocBuf(std.fmt.count(fmt, args)) catch |err| {
+            std.debug.print("allocBuff failed with err: {any}", .{err});
             self.deinit();
             return;
+        };
+        var fmt_message = std.io.fixedBufferStream(msg_buf);
+        // Format message.
+        logfmt.fmtMsg(fmt_message.writer(), fmt, args);
+
+        const log_msg = logfmt.LogMsg{
+            .level = self.log_level,
+            .maybe_scope = self.scope,
+            .maybe_msg = null,
+            .maybe_fields = self.fields.toOwnedSlice() catch |err| {
+                std.debug.print("Processing fields failed with err: {any}", .{err});
+                self.deinit();
+                return;
+            },
+            .maybe_fmt = fmt_message.getWritten(),
+        };
+
+        self.channel.send(log_msg) catch |err| {
+            std.debug.print("Send msg through channel failed with err: {any}", .{err});
+            self.deinit();
+            return;
+        };
+    }
+
+    // Utility function for allocating memory from RecycleFBA for part of the log message.
+    fn allocBuf(self: *const Self, size: u64) ![]u8 {
+        const buf = blk: while (true) {
+            const buf = self.allocator.alloc(u8, size) catch {
+                std.time.sleep(std.time.ns_per_ms);
+                if (self.exit_sig.load(.unordered)) {
+                    return error.MemoryBlockedWithExitSignaled;
+                }
+                continue;
+            };
+            break :blk buf;
+        };
+        errdefer {
+            self.allocator.free(buf);
         }
-        var message = std.ArrayList(u8).initCapacity(self.allocator, msg.len) catch @panic("could not initCapacity for message");
-        message.appendSlice(msg[0..]) catch @panic("could not appendSlice for message");
-        self.message = message;
-        self.time = time.DateTime.now();
-        self.level = level;
-        self.channel.send(self) catch @panic("could not send to channel");
-    }
-
-    pub fn format(
-        self: *const Self,
-        _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        // default formatting style
-        try logfmt.formatter(self, writer);
-    }
-
-    pub fn custom_format(self: *const Self, formatter: anytype, writer: anytype) !void {
-        try formatter(self, writer);
+        return buf;
     }
 };
 
-const A = enum(u8) {
-    some_enum_variant,
+/// An instance of `Entry` that logs directly to std.debug.print, instead of sending to channel.
+pub const DirectPrintEntry = struct {
+    const builtin = @import("builtin");
+
+    log_level: Level,
+    scope: ?[]const u8,
+    allocator: std.mem.Allocator,
+    log_msg: std.ArrayList(u8),
+
+    const Self = @This();
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        scope: ?[]const u8,
+        log_level: Level,
+    ) Self {
+        return .{
+            .allocator = allocator,
+            .scope = scope,
+            .log_level = log_level,
+            .log_msg = std.ArrayList(u8).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.log_msg.deinit();
+    }
+
+    pub fn field(self: *Self, name: []const u8, value: anytype) *Self {
+        logfmt.fmtField(self.log_msg.writer(), name, value);
+        return self;
+    }
+
+    pub fn log(self: *Self, comptime msg: []const u8) void {
+        defer self.deinit();
+        const log_msg = logfmt.LogMsg{
+            .level = self.log_level,
+            .maybe_scope = self.scope,
+            .maybe_msg = msg,
+            .maybe_fields = null,
+            .maybe_fmt = null,
+        };
+
+        const writer = self.log_msg.writer();
+        logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
+        std.debug.print("{s}", .{self.log_msg.items});
+    }
+
+    pub fn logf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        defer self.deinit();
+        // Format message.
+        var fmt_msg = std.ArrayList(u8).initCapacity(self.allocator, 256) catch @panic("could not initCapacity for message");
+        defer fmt_msg.deinit();
+        logfmt.fmtMsg(fmt_msg.writer(), fmt, args);
+
+        const log_msg = logfmt.LogMsg{
+            .level = self.log_level,
+            .maybe_scope = self.scope,
+            .maybe_msg = null,
+            .maybe_fields = null,
+            .maybe_fmt = fmt_msg.items,
+        };
+
+        const writer = self.log_msg.writer();
+        logfmt.writeLog(writer, log_msg) catch @panic("Failed to write log");
+        std.debug.print("{s}", .{self.log_msg.items});
+    }
 };
-
-test "trace.entry: should info log correctly" {
-    var logger = Logger.init(testing.allocator, Level.info);
-    defer logger.deinit();
-    var entry = StandardEntry.init(testing.allocator, logger.standard.channel, .debug);
-    defer entry.deinit();
-
-    const anull: ?u8 = null;
-
-    entry
-        .field("some_val", true)
-        .field("enum_field", A.some_enum_variant)
-        .field("name", "a-mod")
-        .field("elapsed", @as(i48, 135133340042))
-        .field("possible_value", anull)
-        .logf(.info, "hello, {s}", .{"world!"});
-}

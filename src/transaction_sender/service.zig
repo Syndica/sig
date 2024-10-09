@@ -144,7 +144,7 @@ pub const Service = struct {
                 last_batch_sent = Instant.now();
 
                 self.transaction_pool.addTransactions(transaction_batch.values()) catch {
-                    self.logger.warn("Transaction pool is full, dropping transactions");
+                    self.logger.warn().log("Transaction pool is full, dropping transactions");
                 };
 
                 transaction_batch.clearRetainingCapacity();
@@ -281,7 +281,7 @@ pub const Service = struct {
     /// Sends transactions to the next N leaders TPU addresses
     fn sendTransactions(self: *Service, transactions: []const TransactionInfo, leader_addresses: std.ArrayList(SocketAddr)) !void {
         if (leader_addresses.items.len == 0) {
-            self.logger.warn("No leader addresses found");
+            self.logger.warn().log("No leader addresses found");
             return;
         }
 
@@ -365,7 +365,7 @@ pub const Stats = struct {
     }
 
     pub fn log(self: *const Stats, logger: Logger) void {
-        logger.infof("transaction-sender: {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
+        logger.info().logf("transaction-sender: {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
             self.transactions_received_count.get(),
             self.transactions_pending.get(),
             self.transactions_rooted_count.get(),

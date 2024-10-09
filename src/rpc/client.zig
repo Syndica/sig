@@ -265,7 +265,7 @@ pub const Client = struct {
 
         for (0..self.max_retries + 1) |curr_retries| {
             const result = self.fetchRequest(payload, &response.bytes) catch |fetch_error| {
-                self.logger.warnf("HTTP client error, attempting reinitialisation: error={any}", .{fetch_error});
+                self.logger.warn().logf("HTTP client error, attempting reinitialisation: error={any}", .{fetch_error});
                 if (curr_retries == self.max_retries) return fetch_error;
                 response.bytes.clearRetainingCapacity();
                 self.restartHttpClient();
@@ -273,7 +273,7 @@ pub const Client = struct {
             };
 
             if (result.status != std.http.Status.ok) {
-                self.logger.warnf("HTTP request failed ({d}/{d}): {}", .{ curr_retries, self.max_retries, result.status });
+                self.logger.warn().logf("HTTP request failed ({d}/{d}): {}", .{ curr_retries, self.max_retries, result.status });
                 if (curr_retries == self.max_retries) return error.HttpRequestFailed;
                 response.bytes.clearRetainingCapacity();
                 continue;
@@ -283,7 +283,7 @@ pub const Client = struct {
         }
 
         response.parse() catch |err| {
-            self.logger.errf("Failed to parse response: error={} request_payload={s} response={s}", .{ err, payload, response.bytes.items });
+            self.logger.err().logf("Failed to parse response: error={} request_payload={s} response={s}", .{ err, payload, response.bytes.items });
             return err;
         };
 

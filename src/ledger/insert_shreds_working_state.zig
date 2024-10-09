@@ -414,7 +414,7 @@ pub const WorkingShredStore = struct {
             shred
         else if (index.contains(shred_index)) blk: {
             const shred = try self.db.getBytes(cf, .{ slot, @intCast(id.index) }) orelse {
-                self.logger.errf(&newlinesToSpaces(
+                self.logger.err().logf(&newlinesToSpaces(
                     \\Unable to read the {s} with slot {}, index {} for shred
                     \\recovery. The shred is marked present in the slot's index,
                     \\but the shred could not be found in the column.

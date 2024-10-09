@@ -639,7 +639,7 @@ pub const BenchmarkSwissMap = struct {
         },
     };
 
-    pub fn swissmapReadWriteBenchmark(bench_args: BenchArgs) !u64 {
+    pub fn swissmapReadWriteBenchmark(bench_args: BenchArgs) !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         const n_accounts = bench_args.n_accounts;
 
@@ -679,18 +679,18 @@ pub const BenchmarkSwissMap = struct {
             null,
         );
 
-        const write_speedup = @as(f32, @floatFromInt(std_write_time)) / @as(f32, @floatFromInt(write_time));
+        const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos())) / @as(f32, @floatFromInt(write_time.asNanos()));
         const write_faster_or_slower = if (write_speedup < 1.0) "slower" else "faster";
         std.debug.print("\tWRITE: {} ({d:.2}x {s} than std)\n", .{
-            std.fmt.fmtDuration(write_time),
+            std.fmt.fmtDuration(write_time.asNanos()),
             write_speedup,
             write_faster_or_slower,
         });
 
-        const read_speedup = @as(f32, @floatFromInt(std_read_time)) / @as(f32, @floatFromInt(read_time));
+        const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
         const read_faster_or_slower = if (read_speedup < 1.0) "slower" else "faster";
         std.debug.print("\tREAD: {} ({d:.2}x {s} than std)\n", .{
-            std.fmt.fmtDuration(read_time),
+            std.fmt.fmtDuration(read_time.asNanos()),
             read_speedup,
             read_faster_or_slower,
         });
@@ -705,10 +705,10 @@ fn benchGetOrPut(
     accounts: []accounts_db.index.AccountRef,
     pubkeys: []sig.core.Pubkey,
     read_amount: ?usize,
-) !struct { usize, usize } {
+) !struct { sig.time.Duration, sig.time.Duration } {
     var t = try T.initCapacity(allocator, accounts.len);
 
-    var timer = try std.time.Timer.start();
+    var timer = try sig.time.Timer.start();
     for (0..accounts.len) |i| {
         const result = t.getOrPutAssumeCapacity(accounts[i].pubkey);
         if (!result.found_existing) {

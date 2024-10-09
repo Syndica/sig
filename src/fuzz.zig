@@ -6,7 +6,8 @@ const accountsdb_fuzz = sig.accounts_db.fuzz;
 const gossip_fuzz_service = sig.gossip.fuzz_service;
 const gossip_fuzz_table = sig.gossip.fuzz_table;
 const accountsdb_snapshot_fuzz = sig.accounts_db.fuzz_snapshot;
-const logger = sig.trace.log;
+const StandardErrLogger = sig.trace.ChannelPrintLogger;
+const Level = sig.trace.Level;
 
 const spawnMetrics = sig.prometheus.spawnMetrics;
 
@@ -27,12 +28,19 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    logger.default_logger.* = logger.Logger.init(std.heap.c_allocator, .debug);
+    var std_logger = StandardErrLogger.init(.{
+        .allocator = std.heap.c_allocator,
+        .max_level = Level.debug,
+        .max_buffer = 1 << 30,
+    }) catch @panic("Logger init failed");
+    defer std_logger.deinit();
+
+    const logger = std_logger.logger();
 
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
-    logger.default_logger.infof("metrics port: {d}", .{config.current.metrics_port});
+    logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
     const metrics_thread = try spawnMetrics(
         // TODO: use the GPA here, the server is just leaking because we're losing the handle
         // to it and never deiniting.

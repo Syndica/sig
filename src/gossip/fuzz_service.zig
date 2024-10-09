@@ -269,7 +269,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             const client_pubkey = Pubkey.fromPublicKey(&client_keypair.public_key);
             var client_contact_info = ContactInfo.init(allocator, client_pubkey, 0, 19);
             try client_contact_info.setSocket(.gossip, client_address);
-
             var gossip_service_client = try GossipService.init(
                 allocator,
                 allocator,
@@ -286,7 +285,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     .dump = false,
                 },
             });
-
             // this is used to respond to pings
             var gossip_service_fuzzer = try GossipService.init(
                 allocator,

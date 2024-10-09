@@ -1,6 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const Logger = @import("../trace/log.zig").Logger;
+const Logger = sig.trace.Logger;
 
 // TODO: change to writer interface when logger has improved
 pub fn printTimeEstimate(
@@ -15,7 +15,9 @@ pub fn printTimeEstimate(
     if (i == 0 or total == 0) return;
     if (i > total) {
         if (other_info) |info| {
-            logger.infof("{s} [{s}]: {d}/{d} (?%) (est: ? elp: {s})", .{
+            logger
+                .info()
+                .logf("{s} [{s}]: {d}/{d} (?%) (est: ? elp: {s})", .{
                 name,
                 info,
                 i,
@@ -23,7 +25,7 @@ pub fn printTimeEstimate(
                 timer.read(),
             });
         } else {
-            logger.infof("{s}: {d}/{d} (?%) (est: ? elp: {s})", .{
+            logger.info().logf("{s}: {d}/{d} (?%) (est: ? elp: {s})", .{
                 name,
                 i,
                 total,
@@ -41,7 +43,7 @@ pub fn printTimeEstimate(
     const ns_left = ns_per_vec * left;
 
     if (other_info) |info| {
-        logger.infof("{s} [{s}]: {d}/{d} ({d}%) (est: {s} elp: {s})", .{
+        logger.info().logf("{s} [{s}]: {d}/{d} ({d}%) (est: {s} elp: {s})", .{
             name,
             info,
             i,
@@ -51,7 +53,7 @@ pub fn printTimeEstimate(
             timer.read(),
         });
     } else {
-        logger.infof("{s}: {d}/{d} ({d}%) (est: {s} elp: {s})", .{
+        logger.info().logf("{s}: {d}/{d} ({d}%) (est: {s} elp: {s})", .{
             name,
             i,
             total,

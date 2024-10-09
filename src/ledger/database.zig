@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const blockstore = @import("lib.zig");
+const log = @import("../trace/log.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -294,7 +295,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     };
     const DB = Database(Impl(&.{ cf1, cf2 }));
 
-    const logger = sig.trace.TestLogger.default.logger();
+    const logger = .noop;
 
     return struct {
         pub fn basic() !void {

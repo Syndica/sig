@@ -65,7 +65,7 @@ pub const BasicShredTracker = struct {
             const monitored_slot = try self.observeSlot(slot);
             if (!monitored_slot.is_complete) {
                 monitored_slot.is_complete = true;
-                self.logger.infof("skipping slot: {}", .{slot});
+                self.logger.info().logf("skipping slot: {}", .{slot});
                 self.max_slot_processed = @max(self.max_slot_processed, slot);
             }
         }
@@ -81,7 +81,7 @@ pub const BasicShredTracker = struct {
 
         const monitored_slot = try self.observeSlot(slot);
         const new = monitored_slot.record(shred_index);
-        if (new) self.logger.debugf("new slot: {}", .{slot});
+        if (new) self.logger.debug().logf("new slot: {}", .{slot});
         self.max_slot_processed = @max(self.max_slot_processed, slot);
     }
 
@@ -122,9 +122,9 @@ pub const BasicShredTracker = struct {
             }
             if (!found_an_incomplete_slot) {
                 if (slot % 20 == 0) {
-                    self.logger.infof("shred tracker: received all shreds up to slot {}", .{slot});
+                    self.logger.info().logf("shred tracker: received all shreds up to slot {}", .{slot});
                 } else {
-                    self.logger.debugf("shred tracker: received all shreds up to slot {}", .{slot});
+                    self.logger.debug().logf("shred tracker: received all shreds up to slot {}", .{slot});
                 }
                 self.current_bottom_slot = @max(self.current_bottom_slot, slot + 1);
                 monitored_slot.* = .{};
