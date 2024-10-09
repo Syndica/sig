@@ -422,8 +422,8 @@ pub const RepairPeerProvider = struct {
 
 test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
-    var rand = std.rand.DefaultPrng.init(4328095);
-    var random = rand.random();
+    var prng = std.rand.DefaultPrng.init(4328095);
+    var random = prng.random();
     const TestLogger = sig.trace.DirectPrintLogger;
 
     // my details
@@ -503,8 +503,8 @@ test "RepairService sends repair request to gossip peer" {
 
 test "RepairPeerProvider selects correct peers" {
     const allocator = std.testing.allocator;
-    var rand = std.rand.DefaultPrng.init(4328095);
-    var random = rand.random();
+    var prng = std.rand.DefaultPrng.init(4328095);
+    var random = prng.random();
 
     // my details
     const keypair = KeyPair.create(null) catch unreachable;

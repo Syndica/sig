@@ -13,8 +13,6 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const SocketAddr = sig.net.SocketAddr;
 const Duration = sig.time.Duration;
 
-const getWallclockMs = sig.time.getWallclockMs;
-
 const PING_TOKEN_SIZE: usize = 32;
 const PING_PONG_HASH_PREFIX: [16]u8 = .{
     'S', 'O', 'L', 'A', 'N', 'A', '_', 'P', 'I', 'N', 'G', '_', 'P', 'O', 'N', 'G',
@@ -254,10 +252,10 @@ test "PingCache works" {
     );
     defer ping_cache.deinit();
 
-    var rand = std.rand.DefaultPrng.init(0);
-    const prng = rand.random();
+    var prng = std.rand.DefaultPrng.init(0);
+    const random = prng.random();
 
-    const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(prng), .socket_addr = SocketAddr.UNSPECIFIED };
+    const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(random), .socket_addr = SocketAddr.UNSPECIFIED };
     const now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 
