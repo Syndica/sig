@@ -105,10 +105,6 @@ const VariantIndexer = struct {
         return self.int_to_index[toInt(err)];
     }
 
-    pub fn get(self: Self, index_: usize) self.EnumOrError {
-        return self.fromInt(self.index_to_int[index_]);
-    }
-
     pub fn names(self: Self) [self.len][]const u8 {
         var name_array: [self.len][]const u8 = undefined;
         for (0..self.len) |i| {
