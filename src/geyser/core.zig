@@ -71,10 +71,12 @@ pub const AccountPayloadV1 = struct {
 };
 
 pub const GeyserWriterStats = struct {
-    geyser_writer_recycle_fba_empty_loop_count: *Counter,
-    geyser_writer_pipe_full_count: *Counter,
-    geyser_writer_n_payloads: *Counter,
-    geyser_writer_total_bytes: *Counter,
+    recycle_fba_empty_loop_count: *Counter,
+    pipe_full_count: *Counter,
+    n_payloads: *Counter,
+    total_bytes: *Counter,
+
+    pub const prefix = "geyser_writer";
 
     pub fn init() !GeyserWriterStats {
         return try globalRegistry().initStruct(GeyserWriterStats);
@@ -157,7 +159,7 @@ pub const GeyserWriter = struct {
                         return err;
                     }
                 };
-                self.stats.geyser_writer_n_payloads.inc();
+                self.stats.n_payloads.inc();
                 self.io_allocator.free(payload);
             }
         }
@@ -190,7 +192,7 @@ pub const GeyserWriter = struct {
         const buf = blk: while (true) {
             const buf = self.io_allocator.alloc(u8, total_len) catch {
                 // no memory available rn - unlock and wait
-                self.stats.geyser_writer_recycle_fba_empty_loop_count.inc();
+                self.stats.recycle_fba_empty_loop_count.inc();
                 std.time.sleep(std.time.ns_per_ms);
                 if (self.exit.load(.acquire)) {
                     return error.MemoryBlockedWithExitSignaled;
@@ -224,7 +226,7 @@ pub const GeyserWriter = struct {
                         return WritePipeError.PipeBlockedWithExitSignaled;
                     } else {
                         // pipe is full but we dont need to exit, so we try again
-                        self.stats.geyser_writer_pipe_full_count.inc();
+                        self.stats.pipe_full_count.inc();
                         continue;
                     }
                 } else {
@@ -236,7 +238,7 @@ pub const GeyserWriter = struct {
                 return WritePipeError.PipeClosed;
             }
             n_bytes_written_total += n_bytes_written;
-            self.stats.geyser_writer_total_bytes.add(n_bytes_written);
+            self.stats.total_bytes.add(n_bytes_written);
         }
 
         std.debug.assert(n_bytes_written_total == buf.len);
@@ -245,13 +247,15 @@ pub const GeyserWriter = struct {
 };
 
 pub const GeyserReaderStats = struct {
-    geyser_reader_io_buf_size: *GaugeU64,
-    geyser_reader_bincode_buf_size: *GaugeU64,
-    geyser_reader_pipe_empty_count: *Counter,
-    geyser_reader_total_payloads: *Counter,
-    geyser_reader_total_bytes: *Counter,
+    io_buf_size: *GaugeU64,
+    bincode_buf_size: *GaugeU64,
+    pipe_empty_count: *Counter,
+    total_payloads: *Counter,
+    total_bytes: *Counter,
 
     const GaugeU64 = Gauge(u64);
+
+    pub const prefix = "geyser_reader";
 
     pub fn init() !GeyserReaderStats {
         return try globalRegistry().initStruct(GeyserReaderStats);
@@ -297,8 +301,8 @@ pub const GeyserReader = struct {
         const fba = std.heap.FixedBufferAllocator.init(bincode_buf);
 
         const stats = try GeyserReaderStats.init();
-        stats.geyser_reader_io_buf_size.set(allocator_config.io_buf_len);
-        stats.geyser_reader_bincode_buf_size.set(allocator_config.bincode_buf_len);
+        stats.io_buf_size.set(allocator_config.io_buf_len);
+        stats.bincode_buf_size.set(allocator_config.bincode_buf_len);
 
         return .{
             .file = file,
@@ -330,7 +334,7 @@ pub const GeyserReader = struct {
     pub fn readPayload(self: *Self) !struct { u64, VersionedAccountPayload } {
         const len = try self.readType(u64, 8);
         const versioned_payload = try self.readType(VersionedAccountPayload, len);
-        self.stats.geyser_reader_total_payloads.inc();
+        self.stats.total_payloads.inc();
         return .{ 8 + len, versioned_payload };
     }
 
@@ -342,7 +346,7 @@ pub const GeyserReader = struct {
             const new_buf = try self.allocator.alloc(u8, expected_n_bytes);
             self.allocator.free(self.io_buf);
             self.io_buf = new_buf;
-            self.stats.geyser_reader_io_buf_size.set(expected_n_bytes);
+            self.stats.io_buf_size.set(expected_n_bytes);
         }
 
         var total_bytes_read: u64 = 0;
@@ -353,7 +357,7 @@ pub const GeyserReader = struct {
                         return error.PipeBlockedWithExitSignaled;
                     } else {
                         // pipe is empty but we dont need to exit, so we try again
-                        self.stats.geyser_reader_pipe_empty_count.inc();
+                        self.stats.pipe_empty_count.inc();
                         continue;
                     }
                 } else {
@@ -366,7 +370,7 @@ pub const GeyserReader = struct {
             }
             total_bytes_read += n_bytes_read;
         }
-        self.stats.geyser_reader_total_bytes.add(expected_n_bytes);
+        self.stats.total_bytes.add(expected_n_bytes);
 
         while (true) {
             const data = bincode.readFromSlice(
@@ -383,7 +387,7 @@ pub const GeyserReader = struct {
                     self.bincode_buf = new_buf;
                     self.bincode_allocator = std.heap.FixedBufferAllocator.init(self.bincode_buf);
 
-                    self.stats.geyser_reader_bincode_buf_size.set(new_size);
+                    self.stats.bincode_buf_size.set(new_size);
                     continue;
                 } else {
                     return err;
