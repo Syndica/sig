@@ -127,11 +127,15 @@ pub const TurbineTreeProvider = struct {
     }
 };
 
+/// Nodes in the TurbineTree may be identified by solely their
+/// pubkey if they are not in the gossip table or their contact info
+/// is not known.
 pub const NodeId = union(enum) {
     contact_info: ThreadSafeContactInfo,
     pubkey: Pubkey,
 };
 
+/// A node in the TurbineTree
 pub const Node = struct {
     id: NodeId,
     stake: u64,
@@ -179,6 +183,8 @@ pub const TurbineTree = struct {
     const DATA_PLANE_FANOUT = 200;
     const MAX_NODES_PER_IP = 2;
 
+    /// Initialise the TurbineTree for retransmit service
+    /// The tvu_peers and stakes are used to construct the nodes in the tree
     pub fn initForRetransmit(
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
@@ -227,6 +233,9 @@ pub const TurbineTree = struct {
         if (self.reference_count.fetchSub(1, .monotonic) == 1) self.deinit();
     }
 
+    /// Get the root distance and retransmit children for the given slot leader and shred id.
+    /// The retransmit children are calculated from the weighted shuffle of nodes using the
+    /// slot leader and shred id as the seed for the shuffle.
     pub fn getRetransmitChildren(
         self: *const TurbineTree,
         allocator: std.mem.Allocator,
@@ -241,41 +250,45 @@ pub const TurbineTree = struct {
             return error.LoopBack;
         }
 
+        // Clone the weighted shuffle, and remove the slot leader as
+        // it should not be included in the retransmit set
         var weighted_shuffle = try self.weighted_shuffle.clone();
         defer weighted_shuffle.deinit();
         if (self.index.get(slot_leader)) |index| {
             weighted_shuffle.removeIndex(index);
         }
 
-        var nodes = try std.ArrayList(Node).initCapacity(
+        // Shuffle the nodes and find my index
+        var shuffled_nodes = try std.ArrayList(Node).initCapacity(
             allocator,
             self.nodes.items.len,
         );
-        defer nodes.deinit();
-
-        var chacha = getSeededRng(slot_leader, shred_id);
-        var shuffled = weighted_shuffle.shuffle(chacha.random());
+        defer shuffled_nodes.deinit();
 
         var my_index: usize = undefined;
         var found_my_index = false;
+        var chacha = getSeededRng(slot_leader, shred_id);
+        var shuffled_indexes = weighted_shuffle.shuffle(chacha.random());
 
-        while (shuffled.next()) |index| {
-            nodes.appendAssumeCapacity(self.nodes.items[index]);
+        while (shuffled_indexes.next()) |index| {
+            shuffled_nodes.appendAssumeCapacity(self.nodes.items[index]);
             if (!found_my_index) {
                 if (self.nodes.items[index].pubkey().equals(&self.my_pubkey)) {
-                    my_index = nodes.items.len - 1;
+                    my_index = shuffled_nodes.items.len - 1;
                     found_my_index = true;
                 }
             }
         }
 
+        // Compute the retransmit children from the shuffled nodes
         const children = try computeRetransmitChildren(
             allocator,
             fanout,
             my_index,
-            nodes.items,
+            shuffled_nodes.items,
         );
 
+        // Compute the root distance
         const root_distance: usize = if (my_index == 0)
             0
         else if (my_index <= fanout)
@@ -288,6 +301,19 @@ pub const TurbineTree = struct {
         return .{ root_distance, children };
     }
 
+    // root     : [0]
+    // 1st layer: [1, 2, ..., fanout]
+    // 2nd layer: [[fanout + 1, ..., fanout * 2],
+    //             [fanout * 2 + 1, ..., fanout * 3],
+    //             ...
+    //             [fanout * fanout + 1, ..., fanout * (fanout + 1)]]
+    // 3rd layer: ...
+    // ...
+    // The leader node broadcasts shreds to the root node.
+    // The root node retransmits the shreds to all nodes in the 1st layer.
+    // Each other node retransmits shreds to fanout many nodes in the next layer.
+    // For example the node k in the 1st layer will retransmit to nodes:
+    // fanout + k, 2*fanout + k, ..., fanout*fanout + k
     fn computeRetransmitChildren(
         allocator: std.mem.Allocator,
         fanout: usize,
@@ -311,6 +337,8 @@ pub const TurbineTree = struct {
         return children;
     }
 
+    // Returns the parent node in the turbine broadcast tree.
+    // Returns None if the node is the root of the tree.
     fn computeRetransmitParent(
         fanout: usize,
         index_: usize,
@@ -334,58 +362,66 @@ pub const TurbineTree = struct {
         return DATA_PLANE_FANOUT;
     }
 
+    /// TODO: Equivalence with agave
     fn getSeededRng(leader: Pubkey, shred: ShredId) ChaChaRng {
         const seed = shred.seed(leader);
         return ChaChaRng.fromSeed(seed);
     }
 
+    /// All staked nodes + other known tvu-peers + the node itself;
+    /// sorted by (stake, pubkey) in descending order.
     fn getNodes(
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
         tvu_peers: []const ThreadSafeContactInfo,
         stakes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
     ) !std.ArrayList(Node) {
-        var nodes = std.ArrayList(Node).init(allocator);
+        var nodes = try std.ArrayList(Node).initCapacity(allocator, tvu_peers.len + stakes.count());
         defer nodes.deinit();
 
-        var has_contact_info = std.AutoArrayHashMap(Pubkey, void).init(allocator);
-        defer has_contact_info.deinit();
+        var pubkeys = std.AutoArrayHashMap(Pubkey, void).init(allocator);
+        defer pubkeys.deinit();
 
         // HACK TO SET OUR STAKE
         var max_stake: u64 = 0;
         for (stakes.values()) |stake| {
             if (stake > max_stake) max_stake = stake;
         }
-        try nodes.append(.{
+        nodes.appendAssumeCapacity(.{
             .id = .{ .contact_info = my_contact_info },
             .stake = @divFloor(max_stake, 2),
         });
         // REPLACES
+        // // Add ourself to the list of nodes
         // try nodes.append(.{
         //     .id = .{ .contact_info = my_contact_info },
         //     .stake = if (stakes.get(my_contact_info.pubkey)) |stake| stake else 0,
         // });
         // END
+        try pubkeys.put(my_contact_info.pubkey, void{});
 
-        try has_contact_info.put(my_contact_info.pubkey, void{});
-
+        // Add all TVU peers directly to the list of nodes
+        // The TVU peers are all nodes in gossip table with the same shred version
         for (tvu_peers) |peer| {
-            try nodes.append(.{
+            nodes.appendAssumeCapacity(.{
                 .id = .{ .contact_info = peer },
                 .stake = if (stakes.get(peer.pubkey)) |stake| stake else 0,
             });
-            try has_contact_info.put(peer.pubkey, void{});
+            try pubkeys.put(peer.pubkey, void{});
         }
 
+        // Add all staked nodes to the list of nodes
+        // Skip nodes that are already in the list, i.e. nodes with contact info
         for (stakes.keys(), stakes.values()) |pubkey, stake| {
-            if (stake > 0 and !has_contact_info.contains(pubkey)) {
-                try nodes.append(.{
+            if (stake > 0 and !pubkeys.contains(pubkey)) {
+                nodes.appendAssumeCapacity(.{
                     .id = .{ .pubkey = pubkey },
                     .stake = stake,
                 });
             }
         }
 
+        // Sort the nodes by stake, then pubkey
         std.mem.sortUnstable(Node, nodes.items, {}, struct {
             pub fn lt(_: void, lhs: Node, rhs: Node) bool {
                 if (lhs.stake > rhs.stake) return true;
@@ -394,25 +430,34 @@ pub const TurbineTree = struct {
             }
         }.lt);
 
-        var counts = std.AutoArrayHashMap(IpAddr, usize).init(allocator);
-        defer counts.deinit();
-
-        var result = std.ArrayList(Node).init(allocator);
+        // Filter out nodes which exceed the maximum number of nodes per IP and
+        // nodes with a stake of 0
+        var result = try std.ArrayList(Node).initCapacity(allocator, nodes.items.len);
         errdefer result.deinit();
-
+        var ip_counts = std.AutoArrayHashMap(IpAddr, usize).init(allocator);
+        defer ip_counts.deinit();
         for (nodes.items) |node| {
-            if (node.contactInfo()) |ci| {
-                if (ci.tvu_addr) |addr| {
-                    const current = counts.get(addr.ip()) orelse 0;
-                    if (current < MAX_NODES_PER_IP) try result.append(node);
-                    try counts.put(
-                        addr.ip(),
-                        current + 1,
-                    );
-                    continue;
+            // Add the node to the result if it does not exceed the
+            // maximum number of nodes per IP
+            var exceeds_ip_limit = false;
+            if (node.tvuAddress()) |tvu_addr| {
+                const ip_count = ip_counts.get(tvu_addr.ip()) orelse 0;
+                if (ip_count < MAX_NODES_PER_IP) {
+                    result.appendAssumeCapacity(node);
+                } else {
+                    exceeds_ip_limit = true;
                 }
+                try ip_counts.put(tvu_addr.ip(), ip_count + 1);
             }
-            if (node.stake > 0) try result.append(node);
+
+            // Keep the node for deterministic shuffle but remove
+            // contact info so that it is not used for retransmit
+            if (exceeds_ip_limit and node.stake > 0) {
+                result.appendAssumeCapacity(.{
+                    .id = .{ .pubkey = node.pubkey() },
+                    .stake = node.stake,
+                });
+            }
         }
 
         return result;
