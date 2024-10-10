@@ -2500,9 +2500,7 @@ pub const AccountsDB = struct {
         latest_full_snapshot_info.* = snapshot_gen_info;
         if (maybe_old_snapshot_info) |old_snapshot_info| {
             std.debug.assert(old_snapshot_info.slot <= snapshot_gen_info.slot);
-        }
 
-        if (maybe_old_snapshot_info) |old_snapshot_info| {
             switch (params.old_snapshot_action) {
                 .ignore_old => {},
                 .delete_old => {
@@ -2699,9 +2697,7 @@ pub const AccountsDB = struct {
         latest_incremental_snapshot_info.* = snapshot_gen_info;
         if (maybe_old_snapshot_info) |old_snapshot_info| {
             std.debug.assert(old_snapshot_info.slot <= params.target_slot);
-        }
 
-        if (maybe_old_snapshot_info) |old_snapshot_info| {
             switch (params.old_snapshot_action) {
                 .ignore_old => {},
                 .delete_old => {
