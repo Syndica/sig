@@ -14,24 +14,22 @@ const BankFields = sig.accounts_db.snapshots.BankFields;
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
     slot: u64,
-    data: []u8,
+    data: [32]u8,
 
-    pub fn initRandom(random: std.rand.Random, slot: Slot, allocator: std.mem.Allocator) !TrackedAccount {
+    pub fn initRandom(random: std.rand.Random, slot: Slot) !TrackedAccount {
+        var data: [32]u8 = undefined;
+        random.bytes(&data);
         return .{
             .pubkey = Pubkey.initRandom(random),
             .slot = slot,
-            .data = try allocator.alloc(u8, 32),
+            .data = data,
         };
-    }
-
-    pub fn deinit(self: *TrackedAccount, allocator: std.mem.Allocator) void {
-        allocator.free(self.data);
     }
 
     pub fn toAccount(self: *const TrackedAccount, allocator: std.mem.Allocator) !Account {
         return .{
             .lamports = 19,
-            .data = try allocator.dupe(u8, self.data),
+            .data = try allocator.dupe(u8, &self.data),
             .owner = Pubkey.zeroes,
             .executable = false,
             .rent_epoch = 0,
@@ -124,9 +122,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var tracked_accounts = std.AutoArrayHashMap(Pubkey, TrackedAccount).init(allocator);
     defer tracked_accounts.deinit();
-    defer for (tracked_accounts.values()) |*value| {
-        value.deinit(allocator);
-    };
     try tracked_accounts.ensureTotalCapacity(10_000);
 
     var random_bank_fields = try BankFields.initRandom(allocator, random, 1 << 8);
@@ -159,7 +154,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
                     errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
 
-                    var tracked_account = try TrackedAccount.initRandom(random, slot, allocator);
+                    var tracked_account = try TrackedAccount.initRandom(random, slot);
 
                     const existing_pubkey = random.boolean();
                     if (existing_pubkey and tracked_accounts.count() > 0) {
@@ -171,12 +166,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     account.* = try tracked_account.toAccount(allocator);
                     pubkey.* = tracked_account.pubkey;
 
-                    const r = try tracked_accounts.getOrPut(tracked_account.pubkey);
-                    if (r.found_existing) {
-                        r.value_ptr.deinit(allocator);
-                    }
                     // always overwrite the old slot
-                    r.value_ptr.* = tracked_account;
+                    try tracked_accounts.put(tracked_account.pubkey, tracked_account);
                 }
                 defer for (accounts) |account| account.deinit(allocator);
 
@@ -199,7 +190,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 var account = try accounts_db.getAccount(&tracked_account.pubkey);
                 defer account.deinit(allocator);
 
-                if (!std.mem.eql(u8, tracked_account.data, account.data)) {
+                if (!std.mem.eql(u8, &tracked_account.data, account.data)) {
                     @panic("found accounts with different data");
                 }
             },
