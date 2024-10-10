@@ -31,21 +31,17 @@ pub fn merkleTreeHash(hashes: []Hash, fanout: usize) !*Hash {
 pub const NestedHashTree = struct {
     hashes: []std.ArrayListUnmanaged(Hash),
 
-    pub fn getValue(self: *NestedHashTree, index: usize) !*Hash {
+    pub fn getValue(self: *NestedHashTree, index: usize) ?*Hash {
         var search_index: usize = 0;
-        var i: usize = 0;
-        while (i < self.hashes.len) {
-            const nested_len = self.hashes[i].items.len;
-            if (search_index + nested_len > index) {
+        for (self.hashes) |hash_list| {
+            if (search_index + hash_list.items.len > index) {
                 const index_in_nested = index - search_index;
-                return &self.hashes[i].items[index_in_nested];
+                return &hash_list.items[index_in_nested];
             } else {
-                search_index += nested_len;
-                i += 1;
+                search_index += hash_list.items.len;
             }
         }
-
-        return error.InvalidIndex;
+        return null;
     }
 
     pub fn len(self: *NestedHashTree) usize {
@@ -70,16 +66,16 @@ pub const NestedHashTree = struct {
 
                 var hasher = Sha256.init(.{});
                 for (start..end) |j| {
-                    const h = self.getValue(j) catch unreachable;
+                    const h = self.getValue(j).?;
                     hasher.update(&h.data);
                 }
                 const hash = hasher.finalResult();
-                (self.getValue(index) catch unreachable).data = hash;
+                self.getValue(index).?.data = hash;
                 index += 1;
             }
             length = index;
             if (length == 1) {
-                return self.getValue(0) catch unreachable;
+                return self.getValue(0).?;
             }
         }
     }
