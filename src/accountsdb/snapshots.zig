@@ -1851,6 +1851,65 @@ pub const AllSnapshotFields = struct {
     }
 };
 
+pub const generate = struct {
+    /// Writes the version, status cache, and manifest files.
+    /// Should call this first to begin generating the snapshot archive.
+    pub fn writeMetadataFiles(
+        archive_writer: anytype,
+        version: sig.version.ClientVersion,
+        status_cache: StatusCache,
+        manifest: *const SnapshotFields,
+    ) !void {
+        const slot: Slot = manifest.bank_fields.slot;
+
+        var counting_writer_state = std.io.countingWriter(archive_writer);
+        const writer = counting_writer_state.writer();
+
+        // write the version file
+        const version_str_bounded = sig.utils.fmt.boundedFmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+        const version_str = version_str_bounded.constSlice();
+        try sig.utils.tar.writeTarHeader(writer, .regular, "version", version_str.len);
+        try writer.writeAll(version_str);
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+
+        // create the snapshots dir
+        try sig.utils.tar.writeTarHeader(writer, .directory, "snapshots/", 0);
+
+        // write the status cache
+        try sig.utils.tar.writeTarHeader(writer, .regular, "snapshots/status_cache", bincode.sizeOf(status_cache, .{}));
+        try bincode.write(writer, status_cache, .{});
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+
+        // write the manifest
+        const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot});
+        try sig.utils.tar.writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
+
+        const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot});
+        try sig.utils.tar.writeTarHeader(writer, .regular, file_name_bounded.constSlice(), bincode.sizeOf(manifest, .{}));
+        try bincode.write(writer, manifest, .{});
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+
+        std.debug.assert(counting_writer_state.bytes_written % 512 == 0);
+    }
+
+    /// Writes the accounts dir header. Do this after writing the metadata files.
+    pub fn writeAccountsDirHeader(archive_writer: anytype) !void {
+        try sig.utils.tar.writeTarHeader(archive_writer, .directory, "accounts/", 0);
+    }
+
+    /// Writes the account file header - follow this up by writing the file content to `archive_writer`,
+    /// and then follow that up with `writeAccountFilePadding(archive_writer, file_info.length)`.
+    /// Do this for each account file included in the snapshot.
+    pub fn writeAccountFileHeader(archive_writer: anytype, file_slot: Slot, file_info: AccountFileInfo) !void {
+        const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ file_slot, file_info.id.toInt() });
+        try sig.utils.tar.writeTarHeader(archive_writer, .regular, name_bounded.constSlice(), file_info.length);
+    }
+
+    pub fn writeAccountFilePadding(archive_writer: anytype, file_length: usize) !void {
+        try archive_writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(file_length));
+    }
+};
+
 /// unpacks a .tar.zstd file into the given directory
 pub fn parallelUnpackZstdTarBall(
     allocator: std.mem.Allocator,
