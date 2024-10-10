@@ -63,8 +63,9 @@ pub const AccountsLRU = struct {
     /// Atomically refcounted account
     const CachedAccount = struct {
         account: Account,
-        // this account has since been mutated
-        is_dirty: bool = false, // TODO: make this an atomic & find the proper way to mark dirty accounts
+        // this account has since been mutated, and will not progress to newer slots
+        // TODO: when we start mutating accounts, make sure to set this field
+        is_dirty: std.atomic.Value(bool) = .{ .raw = false },
         ref_count: std.atomic.Value(usize),
 
         fn init(allocator: std.mem.Allocator, account: Account) !CachedAccount {
@@ -180,7 +181,7 @@ pub const AccountsLRU = struct {
 
             var it = old_slot_lru.dbl_link_list.first;
             while (it) |node| : (it = node.next) {
-                if (node.data.value.is_dirty) continue; // do not copy forward modified accounts
+                if (node.data.value.is_dirty.load(.acquire)) continue; // do not copy forward modified accounts
 
                 _ = new_slot_lru.put(node.data.key, node.data.value.copyRef());
             }
