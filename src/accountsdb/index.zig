@@ -13,8 +13,14 @@ const BenchHashMap = sig.accounts_db.swiss_map.BenchHashMap;
 const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 
+const RefIndex = struct {
+    slot: Slot = 0,
+    index: u64 = 0,
+};
+
 pub const AccountReferenceHead = struct {
-    ref_ptr: *AccountRef,
+    ref_ptr: *AccountRef, // TODO: remove
+    ref_index: RefIndex = .{},
 
     const Self = @This();
 
@@ -70,7 +76,8 @@ pub const AccountRef = struct {
     pubkey: Pubkey,
     slot: Slot,
     location: AccountLocation,
-    next_ptr: ?*AccountRef = null,
+    next_ptr: ?*AccountRef = null, // TODO: remove
+    next_ref_index: ?RefIndex = null,
 
     /// Analogous to [StorageLocation](https://github.com/anza-xyz/agave/blob/b47a4ec74d85dae0b6d5dd24a13a8923240e03af/accounts-db/src/account_info.rs#L23)
     pub const AccountLocation = union(enum(u8)) {
@@ -190,6 +197,19 @@ pub const AccountIndex = struct {
         }
     }
 
+    // TODO: position in struct
+    pub fn getNextRef(self: *Self, ref: *AccountRef) ?*AccountRef {
+        if (ref.next_ref_index) |next_ref_index| {
+            const ref_memory, var ref_memory_lg = self.reference_memory.readWithLock();
+            defer ref_memory_lg.unlock();
+
+            const ref_list = ref_memory.get(next_ref_index.slot) orelse return null;
+            return &ref_list.items[next_ref_index.index];
+        } else {
+            return null;
+        }
+    }
+
     pub fn ensureTotalCapacity(self: *Self, size: u32) !void {
         for (self.bins) |*bin_rw| {
             const bin, var bin_lg = bin_rw.writeWithLock();
@@ -290,13 +310,15 @@ pub const AccountIndex = struct {
         return does_exist;
     }
 
-    pub fn indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(self: *Self, account_ref: *AccountRef) bool {
-        // UNSAFE: this function is unsafe because it does not lock the reference map
+    /// adds the reference to the index if there is not a duplicate (ie, the same slot).
+    /// returns if the reference was inserted.
+    pub fn indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(self: *Self, account_ref: *AccountRef, index: u64) bool {
         const bin = &self.getBinFromPubkey(&account_ref.pubkey).private.v;
 
         const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey);
         if (!gop.found_existing) {
-            gop.value_ptr.* = .{ .ref_ptr = account_ref };
+            // TODO: remove ref_ptr
+            gop.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = .{ .slot = account_ref.slot, .index = index } };
             return true;
         }
 
@@ -305,13 +327,14 @@ pub const AccountIndex = struct {
         var curr = head_ref.ref_ptr;
         while (true) {
             if (curr.slot == account_ref.slot) {
-                // found a duplicate => dont do the insertion
+                // found a DUPLICATE => dont do the insertion
                 return false;
             }
 
             const next_ptr = curr.next_ptr orelse {
-                // end of the list => insert it here
-                curr.next_ptr = account_ref;
+                // end of the list => INSERT it here
+                curr.next_ptr = account_ref; // TODO: remove
+                curr.next_ref_index = .{ .slot = account_ref.slot, .index = index };
                 return true;
             };
 

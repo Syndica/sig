@@ -289,11 +289,12 @@ pub const AccountsDB = struct {
                 0,
             );
 
-            std.debug.print("memory ptr {*} fixed_addr_ptr {*}\n", .{ memory.ptr, fixed_addr_ptr });
-            if (memory.ptr != fixed_addr_ptr) {
-                self.logger.err("failed to mmap reference memory");
-                return error.MmapFailed;
-            }
+            // TODO: remove this fixed stuff
+            // std.debug.print("memory ptr {*} fixed_addr_ptr {*}\n", .{ memory.ptr, fixed_addr_ptr });
+            // if (memory.ptr != fixed_addr_ptr) {
+            //     self.logger.err("failed to mmap reference memory");
+            //     return error.MmapFailed;
+            // }
 
             const n_accounts_written = std.mem.readInt(u64, memory[@sizeOf(u64) .. @sizeOf(u64) * 2], .little);
             const reference_slice_aligned: [*]align(8) AccountRef = @alignCast(@ptrCast(memory[@sizeOf(u64) * 2 ..]));
@@ -336,26 +337,26 @@ pub const AccountsDB = struct {
         }
         self.logger.info("loaded account reference maps");
 
-        var ref_count: u64 = 0;
-        for (references.items) |ref_batch| {
-            for (ref_batch) |ref| {
-                const bin_rw = self.account_index.getBinFromPubkey(&ref.pubkey);
-                const bin, var bin_lg = bin_rw.writeWithLock();
-                defer bin_lg.unlock();
+        // var ref_count: u64 = 0;
+        // for (references.items) |ref_batch| {
+        //     for (ref_batch) |ref| {
+        //         const bin_rw = self.account_index.getBinFromPubkey(&ref.pubkey);
+        //         const bin, var bin_lg = bin_rw.writeWithLock();
+        //         defer bin_lg.unlock();
 
-                _ = bin.get(ref.pubkey) orelse {
-                    std.debug.panic("reference {any} not found in bin\n", .{ref});
-                };
+        //         _ = bin.get(ref.pubkey) orelse {
+        //             std.debug.panic("reference {any} not found in bin\n", .{ref});
+        //         };
 
-                var curr_ref = &ref;
-                while (curr_ref.next_ptr) |next_ref| {
-                    std.debug.assert(next_ref.pubkey.equals(&ref.pubkey));
-                    curr_ref = next_ref;
-                }
+        //         var curr_ref = &ref;
+        //         while (curr_ref.next_ptr) |next_ref| {
+        //             std.debug.assert(next_ref.pubkey.equals(&ref.pubkey));
+        //             curr_ref = next_ref;
+        //         }
 
-                ref_count += 1;
-            }
-        }
+        //         ref_count += 1;
+        //     }
+        // }
     }
 
     /// easier to use load function
@@ -387,6 +388,7 @@ pub const AccountsDB = struct {
             var disk_allocator = DiskMemoryAllocator{ .dir = ref_map_dir, .logger = self.logger };
             // TODO: push to var
             std.debug.print("saving index reference map to disk @ index_ref_map/\n", .{});
+            defer std.debug.print("done saving index reference map to disk\n", .{});
 
             const n_bins = self.account_index.numberOfBins();
             var map_data_len: u64 = 0;
@@ -426,6 +428,8 @@ pub const AccountsDB = struct {
                 @memcpy(map_memory[offset..][0..bin_memory.len], bin_memory);
                 offset += bin_memory.len;
             }
+
+            // bincode write the map
         }
 
         if (validate) {
@@ -813,12 +817,15 @@ pub const AccountsDB = struct {
         timer.reset();
 
         var slot_iter = reference_memory.keyIterator();
+        var index: u64 = 0;
         while (slot_iter.next()) |slot| {
             const refs = reference_memory.get(slot.*).?;
             for (refs.items) |*ref| {
-                _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
+                _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(ref, index);
                 ref_count += 1;
+                index += 1;
             }
+            index = 0;
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
@@ -1213,8 +1220,8 @@ pub const AccountsDB = struct {
                 // get the most recent state of the account
                 const ref_ptr = ref_head.ref_ptr;
                 const max_slot_ref = switch (config) {
-                    .FullAccountHash => |full_config| slotListMaxWithinBounds(ref_ptr, full_config.min_slot, full_config.max_slot),
-                    .IncrementalAccountHash => |inc_config| slotListMaxWithinBounds(ref_ptr, inc_config.min_slot, inc_config.max_slot),
+                    .FullAccountHash => |full_config| self.slotListMaxWithinBoundsNew(ref_ptr, full_config.min_slot, full_config.max_slot),
+                    .IncrementalAccountHash => |inc_config| self.slotListMaxWithinBoundsNew(ref_ptr, inc_config.min_slot, inc_config.max_slot),
                 } orelse {
                     // TODO: metrics
                     continue;
@@ -2462,6 +2469,29 @@ pub const AccountsDB = struct {
         return .{ gop.value_ptr, bank_hash_stats_lg };
     }
 
+    // TODO: replace with this througout when it works
+    pub inline fn slotListMaxWithinBoundsNew(
+        self: *Self, // TODO: *const ?
+        ref_ptr: *AccountRef,
+        min_slot: ?Slot,
+        max_slot: ?Slot,
+    ) ?*AccountRef {
+        var biggest: ?*AccountRef = null;
+        if (inBoundsIf(ref_ptr.slot, min_slot, max_slot)) {
+            biggest = ref_ptr;
+        }
+
+        var curr = ref_ptr;
+        while (self.account_index.getNextRef(curr)) |next_ref| {
+            if (inBoundsIf(next_ref.slot, min_slot, max_slot) and (biggest == null or next_ref.slot > biggest.?.slot)) {
+                biggest = next_ref;
+            }
+            curr = next_ref;
+        }
+        return biggest;
+    }
+
+    // TODO: fully remove
     pub inline fn slotListMaxWithinBounds(
         ref_ptr: *AccountRef,
         min_slot: ?Slot,
