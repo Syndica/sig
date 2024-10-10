@@ -4,4 +4,4 @@ pub const turbine_tree = @import("turbine_tree.zig");
 
 pub const ShredDeduper = shred_deduper.ShredDeduper;
 pub const TurbineTree = turbine_tree.TurbineTree;
-pub const TurbineTreeCache = turbine_tree.TurbineTreeProvider;
+pub const TurbineTreeProvider = turbine_tree.TurbineTreeProvider;
