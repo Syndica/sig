@@ -981,26 +981,26 @@ pub const AccountFileInfo = struct {
 pub const BankHashInfo = struct {
     accounts_delta_hash: Hash,
     accounts_hash: Hash,
-    stats: BankHashStats,
+    stats: BankHashMetrics,
 
     pub fn random(rand: std.Random) BankHashInfo {
         return .{
             .accounts_delta_hash = Hash.random(rand),
             .accounts_hash = Hash.random(rand),
-            .stats = BankHashStats.random(rand),
+            .stats = BankHashMetrics.random(rand),
         };
     }
 };
 
 /// Analogous to [BankHashStats](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1299)
-pub const BankHashStats = struct {
+pub const BankHashMetrics = struct {
     num_updated_accounts: u64,
     num_removed_accounts: u64,
     num_lamports_stored: u64,
     total_data_len: u64,
     num_executable_accounts: u64,
 
-    pub const zero_init: BankHashStats = .{
+    pub const zero_init: BankHashMetrics = .{
         .num_updated_accounts = 0,
         .num_removed_accounts = 0,
         .num_lamports_stored = 0,
@@ -1008,7 +1008,7 @@ pub const BankHashStats = struct {
         .num_executable_accounts = 0,
     };
 
-    pub fn random(rand: std.Random) BankHashStats {
+    pub fn random(rand: std.Random) BankHashMetrics {
         return .{
             .num_updated_accounts = rand.int(u64),
             .num_removed_accounts = rand.int(u64),
@@ -1023,7 +1023,7 @@ pub const BankHashStats = struct {
         data_len: u64,
         executable: bool,
     };
-    pub fn update(stats: *BankHashStats, account: AccountData) void {
+    pub fn update(stats: *BankHashMetrics, account: AccountData) void {
         if (account.lamports == 0) {
             stats.num_removed_accounts += 1;
         } else {
@@ -1034,7 +1034,7 @@ pub const BankHashStats = struct {
         stats.num_lamports_stored +%= account.lamports;
     }
 
-    pub fn accumulate(stats: *BankHashStats, other: BankHashStats) void {
+    pub fn accumulate(stats: *BankHashMetrics, other: BankHashMetrics) void {
         stats.num_updated_accounts += other.num_updated_accounts;
         stats.num_removed_accounts += other.num_removed_accounts;
         stats.total_data_len +%= other.total_data_len;

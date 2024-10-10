@@ -167,7 +167,7 @@ pub const GossipService = struct {
     thread_pool: *ThreadPool,
     echo_server: EchoServer,
 
-    stats: GossipStats,
+    stats: GossipMetrics,
 
     const Self = @This();
 
@@ -226,7 +226,7 @@ pub const GossipService = struct {
             for (eps) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
         }
 
-        const stats = try GossipStats.init(logger);
+        const stats = try GossipMetrics.init(logger);
 
         const ping_cache_ptr = try allocator.create(PingCache);
         ping_cache_ptr.* = try PingCache.init(
@@ -1942,7 +1942,7 @@ pub const GossipService = struct {
 };
 
 /// stats that we publish to prometheus
-pub const GossipStats = struct {
+pub const GossipMetrics = struct {
     gossip_packets_received_total: *Counter,
     gossip_packets_verified_total: *Counter,
     gossip_packets_processed_total: *Counter,
@@ -2049,7 +2049,7 @@ pub const GossipStats = struct {
     }
 
     pub fn reset(self: *Self) void {
-        inline for (@typeInfo(GossipStats).Struct.fields) |field| {
+        inline for (@typeInfo(GossipMetrics).Struct.fields) |field| {
             if (field.name[0] != '_') {
                 @field(self, field.name).reset();
             }

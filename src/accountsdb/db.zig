@@ -41,7 +41,7 @@ const ClientVersion = sig.version.ClientVersion;
 const StatusCache = sig.accounts_db.StatusCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
-const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
+const BankHashStats = sig.accounts_db.snapshots.BankHashMetrics;
 const PubkeyBinCalculator = sig.accounts_db.index.PubkeyBinCalculator;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
@@ -58,7 +58,7 @@ pub const ACCOUNT_INDEX_BINS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
-pub const AccountsDBStats = struct {
+pub const AccountsDBMetrics = struct {
     number_files_flushed: *Counter,
     number_files_cleaned: *Counter,
     number_files_shrunk: *Counter,
@@ -173,7 +173,7 @@ pub const AccountsDB = struct {
     // TODO: move to Bank struct
     bank_hash_stats: RwMux(BankHashStatsMap) = RwMux(BankHashStatsMap).init(.{}),
 
-    stats: AccountsDBStats,
+    stats: AccountsDBMetrics,
     logger: Logger,
     config: InitConfig,
 
@@ -236,7 +236,7 @@ pub const AccountsDB = struct {
         );
         errdefer account_index.deinit(true);
 
-        const stats = try AccountsDBStats.init();
+        const stats = try AccountsDBMetrics.init();
 
         return .{
             .allocator = allocator,

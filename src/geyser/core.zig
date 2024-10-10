@@ -70,7 +70,7 @@ pub const AccountPayloadV1 = struct {
     }
 };
 
-pub const GeyserWriterStats = struct {
+pub const GeyserWriterMetrics = struct {
     recycle_fba_empty_loop_count: *Counter,
     pipe_full_count: *Counter,
     n_payloads: *Counter,
@@ -78,8 +78,8 @@ pub const GeyserWriterStats = struct {
 
     pub const prefix = "geyser_writer";
 
-    pub fn init() !GeyserWriterStats {
-        return try globalRegistry().initStruct(GeyserWriterStats);
+    pub fn init() !GeyserWriterMetrics {
+        return try globalRegistry().initStruct(GeyserWriterMetrics);
     }
 };
 
@@ -95,7 +95,7 @@ pub const GeyserWriter = struct {
     /// channel which data is streamed into and then written to the pipe
     io_channel: *sig.sync.Channel([]u8),
     exit: *std.atomic.Value(bool),
-    stats: GeyserWriterStats,
+    stats: GeyserWriterMetrics,
 
     /// set when the writer thread is running
     io_handle: ?std.Thread = null,
@@ -119,7 +119,7 @@ pub const GeyserWriter = struct {
         const io_channel = try sig.sync.Channel([]u8).create(allocator);
         const io_allocator_state = try allocator.create(RecycleFBA(.{}));
         io_allocator_state.* = try RecycleFBA(.{}).init(allocator, io_fba_bytes);
-        const stats = try GeyserWriterStats.init();
+        const stats = try GeyserWriterMetrics.init();
 
         return .{
             .allocator = allocator,
@@ -246,7 +246,7 @@ pub const GeyserWriter = struct {
     }
 };
 
-pub const GeyserReaderStats = struct {
+pub const GeyserReaderMetrics = struct {
     io_buf_size: *GaugeU64,
     bincode_buf_size: *GaugeU64,
     pipe_empty_count: *Counter,
@@ -257,8 +257,8 @@ pub const GeyserReaderStats = struct {
 
     pub const prefix = "geyser_reader";
 
-    pub fn init() !GeyserReaderStats {
-        return try globalRegistry().initStruct(GeyserReaderStats);
+    pub fn init() !GeyserReaderMetrics {
+        return try globalRegistry().initStruct(GeyserReaderMetrics);
     }
 };
 
@@ -271,7 +271,7 @@ pub const GeyserReader = struct {
     bincode_buf: []u8,
     /// NOTE: not thread-safe
     bincode_allocator: std.heap.FixedBufferAllocator,
-    stats: GeyserReaderStats,
+    stats: GeyserReaderMetrics,
     exit: ?*std.atomic.Value(bool),
 
     const Self = @This();
@@ -300,7 +300,7 @@ pub const GeyserReader = struct {
 
         const fba = std.heap.FixedBufferAllocator.init(bincode_buf);
 
-        const stats = try GeyserReaderStats.init();
+        const stats = try GeyserReaderMetrics.init();
         stats.io_buf_size.set(allocator_config.io_buf_len);
         stats.bincode_buf_size.set(allocator_config.bincode_buf_len);
 

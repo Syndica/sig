@@ -41,7 +41,7 @@ const globalRegistry = sig.prometheus.globalRegistry;
 pub const Service = struct {
     allocator: std.mem.Allocator,
     config: Config,
-    stats: Stats,
+    stats: Metrics,
     transaction_pool: TransactionPool,
     leader_info_rw: RwMux(LeaderInfo),
     send_socket: UdpSocket,
@@ -61,7 +61,7 @@ pub const Service = struct {
         return .{
             .allocator = allocator,
             .config = config,
-            .stats = try Stats.init(),
+            .stats = try Metrics.init(),
             .transaction_pool = TransactionPool.init(
                 allocator,
                 config.pool_max_size,
@@ -330,7 +330,7 @@ pub const Config = struct {
     rpc_retries: usize = 3,
 };
 
-pub const Stats = struct {
+pub const Metrics = struct {
     transactions_pending: *Gauge(u64),
     transactions_received_count: *Counter,
     transactions_retry_count: *Counter,
@@ -348,11 +348,11 @@ pub const Stats = struct {
     rpc_block_height_latency_millis: *Gauge(u64),
     rpc_signature_statuses_latency_millis: *Gauge(u64),
 
-    pub fn init() GetMetricError!Stats {
-        return globalRegistry().initStruct(Stats);
+    pub fn init() GetMetricError!Metrics {
+        return globalRegistry().initStruct(Metrics);
     }
 
-    pub fn log(self: *const Stats, logger: Logger) void {
+    pub fn log(self: *const Metrics, logger: Logger) void {
         logger.info().logf("transaction-sender: {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
             self.transactions_received_count.get(),
             self.transactions_pending.get(),
