@@ -585,7 +585,7 @@ test "blank Message fails to sanitize" {
 }
 
 test "minimal valid Message sanitizes" {
-    var pubkeys = [_]Pubkey{Pubkey.default()};
+    var pubkeys = [_]Pubkey{Pubkey.zeroes};
     const message = Message{
         .header = MessageHeader{
             .num_required_signatures = 1,
@@ -600,7 +600,7 @@ test "minimal valid Message sanitizes" {
 }
 
 test "Message sanitize fails if missing signers" {
-    var pubkeys = [_]Pubkey{Pubkey.default()};
+    var pubkeys = [_]Pubkey{Pubkey.zeroes};
     const message = Message{
         .header = MessageHeader{
             .num_required_signatures = 2,
@@ -615,7 +615,7 @@ test "Message sanitize fails if missing signers" {
 }
 
 test "Message sanitize fails if missing unsigned" {
-    var pubkeys = [_]Pubkey{Pubkey.default()};
+    var pubkeys = [_]Pubkey{Pubkey.zeroes};
     const message = Message{
         .header = MessageHeader{
             .num_required_signatures = 1,
@@ -630,7 +630,7 @@ test "Message sanitize fails if missing unsigned" {
 }
 
 test "Message sanitize fails if no writable signed" {
-    var pubkeys = [_]Pubkey{ Pubkey.default(), Pubkey.default() };
+    var pubkeys = [_]Pubkey{ Pubkey.zeroes, Pubkey.zeroes };
     const message = Message{
         .header = MessageHeader{
             .num_required_signatures = 1,
@@ -645,7 +645,7 @@ test "Message sanitize fails if no writable signed" {
 }
 
 test "Message sanitize fails if missing program id" {
-    var pubkeys = [_]Pubkey{Pubkey.default()};
+    var pubkeys = [_]Pubkey{Pubkey.zeroes};
     var instructions = [_]CompiledInstruction{.{
         .program_id_index = 1,
         .accounts = &[_]u8{},
@@ -665,7 +665,7 @@ test "Message sanitize fails if missing program id" {
 }
 
 test "Message sanitize fails if program id has index 0" {
-    var pubkeys = [_]Pubkey{Pubkey.default()};
+    var pubkeys = [_]Pubkey{Pubkey.zeroes};
     var instructions = [_]CompiledInstruction{.{
         .program_id_index = 0,
         .accounts = &[_]u8{},
@@ -685,7 +685,7 @@ test "Message sanitize fails if program id has index 0" {
 }
 
 test "Message sanitize fails if account index is out of bounds" {
-    var pubkeys = [_]Pubkey{ Pubkey.default(), Pubkey.default() };
+    var pubkeys = [_]Pubkey{ Pubkey.zeroes, Pubkey.zeroes };
     var accounts = [_]u8{2};
     var instructions = [_]CompiledInstruction{.{
         .program_id_index = 1,

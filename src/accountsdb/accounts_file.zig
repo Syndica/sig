@@ -154,7 +154,7 @@ pub const AccountInFile = struct {
         const valid_lamports = self.account_info.lamports != 0 or (
         // ie, is default account
             self.data.len == 0 and
-            self.owner().isDefault() and
+            self.owner().isAllZeroes() and
             self.executable().* == false and
             self.rent_epoch().* == 0);
         if (!valid_lamports) {

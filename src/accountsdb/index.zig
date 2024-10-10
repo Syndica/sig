@@ -84,7 +84,7 @@ pub const AccountRef = struct {
 
     pub fn default() AccountRef {
         return AccountRef{
-            .pubkey = Pubkey.default(),
+            .pubkey = Pubkey.zeroes,
             .slot = 0,
             .location = .{
                 .Cache = .{ .index = 0 },

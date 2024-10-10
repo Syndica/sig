@@ -135,7 +135,7 @@ pub const LoadedAddresses = struct {
 };
 
 pub const TransactionReturnData = struct {
-    program_id: sig.core.Pubkey = sig.core.Pubkey.default(),
+    program_id: sig.core.Pubkey = sig.core.Pubkey.zeroes,
     data: []const u8 = &.{},
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
