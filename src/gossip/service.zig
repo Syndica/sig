@@ -2032,7 +2032,7 @@ pub const GossipStats = struct {
 
     const Self = @This();
 
-    pub const buckets: [10]f64 = .{
+    pub const histogram_buckets: [10]f64 = .{
         10,   25,
         50,   100,
         250,  500,

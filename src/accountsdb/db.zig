@@ -88,7 +88,7 @@ pub const AccountsDBStats = struct {
         return globalRegistry().initStruct(Self);
     }
 
-    pub fn buckets(comptime field_name: []const u8) []const f64 {
+    pub fn histogramBucketsForField(comptime field_name: []const u8) []const f64 {
         const HistogramKind = enum {
             flush_account_file_size,
             shrink_file_shrunk_by,

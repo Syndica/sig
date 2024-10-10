@@ -309,7 +309,7 @@ pub const ScanAndFixRootsMetrics = struct {
     fix_roots_us: *Histogram,
 
     pub const prefix = "scan_and_fix_roots";
-    pub const buckets = sig.prometheus.histogram.exponentialBuckets(5, -1, 10);
+    pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(5, -1, 10);
 };
 
 const TestDB = sig.ledger.tests.TestDB("writer");

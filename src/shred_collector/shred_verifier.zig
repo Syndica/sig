@@ -73,5 +73,5 @@ const Metrics = struct {
     fail: *VariantCounter(ShredVerificationFailure),
 
     pub const prefix = "shred_verifier";
-    pub const buckets = sig.prometheus.histogram.exponentialBuckets(2, -1, 8);
+    pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(2, -1, 8);
 };

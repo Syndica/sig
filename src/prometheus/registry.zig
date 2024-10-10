@@ -133,13 +133,54 @@ pub fn Registry(comptime options: RegistryOptions) type {
                 .variant_counter => try self.getOrCreateVariantCounter(name, MetricType.Type),
                 .gauge => try self.getOrCreateGauge(name, MetricType.Data),
                 .gauge_fn => @compileError("GaugeFn does not support auto-init."),
-                .histogram => try self.getOrCreateHistogram(
-                    name,
-                    if (@typeInfo(@TypeOf(Config.buckets)) == .Fn)
-                        Config.buckets(name)
-                    else
-                        &Config.buckets,
-                ),
+                .histogram => try self
+                    .getOrCreateHistogram(name, histogramBuckets(Config, local_name)),
+            };
+        }
+
+        fn histogramBuckets(
+            comptime Config: type,
+            comptime local_histogram_name: []const u8,
+        ) []const f64 {
+            const has_fn = @hasDecl(Config, "histogramBucketsForField");
+            const has_const = @hasDecl(Config, "histogram_buckets");
+            if (has_const and has_fn) {
+                @compileError(@typeName(Config) ++ " has both histogramBucketsForField and" ++
+                    " histogram_buckets, but it should only have one.");
+            } else if (has_const) {
+                comptime if (!isSlicable(@TypeOf(Config.histogram_buckets), f64)) {
+                    @compileError(@typeName(Config) ++
+                        ".histogram_buckets should be a slice or array of f64");
+                };
+                return Config.histogram_buckets[0..];
+            } else if (has_fn) {
+                const info = @typeInfo(@TypeOf(Config.histogramBucketsForField));
+                comptime if (info != .Fn or
+                    info.Fn.params.len != 1 or
+                    info.Fn.params[0].type != []const u8 or
+                    !isSlicable(info.Fn.return_type.?, f64))
+                {
+                    @compileError(@typeName(Config) ++
+                        ".histogramBucketsForField should take one param `[]const u8` and " ++
+                        "return either a slice or array of f64");
+                };
+                return Config.histogramBucketsForField(local_histogram_name)[0..];
+            } else {
+                @compileError(@typeName(Config) ++ " must provide the histogram buckets for " ++
+                    local_histogram_name ++ ", either with a const `histogram_buckets` " ++
+                    "that defines the buckets to use for all histograms in the struct, or with " ++
+                    "a function histogramBucketsForField that accepts the local histogram name " ++
+                    "as an input and returns the buckets for that histogram. In either case, " ++
+                    "the buckets should be provided as either a slice or array of f64.");
+            }
+        }
+
+        fn isSlicable(comptime T: type, comptime DesiredChild: type) bool {
+            return switch (@typeInfo(T)) {
+                .Array => |a| a.child == DesiredChild,
+                .Pointer => |p| p.size != .One and p.child == DesiredChild or
+                    p.size == .One and isSlicable(p.child, DesiredChild),
+                else => false,
             };
         }
 

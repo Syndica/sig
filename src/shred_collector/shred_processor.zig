@@ -135,5 +135,5 @@ const Metrics = struct {
     set_last_shred_error: *VariantCounter(SlotOutOfBounds),
 
     pub const prefix = "shred_processor";
-    pub const buckets = sig.prometheus.histogram.exponentialBuckets(2, -1, 8);
+    pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(2, -1, 8);
 };

@@ -222,7 +222,7 @@ pub const ShredReceiverMetrics = struct {
     discard: *VariantCounter(ShredValidationError),
 
     pub const prefix = "shred_receiver";
-    pub const buckets = sig.prometheus.histogram.exponentialBuckets(2, -1, 8);
+    pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(2, -1, 8);
 };
 
 /// Something about the shred was unexpected, so we will discard it.

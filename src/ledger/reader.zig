@@ -1454,7 +1454,7 @@ const BlockstoreReaderMetrics = struct {
     get_until_slot_us: *Histogram,
 
     pub const prefix = "blockstore_reader";
-    pub const buckets = sig.prometheus.histogram.exponentialBuckets(5, -1, 10);
+    pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(5, -1, 10);
 };
 
 const BlockstoreRpcApiMetrics = struct {
