@@ -94,15 +94,15 @@ pub const ShredReceiver = struct {
     ) !void {
         while (!self.exit.load(.acquire)) {
             for (receivers) |receiver| {
-                var count: usize = 0;
+                var packet_count: usize = 0;
                 while (receiver.receive()) |packet| {
-                    count += 1;
+                    packet_count += 1;
                     try self.handlePacket(packet, response_sender, is_repair);
                 }
                 if (is_repair) {
-                    self.metrics.repair_batch_size.observe(count);
+                    self.metrics.repair_batch_size.observe(packet_count);
                 } else {
-                    self.metrics.turbine_batch_size.observe(count);
+                    self.metrics.turbine_batch_size.observe(packet_count);
                 }
             }
         }
@@ -116,8 +116,8 @@ pub const ShredReceiver = struct {
         comptime is_repair: bool,
     ) !void {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
-            if (try self.handlePing(&packet)) |p| {
-                try response_sender.send(p);
+            if (try self.handlePing(&packet)) |pong_packet| {
+                try response_sender.send(pong_packet);
                 self.metrics.pong_sent_count.inc();
             }
         } else {
