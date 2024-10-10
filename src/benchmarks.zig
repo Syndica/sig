@@ -38,6 +38,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
         try benchmark(
+            allocator,
             @import("accountsdb/index.zig").BenchmarkSwissMap,
             max_time_per_bench,
             .microseconds,
@@ -57,6 +58,7 @@ pub fn main() !void {
 
         if (std.mem.eql(u8, "accounts_db_readwrite", filter) or run_all) {
             try benchmark(
+                allocator,
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
                 .seconds,
@@ -67,6 +69,7 @@ pub fn main() !void {
             // NOTE: for this benchmark you need to setup a snapshot in test-data/snapshot_bench
             // and run as a binary ./zig-out/bin/... so the open file limits are ok
             try benchmark(
+                allocator,
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
                 .seconds,
@@ -76,6 +79,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, filter, "socket_utils") or run_all_benchmarks) {
         try benchmark(
+            allocator,
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
             .milliseconds,
@@ -84,11 +88,13 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, filter, "gossip") or run_all_benchmarks) {
         try benchmark(
+            allocator,
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
             .milliseconds,
         );
         try benchmark(
+            allocator,
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
             .milliseconds,
@@ -97,6 +103,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, filter, "sync") or run_all_benchmarks) {
         try benchmark(
+            allocator,
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
             .microseconds,
@@ -133,6 +140,7 @@ const TimeUnits = enum {
 
 // src: https://github.com/Hejsil/zig-bench
 pub fn benchmark(
+    allocator: std.mem.Allocator,
     comptime B: type,
     max_time: u128,
     time_unit: TimeUnits,
@@ -143,7 +151,7 @@ pub fn benchmark(
 
     const functions = comptime blk: {
         var res: []const Decl = &[_]Decl{};
-        for (meta.declarations(B)) |decl| {
+        for (@typeInfo(B).Struct.decls) |decl| {
             if (@typeInfo(@TypeOf(@field(B, decl.name))) != .Fn)
                 continue;
             res = res ++ [_]Decl{decl};
@@ -204,55 +212,114 @@ pub fn benchmark(
 
     inline for (functions, 0..) |def, fcni| {
         if (fcni > 0)
-            std.debug.print("---\n", .{});
+            try stderr.writeAll("---\n");
 
         inline for (args) |arg| {
-            var runtimes: [max_iterations]u64 = undefined;
+            const benchFunction = @field(B, def.name);
+            const arguments = switch (@TypeOf(arg)) {
+                void => .{},
+                else => .{arg},
+            };
+
+            // NOTE: @TypeOf guarantees no runtime side-effects of argument expressions.
+            // this means the function will *not* be called, this is just computing the return
+            // type.
+            const result_type: type = @TypeOf(try @call(.auto, benchFunction, arguments));
+            const runtime_type = switch (result_type) {
+                sig.time.Duration => struct { result: u64 },
+                else => result_type,
+            };
+            var runtimes: std.MultiArrayList(runtime_type) = .{};
             var min: u64 = math.maxInt(u64);
             var max: u64 = 0;
             var runtime_sum: u128 = 0;
 
-            var i: usize = 0;
+            var i: u64 = 0;
             while (i < min_iterations or
                 (i < max_iterations and runtime_sum < max_time)) : (i += 1)
             {
-                const benchFunction = @field(B, def.name);
-                const ns_duration: sig.time.Duration = try switch (@TypeOf(arg)) {
-                    void => benchFunction(),
-                    else => benchFunction(arg),
-                };
-
-                const runtime = try time_unit.unitsfromNanoseconds(ns_duration.asNanos());
-
-                runtimes[i] = runtime;
-                runtime_sum += runtime;
-                min = @min(runtimes[i], min);
-                max = @max(runtimes[i], max);
+                switch (runtime_type) {
+                    u64 => {
+                        const ns_duration = try @call(.auto, benchFunction, arguments);
+                        const runtime = try time_unit.unitsfromNanoseconds(ns_duration.asNanos());
+                        runtimes.append(allocator, .{ .result = runtime });
+                        runtime_sum += runtime;
+                        min = @min(runtimes[i], min);
+                        max = @max(runtimes[i], max);
+                    },
+                    inline else => |T| {
+                        std.debug.print("T: {s}\n", .{@typeName(T)});
+                    },
+                }
             }
 
-            const runtime_mean: u64 = @intCast(runtime_sum / i);
-
-            var d_sq_sum: u128 = 0;
-            for (runtimes[0..i]) |runtime| {
-                const d = @as(i64, @intCast(@as(i128, @intCast(runtime)) - runtime_mean));
-                d_sq_sum += @as(u64, @intCast(d * d));
+            switch (runtime_type) {
+                u64 => {
+                    try printResult(
+                        stderr,
+                        min_width,
+                        runtime_sum,
+                        &runtimes,
+                        i,
+                        def.name,
+                        formatter("{s}", if (@TypeOf(arg) == void) "" else arg.name),
+                        min,
+                        max,
+                    );
+                },
+                else => {
+                    inline for (@typeInfo(result_type).Struct.fields) |field| {
+                        try printResult(
+                            stderr,
+                            min_width,
+                            runtime_sum,
+                            runtimes.items(std.meta.stringToEnum(std.meta.FieldEnum(runtime_type), field.name) orelse unreachable),
+                            i,
+                            def.name ++ "." ++ field.name,
+                            formatter("{s}", if (@TypeOf(arg) == void) "" else arg.name),
+                            min,
+                            max,
+                        );
+                    }
+                },
             }
-            const variance = d_sq_sum / i;
-            _ = try printBenchmark(
-                stderr,
-                min_width,
-                def.name,
-                formatter("{s}", if (@TypeOf(arg) == void) "" else arg.name),
-                i,
-                min,
-                max,
-                variance,
-                runtime_mean,
-            );
+
             try stderr.writeAll("\n");
-            try stderr.context.flush();
+            try buffered_stderr.flush();
         }
     }
+}
+
+fn printResult(
+    writer: anytype,
+    min_widths: [6]u64,
+    runtime_sum: u128,
+    runtimes: []const u64,
+    iterations: u64,
+    function_name: []const u8,
+    arg_name: anytype,
+    min: u64,
+    max: u64,
+) !void {
+    const runtime_mean: u64 = @intCast(runtime_sum / iterations);
+
+    var d_sq_sum: u128 = 0;
+    for (runtimes[0..iterations]) |runtime| {
+        const d = @as(i64, @intCast(@as(i128, @intCast(runtime)) - runtime_mean));
+        d_sq_sum += @as(u64, @intCast(d * d));
+    }
+    const variance = d_sq_sum / iterations;
+    _ = try printBenchmark(
+        writer,
+        min_widths,
+        function_name,
+        arg_name,
+        iterations,
+        min,
+        max,
+        variance,
+        runtime_mean,
+    );
 }
 
 fn printBenchmark(

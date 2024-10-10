@@ -3972,7 +3972,12 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         return duration;
     }
 
-    pub fn verifySnapshot(bench_args: BenchArgs) !sig.time.Duration {
+    const BenchResult = struct {
+        load_time: sig.time.Duration,
+        validate_time: sig.time.Duration,
+    };
+
+    pub fn loadAndVerifySnapshot(bench_args: BenchArgs) !BenchResult {
         const allocator = std.heap.c_allocator;
 
         const logger = Logger {.noop = {}};
@@ -3986,7 +3991,11 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
         var snapshot_dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
             std.debug.print("need to setup a snapshot in {s} for this benchmark...\n", .{dir_path});
-            return sig.time.Duration.fromNanos(0);
+            const zero_duration = sig.time.Duration.fromNanos(0);
+            return .{
+                .load_time = zero_duration,
+                .validate_time = zero_duration,
+            };
         };
         defer snapshot_dir.close();
 
@@ -4023,7 +4032,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         }, null);
         defer accounts_db.deinit();
 
-        _ = try accounts_db.loadFromSnapshot(
+        const loading_duration = try accounts_db.loadFromSnapshot(
             snapshot.accounts_db_fields,
             bench_args.n_threads,
             allocator,
@@ -4038,7 +4047,10 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             snapshot.accounts_db_fields.bank_hash_info.accounts_hash,
         );
 
-        return validate_duration;
+        return .{
+            .load_time = loading_duration,
+            .validate_time = validate_duration,
+        };
     }
 };
 
