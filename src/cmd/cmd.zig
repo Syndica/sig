@@ -1434,23 +1434,23 @@ fn loadSnapshot(
     );
     errdefer result.accounts_db.deinit();
 
-    // TODO: load from disk index
-    const manifest = try all_snapshot_fields.collapse();
-    try result.accounts_db.fastLoadWithDiskIndexes(
-        manifest.accounts_db_fields,
-    );
-    const full_snapshot = all_snapshot_fields.full;
-    const validate_duration = try result.accounts_db.validateLoadFromSnapshot(
-        manifest.bank_fields_inc.snapshot_persistence,
-        full_snapshot.bank_fields.slot,
-        full_snapshot.bank_fields.capitalization,
-        manifest.accounts_db_fields.bank_hash_info.accounts_hash,
-    );
-    logger.infof("validated from snapshot in {s}", .{validate_duration});
+    // // TODO: load from disk index
+    // const manifest = try all_snapshot_fields.collapse();
+    // try result.accounts_db.fastLoadWithDiskIndexes(
+    //     manifest.accounts_db_fields,
+    // );
+    // const full_snapshot = all_snapshot_fields.full;
+    // const validate_duration = try result.accounts_db.validateLoadFromSnapshot(
+    //     manifest.bank_fields_inc.snapshot_persistence,
+    //     full_snapshot.bank_fields.slot,
+    //     full_snapshot.bank_fields.capitalization,
+    //     manifest.accounts_db_fields.bank_hash_info.accounts_hash,
+    // );
+    // logger.info().logf("validated from snapshot in {s}", .{validate_duration});
 
-    if (config.current.accounts_db.use_disk_index) {
-        @panic("ahhh");
-    }
+    // if (config.current.accounts_db.use_disk_index) {
+    //     @panic("ahhh");
+    // }
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(
         allocator,

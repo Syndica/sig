@@ -33,6 +33,21 @@ pub fn RecycleFBA(config: struct {
             };
         }
 
+        pub fn ensureCapacity(self: *Self, n: u64) !void {
+            const current_buf = self.fba_allocator.buffer;
+            if (current_buf.len >= n) return;
+
+            if (self.backing_allocator.resize(current_buf, n)) {
+                const current_usage = self.fba_allocator.end_index;
+                if (current_usage != 0) return error.ResizeUsedAllocatorNotSupported;
+
+                // NOTE: this can be expensive on memory (if two large bufs)
+                try self.backing_allocator.alloc(u8, n);
+                self.fba_allocator.buffer = self.backing_allocator.buffer;
+                self.backing_allocator.free(current_buf);
+            }
+        }
+
         pub fn deinit(self: *Self) void {
             self.backing_allocator.free(self.fba_allocator.buffer);
             self.records.deinit();
