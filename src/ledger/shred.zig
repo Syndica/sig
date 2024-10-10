@@ -7,6 +7,7 @@ const Allocator = std.mem.Allocator;
 
 const BitFlags = sig.utils.bitflags.BitFlags;
 const Hash = sig.core.Hash;
+const Pubkey = sig.core.Pubkey;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Signature = sig.core.Signature;
@@ -530,6 +531,22 @@ pub const ShredId = struct {
     slot: Slot,
     index: u32,
     shred_type: sig.ledger.shred.ShredType,
+
+    // TODO: Check for seed equivalence with agave
+    pub fn seed(self: ShredId, leader: Pubkey) [32]u8 {
+        var slot_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &slot_bytes, self.slot, .little);
+        var index_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &index_bytes, self.index, .little);
+        var shred_bytes: [1]u8 = undefined;
+        std.mem.writeInt(u8, &shred_bytes, @intFromEnum(self.shred_type), .little);
+        return hashv(&.{
+            &slot_bytes,
+            &shred_bytes,
+            &index_bytes,
+            &leader.data,
+        }).data;
+    }
 };
 
 pub const ErasureSetId = struct {
@@ -1014,6 +1031,15 @@ pub const layout = struct {
     pub const OFFSET_OF_SHRED_VARIANT: usize = SIZE_OF_SIGNATURE; // 64
     pub const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_VARIANT; // 64 + 1 = 65
     pub const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT; // 65 + 8 = 73
+
+    pub fn getShredId(packet: *const Packet) !ShredId {
+        const shred = getShred(packet) orelse return error.InvalidShred;
+        return .{
+            .slot = getSlot(shred) orelse return error.InvalidShred,
+            .index = getIndex(shred) orelse return error.InvalidShred,
+            .shred_type = getShredVariant(shred).?.shred_type,
+        };
+    }
 
     pub fn getShred(packet: *const Packet) ?[]const u8 {
         if (getShredSize(packet) > packet.data.len) return null;

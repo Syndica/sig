@@ -1401,6 +1401,32 @@ pub const ThreadSafeContactInfo = struct {
     gossip_addr: ?SocketAddr,
     rpc_addr: ?SocketAddr,
     tpu_addr: ?SocketAddr,
+    tvu_addr: ?SocketAddr,
+
+    pub fn random(
+        allocator: std.mem.Allocator,
+        rng: std.rand.Random,
+        pubkey: Pubkey,
+        wallclock: u64,
+        outset: u64,
+        shred_version: u16,
+    ) !ThreadSafeContactInfo {
+        const contact_info = try ContactInfo.random(
+            allocator,
+            rng,
+            pubkey,
+            wallclock,
+            outset,
+            shred_version,
+        );
+        defer contact_info.deinit();
+        var threadsafe_contact_info = ThreadSafeContactInfo.fromContactInfo(contact_info);
+        threadsafe_contact_info.gossip_addr = SocketAddr.random(rng);
+        threadsafe_contact_info.rpc_addr = SocketAddr.random(rng);
+        threadsafe_contact_info.tpu_addr = SocketAddr.random(rng);
+        threadsafe_contact_info.tvu_addr = SocketAddr.random(rng);
+        return threadsafe_contact_info;
+    }
 
     pub fn fromContactInfo(contact_info: ContactInfo) ThreadSafeContactInfo {
         return .{
@@ -1409,6 +1435,7 @@ pub const ThreadSafeContactInfo = struct {
             .gossip_addr = contact_info.getSocket(.gossip),
             .rpc_addr = contact_info.getSocket(.rpc),
             .tpu_addr = contact_info.getSocket(.tpu),
+            .tvu_addr = contact_info.getSocket(.turbine_recv),
         };
     }
 
@@ -1419,6 +1446,7 @@ pub const ThreadSafeContactInfo = struct {
             .gossip_addr = legacy_contact_info.gossip,
             .rpc_addr = legacy_contact_info.rpc,
             .tpu_addr = legacy_contact_info.tpu,
+            .tvu_addr = legacy_contact_info.turbine_recv,
         };
     }
 };

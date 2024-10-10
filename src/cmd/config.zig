@@ -121,6 +121,8 @@ pub const AccountsDBConfig = struct {
     force_new_snapshot_download: bool = false,
     /// estimate of the number of accounts per file (used for preallocation)
     accounts_per_file_estimate: u64 = 1_500,
+    /// only load snapshot metadata when starting up
+    snapshot_metadata_only: bool = false,
 };
 
 pub const GeyserConfig = struct {

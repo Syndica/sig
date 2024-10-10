@@ -17,6 +17,8 @@ pub fn runShredVerifier(
     unverified_shred_receiver: *Channel(Packet),
     /// me --> shred processor
     verified_shred_sender: *Channel(Packet),
+    /// me --> retransmit service
+    retransmit_shred_sender: *Channel(Packet),
     leader_schedule: SlotLeaderProvider,
 ) !void {
     while (!exit.load(.acquire) or
@@ -26,6 +28,7 @@ pub fn runShredVerifier(
             // TODO parallelize this once it's actually verifying signatures
             if (verifyShred(&packet, leader_schedule)) {
                 try verified_shred_sender.send(packet);
+                try retransmit_shred_sender.send(packet);
             }
         }
     }

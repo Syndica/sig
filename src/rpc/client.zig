@@ -119,7 +119,12 @@ pub const Client = struct {
         return self.sendFetchRequest(allocator, types.EpochInfo, request, .{});
     }
 
-    // TODO: getEpochSchedule()
+    pub fn getEpochSchedule(self: *Client, allocator: std.mem.Allocator) !Response(types.EpochSchedule) {
+        var request = try Request.init(allocator, "getEpochSchedule");
+        defer request.deinit();
+        return self.sendFetchRequest(allocator, types.EpochSchedule, request, .{});
+    }
+
     // TODO: getFeeForMessage()
     // TODO: getFirstAvailableBlock()
     // TODO: getGenesisHash()
