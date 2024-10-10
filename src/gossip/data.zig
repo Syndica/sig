@@ -21,7 +21,6 @@ const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
 const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
-const ShortVecArrayListConfig = sig.bincode.shortvec.ShortVecArrayListConfig;
 const sanitizeWallclock = sig.gossip.message.sanitizeWallclock;
 
 const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
@@ -1199,9 +1198,9 @@ pub const ContactInfo = struct {
     // TODO: improve implementation of post deserialise method
     pub const @"!bincode-config:post-deserialize" = bincode.FieldConfig(ContactInfo){ .post_deserialize_fn = ContactInfo.buildCache };
     pub const @"!bincode-config:cache" = bincode.FieldConfig([SOCKET_CACHE_SIZE]SocketAddr){ .skip = true };
-    pub const @"!bincode-config:addrs" = ShortVecArrayListConfig(IpAddr);
-    pub const @"!bincode-config:sockets" = ShortVecArrayListConfig(SocketEntry);
-    pub const @"!bincode-config:extensions" = ShortVecArrayListConfig(Extension);
+    pub const @"!bincode-config:addrs" = bincode.shortvec.arrayListConfig(IpAddr);
+    pub const @"!bincode-config:sockets" = bincode.shortvec.arrayListConfig(SocketEntry);
+    pub const @"!bincode-config:extensions" = bincode.shortvec.arrayListConfig(Extension);
     pub const @"!bincode-config:wallclock" = var_int_config_u64;
 
     const Self = @This();

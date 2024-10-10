@@ -9,13 +9,13 @@ const Signature = sig.core.Signature;
 const indexOf = sig.utils.slice.indexOf;
 
 const peekableReader = sig.utils.io.peekableReader;
-const ShortVecConfig = sig.bincode.shortvec.ShortVecConfig;
+const shortVecConfig = sig.bincode.shortvec.sliceConfig;
 
 pub const VersionedTransaction = struct {
     signatures: []Signature,
     message: VersionedMessage,
 
-    pub const @"!bincode-config:signatures" = ShortVecConfig(Signature);
+    pub const @"!bincode-config:signatures" = shortVecConfig([]Signature);
 
     pub fn deinit(self: VersionedTransaction, allocator: std.mem.Allocator) void {
         allocator.free(self.signatures);
@@ -124,9 +124,9 @@ pub const V0Message = struct {
     /// for this transaction.
     address_table_lookups: []MessageAddressTableLookup,
 
-    pub const @"!bincode-config:account_keys" = ShortVecConfig(Pubkey);
-    pub const @"!bincode-config:instructions" = ShortVecConfig(CompiledInstruction);
-    pub const @"!bincode-config:address_table_lookups" = ShortVecConfig(MessageAddressTableLookup);
+    pub const @"!bincode-config:account_keys" = shortVecConfig([]Pubkey);
+    pub const @"!bincode-config:instructions" = shortVecConfig([]CompiledInstruction);
+    pub const @"!bincode-config:address_table_lookups" = shortVecConfig([]MessageAddressTableLookup);
 
     pub fn deinit(self: V0Message, allocator: std.mem.Allocator) void {
         inline for (.{ self.instructions, self.address_table_lookups }) |slice| {
@@ -160,8 +160,8 @@ pub const MessageAddressTableLookup = struct {
     /// List of indexes used to load readonly account addresses
     readonly_indexes: []u8,
 
-    pub const @"!bincode-config:writable_indexes" = ShortVecConfig(u8);
-    pub const @"!bincode-config:readonly_indexes" = ShortVecConfig(u8);
+    pub const @"!bincode-config:writable_indexes" = shortVecConfig([]u8);
+    pub const @"!bincode-config:readonly_indexes" = shortVecConfig([]u8);
 
     pub fn deinit(self: MessageAddressTableLookup, allocator: std.mem.Allocator) void {
         allocator.free(self.writable_indexes);
@@ -173,7 +173,7 @@ pub const Transaction = struct {
     signatures: []Signature,
     message: Message,
 
-    pub const @"!bincode-config:signatures" = ShortVecConfig(Signature);
+    pub const @"!bincode-config:signatures" = shortVecConfig([]Signature);
 
     pub const MAX_BYTES: usize = 1232;
 
@@ -224,8 +224,8 @@ pub const Message = struct {
     recent_blockhash: Hash,
     instructions: []CompiledInstruction,
 
-    pub const @"!bincode-config:account_keys" = ShortVecConfig(Pubkey);
-    pub const @"!bincode-config:instructions" = ShortVecConfig(CompiledInstruction);
+    pub const @"!bincode-config:account_keys" = shortVecConfig([]Pubkey);
+    pub const @"!bincode-config:instructions" = shortVecConfig([]CompiledInstruction);
 
     pub fn default() Message {
         return Message{
@@ -348,8 +348,8 @@ pub const CompiledInstruction = struct {
     /// The program input data.
     data: []u8,
 
-    pub const @"!bincode-config:accounts" = ShortVecConfig(u8);
-    pub const @"!bincode-config:data" = ShortVecConfig(u8);
+    pub const @"!bincode-config:accounts" = shortVecConfig([]u8);
+    pub const @"!bincode-config:data" = shortVecConfig([]u8);
 
     pub fn clone(self: *const CompiledInstruction, allocator: std.mem.Allocator) error{OutOfMemory}!CompiledInstruction {
         return .{

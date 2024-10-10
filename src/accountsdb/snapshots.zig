@@ -23,7 +23,6 @@ const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
 
 const Logger = sig.trace.Logger;
 
-const defaultArrayListUnmanagedOnEOFConfig = bincode.arraylist.defaultArrayListUnmanagedOnEOFConfig;
 const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
 const readDirectory = sig.utils.directory.readDirectory;
 
@@ -1066,8 +1065,8 @@ pub const AccountsDbFields = struct {
     pub const @"!bincode-config:file_map" = bincode.hashmap.hashMapFieldConfig(FileMap, .{
         .value = bincode.list.valueEncodedAsSlice(AccountFileInfo, .{}),
     });
-    pub const @"!bincode-config:rooted_slots" = defaultArrayListUnmanagedOnEOFConfig(Slot);
-    pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListUnmanagedOnEOFConfig(SlotAndHash);
+    pub const @"!bincode-config:rooted_slots" = bincode.arraylist.defaultOnEofConfig(std.ArrayListUnmanaged(Slot));
+    pub const @"!bincode-config:rooted_slot_hashes" = bincode.arraylist.defaultOnEofConfig(std.ArrayListUnmanaged(SlotAndHash));
 
     pub const FileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
 
