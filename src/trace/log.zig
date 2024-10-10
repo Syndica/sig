@@ -211,7 +211,7 @@ pub const ChannelPrintLogger = struct {
         for (0..100) |_| {
             return self.log_allocator.alloc(u8, size) catch {
                 std.time.sleep(std.time.ns_per_ms);
-                if (self.exit.load(.unordered)) {
+                if (self.exit.load(.monotonic)) {
                     return error.MemoryBlockedWithExitSignaled;
                 }
                 continue;
