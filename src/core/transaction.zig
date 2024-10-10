@@ -12,10 +12,10 @@ const peekableReader = sig.utils.io.peekableReader;
 const shortVecConfig = sig.bincode.shortvec.sliceConfig;
 
 pub const VersionedTransaction = struct {
-    signatures: []Signature,
+    signatures: []const Signature,
     message: VersionedMessage,
 
-    pub const @"!bincode-config:signatures" = shortVecConfig([]Signature);
+    pub const @"!bincode-config:signatures" = shortVecConfig([]const Signature);
 
     pub fn deinit(self: VersionedTransaction, allocator: std.mem.Allocator) void {
         allocator.free(self.signatures);
@@ -100,7 +100,7 @@ pub const V0Message = struct {
     header: MessageHeader,
 
     /// List of accounts loaded by this transaction.
-    account_keys: []Pubkey,
+    account_keys: []const Pubkey,
 
     /// The blockhash of a recent block.
     recent_blockhash: Hash,
@@ -118,15 +118,15 @@ pub const V0Message = struct {
     ///   1) message `account_keys`
     ///   2) ordered list of keys loaded from `writable` lookup table indexes
     ///   3) ordered list of keys loaded from `readable` lookup table indexes
-    instructions: []CompiledInstruction,
+    instructions: []const CompiledInstruction,
 
     /// List of address table lookups used to load additional accounts
     /// for this transaction.
-    address_table_lookups: []MessageAddressTableLookup,
+    address_table_lookups: []const MessageAddressTableLookup,
 
-    pub const @"!bincode-config:account_keys" = shortVecConfig([]Pubkey);
-    pub const @"!bincode-config:instructions" = shortVecConfig([]CompiledInstruction);
-    pub const @"!bincode-config:address_table_lookups" = shortVecConfig([]MessageAddressTableLookup);
+    pub const @"!bincode-config:account_keys" = shortVecConfig([]const Pubkey);
+    pub const @"!bincode-config:instructions" = shortVecConfig([]const CompiledInstruction);
+    pub const @"!bincode-config:address_table_lookups" = shortVecConfig([]const MessageAddressTableLookup);
 
     pub fn deinit(self: V0Message, allocator: std.mem.Allocator) void {
         inline for (.{ self.instructions, self.address_table_lookups }) |slice| {
@@ -156,12 +156,12 @@ pub const MessageAddressTableLookup = struct {
     /// Address lookup table account key
     account_key: Pubkey,
     /// List of indexes used to load writable account addresses
-    writable_indexes: []u8,
+    writable_indexes: []const u8,
     /// List of indexes used to load readonly account addresses
-    readonly_indexes: []u8,
+    readonly_indexes: []const u8,
 
-    pub const @"!bincode-config:writable_indexes" = shortVecConfig([]u8);
-    pub const @"!bincode-config:readonly_indexes" = shortVecConfig([]u8);
+    pub const @"!bincode-config:writable_indexes" = shortVecConfig([]const u8);
+    pub const @"!bincode-config:readonly_indexes" = shortVecConfig([]const u8);
 
     pub fn deinit(self: MessageAddressTableLookup, allocator: std.mem.Allocator) void {
         allocator.free(self.writable_indexes);
@@ -170,10 +170,10 @@ pub const MessageAddressTableLookup = struct {
 };
 
 pub const Transaction = struct {
-    signatures: []Signature,
+    signatures: []const Signature,
     message: Message,
 
-    pub const @"!bincode-config:signatures" = shortVecConfig([]Signature);
+    pub const @"!bincode-config:signatures" = shortVecConfig([]const Signature);
 
     pub const MAX_BYTES: usize = 1232;
 
@@ -220,12 +220,12 @@ pub const Transaction = struct {
 
 pub const Message = struct {
     header: MessageHeader,
-    account_keys: []Pubkey,
+    account_keys: []const Pubkey,
     recent_blockhash: Hash,
-    instructions: []CompiledInstruction,
+    instructions: []const CompiledInstruction,
 
-    pub const @"!bincode-config:account_keys" = shortVecConfig([]Pubkey);
-    pub const @"!bincode-config:instructions" = shortVecConfig([]CompiledInstruction);
+    pub const @"!bincode-config:account_keys" = shortVecConfig([]const Pubkey);
+    pub const @"!bincode-config:instructions" = shortVecConfig([]const CompiledInstruction);
 
     pub fn default() Message {
         return Message{
@@ -344,12 +344,12 @@ pub const CompiledInstruction = struct {
     /// Index into the transaction keys array indicating the program account that executes this instruction.
     program_id_index: u8,
     /// Ordered indices into the transaction keys array indicating which accounts to pass to the program.
-    accounts: []u8,
+    accounts: []const u8,
     /// The program input data.
-    data: []u8,
+    data: []const u8,
 
-    pub const @"!bincode-config:accounts" = shortVecConfig([]u8);
-    pub const @"!bincode-config:data" = shortVecConfig([]u8);
+    pub const @"!bincode-config:accounts" = shortVecConfig([]const u8);
+    pub const @"!bincode-config:data" = shortVecConfig([]const u8);
 
     pub fn clone(self: *const CompiledInstruction, allocator: std.mem.Allocator) error{OutOfMemory}!CompiledInstruction {
         return .{
