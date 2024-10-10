@@ -18,7 +18,7 @@ const Gauge = sig.prometheus.Gauge;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Duration = sig.time.Duration;
 const TurbineTree = sig.turbine.TurbineTree;
-const TurbineTreeCache = sig.turbine.TurbineTreeCache;
+const TurbineTreeProvider = sig.turbine.TurbineTreeProvider;
 const Channel = sig.sync.Channel;
 const ShredId = sig.ledger.shred.ShredId;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
@@ -34,6 +34,8 @@ const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
 const DEDUPER_RESET_CYCLE: Duration = Duration.fromSecs(5 * 60);
 const DEDUPER_NUM_BITS: u64 = 637_534_199;
 const SEND_SHRED_THREADS: usize = 8;
+
+const USE_STAKE_HACK_FOR_TESTING = false;
 
 pub fn run(
     allocator: std.mem.Allocator,
@@ -127,10 +129,11 @@ fn receiveShreds(
     logger: Logger,
     stats: *Stats,
 ) !void {
-    var turbine_tree_provider = TurbineTreeCache.init(
+    var turbine_tree_provider = TurbineTreeProvider.init(
         allocator,
         my_contact_info,
         gossip_table_rw,
+        USE_STAKE_HACK_FOR_TESTING,
     );
     defer turbine_tree_provider.deinit();
 
@@ -203,9 +206,12 @@ fn receiveShreds(
                 break :blk leader_schedule_cache.slotLeader(slot) orelse @panic("failed to get slot leader");
             };
 
-            const turbine_tree = try turbine_tree_provider.getTurbineTree(
+            const turbine_tree = try turbine_tree_provider.getTurbineTreeForRetransmit(
                 epoch,
-                bank_fields,
+                try bank_fields.getStakedNodes(
+                    allocator,
+                    epoch,
+                ),
             );
 
             for (slot_shreds.items) |shred_id_and_packet| {
@@ -236,7 +242,6 @@ fn retransmitShreds(
 ) !void {
     while (!exit.load(.acquire)) {
         const retransmit_info: RetransmitShredInfo = receiver.receive() orelse continue;
-        defer retransmit_info.deinit();
 
         var compute_turbine_children_timer = try sig.time.Timer.start();
         const level, const children = try retransmit_info.turbine_tree.getRetransmitChildren(
@@ -246,6 +251,7 @@ fn retransmitShreds(
             TurbineTree.getDataPlaneFanout(),
         );
         defer children.deinit();
+        defer retransmit_info.turbine_tree.releaseUnsafe();
         stats.retransmit_compute_turbine_children_micros.set(compute_turbine_children_timer.read().asMicros());
 
         var children_with_addresses_count: usize = 0;
@@ -277,10 +283,6 @@ const RetransmitShredInfo = struct {
     shred_packet: Packet,
     slot_leader: Pubkey,
     turbine_tree: *TurbineTree,
-
-    pub fn deinit(self: RetransmitShredInfo) void {
-        self.turbine_tree.release();
-    }
 };
 
 pub const Stats = struct {
