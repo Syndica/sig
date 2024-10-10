@@ -175,13 +175,18 @@ pub const Node = struct {
 pub const TurbineTree = struct {
     allocator: std.mem.Allocator,
     my_pubkey: Pubkey,
+    /// All staked nodes + other known tvu-peers + the node itself;
+    /// sorted by (stake, pubkey) in descending order.
     nodes: std.ArrayList(Node),
+    /// Pubkey -> index in nodes
     index: std.AutoArrayHashMap(Pubkey, usize),
+    /// Weighted shuffle of node stakes
     weighted_shuffle: WeightedShuffle,
     reference_count: AtomicUsize,
 
-    const DATA_PLANE_FANOUT = 200;
-    const MAX_NODES_PER_IP = 2;
+    pub const DATA_PLANE_FANOUT: usize = 200;
+    pub const MAX_TURBINE_TREE_DEPTH: usize = 4;
+    pub const MAX_NODES_PER_IP_ADDRESS: usize = 10;
 
     /// Initialise the TurbineTree for retransmit service
     /// The tvu_peers and stakes are used to construct the nodes in the tree
@@ -442,7 +447,7 @@ pub const TurbineTree = struct {
             var exceeds_ip_limit = false;
             if (node.tvuAddress()) |tvu_addr| {
                 const ip_count = ip_counts.get(tvu_addr.ip()) orelse 0;
-                if (ip_count < MAX_NODES_PER_IP) {
+                if (ip_count < MAX_NODES_PER_IP_ADDRESS) {
                     result.appendAssumeCapacity(node);
                 } else {
                     exceeds_ip_limit = true;
