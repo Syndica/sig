@@ -7,7 +7,6 @@ const bincode = sig.bincode;
 const layout = sig.ledger.shred.layout;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Socket = network.Socket;
@@ -32,7 +31,7 @@ pub const ShredReceiver = struct {
     repair_socket: Socket,
     turbine_socket: Socket,
     /// me --> shred verifier
-    unverified_shred_sender: *Channel(ArrayList(Packet)),
+    unverified_shred_sender: *Channel(Packet),
     shred_version: *const Atomic(u16),
     metrics: ShredReceiverMetrics,
     root_slot: Slot, // TODO: eventually, this should be handled by BankForks
@@ -42,114 +41,108 @@ pub const ShredReceiver = struct {
     /// Run threads to listen/send over socket and handle all incoming packets.
     /// Returns when exit is set to true.
     pub fn run(self: *Self) !void {
-        defer self.logger.err("exiting shred receiver");
-        errdefer self.logger.err("error in shred receiver");
+        defer self.logger.err().log("exiting shred receiver");
+        errdefer self.logger.err().log("error in shred receiver");
 
         var response_sender = try SocketThread
             .initSender(self.allocator, self.logger, self.repair_socket, self.exit);
-        defer response_sender.deinit();
+        defer response_sender.deinit(self.allocator);
         var repair_receiver = try SocketThread
             .initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
-        defer repair_receiver.deinit();
+        defer repair_receiver.deinit(self.allocator);
 
-        var turbine_receivers: [NUM_TVU_RECEIVERS]*Channel(ArrayList(Packet)) = undefined;
+        var turbine_receivers: [NUM_TVU_RECEIVERS]SocketThread = undefined;
         for (0..NUM_TVU_RECEIVERS) |i| {
-            turbine_receivers[i] = (try SocketThread.initReceiver(
+            turbine_receivers[i] = try SocketThread.initReceiver(
                 self.allocator,
                 self.logger,
                 self.turbine_socket,
                 self.exit,
-            )).channel;
+            );
         }
-        defer for (turbine_receivers) |r| r.deinit();
-        const x = try std.Thread.spawn(
+        defer for (turbine_receivers) |r| r.deinit(self.allocator);
+
+        var turbine_channels: [NUM_TVU_RECEIVERS]*Channel(Packet) = undefined;
+        for (&turbine_receivers, &turbine_channels) |*receiver, *channel| {
+            channel.* = receiver.channel;
+        }
+
+        const turbine_thread = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, &turbine_receivers, response_sender.channel, false },
+            .{ self, &turbine_channels, response_sender.channel, false },
         );
-        const y = try std.Thread.spawn(
+        const receiver_thread = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
             .{ self, &.{repair_receiver.channel}, response_sender.channel, true },
         );
-        x.join();
-        y.join();
+        turbine_thread.join();
+        receiver_thread.join();
     }
 
     /// Keep looping over packet channel and process the incoming packets.
     /// Returns when exit is set to true.
     fn runPacketHandler(
         self: *Self,
-        receivers: []const *Channel(ArrayList(Packet)),
-        response_sender: *Channel(ArrayList(Packet)),
+        receivers: []const *Channel(Packet),
+        response_sender: *Channel(Packet),
         comptime is_repair: bool,
     ) !void {
-        var buf = ArrayList(ArrayList(Packet)).init(self.allocator);
-        while (!self.exit.load(.unordered)) {
-            var responses = ArrayList(Packet).init(self.allocator);
+        while (!self.exit.load(.acquire)) {
             for (receivers) |receiver| {
-                try receiver.tryDrainRecycle(&buf);
-                if (buf.items.len > 0) {
-                    const shred_version = self.shred_version.load(.monotonic);
-                    for (buf.items) |batch| {
-                        for (batch.items) |*packet| {
-                            if (is_repair) packet.flags.set(.repair);
-                            try self.handlePacket(packet, &responses, shred_version);
-                        }
-                        try self.unverified_shred_sender.send(batch);
-                    }
-                } else {
-                    std.time.sleep(10 * std.time.ns_per_ms);
+                while (receiver.receive()) |packet| {
+                    try self.handlePacket(packet, response_sender, is_repair);
                 }
             }
-            if (responses.items.len > 0) {
-                try response_sender.send(responses);
-            }
         }
     }
 
-    /// Handle a single packet and return
+    /// Handle a single packet and return.
     fn handlePacket(
-        self: *Self,
-        packet: *Packet,
-        responses: *ArrayList(Packet),
-        shred_version: u16,
+        self: Self,
+        packet: Packet,
+        response_sender: *Channel(Packet),
+        comptime is_repair: bool,
     ) !void {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
-            try self.handlePing(packet, responses);
-            packet.flags.set(.discard);
+            if (try self.handlePing(&packet)) |p| try response_sender.send(p);
         } else {
             const max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
-            if (shouldDiscardShred(packet, self.root_slot, shred_version, max_slot)) {
-                packet.flags.set(.discard);
+            if (shouldDiscardShred(&packet, self.root_slot, self.shred_version, max_slot)) {
+                return;
             }
+            var our_packet = packet;
+            if (is_repair) our_packet.flags.set(.repair);
+            try self.unverified_shred_sender.send(our_packet);
         }
     }
 
-    /// Handle a ping message and return
-    fn handlePing(self: *Self, packet: *const Packet, responses: *ArrayList(Packet)) !void {
+    /// Handle a ping message and returns the repair message.
+    fn handlePing(self: *const Self, packet: *const Packet) !?Packet {
         const repair_ping = bincode.readFromSlice(self.allocator, RepairPing, &packet.data, .{}) catch {
             self.metrics.invalid_repair_pings.inc();
-            return;
+            return null;
         };
         const ping = repair_ping.Ping;
         ping.verify() catch {
             self.metrics.invalid_repair_pings.inc();
-            return;
+            return null;
         };
+        const reply: RepairMessage = .{ .Pong = try Pong.init(&ping, self.keypair) };
 
-        const reply = RepairMessage{ .Pong = try Pong.init(&ping, self.keypair) };
-        const reply_packet = try responses.addOne();
+        var reply_packet = Packet.default();
         const reply_bytes = try bincode.writeToSlice(&reply_packet.data, reply, .{});
         reply_packet.size = reply_bytes.len;
         reply_packet.addr = packet.addr;
+        return reply_packet;
     }
 };
 
 fn shouldDiscardShred(
     packet: *const Packet,
     root: Slot,
-    shred_version: u16,
+    shred_version: *const Atomic(u16),
     max_slot: Slot,
 ) bool {
     const shred = layout.getShred(packet) orelse return true;
@@ -158,7 +151,7 @@ fn shouldDiscardShred(
     const index = layout.getIndex(shred) orelse return true;
     const variant = layout.getShredVariant(shred) orelse return true;
 
-    if (version != shred_version) return true;
+    if (version != shred_version.load(.acquire)) return true;
     if (slot > max_slot) return true;
     switch (variant.shred_type) {
         .code => {

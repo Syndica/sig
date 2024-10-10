@@ -47,7 +47,7 @@ pub fn getMetrics(
 
 /// Runs a test prometheus endpoint with dummy data.
 pub fn main() !void {
-    const alloc = std.heap.page_allocator;
+    const alloc = std.heap.c_allocator;
 
     _ = try std.Thread.spawn(
         .{},

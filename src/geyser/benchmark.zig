@@ -11,9 +11,7 @@ const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
 const MEASURE_RATE = sig.time.Duration.fromSecs(2);
 const PIPE_PATH = "../sig/" ++ sig.TEST_DATA_DIR ++ "accountsdb_fuzz.pipe";
 
-pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
-    const allocator = std.heap.page_allocator;
-
+pub fn streamWriter(allocator: std.mem.Allocator, exit: *std.atomic.Value(bool)) !void {
     // 4gb
     var geyser_writer = try GeyserWriter.init(allocator, PIPE_PATH, exit, 1 << 32);
     defer geyser_writer.deinit();
@@ -34,7 +32,7 @@ pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     }
     var slot: Slot = 0;
 
-    while (!exit.load(.unordered)) {
+    while (!exit.load(.acquire)) {
         // since the i/o happens in another thread, we cant easily track bytes/second here
         geyser_writer.writePayloadToPipe(
             VersionedAccountPayload{
@@ -56,26 +54,25 @@ pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
 }
 
 pub fn runBenchmark() !void {
-    const allocator = std.heap.page_allocator;
+    const allocator = std.heap.c_allocator;
 
     const exit = try allocator.create(std.atomic.Value(bool));
     defer allocator.destroy(exit);
 
     exit.* = std.atomic.Value(bool).init(false);
 
-    const reader_handle = try std.Thread.spawn(.{}, geyser.core.streamReader, .{
-        exit,
-        PIPE_PATH,
-        MEASURE_RATE,
-        null,
-    });
-    const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{exit});
+    const reader_handle = try std.Thread.spawn(
+        .{},
+        geyser.core.streamReader,
+        .{ allocator, exit, PIPE_PATH, MEASURE_RATE, null },
+    );
+    const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{ allocator, exit });
 
     // let it run for ~4 measurements
     const NUM_MEAUSUREMENTS = 4;
     std.time.sleep(MEASURE_RATE.asNanos() * NUM_MEAUSUREMENTS);
     std.debug.print("exiting\n", .{});
-    exit.store(true, .unordered);
+    exit.store(true, .release);
 
     reader_handle.join();
     writer_handle.join();

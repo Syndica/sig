@@ -56,13 +56,10 @@ pub const RepairService = struct {
 
     pub const RequestBatchThreadPool = HomogeneousThreadPool(struct {
         requester: *RepairRequester,
-        requests: []AddressedRepairRequest,
+        requests: []const AddressedRepairRequest,
 
         pub fn run(self: *@This()) !void {
-            return self.requester.sendRepairRequestBatch(
-                self.requester.allocator,
-                self.requests,
-            );
+            return self.requester.sendRepairRequestBatch(self.requests);
         }
     });
 
@@ -89,6 +86,7 @@ pub const RepairService = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.exit.store(true, .release);
         self.peer_provider.deinit();
         self.requester.deinit();
         self.thread_pool.deinit();
@@ -101,15 +99,15 @@ pub const RepairService = struct {
         var waiting_for_peers = false;
         var timer = try std.time.Timer.start();
         var last_iteration: u64 = 0;
-        while (!self.exit.load(.unordered)) {
+        while (!self.exit.load(.acquire)) {
             if (self.sendNecessaryRepairs()) |_| {
                 if (waiting_for_peers) {
                     waiting_for_peers = false;
-                    self.logger.infof("Acquired some repair peers.", .{});
+                    self.logger.info().logf("Acquired some repair peers.", .{});
                 }
             } else |e| switch (e) {
                 error.NoRepairPeers => if (!waiting_for_peers) {
-                    self.logger.infof("Waiting for repair peers...", .{});
+                    self.logger.info().logf("Waiting for repair peers...", .{});
                     waiting_for_peers = true;
                 },
                 else => return e,
@@ -128,7 +126,7 @@ pub const RepairService = struct {
         defer addressed_requests.deinit();
 
         if (addressed_requests.items.len < 4) {
-            try self.requester.sendRepairRequestBatch(self.allocator, addressed_requests.items);
+            try self.requester.sendRepairRequestBatch(addressed_requests.items);
         } else {
             for (0..4) |i| {
                 const start = (addressed_requests.items.len * i) / 4;
@@ -143,7 +141,7 @@ pub const RepairService = struct {
 
         // TODO less often
         if (addressed_requests.items.len > 0) {
-            self.logger.debugf(
+            self.logger.debug().logf(
                 "sent {} repair requests",
                 .{addressed_requests.items.len},
             );
@@ -244,19 +242,16 @@ pub const RepairRequester = struct {
     }
 
     pub fn deinit(self: Self) void {
-        self.sender.deinit();
+        self.sender.deinit(self.allocator);
     }
 
     pub fn sendRepairRequestBatch(
         self: *const Self,
-        allocator: Allocator,
-        requests: []AddressedRepairRequest,
+        requests: []const AddressedRepairRequest,
     ) !void {
-        var packet_batch = try std.ArrayList(Packet).initCapacity(allocator, requests.len);
         const timestamp = std.time.milliTimestamp();
         for (requests) |request| {
-            const packet = packet_batch.addOneAssumeCapacity();
-            packet.* = Packet{
+            var packet: Packet = .{
                 .addr = request.recipient_addr.toEndpoint(),
                 .data = undefined,
                 .size = undefined,
@@ -270,8 +265,8 @@ pub const RepairRequester = struct {
                 self.rng.int(Nonce),
             );
             packet.size = data.len;
+            try self.sender.channel.send(packet);
         }
-        try self.sender.channel.send(packet_batch);
     }
 };
 
@@ -429,15 +424,17 @@ test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(4328095);
     var random = rand.random();
+    const TestLogger = sig.trace.DirectPrintLogger;
 
     // my details
-    const keypair = KeyPair.create(null) catch unreachable;
+    const keypair = try KeyPair.create(null);
     const my_shred_version = Atomic(u16).init(random.int(u16));
     const wallclock = 100;
     var gossip = try GossipTable.init(allocator, undefined);
     defer gossip.deinit();
-    var logger = Logger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
+    var test_logger = TestLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
+
+    const logger = test_logger.logger();
 
     // connectivity
     const repair_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
@@ -449,7 +446,7 @@ test "RepairService sends repair request to gossip peer" {
 
     // peer
     const peer_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
-    const peer_keypair = KeyPair.create(null) catch unreachable;
+    const peer_keypair = try KeyPair.create(null);
     var peer_socket = try Socket.create(.ipv4, .udp);
     const peer_endpoint = .{
         .address = .{ .ipv4 = .{ .value = .{ 127, 0, 0, 1 } } },
@@ -457,7 +454,7 @@ test "RepairService sends repair request to gossip peer" {
     };
     try peer_socket.bind(peer_endpoint);
     try peer_socket.setReadTimeout(100_000);
-    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.unordered));
+    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.acquire));
     try peer_contact_info.setSocket(.serve_repair, SocketAddr.fromEndpoint(&peer_endpoint));
     try peer_contact_info.setSocket(.turbine_recv, SocketAddr.fromEndpoint(&peer_endpoint));
     _ = try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
@@ -472,6 +469,7 @@ test "RepairService sends repair request to gossip peer" {
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
     );
+
     var tracker = BasicShredTracker.init(13579, .noop);
     var service = RepairService.init(
         allocator,
@@ -513,15 +511,13 @@ test "RepairPeerProvider selects correct peers" {
     const my_shred_version = Atomic(u16).init(random.int(u16));
     var gossip = try GossipTable.init(allocator, undefined);
     defer gossip.deinit();
-    var logger = Logger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
 
     // peers
     const peer_generator = TestPeerGenerator{
         .allocator = allocator,
         .gossip = &gossip,
         .random = random,
-        .shred_version = my_shred_version.load(.unordered),
+        .shred_version = my_shred_version.load(.acquire),
         .slot = 13579,
     };
     const good_peers = .{

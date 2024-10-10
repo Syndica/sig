@@ -551,7 +551,7 @@ pub const Duration = struct {
         return self.ns == other.ns;
     }
 
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         return writer.print("{s}", .{std.fmt.fmtDuration(self.ns)}) catch unreachable;
     }
 };
@@ -571,7 +571,7 @@ pub const Instant = struct {
         return Duration.fromNanos(self.inner.since(earlier.inner));
     }
 
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         return try writer.print("{s}", .{std.fmt.fmtDuration(self.ns)});
     }
 };

@@ -45,7 +45,7 @@ pub const Service = struct {
     transaction_pool: TransactionPool,
     leader_info_rw: RwMux(LeaderInfo),
     send_socket: UdpSocket,
-    send_channel: *Channel(std.ArrayList(Packet)),
+    send_channel: *Channel(Packet),
     receive_channel: *Channel(TransactionInfo),
     exit: *AtomicBool,
     logger: Logger,
@@ -76,10 +76,7 @@ pub const Service = struct {
                 .ipv4,
                 .udp,
             ),
-            .send_channel = Channel(std.ArrayList(Packet)).init(
-                allocator,
-                config.pool_max_size,
-            ),
+            .send_channel = try Channel(Packet).create(allocator),
             .receive_channel = receive_channel,
             .logger = logger,
             .exit = exit,
@@ -93,8 +90,10 @@ pub const Service = struct {
             .{
                 self.send_socket,
                 self.send_channel,
-                self.exit,
                 self.logger,
+                false,
+                self.exit,
+                {},
             },
         );
 
@@ -145,7 +144,7 @@ pub const Service = struct {
                 last_batch_sent = Instant.now();
 
                 self.transaction_pool.addTransactions(transaction_batch.values()) catch {
-                    self.logger.warn("Transaction pool is full, dropping transactions");
+                    self.logger.warn().log("Transaction pool is full, dropping transactions");
                 };
 
                 transaction_batch.clearRetainingCapacity();
@@ -282,20 +281,18 @@ pub const Service = struct {
     /// Sends transactions to the next N leaders TPU addresses
     fn sendTransactions(self: *Service, transactions: []const TransactionInfo, leader_addresses: std.ArrayList(SocketAddr)) !void {
         if (leader_addresses.items.len == 0) {
-            self.logger.warn("No leader addresses found");
+            self.logger.warn().log("No leader addresses found");
             return;
         }
 
         for (leader_addresses.items) |leader_address| {
-            var packets = try std.ArrayList(Packet).initCapacity(self.allocator, transactions.len);
             for (transactions) |tx| {
-                try packets.append(Packet.init(
+                try self.send_channel.send(Packet.init(
                     leader_address.toEndpoint(),
                     tx.wire_transaction,
                     tx.wire_transaction_size,
                 ));
             }
-            try self.send_channel.send(packets);
         }
 
         const last_sent_time = Instant.now();
@@ -368,7 +365,7 @@ pub const Stats = struct {
     }
 
     pub fn log(self: *const Stats, logger: Logger) void {
-        logger.infof("transaction-sender: {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
+        logger.info().logf("transaction-sender: {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
             self.transactions_received_count.get(),
             self.transactions_pending.get(),
             self.transactions_rooted_count.get(),

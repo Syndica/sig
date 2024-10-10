@@ -14,7 +14,7 @@ const Slot = sig.core.time.Slot;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
-const EpochSchedule = sig.accounts_db.genesis_config.EpochSchedule;
+const EpochSchedule = sig.core.EpochSchedule;
 const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
 const Inflation = sig.accounts_db.genesis_config.Inflation;
 const Rent = sig.accounts_db.genesis_config.Rent;
@@ -889,6 +889,39 @@ pub const BankFields = struct {
             .is_delta = rand.boolean(),
         };
     }
+
+    pub fn getStakedNodes(self: *const BankFields, allocator: std.mem.Allocator, epoch: Epoch) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+        const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
+        return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
+    }
+
+    /// Returns the leader schedule for this bank's epoch
+    pub fn leaderSchedule(
+        self: *const BankFields,
+        allocator: std.mem.Allocator,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        return self.leaderScheduleForEpoch(allocator, self.epoch);
+    }
+
+    /// Returns the leader schedule for an arbitrary epoch.
+    /// Only works if the bank is aware of the staked nodes for that epoch.
+    pub fn leaderScheduleForEpoch(
+        self: *const BankFields,
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
+        const staked_nodes = try self.getStakedNodes(allocator, epoch);
+        return .{
+            .allocator = allocator,
+            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule.fromStakedNodes(
+                allocator,
+                epoch,
+                slots_in_epoch,
+                staked_nodes,
+            ),
+        };
+    }
 };
 
 /// Analogous to [SerializableAccountStorageEntry](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/serde_snapshot/storage.rs#L11)
@@ -1712,7 +1745,7 @@ pub const AllSnapshotFields = struct {
             const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full_snapshot.slot});
             const rel_path = rel_path_bounded.constSlice();
 
-            logger.infof("reading snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+            logger.info().logf("reading snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
 
             const full_file = try snapshot_dir.openFile(rel_path, .{});
             defer full_file.close();
@@ -1726,7 +1759,7 @@ pub const AllSnapshotFields = struct {
                 const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{incremental_snapshot_path.slot});
                 const rel_path = rel_path_bounded.constSlice();
 
-                logger.infof("reading inc snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+                logger.info().logf("reading inc snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
 
                 const incremental_file = try snapshot_dir.openFile(rel_path, .{});
                 defer incremental_file.close();
@@ -1736,7 +1769,7 @@ pub const AllSnapshotFields = struct {
 
                 break :blk incremental_fields;
             } else {
-                logger.info("no incremental snapshot fields found");
+                logger.info().log("no incremental snapshot fields found");
                 break :blk null;
             }
         };

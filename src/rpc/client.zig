@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const types = sig.rpc.types;
 
-const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
@@ -159,10 +158,10 @@ pub const Client = struct {
     /// }
     /// however, this introduces another layer of indirection.
     /// Not a big deal here but I am curious if there is a way to do this.
-    pub fn getLeaderSchedule(self: *Client, allocator: std.mem.Allocator, maybe_epoch: ?Epoch, config: GetLeaderScheduleConfig) !Response(types.LeaderSchedule) {
+    pub fn getLeaderSchedule(self: *Client, allocator: std.mem.Allocator, maybe_slot: ?Slot, config: GetLeaderScheduleConfig) !Response(types.LeaderSchedule) {
         var request = try Request.init(allocator, "getLeaderSchedule");
         defer request.deinit();
-        try request.addParameter(maybe_epoch);
+        try request.addParameter(maybe_slot);
         try request.addConfig(config);
         const json_response = try self.sendFetchRequest(allocator, std.json.Value, request, .{});
 
@@ -266,7 +265,7 @@ pub const Client = struct {
 
         for (0..self.max_retries + 1) |curr_retries| {
             const result = self.fetchRequest(payload, &response.bytes) catch |fetch_error| {
-                self.logger.warnf("HTTP client error, attempting reinitialisation: error={any}", .{fetch_error});
+                self.logger.warn().logf("HTTP client error, attempting reinitialisation: error={any}", .{fetch_error});
                 if (curr_retries == self.max_retries) return fetch_error;
                 response.bytes.clearRetainingCapacity();
                 self.restartHttpClient();
@@ -274,7 +273,7 @@ pub const Client = struct {
             };
 
             if (result.status != std.http.Status.ok) {
-                self.logger.warnf("HTTP request failed ({d}/{d}): {}", .{ curr_retries, self.max_retries, result.status });
+                self.logger.warn().logf("HTTP request failed ({d}/{d}): {}", .{ curr_retries, self.max_retries, result.status });
                 if (curr_retries == self.max_retries) return error.HttpRequestFailed;
                 response.bytes.clearRetainingCapacity();
                 continue;
@@ -284,7 +283,7 @@ pub const Client = struct {
         }
 
         response.parse() catch |err| {
-            self.logger.errf("Failed to parse response: error={} request_payload={s} response={s}", .{ err, payload, response.bytes.items });
+            self.logger.err().logf("Failed to parse response: error={} request_payload={s} response={s}", .{ err, payload, response.bytes.items });
             return err;
         };
 

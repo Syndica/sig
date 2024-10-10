@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
 const network = @import("zig-network");
@@ -13,45 +14,55 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
 const Bank = sig.accounts_db.Bank;
+const Slot = sig.core.Slot;
 const ContactInfo = sig.gossip.ContactInfo;
 const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const Logger = sig.trace.Logger;
+const Network = config.Network;
+const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.Pubkey;
 const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
-const SingleEpochLeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
+const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
+const EpochSchedule = sig.core.EpochSchedule;
+const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
-const leaderScheduleFromBank = sig.core.leader_schedule.leaderScheduleFromBank;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
-const parseLeaderSchedule = sig.core.leader_schedule.parseLeaderSchedule;
 const requestIpEcho = sig.net.requestIpEcho;
 const spawnMetrics = sig.prometheus.spawnMetrics;
-const writeLeaderSchedule = sig.core.leader_schedule.writeLeaderSchedule;
 
 const BlockstoreReader = sig.ledger.BlockstoreReader;
-const BlockstoreWriter = sig.ledger.BlockstoreWriter;
 
 const SocketTag = sig.gossip.SocketTag;
 
-// TODO: use better allocator, unless GPA becomes more performant.
-
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const gpa_allocator = gpa.allocator();
+const gpa_allocator = if (builtin.mode == .Debug)
+    gpa.allocator()
+else
+    std.heap.c_allocator;
 
 var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-const gossip_value_gpa_allocator = gossip_value_gpa.allocator();
+const gossip_value_gpa_allocator = if (builtin.mode == .Debug)
+    gossip_value_gpa.allocator()
+else
+    std.heap.c_allocator;
 
 const base58Encoder = base58.Encoder.init(.{});
 
 pub fn run() !void {
+    defer {
+        // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
+        _ = gossip_value_gpa.deinit();
+    }
+
     var gossip_host_option = cli.Option{
         .long_name = "gossip-host",
         .help = "IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1",
@@ -120,7 +131,7 @@ pub fn run() !void {
 
     var network_option = cli.Option{
         .long_name = "network",
-        .help = "network to use with predefined entrypoints",
+        .help = "cluster to connect to - adds gossip entrypoints, sets default genesis file path",
         .short_alias = 'n',
         .value_ref = cli.mkRef(&config.current.gossip.network),
         .required = false,
@@ -225,10 +236,10 @@ pub fn run() !void {
 
     var genesis_file_path = cli.Option{
         .long_name = "genesis-file-path",
-        .help = "path to the genesis file",
+        .help = "path to the genesis file. defaults to 'data/genesis-files/<network>_genesis.bin' if --network option is set",
         .short_alias = 'g',
         .value_ref = cli.mkRef(&config.current.genesis_file_path),
-        .required = true,
+        .required = false,
         .value_name = "genesis_file_path",
     };
 
@@ -585,9 +596,14 @@ pub fn run() !void {
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    var logger = Logger.init(gpa_allocator, config.current.log_level);
-    defer logger.deinit();
-    logger.spawn();
+    var std_logger = ChannelPrintLogger.init(.{
+        .allocator = gpa_allocator,
+        .max_level = config.current.log_level,
+        .max_buffer = 1 << 30,
+    }) catch @panic("Logger init failed");
+    defer std_logger.deinit();
+
+    const logger = std_logger.logger();
 
     const keypair = try getOrInitIdentity(gpa_allocator, logger);
     var pubkey: [50]u8 = undefined;
@@ -598,17 +614,27 @@ fn identity() !void {
 /// entrypoint to run only gossip
 fn gossip() !void {
     var app_base = try AppBase.init(gpa_allocator);
+    errdefer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
-    _, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
-    defer gossip_manager.deinit();
+    const gossip_service, var service_manager =
+        try startGossip(gpa_allocator, &app_base, &.{});
+    defer {
+        gossip_service.shutdown();
+        service_manager.deinit();
+    }
 
-    gossip_manager.join();
+    // block until we're all done
+    service_manager.join();
 }
 
 /// entrypoint to run a full solana validator
 fn validator() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
+    defer app_base.deinit();
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
@@ -617,11 +643,16 @@ fn validator() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
+    var gossip_service, var service_manager = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
-    defer gossip_manager.deinit();
+    defer {
+        app_base.shutdown();
+        gossip_service.shutdown();
+        service_manager.join();
+        service_manager.deinit();
+    }
 
     const geyser_writer = try buildGeyserWriter(allocator, app_base.logger);
     defer {
@@ -639,13 +670,20 @@ fn validator() !void {
         geyser_writer,
     );
 
-    // leader schedule
-    var leader_schedule = try getLeaderScheduleFromCli(allocator) orelse
-        try leaderScheduleFromBank(allocator, snapshot.bank.bank_fields);
-    const leader_provider = leader_schedule.provider();
+    // leader schedule cache
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
+    if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
+        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
+    } else {
+        const schedule = try snapshot.bank.bank_fields.leaderSchedule(allocator);
+        _ = try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, schedule);
+    }
+    // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
+    // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
+    const leader_provider = leader_schedule_cache.slotLeaderProvider();
 
     // blockstore
-    const blockstore_db = try sig.ledger.BlockstoreDB.open(
+    var blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger,
         sig.VALIDATOR_DIR ++ "blockstore",
@@ -666,19 +704,6 @@ fn validator() !void {
     max_root.* = std.atomic.Value(sig.core.Slot).init(0);
     defer allocator.destroy(max_root);
 
-    const blockstore_writer = try allocator.create(BlockstoreWriter);
-    defer allocator.destroy(blockstore_writer);
-    blockstore_writer.* = BlockstoreWriter{
-        .allocator = allocator,
-        .db = blockstore_db,
-        .logger = app_base.logger,
-        .lowest_cleanup_slot = lowest_cleanup_slot,
-        .max_root = max_root,
-        .scan_and_fix_roots_metrics = try sig.ledger.writer.ScanAndFixRootsMetrics.init(
-            app_base.metrics_registry,
-        ),
-    };
-
     const blockstore_reader = try allocator.create(BlockstoreReader);
     defer allocator.destroy(blockstore_reader);
     blockstore_reader.* = try BlockstoreReader.init(
@@ -693,7 +718,8 @@ fn validator() !void {
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         app_base.logger,
         blockstore_reader,
-        blockstore_writer,
+        &blockstore_db,
+        lowest_cleanup_slot,
         config.current.max_shreds,
         &app_base.exit,
     });
@@ -719,13 +745,14 @@ fn validator() !void {
     );
     defer shred_collector_manager.deinit();
 
-    gossip_manager.join();
+    service_manager.join();
     shred_collector_manager.join();
 }
 
 fn shredCollector() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
+    defer app_base.deinit();
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
@@ -734,15 +761,25 @@ fn shredCollector() !void {
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
-    defer gossip_manager.deinit();
+    defer {
+        app_base.shutdown();
+        gossip_service.shutdown();
+        gossip_manager.deinit();
+    }
 
     // leader schedule
     // NOTE: leader schedule is needed for the shred collector because we skip accounts-db setup
-    var leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
-    const leader_provider = leader_schedule.provider();
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, try EpochSchedule.default());
+
+    // This is a sort of hack to get the epoch of the leader schedule and then insert into the cache
+    const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
+    const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(start_slot); // first_slot is non null iff leader schedule is built from cli
+    try leader_schedule_cache.put(leader_schedule_epoch, leader_schedule);
+
+    const leader_provider = leader_schedule_cache.slotLeaderProvider();
 
     // blockstore
-    const blockstore_db = try sig.ledger.BlockstoreDB.open(
+    var blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger,
         sig.VALIDATOR_DIR ++ "blockstore",
@@ -763,19 +800,6 @@ fn shredCollector() !void {
     max_root.* = std.atomic.Value(sig.core.Slot).init(0);
     defer allocator.destroy(max_root);
 
-    const blockstore_writer = try allocator.create(BlockstoreWriter);
-    defer allocator.destroy(blockstore_writer);
-    blockstore_writer.* = BlockstoreWriter{
-        .allocator = allocator,
-        .db = blockstore_db,
-        .logger = app_base.logger,
-        .lowest_cleanup_slot = lowest_cleanup_slot,
-        .max_root = max_root,
-        .scan_and_fix_roots_metrics = try sig.ledger.writer.ScanAndFixRootsMetrics.init(
-            app_base.metrics_registry,
-        ),
-    };
-
     const blockstore_reader = try allocator.create(BlockstoreReader);
     defer allocator.destroy(blockstore_reader);
     blockstore_reader.* = try BlockstoreReader.init(
@@ -790,7 +814,8 @@ fn shredCollector() !void {
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         app_base.logger,
         blockstore_reader,
-        blockstore_writer,
+        &blockstore_db,
+        lowest_cleanup_slot,
         config.current.max_shreds,
         &app_base.exit,
     });
@@ -802,7 +827,7 @@ fn shredCollector() !void {
     var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
-        ShredCollectorDependencies{
+        .{
             .allocator = allocator,
             .logger = app_base.logger,
             .random = rng.random(),
@@ -825,7 +850,7 @@ const GeyserWriter = sig.geyser.GeyserWriter;
 fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWriter {
     var geyser_writer: ?*GeyserWriter = null;
     if (config.current.geyser.enable) {
-        logger.info("Starting GeyserWriter...");
+        logger.info().log("Starting GeyserWriter...");
 
         const exit = try allocator.create(Atomic(bool));
         exit.* = Atomic(bool).init(false);
@@ -841,7 +866,7 @@ fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWrit
         // start the geyser writer
         try geyser_writer.?.spawnIOLoop();
     } else {
-        logger.info("GeyserWriter is disabled.");
+        logger.info().log("GeyserWriter is disabled.");
     }
 
     return geyser_writer;
@@ -849,7 +874,11 @@ fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWrit
 
 fn printManifest() !void {
     const allocator = gpa_allocator;
-    const app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator);
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
@@ -873,7 +902,11 @@ fn printManifest() !void {
 
 fn createSnapshot() !void {
     const allocator = gpa_allocator;
-    const app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator);
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
@@ -897,13 +930,13 @@ fn createSnapshot() !void {
         defer bin_lg.unlock();
         n_accounts_indexed += bin.count();
     }
-    app_base.logger.infof("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
+    app_base.logger.info().logf("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
 
     const output_dir_name = "alt_" ++ sig.VALIDATOR_DIR; // TODO: pull out to cli arg
     var output_dir = try std.fs.cwd().makeOpenPath(output_dir_name, .{});
     defer output_dir.close();
 
-    app_base.logger.infof("accountsdb[manager]: generating full snapshot for slot {d}", .{slot});
+    app_base.logger.info().logf("accountsdb[manager]: generating full snapshot for slot {d}", .{slot});
     try accounts_db.buildFullSnapshot(
         slot,
         output_dir,
@@ -914,7 +947,11 @@ fn createSnapshot() !void {
 
 fn validateSnapshot() !void {
     const allocator = gpa_allocator;
-    const app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator);
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
@@ -942,9 +979,13 @@ fn validateSnapshot() !void {
 fn printLeaderSchedule() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
-    const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
-        app_base.logger.info("Downloading a snapshot to calculate the leader schedule.");
+    const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
+        app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
         const loaded_snapshot = loadSnapshot(
             allocator,
             app_base.logger,
@@ -953,7 +994,7 @@ fn printLeaderSchedule() !void {
             null,
         ) catch |err| {
             if (err == error.SnapshotsNotFoundAndNoGossipService) {
-                app_base.logger.err(
+                app_base.logger.err().log(
                     \\\ No snapshot found and no gossip service to download a snapshot from.
                     \\\ Download using the `snapshot-download` command.
                 );
@@ -962,26 +1003,31 @@ fn printLeaderSchedule() !void {
                 return err;
             }
         };
-        break :b try leaderScheduleFromBank(allocator, loaded_snapshot.bank.bank_fields);
+        _, const slot_index = loaded_snapshot.bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(loaded_snapshot.bank.bank_fields.slot);
+        break :b .{
+            loaded_snapshot.bank.bank_fields.slot - slot_index,
+            try loaded_snapshot.bank.bank_fields.leaderSchedule(allocator),
+        };
     };
 
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    try writeLeaderSchedule(leader_schedule, stdout.writer());
+    try leader_schedule.write(stdout.writer(), start_slot);
     try stdout.flush();
 }
 
-fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
+fn getLeaderScheduleFromCli(allocator: Allocator) !?struct { Slot, LeaderSchedule } {
     return if (config.current.leader_schedule_path) |path|
         if (std.mem.eql(u8, "--", path))
-            try parseLeaderSchedule(allocator, std.io.getStdIn().reader())
+            try LeaderSchedule.read(allocator, std.io.getStdIn().reader())
         else
-            try parseLeaderSchedule(allocator, (try std.fs.cwd().openFile(path, .{})).reader())
+            try LeaderSchedule.read(allocator, (try std.fs.cwd().openFile(path, .{})).reader())
     else
         null;
 }
 
 pub fn testTransactionSenderService() !void {
     var app_base = try AppBase.init(gpa_allocator);
+    defer app_base.deinit();
 
     if (config.current.gossip.network) |net| {
         if (!std.mem.eql(u8, net, "testnet")) {
@@ -996,9 +1042,13 @@ pub fn testTransactionSenderService() !void {
     }
 
     const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
-    defer gossip_manager.deinit();
+    defer {
+        app_base.shutdown();
+        gossip_service.shutdown();
+        gossip_manager.deinit();
+    }
 
-    const transaction_channel = sig.sync.Channel(sig.transaction_sender.TransactionInfo).init(gpa_allocator, 100);
+    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(gpa_allocator);
     defer transaction_channel.deinit();
 
     const transaction_sender_config = sig.transaction_sender.service.Config{
@@ -1042,6 +1092,9 @@ pub fn testTransactionSenderService() !void {
 /// and deinitialized only when the app exits.
 const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+    closed: bool,
     logger: Logger,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
@@ -1051,12 +1104,11 @@ const AppBase = struct {
     my_ip: IpAddr,
 
     fn init(allocator: Allocator) !AppBase {
-        var logger = try spawnLogger();
-        // var logger: Logger = .noop;
+        const logger = try spawnLogger();
         errdefer logger.deinit();
 
         const metrics_registry = globalRegistry();
-        logger.infof("metrics port: {d}", .{config.current.metrics_port});
+        logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
         const metrics_thread = try spawnMetrics(gpa_allocator, config.current.metrics_port);
         errdefer metrics_thread.detach();
 
@@ -1068,6 +1120,7 @@ const AppBase = struct {
         const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
         return .{
+            .closed = false,
             .logger = logger,
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
@@ -1078,8 +1131,17 @@ const AppBase = struct {
         };
     }
 
-    pub fn deinit(self: @This()) void {
-        self.exit.store(true, .unordered);
+    /// Signals the shutdown, however it does not block.
+    pub fn shutdown(self: *AppBase) void {
+        std.debug.assert(!self.closed);
+        defer self.closed = true;
+
+        self.counter.store(1, .release);
+        self.exit.store(true, .release);
+    }
+
+    pub fn deinit(self: *AppBase) void {
+        std.debug.assert(self.closed); // call `self.shutdown()` first
         self.entrypoints.deinit();
         self.metrics_thread.detach();
         self.logger.deinit();
@@ -1090,15 +1152,15 @@ const AppBase = struct {
 fn initGossip(
     logger: Logger,
     my_keypair: KeyPair,
-    exit: *Atomic(bool),
+    exit: *Atomic(usize),
     entrypoints: []const SocketAddr,
     shred_version: u16,
     gossip_host_ip: IpAddr,
     sockets: []const struct { tag: SocketTag, port: u16 },
 ) !GossipService {
     const gossip_port: u16 = config.current.gossip.port;
-    logger.infof("gossip host: {any}", .{gossip_host_ip});
-    logger.infof("gossip port: {d}", .{gossip_port});
+    logger.info().logf("gossip host: {any}", .{gossip_host_ip});
+    logger.info().logf("gossip port: {d}", .{gossip_port});
 
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
@@ -1125,8 +1187,8 @@ fn startGossip(
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
 ) !struct { *GossipService, sig.utils.service_manager.ServiceManager } {
     const gossip_port = config.current.gossip.port;
-    app_base.logger.infof("gossip host: {any}", .{app_base.my_ip});
-    app_base.logger.infof("gossip port: {d}", .{gossip_port});
+    app_base.logger.info().logf("gossip host: {any}", .{app_base.my_ip});
+    app_base.logger.info().logf("gossip port: {d}", .{gossip_port});
 
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
@@ -1143,14 +1205,15 @@ fn startGossip(
         .{},
         .{},
     );
-    const service = try manager.arena().create(GossipService);
+
+    const service = try manager.arena.allocator().create(GossipService);
     service.* = try GossipService.init(
         gpa_allocator,
         gossip_value_gpa_allocator,
         contact_info,
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints.items,
-        &app_base.exit,
+        &app_base.counter,
         app_base.logger,
     );
     try manager.defers.deferCall(GossipService.deinit, .{service});
@@ -1183,7 +1246,7 @@ fn getMyDataFromIpEcho(
             if (my_ip_from_entrypoint == null) my_ip_from_entrypoint = response.address;
             if (response.shred_version) |shred_version| {
                 var addr_str = entrypoint.toString();
-                logger.infof(
+                logger.info().logf(
                     "shred version: {} - from entrypoint ip echo: {s}",
                     .{ shred_version.value, addr_str[0][0..addr_str[1]] },
                 );
@@ -1191,86 +1254,33 @@ fn getMyDataFromIpEcho(
             }
         } else |_| {}
     } else {
-        logger.warn("could not get a shred version from an entrypoint");
+        logger.warn().log("could not get a shred version from an entrypoint");
         break :loop 0;
     };
     const my_ip = try (config.current.gossip.getHost() orelse (my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1)));
-    logger.infof("my ip: {}", .{my_ip});
+    logger.info().logf("my ip: {}", .{my_ip});
     return .{
         .shred_version = my_shred_version,
         .ip = my_ip,
     };
 }
 
-pub const Network = enum {
-    mainnet,
-    devnet,
-    testnet,
-
-    const Self = @This();
-
-    pub fn getPredefinedEntrypoints(self: Self, socket_addrs: *std.ArrayList(SocketAddr), logger: Logger) !void {
-        const E = std.BoundedArray(u8, 100);
-        var predefined_entrypoints: [10]E = undefined;
-        @memset(&predefined_entrypoints, .{});
-        var len: usize = 0;
-
-        switch (self) {
-            .mainnet => {
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint.mainnet-beta.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.mainnet-beta.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.mainnet-beta.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint4.mainnet-beta.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint5.mainnet-beta.solana.com:8001");
-                len += 1;
-            },
-            .testnet => {
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint.testnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.testnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.testnet.solana.com:8001");
-                len += 1;
-            },
-            .devnet => {
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint.devnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.devnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.devnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint4.devnet.solana.com:8001");
-                len += 1;
-                predefined_entrypoints[len] = try E.fromSlice("entrypoint5.devnet.solana.com:8001");
-                len += 1;
-            },
-        }
-
-        for (predefined_entrypoints[0..len]) |entrypoint| {
-            logger.infof("adding predefined entrypoint: {s}", .{entrypoint.slice()});
-            const socket_addr = try resolveSocketAddr(entrypoint.slice(), .noop);
-            try socket_addrs.append(socket_addr);
-        }
-    }
-};
-
 fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
-        logger.field("entrypoint", entrypoint).err("entrypoint port missing");
+        logger.err()
+            .field("entrypoint", entrypoint)
+            .log("entrypoint port missing");
+
         return error.EntrypointPortMissing;
     };
     const domain_str = entrypoint[0..domain_port_sep];
     if (domain_str.len == 0) {
-        logger.errf("'{s}': entrypoint domain not valid", .{entrypoint});
+        logger.err().logf("'{s}': entrypoint domain not valid", .{entrypoint});
         return error.EntrypointDomainNotValid;
     }
     // parse port from string
     const port = std.fmt.parseInt(u16, entrypoint[domain_port_sep + 1 ..], 10) catch {
-        logger.errf("'{s}': entrypoint port not valid", .{entrypoint});
+        logger.err().logf("'{s}': entrypoint port not valid", .{entrypoint});
         return error.EntrypointPortNotValid;
     };
 
@@ -1279,7 +1289,7 @@ fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     defer addr_list.deinit();
 
     if (addr_list.addrs.len == 0) {
-        logger.errf("'{s}': entrypoint resolve dns failed (no records found)", .{entrypoint});
+        logger.err().logf("'{s}': entrypoint resolve dns failed (no records found)", .{entrypoint});
         return error.EntrypointDnsResolutionFailure;
     }
 
@@ -1302,12 +1312,12 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     // try entrypoint_set.ensureTotalCapacity(config.current.gossip.entrypoints.len);
     // try entrypoints.ensureTotalCapacityPrecise(config.current.gossip.entrypoints.len);
 
-    if (config.current.gossip.network) |network_str| {
-        const network_t: Network = std.meta.stringToEnum(Network, network_str) orelse {
-            logger.errf("'{s}': network not valid", .{network_str});
-            return error.NetworkNotValid;
-        };
-        try network_t.getPredefinedEntrypoints(&entrypoints, logger);
+    if (try config.current.gossip.getNetwork()) |cluster| {
+        for (cluster.entrypoints()) |entrypoint| {
+            logger.info().logf("adding predefined entrypoint: {s}", .{entrypoint});
+            const socket_addr = try resolveSocketAddr(entrypoint, .noop);
+            try entrypoints.append(socket_addr);
+        }
     }
 
     for (config.current.gossip.entrypoints) |entrypoint| {
@@ -1322,15 +1332,18 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     }
 
     // log entrypoints
-    logger.infof("entrypoints: {any}", .{entrypoints.items});
+    logger.info().logf("entrypoints: {any}", .{entrypoints.items});
 
     return entrypoints;
 }
 
 fn spawnLogger() !Logger {
-    var logger = Logger.init(gpa_allocator, config.current.log_level);
-    logger.spawn();
-    return logger;
+    var std_logger = ChannelPrintLogger.init(.{
+        .allocator = gpa_allocator,
+        .max_level = config.current.log_level,
+        .max_buffer = 1 << 30,
+    }) catch @panic("Logger init failed");
+    return std_logger.logger();
 }
 
 const LoadedSnapshot = struct {
@@ -1365,6 +1378,9 @@ fn loadSnapshot(
     errdefer allocator.destroy(result);
     result.allocator = allocator;
 
+    const genesis_file_path = try config.current.genesisFilePath() orelse
+        return error.GenesisPathNotProvided;
+
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
@@ -1378,11 +1394,11 @@ fn loadSnapshot(
     });
     result.snapshot_fields = all_snapshot_fields;
 
-    logger.infof("full snapshot: {s}", .{
+    logger.info().logf("full snapshot: {s}", .{
         sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full_snapshot.snapshotNameStr().constSlice()),
     });
     if (snapshot_files.incremental_snapshot) |inc_snap| {
-        logger.infof("incremental snapshot: {s}", .{
+        logger.info().logf("incremental snapshot: {s}", .{
             sig.utils.fmt.tryRealPath(snapshot_dir, inc_snap.snapshotNameStr().constSlice()),
         });
     }
@@ -1397,7 +1413,7 @@ fn loadSnapshot(
             break :blk cli_n_threads_snapshot_load;
         }
     };
-    logger.infof("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
+    logger.info().logf("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
     result.accounts_db = try AccountsDB.init(
         allocator,
@@ -1412,6 +1428,7 @@ fn loadSnapshot(
     errdefer result.accounts_db.deinit();
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(
+        allocator,
         &all_snapshot_fields,
         n_threads_snapshot_load,
         validate_snapshot,
@@ -1423,24 +1440,23 @@ fn loadSnapshot(
     const bank_fields = &snapshot_fields.bank_fields;
 
     // this should exist before we start to unpack
-    logger.infof("reading genesis...", .{});
-    const genesis_file_path = config.current.genesis_file_path orelse return error.GenesisNotProvided;
+    logger.info().log("reading genesis...");
     result.genesis_config = readGenesisConfig(allocator, genesis_file_path) catch |err| {
         if (err == error.GenesisNotFound) {
-            logger.errf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
+            logger.err().logf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
         }
         return err;
     };
     errdefer result.genesis_config.deinit(allocator);
 
-    logger.infof("validating bank...", .{});
+    logger.info().log("validating bank...");
     result.bank = Bank.init(&result.accounts_db, bank_fields);
     try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
     // validate the status cache
     result.status_cache = readStatusCache(allocator, snapshot_dir) catch |err| {
         if (err == error.StatusCacheNotFound) {
-            logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
+            logger.err().logf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
         }
         return err;
     };
@@ -1450,7 +1466,7 @@ fn loadSnapshot(
     defer slot_history.deinit(result.accounts_db.allocator);
     try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
-    logger.infof("accounts-db setup done...", .{});
+    logger.info().log("accounts-db setup done...");
 
     return result;
 }
@@ -1476,10 +1492,10 @@ fn readStatusCache(allocator: Allocator, snapshot_dir: std.fs.Dir) !StatusCache 
 
 /// entrypoint to download snapshot
 fn downloadSnapshot() !void {
-    var logger = try spawnLogger();
+    const logger = try spawnLogger();
     defer logger.deinit();
 
-    var exit = std.atomic.Value(bool).init(false);
+    var counter = std.atomic.Value(usize).init(0);
     const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
     const entrypoints = try getEntrypoints(logger);
     defer entrypoints.deinit();
@@ -1489,7 +1505,7 @@ fn downloadSnapshot() !void {
     var gossip_service = try initGossip(
         .noop,
         my_keypair,
-        &exit,
+        &counter,
         entrypoints.items,
         my_data.shred_version,
         my_data.ip,
@@ -1497,9 +1513,13 @@ fn downloadSnapshot() !void {
     );
     defer gossip_service.deinit();
 
-    const handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
+    const handle = try std.Thread.spawn(
+        .{},
+        runGossipWithConfigValues,
+        .{&gossip_service},
+    );
     defer {
-        exit.store(true, .unordered);
+        gossip_service.shutdown();
         handle.join();
     }
 
@@ -1591,11 +1611,11 @@ fn getOrDownloadSnapshots(
     };
 
     if (snapshot_files.incremental_snapshot == null) {
-        logger.infof("no incremental snapshot found", .{});
+        logger.info().log("no incremental snapshot found");
     }
 
     // if this exists, we wont look for a .tar.zstd
-    const accounts_path_exists = if (snapshot_dir.access("accounts", .{})) |_| true else |_| false;
+    const accounts_path_exists = !std.meta.isError(snapshot_dir.access("accounts", .{}));
     errdefer {
         // if something goes wrong, delete the accounts/ directory
         // so we unpack the full snapshot the next time.
@@ -1616,19 +1636,19 @@ fn getOrDownloadSnapshots(
         const dir_size = (try accounts_dir.stat()).size;
         if (dir_size <= 100) {
             should_unpack_snapshot = true;
-            logger.infof("empty accounts/ directory found, will unpack snapshot...", .{});
+            logger.info().log("empty accounts/ directory found, will unpack snapshot...");
         } else {
-            logger.infof("accounts/ directory found, will not unpack snapshot...", .{});
+            logger.info().log("accounts/ directory found, will not unpack snapshot...");
         }
     }
 
     var timer = try std.time.Timer.start();
     if (should_unpack_snapshot) {
-        logger.infof("unpacking snapshots...", .{});
+        logger.info().log("unpacking snapshots...");
         // if accounts/ doesnt exist then we unpack the found snapshots
         // TODO: delete old accounts/ dir if it exists
         timer.reset();
-        logger.infof("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
+        logger.info().logf("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
         {
             const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
             defer archive_file.close();
@@ -1641,12 +1661,12 @@ fn getOrDownloadSnapshots(
                 true,
             );
         }
-        logger.infof("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+        logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
 
         // TODO: can probs do this in parallel with full snapshot
         if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
             timer.reset();
-            logger.infof("unpacking {s}...", .{incremental_snapshot.snapshotNameStr().constSlice()});
+            logger.info().logf("unpacking {s}...", .{incremental_snapshot.snapshotNameStr().constSlice()});
 
             const archive_file = try snapshot_dir.openFile(incremental_snapshot.snapshotNameStr().constSlice(), .{});
             defer archive_file.close();
@@ -1659,16 +1679,16 @@ fn getOrDownloadSnapshots(
                 n_threads_snapshot_unpack,
                 false,
             );
-            logger.infof("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+            logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
         }
     } else {
-        logger.infof("not unpacking snapshot...", .{});
+        logger.info().log("not unpacking snapshot...");
     }
 
     timer.reset();
-    logger.infof("reading snapshot metadata...", .{});
+    logger.info().log("reading snapshot metadata...");
     const snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
-    logger.infof("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
+    logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
     return .{ snapshots, snapshot_files };
 }

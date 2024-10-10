@@ -151,6 +151,17 @@ inline fn boundedStringMaxArg(comptime T: type) ?T {
     }
 }
 
+/// Replaces any newlines from the string with spaces. Useful when trying
+/// to limit the source code line-length without introducing new lines
+/// into strings.
+pub fn newlinesToSpaces(comptime str: []const u8) [str.len]u8 {
+    var ret: [str.len]u8 = .{' '} ** str.len;
+    for (str, 0..) |char, i| if (char != '\n') {
+        ret[i] = char;
+    };
+    return ret;
+}
+
 /// Tries to format the real path resolved from `dir` and `pathname`.
 /// Should it encounter an error when doing so, `"(error.Name)/pathname"`
 /// is printed instead.

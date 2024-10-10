@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const blockstore = @import("lib.zig");
+const log = @import("../trace/log.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -92,12 +93,12 @@ pub fn Database(comptime Impl: type) type {
         ///    case, getBytes is faster than get. But if you *do* need an owned slice,
         ///    then it's faster to call `get` insted of calling this function followed
         ///    by memcpy.
-        pub fn getBytes(
-            self: *Self,
-            comptime cf: ColumnFamily,
-            key: cf.Key,
-        ) anyerror!?BytesRef {
+        pub fn getBytes(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?BytesRef {
             return try self.impl.getBytes(cf, key);
+        }
+
+        pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!bool {
+            return try self.impl.contains(cf, key);
         }
 
         pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!void {
@@ -294,7 +295,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     };
     const DB = Database(Impl(&.{ cf1, cf2 }));
 
-    const logger = sig.trace.TestLogger.default.logger();
+    const logger = .noop;
 
     return struct {
         pub fn basic() !void {

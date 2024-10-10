@@ -79,7 +79,7 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
             };
         }
 
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
             allocator.free(self.masks);
         }
 

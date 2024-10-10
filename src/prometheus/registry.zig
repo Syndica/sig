@@ -34,12 +34,10 @@ pub const GetMetricError = error{
 /// The registry is initialized the first time this is called
 /// and reused for future calls.
 pub fn globalRegistry() *Registry(.{}) {
-    return global_registry_owned.getOrInit(
-        Registry(.{}).init,
-        .{gpa.allocator()},
-    );
+    return global_registry_owned.getOrInit(Registry(.{}).init, .{gpa});
 }
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+
+var gpa = std.heap.c_allocator;
 var global_registry_owned: OnceCell(Registry(.{})) = .{};
 
 const RegistryOptions = struct {

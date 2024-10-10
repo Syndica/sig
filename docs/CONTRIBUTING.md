@@ -10,6 +10,18 @@ See the [readme](../readme.md#-setup).
 
 ## Style Guide
 
+### Identifiers
+
+We follow the [Zig Style](https://ziglang.org/documentation/master/#Style-Guide) guide as is reasonable.
+
+- Usage of leading underscores in identifiers, i.e (`_foo` or `__bar`) is discouraged unless it's in the correct contex.
+Valid usages of such an identifier would be for a psuedo-private field, which is unrecommened for users to touch. For 
+private fields, there should be a docstring attached explaining that it's a private field. Before creating a private field, it should be considered whether it needs to be a field in the first place. There should be few usages of them.
+
+### Structs
+
+We don't use Zig's file-based structs in the codebase. Meaning use `Foo { }` over `foo.zig: @This()` struct declarations.
+
 ### Imports 
 
 #### Sig Dependencies

@@ -23,7 +23,7 @@ const Bloom = sig.bloom.bloom.Bloom;
 const Packet = sig.net.packet.Packet;
 const Hash = sig.core.hash.Hash;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const AtomicBool = std.atomic.Value(bool);
+const Atomic = std.atomic.Value;
 const Duration = sig.time.Duration;
 
 const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
@@ -54,10 +54,7 @@ pub fn randomPingPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: 
 }
 
 pub fn randomPong(rng: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
-    const pong = GossipMessage{
-        .PongMessage = try Pong.random(rng, keypair),
-    };
-    return pong;
+    return .{ .PongMessage = try Pong.random(rng, keypair) };
 }
 
 pub fn randomPongPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
@@ -85,7 +82,12 @@ pub fn randomSignedGossipData(rng: std.rand.Random, maybe_should_pass_sig_verifi
     return value;
 }
 
-pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
+pub fn randomPushMessage(
+    allocator: std.mem.Allocator,
+    rng: std.rand.Random,
+    keypair: *const KeyPair,
+    to_addr: EndPoint,
+) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
     var values: [size]SignedGossipData = undefined;
     const should_pass_sig_verification = rng.boolean();
@@ -94,7 +96,6 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
         values[i] = value;
     }
 
-    const allocator = std.heap.page_allocator;
     const packets = try gossipDataToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key),
@@ -114,7 +115,7 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
         values[i] = value;
     }
 
-    const allocator = std.heap.page_allocator;
+    const allocator = std.heap.c_allocator;
     const packets = try gossipDataToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key),
@@ -214,17 +215,18 @@ pub fn randomPullRequestWithContactInfo(
     return packet;
 }
 
-pub fn waitForExit(exit: *AtomicBool) void {
+pub fn waitForExit(exit: *Atomic(bool)) void {
     const reader = std.io.getStdOut().reader();
     var buf: [1]u8 = undefined;
     _ = reader.read(&buf) catch unreachable;
 
-    exit.store(true, .unordered);
+    exit.store(true, .release);
 }
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
+    defer _ = gpa.deinit();
 
     var rng = std.rand.DefaultPrng.init(seed);
 
@@ -257,7 +259,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
     try fuzz_contact_info.setSocket(.gossip, fuzz_address);
 
-    var exit = AtomicBool.init(false);
+    var counter = Atomic(usize).init(0);
 
     var gossip_client, const packet_channel, var handle = blk: {
         if (fuzz_sig) {
@@ -267,14 +269,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             const client_pubkey = Pubkey.fromPublicKey(&client_keypair.public_key);
             var client_contact_info = ContactInfo.init(allocator, client_pubkey, 0, 19);
             try client_contact_info.setSocket(.gossip, client_address);
-
             var gossip_service_client = try GossipService.init(
                 allocator,
                 allocator,
                 client_contact_info,
                 client_keypair,
                 null, // we will only recv packets
-                &exit,
+                &counter,
                 .noop, // no logs
             );
 
@@ -284,7 +285,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     .dump = false,
                 },
             });
-
             // this is used to respond to pings
             var gossip_service_fuzzer = try GossipService.init(
                 allocator,
@@ -292,7 +292,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 fuzz_contact_info,
                 fuzz_keypair,
                 (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
-                &exit,
+                &counter,
                 .noop, // no logs
             );
 
@@ -314,7 +314,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 fuzz_contact_info,
                 fuzz_keypair,
                 (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
-                &exit,
+                &counter,
                 .noop, // no logs
             );
 
@@ -333,7 +333,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     // NOTE: this is useful when we want to run for an inf amount of time and want to
     // early exit at some point without killing the process
-    var fuzzing_loop_exit = AtomicBool.init(false);
+    var fuzzing_loop_exit = Atomic(bool).init(false);
     // wait for any keyboard input to exit early
     var exit_handle = try std.Thread.spawn(.{}, waitForExit, .{&fuzzing_loop_exit});
     exit_handle.detach();
@@ -352,7 +352,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     // cleanup
     std.debug.print("\t=> shutting down...\n", .{});
-    exit.store(true, .unordered);
+    counter.store(1, .release);
     handle.join();
     gossip_client.deinit();
     std.debug.print("\t=> done.\n", .{});
@@ -360,17 +360,17 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
 pub fn fuzz(
     allocator: std.mem.Allocator,
-    loop_exit: *AtomicBool,
+    loop_exit: *Atomic(bool),
     maybe_max_messages: ?usize,
     rng: std.Random,
     keypair: *const KeyPair,
     contact_info: LegacyContactInfo,
     to_endpoint: EndPoint,
-    outgoing_channel: *sig.sync.Channel(std.ArrayList(Packet)),
+    outgoing_channel: *sig.sync.Channel(Packet),
 ) !void {
     var msg_count: usize = 0;
 
-    while (!loop_exit.load(.unordered)) {
+    while (!loop_exit.load(.acquire)) {
         if (maybe_max_messages) |max_messages| {
             if (msg_count >= max_messages) {
                 std.debug.print("reached max messages: {d}\n", .{msg_count});
@@ -398,7 +398,7 @@ pub fn fuzz(
             },
             .push => blk: {
                 // send push message
-                const packets = randomPushMessage(rng, keypair, to_endpoint) catch |err| {
+                const packets = randomPushMessage(allocator, rng, keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -429,25 +429,22 @@ pub fn fuzz(
                 );
                 break :blk packet;
             },
-        };
-        const send_packet = packet catch |err| {
+        } catch |err| {
             std.debug.print("ERROR: {s}\n", .{@errorName(err)});
             continue;
         };
 
         // batch it
-        var packet_batch = std.ArrayList(Packet).init(allocator);
-        try packet_batch.append(send_packet);
         msg_count +|= 1;
+
+        // send it
+        try outgoing_channel.send(packet);
 
         const send_duplicate = rng.boolean();
         if (send_duplicate) {
             msg_count +|= 1;
-            try packet_batch.append(send_packet);
+            try outgoing_channel.send(packet);
         }
-
-        // send it
-        try outgoing_channel.send(packet_batch);
 
         std.time.sleep(SLEEP_TIME.asNanos());
 
