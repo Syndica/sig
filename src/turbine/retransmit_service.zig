@@ -156,11 +156,13 @@ fn receiveShreds(
         var preprocess_shreds_timer = try sig.time.Timer.start();
 
         // Reset deduper
-        deduper.maybeReset(
+        const bytes_filter_saturated, const shred_id_filter_saturated = deduper.maybeReset(
             rand,
             DEDUPER_FALSE_POSITIVE_RATE,
             DEDUPER_RESET_CYCLE,
         );
+        if (bytes_filter_saturated) stats.retransmit_shred_byte_filter_saturated_count.reset();
+        if (shred_id_filter_saturated) stats.retransmit_shred_id_filter_saturated_count.reset();
 
         // Group shreds by slot
         var grouped_shreds = std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
@@ -171,9 +173,16 @@ fn receiveShreds(
         for (shreds.items) |shred_packet| {
             const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
 
-            if (deduper.dedup(&shred_id, &shred_packet.data, MAX_DUPLICATE_COUNT)) {
-                stats.retransmit_shreds_skipped_count.add(1);
-                continue;
+            switch (deduper.dedup(&shred_id, &shred_packet.data, MAX_DUPLICATE_COUNT)) {
+                .ByteDuplicate => {
+                    stats.retransmit_shred_byte_filtered_count.add(1);
+                    continue;
+                },
+                .ShredIdDuplicate => {
+                    stats.retransmit_shred_id_filtered_count.add(1);
+                    continue;
+                },
+                .NotDuplicate => {},
             }
 
             if (grouped_shreds.getEntry(shred_id.slot)) |entry| {
@@ -237,7 +246,7 @@ fn retransmitShreds(
             TurbineTree.getDataPlaneFanout(),
         );
         defer children.deinit();
-        stats.retransmit_compute_turbine_children_millis.set(compute_turbine_children_timer.read().asMillis());
+        stats.retransmit_compute_turbine_children_micros.set(compute_turbine_children_timer.read().asMicros());
 
         var children_with_addresses_count: usize = 0;
         for (children.items) |child| {
@@ -276,15 +285,19 @@ const RetransmitShredInfo = struct {
 
 pub const Stats = struct {
     retransmit_shreds_received_count: *Counter,
-    retransmit_shreds_skipped_count: *Counter,
     retransmit_shreds_sent_count: *Counter,
+
+    retransmit_shred_byte_filtered_count: *Counter,
+    retransmit_shred_byte_filter_saturated_count: *Counter,
+    retransmit_shred_id_filtered_count: *Counter,
+    retransmit_shred_id_filter_saturated_count: *Counter,
 
     retransmit_turbine_level: *Gauge(u64),
     retransmit_turbine_children: *Gauge(u64),
     retransmit_turbine_children_with_addresses: *Gauge(u64),
 
     retransmit_preprocess_shreds_micros: *Gauge(u64),
-    retransmit_compute_turbine_children_millis: *Gauge(u64),
+    retransmit_compute_turbine_children_micros: *Gauge(u64),
 
     pub fn init() GetMetricError!Stats {
         var self: Stats = undefined;
@@ -303,10 +316,12 @@ pub const Stats = struct {
     }
 
     pub fn log(self: *const Stats, logger: Logger) void {
-        logger.info().logf("RetransmitService: received={} skipped={} retransmitted={}", .{
+        logger.info().logf("RetransmitService: received={} retransmitted={} skipped={}:{}:{}", .{
             self.retransmit_shreds_received_count.get(),
-            self.retransmit_shreds_skipped_count.get(),
             self.retransmit_shreds_sent_count.get(),
+            self.retransmit_shred_byte_filtered_count.get() + self.retransmit_shred_id_filtered_count.get(),
+            self.retransmit_shred_byte_filtered_count.get(),
+            self.retransmit_shred_id_filtered_count.get(),
         });
     }
 };
