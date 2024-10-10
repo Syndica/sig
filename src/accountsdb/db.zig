@@ -63,92 +63,115 @@ pub const AccountsLRU = struct {
     /// Atomically refcounted account
     const CachedAccount = struct {
         account: Account,
+        // this account has since been mutated
+        is_dirty: bool = false, // TODO: make this an atomic & find the proper way to mark dirty accounts
         ref_count: std.atomic.Value(usize),
 
-        fn init(account: Account) CachedAccount {
+        fn init(allocator: std.mem.Allocator, account: Account) !CachedAccount {
             return .{
-                .account = account,
+                .account = try account.clone(allocator),
                 .ref_count = std.atomic.Value(usize).init(1),
             };
         }
 
+        fn deinit(self: *CachedAccount, allocator: std.mem.Allocator) void {
+            self.account.deinit(allocator);
+            self.* = undefined;
+        }
+
         fn releaseOrDestroy(self: *CachedAccount, allocator: std.mem.Allocator) void {
             const current_count = self.ref_count.load(.acquire);
-            if (current_count == 0) {
+            if (current_count == 1) {
+                self.deinit(allocator);
                 allocator.destroy(self);
             } else {
                 _ = self.ref_count.fetchSub(1, .acq_rel);
             }
         }
 
+        // satisfies the type LruCacheCustom expects
+        fn releaseOrDestroyDoublePtr(self: **CachedAccount, allocator: std.mem.Allocator) void {
+            releaseOrDestroy(self.*, allocator);
+        }
+
         fn copyRef(self: *CachedAccount) *CachedAccount {
             _ = self.ref_count.fetchAdd(1, .acq_rel);
             return self;
         }
-
-        fn clone(self: *const CachedAccount, allocator: std.mem.Allocator) !*CachedAccount {
-            const cloned = try allocator.create(CachedAccount);
-            cloned.* = .{
-                .account = self.account,
-                .ref_count = std.atomic.Value(usize).init(1),
-            };
-            return cloned;
-        }
-
-        fn cloneAccount(self: *const CachedAccount, allocator: std.mem.Allocator) !*Account {
-            const cloned = try allocator.create(Account);
-            cloned.* = self.account;
-            return cloned;
-        }
-
-        fn move(self: *CachedAccount, allocator: std.mem.Allocator) !*CachedAccount {
-            const cloned = self.clone(allocator);
-            self.releaseOrDestroy(allocator);
-            return cloned;
-        }
     };
 
-    const LRU = LruCacheCustom(.locking, Pubkey, CachedAccount, std.mem.Allocator, CachedAccount.releaseOrDestroy);
+    const LRU = LruCacheCustom(.locking, Pubkey, *CachedAccount, std.mem.Allocator, CachedAccount.releaseOrDestroyDoublePtr);
     const SlotLRU = std.AutoHashMap(Slot, *LRU);
 
     slot_lrus: SlotLRU,
     max_items: usize,
+    max_slots: usize,
+    highest_slot: ?Slot,
 
-    fn init(allocator: std.mem.Allocator, max_items: usize) !AccountsLRU {
+    fn init(
+        allocator: std.mem.Allocator,
+        max_items: usize,
+        max_slots: usize,
+    ) !AccountsLRU {
         return .{
             .slot_lrus = SlotLRU.init(allocator),
             .max_items = max_items,
+            .max_slots = max_slots,
+            .highest_slot = null,
         };
     }
 
     fn get(self: *const AccountsLRU, slot: Slot, pubkey: Pubkey) ?CachedAccount {
         const slot_lru = self.slot_lrus.get(slot) orelse return null;
-        return slot_lru.get(pubkey);
+        return (slot_lru.get(pubkey) orelse return null).*;
     }
 
     /// should only be called iff account is not already present
     fn putAccount(self: *AccountsLRU, slot: Slot, pubkey: Pubkey, account: Account) !void {
         const slot_lru = self.slot_lrus.get(slot) orelse blk: {
-            const lru = try self.slot_lrus.allocator.create(LRU);
-            lru.* = try LRU.initWithContext(self.slot_lrus.allocator, self.max_items, self.slot_lrus.allocator);
+            if (self.highest_slot) |highest_slot| {
+                if (slot > highest_slot) {
+                    try self.copySlot(highest_slot, slot);
+                    break :blk self.slot_lrus.get(slot) orelse unreachable;
+                } else {
+                    return error.SlotLowerThanPrevious;
+                }
+            } else {
+                const lru = try self.slot_lrus.allocator.create(LRU);
+                lru.* = try LRU.initWithContext(self.slot_lrus.allocator, self.max_items, self.slot_lrus.allocator);
 
-            try self.slot_lrus.put(slot, lru);
+                try self.slot_lrus.put(slot, lru);
 
-            break :blk lru;
+                break :blk lru;
+            }
         };
-        if (slot_lru.put(pubkey, CachedAccount.init(account)) != null) return error.InvalidPut;
+
+        if (self.highest_slot == null or slot > self.highest_slot.?) {
+            self.highest_slot = slot;
+        }
+
+        const new_cached_account = try self.slot_lrus.allocator.create(CachedAccount);
+        errdefer self.slot_lrus.allocator.destroy(new_cached_account);
+        new_cached_account.* = try CachedAccount.init(self.slot_lrus.allocator, account);
+        errdefer new_cached_account.deinit(self.slot_lrus.allocator);
+
+        if (slot_lru.put(pubkey, new_cached_account) != null) return error.InvalidPut;
     }
 
     /// remove slot lru, decreasing ref_counts on CachedAccounts (optionally removing)
-    fn purgeSlot(self: *AccountsLRU, slot: Slot) !void {
-        var slot_lru = self.slot_lrus.get(slot) orelse return error.SlotNotFound;
+    fn purgeSlot(self: *AccountsLRU, slot: Slot) void {
+        const slot_lru = self.slot_lrus.get(slot) orelse return;
         slot_lru.deinit();
+        _ = self.slot_lrus.remove(slot);
     }
 
-    // bring slot lru forward to new slot, increasing ref_counts
+    /// bring slot lru forward to new slot, increasing ref_counts
     fn copySlot(self: *AccountsLRU, old_slot: Slot, new_slot: Slot) !void {
         var old_slot_lru = self.slot_lrus.get(old_slot) orelse return error.SlotNotFound;
-        var new_slot_lru = try LRU.init(self.slot_lrus.allocator, self.max_items);
+
+        const new_slot_lru = try self.slot_lrus.allocator.create(LRU);
+        errdefer self.slot_lrus.allocator.destroy(new_slot_lru);
+        new_slot_lru.* = try LRU.initWithContext(self.slot_lrus.allocator, self.max_items, self.slot_lrus.allocator);
 
         // copy from old to new slot lru
         {
@@ -157,11 +180,29 @@ pub const AccountsLRU = struct {
 
             var it = old_slot_lru.dbl_link_list.first;
             while (it) |node| : (it = node.next) {
-                new_slot_lru.put(node.data.key, node.data.value.copyRef());
+                if (node.data.value.is_dirty) continue; // do not copy forward modified accounts
+
+                _ = new_slot_lru.put(node.data.key, node.data.value.copyRef());
             }
         }
 
+        self.correctSlotCount();
+
         try self.slot_lrus.put(new_slot, new_slot_lru);
+
+        self.highest_slot = new_slot;
+    }
+
+    /// removes lowest slot when exceeding .max_slots
+    fn correctSlotCount(self: *AccountsLRU) void {
+        if (self.slot_lrus.count() > self.max_slots) {
+            var lowest_slot: Slot = std.math.maxInt(usize);
+            var iter = self.slot_lrus.iterator();
+            while (iter.next()) |entry| {
+                if (entry.key_ptr.* < lowest_slot) lowest_slot = entry.key_ptr.*;
+            }
+            self.purgeSlot(lowest_slot);
+        }
     }
 
     fn deinit(self: *AccountsLRU) void {
@@ -174,6 +215,157 @@ pub const AccountsLRU = struct {
         self.slot_lrus.deinit();
     }
 };
+
+test "CachedAccount ref_count" {
+    const allocator = std.testing.allocator;
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+
+    const account = try Account.random(allocator, rng, 1);
+    defer account.deinit(allocator);
+
+    const cached_account = try allocator.create(AccountsLRU.CachedAccount);
+    cached_account.* = try AccountsLRU.CachedAccount.init(allocator, account);
+    defer cached_account.releaseOrDestroy(allocator);
+
+    try std.testing.expectEqual(cached_account.ref_count.load(.acquire), 1);
+
+    const cached_account_ref = cached_account.copyRef();
+
+    try std.testing.expectEqual(cached_account.ref_count.load(.acquire), 2);
+
+    cached_account_ref.releaseOrDestroy(allocator);
+
+    try std.testing.expectEqual(cached_account.ref_count.load(.acquire), 1);
+}
+
+test "AccountsLRU put and get account" {
+    const allocator = std.testing.allocator;
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+
+    var accounts_lru = try AccountsLRU.init(allocator, 10, 1);
+    defer accounts_lru.deinit();
+
+    const account = try Account.random(allocator, rng, 1);
+    defer account.deinit(allocator);
+
+    const pubkey = Pubkey.random(rng);
+    const slot = 1;
+
+    try accounts_lru.putAccount(slot, pubkey, account);
+
+    const cached_account = accounts_lru.get(slot, pubkey) orelse null;
+    try std.testing.expect(cached_account != null);
+}
+
+test "AccountsLRU returns null when account is missing" {
+    const allocator = std.testing.allocator;
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+
+    var accounts_lru = try AccountsLRU.init(allocator, 10, 1);
+    defer accounts_lru.deinit();
+
+    const pubkey = Pubkey.random(rng);
+    const slot = 1;
+
+    const result = accounts_lru.get(slot, pubkey);
+    try std.testing.expect(result == null);
+}
+
+test "AccountsLRU putAccount & copySlot ref counting" {
+    const allocator = std.testing.allocator;
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+
+    var accounts_lru = try AccountsLRU.init(allocator, 10, 2);
+    defer accounts_lru.deinit();
+
+    const account = try Account.random(allocator, rng, 1);
+    defer account.deinit(allocator);
+
+    const pubkey = Pubkey.random(rng);
+    const old_slot = 1;
+    const new_slot = 2;
+
+    try accounts_lru.putAccount(old_slot, pubkey, account);
+
+    try std.testing.expectEqual(accounts_lru.get(old_slot, pubkey).?.ref_count.load(.acquire), 1);
+
+    try accounts_lru.copySlot(old_slot, new_slot);
+
+    try std.testing.expectEqual(accounts_lru.get(old_slot, pubkey).?.ref_count.load(.acquire), 2);
+
+    const cached_account = accounts_lru.get(new_slot, pubkey) orelse null;
+    try std.testing.expect(cached_account != null);
+}
+
+// test "AccountsLRU max slots" {
+//     const allocator = std.testing.allocator;
+//     var random = std.rand.DefaultPrng.init(19);
+//     const rng = random.random();
+
+//     var accounts_lru = try AccountsLRU.init(allocator, 10, 2);
+//     defer accounts_lru.deinit();
+
+//     const account = try Account.random(allocator, rng, 1);
+//     defer account.deinit(allocator);
+
+//     const pubkey = Pubkey.random(rng);
+
+//     try accounts_lru.putAccount(1, pubkey, account);
+//     try std.testing.expect(accounts_lru.get(1, pubkey) != null);
+
+//     try accounts_lru.putAccount(2, pubkey, account);
+//     try std.testing.expect(accounts_lru.get(1, pubkey) != null);
+
+//     try accounts_lru.putAccount(3, pubkey, account);
+//     try std.testing.expect(accounts_lru.get(1, pubkey) == null);
+// }
+
+// test "AccountsLRU putAccount returns error on duplicate" {
+//     const allocator = std.testing.allocator;
+//     var random = std.rand.DefaultPrng.init(19);
+//     const rng = random.random();
+
+//     const account = try Account.random(allocator, rng, 1);
+//     defer account.deinit(allocator);
+
+//     var accounts_lru = try AccountsLRU.init(allocator, 10);
+//     defer accounts_lru.deinit();
+
+//     const pubkey = Pubkey.random(rng);
+//     const slot = 1;
+
+//     try accounts_lru.putAccount(slot, pubkey, account);
+
+//     // Trying to insert the same account again should fail
+//     try std.testing.expectEqual(error.InvalidPut, accounts_lru.putAccount(slot, pubkey, account));
+// }
+
+// test "AccountsLRU purgeSlot removes the slot and accounts" {
+//     const allocator = std.testing.allocator;
+//     var random = std.rand.DefaultPrng.init(19);
+//     const rng = random.random();
+
+//     var accounts_lru = try AccountsLRU.init(allocator, 10);
+//     defer accounts_lru.deinit();
+
+//     const account = try Account.random(allocator, rng, 1);
+//     defer account.deinit(allocator);
+
+//     const pubkey = Pubkey.random(rng); // Create a dummy pubkey
+//     const slot = 1;
+
+//     try accounts_lru.putAccount(slot, pubkey, account);
+
+//     // Purge the slot
+//     try accounts_lru.purgeSlot(slot);
+
+//     const result = accounts_lru.get(slot, pubkey);
+//     try std.testing.expect(result == null);
+// }
 
 /// database for accounts
 ///
@@ -305,7 +497,7 @@ pub const AccountsDB = struct {
             .logger = logger,
             .config = config,
             .slot_pubkeyaccounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(allocator)),
-            .accounts_lru = RwMux(AccountsLRU).init(try AccountsLRU.init(allocator, 1_000)), // TODO: make configurable
+            .accounts_lru = RwMux(AccountsLRU).init(try AccountsLRU.init(allocator, 1_000, 10)), // TODO: make configurable
             .snapshot_dir = snapshot_dir,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .metrics = metrics,
