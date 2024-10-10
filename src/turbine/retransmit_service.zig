@@ -116,7 +116,7 @@ pub fn run(
     for (send_socket_threads.items) |thread| thread.join();
 }
 
-fn receiveShreds(
+fn receiveShredsBatched(
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
     bank_fields: *const BankFields,
@@ -229,6 +229,96 @@ fn receiveShreds(
         }
 
         stats.retransmit_preprocess_shreds_micros.set(@divFloor(preprocess_shreds_timer.read().asMicros(), shreds.items.len));
+        stats.log(logger);
+    }
+}
+
+fn receiveShreds(
+    allocator: std.mem.Allocator,
+    my_contact_info: ThreadSafeContactInfo,
+    bank_fields: *const BankFields,
+    leader_schedule_cache: *LeaderScheduleCache,
+    receiver: *Channel(Packet),
+    sender: *Channel(RetransmitShredInfo),
+    gossip_table_rw: *RwMux(sig.gossip.GossipTable),
+    rand: Random,
+    exit: *AtomicBool,
+    logger: Logger,
+    stats: *Stats,
+) !void {
+    var turbine_tree_provider = TurbineTreeProvider.init(
+        allocator,
+        my_contact_info,
+        gossip_table_rw,
+        USE_STAKE_HACK_FOR_TESTING,
+    );
+    defer turbine_tree_provider.deinit();
+
+    var deduper = try ShredDeduper(2).init(
+        allocator,
+        rand,
+        DEDUPER_NUM_BITS,
+    );
+    defer deduper.deinit();
+
+    while (!exit.load(.acquire)) {
+        const shred_packet = receiver.receive() orelse continue;
+        stats.retransmit_shreds_received_count.inc();
+
+        // Preprocess shreds
+        var preprocess_shred_timer = try sig.time.Timer.start();
+
+        // Reset deduper
+        const bytes_filter_saturated, const shred_id_filter_saturated = deduper.maybeReset(
+            rand,
+            DEDUPER_FALSE_POSITIVE_RATE,
+            DEDUPER_RESET_CYCLE,
+        );
+        if (bytes_filter_saturated) stats.retransmit_shred_byte_filter_saturated_count.inc();
+        if (shred_id_filter_saturated) stats.retransmit_shred_id_filter_saturated_count.inc();
+
+        const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
+
+        switch (deduper.dedup(&shred_id, &shred_packet.data, MAX_DUPLICATE_COUNT)) {
+            .ByteDuplicate => {
+                stats.retransmit_shred_byte_filtered_count.add(1);
+                continue;
+            },
+            .ShredIdDuplicate => {
+                stats.retransmit_shred_id_filtered_count.add(1);
+                continue;
+            },
+            .NotDuplicate => {},
+        }
+
+        const slot = shred_id.slot;
+        const epoch, _ = bank_fields.epoch_schedule.getEpochAndSlotIndex(slot);
+
+        const slot_leader = if (leader_schedule_cache.slotLeader(slot)) |leader| leader else blk: {
+            try leader_schedule_cache.put(epoch, try bank_fields.leaderSchedule(allocator));
+            break :blk leader_schedule_cache.slotLeader(slot) orelse @panic("failed to get slot leader");
+        };
+
+        const turbine_tree = try turbine_tree_provider.getTurbineTreeForRetransmit(
+            epoch,
+            try bank_fields.getStakedNodes(
+                allocator,
+                epoch,
+            ),
+        );
+
+        try sender.send(.{
+            .slot_leader = slot_leader,
+            // CAUTION: .acquireUnsafe() is used here as the turbine_tree is guaranteed to be valid since:
+            // 1. the turbine_tree_provider has one exactly on reference to the turbine_tree after getTurbineTree
+            // 2. each call to .aquireUnsafe() increments the reference count by 1
+            // 3. there is exactly one call to .release() per send (see RetransmitShredInfo.deinit and retransmitShreds)
+            .turbine_tree = turbine_tree.acquireUnsafe(),
+            .shred_id = shred_id,
+            .shred_packet = shred_packet,
+        });
+
+        stats.retransmit_preprocess_shreds_micros.set(preprocess_shred_timer.read().asMicros());
         stats.log(logger);
     }
 }
