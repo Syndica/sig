@@ -41,7 +41,7 @@ const globalRegistry = sig.prometheus.globalRegistry;
 pub const Service = struct {
     allocator: std.mem.Allocator,
     config: Config,
-    stats: Metrics,
+    metrics: Metrics,
     transaction_pool: TransactionPool,
     leader_info_rw: RwMux(LeaderInfo),
     send_socket: UdpSocket,
@@ -61,7 +61,7 @@ pub const Service = struct {
         return .{
             .allocator = allocator,
             .config = config,
-            .stats = try Metrics.init(),
+            .metrics = try Metrics.init(),
             .transaction_pool = TransactionPool.init(
                 allocator,
                 config.pool_max_size,
@@ -124,7 +124,7 @@ pub const Service = struct {
 
         while (!self.exit.load(.unordered)) {
             const transaction = self.receive_channel.receive() orelse break;
-            self.stats.transactions_received_count.add(1);
+            self.metrics.transactions_received_count.add(1);
 
             if (!transaction_batch.contains(transaction.signature) and
                 !self.transaction_pool.contains(transaction.signature))
@@ -169,15 +169,15 @@ pub const Service = struct {
             var timer = try Timer.start();
 
             try self.processTransactions(&rpc_client);
-            self.stats.process_transactions_latency_millis.set(timer.lap().asMillis());
+            self.metrics.process_transactions_latency_millis.set(timer.lap().asMillis());
 
             try self.retryTransactions();
-            self.stats.retry_transactions_latency_millis.set(timer.lap().asMillis());
+            self.metrics.retry_transactions_latency_millis.set(timer.lap().asMillis());
 
             self.transaction_pool.purge();
-            self.stats.transactions_pending.set(self.transaction_pool.count());
+            self.metrics.transactions_pending.set(self.transaction_pool.count());
 
-            self.stats.log(self.logger);
+            self.metrics.log(self.logger);
         }
     }
 
@@ -190,7 +190,7 @@ pub const Service = struct {
         );
         defer block_height_response.deinit();
         const block_height = try block_height_response.result();
-        self.stats.rpc_block_height_latency_millis.set(block_height_timer.read().asMillis());
+        self.metrics.rpc_block_height_latency_millis.set(block_height_timer.read().asMillis());
 
         // We need to hold a read lock until we are finished using the signatures and transactions, otherwise
         // the receiver thread could add new transactions and corrupt the underlying array
@@ -205,37 +205,37 @@ pub const Service = struct {
         );
         defer signature_statuses_response.deinit();
         const signature_statuses = try signature_statuses_response.result();
-        self.stats.rpc_signature_statuses_latency_millis.set(signature_statuses_timer.read().asMillis());
+        self.metrics.rpc_signature_statuses_latency_millis.set(signature_statuses_timer.read().asMillis());
 
         for (signature_statuses.value, signatures, transactions) |maybe_signature_status, signature, transaction_info| {
             if (maybe_signature_status) |signature_status| {
                 if (signature_status.confirmations == null) {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.stats.transactions_rooted_count.add(1);
+                    self.metrics.transactions_rooted_count.add(1);
                     continue;
                 }
 
                 if (signature_status.err) |_| {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.stats.transactions_failed_count.add(1);
+                    self.metrics.transactions_failed_count.add(1);
                     continue;
                 }
 
                 if (transaction_info.isExpired(block_height)) {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.stats.transactions_expired_count.add(1);
+                    self.metrics.transactions_expired_count.add(1);
                     continue;
                 }
             } else {
                 if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.stats.transactions_exceeded_max_retries_count.add(1);
+                    self.metrics.transactions_exceeded_max_retries_count.add(1);
                     continue;
                 }
 
                 if (transaction_info.shouldRetry(self.config.retry_rate)) {
                     try self.transaction_pool.retry_signatures.append(signature);
-                    self.stats.transactions_retry_count.add(1);
+                    self.metrics.transactions_retry_count.add(1);
                 }
             }
         }
@@ -273,8 +273,8 @@ pub const Service = struct {
             defer leader_info_lg.unlock();
             break :blk try leader_info.getLeaderAddresses(self.allocator);
         };
-        self.stats.get_leader_addresses_latency_millis.set(get_leader_addresses_timer.read().asMillis());
-        self.stats.number_of_leaders_identified.set(leader_addresses.items.len);
+        self.metrics.get_leader_addresses_latency_millis.set(get_leader_addresses_timer.read().asMillis());
+        self.metrics.number_of_leaders_identified.set(leader_addresses.items.len);
         return leader_addresses;
     }
 
@@ -301,7 +301,7 @@ pub const Service = struct {
             tx.last_sent_time = last_sent_time;
         }
 
-        self.stats.transactions_sent_count.add(transactions.len);
+        self.metrics.transactions_sent_count.add(transactions.len);
     }
 };
 
