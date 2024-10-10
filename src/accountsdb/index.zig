@@ -110,7 +110,8 @@ pub const DiskIndexConfig = struct {
 /// Analogous to [AccountsIndex](https://github.com/anza-xyz/agave/blob/a6b2283142192c5360ad0f53bec1eb4a9fb36154/accounts-db/src/accounts_index.rs#L644)
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
-    reference_allocator: std.mem.Allocator,
+    underlying_reference_allocator: std.mem.Allocator,
+    recycle_fba: *sig.utils.allocators.RecycleFBA(.{}), // TODO: does this need to be a pointer?
     reference_memory: RwMux(ReferenceMemory),
     bins: []RwMux(RefMap),
     pubkey_bin_calculator: PubkeyBinCalculator,
@@ -130,14 +131,15 @@ pub const AccountIndex = struct {
         maybe_disk_index_config: ?DiskIndexConfig,
         /// number of bins to shard across
         number_of_bins: usize,
+        max_number_of_references: u64,
     ) !Self {
         const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
-        const reference_allocator: std.mem.Allocator //
+        const underlying_reference_allocator: std.mem.Allocator //
         = blk: {
             if (maybe_disk_index_config) |config| {
                 var index_bin_dir = try config.accountsdb_dir.makeOpenPath("index", .{});
                 errdefer index_bin_dir.close();
-                logger.infof("using disk index in {s}", .{sig.utils.fmt.tryRealPath(index_bin_dir, ".")});
+                logger.info().logf("using disk index in {s}", .{sig.utils.fmt.tryRealPath(index_bin_dir, ".")});
 
                 const ptr = try allocator.create(DiskMemoryAllocator);
                 ptr.* = .{
@@ -147,7 +149,7 @@ pub const AccountIndex = struct {
 
                 break :blk .{ ptr, ptr.allocator() };
             } else {
-                logger.infof("using ram index", .{});
+                logger.info().log("using ram index");
                 break :blk .{ null, allocator };
             }
         };
@@ -157,16 +159,21 @@ pub const AccountIndex = struct {
         };
 
         const bins = try allocator.alloc(RwMux(RefMap), number_of_bins);
-        errdefer allocator.free(number_of_bins);
+        errdefer allocator.free(bins);
         @memset(bins, RwMux(RefMap).init(RefMap.init(allocator)));
+
+        const T = sig.utils.allocators.RecycleFBA(.{});
+        const recycle_fba = try allocator.create(T);
+        recycle_fba.* = try T.init(underlying_reference_allocator, max_number_of_references);
 
         return Self{
             .allocator = allocator,
-            .reference_allocator = reference_allocator,
+            .underlying_reference_allocator = underlying_reference_allocator,
             .bins = bins,
             .pubkey_bin_calculator = PubkeyBinCalculator.init(number_of_bins),
             .reference_memory = RwMux(ReferenceMemory).init(ReferenceMemory.init(allocator)),
             .disk_allocator_ptr = maybe_disk_allocator_ptr,
+            .recycle_fba = recycle_fba,
         };
     }
 
@@ -525,7 +532,7 @@ pub const PubkeyBinCalculator = struct {
 test "account index update/remove reference" {
     const allocator = std.testing.allocator;
 
-    var index = try AccountIndex.init(allocator, .noop, null, 8);
+    var index = try AccountIndex.init(allocator, .noop, null, 8, 0);
     defer index.deinit(true);
     try index.ensureTotalCapacity(100);
 

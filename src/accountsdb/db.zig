@@ -145,6 +145,7 @@ pub const AccountsDB = struct {
             logger,
             if (config.use_disk_index) .{ .accountsdb_dir = snapshot_dir } else null,
             config.number_of_index_bins,
+            0, // TODO: make this configurable
         );
         errdefer account_index.deinit(true);
 
@@ -210,7 +211,7 @@ pub const AccountsDB = struct {
         var progress_timer = try sig.time.Timer.start();
 
         const n_account_files = snapshot_manifest.file_map.count();
-        self.logger.infof("found {d} account files", .{n_account_files});
+        self.logger.info().logf("found {d} account files", .{n_account_files});
 
         const manifest_file_map = snapshot_manifest.file_map;
 
@@ -232,13 +233,13 @@ pub const AccountsDB = struct {
                 const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id.toInt() });
 
                 const accounts_file_file = accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write }) catch |err| {
-                    self.logger.errf("Failed to open accounts/{s}: {s}", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    self.logger.err().logf("Failed to open accounts/{s}: {s}", .{ file_name_bounded.constSlice(), @errorName(err) });
                     return err;
                 };
                 errdefer accounts_file_file.close();
 
                 break :blk AccountFile.init(accounts_file_file, file_info, slot) catch |err| {
-                    self.logger.errf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    self.logger.err().logf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });
                     return err;
                 };
             };
@@ -262,7 +263,7 @@ pub const AccountsDB = struct {
                 progress_timer.reset();
             }
         }
-        self.logger.info("loaded account files");
+        self.logger.info().log("loaded account files");
 
         const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
         defer self.allocator.free(bin_counts);
@@ -303,7 +304,7 @@ pub const AccountsDB = struct {
 
             try references.append(reference_slice);
         }
-        self.logger.info("loaded account references");
+        self.logger.info().log("loaded account references");
 
         var ref_map_file = try ref_map_dir.openFile("account_references_0", .{});
         defer ref_map_file.close();
@@ -311,7 +312,7 @@ pub const AccountsDB = struct {
         const ref_map_reader = ref_map_file.reader();
         const n_bins = try ref_map_reader.readInt(u64, .little);
         if (n_bins != self.account_index.numberOfBins()) {
-            self.logger.errf("number of bins in ref map does not match account index: {d} vs {d}", .{ n_bins, self.account_index.numberOfBins() });
+            self.logger.err().logf("number of bins in ref map does not match account index: {d} vs {d}", .{ n_bins, self.account_index.numberOfBins() });
             return error.InvalidBinCount;
         }
 
@@ -331,12 +332,12 @@ pub const AccountsDB = struct {
             const memory = try self.allocator.alloc(u8, bin_lens[i]);
             const amount_read = try ref_map_file.readAll(memory);
             if (amount_read != bin_lens[i]) {
-                self.logger.errf("failed to read all bin memory: {d} vs {d}", .{ amount_read, bin_lens[i] });
+                self.logger.err().logf("failed to read all bin memory: {d} vs {d}", .{ amount_read, bin_lens[i] });
                 return error.InvalidBinMemory;
             }
             bin.unmanaged.setFromMemory(memory);
         }
-        self.logger.info("loaded account reference maps");
+        self.logger.info().log("loaded account reference maps");
 
         // var ref_count: u64 = 0;
         // for (references.items) |ref_batch| {
@@ -473,6 +474,9 @@ pub const AccountsDB = struct {
         self.logger.info().logf("found {d} account files", .{n_account_files});
 
         std.debug.assert(n_account_files > 0);
+        const max_n_references = n_account_files * accounts_per_file_estimate;
+        const n_bytes = max_n_references * @sizeOf(AccountRef);
+        _ = n_bytes;
 
         {
             const bhs, var bhs_lg = try self.getOrInitBankHashStats(snapshot_manifest.slot);
@@ -521,7 +525,7 @@ pub const AccountsDB = struct {
             if (use_disk_index) {
                 const disk_allocator = self.account_index.disk_allocator_ptr;
                 thread_db.account_index.disk_allocator_ptr = disk_allocator;
-                thread_db.account_index.reference_allocator = disk_allocator.?.allocator();
+                thread_db.account_index.underlying_reference_allocator = disk_allocator.?.allocator();
             }
         }
         defer {
@@ -626,7 +630,8 @@ pub const AccountsDB = struct {
         // without this large allocation, snapshot loading is very slow
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
 
-        const ref_memory_raw_ptr = self.account_index.reference_allocator.rawAlloc(
+        // TODO:
+        const ref_memory_raw_ptr = self.account_index.underlying_reference_allocator.rawAlloc(
             @sizeOf(u64) * 2 + @sizeOf(AccountRef) * n_accounts_estimate,
             8,
             @returnAddress(),
@@ -636,7 +641,7 @@ pub const AccountsDB = struct {
         const reference_slice = reference_slice_aligned[0..n_accounts_estimate];
         const references_ptr = reference_slice.ptr;
         var references = ArrayList(AccountRef).fromOwnedSlice(
-            self.account_index.reference_allocator,
+            self.account_index.underlying_reference_allocator, // TODO:
             reference_slice,
         );
         references.items.len = 0; // zero valid items
@@ -2024,7 +2029,7 @@ pub const AccountsDB = struct {
 
             // update the references
             var new_reference_block = try ArrayList(AccountRef).initCapacity(
-                self.account_index.reference_allocator,
+                self.account_index.underlying_reference_allocator, // TODO:
                 accounts_alive_count,
             );
 
@@ -2348,7 +2353,7 @@ pub const AccountsDB = struct {
         @memset(bin_counts, 0);
 
         var references = try ArrayList(AccountRef).initCapacity(
-            self.account_index.reference_allocator,
+            self.account_index.underlying_reference_allocator, // TODO:
             n_accounts,
         );
 
@@ -2492,7 +2497,7 @@ pub const AccountsDB = struct {
         // update index
         var accounts_dead_count: u64 = 0;
         var references = try ArrayList(AccountRef).initCapacity(
-            self.account_index.reference_allocator,
+            self.account_index.underlying_reference_allocator, // TODO:
             accounts.len,
         );
         for (0..accounts.len) |i| {
