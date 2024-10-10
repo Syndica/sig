@@ -28,9 +28,9 @@ pub fn runShredVerifier(
     while (!exit.load(.acquire) or
         unverified_shred_receiver.len() != 0)
     {
-        var count: usize = 0;
+        var packet_count: usize = 0;
         while (unverified_shred_receiver.receive()) |packet| {
-            count += 1;
+            packet_count += 1;
             metrics.received_count.inc();
             if (verifyShred(&packet, leader_schedule)) |_| {
                 metrics.verified_count.inc();
@@ -39,7 +39,7 @@ pub fn runShredVerifier(
                 metrics.fail.observe(err);
             }
         }
-        metrics.batch_size.observe(count);
+        metrics.batch_size.observe(packet_count);
     }
 }
 
