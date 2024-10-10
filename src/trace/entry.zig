@@ -58,26 +58,22 @@ pub fn Entry(comptime Fields: type, comptime scope: ?[]const u8) type {
         /// Returns a new struct type based on Fields, just with one more field added.
         fn FieldsPlus(comptime field_name: [:0]const u8, comptime FieldType: type) type {
             const info = @typeInfo(Fields);
-            var new_fields: [1 + info.Struct.fields.len]std.builtin.Type.StructField = undefined;
-            for (info.Struct.fields, 0..) |existing_field, i| {
-                new_fields[i] = existing_field;
-            }
             const ActualFieldType = switch (@typeInfo(FieldType)) {
                 .ComptimeFloat => f64,
                 .ComptimeInt => u64,
                 else => FieldType,
             };
-            new_fields[info.Struct.fields.len] = .{
+            const new_fields = info.Struct.fields ++ &[_]std.builtin.Type.StructField{.{
                 .name = field_name,
                 .type = ActualFieldType,
                 .default_value = null,
                 .is_comptime = false,
                 .alignment = @alignOf(FieldType),
-            };
+            }};
             const new_struct = std.builtin.Type.Struct{
                 .layout = .auto,
                 .backing_integer = null,
-                .fields = &new_fields,
+                .fields = new_fields,
                 .decls = &.{},
                 .is_tuple = false,
             };
