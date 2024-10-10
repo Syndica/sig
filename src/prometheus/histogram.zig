@@ -1,11 +1,25 @@
 const std = @import("std");
+const prometheus = @import("lib.zig");
+
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
-const Metric = @import("metric.zig").Metric;
+const Metric = prometheus.metric.Metric;
+const MetricType = prometheus.metric.MetricType;
 
 pub const DEFAULT_BUCKETS: [11]f64 = .{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0 };
+
+pub fn exponentialBuckets(base: i64, comptime start: i64, comptime end: i64) [end - start]f64 {
+    std.debug.assert(end > start);
+    const base_float = @as(f64, @floatFromInt(base));
+    var buckets: [end - start]f64 = undefined;
+    for (0..end - start) |i| {
+        const exponent = @as(f64, @floatFromInt(start + @as(i64, @intCast(i))));
+        buckets[i] = std.math.pow(f64, base_float, exponent);
+    }
+    return buckets;
+}
 
 /// Histogram optimized for fast concurrent writes.
 /// Reads and writes are thread-safe if you use the public methods.
@@ -41,6 +55,8 @@ pub const Histogram = struct {
 
     /// Used by registry to report the histogram
     metric: Metric = .{ .getResultFn = getResult },
+
+    pub const metric_type: MetricType = .histogram;
 
     const ShardSync = packed struct {
         /// The total count of events that have started to be recorded (including those that finished).
@@ -89,16 +105,21 @@ pub const Histogram = struct {
     }
 
     /// Writes a value into the histogram.
-    pub fn observe(self: *Self, value: f64) void {
+    pub fn observe(
+        self: *Self,
+        /// Must be f64 or int
+        value: anytype,
+    ) void {
+        const float: f64 = if (@typeInfo(@TypeOf(value)) == .Int) @floatFromInt(value) else value;
         const shard_sync = self.incrementCount(.acquire); // acquires lock. must be first step.
         const shard = &self.shards[shard_sync.shard];
         for (self.upper_bounds.items, 0..) |bound, i| {
-            if (value <= bound) {
+            if (float <= bound) {
                 _ = shard.buckets.items[i].fetchAdd(1, .monotonic);
                 break;
             }
         }
-        _ = shard.sum.fetchAdd(value, .monotonic);
+        _ = shard.sum.fetchAdd(float, .monotonic);
         _ = shard.count.fetchAdd(1, .release); // releases lock. must be last step.
     }
 

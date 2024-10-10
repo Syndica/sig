@@ -89,8 +89,12 @@ pub const PendingInsertShredsState = struct {
 
     const Self = @This();
 
-    // TODO add param for metrics
-    pub fn init(allocator: Allocator, logger: sig.trace.Logger, db: *BlockstoreDB) !Self {
+    pub fn init(
+        allocator: Allocator,
+        logger: sig.trace.Logger,
+        db: *BlockstoreDB,
+        metrics: BlockstoreInsertionMetrics,
+    ) !Self {
         return .{
             .allocator = allocator,
             .db = db,
@@ -102,7 +106,7 @@ pub const PendingInsertShredsState = struct {
             .slot_meta_working_set = AutoHashMap(u64, SlotMetaWorkingSetEntry).init(allocator),
             .index_working_set = AutoHashMap(u64, IndexMetaWorkingSetEntry).init(allocator),
             .duplicate_shreds = ArrayList(PossibleDuplicateShred).init(allocator),
-            .metrics = try BlockstoreInsertionMetrics.init(sig.prometheus.globalRegistry()),
+            .metrics = metrics,
         };
     }
 

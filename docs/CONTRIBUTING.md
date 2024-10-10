@@ -100,3 +100,16 @@ fn do_something(maybe_foo: ?Foo) void {
 ### Linting
 
 - run `zig fmt src/` in the top-level directory to run the zig linter
+
+
+### Metrics
+
+It's common for a single context to deal with multiple prometheus metrics. In that case, it may be useful to group them together in their own struct. Any metrics structs following this pattern must end their names with the word `Metrics`. If practical, `Registry.initStruct` or `Registry.initFields` is recommended for the struct's initialization.
+
+The name of the struct should be prefixed with a name describing the scope where it is used, as in `GossipMetrics`. The prefix may be omitted if the context is already obvious, and the following are true about the metrics struct:
+- It is a private const.
+- It is the only metrics struct defined in that context.
+- It is expected to contain all metrics that would ever be used in any context where it the struct is accessible.
+- The context's name would be redundantly expressed in its name. For example, shred_processor.zig encloses a metrics struct, for which the only sensible names would be ShredProcessorMetrics or Metrics. In this case, the context would be redundantly expressed, so it may be omitted.
+
+If the Metrics struct is simple, and only used within one struct, it can be defined within that struct, otherwise it can be defined directly underneath the struct.

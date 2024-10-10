@@ -35,6 +35,7 @@ const Level = sig.trace.level.Level;
 const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Counter = sig.prometheus.counter.Counter;
+const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.histogram.Histogram;
 const ClientVersion = sig.version.ClientVersion;
 const StatusCache = sig.accounts_db.StatusCache;
@@ -56,86 +57,6 @@ pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 pub const DELETE_ACCOUNT_FILES_MIN = 100;
-
-pub const AccountsDBStats = struct {
-    const HistogramKind = enum {
-        flush_account_file_size,
-        shrink_file_shrunk_by,
-        shrink_alive_accounts,
-        shrink_dead_accounts,
-        time_flush,
-        time_clean,
-        time_shrink,
-        time_purge,
-
-        fn buckets(self: HistogramKind) []const f64 {
-            const account_size_buckets = &.{
-                // 10 bytes -> 10MB (solana max account size)
-                10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000,
-            };
-            const account_count_buckets = &.{ 1, 5, 10, 50, 100, 500, 1_000, 10_000 };
-            const nanosecond_buckets = &.{
-                // 0.01ms -> 10ms
-                1_000,      10_000,      100_000,     1_000_000,   10_000_000,
-                // 50ms -> 1000ms
-                50_000_000, 100_000_000, 200_000_000, 400_000_000, 1_000_000_000,
-            };
-
-            return switch (self) {
-                .flush_account_file_size, .shrink_file_shrunk_by => account_size_buckets,
-                .shrink_alive_accounts, .shrink_dead_accounts => account_count_buckets,
-                .time_flush, .time_clean, .time_shrink, .time_purge => nanosecond_buckets,
-            };
-        }
-    };
-
-    number_files_flushed: *Counter,
-    number_files_cleaned: *Counter,
-    number_files_shrunk: *Counter,
-    number_files_deleted: *Counter,
-
-    time_flush: *Histogram,
-    time_clean: *Histogram,
-    time_shrink: *Histogram,
-    time_purge: *Histogram,
-
-    flush_account_file_size: *Histogram,
-    flush_accounts_written: *Counter,
-
-    clean_references_deleted: *Counter,
-    clean_files_queued_deletion: *Counter,
-    clean_files_queued_shrink: *Counter,
-    clean_slot_old_state: *Counter,
-    clean_slot_zero_lamports: *Counter,
-
-    shrink_file_shrunk_by: *Histogram,
-    shrink_alive_accounts: *Histogram,
-    shrink_dead_accounts: *Histogram,
-
-    const Self = @This();
-
-    pub fn init() GetMetricError!Self {
-        var self: Self = undefined;
-        const registry = globalRegistry();
-        const stats_struct_info = @typeInfo(Self).Struct;
-        inline for (stats_struct_info.fields) |field| {
-            @field(self, field.name) = switch (field.type) {
-                *Counter => try registry.getOrCreateCounter(field.name),
-                *Histogram => blk: {
-                    @setEvalBranchQuota(2000); // stringToEnum requires a little more than default
-                    const histogram_kind = comptime std.meta.stringToEnum(
-                        HistogramKind,
-                        field.name,
-                    ) orelse @compileError("no matching HistogramKind for AccountsDBStats *Histogram field");
-
-                    break :blk try registry.getOrCreateHistogram(field.name, histogram_kind.buckets());
-                },
-                else => @compileError("Unsupported field type"),
-            };
-        }
-        return self;
-    }
-};
 
 /// database for accounts
 ///
@@ -190,7 +111,7 @@ pub const AccountsDB = struct {
     // TODO: move to Bank struct
     bank_hash_stats: RwMux(BankHashStatsMap) = RwMux(BankHashStatsMap).init(.{}),
 
-    stats: AccountsDBStats,
+    metrics: AccountsDBMetrics,
     logger: Logger,
     config: InitConfig,
 
@@ -253,8 +174,7 @@ pub const AccountsDB = struct {
         );
         errdefer account_index.deinit(true);
 
-        const stats = try AccountsDBStats.init();
-
+        const metrics = try AccountsDBMetrics.init();
         return .{
             .allocator = allocator,
             .disk_allocator_ptr = maybe_disk_allocator_ptr,
@@ -264,7 +184,7 @@ pub const AccountsDB = struct {
             .account_cache = RwMux(AccountCache).init(AccountCache.init(allocator)),
             .snapshot_dir = snapshot_dir,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
-            .stats = stats,
+            .metrics = metrics,
             .geyser_writer = geyser_writer,
         };
     }
@@ -1423,7 +1343,7 @@ pub const AccountsDB = struct {
     pub fn flushSlot(self: *Self, slot: Slot) !FileId {
         var timer = try sig.time.Timer.start();
 
-        defer self.stats.number_files_flushed.inc();
+        defer self.metrics.number_files_flushed.inc();
 
         const pubkeys, const accounts: []const Account = blk: {
             // NOTE: flush should be the only function to delete/free cache slices of a flushed slot
@@ -1441,7 +1361,7 @@ pub const AccountsDB = struct {
         for (accounts) |*account| {
             const account_size_in_file = account.getSizeInFile();
             size += account_size_in_file;
-            self.stats.flush_account_file_size.observe(@floatFromInt(account_size_in_file));
+            self.metrics.flush_account_file_size.observe(account_size_in_file);
         }
 
         const file, const file_id, const memory = try self.createAccountFile(size, slot);
@@ -1469,7 +1389,7 @@ pub const AccountsDB = struct {
             try file_map.putNoClobber(self.allocator, file_id, account_file);
         }
 
-        self.stats.flush_accounts_written.add(account_file.number_of_accounts);
+        self.metrics.flush_accounts_written.add(account_file.number_of_accounts);
 
         // update the reference AFTER the data exists
         for (pubkeys, offsets) |pubkey, offset| {
@@ -1510,7 +1430,7 @@ pub const AccountsDB = struct {
             self.allocator.free(pubkeys);
         }
 
-        self.stats.time_flush.observe(@floatFromInt(timer.read().asNanos()));
+        self.metrics.time_flush.observe(timer.read().asNanos());
 
         // return to queue for cleaning
         return file_id;
@@ -1536,7 +1456,7 @@ pub const AccountsDB = struct {
 
         defer {
             const number_of_files = unclean_account_files.len;
-            self.stats.number_files_cleaned.add(number_of_files);
+            self.metrics.number_files_cleaned.add(number_of_files);
         }
 
         var num_zero_lamports: usize = 0;
@@ -1659,19 +1579,19 @@ pub const AccountsDB = struct {
                 }
             }
             references_to_delete.clearRetainingCapacity();
-            self.stats.clean_references_deleted.set(references_to_delete.items.len);
+            self.metrics.clean_references_deleted.set(references_to_delete.items.len);
             self.logger.debug().logf(
                 "cleaned slot {} - old_state: {}, zero_lamports: {}",
                 .{ account_file.slot, num_old_states, num_zero_lamports },
             );
         }
 
-        self.stats.clean_files_queued_deletion.set(delete_account_files.count());
-        self.stats.clean_files_queued_shrink.set(delete_account_files.count());
-        self.stats.clean_slot_old_state.set(num_old_states);
-        self.stats.clean_slot_zero_lamports.set(num_zero_lamports);
+        self.metrics.clean_files_queued_deletion.set(delete_account_files.count());
+        self.metrics.clean_files_queued_shrink.set(delete_account_files.count());
+        self.metrics.clean_slot_old_state.set(num_old_states);
+        self.metrics.clean_slot_zero_lamports.set(num_zero_lamports);
 
-        self.stats.time_clean.observe(@floatFromInt(timer.read().asNanos()));
+        self.metrics.time_clean.observe(timer.read().asNanos());
         return .{
             .num_zero_lamports = num_zero_lamports,
             .num_old_states = num_old_states,
@@ -1686,7 +1606,7 @@ pub const AccountsDB = struct {
     ) !void {
         const number_of_files = delete_account_files.len;
         defer {
-            self.stats.number_files_deleted.add(number_of_files);
+            self.metrics.number_files_deleted.add(number_of_files);
         }
 
         var delete_queue = try std.ArrayList(AccountFile).initCapacity(
@@ -1772,7 +1692,7 @@ pub const AccountsDB = struct {
 
         defer {
             const number_of_files = shrink_account_files.len;
-            self.stats.number_files_shrunk.add(number_of_files);
+            self.metrics.number_files_shrunk.add(number_of_files);
         }
 
         var alive_pubkeys = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
@@ -1834,9 +1754,9 @@ pub const AccountsDB = struct {
             std.debug.assert(accounts_dead_count > 0);
             total_accounts_deleted += accounts_dead_count;
 
-            self.stats.shrink_alive_accounts.observe(@floatFromInt(accounts_alive_count));
-            self.stats.shrink_dead_accounts.observe(@floatFromInt(accounts_dead_count));
-            self.stats.shrink_file_shrunk_by.observe(@floatFromInt(accounts_dead_size));
+            self.metrics.shrink_alive_accounts.observe(accounts_alive_count);
+            self.metrics.shrink_dead_accounts.observe(accounts_dead_count);
+            self.metrics.shrink_file_shrunk_by.observe(accounts_dead_size);
 
             self.logger.debug().logf("n alive accounts: {}", .{accounts_alive_count});
             self.logger.debug().logf("n dead accounts: {}", .{accounts_dead_count});
@@ -1947,7 +1867,7 @@ pub const AccountsDB = struct {
             }
         }
 
-        self.stats.time_shrink.observe(@floatFromInt(timer.read().asNanos()));
+        self.metrics.time_shrink.observe(timer.read().asNanos());
 
         return .{
             .num_accounts_deleted = total_accounts_deleted,
@@ -1995,7 +1915,7 @@ pub const AccountsDB = struct {
         self.allocator.free(accounts);
         self.allocator.free(pubkeys);
 
-        self.stats.time_purge.observe(@floatFromInt(timer.read().asNanos()));
+        self.metrics.time_purge.observe(timer.read().asNanos());
     }
 
     // NOTE: we need to acquire locks which requires `self: *Self` but we never modify any data
@@ -2828,6 +2748,68 @@ pub const AccountsDB = struct {
         max_slot: ?Slot,
     ) bool {
         return lessThanIf(slot, max_slot) and greaterThanIf(slot, min_slot);
+    }
+};
+
+pub const AccountsDBMetrics = struct {
+    number_files_flushed: *Counter,
+    number_files_cleaned: *Counter,
+    number_files_shrunk: *Counter,
+    number_files_deleted: *Counter,
+
+    time_flush: *Histogram,
+    time_clean: *Histogram,
+    time_shrink: *Histogram,
+    time_purge: *Histogram,
+
+    flush_account_file_size: *Histogram,
+    flush_accounts_written: *Counter,
+
+    clean_references_deleted: *Gauge(u64),
+    clean_files_queued_deletion: *Gauge(u64),
+    clean_files_queued_shrink: *Gauge(u64),
+    clean_slot_old_state: *Gauge(u64),
+    clean_slot_zero_lamports: *Gauge(u64),
+
+    shrink_file_shrunk_by: *Histogram,
+    shrink_alive_accounts: *Histogram,
+    shrink_dead_accounts: *Histogram,
+
+    const Self = @This();
+
+    pub fn init() GetMetricError!Self {
+        return globalRegistry().initStruct(Self);
+    }
+
+    pub fn histogramBucketsForField(comptime field_name: []const u8) []const f64 {
+        const HistogramKind = enum {
+            flush_account_file_size,
+            shrink_file_shrunk_by,
+            shrink_alive_accounts,
+            shrink_dead_accounts,
+            time_flush,
+            time_clean,
+            time_shrink,
+            time_purge,
+        };
+
+        const account_size_buckets = &.{
+            // 10 bytes -> 10MB (solana max account size)
+            10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000,
+        };
+        const account_count_buckets = &.{ 1, 5, 10, 50, 100, 500, 1_000, 10_000 };
+        const nanosecond_buckets = &.{
+            // 0.01ms -> 10ms
+            1_000,      10_000,      100_000,     1_000_000,   10_000_000,
+            // 50ms -> 1000ms
+            50_000_000, 100_000_000, 200_000_000, 400_000_000, 1_000_000_000,
+        };
+
+        return switch (@field(HistogramKind, field_name)) {
+            .flush_account_file_size, .shrink_file_shrunk_by => account_size_buckets,
+            .shrink_alive_accounts, .shrink_dead_accounts => account_count_buckets,
+            .time_flush, .time_clean, .time_shrink, .time_purge => nanosecond_buckets,
+        };
     }
 };
 

@@ -6,6 +6,8 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Mutex = std.Thread.Mutex;
 
+const Gauge = sig.prometheus.Gauge;
+const Registry = sig.prometheus.Registry;
 const Slot = sig.core.Slot;
 
 const MAX_SHREDS_PER_SLOT: usize = sig.ledger.shred.MAX_SHREDS_PER_SLOT;
@@ -33,16 +35,25 @@ pub const BasicShredTracker = struct {
     max_slot_seen: Slot = 0,
     /// ring buffer
     slots: [num_slots]MonitoredSlot = .{.{}} ** num_slots,
+    metrics: Metrics,
 
     const num_slots: usize = 1024;
 
+    const Metrics = struct {
+        finished_slots_through: *Gauge(u64),
+        max_slot_processed: *Gauge(u64),
+
+        pub const prefix = "shred_tracker";
+    };
+
     const Self = @This();
 
-    pub fn init(slot: ?Slot, logger: sig.trace.Logger) Self {
+    pub fn init(slot: ?Slot, logger: sig.trace.Logger, registry: *Registry(.{})) !Self {
         return .{
             .start_slot = slot,
             .current_bottom_slot = slot orelse 0,
             .logger = logger,
+            .metrics = try registry.initStruct(Metrics),
         };
     }
 
@@ -66,7 +77,10 @@ pub const BasicShredTracker = struct {
             if (!monitored_slot.is_complete) {
                 monitored_slot.is_complete = true;
                 self.logger.info().logf("skipping slot: {}", .{slot});
-                self.max_slot_processed = @max(self.max_slot_processed, slot);
+                if (slot > self.max_slot_processed) {
+                    self.max_slot_processed = slot;
+                    self.metrics.max_slot_processed.set(slot);
+                }
             }
         }
     }
@@ -82,7 +96,10 @@ pub const BasicShredTracker = struct {
         const monitored_slot = try self.observeSlot(slot);
         const new = monitored_slot.record(shred_index);
         if (new) self.logger.debug().logf("new slot: {}", .{slot});
-        self.max_slot_processed = @max(self.max_slot_processed, slot);
+        if (slot > self.max_slot_processed) {
+            self.max_slot_processed = slot;
+            self.metrics.max_slot_processed.set(slot);
+        }
     }
 
     pub fn setLastShred(self: *Self, slot: Slot, index: usize) SlotOutOfBounds!void {
@@ -127,6 +144,7 @@ pub const BasicShredTracker = struct {
                     self.logger.debug().logf("shred tracker: received all shreds up to slot {}", .{slot});
                 }
                 self.current_bottom_slot = @max(self.current_bottom_slot, slot + 1);
+                self.metrics.finished_slots_through.set(slot);
                 monitored_slot.* = .{};
             }
         }
@@ -239,7 +257,7 @@ test "trivial happy path" {
     var msr = MultiSlotReport.init(allocator);
     defer msr.deinit();
 
-    var tracker = BasicShredTracker.init(13579, .noop);
+    var tracker = try BasicShredTracker.init(13579, .noop, sig.prometheus.globalRegistry());
 
     _ = try tracker.identifyMissing(&msr);
 
@@ -257,7 +275,7 @@ test "1 registered shred is identified" {
     var msr = MultiSlotReport.init(allocator);
     defer msr.deinit();
 
-    var tracker = BasicShredTracker.init(13579, .noop);
+    var tracker = try BasicShredTracker.init(13579, .noop, sig.prometheus.globalRegistry());
     try tracker.registerShred(13579, 123);
     std.time.sleep(210 * std.time.ns_per_ms);
 
