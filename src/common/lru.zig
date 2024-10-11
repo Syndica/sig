@@ -265,6 +265,15 @@ pub fn LruCacheCustom(
             return null;
         }
 
+        pub fn putNoClobber(self: *Self, key: K, value: V) !void {
+            if (kind == .locking) self.mux.lock();
+            defer if (kind == .locking) self.mux.unlock();
+
+            if (self.hashmap.contains(key)) return error.EntryAlreadyExists;
+
+            _ = self.internalInsert(key, value);
+        }
+
         /// Removes key from cache. Returns true if found, false if not.
         pub fn remove(self: *Self, key: K) bool {
             if (kind == .locking) self.mux.lock();

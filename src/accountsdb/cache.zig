@@ -120,9 +120,9 @@ pub const AccountsCache = struct {
         new_cached_account.* = try CachedAccount.init(self.allocator, account);
         errdefer new_cached_account.deinit(self.allocator);
 
-        if (slot_lru.put(pubkey, new_cached_account) != null) {
-            return error.AlreadyExistsInCache;
-        }
+        slot_lru.putNoClobber(pubkey, new_cached_account) catch |err| switch (err) {
+            error.EntryAlreadyExists => return error.AlreadyExistsInCache,
+        };
     }
 
     /// remove slot lru, decreasing ref_counts on CachedAccounts (optionally removing)
@@ -290,25 +290,25 @@ test "AccountsCache max slots" {
     try std.testing.expect(accounts_cache.slot_lrus.count() == 2);
 }
 
-// test "AccountsCache put returns error on duplicate" {
-//     const allocator = std.testing.allocator;
-//     var random = std.rand.DefaultPrng.init(19);
-//     const rng = random.random();
+test "AccountsCache put returns error on duplicate" {
+    const allocator = std.testing.allocator;
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
 
-//     const account = try Account.random(allocator, rng, 1);
-//     defer account.deinit(allocator);
+    const account = try Account.random(allocator, rng, 1);
+    defer account.deinit(allocator);
 
-//     var accounts_cache = try AccountsCache.init(allocator, 10, 1);
-//     defer accounts_cache.deinit();
+    var accounts_cache = try AccountsCache.init(allocator, 10, 1);
+    defer accounts_cache.deinit();
 
-//     const pubkey = Pubkey.random(rng);
-//     const slot = 1;
+    const pubkey = Pubkey.random(rng);
+    const slot = 1;
 
-//     try accounts_cache.put(slot, pubkey, account);
+    try accounts_cache.put(slot, pubkey, account);
 
-//     // Trying to insert the same account again should fail
-//     try std.testing.expectEqual(error.AlreadyExistsInCache, accounts_cache.put(slot, pubkey, account));
-// }
+    // Trying to insert the same account again should fail
+    try std.testing.expectEqual(error.AlreadyExistsInCache, accounts_cache.put(slot, pubkey, account));
+}
 
 test "AccountsCache purgeSlot removes the slot and accounts" {
     const allocator = std.testing.allocator;
