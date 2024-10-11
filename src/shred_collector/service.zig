@@ -15,6 +15,7 @@ const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
+const Registry = sig.prometheus.Registry;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
@@ -39,6 +40,7 @@ pub const ShredCollectorDependencies = struct {
     allocator: Allocator,
     logger: Logger,
     random: Random,
+    registry: *Registry(.{}),
     /// This validator's keypair
     my_keypair: *const KeyPair,
     /// Shared exit indicator, used to shutdown the Shred Collector.
@@ -90,7 +92,7 @@ pub fn start(
         .turbine_socket = turbine_socket,
         .unverified_shred_sender = unverified_shred_channel,
         .shred_version = deps.my_shred_version,
-        .metrics = try ShredReceiverMetrics.init(),
+        .metrics = try deps.registry.initStruct(ShredReceiverMetrics),
         .root_slot = if (conf.start_slot) |s| s - 1 else 0,
     };
     try service_manager.spawn(
@@ -106,6 +108,7 @@ pub fn start(
         shred_collector.shred_verifier.runShredVerifier,
         .{
             deps.exit,
+            deps.registry,
             unverified_shred_channel,
             verified_shred_channel,
             deps.leader_schedule,
@@ -115,9 +118,10 @@ pub fn start(
 
     // tracker (shared state, internal to Shred Collector)
     const shred_tracker = try arena.create(BasicShredTracker);
-    shred_tracker.* = BasicShredTracker.init(
+    shred_tracker.* = try BasicShredTracker.init(
         conf.start_slot,
         deps.logger,
+        deps.registry,
     );
 
     // processor (thread)
@@ -128,6 +132,7 @@ pub fn start(
             deps.allocator,
             deps.exit,
             deps.logger,
+            deps.registry,
             verified_shred_channel,
             shred_tracker,
             deps.shred_inserter,
@@ -140,6 +145,7 @@ pub fn start(
     const repair_peer_provider = try RepairPeerProvider.init(
         deps.allocator,
         deps.random,
+        deps.registry,
         deps.gossip_table_rw,
         Pubkey.fromPublicKey(&deps.my_keypair.public_key),
         deps.my_shred_version,
@@ -148,16 +154,18 @@ pub fn start(
         deps.allocator,
         deps.logger,
         deps.random,
+        deps.registry,
         deps.my_keypair,
         repair_socket,
         deps.exit,
     );
     const repair_svc = try arena.create(RepairService);
     try service_manager.defers.deferCall(RepairService.deinit, .{repair_svc});
-    repair_svc.* = RepairService.init(
+    repair_svc.* = try RepairService.init(
         deps.allocator,
         deps.logger,
         deps.exit,
+        deps.registry,
         repair_requester,
         repair_peer_provider,
         shred_tracker,

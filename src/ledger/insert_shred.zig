@@ -68,7 +68,7 @@ pub const ShredInserter = struct {
             .db = db,
             .lock = .{},
             .max_root = Atomic(u64).init(0), // TODO read this from the database
-            .metrics = try BlockstoreInsertionMetrics.init(registry),
+            .metrics = try registry.initStruct(BlockstoreInsertionMetrics),
         };
     }
 
@@ -160,7 +160,12 @@ pub const ShredInserter = struct {
         //
         const allocator = self.allocator;
         var total_timer = try Timer.start();
-        var state = try PendingInsertShredsState.init(self.allocator, self.logger, &self.db);
+        var state = try PendingInsertShredsState.init(
+            self.allocator,
+            self.logger,
+            &self.db,
+            self.metrics,
+        );
         defer state.deinit();
         var write_batch = state.write_batch;
 
@@ -1102,14 +1107,7 @@ pub const BlockstoreInsertionMetrics = struct {
     num_code_shreds_invalid_erasure_config: *Counter, // usize
     num_code_shreds_inserted: *Counter, // usize
 
-    pub fn init(registry: *sig.prometheus.Registry(.{})) !BlockstoreInsertionMetrics {
-        var self: BlockstoreInsertionMetrics = undefined;
-        inline for (@typeInfo(BlockstoreInsertionMetrics).Struct.fields) |field| {
-            const name = "shred_inserter_" ++ field.name;
-            @field(self, field.name) = try registry.getOrCreateCounter(name);
-        }
-        return self;
-    }
+    pub const prefix = "shred_inserter";
 };
 
 //////////
@@ -1324,6 +1322,7 @@ test "merkle root metas coding" {
     var state = try ShredInserterTestState.initWithLogger(std.testing.allocator, "handle chaining basic", .noop);
     defer state.deinit();
     const allocator = state.allocator();
+    const metrics = try sig.prometheus.globalRegistry().initStruct(BlockstoreInsertionMetrics);
 
     const slot = 1;
     const start_index = 0;
@@ -1338,7 +1337,12 @@ test "merkle root metas coding" {
         var write_batch = try state.db.initWriteBatch();
         defer write_batch.deinit();
         const this_shred = shreds[0];
-        var insert_state = try PendingInsertShredsState.init(state.allocator(), .noop, &state.db);
+        var insert_state = try PendingInsertShredsState.init(
+            state.allocator(),
+            .noop,
+            &state.db,
+            metrics,
+        );
         defer insert_state.deinit();
         const merkle_root_metas = &insert_state.merkle_root_metas;
 
@@ -1369,7 +1373,12 @@ test "merkle root metas coding" {
         try state.db.commit(write_batch);
     }
 
-    var insert_state = try PendingInsertShredsState.init(state.allocator(), .noop, &state.db);
+    var insert_state = try PendingInsertShredsState.init(
+        state.allocator(),
+        .noop,
+        &state.db,
+        metrics,
+    );
     defer insert_state.deinit();
 
     { // second shred (same index as first, should conflict with merkle root)

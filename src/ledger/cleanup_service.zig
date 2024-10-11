@@ -385,7 +385,7 @@ test "purgeSlots" {
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
-        .scan_and_fix_roots_metrics = try ledger.writer.ScanAndFixRootsMetrics.init(registry),
+        .scan_and_fix_roots_metrics = try registry.initStruct(ledger.writer.ScanAndFixRootsMetrics),
     };
 
     // write some roots

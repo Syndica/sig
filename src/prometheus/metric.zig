@@ -1,9 +1,12 @@
 const std = @import("std");
+const prometheus = @import("lib.zig");
+
 const fmt = std.fmt;
 const mem = std.mem;
 const testing = std.testing;
 
-const HistogramSnapshot = @import("histogram.zig").HistogramSnapshot;
+const HistogramSnapshot = prometheus.histogram.HistogramSnapshot;
+const VariantCounts = prometheus.variant_counter.VariantCounts;
 
 pub const Metric = struct {
     pub const Error = error{OutOfMemory} || std.posix.WriteError || std.http.Server.Response.WriteError;
@@ -15,6 +18,7 @@ pub const Metric = struct {
         gauge: f64,
         gauge_int: u64,
         histogram: HistogramSnapshot,
+        variant_counter: VariantCounts,
 
         pub fn deinit(self: Self, allocator: mem.Allocator) void {
             switch (self) {
@@ -38,6 +42,14 @@ pub const Metric = struct {
             },
             .gauge => |v| {
                 return try writer.print("{s} {d:.6}\n", .{ name, v });
+            },
+            .variant_counter => |counts| {
+                for (counts.counts, counts.names) |counter, label| {
+                    try writer.print(
+                        "{s}_count{{variant=\"{s}\"}} {d}\n",
+                        .{ name, label, counter.load(.monotonic) },
+                    );
+                }
             },
             .histogram => |v| {
                 if (v.buckets.len <= 0) return;
@@ -83,6 +95,14 @@ pub const Metric = struct {
             },
         }
     }
+};
+
+pub const MetricType = enum {
+    counter,
+    variant_counter,
+    gauge,
+    gauge_fn,
+    histogram,
 };
 
 /// Converts a float into an anonymous type that can be formatted properly for prometheus.

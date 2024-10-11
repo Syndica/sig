@@ -10,7 +10,6 @@ const AutoHashMap = std.AutoHashMap;
 // sig common
 const Counter = sig.prometheus.Counter;
 const Entry = sig.core.Entry;
-const GetMetricError = sig.prometheus.GetMetricError;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
 const Logger = sig.trace.Logger;
@@ -72,8 +71,8 @@ pub const BlockstoreReader = struct {
             .allocator = allocator,
             .logger = logger,
             .db = db,
-            .rpc_api_metrics = try BlockstoreRpcApiMetrics.init(registry),
-            .metrics = try BlockstoreReaderMetrics.init(registry),
+            .rpc_api_metrics = try registry.initStruct(BlockstoreRpcApiMetrics),
+            .metrics = try registry.initStruct(BlockstoreReaderMetrics),
             .lowest_cleanup_slot = lowest_cleanup_slot,
             .max_root = max_root,
         };
@@ -774,7 +773,7 @@ pub const BlockstoreReader = struct {
         } else .{ highest_slot, AutoHashMap(Signature, void).init(self.allocator) };
         defer before_excluded_signatures.deinit();
         self.metrics.get_before_slot_us
-            .observe(@floatFromInt(get_before_slot_timer.read().asMicros()));
+            .observe(get_before_slot_timer.read().asMicros());
 
         // Generate a HashSet of signatures that should be excluded from the results based on
         // `until` signature
@@ -801,7 +800,7 @@ pub const BlockstoreReader = struct {
         };
         defer until_excluded_signatures.deinit();
         self.metrics.get_until_slot_us
-            .observe(@floatFromInt(get_until_slot_timer.read().asMicros()));
+            .observe(get_until_slot_timer.read().asMicros());
 
         // Fetch the list of signatures that affect the given address
         var address_signatures = ArrayList(struct { Slot, Signature }).init(self.allocator);
@@ -819,7 +818,7 @@ pub const BlockstoreReader = struct {
             }
         }
         self.metrics.get_initial_slot_us
-            .observe(@floatFromInt(get_initial_slot_timer.read().asMicros()));
+            .observe(get_initial_slot_timer.read().asMicros());
 
         var address_signatures_iter_timer = try Timer.start();
         // Regardless of whether a `before` signature is provided, the latest relevant
@@ -848,7 +847,7 @@ pub const BlockstoreReader = struct {
             }
         }
         self.metrics.address_signatures_iter_us
-            .observe(@floatFromInt(address_signatures_iter_timer.read().asMicros()));
+            .observe(address_signatures_iter_timer.read().asMicros());
 
         address_signatures.items.len = @min(address_signatures.items.len, limit);
 
@@ -877,7 +876,7 @@ pub const BlockstoreReader = struct {
             });
         }
         self.metrics.get_status_info_us
-            .observe(@floatFromInt(get_status_info_timer.read().asMicros()));
+            .observe(get_status_info_timer.read().asMicros());
 
         return .{
             .infos = infos,
@@ -1454,22 +1453,8 @@ const BlockstoreReaderMetrics = struct {
     get_status_info_us: *Histogram,
     get_until_slot_us: *Histogram,
 
-    pub fn init(registry: *Registry(.{})) GetMetricError!BlockstoreReaderMetrics {
-        var self: BlockstoreReaderMetrics = undefined;
-        inline for (@typeInfo(BlockstoreReaderMetrics).Struct.fields) |field| {
-            const name = "blockstore_reader_" ++ field.name;
-            @field(self, field.name) = try registry.getOrCreateHistogram(name, &buckets);
-        }
-        return self;
-    }
-
-    const buckets: [11]f64 = blk: {
-        var bs: [11]f64 = undefined;
-        for (0..11) |i| {
-            bs[i] = std.math.pow(f64, 5.0, @as(f64, @floatFromInt(i)) - 1.0);
-        }
-        break :blk bs;
-    };
+    pub const prefix = "blockstore_reader";
+    pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(5, -1, 10);
 };
 
 const BlockstoreRpcApiMetrics = struct {
@@ -1484,14 +1469,7 @@ const BlockstoreRpcApiMetrics = struct {
     num_get_rooted_block_with_entries: *Counter,
     num_get_transaction_status: *Counter,
 
-    pub fn init(registry: *Registry(.{})) GetMetricError!BlockstoreRpcApiMetrics {
-        var self: BlockstoreRpcApiMetrics = undefined;
-        inline for (@typeInfo(BlockstoreRpcApiMetrics).Struct.fields) |field| {
-            const name = "blockstore_rpc_api_" ++ field.name;
-            @field(self, field.name) = try registry.getOrCreateCounter(name);
-        }
-        return self;
-    }
+    pub const prefix = "blockstore_rpc_api";
 };
 
 pub const AncestorIterator = struct {
