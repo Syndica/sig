@@ -8,6 +8,7 @@ const Duration = sig.time.Duration;
 const RandomState = sig.utils.ahash.RandomState;
 const AHasher = sig.utils.ahash.AHasher;
 const ChaChaRng = sig.rand.ChaChaRng(20);
+const uintLessThanRust = sig.rand.weighted_shuffle.uintLessThanRust;
 
 /// Deduper from agave.
 pub fn Deduper(comptime K: usize, comptime T: type) type {
@@ -141,16 +142,15 @@ fn testDedupSeeded(
 
     var dup_count: usize = 0;
     for (0..num_packets) |_| {
+        const size = uintLessThanRust(usize, rng, packet_data_size);
         var data = [_]u8{0} ** packet_data_size;
-        const size = rng.uintLessThan(usize, packet_data_size);
-        for (0..size) |i| data[i] = rng.uintLessThan(u8, 255);
+        rng.bytes(data[0..size]);
         if (deduper.dedup(&data[0..size])) dup_count += 1;
         try std.testing.expect(deduper.dedup(&data[0..size]));
     }
 
     try std.testing.expectEqual(num_dups, num_dups);
-    _ = popcount;
-    // try std.testing.expectEqual(popcount, deduper.popcount.load(.unordered)); // TODO: Find why this fails
+    try std.testing.expectEqual(popcount, deduper.popcount.load(.unordered)); // TODO: Find why this fails
     try std.testing.expect(deduper.falsePositiveRate() < false_positive_rate);
     try std.testing.expect(!deduper.maybeReset(rng, false_positive_rate, Duration.fromMillis(0)));
 }
