@@ -18,12 +18,8 @@ pub fn Entry(comptime Fields: type, comptime scope: ?[]const u8) type {
 
         const Self = @This();
 
-        pub inline fn init(logger: ScopedLogger(scope), level: Level) Self {
-            return .{ .logger = logger, .level = level, .fields = .{} };
-        }
-
         /// Add a field to the log message.
-        pub inline fn field(
+        pub fn field(
             self: Self,
             comptime name: [:0]const u8,
             value: anytype,
@@ -46,12 +42,12 @@ pub fn Entry(comptime Fields: type, comptime scope: ?[]const u8) type {
         }
 
         /// Log the message using the logger, including all fields that are saved in the entry.
-        pub inline fn log(self: Self, comptime message: []const u8) void {
+        pub fn log(self: Self, comptime message: []const u8) void {
             self.logger.private_log(self.level, self.fields, message, .{});
         }
 
         /// Log the message using the logger, including all fields that are saved in the entry.
-        pub inline fn logf(self: Self, comptime fmt: []const u8, args: anytype) void {
+        pub fn logf(self: Self, comptime fmt: []const u8, args: anytype) void {
             self.logger.private_log(self.level, self.fields, fmt, args);
         }
 

@@ -81,7 +81,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
                 else
                     .noop,
             };
-            return NewEntry(scope).init(logger, level);
+            return .{ .logger = logger, .level = level, .fields = .{} };
         }
 
         pub fn log(self: Self, level: Level, comptime message: []const u8) void {
