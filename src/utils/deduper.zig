@@ -42,6 +42,7 @@ pub fn Deduper(comptime K: usize, comptime T: type) type {
             self.bits.deinit();
         }
 
+        /// Resets the deduper if the false positive rate is too high or the reset cycle has elapsed.
         pub fn maybeReset(
             self: *Deduper(K, T),
             rand: std.rand.Random,
@@ -62,6 +63,7 @@ pub fn Deduper(comptime K: usize, comptime T: type) type {
             return saturated;
         }
 
+        /// Returns true if the data is likely a duplicate.
         pub fn dedup(self: *Deduper(K, T), data: *const T) bool {
             var duplicate = true;
             for (0..K) |i| {
@@ -79,6 +81,7 @@ pub fn Deduper(comptime K: usize, comptime T: type) type {
             return duplicate;
         }
 
+        /// False positive rate computed from the current popcount and num_bits.
         fn falsePositiveRate(self: *Deduper(K, T)) f64 {
             const popcount = self.popcount.load(.unordered);
             const numerator: f64 = @floatFromInt(@min(popcount, self.num_bits));
@@ -89,10 +92,15 @@ pub fn Deduper(comptime K: usize, comptime T: type) type {
     };
 }
 
+/// Test method from agave.
+/// Calculate the capacity of the deduper before exceeding the false positive rate.
 fn testGetCapacity(comptime K: usize, num_bits: u64, false_positive_rate: f64) u64 {
     return @intFromFloat((@as(f64, @floatFromInt(num_bits)) * std.math.pow(f64, false_positive_rate, (1 / @as(f64, @floatFromInt(K))))));
 }
 
+/// Test method from agave.
+/// Checks that the deduper with a specific number of bits and false positive rate
+/// has the correct capacity.
 fn testDedupCapacity(num_bits: u64, false_positive_rate: f64, capacity: u64) !void {
     var xoshiro = std.rand.DefaultPrng.init(0);
     const rng = xoshiro.random();
@@ -121,6 +129,9 @@ fn testDedupCapacity(num_bits: u64, false_positive_rate: f64, capacity: u64) !vo
     ));
 }
 
+/// Test method from agave.
+/// Checks that the deduper produces the expected number of duplicates and popcount
+/// when seeded with a specific seed.
 fn testDedupSeeded(
     seed: [32]u8,
     num_bits: u64,
