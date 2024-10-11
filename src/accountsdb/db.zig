@@ -2241,7 +2241,8 @@ pub const AccountsDB = struct {
         defer head_ref_lg.unlock();
 
         // NOTE: this will always be a safe unwrap since both bounds are null
-        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
+        const ref = self.account_index.getRefFromHeadUnsafe(&head_ref);
+        const max_ref = self.slotListMaxWithinBoundsNew(ref, null, null).?;
         const account = try self.getAccountFromRef(max_ref);
 
         return account;
@@ -2298,23 +2299,25 @@ pub const AccountsDB = struct {
         defer self.allocator.free(bin_counts);
         @memset(bin_counts, 0);
 
-        // TODO: this is broken
-        const references = try ArrayList(AccountRef).initCapacity(
-            self.account_index.underlying_reference_allocator, // TODO:
-            n_accounts,
+        const ref_buf = try self.account_index.recycle_fba.allocator().alloc(AccountRef, n_accounts);
+        var references = std.ArrayListUnmanaged(AccountRef).fromOwnedSlice(ref_buf);
+        references.items.len = 0;
+
+        try indexAndValidateAccountFile(
+            account_file,
+            self.account_index.pubkey_bin_calculator,
+            bin_counts,
+            &references,
+            // NOTE: this method should only be called in tests/benchmarks so we dont need
+            // to support geyser
+            null,
         );
 
-        // try indexAndValidateAccountFile(
-        //     account_file,
-        //     self.account_index.pubkey_bin_calculator,
-        //     bin_counts,
-        //     &references,
-        //     // NOTE: this method should only be called in tests/benchmarks so we dont need
-        //     // to support geyser
-        //     null,
-        // );
-
-        try self.account_index.putReferenceBlock(account_file.slot, references);
+        {
+            const reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
+            defer reference_memory_lg.unlock();
+            try reference_memory.putNoClobber(account_file.slot, references.items);
+        }
 
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
@@ -2352,8 +2355,8 @@ pub const AccountsDB = struct {
 
         // compute how many account_references for each pubkey
         var accounts_dead_count: u64 = 0;
-        for (references.items) |*ref| {
-            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
+        for (references.items, 0..) |*ref, index| {
+            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(ref, index);
             if (!was_inserted) {
                 accounts_dead_count += 1;
                 self.logger.warn().logf(
@@ -4313,34 +4316,34 @@ pub const BenchmarkAccountsDB = struct {
     };
 
     pub const args = [_]BenchArgs{
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .ram,
-            .index = .ram,
-            .name = "100k accounts (1_slot - ram index - ram accounts)",
-        },
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .ram,
-            .index = .disk,
-            .name = "100k accounts (1_slot - disk index - ram accounts)",
-        },
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .ram,
-            .name = "100k accounts (1_slot - ram index - disk accounts)",
-        },
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .disk,
-            .name = "100k accounts (1_slot - disk index - disk accounts)",
-        },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .ram,
+        //     .index = .ram,
+        //     .name = "100k accounts (1_slot - ram index - ram accounts)",
+        // },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .ram,
+        //     .index = .disk,
+        //     .name = "100k accounts (1_slot - disk index - ram accounts)",
+        // },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .ram,
+        //     .name = "100k accounts (1_slot - ram index - disk accounts)",
+        // },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .disk,
+        //     .name = "100k accounts (1_slot - disk index - disk accounts)",
+        // },
 
         // // test accounts in ram
         // BenchArgs{
@@ -4448,6 +4451,8 @@ pub const BenchmarkAccountsDB = struct {
             .use_disk_index = bench_args.index == .disk,
         }, null);
         defer accounts_db.deinit();
+        // preallocate the index
+        try accounts_db.account_index.recycle_fba.ensureCapacity(total_n_accounts * @sizeOf(AccountRef));
 
         var prng = std.Random.DefaultPrng.init(19);
         const random = prng.random();
