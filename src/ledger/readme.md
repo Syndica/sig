@@ -68,7 +68,7 @@ graph TD
 
 ![Shred Collector Component](./imgs/shred_collector_component.png)
 
-- The **Shred Collector** utilizes:
+- The **ShredCollector** utilizes:
   - The **ShredInserter** to insert shreds received from the network via Gossip.
 
 - The **ShredInserter** relies on:
@@ -78,23 +78,56 @@ graph TD
   - The **BlockstoreDB** for performing cleanup operations, also backed by RocksDB.
   - The **BlockstoreReader** for reading data during cleanup.
 
-  
-<!-- TODO Add information on how to start the shred collector -->
+The ShredCollector can be run standalone without running the full node.
+
+```
+zig-out/bin/sig shred-collector --leader-schedule <path_to_leader_schedule> --network <network> --test-repair-for-slot <slot>
+```
+
+Note: Running standalone requires manually needing to set to slot to repeatedly send repair requests for shreds from, via the `test-repair-for-slot` flag and 
+provide the leader schedule which is normally derived from the AccountDB if the full node is ran.
+
+Note: The leader schedule can be retrieved via the `getLeaderShedule` RPC call and is expected 
+to be in the format generated from calling `./target/debug/solana leader-schedule --url <rpc-endpoint>` in Agave, ie:
+
+```
+slot pubkey
+slot pubkey
+slot pubkey
+```
 
 ### ShredInserter
 
+The **ShredInserter** is the component of the ledger used to insert shreds.
+
+It is implemented in [`insert_shred.zig`](./insert_shred.zig) and the main function 
+that performs the shred insertion logic and updates corresponding metadata is `insertShreds`.
+
+The `insertShreds` validates the shreds, recover any lost shreds and saves them together.
+
 ### Shredder
 
-## Writer and Reader
+The shredder is the component of the ledger that can be used to convert all shreds to recreate the original buffer. 
+For example if there is a need to reconstruct the Entries, as is done in the `getSlotEntriesInBlock` in the [`reader.zig`](./reader.zig).
 
-<!-- Expand more on the writer and reader -->
+## Reader And Writer
 
-<!-- ## Transaction Status ?? Dive deep into this and see what can be explained here -->
+The Reader and Writer serve as wrappers around the ledger's backing database, providing a simplified interface for 
+reading and writing data. 
+
+This abstraction enables interaction with the database without the need to directly engage with the underlying storage API. 
+Additionally, it facilitates the handling of domain-specific data, allowing for operations that extend beyond the standard data structures defined by the column families.
+
+For example, the cleanup service utilizes the `reader.lowestSlot()` method to determine the slot up to which data should be cleaned in the ledger.
+
+The Reader is implemented in [`reader.zig`](./reader.zig), while the Writer is implemented in [`writer.zig`](./writer.zig).
+
+The tests in these two files is also a good place to get a better understanding of the API exposed by the reader and write.
 
 ## Putting it Together
 
-<!-- 
+The different components of the ledger: Backing database, ShredInserter, Shredder, Reader, Writer etc work together to manage how data is stored, 
+and retrieved.
 
-Provide an overview of how data flows into and out of the ledger during the normal operation of Sig, possibly touching on other components like gossip, turbine, etc., and how they interface with the ledger. 
-
--->
+The BlockstoreDB, acts as the ledger’s storage, while the Reader and Writer simplify interactions with the database, making it easy to store and retrieve 
+data without worrying about the low-level details of the storage backend.
