@@ -14,7 +14,7 @@ pub const AccountsCache = struct {
     /// Atomically refcounted account
     pub const CachedAccount = struct {
         account: Account,
-        // this account has since been mutated, and will not progress to newer slots
+        /// represents whether this account has been mutated, and shouldn't progress to newer slots
         // TODO: when we start mutating accounts, make sure to set this field
         is_dirty: std.atomic.Value(bool) = .{ .raw = false },
         ref_count: std.atomic.Value(usize),
@@ -50,6 +50,19 @@ pub const AccountsCache = struct {
             _ = self.ref_count.fetchAdd(1, .acq_rel);
             return self;
         }
+
+        pub fn getMeta(self: *CachedAccount) CachedAccountMeta {
+            return .{
+                .is_dirty = self.is_dirty.load(.acquire),
+                .ref_count = self.ref_count.load(.acquire),
+            };
+        }
+    };
+
+    /// A copy of a CachedAccout's fields, without the account
+    pub const CachedAccountMeta = struct {
+        is_dirty: bool,
+        ref_count: usize,
     };
 
     pub const LRU = LruCacheCustom(
@@ -83,9 +96,22 @@ pub const AccountsCache = struct {
         };
     }
 
-    pub fn get(self: *const Self, slot: Slot, pubkey: Pubkey) ?CachedAccount {
+    /// user is expected to release the returned CachedAccount
+    pub fn get(self: *const Self, slot: Slot, pubkey: Pubkey) ?*CachedAccount {
         const slot_lru = self.slot_lrus.getPtr(slot) orelse return null;
-        return (slot_lru.get(pubkey) orelse return null).*;
+        return (slot_lru.get(pubkey) orelse return null).copyRef();
+    }
+
+    /// Returns a copy of the CachedAccount's meta. Likely shouldn't be used outside of tests.
+    pub fn getMeta(self: *const Self, slot: Slot, pubkey: Pubkey) ?CachedAccountMeta {
+        const slot_lru = self.slot_lrus.getPtr(slot) orelse return null;
+        return (slot_lru.get(pubkey) orelse return null).getMeta();
+    }
+
+    /// does not influence underlying LRU's cache ordering
+    pub fn contains(self: *const Self, slot: Slot, pubkey: Pubkey) bool {
+        const slot_lru = self.slot_lrus.getPtr(slot) orelse return false;
+        return slot_lru.contains(pubkey);
     }
 
     /// should only be called iff account is not already present
@@ -184,10 +210,10 @@ pub const AccountsCache = struct {
 
 test "CachedAccount ref_count" {
     const allocator = std.testing.allocator;
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
-    const account = try Account.random(allocator, rng, 1);
+    const account = try Account.random(allocator, random, 1);
     defer account.deinit(allocator);
 
     const cached_account = try allocator.create(AccountsCache.CachedAccount);
@@ -207,101 +233,107 @@ test "CachedAccount ref_count" {
 
 test "AccountsCache put and get account" {
     const allocator = std.testing.allocator;
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
     var accounts_cache = try AccountsCache.init(allocator, 10, 1);
     defer accounts_cache.deinit();
 
-    const account = try Account.random(allocator, rng, 1);
+    const account = try Account.random(allocator, random, 1);
     defer account.deinit(allocator);
 
-    const pubkey = Pubkey.random(rng);
+    const pubkey = Pubkey.random(random);
     const slot = 1;
 
     try accounts_cache.put(slot, pubkey, account);
 
     const cached_account = accounts_cache.get(slot, pubkey);
+    defer if (cached_account) |cached| cached.releaseOrDestroy(allocator);
+
     try std.testing.expect(cached_account != null);
 }
 
 test "AccountsCache returns null when account is missing" {
     const allocator = std.testing.allocator;
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
     var accounts_cache = try AccountsCache.init(allocator, 10, 1);
     defer accounts_cache.deinit();
 
-    const pubkey = Pubkey.random(rng);
+    const pubkey = Pubkey.random(random);
     const slot = 1;
 
     const result = accounts_cache.get(slot, pubkey);
+    defer if (result) |cached| cached.releaseOrDestroy(allocator);
+
     try std.testing.expect(result == null);
 }
 
 test "AccountsCache put & copySlot ref counting" {
     const allocator = std.testing.allocator;
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
     var accounts_cache = try AccountsCache.init(allocator, 10, 2);
     defer accounts_cache.deinit();
 
-    const account = try Account.random(allocator, rng, 1);
+    const account = try Account.random(allocator, random, 1);
     defer account.deinit(allocator);
 
-    const pubkey = Pubkey.random(rng);
+    const pubkey = Pubkey.random(random);
     const old_slot = 1;
     const new_slot = 2;
 
     try accounts_cache.put(old_slot, pubkey, account);
 
-    try std.testing.expectEqual(accounts_cache.get(old_slot, pubkey).?.ref_count.load(.acquire), 1);
+    try std.testing.expectEqual(accounts_cache.getMeta(old_slot, pubkey).?.ref_count, 1);
 
     try accounts_cache.shiftLRUForward(old_slot, new_slot);
 
-    try std.testing.expectEqual(accounts_cache.get(old_slot, pubkey).?.ref_count.load(.acquire), 2);
+    try std.testing.expectEqual(accounts_cache.getMeta(old_slot, pubkey).?.ref_count, 2);
 
     const cached_account = accounts_cache.get(new_slot, pubkey);
+    defer if (cached_account) |cached| cached.releaseOrDestroy(allocator);
+
     try std.testing.expect(cached_account != null);
 }
 
 test "AccountsCache max slots" {
     const allocator = std.testing.allocator;
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
     var accounts_cache = try AccountsCache.init(allocator, 10, 2);
     defer accounts_cache.deinit();
 
-    const account = try Account.random(allocator, rng, 1);
+    const account = try Account.random(allocator, random, 1);
     defer account.deinit(allocator);
 
-    const pubkey = Pubkey.random(rng);
+    const pubkey = Pubkey.random(random);
 
     try accounts_cache.put(1, pubkey, account);
-    try std.testing.expect(accounts_cache.get(1, pubkey) != null);
+    try std.testing.expect(accounts_cache.contains(1, pubkey));
     try accounts_cache.shiftLRUForward(1, 2);
-    try std.testing.expect(accounts_cache.get(1, pubkey) != null);
+    try std.testing.expect(accounts_cache.contains(1, pubkey));
     // create 3rd slot, max slots = 2, 1st slot evicted
     try accounts_cache.shiftLRUForward(2, 3);
-    try std.testing.expect(accounts_cache.get(1, pubkey) == null);
+    try std.testing.expect(!accounts_cache.contains(1, pubkey));
     try std.testing.expect(accounts_cache.slot_lrus.count() == 2);
 }
 
 test "AccountsCache put returns error on duplicate" {
     const allocator = std.testing.allocator;
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
-    const account = try Account.random(allocator, rng, 1);
+    const account = try Account.random(allocator, random, 1);
     defer account.deinit(allocator);
 
     var accounts_cache = try AccountsCache.init(allocator, 10, 1);
     defer accounts_cache.deinit();
 
-    const pubkey = Pubkey.random(rng);
+    const pubkey = Pubkey.random(random);
     const slot = 1;
 
     try accounts_cache.put(slot, pubkey, account);
@@ -312,20 +344,22 @@ test "AccountsCache put returns error on duplicate" {
 
 test "AccountsCache purgeSlot removes the slot and accounts" {
     const allocator = std.testing.allocator;
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
     var accounts_cache = try AccountsCache.init(allocator, 10, 1);
     defer accounts_cache.deinit();
 
-    const account = try Account.random(allocator, rng, 1);
+    const account = try Account.random(allocator, random, 1);
     defer account.deinit(allocator);
 
-    const pubkey = Pubkey.random(rng);
+    const pubkey = Pubkey.random(random);
 
     const slot = 1;
     try accounts_cache.put(slot, pubkey, account);
     accounts_cache.purgeSlot(slot);
     const result = accounts_cache.get(slot, pubkey);
+    defer if (result) |cached| cached.releaseOrDestroy(allocator);
+
     try std.testing.expect(result == null);
 }
