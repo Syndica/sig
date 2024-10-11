@@ -150,6 +150,7 @@ pub fn SwissMapUnmanaged(
             return self;
         }
 
+        // TODO: better method location
         pub fn setFromMemory(self: *Self, memory: []u8) void {
             // from ensureTotalCapacity:
             // memory.len === n_groups * (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State))

@@ -14,13 +14,13 @@ const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 
 const RefIndex = struct {
-    slot: Slot = 0,
-    index: u64 = 0,
+    slot: Slot,
+    index: u64,
 };
 
 pub const AccountReferenceHead = struct {
     ref_ptr: *AccountRef, // TODO: remove
-    ref_index: RefIndex = .{},
+    ref_index: RefIndex = .{ .slot = 0, .index = 0 }, // TODO: make mandatory
 
     const Self = @This();
 
@@ -116,12 +116,12 @@ pub const AccountIndex = struct {
     bins: []RwMux(RefMap),
     pubkey_bin_calculator: PubkeyBinCalculator,
     disk_allocator_ptr: ?*DiskMemoryAllocator = null,
-    const Self = @This();
 
-    pub const ReferenceMemory = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
+    pub const ReferenceMemory = std.AutoHashMap(Slot, []AccountRef);
     pub const RefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
-
     pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
+
+    const Self = @This();
 
     pub fn init(
         /// used to allocate the hashmap data
@@ -164,7 +164,11 @@ pub const AccountIndex = struct {
 
         const T = sig.utils.allocators.RecycleFBA(.{});
         const recycle_fba = try allocator.create(T);
-        recycle_fba.* = try T.init(underlying_reference_allocator, max_number_of_references);
+        recycle_fba.* = try T.initNew(
+            allocator,
+            underlying_reference_allocator,
+            max_number_of_references,
+        );
 
         return Self{
             .allocator = allocator,
@@ -192,7 +196,9 @@ pub const AccountIndex = struct {
             if (free_memory) {
                 var iter = reference_memory.iterator();
                 while (iter.next()) |entry| {
-                    entry.value_ptr.deinit();
+                    _ = entry;
+                    // TODO: fix
+                    // self.recycle_fba.allocator().free(entry.value_ptr.*);
                 }
             }
             reference_memory.deinit();
@@ -211,10 +217,18 @@ pub const AccountIndex = struct {
             defer ref_memory_lg.unlock();
 
             const ref_list = ref_memory.get(next_ref_index.slot) orelse return null;
-            return &ref_list.items[next_ref_index.index];
+            return &ref_list[next_ref_index.index];
         } else {
             return null;
         }
+    }
+
+    pub fn getRefFromHeadUnsafe(self: *Self, head: *const AccountReferenceHead) *AccountRef {
+        const index = head.ref_index;
+        // VERY UNSAFE
+        const ref_memory = &self.reference_memory.private.v;
+        const slot_ref_list = ref_memory.get(index.slot) orelse unreachable;
+        return &slot_ref_list[index.index];
     }
 
     pub fn ensureTotalCapacity(self: *Self, size: u32) !void {
@@ -229,7 +243,7 @@ pub const AccountIndex = struct {
     pub fn putReferenceBlock(self: *Self, slot: Slot, references: std.ArrayList(AccountRef)) !void {
         const reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
         defer reference_memory_lg.unlock();
-        try reference_memory.putNoClobber(slot, references);
+        try reference_memory.putNoClobber(slot, references.items);
     }
 
     pub fn freeReferenceBlock(self: *Self, slot: Slot) error{MemoryNotFound}!void {
@@ -237,7 +251,7 @@ pub const AccountIndex = struct {
         defer reference_memory_lg.unlock();
 
         const removed_kv = reference_memory.fetchRemove(slot) orelse return error.MemoryNotFound;
-        removed_kv.value.deinit();
+        self.recycle_fba.allocator().free(removed_kv.value);
     }
 
     /// Get a read-safe account reference head, and its associated lock guard.
@@ -320,6 +334,7 @@ pub const AccountIndex = struct {
     /// adds the reference to the index if there is not a duplicate (ie, the same slot).
     /// returns if the reference was inserted.
     pub fn indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(self: *Self, account_ref: *AccountRef, index: u64) bool {
+        // UNSAFE: only use if you know what you are doing
         const bin = &self.getBinFromPubkey(&account_ref.pubkey).private.v;
 
         const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey);
@@ -331,14 +346,15 @@ pub const AccountIndex = struct {
 
         // traverse until you find the end
         const head_ref = gop.value_ptr.*;
-        var curr = head_ref.ref_ptr;
+        var curr = self.getRefFromHeadUnsafe(&head_ref);
         while (true) {
             if (curr.slot == account_ref.slot) {
                 // found a DUPLICATE => dont do the insertion
                 return false;
             }
 
-            const next_ptr = curr.next_ptr orelse {
+            // const next_ptr = curr.next_ptr orelse {
+            const next_ptr = self.getNextRef(curr) orelse {
                 // end of the list => INSERT it here
                 curr.next_ptr = account_ref; // TODO: remove
                 curr.next_ref_index = .{ .slot = account_ref.slot, .index = index };

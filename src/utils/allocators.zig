@@ -21,6 +21,19 @@ pub fn RecycleFBA(config: struct {
         const Record = struct { is_free: bool, buf: [*]u8, len: u64 };
         const Self = @This();
 
+        // TODO: fix
+        pub fn initNew(a: std.mem.Allocator, backing_allocator: std.mem.Allocator, n_bytes: u64) !Self {
+            const buf = try backing_allocator.alloc(u8, n_bytes);
+            const fba_allocator = std.heap.FixedBufferAllocator.init(buf);
+            const records = std.ArrayList(Record).init(a);
+
+            return .{
+                .backing_allocator = backing_allocator,
+                .fba_allocator = fba_allocator,
+                .records = records,
+            };
+        }
+
         pub fn init(backing_allocator: std.mem.Allocator, n_bytes: u64) !Self {
             const buf = try backing_allocator.alloc(u8, n_bytes);
             const fba_allocator = std.heap.FixedBufferAllocator.init(buf);
@@ -31,21 +44,6 @@ pub fn RecycleFBA(config: struct {
                 .fba_allocator = fba_allocator,
                 .records = records,
             };
-        }
-
-        pub fn ensureCapacity(self: *Self, n: u64) !void {
-            const current_buf = self.fba_allocator.buffer;
-            if (current_buf.len >= n) return;
-
-            if (self.backing_allocator.resize(current_buf, n)) {
-                const current_usage = self.fba_allocator.end_index;
-                if (current_usage != 0) return error.ResizeUsedAllocatorNotSupported;
-
-                // NOTE: this can be expensive on memory (if two large bufs)
-                try self.backing_allocator.alloc(u8, n);
-                self.fba_allocator.buffer = self.backing_allocator.buffer;
-                self.backing_allocator.free(current_buf);
-            }
         }
 
         pub fn deinit(self: *Self) void {
@@ -72,7 +70,10 @@ pub fn RecycleFBA(config: struct {
             defer if (config.thread_safe) self.mux.unlock();
 
             if (n > self.fba_allocator.buffer.len) {
-                @panic("RecycleFBA.alloc: requested size too large, make the buffer larger");
+                std.debug.panic(
+                    "RecycleFBA.alloc: requested size {d} is larger than buffer size {d}",
+                    .{ n, self.fba_allocator.buffer.len },
+                );
             }
 
             // check for a buf to recycle
@@ -135,6 +136,25 @@ pub fn RecycleFBA(config: struct {
             @panic("RecycleFBA.free: could not find buf to free");
         }
 
+        /// frees the unused space of a buf.
+        /// this is useful when a buf is initially overallocated and then resized.
+        pub fn freeUnusedSpace(self: *Self, allocated_and_used_buf: []u8) void {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+
+            for (self.records.items) |*record| {
+                if (record.buf == allocated_and_used_buf.ptr) {
+                    const unused_len = record.len - allocated_and_used_buf.len;
+                    if (unused_len > 0) {
+                        const unused_buf_ptr = allocated_and_used_buf.ptr + allocated_and_used_buf.len + 1;
+                        self.records.append(.{ .is_free = true, .buf = unused_buf_ptr, .len = unused_len }) catch {
+                            @panic("RecycleFBA.freeUnusedSpace: unable to append to records");
+                        };
+                    }
+                }
+            }
+        }
+
         fn resize(
             ctx: *anyopaque,
             buf: []u8,
@@ -187,7 +207,7 @@ pub fn RecycleFBA(config: struct {
 
         /// collapses adjacent free records into a single record
         pub fn tryCollapse(self: *Self) void {
-            var new_records = std.ArrayList(Record).init(self.backing_allocator);
+            var new_records = std.ArrayList(Record).init(self.records.allocator);
             var last_was_free = false;
 
             for (self.records.items) |record| {
@@ -210,6 +230,21 @@ pub fn RecycleFBA(config: struct {
 
             self.records.deinit();
             self.records = new_records;
+        }
+
+        pub fn ensureCapacity(self: *Self, n: u64) !void {
+            const current_buf = self.fba_allocator.buffer;
+            if (current_buf.len >= n) return;
+
+            if (!self.backing_allocator.resize(current_buf, n)) {
+                const current_usage = self.fba_allocator.end_index;
+                if (current_usage != 0) return error.ResizeUsedAllocatorNotSupported;
+
+                // NOTE: this can be expensive on memory (if two large bufs)
+                const new_buf = try self.backing_allocator.alloc(u8, n);
+                self.fba_allocator.buffer = new_buf;
+                self.backing_allocator.free(current_buf);
+            }
         }
     };
 }
@@ -454,6 +489,25 @@ pub const failing = struct {
         };
     }
 };
+
+test "recycle allocator: freeUnused" {
+    const backing_allocator = std.testing.allocator;
+    var allocator = try RecycleFBA(.{}).init(backing_allocator, 200);
+    defer allocator.deinit();
+
+    // alloc a slice of 100 bytes
+    const bytes = try allocator.allocator().alloc(u8, 100);
+    defer allocator.allocator().free(bytes);
+    // free the unused space
+    allocator.freeUnusedSpace(bytes[0..50]);
+
+    // this should be ok now
+    const bytes2 = try allocator.allocator().alloc(u8, 50);
+    defer allocator.allocator().free(bytes2);
+
+    const expected_ptr: [*]u8 = @alignCast(@ptrCast(&bytes[51]));
+    try std.testing.expectEqual(expected_ptr, bytes2.ptr);
+}
 
 test "recycle allocator: tryCollapse" {
     const backing_allocator = std.testing.allocator;
