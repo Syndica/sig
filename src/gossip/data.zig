@@ -590,16 +590,16 @@ pub const LegacyContactInfo = struct {
     pub fn fromContactInfo(ci: *const ContactInfo) LegacyContactInfo {
         return .{
             .id = ci.pubkey,
-            .gossip = ci.getSocket(.gossip) orelse SocketAddr.UNSPECIFIED,
-            .turbine_recv = ci.getSocket(.turbine_recv) orelse SocketAddr.UNSPECIFIED,
-            .turbine_recv_quic = ci.getSocket(.turbine_recv_quic) orelse SocketAddr.UNSPECIFIED,
-            .repair = ci.getSocket(.repair) orelse SocketAddr.UNSPECIFIED,
-            .tpu = ci.getSocket(.tpu) orelse SocketAddr.UNSPECIFIED,
-            .tpu_forwards = ci.getSocket(.tpu_forwards) orelse SocketAddr.UNSPECIFIED,
-            .tpu_vote = ci.getSocket(.tpu_vote) orelse SocketAddr.UNSPECIFIED,
-            .rpc = ci.getSocket(.rpc) orelse SocketAddr.UNSPECIFIED,
-            .rpc_pubsub = ci.getSocket(.rpc_pubsub) orelse SocketAddr.UNSPECIFIED,
-            .serve_repair = ci.getSocket(.serve_repair) orelse SocketAddr.UNSPECIFIED,
+            .gossip = ci.getSocket(.gossip) orelse SocketAddr.unspecified,
+            .turbine_recv = ci.getSocket(.turbine_recv) orelse SocketAddr.unspecified,
+            .turbine_recv_quic = ci.getSocket(.turbine_recv_quic) orelse SocketAddr.unspecified,
+            .repair = ci.getSocket(.repair) orelse SocketAddr.unspecified,
+            .tpu = ci.getSocket(.tpu) orelse SocketAddr.unspecified,
+            .tpu_forwards = ci.getSocket(.tpu_forwards) orelse SocketAddr.unspecified,
+            .tpu_vote = ci.getSocket(.tpu_vote) orelse SocketAddr.unspecified,
+            .rpc = ci.getSocket(.rpc) orelse SocketAddr.unspecified,
+            .rpc_pubsub = ci.getSocket(.rpc_pubsub) orelse SocketAddr.unspecified,
+            .serve_repair = ci.getSocket(.serve_repair) orelse SocketAddr.unspecified,
             .wallclock = ci.wallclock,
             .shred_version = ci.shred_version,
         };
@@ -630,7 +630,7 @@ pub const Vote = struct {
     pub fn initRandom(random: std.rand.Random) Vote {
         return Vote{
             .from = Pubkey.initRandom(random),
-            .transaction = Transaction.default(),
+            .transaction = Transaction.empty,
             .wallclock = getWallclockMs(),
             .slot = random.int(u64),
         };
@@ -1193,7 +1193,7 @@ pub const ContactInfo = struct {
     addrs: ArrayList(IpAddr),
     sockets: ArrayList(SocketEntry),
     extensions: ArrayList(Extension),
-    cache: [SOCKET_CACHE_SIZE]SocketAddr = socket_addrs_unspecified(),
+    cache: [SOCKET_CACHE_SIZE]SocketAddr = socket_addrs_unspecified,
 
     // TODO: improve implementation of post deserialise method
     pub const @"!bincode-config:post-deserialize" = bincode.FieldConfig(ContactInfo){ .post_deserialize_fn = ContactInfo.buildCache };
@@ -1247,11 +1247,11 @@ pub const ContactInfo = struct {
             .wallclock = wallclock,
             .outset = outset,
             .shred_version = shred_version,
-            .version = ClientVersion.default(),
+            .version = ClientVersion.default,
             .addrs = ArrayList(IpAddr).init(allocator),
             .sockets = ArrayList(SocketEntry).init(allocator),
             .extensions = ArrayList(void).init(allocator),
-            .cache = socket_addrs_unspecified(),
+            .cache = socket_addrs_unspecified,
         };
     }
 
@@ -1292,7 +1292,7 @@ pub const ContactInfo = struct {
 
     pub fn getSocket(self: *const Self, key: SocketTag) ?SocketAddr {
         const socket = &self.cache[@intFromEnum(key)];
-        if (socket.eql(&SocketAddr.UNSPECIFIED)) {
+        if (socket.eql(&SocketAddr.unspecified)) {
             return null;
         }
         return socket.*;
@@ -1340,7 +1340,7 @@ pub const ContactInfo = struct {
                 next_entry.offset += removed_entry.offset;
             }
             self.removeAddrIfUnused(removed_entry.index);
-            self.cache[@intFromEnum(key)] = SocketAddr.unspecified();
+            self.cache[@intFromEnum(key)] = SocketAddr.unspecified;
         }
     }
 
@@ -1478,9 +1478,7 @@ pub const SocketEntry = struct {
     }
 };
 
-fn socket_addrs_unspecified() [SOCKET_CACHE_SIZE]SocketAddr {
-    return .{SocketAddr.unspecified()} ** SOCKET_CACHE_SIZE;
-}
+const socket_addrs_unspecified: [SOCKET_CACHE_SIZE]SocketAddr = .{SocketAddr.unspecified} ** SOCKET_CACHE_SIZE;
 
 pub const RestartHeaviestFork = struct {
     from: Pubkey,

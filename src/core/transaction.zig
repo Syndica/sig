@@ -177,12 +177,10 @@ pub const Transaction = struct {
 
     pub const MAX_BYTES: usize = 1232;
 
-    pub fn default() Transaction {
-        return Transaction{
-            .signatures = &[_]Signature{},
-            .message = Message.default(),
-        };
-    }
+    pub const empty: Transaction = .{
+        .signatures = &[_]Signature{},
+        .message = Message.empty,
+    };
 
     pub fn newUnsigned(allocator: std.mem.Allocator, message: Message) error{OutOfMemory}!Transaction {
         return Transaction{
@@ -227,18 +225,19 @@ pub const Message = struct {
     pub const @"!bincode-config:account_keys" = shortVecConfig([]const Pubkey);
     pub const @"!bincode-config:instructions" = shortVecConfig([]const CompiledInstruction);
 
-    pub fn default() Message {
-        return Message{
-            .header = MessageHeader{
-                .num_required_signatures = 0,
-                .num_readonly_signed_accounts = 0,
-                .num_readonly_unsigned_accounts = 0,
-            },
-            .account_keys = &[_]Pubkey{},
-            .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-            .instructions = &[_]CompiledInstruction{},
-        };
-    }
+    pub const empty: Message = .{
+        .header = .{
+            .num_required_signatures = 0,
+            .num_readonly_signed_accounts = 0,
+            .num_readonly_unsigned_accounts = 0,
+        },
+        .account_keys = &.{},
+        .recent_blockhash = blk: {
+            @setEvalBranchQuota(1962);
+            break :blk Hash.generateSha256Hash(&.{0});
+        },
+        .instructions = &.{},
+    };
 
     pub fn init(allocator: std.mem.Allocator, instructions: []const Instruction, payer: Pubkey, recent_blockhash: Hash) !Message {
         var compiled_keys = try CompiledKeys.init(allocator, instructions, payer);
@@ -406,14 +405,14 @@ pub const CompiledKeys = struct {
         for (instructions) |instruction| {
             const instruction_meta_gopr = try key_meta_map.getOrPut(instruction.program_id);
             if (!instruction_meta_gopr.found_existing) {
-                instruction_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
+                instruction_meta_gopr.value_ptr.* = CompiledKeyMeta.all_false;
             }
             instruction_meta_gopr.value_ptr.*.is_invoked = true;
 
             for (instruction.accounts) |account_meta| {
                 const account_meta_gopr = try key_meta_map.getOrPut(account_meta.pubkey);
                 if (!account_meta_gopr.found_existing) {
-                    account_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
+                    account_meta_gopr.value_ptr.* = CompiledKeyMeta.all_false;
                 }
                 account_meta_gopr.value_ptr.*.is_signer = account_meta_gopr.value_ptr.*.is_signer or account_meta.is_signer;
                 account_meta_gopr.value_ptr.*.is_writable = account_meta_gopr.value_ptr.*.is_writable or account_meta.is_writable;
@@ -422,7 +421,7 @@ pub const CompiledKeys = struct {
             if (maybe_payer) |payer| {
                 const payer_meta_gopr = try key_meta_map.getOrPut(payer);
                 if (!payer_meta_gopr.found_existing) {
-                    payer_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
+                    payer_meta_gopr.value_ptr.* = CompiledKeyMeta.all_false;
                 }
                 payer_meta_gopr.value_ptr.*.is_signer = true;
                 payer_meta_gopr.value_ptr.*.is_writable = true;
@@ -490,13 +489,11 @@ pub const CompiledKeyMeta = packed struct {
     is_writable: bool,
     is_invoked: bool,
 
-    pub fn default() CompiledKeyMeta {
-        return .{
-            .is_signer = false,
-            .is_writable = false,
-            .is_invoked = false,
-        };
-    }
+    pub const all_false: CompiledKeyMeta = .{
+        .is_signer = false,
+        .is_writable = false,
+        .is_invoked = false,
+    };
 };
 
 pub const CompileError = error{
@@ -586,12 +583,11 @@ test "create transfer transaction" {
 }
 
 test "tmp" {
-    const msg = Message.default();
-    try std.testing.expect(msg.account_keys.len == 0);
+    try std.testing.expect(Message.empty.account_keys.len == 0);
 }
 
 test "blank Message fails to sanitize" {
-    try std.testing.expect(error.MissingWritableFeePayer == Message.default().sanitize());
+    try std.testing.expectError(error.MissingWritableFeePayer, Message.empty.sanitize());
 }
 
 test "minimal valid Message sanitizes" {
@@ -603,8 +599,8 @@ test "minimal valid Message sanitizes" {
             .num_readonly_unsigned_accounts = 0,
         },
         .account_keys = &pubkeys,
-        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &[_]CompiledInstruction{},
+        .recent_blockhash = Hash.generateSha256Hash(&.{0}),
+        .instructions = &.{},
     };
     try message.sanitize();
 }
@@ -618,8 +614,8 @@ test "Message sanitize fails if missing signers" {
             .num_readonly_unsigned_accounts = 0,
         },
         .account_keys = &pubkeys,
-        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &[_]CompiledInstruction{},
+        .recent_blockhash = Hash.generateSha256Hash(&.{0}),
+        .instructions = &.{},
     };
     try std.testing.expect(error.NotEnoughAccounts == message.sanitize());
 }
@@ -633,8 +629,8 @@ test "Message sanitize fails if missing unsigned" {
             .num_readonly_unsigned_accounts = 1,
         },
         .account_keys = &pubkeys,
-        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &[_]CompiledInstruction{},
+        .recent_blockhash = Hash.generateSha256Hash(&.{0}),
+        .instructions = &.{},
     };
     try std.testing.expect(error.NotEnoughAccounts == message.sanitize());
 }

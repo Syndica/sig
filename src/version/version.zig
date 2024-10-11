@@ -14,9 +14,7 @@ pub const ClientVersion = struct {
 
     const Self = @This();
 
-    pub fn default() Self {
-        return CURRENT_CLIENT_VERSION;
-    }
+    pub const default = CURRENT_CLIENT_VERSION;
 
     pub fn new(
         major: u16,

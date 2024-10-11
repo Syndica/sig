@@ -8,14 +8,10 @@ pub const SocketAddr = union(enum(u8)) {
 
     const Self = @This();
 
-    pub const UNSPECIFIED = Self{
-        .V4 = .{
-            .ip = Ipv4Addr{
-                .octets = [4]u8{ 0, 0, 0, 0 },
-            },
-            .port = 0,
-        },
-    };
+    pub const unspecified: SocketAddr = .{ .V4 = .{
+        .ip = .{ .octets = .{ 0, 0, 0, 0 } },
+        .port = 0,
+    } };
 
     pub fn init(addr: IpAddr, portt: u16) Self {
         return switch (addr) {
@@ -150,10 +146,6 @@ pub const SocketAddr = union(enum(u8)) {
         return Self{
             .V6 = .{ .ip = Ipv6Addr.init(octets), .port = portt, .flowinfo = 0, .scope_id = 0 },
         };
-    }
-
-    pub fn unspecified() Self {
-        return UNSPECIFIED;
     }
 
     pub fn port(self: *const Self) u16 {
