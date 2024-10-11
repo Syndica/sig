@@ -1,3 +1,4 @@
+pub const ahash = @import("ahash.zig");
 pub const allocators = @import("allocators.zig");
 pub const collections = @import("collections.zig");
 pub const closure = @import("closure.zig");
