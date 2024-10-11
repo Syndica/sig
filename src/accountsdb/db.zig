@@ -326,7 +326,7 @@ test "AccountsLRU putAccount & copySlot ref counting" {
 //     try accounts_lru.copySlot(1, 2);
 //     try std.testing.expect(accounts_lru.get(1, pubkey) != null);
 //     // create 3rd slot, max slots = 2, 1st slot evicted
-//     try accounts_lru.copySlot(2, 3); 
+//     try accounts_lru.copySlot(2, 3);
 //     try std.testing.expect(accounts_lru.get(1, pubkey) == null);
 //     try std.testing.expect(accounts_lru.slot_lrus.count() == 2);
 // }
@@ -339,7 +339,7 @@ test "AccountsLRU putAccount & copySlot ref counting" {
 //     const account = try Account.random(allocator, rng, 1);
 //     defer account.deinit(allocator);
 
-//     var accounts_lru = try AccountsLRU.init(allocator, 10);
+//     var accounts_lru = try AccountsLRU.init(allocator, 10, 1);
 //     defer accounts_lru.deinit();
 
 //     const pubkey = Pubkey.random(rng);
@@ -356,20 +356,17 @@ test "AccountsLRU putAccount & copySlot ref counting" {
 //     var random = std.rand.DefaultPrng.init(19);
 //     const rng = random.random();
 
-//     var accounts_lru = try AccountsLRU.init(allocator, 10);
+//     var accounts_lru = try AccountsLRU.init(allocator, 10, 1);
 //     defer accounts_lru.deinit();
 
 //     const account = try Account.random(allocator, rng, 1);
 //     defer account.deinit(allocator);
 
-//     const pubkey = Pubkey.random(rng); // Create a dummy pubkey
+//     const pubkey = Pubkey.random(rng);
+
 //     const slot = 1;
-
 //     try accounts_lru.putAccount(slot, pubkey, account);
-
-//     // Purge the slot
-//     try accounts_lru.purgeSlot(slot);
-
+//     accounts_lru.purgeSlot(slot);
 //     const result = accounts_lru.get(slot, pubkey);
 //     try std.testing.expect(result == null);
 // }
