@@ -254,11 +254,21 @@ pub const Message = struct {
     }
 
     pub fn clone(self: *const Message, allocator: std.mem.Allocator) error{OutOfMemory}!Message {
+        const account_keys = try allocator.dupe(Pubkey, self.account_keys);
+        errdefer allocator.free(account_keys);
+
         const instructions = try allocator.alloc(CompiledInstruction, self.instructions.len);
-        for (instructions, 0..) |*ci, i| ci.* = try self.instructions[i].clone(allocator);
+        errdefer allocator.free(instructions);
+
+        for (instructions, self.instructions, 0..) |*ci, original_ci, i| {
+            errdefer for (instructions[0..i]) |prev_ci| prev_ci.deinit(allocator);
+            ci.* = try original_ci.clone(allocator);
+        }
+        errdefer for (instructions) |instruction| instruction.deinit(allocator);
+
         return .{
             .header = self.header,
-            .account_keys = try allocator.dupe(Pubkey, self.account_keys),
+            .account_keys = account_keys,
             .recent_blockhash = self.recent_blockhash,
             .instructions = instructions,
         };
