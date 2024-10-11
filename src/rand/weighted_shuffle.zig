@@ -185,14 +185,14 @@ pub fn WeightedShuffle(comptime T: type) type {
         /// The function is non-destructive and does not remove the weights from the internal state.
         pub fn first(self: *const WeightedShuffle(T), rng: Random) ?usize {
             if (self.weight > 0) {
-                const sample = uintLessThan(T, rng, self.weight);
+                const sample = uintLessThanRust(T, rng, self.weight);
                 const index, _ = self.search(sample);
                 return index;
             }
             if (self.zeros.items.len == 0) {
                 return null;
             }
-            const index = uintLessThan(usize, rng, self.zeros.items.len);
+            const index = uintLessThanRust(usize, rng, self.zeros.items.len);
             return self.zeros.items[index];
         }
 
@@ -223,7 +223,7 @@ pub fn WeightedShuffle(comptime T: type) type {
 
             pub fn next(self: *Iterator) ?usize {
                 if (self.shuffle.weight > 0) {
-                    const sample = uintLessThan(T, self.rng, self.shuffle.weight);
+                    const sample = uintLessThanRust(T, self.rng, self.shuffle.weight);
                     const index, const weight = self.shuffle.search(sample);
                     self.shuffle.remove(index, weight);
                     self.index += 1;
@@ -231,7 +231,7 @@ pub fn WeightedShuffle(comptime T: type) type {
                 }
                 if (self.shuffle.zeros.items.len == 0) return null;
                 self.index += 1;
-                const index = uintLessThan(usize, self.rng, self.shuffle.zeros.items.len);
+                const index = uintLessThanRust(usize, self.rng, self.shuffle.zeros.items.len);
                 return self.shuffle.zeros.swapRemove(index);
             }
 
@@ -258,7 +258,7 @@ pub fn WeightedShuffle(comptime T: type) type {
 /// Custom Rng downsampling function designed to match the agave sampler used
 /// in the agave implementation of the weighted shuffle.
 /// For use in place of: <T as SampleUniform>::Sampler::sample_single
-fn uintLessThan(comptime I: type, rng: Random, less_than: I) I {
+pub fn uintLessThanRust(comptime I: type, rng: Random, less_than: I) I {
     const unsigned = switch (I) {
         i8, u8 => u8,
         i16, u16 => u16,
@@ -322,7 +322,7 @@ fn testWeightedShuffleSlow(allocator: std.mem.Allocator, rng: Random, weights: [
     // Shuffle indices according to their weights
     var shuffle = try std.ArrayList(usize).initCapacity(allocator, weights.len);
     while (high != 0) {
-        const sample = uintLessThan(u64, rng, high);
+        const sample = uintLessThanRust(u64, rng, high);
         var sum: u64 = 0;
         for (weights, 0..) |weight, k| {
             sum += weight;
@@ -337,7 +337,7 @@ fn testWeightedShuffleSlow(allocator: std.mem.Allocator, rng: Random, weights: [
 
     // Add zeros to the end
     while (zeros.items.len > 0) {
-        const index = uintLessThan(usize, rng, zeros.items.len);
+        const index = uintLessThanRust(usize, rng, zeros.items.len);
         shuffle.appendAssumeCapacity(zeros.swapRemove(index));
     }
 
@@ -350,7 +350,7 @@ test "uintLessThan" {
     const rng = chacha.random();
 
     for (0..1000) |_| {
-        const val = uintLessThan(u64, rng, 1);
+        const val = uintLessThanRust(u64, rng, 1);
         try std.testing.expect(val == 0);
     }
 }
