@@ -49,10 +49,34 @@ For more information on Shreds, see the spec [here](https://github.com/solana-fo
 
 ### Shred Collector
 
-The Shred Collector is the component that collects and stores shreds from the network.
+The Shred Collector is responsible for gathering and storing shreds from the network. While it is not a direct 
+part of the ledger, the ledger plays a crucial role in supporting its operations. As such, the Shred Collector 
+is implemented in its own module, ie: [`shred_collector`](../shred_collector), separate from the ledger module.
 
-It is not part of the ledger but is a subcomponent that closely depends on the ledger. Therefore, its implementation resides in a separate module, distinct from the `ledger` module.
+Understanding how the Shred Collector interacts with other components sheds light on key elements of the 
+ledger’s architecture. 
 
+The following diagram illustrates the dependencies between the Shred Collector and related components of the ledger:
+
+```mermaid
+graph TD
+    A[ShredCollector] --> B[ShredInserter]
+    B --> C[BlockstoreDB]
+    D[cleanup_service] --> C
+    D --> E[BlockstoreReader]
+```
+
+![Shred Collector Component](./imgs/shred_collector_component.png)
+
+- The `Shred Collector` uses
+  - The `ShredInserter` to insert shreds received from the network (via Gossip).
+- The `ShredInserter` uses
+  - The `BlockstoreDB`, the rocks db backed implemented of the ledger as destination to write to.
+- The `cleanup` service uses
+  - The `BlockstoreDB` the rocks db backed implemented of the ledger as where to perform the cleanup.
+  - The `BlockstoreReader`
+
+  
 <!-- TODO Add information on how to start the shred collector -->
 
 ### ShredInserter
