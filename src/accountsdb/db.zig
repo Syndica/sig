@@ -139,7 +139,9 @@ pub const AccountsLRU = struct {
                 }
             } else {
                 const lru = try self.slot_lrus.allocator.create(LRU);
+                errdefer self.slot_lrus.allocator.destroy(lru);
                 lru.* = try LRU.initWithContext(self.slot_lrus.allocator, self.max_items, self.slot_lrus.allocator);
+                errdefer lru.deinit();
 
                 try self.slot_lrus.put(slot, lru);
 
@@ -151,12 +153,16 @@ pub const AccountsLRU = struct {
             self.highest_slot = slot;
         }
 
+        self.correctSlotCount();
+
         const new_cached_account = try self.slot_lrus.allocator.create(CachedAccount);
         errdefer self.slot_lrus.allocator.destroy(new_cached_account);
         new_cached_account.* = try CachedAccount.init(self.slot_lrus.allocator, account);
         errdefer new_cached_account.deinit(self.slot_lrus.allocator);
 
-        if (slot_lru.put(pubkey, new_cached_account) != null) return error.InvalidPut;
+        if (slot_lru.put(pubkey, new_cached_account) != null) {
+            return error.InvalidPut;
+        }
     }
 
     /// remove slot lru, decreasing ref_counts on CachedAccounts (optionally removing)
@@ -187,9 +193,9 @@ pub const AccountsLRU = struct {
             }
         }
 
-        self.correctSlotCount();
-
         try self.slot_lrus.put(new_slot, new_slot_lru);
+
+        self.correctSlotCount();
 
         self.highest_slot = new_slot;
     }
@@ -317,12 +323,12 @@ test "AccountsLRU putAccount & copySlot ref counting" {
 
 //     try accounts_lru.putAccount(1, pubkey, account);
 //     try std.testing.expect(accounts_lru.get(1, pubkey) != null);
-
-//     try accounts_lru.putAccount(2, pubkey, account);
+//     try accounts_lru.copySlot(1, 2);
 //     try std.testing.expect(accounts_lru.get(1, pubkey) != null);
-
-//     try accounts_lru.putAccount(3, pubkey, account);
+//     // create 3rd slot, max slots = 2, 1st slot evicted
+//     try accounts_lru.copySlot(2, 3); 
 //     try std.testing.expect(accounts_lru.get(1, pubkey) == null);
+//     try std.testing.expect(accounts_lru.slot_lrus.count() == 2);
 // }
 
 // test "AccountsLRU putAccount returns error on duplicate" {
