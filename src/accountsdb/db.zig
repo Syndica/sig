@@ -102,9 +102,10 @@ pub const AccountsLRU = struct {
     };
 
     const LRU = LruCacheCustom(.locking, Pubkey, *CachedAccount, std.mem.Allocator, CachedAccount.releaseOrDestroyDoublePtr);
-    const SlotLRU = std.AutoHashMap(Slot, *LRU);
+    const SlotLRU = std.AutoHashMapUnmanaged(Slot, *LRU);
 
     slot_lrus: SlotLRU,
+    allocator: std.mem.Allocator,
     max_items: usize,
     max_slots: usize,
     highest_slot: ?Slot,
@@ -115,7 +116,8 @@ pub const AccountsLRU = struct {
         max_slots: usize,
     ) !AccountsLRU {
         return .{
-            .slot_lrus = SlotLRU.init(allocator),
+            .slot_lrus = .{},
+            .allocator = allocator,
             .max_items = max_items,
             .max_slots = max_slots,
             .highest_slot = null,
@@ -138,12 +140,12 @@ pub const AccountsLRU = struct {
                     return error.SlotLowerThanPrevious;
                 }
             } else {
-                const lru = try self.slot_lrus.allocator.create(LRU);
-                errdefer self.slot_lrus.allocator.destroy(lru);
-                lru.* = try LRU.initWithContext(self.slot_lrus.allocator, self.max_items, self.slot_lrus.allocator);
+                const lru = try self.allocator.create(LRU);
+                errdefer self.allocator.destroy(lru);
+                lru.* = try LRU.initWithContext(self.allocator, self.max_items, self.allocator);
                 errdefer lru.deinit();
 
-                try self.slot_lrus.put(slot, lru);
+                try self.slot_lrus.put(self.allocator, slot, lru);
 
                 break :blk lru;
             }
@@ -155,10 +157,10 @@ pub const AccountsLRU = struct {
 
         self.correctSlotCount();
 
-        const new_cached_account = try self.slot_lrus.allocator.create(CachedAccount);
-        errdefer self.slot_lrus.allocator.destroy(new_cached_account);
-        new_cached_account.* = try CachedAccount.init(self.slot_lrus.allocator, account);
-        errdefer new_cached_account.deinit(self.slot_lrus.allocator);
+        const new_cached_account = try self.allocator.create(CachedAccount);
+        errdefer self.allocator.destroy(new_cached_account);
+        new_cached_account.* = try CachedAccount.init(self.allocator, account);
+        errdefer new_cached_account.deinit(self.allocator);
 
         if (slot_lru.put(pubkey, new_cached_account) != null) {
             return error.InvalidPut;
@@ -176,9 +178,9 @@ pub const AccountsLRU = struct {
     fn copySlot(self: *AccountsLRU, old_slot: Slot, new_slot: Slot) !void {
         var old_slot_lru = self.slot_lrus.get(old_slot) orelse return error.SlotNotFound;
 
-        const new_slot_lru = try self.slot_lrus.allocator.create(LRU);
-        errdefer self.slot_lrus.allocator.destroy(new_slot_lru);
-        new_slot_lru.* = try LRU.initWithContext(self.slot_lrus.allocator, self.max_items, self.slot_lrus.allocator);
+        const new_slot_lru = try self.allocator.create(LRU);
+        errdefer self.allocator.destroy(new_slot_lru);
+        new_slot_lru.* = try LRU.initWithContext(self.allocator, self.max_items, self.allocator);
 
         // copy from old to new slot lru
         {
@@ -193,7 +195,7 @@ pub const AccountsLRU = struct {
             }
         }
 
-        try self.slot_lrus.put(new_slot, new_slot_lru);
+        try self.slot_lrus.put(self.allocator, new_slot, new_slot_lru);
 
         self.correctSlotCount();
 
@@ -217,9 +219,9 @@ pub const AccountsLRU = struct {
         while (slot_iter.next()) |entry| {
             const slot_lru_ptr = entry.value_ptr.*;
             slot_lru_ptr.deinit();
-            self.slot_lrus.allocator.destroy(slot_lru_ptr);
+            self.allocator.destroy(slot_lru_ptr);
         }
-        self.slot_lrus.deinit();
+        self.slot_lrus.deinit(self.allocator);
     }
 };
 
