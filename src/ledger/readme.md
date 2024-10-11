@@ -68,13 +68,15 @@ graph TD
 
 ![Shred Collector Component](./imgs/shred_collector_component.png)
 
-- The `Shred Collector` uses
-  - The `ShredInserter` to insert shreds received from the network (via Gossip).
-- The `ShredInserter` uses
-  - The `BlockstoreDB`, the rocks db backed implemented of the ledger as destination to write to.
-- The `cleanup` service uses
-  - The `BlockstoreDB` the rocks db backed implemented of the ledger as where to perform the cleanup.
-  - The `BlockstoreReader`
+- The **Shred Collector** utilizes:
+  - The **ShredInserter** to insert shreds received from the network via Gossip.
+
+- The **ShredInserter** relies on:
+  - The **BlockstoreDB**, which serves as the destination for writing data, backed by the RocksDB implementation of the ledger.
+
+- The **cleanup service** employs:
+  - The **BlockstoreDB** for performing cleanup operations, also backed by RocksDB.
+  - The **BlockstoreReader** for reading data during cleanup.
 
   
 <!-- TODO Add information on how to start the shred collector -->
