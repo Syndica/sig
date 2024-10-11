@@ -204,7 +204,7 @@ pub const AccountsCache = struct {
 
         self.enforceMaxSlotCount();
 
-        self.highest_slot = new_slot;
+        if (new_slot > self.highest_slot) self.highest_slot = new_slot;
     }
 
     /// removes lowest slot when exceeding .max_slots
@@ -310,7 +310,7 @@ test "AccountsCache put & copySlot ref counting" {
 
     try std.testing.expectEqual(accounts_cache.get(old_slot, pubkey).?.ref_count.load(.acquire), 2);
 
-    const cached_account = accounts_cache.get(new_slot, pubkey) orelse null;
+    const cached_account = accounts_cache.get(new_slot, pubkey);
     try std.testing.expect(cached_account != null);
 }
 
@@ -523,8 +523,8 @@ pub const AccountsDB = struct {
         }
 
         {
-            const accounts_cache, var accounts_lru_lg = self.accounts_cache.writeWithLock();
-            defer accounts_lru_lg.unlock();
+            const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
+            defer accounts_cache_lg.unlock();
             accounts_cache.deinit();
         }
 
@@ -2188,15 +2188,15 @@ pub const AccountsDB = struct {
     pub fn getAccountFromRef(self: *Self, account_ref: *const AccountRef) !Account {
         switch (account_ref.location) {
             .File => |ref_info| {
-                const account_in_lru = blk: {
-                    const accounts_cache, var accounts_lru_lg = self.accounts_cache.readWithLock();
-                    defer accounts_lru_lg.unlock();
+                const account_in_cache = blk: {
+                    const accounts_cache, var accounts_cache_lg = self.accounts_cache.readWithLock();
+                    defer accounts_cache_lg.unlock();
 
                     const cached_account = accounts_cache.get(account_ref.slot, account_ref.pubkey) orelse break :blk null;
                     break :blk cached_account.account;
                 };
 
-                if (account_in_lru) |account| {
+                if (account_in_cache) |account| {
                     return account;
                 } else {
                     const account = try self.getAccountInFile(
@@ -2205,8 +2205,8 @@ pub const AccountsDB = struct {
                         ref_info.offset,
                     );
 
-                    const accounts_cache, var accounts_lru_lg = self.accounts_cache.writeWithLock();
-                    defer accounts_lru_lg.unlock();
+                    const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
+                    defer accounts_cache_lg.unlock();
                     try accounts_cache.put(account_ref.slot, account_ref.pubkey, account);
 
                     return account;
