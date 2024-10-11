@@ -105,6 +105,8 @@ that performs the shred insertion logic and updates corresponding metadata is `i
 
 The `insertShreds` validates the shreds, recover any lost shreds and saves them together.
 
+Note: The `insertShreds` is adequately documented, so that won't be repeated here.
+
 ### Shredder
 
 The shredder is the component of the ledger that can be used to convert all shreds to recreate the original buffer. 
