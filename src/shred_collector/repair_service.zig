@@ -265,8 +265,8 @@ pub const RepairRequester = struct {
     pub fn init(
         allocator: Allocator,
         logger: Logger,
-        registry: *Registry(.{}),
         rand: Random,
+        registry: *Registry(.{}),
         keypair: *const KeyPair,
         udp_send_socket: Socket,
         exit: *Atomic(bool),
@@ -378,8 +378,8 @@ pub const RepairPeerProvider = struct {
 
     pub fn init(
         allocator: Allocator,
-        registry: *Registry(.{}),
         rand: Random,
+        registry: *Registry(.{}),
         gossip: *RwMux(GossipTable),
         my_pubkey: Pubkey,
         my_shred_version: *const Atomic(u16),
