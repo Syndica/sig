@@ -65,8 +65,8 @@ pub const AHasher = struct {
     }
 
     inline fn hashSlice(self: *AHasher, comptime T: type, data: []const T) void {
-        self.write(std.mem.asBytes(&data.len));
-        for (data) |elem| self.hash(T, &elem);
+        self.update(data.len);
+        self.write(@as([]const u8, data));
     }
 
     inline fn update(self: *AHasher, new_data: u64) void {
@@ -200,7 +200,7 @@ test "AHasher.hash" {
         hasher.hash(@TypeOf(data), &data);
         hasher.hash(@TypeOf(data), &data);
         hasher.hash(@TypeOf(data), &data);
-        try std.testing.expectEqual(5624437601938525983, hasher.finish());
+        try std.testing.expectEqual(6946764487996054145, hasher.finish());
     }
     {
         var hasher = AHasher.fromRandomState(random_state);
@@ -208,39 +208,6 @@ test "AHasher.hash" {
         hasher.hash(@TypeOf(data), &data);
         hasher.hash(@TypeOf(data), &data);
         hasher.hash(@TypeOf(data), &data);
-        try std.testing.expectEqual(15481365550556600541, hasher.finish());
-
-        // NOTE: For some rease, snippet A does not generate the same result
-        // as snippet B in the Rust implementation. This is despite the fact that as
-        // far as I can tell, snippet B is a direct replication of the logic expressed
-        // in snippet A. I don't think this should be cause for concern as the logic
-        // in snippet B makes sense as a way to hash an array of bytes.
-
-        // TODO: Investigate why snippet A and snippet B do not generate the same result.
-
-        // SNIPPET A
-        // let mut hasher = random_state.build_hasher();
-        // let data: [u8; 3] = [10, 3, 5];
-        // data.hash(&mut hasher);
-        // data.hash(&mut hasher);
-        // data.hash(&mut hasher);
-        // println!("{}", hasher.finish());
-
-        // SNIPPET B
-        // let mut hasher = random_state.build_hasher();
-        // let data: [u8; 3] = [10, 3, 5];
-        // hasher.write(&data.len().to_ne_bytes());
-        // for d in &data {
-        //     d.hash(&mut hasher);
-        // }
-        // hasher.write(&data.len().to_ne_bytes());
-        // for d in &data {
-        //     d.hash(&mut hasher);
-        // }
-        // hasher.write(&data.len().to_ne_bytes());
-        // for d in &data {
-        //     d.hash(&mut hasher);
-        // }
-        // println!("{}", hasher.finish());
+        try std.testing.expectEqual(15306412442377278323, hasher.finish());
     }
 }
