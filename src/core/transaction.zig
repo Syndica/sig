@@ -591,48 +591,42 @@ test "blank Message fails to sanitize" {
 }
 
 test "minimal valid Message sanitizes" {
-    var pubkeys = [_]Pubkey{Pubkey.zeroes};
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectEqual({}, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{Pubkey.zeroes},
         .recent_blockhash = Hash.generateSha256Hash(&.{0}),
         .instructions = &.{},
-    };
-    try message.sanitize();
+    }));
 }
 
 test "Message sanitize fails if missing signers" {
-    var pubkeys = [_]Pubkey{Pubkey.zeroes};
-    const message = Message{
+    try std.testing.expectError(error.NotEnoughAccounts, Message.sanitize(&.{
         .header = MessageHeader{
             .num_required_signatures = 2,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{Pubkey.zeroes},
         .recent_blockhash = Hash.generateSha256Hash(&.{0}),
         .instructions = &.{},
-    };
-    try std.testing.expect(error.NotEnoughAccounts == message.sanitize());
+    }));
 }
 
 test "Message sanitize fails if missing unsigned" {
-    var pubkeys = [_]Pubkey{Pubkey.zeroes};
-    const message = Message{
+    try std.testing.expectError(error.NotEnoughAccounts, Message.sanitize(&.{
         .header = MessageHeader{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 1,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{Pubkey.zeroes},
         .recent_blockhash = Hash.generateSha256Hash(&.{0}),
         .instructions = &.{},
-    };
-    try std.testing.expect(error.NotEnoughAccounts == message.sanitize());
+    }));
 }
 
 test "Message sanitize fails if no writable signed" {
