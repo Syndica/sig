@@ -10,7 +10,6 @@ const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 const BankFields = sig.accounts_db.snapshots.BankFields;
-const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
