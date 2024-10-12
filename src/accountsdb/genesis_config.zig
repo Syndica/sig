@@ -86,7 +86,7 @@ pub const Rent = extern struct {
     pub fn initRandom(random: std.Random) Rent {
         return .{
             .lamports_per_byte_year = random.int(u64),
-            .exemption_threshold = @bitCast(random.int(u64)),
+            .exemption_threshold = random.float(f64),
             .burn_percent = random.uintAtMost(u8, 100),
         };
     }
@@ -114,12 +114,12 @@ pub const Inflation = struct {
 
     pub fn initRandom(random: std.Random) Inflation {
         return .{
-            .initial = @bitCast(random.int(u64)),
-            .terminal = @bitCast(random.int(u64)),
-            .taper = @bitCast(random.int(u64)),
-            .foundation = @bitCast(random.int(u64)),
-            .foundation_term = @bitCast(random.int(u64)),
-            .__unused = @bitCast(random.int(u64)),
+            .initial = random.float(f64),
+            .terminal = random.float(f64),
+            .taper = random.float(f64),
+            .foundation = random.float(f64),
+            .foundation_term = random.float(f64),
+            .__unused = random.float(f64),
         };
     }
 };

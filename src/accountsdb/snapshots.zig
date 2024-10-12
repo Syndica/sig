@@ -85,11 +85,11 @@ pub fn stakeDelegationsRandom(
     errdefer stake_delegations.deinit();
 
     try sig.rand.fillHashmapWithRng(&stake_delegations, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(_random: std.Random) !Pubkey {
-            return Pubkey.initRandom(_random);
+        pub fn randomKey(rand: std.Random) !Pubkey {
+            return Pubkey.initRandom(rand);
         }
-        pub fn randomValue(_random: std.Random) !Delegation {
-            return Delegation.initRandom(_random);
+        pub fn randomValue(rand: std.Random) !Delegation {
+            return Delegation.initRandom(rand);
         }
     });
 
@@ -213,13 +213,13 @@ pub const VoteAccounts = struct {
             allocator: std.mem.Allocator,
             max_list_entries: usize,
 
-            pub fn randomKey(_: @This(), _random: std.Random) !Pubkey {
-                return Pubkey.initRandom(_random);
+            pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
+                return Pubkey.initRandom(rand);
             }
-            pub fn randomValue(ctx: @This(), _random: std.Random) !StakeAndVoteAccount {
-                const vote_account: VoteAccount = try VoteAccount.initRandom(_random, ctx.allocator, ctx.max_list_entries, error{ RandomError1, RandomError2, RandomError3 });
+            pub fn randomValue(ctx: @This(), rand: std.Random) !StakeAndVoteAccount {
+                const vote_account: VoteAccount = try VoteAccount.initRandom(rand, ctx.allocator, ctx.max_list_entries, error{ RandomError1, RandomError2, RandomError3 });
                 errdefer vote_account.deinit(ctx.allocator);
-                return .{ _random.int(u64), vote_account };
+                return .{ rand.int(u64), vote_account };
             }
         }{
             .allocator = allocator,
@@ -230,11 +230,11 @@ pub const VoteAccounts = struct {
         errdefer if (stakes_maybe_staked_nodes) |*staked_nodes| staked_nodes.deinit();
 
         if (stakes_maybe_staked_nodes) |*staked_nodes| try sig.rand.fillHashmapWithRng(staked_nodes, random, random.uintAtMost(usize, max_list_entries), struct {
-            pub fn randomKey(_random: std.Random) !Pubkey {
-                return Pubkey.initRandom(_random);
+            pub fn randomKey(rand: std.Random) !Pubkey {
+                return Pubkey.initRandom(rand);
             }
-            pub fn randomValue(_random: std.Random) !u64 {
-                return _random.int(u64);
+            pub fn randomValue(rand: std.Random) !u64 {
+                return rand.int(u64);
             }
         });
 
@@ -329,7 +329,7 @@ pub const Delegation = struct {
             .stake = random.int(u64),
             .activation_epoch = random.int(Epoch),
             .deactivation_epoch = random.int(Epoch),
-            .warmup_cooldown_rate = @bitCast(random.int(u64)),
+            .warmup_cooldown_rate = random.float(f64),
         };
     }
 };
@@ -345,7 +345,7 @@ pub const RentCollector = struct {
         return .{
             .epoch = random.int(Epoch),
             .epoch_schedule = EpochSchedule.initRandom(random),
-            .slots_per_year = @bitCast(random.int(u64)),
+            .slots_per_year = random.float(f64),
             .rent = Rent.initRandom(random),
         };
     }
@@ -390,11 +390,11 @@ pub fn blockhashQueueAgesRandom(
     errdefer ages.deinit();
 
     try sig.rand.fillHashmapWithRng(&ages, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(_random: std.Random) !Hash {
-            return Hash.initRandom(_random);
+        pub fn randomKey(rand: std.Random) !Hash {
+            return Hash.initRandom(rand);
         }
-        pub fn randomValue(_random: std.Random) !HashAge {
-            return HashAge.initRandom(_random);
+        pub fn randomValue(rand: std.Random) !HashAge {
+            return HashAge.initRandom(rand);
         }
     });
 
@@ -467,12 +467,12 @@ pub const UnusedAccounts = struct {
             defer ptr.* = managed.unmanaged;
 
             try sig.rand.fillHashmapWithRng(&managed, random, random.uintAtMost(usize, max_list_entries), struct {
-                pub fn randomKey(_random: std.Random) !Pubkey {
-                    return Pubkey.initRandom(_random);
+                pub fn randomKey(rand: std.Random) !Pubkey {
+                    return Pubkey.initRandom(rand);
                 }
-                pub fn randomValue(_random: std.Random) !hm_info.Value {
+                pub fn randomValue(rand: std.Random) !hm_info.Value {
                     return switch (hm_info.Value) {
-                        u64 => _random.int(u64),
+                        u64 => rand.int(u64),
                         void => {},
                         else => @compileError("Unexpected value type: " ++ @typeName(hm_info.Value)),
                     };
@@ -496,11 +496,11 @@ pub fn ancestorsRandom(
     errdefer ancestors.deinit();
 
     try sig.rand.fillHashmapWithRng(&ancestors, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(_random: std.Random) !Slot {
-            return _random.int(Slot);
+        pub fn randomKey(rand: std.Random) !Slot {
+            return rand.int(Slot);
         }
-        pub fn randomValue(_random: std.Random) !usize {
-            return _random.int(usize);
+        pub fn randomValue(rand: std.Random) !usize {
+            return rand.int(usize);
         }
     });
 
@@ -582,12 +582,12 @@ pub fn nodeIdToVoteAccountsMapRandom(
         allocator: std.mem.Allocator,
         max_list_entries: usize,
 
-        pub fn randomKey(_: @This(), _random: std.Random) !Pubkey {
-            return Pubkey.initRandom(_random);
+        pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
+            return Pubkey.initRandom(rand);
         }
 
-        pub fn randomValue(ctx: @This(), _random: std.Random) !NodeVoteAccounts {
-            return try NodeVoteAccounts.initRandom(_random, ctx.allocator, ctx.max_list_entries);
+        pub fn randomValue(ctx: @This(), rand: std.Random) !NodeVoteAccounts {
+            return try NodeVoteAccounts.initRandom(rand, ctx.allocator, ctx.max_list_entries);
         }
     }{
         .allocator = allocator,
@@ -608,11 +608,11 @@ pub fn epochAuthorizedVotersRandom(
     errdefer epoch_authorized_voters.deinit();
 
     try sig.rand.fillHashmapWithRng(&epoch_authorized_voters, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(_random: std.Random) !Pubkey {
-            return Pubkey.initRandom(_random);
+        pub fn randomKey(rand: std.Random) !Pubkey {
+            return Pubkey.initRandom(rand);
         }
-        pub fn randomValue(_random: std.Random) !Pubkey {
-            return Pubkey.initRandom(_random);
+        pub fn randomValue(rand: std.Random) !Pubkey {
+            return Pubkey.initRandom(rand);
         }
     });
 
@@ -750,12 +750,12 @@ pub fn epochStakeMapRandom(
         allocator: std.mem.Allocator,
         max_list_entries: usize,
 
-        pub fn randomKey(_: @This(), _random: std.Random) !Epoch {
-            return _random.int(Epoch);
+        pub fn randomKey(_: @This(), rand: std.Random) !Epoch {
+            return rand.int(Epoch);
         }
 
-        pub fn randomValue(ctx: @This(), _random: std.Random) !EpochStakes {
-            return try EpochStakes.initRandom(ctx.allocator, _random, ctx.max_list_entries);
+        pub fn randomValue(ctx: @This(), rand: std.Random) !EpochStakes {
+            return try EpochStakes.initRandom(ctx.allocator, rand, ctx.max_list_entries);
         }
     }{
         .allocator = allocator,
@@ -870,7 +870,7 @@ pub const BankFields = struct {
             .ticks_per_slot = random.int(u64),
             .ns_per_slot = random.int(u128),
             .genesis_creation_time = random.int(sig.accounts_db.genesis_config.UnixTimestamp),
-            .slots_per_year = @bitCast(random.int(u64)),
+            .slots_per_year = random.float(f64),
             .accounts_data_len = random.int(u64),
             .slot = random.int(Slot),
             .epoch = random.int(Epoch),
