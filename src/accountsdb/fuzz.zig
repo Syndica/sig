@@ -17,9 +17,9 @@ pub const TrackedAccount = struct {
     slot: u64,
     data: []u8,
 
-    pub fn random(rand: std.rand.Random, slot: Slot, allocator: std.mem.Allocator) !TrackedAccount {
+    pub fn initRandom(random: std.rand.Random, slot: Slot, allocator: std.mem.Allocator) !TrackedAccount {
         return .{
-            .pubkey = Pubkey.random(rand),
+            .pubkey = Pubkey.initRandom(random),
             .slot = slot,
             .data = try allocator.alloc(u8, 32),
         };
@@ -129,10 +129,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     };
     try tracked_accounts.ensureTotalCapacity(10_000);
 
-    var random_bank_fields = try BankFields.random(allocator, random, 1 << 8);
+    var random_bank_fields = try BankFields.initRandom(allocator, random, 1 << 8);
     defer random_bank_fields.deinit(allocator);
-
-    // const random_bank_hash_info = BankHashInfo.random(rand);
 
     const zstd_compressor = try zstd.Compressor.init(.{});
     defer zstd_compressor.deinit();
@@ -161,7 +159,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
                     errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
 
-                    var tracked_account = try TrackedAccount.random(random, slot, allocator);
+                    var tracked_account = try TrackedAccount.initRandom(random, slot, allocator);
 
                     const existing_pubkey = random.boolean();
                     if (existing_pubkey and tracked_accounts.count() > 0) {

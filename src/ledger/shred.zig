@@ -1243,7 +1243,7 @@ test "merkle tree round trip" {
     var nodes = try std.ArrayList(Hash).initCapacity(allocator, size);
     defer nodes.deinit();
     for (0..size) |_| {
-        nodes.appendAssumeCapacity(Hash.random(random));
+        nodes.appendAssumeCapacity(Hash.initRandom(random));
     }
     var tree = try nodes.clone();
     defer tree.deinit();

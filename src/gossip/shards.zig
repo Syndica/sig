@@ -111,7 +111,7 @@ test "GossipTableShards" {
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
 
-    const v = Hash.random(random);
+    const v = Hash.initRandom(random);
     try shards.insert(10, &v);
     shards.remove(10, &v);
 
@@ -120,9 +120,9 @@ test "GossipTableShards" {
 }
 
 // test helper fcns
-fn newTestGossipVersionedData(rand: std.rand.Random, gossip_table: *GossipTable) !GossipVersionedData {
+fn newTestGossipVersionedData(random: std.rand.Random, gossip_table: *GossipTable) !GossipVersionedData {
     const keypair = try KeyPair.create(null);
-    var value = try SignedGossipData.random(rand, &keypair);
+    var value = try SignedGossipData.initRandom(random, &keypair);
     _ = try gossip_table.insert(value, 0);
     const label = value.label();
     const x = gossip_table.get(label).?;

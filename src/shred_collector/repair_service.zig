@@ -248,7 +248,7 @@ pub const RepairService = struct {
 pub const RepairRequester = struct {
     allocator: Allocator,
     logger: Logger,
-    rand: Random,
+    random: Random,
     keypair: *const KeyPair,
     sender: SocketThread,
     metrics: Metrics,
@@ -265,7 +265,7 @@ pub const RepairRequester = struct {
     pub fn init(
         allocator: Allocator,
         logger: Logger,
-        rand: Random,
+        random: Random,
         registry: *Registry(.{}),
         keypair: *const KeyPair,
         udp_send_socket: Socket,
@@ -275,7 +275,7 @@ pub const RepairRequester = struct {
         return .{
             .allocator = allocator,
             .logger = logger,
-            .rand = rand,
+            .random = random,
             .keypair = keypair,
             .sender = sndr,
             .metrics = try registry.initStruct(Metrics),
@@ -305,7 +305,7 @@ pub const RepairRequester = struct {
                 self.keypair,
                 request.recipient,
                 @intCast(timestamp),
-                self.rand.int(Nonce),
+                self.random.int(Nonce),
             );
             packet.size = data.len;
             try self.sender.channel.send(packet);
@@ -349,7 +349,7 @@ pub const RepairPeer = struct {
 /// of requests. Naive benchmarks will optimize the wrong behaviors.
 pub const RepairPeerProvider = struct {
     allocator: Allocator,
-    rand: Random,
+    random: Random,
     gossip_table_rw: *RwMux(GossipTable),
     cache: LruCacheCustom(.non_locking, Slot, RepairPeers, Allocator, RepairPeers.deinit),
     my_pubkey: Pubkey,
@@ -378,7 +378,7 @@ pub const RepairPeerProvider = struct {
 
     pub fn init(
         allocator: Allocator,
-        rand: Random,
+        random: Random,
         registry: *Registry(.{}),
         gossip: *RwMux(GossipTable),
         my_pubkey: Pubkey,
@@ -392,7 +392,7 @@ pub const RepairPeerProvider = struct {
             .my_pubkey = my_pubkey,
             .my_shred_version = my_shred_version,
             .metrics = try registry.initStruct(Metrics),
-            .rand = rand,
+            .random = random,
         };
     }
 
@@ -411,7 +411,7 @@ pub const RepairPeerProvider = struct {
     pub fn getRandomPeer(self: *Self, slot: Slot) Error!?RepairPeer {
         const peers = try self.getPeers(slot);
         if (peers.len == 0) return null;
-        const index = self.rand.intRangeLessThan(usize, 0, peers.len);
+        const index = self.random.intRangeLessThan(usize, 0, peers.len);
         return peers[index];
     }
 
@@ -484,7 +484,7 @@ test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
     const registry = sig.prometheus.globalRegistry();
     var prng = std.rand.DefaultPrng.init(4328095);
-    var random = prng.random();
+    const random = prng.random();
     const TestLogger = sig.trace.DirectPrintLogger;
 
     // my details
@@ -568,7 +568,7 @@ test "RepairService sends repair request to gossip peer" {
 test "RepairPeerProvider selects correct peers" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(4328095);
-    var random = prng.random();
+    const random = prng.random();
 
     // my details
     const keypair = KeyPair.create(null) catch unreachable;
@@ -669,7 +669,7 @@ const TestPeerGenerator = struct {
         _ = try self.gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = contact_info }, &keypair), wallclock);
         switch (peer_type) {
             inline .HasSlot, .MissingSlot => {
-                var lowest_slot = sig.gossip.LowestSlot.random(self.random);
+                var lowest_slot = sig.gossip.LowestSlot.initRandom(self.random);
                 lowest_slot.from = pubkey;
                 lowest_slot.lowest = switch (peer_type) {
                     .MissingSlot => self.slot + 1,

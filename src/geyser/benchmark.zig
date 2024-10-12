@@ -27,8 +27,8 @@ pub fn streamWriter(allocator: std.mem.Allocator, exit: *std.atomic.Value(bool))
     const pubkeys = try allocator.alloc(Pubkey, N_ACCOUNTS_PER_SLOT);
     for (0..N_ACCOUNTS_PER_SLOT) |i| {
         const data_len = random.intRangeAtMost(u64, 2000, 10_000);
-        accounts[i] = try Account.random(allocator, random, data_len);
-        pubkeys[i] = Pubkey.random(random);
+        accounts[i] = try Account.initRandom(allocator, random, data_len);
+        pubkeys[i] = Pubkey.initRandom(random);
     }
     var slot: Slot = 0;
 

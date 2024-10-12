@@ -76,33 +76,33 @@ fn randomSnapshotFields(
     allocator: std.mem.Allocator,
     /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
     /// for commentary on the runtime of this function.
-    rand: std.Random,
+    random: std.Random,
 ) !SnapshotFields {
-    const bank_fields = try BankFields.random(allocator, rand, max_list_entries);
+    const bank_fields = try BankFields.initRandom(allocator, random, max_list_entries);
     errdefer bank_fields.deinit(allocator);
 
-    const accounts_db_fields = try randomAccountsDbFields(allocator, rand, .{});
+    const accounts_db_fields = try randomAccountsDbFields(allocator, random, .{});
     errdefer accounts_db_fields.deinit(allocator);
 
-    const epoch_reward_status: ?EpochRewardStatus = if (rand.boolean()) null else switch (rand.enumValue(@typeInfo(EpochRewardStatus).Union.tag_type.?)) {
+    const epoch_reward_status: ?EpochRewardStatus = if (random.boolean()) null else switch (random.enumValue(@typeInfo(EpochRewardStatus).Union.tag_type.?)) {
         .Active => .{ .Active = .{
-            .parent_start_block_height = rand.int(u64),
+            .parent_start_block_height = random.int(u64),
             .calculated_epoch_stake_rewards = blk: {
-                const stake_rewards = try allocator.alloc(StakeReward, rand.uintAtMost(usize, max_list_entries));
+                const stake_rewards = try allocator.alloc(StakeReward, random.uintAtMost(usize, max_list_entries));
                 errdefer allocator.free(stake_rewards);
                 errdefer for (stake_rewards) |*reward| {
                     reward.stake_account.deinit(allocator);
                 };
                 for (stake_rewards) |*rewards| {
                     rewards.* = .{
-                        .stake_pubkey = Pubkey.random(rand),
+                        .stake_pubkey = Pubkey.initRandom(random),
                         .stake_reward_info = .{
-                            .reward_type = rand.enumValue(sig.accounts_db.snapshots.RewardType),
-                            .lamports = rand.int(i64),
-                            .post_balance = rand.int(u64),
-                            .commission = if (rand.boolean()) rand.int(u8) else null,
+                            .reward_type = random.enumValue(sig.accounts_db.snapshots.RewardType),
+                            .lamports = random.int(i64),
+                            .post_balance = random.int(u64),
+                            .commission = if (random.boolean()) random.int(u8) else null,
                         },
-                        .stake_account = try Account.random(allocator, rand, rand.uintAtMost(usize, max_list_entries)),
+                        .stake_account = try Account.initRandom(allocator, random, random.uintAtMost(usize, max_list_entries)),
                     };
                 }
                 break :blk std.ArrayList(StakeReward).fromOwnedSlice(allocator, stake_rewards);
@@ -115,16 +115,16 @@ fn randomSnapshotFields(
     return .{
         .bank_fields = bank_fields,
         .accounts_db_fields = accounts_db_fields,
-        .lamports_per_signature = rand.int(u64),
+        .lamports_per_signature = random.int(u64),
         .bank_fields_inc = .{
-            .snapshot_persistence = if (rand.boolean()) null else .{
-                .full_slot = rand.int(Slot),
-                .full_hash = Hash.random(rand),
-                .full_capitalization = rand.int(u64),
-                .incremental_hash = Hash.random(rand),
-                .incremental_capitalization = rand.int(u64),
+            .snapshot_persistence = if (random.boolean()) null else .{
+                .full_slot = random.int(Slot),
+                .full_hash = Hash.initRandom(random),
+                .full_capitalization = random.int(u64),
+                .incremental_hash = Hash.initRandom(random),
+                .incremental_capitalization = random.int(u64),
             },
-            .epoch_accounts_hash = if (rand.boolean()) null else Hash.random(rand),
+            .epoch_accounts_hash = if (random.boolean()) null else Hash.initRandom(random),
             .epoch_reward_status = epoch_reward_status,
         },
     };
@@ -158,7 +158,7 @@ fn randomAccountsDbFields(
     allocator: std.mem.Allocator,
     /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
     /// for commentary on the runtime of this function.
-    rand: std.Random,
+    random: std.Random,
     params: AccountsDbFieldsRandomConfig,
 ) std.mem.Allocator.Error!AccountsDbFields {
     std.debug.assert(params.file_map_len.min >= 1);
@@ -179,7 +179,7 @@ fn randomAccountsDbFields(
     var total_data_len: u64 = 0;
     var max_slot: Slot = 0;
 
-    const file_map_len = rand.intRangeAtMost(usize, params.file_map_len.min, params.file_map_len.max);
+    const file_map_len = random.intRangeAtMost(usize, params.file_map_len.min, params.file_map_len.max);
 
     var file_map = AccountsDbFields.FileMap.init(allocator);
     errdefer file_map.deinit();
@@ -190,12 +190,12 @@ fn randomAccountsDbFields(
     try file_id_set.ensureTotalCapacity(file_map_len);
 
     for (0..file_map_len) |_| while (true) {
-        const new_slot = rand.intRangeAtMost(Slot, params.slot.min, params.slot.max);
+        const new_slot = random.intRangeAtMost(Slot, params.slot.min, params.slot.max);
         const slot_gop = file_map.getOrPutAssumeCapacity(new_slot);
         if (slot_gop.found_existing) continue;
 
         const new_id: FileId = while (true) {
-            const new_id = FileId.fromInt(rand.intRangeAtMost(FileId.Int, params.file_id.min.toInt(), params.file_id.max.toInt()));
+            const new_id = FileId.fromInt(random.intRangeAtMost(FileId.Int, params.file_id.min.toInt(), params.file_id.max.toInt()));
             const id_gop = file_id_set.getOrPutAssumeCapacityAdapted(new_id, FileIdAdapter{
                 .file_map = &file_map,
             });
@@ -205,7 +205,7 @@ fn randomAccountsDbFields(
 
         const account_file_info: AccountFileInfo = .{
             .id = new_id,
-            .length = rand.intRangeAtMost(usize, params.file_len.min, @min(std.math.maxInt(u64) - total_data_len, params.file_len.max)),
+            .length = random.intRangeAtMost(usize, params.file_len.min, @min(std.math.maxInt(u64) - total_data_len, params.file_len.max)),
         };
         slot_gop.value_ptr.* = account_file_info;
         max_slot = @max(max_slot, new_slot);
@@ -215,17 +215,17 @@ fn randomAccountsDbFields(
 
     return .{
         .file_map = file_map,
-        .stored_meta_write_version = rand.uintAtMost(u64, params.stored_meta_write_version_max),
+        .stored_meta_write_version = random.uintAtMost(u64, params.stored_meta_write_version_max),
         .slot = max_slot,
         .bank_hash_info = .{
-            .accounts_delta_hash = Hash.random(rand),
-            .accounts_hash = Hash.random(rand),
+            .accounts_delta_hash = Hash.initRandom(random),
+            .accounts_hash = Hash.initRandom(random),
             .stats = .{
-                .num_updated_accounts = rand.intRangeAtMost(u64, params.file_map_len.min, params.file_map_len.max),
-                .num_removed_accounts = rand.intRangeAtMost(u64, params.file_map_len.min, params.file_map_len.max),
-                .num_lamports_stored = rand.int(u64),
+                .num_updated_accounts = random.intRangeAtMost(u64, params.file_map_len.min, params.file_map_len.max),
+                .num_removed_accounts = random.intRangeAtMost(u64, params.file_map_len.min, params.file_map_len.max),
+                .num_lamports_stored = random.int(u64),
                 .total_data_len = total_data_len,
-                .num_executable_accounts = rand.intRangeAtMost(u64, params.file_map_len.min, params.file_map_len.max),
+                .num_executable_accounts = random.intRangeAtMost(u64, params.file_map_len.min, params.file_map_len.max),
             },
         },
         // NOTE: see field comment about these always being empty

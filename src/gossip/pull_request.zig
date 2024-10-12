@@ -25,7 +25,7 @@ pub const KEYS: f64 = 8;
 /// corresponding filters. Note: make sure to call deinit_gossip_filters.
 pub fn buildGossipPullFilters(
     alloc: std.mem.Allocator,
-    rand: std.Random,
+    random: std.Random,
     gossip_table_rw: *RwMux(GossipTable),
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
@@ -38,7 +38,7 @@ pub fn buildGossipPullFilters(
 
         const num_items = gossip_table.len() + gossip_table.purged.len() + failed_pull_hashes.items.len;
 
-        var filter_set = try GossipPullFilterSet.init(alloc, rand, num_items, bloom_size);
+        var filter_set = try GossipPullFilterSet.init(alloc, random, num_items, bloom_size);
         errdefer filter_set.deinit();
 
         // add all gossip values
@@ -62,7 +62,7 @@ pub fn buildGossipPullFilters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consumeForGossipPullFilters(alloc, rand, max_n_filters);
+    const filters = try filter_set.consumeForGossipPullFilters(alloc, random, max_n_filters);
     return filters;
 }
 
@@ -84,7 +84,7 @@ pub const GossipPullFilterSet = struct {
 
     pub fn init(
         alloc: std.mem.Allocator,
-        rand: std.Random,
+        random: std.Random,
         num_items: usize,
         bloom_size_bytes: usize,
     ) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
@@ -97,9 +97,9 @@ pub const GossipPullFilterSet = struct {
         const max_items = GossipPullFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
-            const filter = try Bloom.random(
+            const filter = try Bloom.initRandom(
                 alloc,
-                rand,
+                random,
                 @intFromFloat(max_items),
                 FALSE_RATE,
                 @intFromFloat(bloom_size_bits),
@@ -113,12 +113,12 @@ pub const GossipPullFilterSet = struct {
         };
     }
 
-    pub fn initTest(alloc: std.mem.Allocator, rand: std.Random, mask_bits: u32) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
+    pub fn initTest(alloc: std.mem.Allocator, random: std.Random, mask_bits: u32) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
-            const filter = try Bloom.random(alloc, rand, 1000, FALSE_RATE, MAX_BLOOM_SIZE);
+            const filter = try Bloom.initRandom(alloc, random, 1000, FALSE_RATE, MAX_BLOOM_SIZE);
             filters.appendAssumeCapacity(filter);
         }
         return Self{
@@ -158,7 +158,7 @@ pub const GossipPullFilterSet = struct {
     pub fn consumeForGossipPullFilters(
         self: *Self,
         allocator: std.mem.Allocator,
-        rand: std.Random,
+        random: std.Random,
         max_size: usize,
     ) error{OutOfMemory}!ArrayList(GossipPullFilter) {
         defer self.deinit(); // !
@@ -175,7 +175,7 @@ pub const GossipPullFilterSet = struct {
 
         if (!can_consume_all) {
             // shuffle the indexs
-            shuffleFirstN(rand, usize, indexs.items, n_filters);
+            shuffleFirstN(random, usize, indexs.items, n_filters);
 
             // release others
             for (n_filters..set_size) |i| {
@@ -271,7 +271,7 @@ test "building pull filters" {
     const random = prng.random();
 
     for (0..64) |_| {
-        const id = Pubkey.random(random);
+        const id = Pubkey.initRandom(random);
         var legacy_contact_info = LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
         const gossip_value = try SignedGossipData.initSigned(.{
@@ -318,7 +318,7 @@ test "filter set deinits correct" {
 
     var filter_set = try GossipPullFilterSet.init(std.testing.allocator, random, 10000, 200);
 
-    const hash = Hash.random(random);
+    const hash = Hash.initRandom(random);
     filter_set.add(&hash);
 
     const index = GossipPullFilterSet.hashIndex(filter_set.mask_bits, &hash);

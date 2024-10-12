@@ -492,13 +492,13 @@ test "accounts_db.download: test remove untrusted peers" {
     const random = prng.random();
 
     const my_shred_version: usize = 19;
-    const my_pubkey = Pubkey.random(random);
+    const my_pubkey = Pubkey.initRandom(random);
 
     const contact_infos: []ThreadSafeContactInfo = try allocator.alloc(ThreadSafeContactInfo, 10);
     defer allocator.free(contact_infos);
 
     for (contact_infos) |*ci| {
-        var lci = LegacyContactInfo.default(Pubkey.random(random));
+        var lci = LegacyContactInfo.default(Pubkey.initRandom(random));
         lci.rpc.setPort(19); // no long unspecified = valid
         ci.* = ThreadSafeContactInfo.fromLegacyContactInfo(lci);
         ci.shred_version = 19; // matching shred version
@@ -568,13 +568,13 @@ test "accounts_db.download: test finding peers" {
     const random = prng.random();
 
     const my_shred_version: usize = 19;
-    const my_pubkey = Pubkey.random(random);
+    const my_pubkey = Pubkey.initRandom(random);
 
     const contact_infos: []ThreadSafeContactInfo = try allocator.alloc(ThreadSafeContactInfo, 10);
     defer allocator.free(contact_infos);
 
     for (contact_infos) |*ci| {
-        var lci = LegacyContactInfo.default(Pubkey.random(random));
+        var lci = LegacyContactInfo.default(Pubkey.initRandom(random));
         lci.rpc.setPort(19); // no long unspecified = valid
         ci.* = ThreadSafeContactInfo.fromLegacyContactInfo(lci);
         ci.shred_version = 19; // matching shred version

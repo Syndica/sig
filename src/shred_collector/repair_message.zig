@@ -209,7 +209,7 @@ test "signed/serialized RepairRequest is valid" {
         var kp_noise: [32]u8 = undefined;
         random.bytes(&kp_noise);
         const keypair = try KeyPair.create(kp_noise);
-        const recipient = Pubkey.random(random);
+        const recipient = Pubkey.initRandom(random);
         const timestamp = random.int(u64);
         const nonce = random.int(Nonce);
 
@@ -241,8 +241,8 @@ test "RepairRequestHeader serialization round trip" {
 
     const header = RepairRequestHeader{
         .signature = Signature.init(signature),
-        .sender = Pubkey.random(prng.random()),
-        .recipient = Pubkey.random(prng.random()),
+        .sender = Pubkey.initRandom(prng.random()),
+        .recipient = Pubkey.initRandom(prng.random()),
         .timestamp = 5924,
         .nonce = 123,
     };
@@ -402,47 +402,47 @@ const testHelpers = struct {
         // println!("{data:?}");
     }
 
-    fn randomRepairRequestHeader(rand: std.rand.Random) RepairRequestHeader {
+    fn randomRepairRequestHeader(random: std.rand.Random) RepairRequestHeader {
         var signature: [Signature.size]u8 = undefined;
-        rand.bytes(&signature);
+        random.bytes(&signature);
 
         return RepairRequestHeader{
             .signature = Signature.init(signature),
-            .sender = Pubkey.random(rand),
-            .recipient = Pubkey.random(rand),
-            .timestamp = rand.int(u64),
-            .nonce = rand.int(u32),
+            .sender = Pubkey.initRandom(random),
+            .recipient = Pubkey.initRandom(random),
+            .timestamp = random.int(u64),
+            .nonce = random.int(u32),
         };
     }
 
     fn randomRepairProtocolMessage(
-        rand: std.rand.Random,
+        random: std.rand.Random,
         message_type: RepairMessage.Tag,
     ) RepairMessage {
         return switch (message_type) {
             .Pong => x: {
                 var buf: [32]u8 = undefined;
-                rand.bytes(&buf);
+                random.bytes(&buf);
                 const kp = KeyPair.create(buf) catch unreachable;
-                break :x .{ .Pong = Pong.random(rand, &(kp)) catch unreachable };
+                break :x .{ .Pong = Pong.initRandom(random, &(kp)) catch unreachable };
             },
             .WindowIndex => .{ .WindowIndex = .{
-                .header = randomRepairRequestHeader(rand),
-                .slot = rand.int(Slot),
-                .shred_index = rand.int(u64),
+                .header = randomRepairRequestHeader(random),
+                .slot = random.int(Slot),
+                .shred_index = random.int(u64),
             } },
             .HighestWindowIndex => .{ .HighestWindowIndex = .{
-                .header = randomRepairRequestHeader(rand),
-                .slot = rand.int(Slot),
-                .shred_index = rand.int(u64),
+                .header = randomRepairRequestHeader(random),
+                .slot = random.int(Slot),
+                .shred_index = random.int(u64),
             } },
             .Orphan => .{ .Orphan = .{
-                .header = randomRepairRequestHeader(rand),
-                .slot = rand.int(Slot),
+                .header = randomRepairRequestHeader(random),
+                .slot = random.int(Slot),
             } },
             .AncestorHashes => .{ .AncestorHashes = .{
-                .header = randomRepairRequestHeader(rand),
-                .slot = rand.int(Slot),
+                .header = randomRepairRequestHeader(random),
+                .slot = random.int(Slot),
             } },
         };
     }

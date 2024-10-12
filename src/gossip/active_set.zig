@@ -49,9 +49,9 @@ pub const ActiveSet = struct {
         return self.peers.count();
     }
 
-    pub fn rotate(
+    pub fn initRotate(
         self: *Self,
-        rand: std.Random,
+        random: std.Random,
         peers: []ThreadSafeContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
@@ -65,16 +65,16 @@ pub const ActiveSet = struct {
             return;
         }
         const size = @min(peers.len, NUM_ACTIVE_SET_ENTRIES);
-        shuffleFirstN(rand, ThreadSafeContactInfo, peers, size);
+        shuffleFirstN(random, ThreadSafeContactInfo, peers, size);
 
         const bloom_num_items = @max(peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
             const entry = try self.peers.getOrPut(peers[i].pubkey);
             if (entry.found_existing == false) {
                 // *full* hard restart on blooms -- labs doesnt do this - bug?
-                const bloom = try Bloom.random(
+                const bloom = try Bloom.initRandom(
                     self.allocator,
-                    rand,
+                    random,
                     bloom_num_items,
                     BLOOM_FALSE_RATE,
                     BLOOM_MAX_BITS,
@@ -142,7 +142,7 @@ test "init/denit" {
     defer gossip_peers.deinit();
 
     for (0..GOSSIP_PUSH_FANOUT) |_| {
-        const data = LegacyContactInfo.random(prng.random());
+        const data = LegacyContactInfo.initRandom(prng.random());
         try gossip_peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(data));
 
         var keypair = try KeyPair.create(null);
@@ -154,11 +154,11 @@ test "init/denit" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    try active_set.rotate(prng.random(), gossip_peers.items);
+    try active_set.initRotate(prng.random(), gossip_peers.items);
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
-    const origin = Pubkey.random(prng.random());
+    const origin = Pubkey.initRandom(prng.random());
 
     var fanout = try active_set.getFanoutPeers(alloc, origin, &table);
     defer fanout.deinit();
@@ -181,8 +181,8 @@ test "gracefully rotates with duplicate contact ids" {
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
-    var data = try LegacyContactInfo.random(prng.random()).toContactInfo(alloc);
-    var dupe = try LegacyContactInfo.random(prng.random()).toContactInfo(alloc);
+    var data = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(alloc);
+    var dupe = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(alloc);
     defer data.deinit();
     defer dupe.deinit();
     dupe.pubkey = data.pubkey;
@@ -191,5 +191,5 @@ test "gracefully rotates with duplicate contact ids" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    try active_set.rotate(prng.random(), gossip_peers.items);
+    try active_set.initRotate(prng.random(), gossip_peers.items);
 }

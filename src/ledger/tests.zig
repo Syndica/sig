@@ -29,7 +29,7 @@ test "put/get data consistency for merkle root" {
         .slot = 1234127498,
         .fec_set_index = 4932874234,
     };
-    const root = sig.core.Hash.random(random);
+    const root = sig.core.Hash.initRandom(random);
 
     try db.put(
         schema.merkle_root_meta,

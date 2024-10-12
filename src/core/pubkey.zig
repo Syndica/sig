@@ -35,10 +35,10 @@ pub const Pubkey = extern struct {
         return base58.encode(self.data);
     }
 
-    /// ***random*** generates a random pubkey. Optionally set `skip_encoding` to skip expensive base58 encoding.
-    pub fn random(rand: std.Random) Self {
+    /// ***initRandom*** generates a random pubkey. Optionally set `skip_encoding` to skip expensive base58 encoding.
+    pub fn initRandom(random: std.Random) Self {
         var bytes: [size]u8 = undefined;
-        rand.bytes(&bytes);
+        random.bytes(&bytes);
         return .{ .data = bytes };
     }
 

@@ -56,14 +56,14 @@ pub const FeeRateGovernor = struct {
 
     pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .skip = true };
 
-    pub fn random(rand: std.Random) FeeRateGovernor {
+    pub fn initRandom(random: std.Random) FeeRateGovernor {
         return .{
-            .lamports_per_signature = rand.int(u64),
-            .target_lamports_per_signature = rand.int(u64),
-            .target_signatures_per_slot = rand.int(u64),
-            .min_lamports_per_signature = rand.int(u64),
-            .max_lamports_per_signature = rand.int(u64),
-            .burn_percent = rand.uintAtMost(u8, 100),
+            .lamports_per_signature = random.int(u64),
+            .target_lamports_per_signature = random.int(u64),
+            .target_signatures_per_slot = random.int(u64),
+            .min_lamports_per_signature = random.int(u64),
+            .max_lamports_per_signature = random.int(u64),
+            .burn_percent = random.uintAtMost(u8, 100),
         };
     }
 };
@@ -83,11 +83,11 @@ pub const Rent = extern struct {
     /// distributed to validators.
     burn_percent: u8,
 
-    pub fn random(rand: std.Random) Rent {
+    pub fn initRandom(random: std.Random) Rent {
         return .{
-            .lamports_per_byte_year = rand.int(u64),
-            .exemption_threshold = @bitCast(rand.int(u64)),
-            .burn_percent = rand.uintAtMost(u8, 100),
+            .lamports_per_byte_year = random.int(u64),
+            .exemption_threshold = @bitCast(random.int(u64)),
+            .burn_percent = random.uintAtMost(u8, 100),
         };
     }
 };
@@ -112,14 +112,14 @@ pub const Inflation = struct {
     /// DEPRECATED, this field is currently unused
     __unused: f64,
 
-    pub fn random(rand: std.Random) Inflation {
+    pub fn initRandom(random: std.Random) Inflation {
         return .{
-            .initial = @bitCast(rand.int(u64)),
-            .terminal = @bitCast(rand.int(u64)),
-            .taper = @bitCast(rand.int(u64)),
-            .foundation = @bitCast(rand.int(u64)),
-            .foundation_term = @bitCast(rand.int(u64)),
-            .__unused = @bitCast(rand.int(u64)),
+            .initial = @bitCast(random.int(u64)),
+            .terminal = @bitCast(random.int(u64)),
+            .taper = @bitCast(random.int(u64)),
+            .foundation = @bitCast(random.int(u64)),
+            .foundation_term = @bitCast(random.int(u64)),
+            .__unused = @bitCast(random.int(u64)),
         };
     }
 };

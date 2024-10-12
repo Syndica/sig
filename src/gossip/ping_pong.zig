@@ -37,9 +37,9 @@ pub const Ping = struct {
         return self;
     }
 
-    pub fn random(rand: std.rand.Random, keypair: *const KeyPair) !Self {
+    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Self {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
-        rand.bytes(&token);
+        random.bytes(&token);
         var signature = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
 
         return Self{
@@ -81,8 +81,8 @@ pub const Pong = struct {
         }
     }
 
-    pub fn random(rand: std.rand.Random, keypair: *const KeyPair) !Self {
-        const ping = try Ping.random(rand, keypair);
+    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Self {
+        const ping = try Ping.initRandom(random, keypair);
         return try Pong.init(&ping, keypair);
     }
 
@@ -175,7 +175,7 @@ pub const PingCache = struct {
             }
         }
         var prng = DefaultPrng.init(0);
-        const ping = Ping.random(prng.random(), keypair) catch return null;
+        const ping = Ping.initRandom(prng.random(), keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         const hash = Hash.generateSha256Hash(token_with_prefix[0..]);
         _ = self.pending_cache.put(hash, peer_and_addr);
@@ -255,7 +255,7 @@ test "PingCache works" {
     var prng = std.rand.DefaultPrng.init(0);
     const random = prng.random();
 
-    const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(random), .socket_addr = SocketAddr.UNSPECIFIED };
+    const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.initRandom(random), .socket_addr = SocketAddr.UNSPECIFIED };
     const now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 

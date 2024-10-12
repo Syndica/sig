@@ -107,13 +107,13 @@ pub const SignedGossipData = struct {
     }
 
     /// only used in tests
-    pub fn random(rand: std.rand.Random, keypair: *const KeyPair) !Self {
-        return try initSigned(GossipData.random(rand), keypair);
+    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Self {
+        return try initSigned(GossipData.initRandom(random), keypair);
     }
 
     /// only used in tests
-    pub fn randomWithIndex(rand: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
-        var data = GossipData.randomFromIndex(rand, index);
+    pub fn randomWithIndex(random: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
+        var data = GossipData.randomFromIndex(random, index);
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         data.setId(pubkey);
         return try initSigned(data, keypair);
@@ -436,48 +436,48 @@ pub const GossipData = union(GossipDataTag) {
         }
     }
 
-    pub fn random(rand: std.rand.Random) GossipData {
-        const v = rand.intRangeAtMost(u16, 0, 10);
-        return GossipData.randomFromIndex(rand, v);
+    pub fn initRandom(random: std.rand.Random) GossipData {
+        const v = random.intRangeAtMost(u16, 0, 10);
+        return GossipData.randomFromIndex(random, v);
     }
 
-    pub fn randomFromIndex(rand: std.rand.Random, index: usize) GossipData {
+    pub fn randomFromIndex(random: std.rand.Random, index: usize) GossipData {
         switch (index) {
             0 => {
-                return .{ .LegacyContactInfo = LegacyContactInfo.random(rand) };
+                return .{ .LegacyContactInfo = LegacyContactInfo.initRandom(random) };
             },
             1 => {
-                return .{ .Vote = .{ rand.intRangeAtMost(u8, 0, MAX_VOTES - 1), Vote.random(rand) } };
+                return .{ .Vote = .{ random.intRangeAtMost(u8, 0, MAX_VOTES - 1), Vote.initRandom(random) } };
             },
             2 => {
-                return .{ .EpochSlots = .{ rand.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS - 1), EpochSlots.random(rand) } };
+                return .{ .EpochSlots = .{ random.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS - 1), EpochSlots.initRandom(random) } };
             },
             3 => {
-                return .{ .LowestSlot = .{ 0, LowestSlot.random(rand) } };
+                return .{ .LowestSlot = .{ 0, LowestSlot.initRandom(random) } };
             },
             4 => {
-                return .{ .LegacySnapshotHashes = LegacySnapshotHashes.random(rand) };
+                return .{ .LegacySnapshotHashes = LegacySnapshotHashes.initRandom(random) };
             },
             5 => {
-                return .{ .AccountsHashes = AccountsHashes.random(rand) };
+                return .{ .AccountsHashes = AccountsHashes.initRandom(random) };
             },
             6 => {
-                return .{ .LegacyVersion = LegacyVersion.random(rand) };
+                return .{ .LegacyVersion = LegacyVersion.initRandom(random) };
             },
             7 => {
-                return .{ .Version = Version.random(rand) };
+                return .{ .Version = Version.initRandom(random) };
             },
             8 => {
-                return .{ .NodeInstance = NodeInstance.random(rand) };
+                return .{ .NodeInstance = NodeInstance.initRandom(random) };
             },
             9 => {
-                return .{ .SnapshotHashes = SnapshotHashes.random(rand) };
+                return .{ .SnapshotHashes = SnapshotHashes.initRandom(random) };
             },
             // 10 => {
-            //     return GossipData { .ContactInfo = ContactInfo.random(rng) };
+            //     return GossipData { .ContactInfo = ContactInfo.initRandom(rng) };
             // },
             else => {
-                return .{ .DuplicateShred = .{ rand.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.random(rand) } };
+                return .{ .DuplicateShred = .{ random.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.initRandom(random) } };
             },
         }
     }
@@ -554,21 +554,21 @@ pub const LegacyContactInfo = struct {
         };
     }
 
-    pub fn random(rand: std.rand.Random) LegacyContactInfo {
+    pub fn initRandom(random: std.rand.Random) LegacyContactInfo {
         return LegacyContactInfo{
-            .id = Pubkey.random(rand),
-            .gossip = SocketAddr.random(rand),
-            .turbine_recv = SocketAddr.random(rand),
-            .turbine_recv_quic = SocketAddr.random(rand),
-            .repair = SocketAddr.random(rand),
-            .tpu = SocketAddr.random(rand),
-            .tpu_forwards = SocketAddr.random(rand),
-            .tpu_vote = SocketAddr.random(rand),
-            .rpc = SocketAddr.random(rand),
-            .rpc_pubsub = SocketAddr.random(rand),
-            .serve_repair = SocketAddr.random(rand),
+            .id = Pubkey.initRandom(random),
+            .gossip = SocketAddr.initRandom(random),
+            .turbine_recv = SocketAddr.initRandom(random),
+            .turbine_recv_quic = SocketAddr.initRandom(random),
+            .repair = SocketAddr.initRandom(random),
+            .tpu = SocketAddr.initRandom(random),
+            .tpu_forwards = SocketAddr.initRandom(random),
+            .tpu_vote = SocketAddr.initRandom(random),
+            .rpc = SocketAddr.initRandom(random),
+            .rpc_pubsub = SocketAddr.initRandom(random),
+            .serve_repair = SocketAddr.initRandom(random),
             .wallclock = getWallclockMs(),
-            .shred_version = rand.int(u16),
+            .shred_version = random.int(u16),
         };
     }
 
@@ -628,12 +628,12 @@ pub const Vote = struct {
         self.transaction.deinit(allocator);
     }
 
-    pub fn random(rand: std.rand.Random) Vote {
+    pub fn initRandom(random: std.rand.Random) Vote {
         return Vote{
-            .from = Pubkey.random(rand),
+            .from = Pubkey.initRandom(random),
             .transaction = Transaction.default(),
             .wallclock = getWallclockMs(),
-            .slot = rand.int(u64),
+            .slot = random.int(u64),
         };
     }
 
@@ -686,13 +686,13 @@ pub const LowestSlot = struct {
         }
     }
 
-    pub fn random(rand: std.rand.Random) LowestSlot {
+    pub fn initRandom(random: std.rand.Random) LowestSlot {
         var slots: [0]u64 = .{};
         var stash: [0]DeprecatedEpochIncompleteSlots = .{};
         return LowestSlot{
-            .from = Pubkey.random(rand),
+            .from = Pubkey.initRandom(random),
             .root = 0,
-            .lowest = rand.int(u64),
+            .lowest = random.int(u64),
             .slots = &slots,
             .stash = &stash,
             .wallclock = getWallclockMs(),
@@ -745,10 +745,10 @@ pub const AccountsHashes = struct {
         allocator.free(self.hashes);
     }
 
-    pub fn random(rand: std.rand.Random) AccountsHashes {
+    pub fn initRandom(random: std.rand.Random) AccountsHashes {
         var slice: [0]SlotAndHash = .{};
         return AccountsHashes{
-            .from = Pubkey.random(rand),
+            .from = Pubkey.initRandom(random),
             .hashes = &slice,
             .wallclock = getWallclockMs(),
         };
@@ -784,10 +784,10 @@ pub const EpochSlots = struct {
         allocator.free(self.slots);
     }
 
-    pub fn random(rand: std.rand.Random) EpochSlots {
+    pub fn initRandom(random: std.rand.Random) EpochSlots {
         var slice: [0]CompressedSlots = .{};
         return EpochSlots{
-            .from = Pubkey.random(rand),
+            .from = Pubkey.initRandom(random),
             .slots = &slice,
             .wallclock = getWallclockMs(),
         };
@@ -909,11 +909,11 @@ pub const LegacyVersion = struct {
     wallclock: u64,
     version: LegacyVersion1,
 
-    pub fn random(rand: std.rand.Random) LegacyVersion {
+    pub fn initRandom(random: std.rand.Random) LegacyVersion {
         return LegacyVersion{
-            .from = Pubkey.random(rand),
+            .from = Pubkey.initRandom(random),
             .wallclock = getWallclockMs(),
-            .version = LegacyVersion1.random(rand),
+            .version = LegacyVersion1.initRandom(random),
         };
     }
 };
@@ -924,12 +924,12 @@ pub const LegacyVersion1 = struct {
     patch: u16,
     commit: ?u32, // first 4 bytes of the sha1 commit hash
 
-    pub fn random(rand: std.rand.Random) LegacyVersion1 {
+    pub fn initRandom(random: std.rand.Random) LegacyVersion1 {
         return LegacyVersion1{
-            .major = rand.int(u16),
-            .minor = rand.int(u16),
-            .patch = rand.int(u16),
-            .commit = rand.int(u32),
+            .major = random.int(u16),
+            .minor = random.int(u16),
+            .patch = random.int(u16),
+            .commit = random.int(u32),
         };
     }
 };
@@ -957,11 +957,11 @@ pub const Version = struct {
         };
     }
 
-    pub fn random(rand: std.rand.Random) Version {
+    pub fn initRandom(random: std.rand.Random) Version {
         return Version{
-            .from = Pubkey.random(rand),
+            .from = Pubkey.initRandom(random),
             .wallclock = getWallclockMs(),
-            .version = LegacyVersion2.random(rand),
+            .version = LegacyVersion2.initRandom(random),
         };
     }
 
@@ -981,13 +981,13 @@ pub const LegacyVersion2 = struct {
 
     pub const CURRENT = LegacyVersion2.init(1, 14, 17, 2996451279, 3488713414);
 
-    pub fn random(rand: std.rand.Random) Self {
+    pub fn initRandom(random: std.rand.Random) Self {
         return Self{
-            .major = rand.int(u16),
-            .minor = rand.int(u16),
-            .patch = rand.int(u16),
-            .commit = rand.int(u32),
-            .feature_set = rand.int(u32),
+            .major = random.int(u16),
+            .minor = random.int(u16),
+            .patch = random.int(u16),
+            .commit = random.int(u32),
+            .feature_set = random.int(u32),
         };
     }
 
@@ -1010,21 +1010,21 @@ pub const NodeInstance = struct {
 
     const Self = @This();
 
-    pub fn random(rand: std.rand.Random) Self {
+    pub fn initRandom(random: std.rand.Random) Self {
         return Self{
-            .from = Pubkey.random(rand),
+            .from = Pubkey.initRandom(random),
             .wallclock = getWallclockMs(),
-            .timestamp = rand.int(u64),
-            .token = rand.int(u64),
+            .timestamp = random.int(u64),
+            .token = random.int(u64),
         };
     }
 
-    pub fn init(rand: std.Random, from: Pubkey, wallclock: u64) Self {
+    pub fn init(random: std.Random, from: Pubkey, wallclock: u64) Self {
         return Self{
             .from = from,
             .wallclock = wallclock,
             .timestamp = @intCast(std.time.microTimestamp()),
-            .token = rand.int(u64),
+            .token = random.int(u64),
         };
     }
 
@@ -1093,17 +1093,17 @@ pub const DuplicateShred = struct {
         allocator.free(self.chunk);
     }
 
-    pub fn random(rand: std.rand.Random) DuplicateShred {
+    pub fn initRandom(random: std.rand.Random) DuplicateShred {
         // NOTE: cant pass around a slice here (since the stack data will get cleared)
         var slice = [0]u8{}; // empty slice
-        const num_chunks = rand.intRangeAtMost(u8, 5, 100);
-        const chunk_index = rand.intRangeAtMost(u8, 0, num_chunks - 1);
+        const num_chunks = random.intRangeAtMost(u8, 5, 100);
+        const chunk_index = random.intRangeAtMost(u8, 0, num_chunks - 1);
 
         return DuplicateShred{
-            .from = Pubkey.random(rand),
+            .from = Pubkey.initRandom(random),
             .wallclock = getWallclockMs(),
-            .slot = rand.int(u64),
-            .shred_index = rand.int(u32),
+            .slot = random.int(u64),
+            .shred_index = random.int(u32),
             .shred_type = ShredType.Data,
             .num_chunks = num_chunks,
             .chunk_index = chunk_index,
@@ -1138,11 +1138,11 @@ pub const SnapshotHashes = struct {
         allocator.free(self.incremental);
     }
 
-    pub fn random(rand: std.rand.Random) SnapshotHashes {
+    pub fn initRandom(random: std.rand.Random) SnapshotHashes {
         var slice: [0]SlotAndHash = .{};
         return SnapshotHashes{
-            .from = Pubkey.random(rand),
-            .full = .{ .slot = rand.int(u64), .hash = Hash.random(rand) },
+            .from = Pubkey.initRandom(random),
+            .full = .{ .slot = random.int(u64), .hash = Hash.initRandom(random) },
             .incremental = &slice,
             .wallclock = getWallclockMs(),
         };
@@ -1220,8 +1220,8 @@ pub const ContactInfo = struct {
         }
     }
 
-    pub fn toNodeInstance(self: *Self, rand: std.Random) NodeInstance {
-        return NodeInstance.init(rand, self.pubkey, @intCast(std.time.milliTimestamp()));
+    pub fn toNodeInstance(self: *Self, random: std.Random) NodeInstance {
+        return NodeInstance.init(random, self.pubkey, @intCast(std.time.milliTimestamp()));
     }
 
     pub fn deinit(self: *const Self) void {
@@ -1256,16 +1256,16 @@ pub const ContactInfo = struct {
         };
     }
 
-    pub fn random(
+    pub fn initRandom(
         allocator: std.mem.Allocator,
-        rand: std.rand.Random,
+        random: std.rand.Random,
         pubkey: Pubkey,
         wallclock: u64,
         outset: u64,
         shred_version: u16,
     ) !ContactInfo {
-        var addrs = try ArrayList(IpAddr).initCapacity(allocator, rand.intRangeAtMost(usize, 4, 10));
-        var sockets = try ArrayList(SocketEntry).initCapacity(allocator, rand.intRangeAtMost(usize, 4, 10));
+        var addrs = try ArrayList(IpAddr).initCapacity(allocator, random.intRangeAtMost(usize, 4, 10));
+        var sockets = try ArrayList(SocketEntry).initCapacity(allocator, random.intRangeAtMost(usize, 4, 10));
 
         for (0..addrs.items.len) |_| {
             addrs.appendAssumeCapacity(IpAddr.newIpv4(127, 0, 0, 1));
@@ -1567,7 +1567,7 @@ test "new contact info" {
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
 
-    var ci = ContactInfo.init(testing.allocator, Pubkey.random(random), @as(u64, @intCast(std.time.microTimestamp())), 0);
+    var ci = ContactInfo.init(testing.allocator, Pubkey.initRandom(random), @as(u64, @intCast(std.time.microTimestamp())), 0);
     defer ci.deinit();
 }
 
@@ -1595,7 +1595,7 @@ test "set & get socket on contact info" {
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
 
-    var ci = ContactInfo.init(testing.allocator, Pubkey.random(random), @as(u64, @intCast(std.time.microTimestamp())), 0);
+    var ci = ContactInfo.init(testing.allocator, Pubkey.initRandom(random), @as(u64, @intCast(std.time.microTimestamp())), 0);
     defer ci.deinit();
     try ci.setSocket(.rpc, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899));
 
@@ -1771,7 +1771,7 @@ test "sig verify duplicateShreds" {
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     var prng = std.rand.DefaultPrng.init(0);
-    var data = DuplicateShred.random(prng.random());
+    var data = DuplicateShred.initRandom(prng.random());
     data.from = pubkey;
 
     var value = try SignedGossipData.initSigned(GossipData{ .DuplicateShred = .{ 0, data } }, &keypair);
@@ -1936,27 +1936,27 @@ test "random gossip data" {
     var buf: [1000]u8 = undefined;
 
     {
-        const data = LegacyContactInfo.random(random);
+        const data = LegacyContactInfo.initRandom(random);
         const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
         _ = result;
     }
     {
-        const data = EpochSlots.random(random);
+        const data = EpochSlots.initRandom(random);
         const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
         _ = result;
     }
     {
-        const data = Vote.random(random);
+        const data = Vote.initRandom(random);
         const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
         _ = result;
     }
     {
-        const data = DuplicateShred.random(random);
+        const data = DuplicateShred.initRandom(random);
         const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
         _ = result;
     }
     {
-        const data = GossipData.random(random);
+        const data = GossipData.initRandom(random);
         const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
         _ = result;
     }
@@ -1966,7 +1966,7 @@ test "LegacyContactInfo <-> ContactInfo roundtrip" {
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
 
-    const start = LegacyContactInfo.random(random);
+    const start = LegacyContactInfo.initRandom(random);
     const ci = try start.toContactInfo(std.testing.allocator);
     defer ci.deinit();
     const end = LegacyContactInfo.fromContactInfo(&ci);
@@ -1977,7 +1977,7 @@ test "LegacyContactInfo <-> ContactInfo roundtrip" {
 test "sanitize valid ContactInfo works" {
     var prng = std.rand.DefaultPrng.init(871329);
     const random = prng.random();
-    const info = try ContactInfo.random(std.testing.allocator, random, Pubkey.random(random), 100, 123, 246);
+    const info = try ContactInfo.initRandom(std.testing.allocator, random, Pubkey.initRandom(random), 100, 123, 246);
     defer info.deinit();
     const data = GossipData{ .ContactInfo = info };
     try data.sanitize();
@@ -1986,7 +1986,7 @@ test "sanitize valid ContactInfo works" {
 test "sanitize invalid ContactInfo has error" {
     var prng = std.rand.DefaultPrng.init(3414214);
     const random = prng.random();
-    const info = try ContactInfo.random(std.testing.allocator, random, Pubkey.random(random), 1_000_000_000_000_000, 123, 246);
+    const info = try ContactInfo.initRandom(std.testing.allocator, random, Pubkey.initRandom(random), 1_000_000_000_000_000, 123, 246);
     defer info.deinit();
     const data = GossipData{ .ContactInfo = info };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
@@ -1995,7 +1995,7 @@ test "sanitize invalid ContactInfo has error" {
 test "sanitize valid NodeInstance works" {
     var prng = std.rand.DefaultPrng.init(23523413);
     const random = prng.random();
-    const instance = NodeInstance.random(random);
+    const instance = NodeInstance.initRandom(random);
     const data = GossipData{ .NodeInstance = instance };
     try data.sanitize();
 }
@@ -2003,7 +2003,7 @@ test "sanitize valid NodeInstance works" {
 test "sanitize invalid NodeInstance has error" {
     var prng = std.rand.DefaultPrng.init(524145234);
     const random = prng.random();
-    var instance = NodeInstance.random(random);
+    var instance = NodeInstance.initRandom(random);
     instance.wallclock = 1_000_000_000_487_283;
     const data = GossipData{ .NodeInstance = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
@@ -2012,7 +2012,7 @@ test "sanitize invalid NodeInstance has error" {
 test "sanitize valid SnapshotHashes works" {
     var prng = std.rand.DefaultPrng.init(23523413);
     const random = prng.random();
-    var instance = SnapshotHashes.random(random);
+    var instance = SnapshotHashes.initRandom(random);
     instance.full.slot = 1000;
     const data = GossipData{ .SnapshotHashes = instance };
     try data.sanitize();
@@ -2021,7 +2021,7 @@ test "sanitize valid SnapshotHashes works" {
 test "sanitize invalid SnapshotHashes full slot has error" {
     var prng = std.rand.DefaultPrng.init(524145234);
     const random = prng.random();
-    var instance = SnapshotHashes.random(random);
+    var instance = SnapshotHashes.initRandom(random);
     instance.full.slot = 1_000_000_000_487_283;
     const data = GossipData{ .SnapshotHashes = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
@@ -2031,7 +2031,7 @@ test "sanitize invalid SnapshotHashes incremental slot has error" {
     var prng = std.rand.DefaultPrng.init(524145234);
     const random = prng.random();
     var incremental: [1]SlotAndHash = .{.{ .slot = 1_000_000_000_487_283, .hash = Hash.default() }};
-    var instance = SnapshotHashes.random(random);
+    var instance = SnapshotHashes.initRandom(random);
     instance.incremental = &incremental;
     const data = GossipData{ .SnapshotHashes = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
@@ -2041,7 +2041,7 @@ test "sanitize SnapshotHashes full > incremental has error" {
     var prng = std.rand.DefaultPrng.init(524145234);
     const random = prng.random();
     var incremental: [1]SlotAndHash = .{.{ .slot = 1, .hash = Hash.default() }};
-    var instance = SnapshotHashes.random(random);
+    var instance = SnapshotHashes.initRandom(random);
     instance.full.slot = 2;
     instance.incremental = &incremental;
     const data = GossipData{ .SnapshotHashes = instance };

@@ -510,8 +510,8 @@ test "streaming accounts" {
     defer allocator.free(pubkeys);
 
     for (0..batch_len) |i| {
-        accounts[i] = try Account.random(allocator, random, 10);
-        pubkeys[i] = Pubkey.random(random);
+        accounts[i] = try Account.initRandom(allocator, random, 10);
+        pubkeys[i] = Pubkey.initRandom(random);
     }
 
     const exit = try allocator.create(std.atomic.Value(bool));
@@ -569,8 +569,8 @@ test "streaming accounts" {
     const pubkeys2 = try allocator.alloc(Pubkey, batch_len);
     defer allocator.free(pubkeys2);
     for (0..batch_len) |i| {
-        accounts2[i] = try Account.random(allocator, random, 10);
-        pubkeys2[i] = Pubkey.random(random);
+        accounts2[i] = try Account.initRandom(allocator, random, 10);
+        pubkeys2[i] = Pubkey.initRandom(random);
     }
 
     // #2
@@ -611,8 +611,8 @@ test "buf resizing" {
     defer allocator.free(pubkeys);
 
     for (0..batch_len) |i| {
-        accounts[i] = try Account.random(allocator, random, 10);
-        pubkeys[i] = Pubkey.random(random);
+        accounts[i] = try Account.initRandom(allocator, random, 10);
+        pubkeys[i] = Pubkey.initRandom(random);
     }
 
     // setup writer

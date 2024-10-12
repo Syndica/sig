@@ -82,7 +82,7 @@ pub const Bloom = struct {
         return hasher.final();
     }
 
-    pub fn random(alloc: std.mem.Allocator, rand: std.Random, num_items: usize, false_rate: f64, max_bits: usize) error{OutOfMemory}!Self {
+    pub fn initRandom(alloc: std.mem.Allocator, random: std.Random, num_items: usize, false_rate: f64, max_bits: usize) error{OutOfMemory}!Self {
         const n_items_f: f64 = @floatFromInt(num_items);
         const m = Bloom.numBits(n_items_f, false_rate);
         const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
@@ -90,7 +90,7 @@ pub const Bloom = struct {
 
         var keys = try ArrayList(u64).initCapacity(alloc, n_keys);
         for (0..n_keys) |_| {
-            const v = rand.int(u64);
+            const v = random.int(u64);
             keys.appendAssumeCapacity(v);
         }
 
@@ -127,7 +127,7 @@ test "helper methods match rust" {
     try testing.expectEqual(@as(usize, 7), n_keys);
 
     var prng = std.Random.Xoshiro256.init(123);
-    var bloom = try Bloom.random(std.testing.allocator, prng.random(), 100, 0.1, 10000);
+    var bloom = try Bloom.initRandom(std.testing.allocator, prng.random(), 100, 0.1, 10000);
     defer bloom.deinit();
 }
 

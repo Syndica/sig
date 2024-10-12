@@ -867,7 +867,7 @@ test "remove old values" {
 
     for (0..5) |_| {
         const value = try SignedGossipData.initSigned(
-            GossipData.random(prng.random()),
+            GossipData.initRandom(prng.random()),
             &keypair,
         );
         // TS = 100
@@ -930,7 +930,7 @@ test "trim pruned values" {
 
     for (0..N_VALUES) |_| {
         const value = try SignedGossipData.initSigned(
-            GossipData.random(prng.random()),
+            GossipData.initRandom(prng.random()),
             &keypair,
         );
         _ = try table.insert(value, 100);
@@ -962,15 +962,15 @@ test "gossip.HashTimeQueue: insert multiple values" {
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
 
-    try htq.insert(Hash.random(random), 100);
-    try htq.insert(Hash.random(random), 102);
-    try htq.insert(Hash.random(random), 103);
+    try htq.insert(Hash.initRandom(random), 100);
+    try htq.insert(Hash.initRandom(random), 102);
+    try htq.insert(Hash.initRandom(random), 103);
 
     try htq.trim(102);
     try std.testing.expect(htq.len() == 2);
 
-    try htq.insert(Hash.random(random), 101);
-    try htq.insert(Hash.random(random), 120);
+    try htq.insert(Hash.initRandom(random), 101);
+    try htq.insert(Hash.initRandom(random), 120);
     try std.testing.expect(htq.len() == 4);
 
     try htq.trim(150);
@@ -983,7 +983,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
     const data = GossipData{
-        .LegacyContactInfo = LegacyContactInfo.random(random),
+        .LegacyContactInfo = LegacyContactInfo.initRandom(random),
     };
     var value = try SignedGossipData.initSigned(data, &keypair);
 
@@ -1000,7 +1000,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
 
     // should lead to prev being pruned
     var new_data = GossipData{
-        .LegacyContactInfo = LegacyContactInfo.random(random),
+        .LegacyContactInfo = LegacyContactInfo.initRandom(random),
     };
     new_data.LegacyContactInfo.id = data.LegacyContactInfo.id;
     // older wallclock
@@ -1021,7 +1021,7 @@ test "insert and get" {
 
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
-    var value = try SignedGossipData.random(random, &keypair);
+    var value = try SignedGossipData.initRandom(random, &keypair);
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);

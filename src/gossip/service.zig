@@ -929,7 +929,7 @@ pub const GossipService = struct {
         self.metrics.verified_channel_length.set(self.verified_incoming_channel.len());
     }
 
-    pub fn rotateActiveSet(self: *Self, rand: std.Random) !void {
+    pub fn rotateActiveSet(self: *Self, random: std.Random) !void {
         const now = getWallclockMs();
         var buf: [NUM_ACTIVE_SET_ENTRIES]ThreadSafeContactInfo = undefined;
         const gossip_peers = try self.getThreadSafeGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
@@ -960,7 +960,7 @@ pub const GossipService = struct {
         var active_set_lock = self.active_set_rw.write();
         defer active_set_lock.unlock();
         var active_set: *ActiveSet = active_set_lock.mut();
-        try active_set.rotate(rand, valid_gossip_peers[0..valid_gossip_indexs.items.len]);
+        try active_set.initRotate(random, valid_gossip_peers[0..valid_gossip_indexs.items.len]);
     }
 
     /// logic for building new push messages which are sent to peers from the
@@ -1081,7 +1081,7 @@ pub const GossipService = struct {
     /// to be sent to a random set of gossip nodes.
     fn buildPullRequests(
         self: *Self,
-        rand: std.Random,
+        random: std.Random,
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
         now: u64,
@@ -1097,7 +1097,7 @@ pub const GossipService = struct {
         // randomly include an entrypoint in the pull if we dont have their contact info
         var entrypoint_index: i16 = -1;
         if (self.entrypoints.items.len != 0) blk: {
-            const maybe_entrypoint_index = rand.intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
+            const maybe_entrypoint_index = random.intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
             if (self.entrypoints.items[maybe_entrypoint_index].info) |_| {
                 // early exit - we already have the peer in our contact info
                 break :blk;
@@ -1141,7 +1141,7 @@ pub const GossipService = struct {
         // build gossip filters
         var filters = try pull_request.buildGossipPullFilters(
             self.allocator,
-            rand,
+            random,
             &self.gossip_table_rw,
             &failed_pull_hashes_array,
             bloom_size,
@@ -1168,7 +1168,7 @@ pub const GossipService = struct {
         if (num_peers != 0) {
             for (filters.items) |filter_i| {
                 // TODO: incorperate stake weight in random sampling
-                const peer_index = rand.intRangeAtMost(usize, 0, num_peers - 1);
+                const peer_index = random.intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
                 if (peer_contact_info.shred_version != my_shred_version) {
@@ -2366,7 +2366,7 @@ test "handling prune messages" {
     {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
-        try as.rotate(prng.random(), peers.items);
+        try as.initRotate(prng.random(), peers.items);
         as_lock.unlock();
     }
 
@@ -2377,7 +2377,7 @@ test "handling prune messages" {
     const peer0 = iter.next().?.*;
     as_lock.unlock();
 
-    var prunes = [_]Pubkey{Pubkey.random(prng.random())};
+    var prunes = [_]Pubkey{Pubkey.initRandom(prng.random())};
     var prune_data = PruneData{
         .pubkey = peer0,
         .destination = gossip_service.my_pubkey,
@@ -2431,7 +2431,7 @@ test "handling pull responses" {
     var kp = try KeyPair.create(null);
     for (0..5) |i| {
         var value = try SignedGossipData.randomWithIndex(prng.random(), &kp, 0);
-        value.data.LegacyContactInfo.id = Pubkey.random(prng.random());
+        value.data.LegacyContactInfo.id = Pubkey.initRandom(prng.random());
         gossip_values[i] = value;
     }
 
@@ -2485,7 +2485,7 @@ test "handle old prune & pull request message" {
     );
     defer gossip_service.deinit();
 
-    const prune_pubkey = Pubkey.random(random);
+    const prune_pubkey = Pubkey.initRandom(random);
     const prune_data = PruneData.init(prune_pubkey, &.{}, my_pubkey, 0);
     const message = .{
         .PruneMessage = .{ prune_pubkey, prune_data },
@@ -2500,7 +2500,7 @@ test "handle old prune & pull request message" {
 
     // send a pull request message
     const N_FILTER_BITS = 1;
-    var bloom = try Bloom.random(allocator, random, 100, 0.1, N_FILTER_BITS);
+    var bloom = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
     const filter = GossipPullFilter{
@@ -2512,7 +2512,7 @@ test "handle old prune & pull request message" {
     var rando_keypair = try KeyPair.create([_]u8{22} ** 32);
 
     var ci = try SignedGossipData.randomWithIndex(random, &rando_keypair, 0);
-    const addr = SocketAddr.random(random);
+    const addr = SocketAddr.initRandom(random);
     ci.data.LegacyContactInfo.gossip = addr;
     ci.data.LegacyContactInfo.shred_version = 100; // DIFFERENT SHRED VERSION
     try ci.sign(&rando_keypair);
@@ -2524,7 +2524,7 @@ test "handle old prune & pull request message" {
 
     // DIFFERENT GOSSIP DATA (NOT A LEGACY CONTACT INFO)
     // NOTE: need fresh bloom filter because it gets deinit
-    var bloom2 = try Bloom.random(allocator, random, 100, 0.1, N_FILTER_BITS);
+    var bloom2 = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
     defer bloom2.deinit();
 
     const filter2 = GossipPullFilter{
@@ -2600,7 +2600,7 @@ test "handle pull request" {
     var rando_keypair = try KeyPair.create([_]u8{22} ** 32);
     const rando_pubkey = Pubkey.fromPublicKey(&rando_keypair.public_key);
 
-    const addr = SocketAddr.random(prng.random());
+    const addr = SocketAddr.initRandom(prng.random());
     var ci = try SignedGossipData.randomWithIndex(prng.random(), &rando_keypair, 0);
     ci.data.LegacyContactInfo.gossip = addr;
     ci.data.LegacyContactInfo.shred_version = 99;
@@ -2614,7 +2614,7 @@ test "handle pull request" {
     }
 
     // only consider the first bit so we know well get matches
-    var bloom = try Bloom.random(allocator, prng.random(), 100, 0.1, N_FILTER_BITS);
+    var bloom = try Bloom.initRandom(allocator, prng.random(), 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
     const filter = GossipPullFilter{
@@ -2678,17 +2678,17 @@ test "test build prune messages and handle push messages" {
     );
     defer gossip_service.deinit();
 
-    var push_from = Pubkey.random(prng.random());
+    var push_from = Pubkey.initRandom(prng.random());
     var values = ArrayList(SignedGossipData).init(allocator);
     defer values.deinit();
     for (0..10) |_| {
         var value = try SignedGossipData.randomWithIndex(prng.random(), &my_keypair, 0);
-        value.data.LegacyContactInfo.id = Pubkey.random(prng.random());
+        value.data.LegacyContactInfo.id = Pubkey.initRandom(prng.random());
         try values.append(value);
     }
 
     // insert contact info to send prunes to
-    var send_contact_info = LegacyContactInfo.random(prng.random());
+    var send_contact_info = LegacyContactInfo.initRandom(prng.random());
     send_contact_info.id = push_from;
     // valid socket addr
     var gossip_socket = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 20);
@@ -2831,13 +2831,13 @@ test "test build push messages" {
     lg.unlock();
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    const value = try SignedGossipData.random(prng.random(), &keypair);
+    const value = try SignedGossipData.initRandom(prng.random(), &keypair);
 
     // set the active set
     {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
-        try as.rotate(prng.random(), peers.items);
+        try as.initRotate(prng.random(), peers.items);
         as_lock.unlock();
         try std.testing.expect(as.len() > 0);
     }
@@ -2914,7 +2914,7 @@ test "test large push messages" {
     {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
-        try as.rotate(prng.random(), peers.items);
+        try as.initRotate(prng.random(), peers.items);
         as_lock.unlock();
         try std.testing.expect(as.len() > 0);
     }
@@ -3008,7 +3008,7 @@ test "test packet verification" {
     // send it with a SignedGossipData which hash a slice
     {
         const rand_pubkey = Pubkey.fromPublicKey(&rand_keypair.public_key);
-        var dshred = sig.gossip.data.DuplicateShred.random(prng.random());
+        var dshred = sig.gossip.data.DuplicateShred.initRandom(prng.random());
         var chunk: [32]u8 = .{1} ** 32;
         dshred.chunk = &chunk;
         dshred.wallclock = 1714155765121;
@@ -3139,7 +3139,7 @@ test "init, exit, and deinit" {
     const my_keypair = try KeyPair.create(null);
     var prng = std.rand.DefaultPrng.init(91);
 
-    var contact_info = try LegacyContactInfo.random(prng.random()).toContactInfo(std.testing.allocator);
+    var contact_info = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(std.testing.allocator);
     try contact_info.setSocket(.gossip, gossip_address);
 
     var counter = Atomic(usize).init(0);
@@ -3393,7 +3393,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
             _ = try table.insert(signed_contact_info_recv, now);
             // insert all other values
             for (0..bench_args.n_data_populated) |_| {
-                const value = try SignedGossipData.random(random, &recv_keypair);
+                const value = try SignedGossipData.initRandom(random, &recv_keypair);
                 _ = try table.insert(value, now);
             }
             table_lock.unlock();

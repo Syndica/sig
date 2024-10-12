@@ -111,7 +111,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 const new_keypair = random.boolean();
 
                 var data = GossipData{
-                    .ContactInfo = try ContactInfo.random(allocator, random, Pubkey.random(random), 0, 0, 0),
+                    .ContactInfo = try ContactInfo.initRandom(allocator, random, Pubkey.initRandom(random), 0, 0, 0),
                 };
 
                 if (new_keypair) {
