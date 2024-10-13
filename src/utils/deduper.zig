@@ -82,7 +82,7 @@ pub fn Deduper(comptime K: usize, comptime T: type) type {
         }
 
         /// False positive rate computed from the current popcount and num_bits.
-        fn falsePositiveRate(self: *Deduper(K, T)) f64 {
+        pub fn falsePositiveRate(self: *Deduper(K, T)) f64 {
             const popcount = self.popcount.load(.unordered);
             const numerator: f64 = @floatFromInt(@min(popcount, self.num_bits));
             const denominator: f64 = @floatFromInt(self.num_bits);

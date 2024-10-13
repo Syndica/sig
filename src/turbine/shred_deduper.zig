@@ -4,9 +4,12 @@ const sig = @import("../sig.zig");
 const AtomicBool = std.atomic.Value(bool);
 const AtomicU64 = std.atomic.Value(u64);
 
+const ChaChaRng = sig.rand.ChaChaRng(20);
 const ShredId = sig.ledger.shred.ShredId;
 const Duration = sig.time.Duration;
 const Deduper = sig.utils.deduper.Deduper;
+
+const uintLessThanRust = sig.rand.weighted_shuffle.uintLessThanRust;
 
 /// ShredDedupResult is an enum representing the result of deduplicating a shred.
 pub const ShredDedupResult = enum {
@@ -63,4 +66,44 @@ pub fn ShredDeduper(comptime K: usize) type {
     };
 }
 
-// TODO: Testing
+/// Test method from agave.
+/// Checks that the deduper produces the expected number of duplicates and popcount
+/// when seeded with a specific seed.
+fn testDedupSeeded(
+    seed: [32]u8,
+    num_bits: u64,
+    num_shreds: usize,
+    num_dups: usize,
+    bytes_popcount: u64,
+    shred_id_popcount: u64,
+    max_duplicate_count: usize,
+) !void {
+    var chacha = ChaChaRng.fromSeed(seed);
+    const rng = chacha.random();
+
+    var deduper = try ShredDeduper(2).init(std.testing.allocator, rng, num_bits);
+    defer deduper.deinit();
+
+    var dup_count: usize = 0;
+    for (0..num_shreds) |_| {
+        const slot = uintLessThanRust(u64, rng, 1000);
+        const index = uintLessThanRust(u32, rng, 10);
+        var payload = [_]u8{0} ** 16;
+        rng.bytes(&payload);
+        const shred_id = ShredId{ .slot = slot, .index = index, .shred_type = .data };
+        if (.NotDuplicate != deduper.dedup(&shred_id, &payload, max_duplicate_count)) dup_count += 1;
+    }
+
+    try std.testing.expectEqual(num_dups, dup_count);
+    try std.testing.expectEqual(bytes_popcount, deduper.byte_filter.popcount.load(.monotonic));
+    try std.testing.expectEqual(shred_id_popcount, deduper.shred_id_filter.popcount.load(.monotonic));
+}
+
+test "agave: dedup seeded" {
+    try testDedupSeeded([_]u8{0xf9} ** 32, 3_199_997, 51_414, 15_429, 101_207, 71_197, 4);
+    try testDedupSeeded([_]u8{0xdc} ** 32, 3_200_003, 51_414, 15_452, 101_259, 71_103, 4);
+    try testDedupSeeded([_]u8{0xa5} ** 32, 6_399_971, 102_828, 62_932, 202_433, 79_334, 4);
+    try testDedupSeeded([_]u8{0xdb} ** 32, 6_400_013, 102_828, 82_830, 202_356, 39_874, 2);
+    try testDedupSeeded([_]u8{0xcd} ** 32, 12_799_987, 404_771, 384_771, 784_600, 39_936, 2);
+    try testDedupSeeded([_]u8{0xc3} ** 32, 12_800_009, 404_771, 384_771, 784_563, 39_932, 2);
+}
