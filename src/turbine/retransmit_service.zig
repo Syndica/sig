@@ -18,7 +18,7 @@ const Gauge = sig.prometheus.Gauge;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Duration = sig.time.Duration;
 const TurbineTree = sig.turbine.TurbineTree;
-const TurbineTreeProvider = sig.turbine.TurbineTreeProvider;
+const TurbineTreeCache = sig.turbine.TurbineTreeCache;
 const Channel = sig.sync.Channel;
 const ShredId = sig.ledger.shred.ShredId;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
@@ -139,13 +139,8 @@ fn receiveShreds(
     logger: Logger,
     stats: *Stats,
 ) !void {
-    var turbine_tree_provider = TurbineTreeProvider.init(
-        allocator,
-        my_contact_info,
-        gossip_table_rw,
-        USE_STAKE_HACK_FOR_TESTING,
-    );
-    defer turbine_tree_provider.deinit();
+    var turbine_tree_cache = TurbineTreeCache.init(allocator);
+    defer turbine_tree_cache.deinit();
 
     var deduper = try ShredDeduper(2).init(
         allocator,
@@ -174,8 +169,8 @@ fn receiveShreds(
 
         var grouped_shreds = try dedupAndGroupShredsBySlot(
             allocator,
-            shreds,
-            deduper,
+            &shreds,
+            &deduper,
             stats,
         );
         defer {
@@ -186,9 +181,11 @@ fn receiveShreds(
         try createAndSendRetransmitInfo(
             allocator,
             grouped_shreds,
+            my_contact_info,
             bank_fields,
+            gossip_table_rw,
             leader_schedule_cache,
-            turbine_tree_provider,
+            &turbine_tree_cache,
             sender,
             stats,
         );
@@ -203,12 +200,12 @@ fn receiveShreds(
 /// Returns a map of slot to a list of shred_id and packet pairs
 inline fn dedupAndGroupShredsBySlot(
     allocator: std.mem.Allocator,
-    shreds: std.ArrayList(Packet),
+    shreds: *std.ArrayList(Packet),
     deduper: *ShredDeduper(2),
     stats: *Stats,
 ) !std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)) {
     var group_shreds_timer = try sig.time.Timer.start();
-    var grouped_shreds = try std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
+    var grouped_shreds = std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
     for (shreds.items) |shred_packet| {
         const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
 
@@ -241,9 +238,11 @@ inline fn dedupAndGroupShredsBySlot(
 inline fn createAndSendRetransmitInfo(
     allocator: std.mem.Allocator,
     shreds: std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)),
+    my_contact_info: ThreadSafeContactInfo,
     bank: *const BankFields,
+    gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     leader_schedule_cache: *LeaderScheduleCache,
-    turbine_tree_provider: *TurbineTreeProvider,
+    turbine_tree_cache: *TurbineTreeCache,
     sender: *Channel(RetransmitShredInfo),
     stats: *Stats,
 ) !void {
@@ -256,10 +255,19 @@ inline fn createAndSendRetransmitInfo(
             break :blk leader_schedule_cache.slotLeader(slot) orelse @panic("failed to get slot leader");
         };
 
-        const turbine_tree = try turbine_tree_provider.getForRetransmit(
-            epoch,
-            bank,
-        );
+        const turbine_tree = if (try turbine_tree_cache.get(epoch)) |tree| tree else blk: {
+            const turbine_tree = try allocator.create(TurbineTree);
+            turbine_tree.* = try TurbineTree.initForRetransmit(
+                allocator,
+                my_contact_info,
+                gossip_table_rw,
+                try bank.getStakedNodes(allocator, epoch),
+                USE_STAKE_HACK_FOR_TESTING,
+            );
+            try turbine_tree_cache.put(epoch, turbine_tree);
+            break :blk turbine_tree;
+        };
+        defer turbine_tree.releaseUnsafe();
 
         for (slot_shreds.items) |shred_id_and_packet| {
             try sender.send(.{
