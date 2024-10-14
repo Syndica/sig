@@ -8,8 +8,6 @@ const RwMux = sig.sync.RwMux;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const ContactInfo = sig.gossip.data.ContactInfo;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
-const GossipData = sig.gossip.data.GossipData;
-const BankFields = sig.accounts_db.snapshots.BankFields;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
@@ -19,7 +17,6 @@ const GossipTable = sig.gossip.GossipTable;
 const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
 const AtomicUsize = std.atomic.Value(usize);
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const ThreadPool = sig.sync.ThreadPool;
 
 /// TurbineTreeCache
