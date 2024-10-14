@@ -107,3 +107,92 @@ test "agave: dedup seeded" {
     try testDedupSeeded([_]u8{0xcd} ** 32, 12_799_987, 404_771, 384_771, 784_600, 39_936, 2);
     try testDedupSeeded([_]u8{0xc3} ** 32, 12_800_009, 404_771, 384_771, 784_563, 39_932, 2);
 }
+
+test "agave: test already received" {
+    const MAX_DUPLICATE_COUNT = 2;
+
+    var chacha = ChaChaRng.fromSeed([_]u8{0xa5} ** 32);
+    const rng = chacha.random();
+
+    var deduper = try ShredDeduper(2).init(std.testing.allocator, rng, 640_007);
+    defer deduper.deinit();
+
+    const data_shred_id = ShredId{ .slot = 1, .index = 5, .shred_type = .data };
+    var data_payload = [_]u8{0} ** 16;
+    rng.bytes(&data_payload);
+
+    // unique data shred for (1, 5) should pass
+    try std.testing.expectEqual(.NotDuplicate, deduper.dedup(
+        &data_shred_id,
+        &data_payload,
+        MAX_DUPLICATE_COUNT,
+    ));
+
+    // duplicate bytes blocked
+    try std.testing.expectEqual(.ByteDuplicate, deduper.dedup(
+        &data_shred_id,
+        &data_payload,
+        MAX_DUPLICATE_COUNT,
+    ));
+
+    // first duplicate data shred for (1, 5) passed
+    rng.bytes(&data_payload);
+    try std.testing.expectEqual(.NotDuplicate, deduper.dedup(
+        &data_shred_id,
+        &data_payload,
+        MAX_DUPLICATE_COUNT,
+    ));
+    // duplicate bytes blocked
+    try std.testing.expectEqual(.ByteDuplicate, deduper.dedup(
+        &data_shred_id,
+        &data_payload,
+        MAX_DUPLICATE_COUNT,
+    ));
+
+    // second duplicate data shred for (1, 5) blocked
+    rng.bytes(&data_payload);
+    try std.testing.expectEqual(.ShredIdDuplicate, deduper.dedup(
+        &data_shred_id,
+        &data_payload,
+        MAX_DUPLICATE_COUNT,
+    ));
+
+    const code_shred_id = ShredId{ .slot = 1, .index = 5, .shred_type = .code };
+    var code_payload = [_]u8{0} ** 16;
+    rng.bytes(&code_payload);
+
+    // unique code shred at (1, 5) passes
+    try std.testing.expectEqual(.NotDuplicate, deduper.dedup(
+        &code_shred_id,
+        &code_payload,
+        MAX_DUPLICATE_COUNT,
+    ));
+    // duplicate bytes blocked
+    try std.testing.expectEqual(.ByteDuplicate, deduper.dedup(
+        &code_shred_id,
+        &code_payload,
+        MAX_DUPLICATE_COUNT,
+    ));
+
+    // first duplicate code shred for (1, 5) passed
+    rng.bytes(&code_payload);
+    try std.testing.expectEqual(.NotDuplicate, deduper.dedup(
+        &code_shred_id,
+        &code_payload,
+        MAX_DUPLICATE_COUNT,
+    ));
+    // duplicate bytes blocked
+    try std.testing.expectEqual(.ByteDuplicate, deduper.dedup(
+        &code_shred_id,
+        &code_payload,
+        MAX_DUPLICATE_COUNT,
+    ));
+
+    // second duplicate code shred for (1, 5) blocked
+    rng.bytes(&code_payload);
+    try std.testing.expectEqual(.ShredIdDuplicate, deduper.dedup(
+        &code_shred_id,
+        &code_payload,
+        MAX_DUPLICATE_COUNT,
+    ));
+}
