@@ -409,20 +409,19 @@ pub const TurbineTree = struct {
         for (nodes.items) |node| {
             // Add the node to the result if it does not exceed the
             // maximum number of nodes per IP
-            var exceeds_ip_limit = false;
+            var node_appended = false;
             if (node.tvuAddress()) |tvu_addr| {
                 const ip_count = ip_counts.get(tvu_addr.ip()) orelse 0;
                 if (ip_count < MAX_NODES_PER_IP_ADDRESS) {
+                    node_appended = true;
                     result.appendAssumeCapacity(node);
-                } else {
-                    exceeds_ip_limit = true;
                 }
                 try ip_counts.put(tvu_addr.ip(), ip_count + 1);
             }
 
             // Keep the node for deterministic shuffle but remove
             // contact info so that it is not used for retransmit
-            if (exceeds_ip_limit and node.stake > 0) {
+            if (!node_appended and node.stake > 0) {
                 result.appendAssumeCapacity(.{
                     .id = .{ .pubkey = node.pubkey() },
                     .stake = node.stake,
@@ -461,27 +460,18 @@ pub const TurbineTree = struct {
 /// bank fields, and using the TurbineTreeProvider but this is sufficient for now.
 const TestEnvironment = struct {
     allocator: std.mem.Allocator,
-    my_contact_info: ContactInfo,
+    my_contact_info: ThreadSafeContactInfo,
     gossip_table_tp: ThreadPool,
     gossip_table_rw: RwMux(GossipTable),
-    nodes: std.ArrayList(ContactInfo),
     staked_nodes: std.AutoArrayHashMap(Pubkey, u64),
 
-    fn init(allocator: std.mem.Allocator, rand: std.rand.Random, num_nodes: usize) !TestEnvironment {
-        const my_keypair = try KeyPair.create([_]u8{0} ** KeyPair.seed_length);
-
-        const my_contact_info = try ContactInfo.random(
-            allocator,
-            rand,
-            Pubkey.fromPublicKey(&my_keypair.public_key),
-            0,
-            0,
-            0,
-        );
-
-        var nodes = std.ArrayList(ContactInfo).init(allocator);
-        errdefer nodes.deinit();
-
+    pub fn init(
+        allocator: std.mem.Allocator,
+        rng: std.rand.Random,
+        num_known_nodes: usize,
+        num_unknown_staked_nodes: usize,
+        known_nodes_unstaked_ratio: struct { u64, u64 },
+    ) !TestEnvironment {
         var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(allocator);
         errdefer staked_nodes.deinit();
 
@@ -492,44 +482,41 @@ const TestEnvironment = struct {
         );
         errdefer gossip_table.deinit();
 
-        // Create nodes
-        try nodes.append(my_contact_info);
-        for (0..num_nodes - 1) |_| {
-            try nodes.append(try ContactInfo.random(
+        // Add known nodes to the gossip table
+        var my_contact_info: ThreadSafeContactInfo = undefined;
+        for (0..num_known_nodes) |i| {
+            var contact_info = try ContactInfo.random(
                 allocator,
-                rand,
-                Pubkey.random(rand),
+                rng,
+                Pubkey.random(rng),
                 0,
                 0,
-                0,
-            ));
-        }
-
-        // Insert nodes in gossip table
-        for (nodes.items) |node| {
-            _ = try gossip_table.insert(
-                SignedGossipData.init(.{ .ContactInfo = node }),
                 0,
             );
+            try contact_info.setSocket(.turbine_recv, SocketAddr.random(rng));
+            _ = try gossip_table.insert(
+                SignedGossipData.init(.{ .ContactInfo = contact_info }),
+                0,
+            );
+            if (i == 0) my_contact_info = ThreadSafeContactInfo.fromContactInfo(contact_info);
         }
 
-        // Add stakes for nodes with contact info
-        // Set stake to zero for 1/7 nodes
-        try staked_nodes.put(my_contact_info.pubkey, 10);
+        // Add stakes for the known nodes
+        const unstaked_numerator, const unstaked_denominator = known_nodes_unstaked_ratio;
         var contact_info_iterator = gossip_table.contactInfoIterator(0);
         while (contact_info_iterator.next()) |contact_info| {
             try staked_nodes.put(
                 contact_info.pubkey,
-                if (rand.intRangeAtMost(u8, 0, 6) != 0)
-                    rand.intRangeLessThan(u64, 0, 20)
+                if (rng.intRangeAtMost(u64, 1, unstaked_denominator) > unstaked_numerator)
+                    rng.intRangeLessThan(u64, 0, 20)
                 else
                     0,
             );
         }
 
-        // Add some staked nodes with no contact info
-        for (0..@divFloor(num_nodes, 2)) |_| {
-            try staked_nodes.put(Pubkey.random(rand), rand.intRangeLessThan(u64, 0, 20));
+        // Add unknown nodes with non-zero stakes
+        for (0..num_unknown_staked_nodes) |_| {
+            try staked_nodes.put(Pubkey.random(rng), rng.intRangeLessThan(u64, 0, 20));
         }
 
         return .{
@@ -537,18 +524,31 @@ const TestEnvironment = struct {
             .my_contact_info = my_contact_info,
             .gossip_table_tp = gossip_table_tp,
             .gossip_table_rw = RwMux(GossipTable).init(gossip_table),
-            .nodes = nodes,
             .staked_nodes = staked_nodes,
         };
     }
 
-    fn deinit(self: *TestEnvironment) void {
-        self.my_contact_info.deinit();
+    pub fn deinit(self: *TestEnvironment) void {
         const gossip_table: *GossipTable, _ = self.gossip_table_rw.writeWithLock();
         gossip_table.deinit();
-        for (self.nodes.items) |node| node.deinit();
-        self.nodes.deinit();
         self.staked_nodes.deinit();
+    }
+
+    pub fn getKnownNodes(self: *TestEnvironment) !std.ArrayList(ThreadSafeContactInfo) {
+        const gossip_table, var gossip_table_lg = self.gossip_table_rw.readWithLock();
+        defer gossip_table_lg.unlock();
+
+        var known_nodes = try std.ArrayList(ThreadSafeContactInfo).initCapacity(
+            self.allocator,
+            gossip_table.contact_infos.count(),
+        );
+
+        var contact_info_iter = gossip_table.contactInfoIterator(0);
+        while (contact_info_iter.nextThreadSafe()) |contact_info| {
+            known_nodes.appendAssumeCapacity(contact_info);
+        }
+
+        return known_nodes;
     }
 };
 
@@ -637,17 +637,23 @@ fn testCheckRetransmitNodesRoundTrip(allocator: std.mem.Allocator, fanout: usize
 
 test "agave: cluster nodes retransmit" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var xrng = std.rand.DefaultPrng.init(0);
+    const rng = xrng.random();
 
     // Setup Environment
-    const num_nodes = 1000;
-    var env = try TestEnvironment.init(allocator, prng.random(), 1000);
+    var env = try TestEnvironment.init(
+        allocator,
+        rng,
+        1_000,
+        100,
+        .{ 1, 7 },
+    );
     defer env.deinit();
 
     // Get Turbine Tree
     var turbine_tree = try TurbineTree.initForRetransmit(
         std.testing.allocator,
-        ThreadSafeContactInfo.fromContactInfo(env.my_contact_info),
+        env.my_contact_info,
         &env.gossip_table_rw,
         &env.staked_nodes.unmanaged,
         false,
@@ -655,20 +661,21 @@ test "agave: cluster nodes retransmit" {
     defer turbine_tree.deinit();
 
     // All nodes with contact-info or stakes should be in the index.
-    std.debug.print("tree_nodes: {}\n", .{turbine_tree.nodes.items.len});
-    try std.testing.expect(turbine_tree.nodes.items.len > num_nodes);
+    try std.testing.expect(turbine_tree.nodes.items.len > 1_000);
 
     // Assert that all nodes keep their contact-info.
     // and, all staked nodes are also included.
     var node_map = std.AutoArrayHashMap(Pubkey, TurbineTree.Node).init(allocator);
     defer node_map.deinit();
 
+    const known_nodes = try env.getKnownNodes();
+    defer known_nodes.deinit();
+
     for (turbine_tree.nodes.items) |node| try node_map.put(node.pubkey(), node);
-
-    for (env.nodes.items) |node| {
-        try std.testing.expectEqual(node.pubkey, node_map.get(node.pubkey).?.pubkey());
+    for (known_nodes.items) |known_node| {
+        const node = node_map.get(known_node.pubkey).?;
+        try std.testing.expectEqual(known_node.pubkey, node.pubkey());
     }
-
     for (env.staked_nodes.keys(), env.staked_nodes.values()) |pubkey, stake| {
         if (stake > 0) {
             try std.testing.expectEqual(stake, node_map.get(pubkey).?.stake);
