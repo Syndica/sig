@@ -1,8 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-
 const IpAddr = sig.net.IpAddr;
 const SocketAddr = sig.net.SocketAddr;
 const ShredId = sig.ledger.shred.ShredId;
