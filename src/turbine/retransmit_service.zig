@@ -172,7 +172,7 @@ fn receiveShreds(
         if (bytes_filter_saturated) stats.retransmit_shred_byte_filter_saturated_count.reset();
         if (shred_id_filter_saturated) stats.retransmit_shred_id_filter_saturated_count.reset();
 
-        var grouped_shreds = try groupShredsBySlot(
+        var grouped_shreds = try dedupAndGroupShredsBySlot(
             allocator,
             shreds,
             deduper,
@@ -201,7 +201,7 @@ fn receiveShreds(
 
 /// Group shreds by slot and deduplicate them in the process
 /// Returns a map of slot to a list of shred_id and packet pairs
-inline fn groupShredsBySlot(
+inline fn dedupAndGroupShredsBySlot(
     allocator: std.mem.Allocator,
     shreds: std.ArrayList(Packet),
     deduper: *ShredDeduper(2),
