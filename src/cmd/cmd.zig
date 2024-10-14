@@ -96,6 +96,14 @@ pub fn run() !void {
         .value_name = "Turbine Port",
     };
 
+    var turbine_num_retransmit_sockets = cli.Option{
+        .long_name = "num-retransmit-sockets",
+        .help = "The number of retransmit sockets to use for the turbine service - default: 1",
+        .value_ref = cli.mkRef(&config.current.turbine.num_retransmit_sockets),
+        .required = false,
+        .value_name = "Number of turbine retransmit sockets",
+    };
+
     var leader_schedule_option = cli.Option{
         .long_name = "leader-schedule",
         .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
@@ -393,6 +401,8 @@ pub fn run() !void {
                             &test_repair_option,
                             // blockstore cleanup service
                             &max_shreds_option,
+                            // turbine
+                            &turbine_num_retransmit_sockets,
                             // accounts-db
                             &snapshot_dir_option,
                             &use_disk_index_option,
@@ -774,39 +784,30 @@ fn validator() !void {
     });
     defer cleanup_service_handle.join();
 
-    // Shred retransmit channel
-    // Channel populated by the shred collector after the signature verification phase
-    // Channel read by the retransmit service to retransmit shreds to peers
-    var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
-    defer retransmit_shred_channel.deinit();
-
-    // Sockets used to retransmit shreds to peers
-    // The number of sockets should be configurable
-    const retransmit_send_sockets: [1]network.Socket = .{
-        try network.Socket.create(.ipv4, .udp),
-    };
-    defer {
-        for (retransmit_send_sockets) |socket| {
-            socket.close();
-        }
-    }
-    for (retransmit_send_sockets) |_socket| {
-        var socket = _socket;
-        try socket.bind(try network.EndPoint.parse("0.0.0.0:0"));
-    }
-
-    // Retransmit service needs to know the nodes contact info
-    // This should be replaced my a contact info provider which should be used by all services other than
-    // the gossip service to get the nodes contact info since gossip can change the contact info
-    const thread_safe_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
-
     // Random number generator
     var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
     // Retransmit service
+    const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+
+    var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
+    defer retransmit_shred_channel.deinit();
+
+    const retransmit_send_sockets: std.ArrayList(network.Socket) = std.ArrayList(network.Socket).init(allocator);
+    defer {
+        for (retransmit_send_sockets.items) |socket| socket.close();
+        retransmit_send_sockets.deinit();
+    }
+
+    for (0..config.current.turbine.num_retransmit_sockets) |_| {
+        var socket = try network.Socket.create(.ipv4, .udp);
+        try socket.bind(try network.EndPoint.parse("0.0.0.0:0"));
+        try retransmit_send_sockets.append(try network.Socket.create(.ipv4, .udp));
+    }
+
     const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.retransmit_service.run, .{
         allocator,
-        thread_safe_contact_info,
+        my_contact_info,
         snapshot.bank.bank_fields,
         &leader_schedule_cache,
         &retransmit_shred_channel,

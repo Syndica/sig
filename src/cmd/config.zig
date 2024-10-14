@@ -12,6 +12,7 @@ pub const Config = struct {
     shred_collector: ShredCollectorConfig = shred_collector_defaults,
     accounts_db: AccountsDBConfig = .{},
     geyser: GeyserConfig = .{},
+    turbine: TurbineConfig = .{},
 
     test_transaction_sender: TestTransactionSenderConfig = .{},
 
@@ -153,4 +154,8 @@ const LogConfig = struct {};
 const TestTransactionSenderConfig = struct {
     n_transactions: u64 = 3,
     n_lamports_per_transaction: u64 = 1e7,
+};
+
+pub const TurbineConfig = struct {
+    num_retransmit_sockets: u8 = 1,
 };
