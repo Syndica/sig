@@ -29,14 +29,22 @@ const ShredDeduper = sig.turbine.shred_deduper.ShredDeduper;
 
 const globalRegistry = sig.prometheus.globalRegistry;
 
-const MAX_DUPLICATE_COUNT: usize = 2;
+const DEDUPER_MAX_DUPLICATE_COUNT: usize = 2;
 const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
 const DEDUPER_RESET_CYCLE: Duration = Duration.fromSecs(5 * 60);
 const DEDUPER_NUM_BITS: u64 = 637_534_199;
+
 const SEND_SHRED_THREADS: usize = 8;
 
 const USE_STAKE_HACK_FOR_TESTING = false;
 
+/// Retransmit Service
+/// The retransmit service receives verified shreds from the shred collector and retransmits them to the network.
+/// The retransmit service is broken down into two main components:
+/// 1. receiveShreds: runs on a single thread and receives shreds from the shred collector, deduplicates them, and then packages them
+///    into RetransmitShredInfo's which are sent to a channel for further processing.
+/// 2. retransmitShreds: runs on N threads and receives RetransmitShredInfo's from the channel, computes the children to retransmit to
+///    and then constructs and sends packets to the network.
 pub fn run(
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
@@ -116,123 +124,8 @@ pub fn run(
     for (send_socket_threads.items) |thread| thread.join();
 }
 
-fn receiveShredsBatched(
-    allocator: std.mem.Allocator,
-    my_contact_info: ThreadSafeContactInfo,
-    bank_fields: *const BankFields,
-    leader_schedule_cache: *LeaderScheduleCache,
-    receiver: *Channel(Packet),
-    sender: *Channel(RetransmitShredInfo),
-    gossip_table_rw: *RwMux(sig.gossip.GossipTable),
-    rand: Random,
-    exit: *AtomicBool,
-    logger: Logger,
-    stats: *Stats,
-) !void {
-    var turbine_tree_provider = TurbineTreeProvider.init(
-        allocator,
-        my_contact_info,
-        gossip_table_rw,
-        USE_STAKE_HACK_FOR_TESTING,
-    );
-    defer turbine_tree_provider.deinit();
-
-    var deduper = try ShredDeduper(2).init(
-        allocator,
-        rand,
-        DEDUPER_NUM_BITS,
-    );
-    defer deduper.deinit();
-
-    while (!exit.load(.acquire)) {
-        // Drain receiver
-        const receiver_len = receiver.len();
-        if (receiver_len == 0) continue;
-
-        var shreds = try std.ArrayList(Packet).initCapacity(allocator, receiver_len);
-        while (receiver.receive()) |packet| try shreds.append(packet);
-        defer shreds.deinit();
-
-        stats.retransmit_shreds_received_count.add(shreds.items.len);
-
-        // Preprocess shreds
-        var preprocess_shreds_timer = try sig.time.Timer.start();
-
-        // Reset deduper
-        const bytes_filter_saturated, const shred_id_filter_saturated = deduper.maybeReset(
-            rand,
-            DEDUPER_FALSE_POSITIVE_RATE,
-            DEDUPER_RESET_CYCLE,
-        );
-        if (bytes_filter_saturated) stats.retransmit_shred_byte_filter_saturated_count.reset();
-        if (shred_id_filter_saturated) stats.retransmit_shred_id_filter_saturated_count.reset();
-
-        // Group shreds by slot
-        var grouped_shreds = std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
-        defer {
-            for (grouped_shreds.values()) |arr| arr.deinit();
-            grouped_shreds.deinit();
-        }
-        for (shreds.items) |shred_packet| {
-            const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
-
-            switch (deduper.dedup(&shred_id, &shred_packet.data, MAX_DUPLICATE_COUNT)) {
-                .ByteDuplicate => {
-                    stats.retransmit_shred_byte_filtered_count.add(1);
-                    continue;
-                },
-                .ShredIdDuplicate => {
-                    stats.retransmit_shred_id_filtered_count.add(1);
-                    continue;
-                },
-                .NotDuplicate => {},
-            }
-
-            if (grouped_shreds.getEntry(shred_id.slot)) |entry| {
-                try entry.value_ptr.append(.{ shred_id, shred_packet });
-            } else {
-                var new_slot_shreds = std.ArrayList(ShredIdAndPacket).init(allocator);
-                try new_slot_shreds.append(.{ shred_id, shred_packet });
-                try grouped_shreds.put(shred_id.slot, new_slot_shreds);
-            }
-        }
-
-        // Send shreds and required metadata to retransmit channel
-        for (grouped_shreds.keys(), grouped_shreds.values()) |slot, slot_shreds| {
-            const epoch, _ = bank_fields.epoch_schedule.getEpochAndSlotIndex(slot);
-
-            const slot_leader = if (leader_schedule_cache.slotLeader(slot)) |leader| leader else blk: {
-                try leader_schedule_cache.put(epoch, try bank_fields.leaderSchedule(allocator));
-                break :blk leader_schedule_cache.slotLeader(slot) orelse @panic("failed to get slot leader");
-            };
-
-            const turbine_tree = try turbine_tree_provider.getTurbineTreeForRetransmit(
-                epoch,
-                try bank_fields.getStakedNodes(
-                    allocator,
-                    epoch,
-                ),
-            );
-
-            for (slot_shreds.items) |shred_id_and_packet| {
-                try sender.send(.{
-                    .slot_leader = slot_leader,
-                    // CAUTION: .acquireUnsafe() is used here as the turbine_tree is guaranteed to be valid since:
-                    // 1. the turbine_tree_provider has one exactly on reference to the turbine_tree after getTurbineTree
-                    // 2. each call to .aquireUnsafe() increments the reference count by 1
-                    // 3. there is exactly one call to .release() per send (see RetransmitShredInfo.deinit and retransmitShreds)
-                    .turbine_tree = turbine_tree.acquireUnsafe(),
-                    .shred_id = shred_id_and_packet[0],
-                    .shred_packet = shred_id_and_packet[1],
-                });
-            }
-        }
-
-        stats.retransmit_preprocess_shreds_micros.set(@divFloor(preprocess_shreds_timer.read().asMicros(), shreds.items.len));
-        stats.log(logger);
-    }
-}
-
+/// Receive shreds from the network, deduplicate them, and then package
+/// them into RetransmitShredInfo's to be sent to the retransmit shred threads.
 fn receiveShreds(
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
@@ -262,24 +155,64 @@ fn receiveShreds(
     defer deduper.deinit();
 
     while (!exit.load(.acquire)) {
-        const shred_packet = receiver.receive() orelse continue;
-        stats.retransmit_shreds_received_count.inc();
+        var receive_shreds_timer = try sig.time.Timer.start();
 
-        // Preprocess shreds
-        var preprocess_shred_timer = try sig.time.Timer.start();
+        const receiver_len = receiver.len();
+        if (receiver_len == 0) continue;
 
-        // Reset deduper
+        var shreds = try std.ArrayList(Packet).initCapacity(allocator, receiver_len);
+        while (receiver.receive()) |packet| try shreds.append(packet);
+        defer shreds.deinit();
+
         const bytes_filter_saturated, const shred_id_filter_saturated = deduper.maybeReset(
             rand,
             DEDUPER_FALSE_POSITIVE_RATE,
             DEDUPER_RESET_CYCLE,
         );
-        if (bytes_filter_saturated) stats.retransmit_shred_byte_filter_saturated_count.inc();
-        if (shred_id_filter_saturated) stats.retransmit_shred_id_filter_saturated_count.inc();
+        if (bytes_filter_saturated) stats.retransmit_shred_byte_filter_saturated_count.reset();
+        if (shred_id_filter_saturated) stats.retransmit_shred_id_filter_saturated_count.reset();
 
+        var grouped_shreds = try groupShredsBySlot(
+            allocator,
+            shreds,
+            deduper,
+            stats,
+        );
+        defer {
+            for (grouped_shreds.values()) |arr| arr.deinit();
+            grouped_shreds.deinit();
+        }
+
+        try createAndSendRetransmitInfo(
+            allocator,
+            grouped_shreds,
+            bank_fields,
+            leader_schedule_cache,
+            turbine_tree_provider,
+            sender,
+            stats,
+        );
+
+        stats.retransmit_shreds_received_count.add(shreds.items.len);
+        stats.retransmit_receive_shreds_micros.set(@divFloor(receive_shreds_timer.read().asMicros(), shreds.items.len));
+        stats.log(logger);
+    }
+}
+
+/// Group shreds by slot and deduplicate them in the process
+/// Returns a map of slot to a list of shred_id and packet pairs
+inline fn groupShredsBySlot(
+    allocator: std.mem.Allocator,
+    shreds: std.ArrayList(Packet),
+    deduper: *ShredDeduper(2),
+    stats: *Stats,
+) !std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)) {
+    var group_shreds_timer = try sig.time.Timer.start();
+    var grouped_shreds = try std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
+    for (shreds.items) |shred_packet| {
         const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
 
-        switch (deduper.dedup(&shred_id, &shred_packet.data, MAX_DUPLICATE_COUNT)) {
+        switch (deduper.dedup(&shred_id, &shred_packet.data, DEDUPER_MAX_DUPLICATE_COUNT)) {
             .ByteDuplicate => {
                 stats.retransmit_shred_byte_filtered_count.add(1);
                 continue;
@@ -291,38 +224,63 @@ fn receiveShreds(
             .NotDuplicate => {},
         }
 
-        const slot = shred_id.slot;
-        const epoch, _ = bank_fields.epoch_schedule.getEpochAndSlotIndex(slot);
+        if (grouped_shreds.getEntry(shred_id.slot)) |entry| {
+            try entry.value_ptr.append(.{ shred_id, shred_packet });
+        } else {
+            var new_slot_shreds = std.ArrayList(ShredIdAndPacket).init(allocator);
+            try new_slot_shreds.append(.{ shred_id, shred_packet });
+            try grouped_shreds.put(shred_id.slot, new_slot_shreds);
+        }
+    }
+    stats.retransmit_group_shreds_micros.set(group_shreds_timer.read().asMicros());
+    return grouped_shreds;
+}
+
+/// Create and send retransmit info to the retransmit shred threads
+/// Retransmit info contains the slot leader, the shred_id, the shred_packet, and the turbine_tree
+inline fn createAndSendRetransmitInfo(
+    allocator: std.mem.Allocator,
+    shreds: std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)),
+    bank: *const BankFields,
+    leader_schedule_cache: *LeaderScheduleCache,
+    turbine_tree_provider: *TurbineTreeProvider,
+    sender: *Channel(RetransmitShredInfo),
+    stats: *Stats,
+) !void {
+    var send_retransmit_info_timer = try sig.time.Timer.start();
+    for (shreds.keys(), shreds.values()) |slot, slot_shreds| {
+        const epoch, _ = bank.epoch_schedule.getEpochAndSlotIndex(slot);
 
         const slot_leader = if (leader_schedule_cache.slotLeader(slot)) |leader| leader else blk: {
-            try leader_schedule_cache.put(epoch, try bank_fields.leaderSchedule(allocator));
+            try leader_schedule_cache.put(epoch, try bank.leaderSchedule(allocator));
             break :blk leader_schedule_cache.slotLeader(slot) orelse @panic("failed to get slot leader");
         };
 
-        const turbine_tree = try turbine_tree_provider.getTurbineTreeForRetransmit(
+        const turbine_tree = try turbine_tree_provider.getForRetransmit(
             epoch,
-            try bank_fields.getStakedNodes(
-                allocator,
-                epoch,
-            ),
+            bank,
         );
 
-        try sender.send(.{
-            .slot_leader = slot_leader,
-            // CAUTION: .acquireUnsafe() is used here as the turbine_tree is guaranteed to be valid since:
-            // 1. the turbine_tree_provider has one exactly on reference to the turbine_tree after getTurbineTree
-            // 2. each call to .aquireUnsafe() increments the reference count by 1
-            // 3. there is exactly one call to .release() per send (see RetransmitShredInfo.deinit and retransmitShreds)
-            .turbine_tree = turbine_tree.acquireUnsafe(),
-            .shred_id = shred_id,
-            .shred_packet = shred_packet,
-        });
-
-        stats.retransmit_preprocess_shreds_micros.set(preprocess_shred_timer.read().asMicros());
-        stats.log(logger);
+        for (slot_shreds.items) |shred_id_and_packet| {
+            try sender.send(.{
+                .slot_leader = slot_leader,
+                // CAUTION: .acquireUnsafe() is used here as the turbine_tree is guaranteed to be valid since:
+                // 1. the turbine_tree_provider has one exactly on reference to the turbine_tree after getTurbineTree
+                // 2. each call to .aquireUnsafe() increments the reference count by 1
+                // 3. there is exactly one call to .release() per send (see RetransmitShredInfo.deinit and retransmitShreds)
+                .turbine_tree = turbine_tree.acquireUnsafe(),
+                .shred_id = shred_id_and_packet[0],
+                .shred_packet = shred_id_and_packet[1],
+            });
+        }
     }
+    stats.retransmit_send_retransmit_info_micros.set(send_retransmit_info_timer.read().asMicros());
 }
 
+/// Retransmit shreds to nodes in the network
+/// RetransmitShredInfo contains the shred_id, the shred_packet, the slot_leader, and the turbine_tree
+/// The shred_id and slot_leader are used to seed an rng for shuffling the nodes in the turbine_tree before
+/// computing the children to retransmit to.
 fn retransmitShreds(
     allocator: std.mem.Allocator,
     receiver: *Channel(RetransmitShredInfo),
@@ -331,6 +289,8 @@ fn retransmitShreds(
     exit: *AtomicBool,
 ) !void {
     while (!exit.load(.acquire)) {
+        var retransmit_shred_timer = try sig.time.Timer.start();
+
         const retransmit_info: RetransmitShredInfo = receiver.receive() orelse continue;
 
         var compute_turbine_children_timer = try sig.time.Timer.start();
@@ -360,6 +320,7 @@ fn retransmitShreds(
         stats.retransmit_turbine_level.set(level);
         stats.retransmit_turbine_children.set(children.items.len);
         stats.retransmit_turbine_children_with_addresses.set(children_with_addresses_count);
+        stats.retransmit_retransmit_shreds_micros.set(retransmit_shred_timer.read().asMicros());
     }
 }
 
@@ -388,8 +349,12 @@ pub const Stats = struct {
     retransmit_turbine_children: *Gauge(u64),
     retransmit_turbine_children_with_addresses: *Gauge(u64),
 
-    retransmit_preprocess_shreds_micros: *Gauge(u64),
+    retransmit_send_retransmit_info_micros: *Gauge(u64),
+    retransmit_group_shreds_micros: *Gauge(u64),
+    retransmit_receive_shreds_micros: *Gauge(u64),
+
     retransmit_compute_turbine_children_micros: *Gauge(u64),
+    retransmit_retransmit_shreds_micros: *Gauge(u64),
 
     pub fn init() GetMetricError!Stats {
         var self: Stats = undefined;
