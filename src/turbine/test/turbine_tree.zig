@@ -3,24 +3,14 @@ const sig = @import("../../sig.zig");
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const IpAddr = sig.net.IpAddr;
-const SocketAddr = sig.net.SocketAddr;
-const ShredId = sig.ledger.shred.ShredId;
 const RwMux = sig.sync.RwMux;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
-const BankFields = sig.accounts_db.snapshots.BankFields;
 const Pubkey = sig.core.Pubkey;
-const Epoch = sig.core.Epoch;
-const Slot = sig.core.Slot;
-const Duration = sig.time.Duration;
-const Instant = sig.time.Instant;
 const GossipTable = sig.gossip.GossipTable;
 const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
 const AtomicUsize = std.atomic.Value(usize);
 const TurbineTree = sig.turbine.TurbineTree;
-const TurbineTreeProvider = sig.turbine.TurbineTreeProvider;
-const NodeId = TurbineTree.NodeId;
 const Node = TurbineTree.Node;
 
 const TestEnvironment = struct {

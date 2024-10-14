@@ -4,9 +4,6 @@ const sig = @import("../sig.zig");
 const AtomicU64 = std.atomic.Value(u64);
 const Random = std.rand.Random;
 
-const Instant = sig.time.Instant;
-const Duration = sig.time.Duration;
-
 /// AHasher is a minimal impelementation of the AHash, a fast, DOS-resistant hash algorithm (https://github.com/tkaitchuck/aHash).
 /// Currently, only the functionality required to replicate the agave Deduper is implemented.
 pub const AHasher = struct {
