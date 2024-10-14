@@ -373,7 +373,7 @@ pub const Stats = struct {
     }
 
     pub fn log(self: *const Stats, logger: Logger) void {
-        logger.info().logf("RetransmitService: received={} retransmitted={} skipped={}:{}:{}", .{
+        logger.info().logf("retransmit-service: received={} retransmitted={} skipped={}:{}:{}", .{
             self.retransmit_shreds_received_count.get(),
             self.retransmit_shreds_sent_count.get(),
             self.retransmit_shred_byte_filtered_count.get() + self.retransmit_shred_id_filtered_count.get(),
