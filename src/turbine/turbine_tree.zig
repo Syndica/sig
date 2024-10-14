@@ -763,3 +763,42 @@ test "agave: get retransmit nodes round trip" {
     try testCheckRetransmitNodesRoundTrip(std.testing.allocator, 6, 8_778);
     try testCheckRetransmitNodesRoundTrip(std.testing.allocator, 7, 9_879);
 }
+
+test "agave-equivalence: get seeeded rng" {
+    {
+        const pubkey = try Pubkey.fromString("57fFnkGGWzfnhmQEqbCBtZoYnNh26QxFa3FXZJhLmA19");
+        const shred_id = ShredId{ .slot = 1_013, .index = 10, .shred_type = .data };
+        var chacha = TurbineTree.getSeededRng(pubkey, shred_id);
+        const rng = chacha.random();
+        try std.testing.expectEqual(6377385843710208803, rng.int(u64));
+        try std.testing.expectEqual(16700903141058506452, rng.int(u64));
+        try std.testing.expectEqual(3913197096749217054, rng.int(u64));
+    }
+    {
+        const pubkey = try Pubkey.fromString("3qChSzvc79TAKbd7jM8uAGHzeNh6PTjvQR8WPFiftNUq");
+        const shred_id = ShredId{ .slot = 200_378, .index = 0, .shred_type = .data };
+        var chacha = TurbineTree.getSeededRng(pubkey, shred_id);
+        const rng = chacha.random();
+        try std.testing.expectEqual(4906107860997587194, rng.int(u64));
+        try std.testing.expectEqual(11492004887003779529, rng.int(u64));
+        try std.testing.expectEqual(8278812339973083991, rng.int(u64));
+    }
+
+    // fn test_get_seeded_rng(leader: &str, slot: u64, index: u32) {
+    //     let leader = Pubkey::from_str(leader).unwrap();
+    //     let shred = Shred::new_from_data(
+    //         slot,
+    //         index,
+    //         0,
+    //         &[],
+    //         ShredFlags::default(),
+    //         0,
+    //         0,
+    //         0,
+    //     );
+    //     let mut rng = get_seeded_rng(&leader, &shred.id());
+    //     let result = (0..3).map(|_| rng.gen::<u64>()).collect::<Vec<_>>();
+    //     println!("{:?}", result);
+
+    // }
+}
