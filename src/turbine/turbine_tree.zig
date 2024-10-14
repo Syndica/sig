@@ -66,10 +66,10 @@ pub const TurbineTreeProvider = struct {
     /// Get the turbine tree for the given epoch. If the tree is not cached, create a new one
     /// and cache it. The returned pointer is reference counted, however, is is NOT thread safe
     /// in a general sense. See [TurbineTree.acquire] and [TurbineTree.release] for more details.
-    pub fn getTurbineTreeForRetransmit(
+    pub fn getForRetransmit(
         self: *TurbineTreeProvider,
         epoch: Epoch,
-        staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
+        bank: *const BankFields,
     ) !*TurbineTree {
         const gopr = try self.cache.getOrPut(epoch);
 
@@ -81,9 +81,12 @@ pub const TurbineTreeProvider = struct {
             }
         }
 
+        const staked_nodes = try bank.getStakedNodes(self.allocator, epoch);
+        defer staked_nodes.deinit();
+
         gopr.value_ptr.* = .{
             .created = Instant.now(),
-            .turbine_tree = try createTurbineTreeForRetransmit(
+            .turbine_tree = try createForRetransmit(
                 self.allocator,
                 self.my_contact_info,
                 self.gossip_table_rw,
@@ -95,7 +98,7 @@ pub const TurbineTreeProvider = struct {
         return gopr.value_ptr.turbine_tree;
     }
 
-    fn createTurbineTreeForRetransmit(
+    pub fn createForRetransmit(
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
         gossip_table_rw: *RwMux(GossipTable),
@@ -121,7 +124,7 @@ pub const TurbineTreeProvider = struct {
         return turbine_tree;
     }
 
-    fn getTvuPeers(
+    pub fn getTvuPeers(
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
         gossip_table_rw: *RwMux(GossipTable),
@@ -130,11 +133,11 @@ pub const TurbineTreeProvider = struct {
         defer gossip_table_lg.unlock();
 
         var contact_info_iter = gossip_table.contactInfoIterator(0);
-        var tvu_peers = std.ArrayList(ThreadSafeContactInfo).init(allocator);
+        var tvu_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(allocator, gossip_table.contact_infos.count());
 
         while (contact_info_iter.nextThreadSafe()) |contact_info| {
             if (!contact_info.pubkey.equals(&my_contact_info.pubkey) and contact_info.shred_version == my_contact_info.shred_version) {
-                try tvu_peers.append(contact_info);
+                tvu_peers.appendAssumeCapacity(contact_info);
             }
         }
 
