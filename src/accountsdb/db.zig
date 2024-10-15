@@ -4233,6 +4233,7 @@ pub const BenchmarkAccountsDB = struct {
                 std.fs.cwd().deleteFile(filepath) catch {
                     std.debug.print("failed to delete file: {s}\n", .{filepath});
                 };
+                allocator.free(filepath);
             }
         }
 
@@ -4324,7 +4325,7 @@ pub const BenchmarkAccountsDB = struct {
                     // to be indexed later (and timed)
                     account_files.appendAssumeCapacity(account_file);
                 }
-                all_filenames.appendAssumeCapacity(filepath);
+                all_filenames.appendAssumeCapacity(try allocator.dupe(u8, filepath));
             }
 
             var timer = try sig.time.Timer.start();
