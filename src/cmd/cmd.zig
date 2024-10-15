@@ -814,26 +814,15 @@ fn validator() !void {
     var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
     defer retransmit_shred_channel.deinit();
 
-    var retransmit_send_sockets: std.ArrayList(network.Socket) = std.ArrayList(network.Socket).init(allocator);
-    defer {
-        for (retransmit_send_sockets.items) |socket| socket.close();
-        retransmit_send_sockets.deinit();
-    }
-
-    for (0..config.current.turbine.num_retransmit_sockets) |_| {
-        var socket = try network.Socket.create(.ipv4, .udp);
-        try socket.bind(try network.EndPoint.parse("0.0.0.0:0"));
-        try retransmit_send_sockets.append(try network.Socket.create(.ipv4, .udp));
-    }
-
     const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.retransmit_service.run, .{
         allocator,
         my_contact_info,
         snapshot.bank.bank_fields,
         &leader_schedule_cache,
-        &retransmit_shred_channel,
-        retransmit_send_sockets.items,
         &gossip_service.gossip_table_rw,
+        &retransmit_shred_channel,
+        config.current.turbine.num_retransmit_sockets,
+        config.current.turbine.num_retransmit_threads,
         &app_base.exit,
         rng.random(),
         app_base.logger,
