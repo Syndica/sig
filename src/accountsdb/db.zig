@@ -3935,8 +3935,8 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
     }
 
     const BenchResult = struct {
-        load_time: sig.time.Duration,
-        validate_time: sig.time.Duration,
+        load_time: u64,
+        validate_time: u64,
     };
 
     pub fn loadAndVerifySnapshot(bench_args: BenchArgs) !BenchResult {
@@ -3955,8 +3955,8 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             std.debug.print("need to setup a snapshot in {s} for this benchmark...\n", .{dir_path});
             const zero_duration = sig.time.Duration.fromNanos(0);
             return .{
-                .load_time = zero_duration,
-                .validate_time = zero_duration,
+                .load_time = zero_duration.asNanos(),
+                .validate_time = zero_duration.asNanos(),
             };
         };
         defer snapshot_dir.close();
@@ -4010,8 +4010,8 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         );
 
         return .{
-            .load_time = loading_duration,
-            .validate_time = validate_duration,
+            .load_time = loading_duration.asNanos(),
+            .validate_time = validate_duration.asNanos(),
         };
     }
 };
@@ -4157,7 +4157,7 @@ pub const BenchmarkAccountsDB = struct {
         // },
     };
 
-    pub fn readWriteAccounts(bench_args: BenchArgs) !sig.time.Duration {
+    pub fn readWriteAccounts(bench_args: BenchArgs) !struct { read_time: u64, write_time: u64 } {
         const n_accounts = bench_args.n_accounts;
         const slot_list_len = bench_args.slot_list_len;
         const total_n_accounts = n_accounts * slot_list_len;
@@ -4196,7 +4196,7 @@ pub const BenchmarkAccountsDB = struct {
             }
         }
 
-        if (bench_args.accounts == .ram) {
+        const write_time = if (bench_args.accounts == .ram) timer_blk: {
             const n_accounts_init = bench_args.n_accounts_multiple * bench_args.n_accounts;
             const accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));
             for (0..(total_n_accounts + n_accounts_init)) |i| {
@@ -4221,8 +4221,8 @@ pub const BenchmarkAccountsDB = struct {
                     @as(u64, @intCast(i)),
                 );
             }
-            std.debug.print("WRITE: {d}\n", .{timer.read()});
-        } else {
+            break :timer_blk timer.read();
+        } else timer_blk: {
             var account_files = try ArrayList(AccountFile).initCapacity(allocator, slot_list_len);
             defer account_files.deinit();
 
@@ -4291,8 +4291,8 @@ pub const BenchmarkAccountsDB = struct {
             for (account_files.items) |*account_file| {
                 try accounts_db.putAccountFile(account_file, n_accounts);
             }
-            std.debug.print("WRITE: {d}\n", .{timer.read()});
-        }
+            break :timer_blk timer.read();
+        };
 
         var timer = try sig.time.Timer.start();
         for (0..n_accounts) |i| {
@@ -4303,8 +4303,10 @@ pub const BenchmarkAccountsDB = struct {
             }
         }
         const read_time = timer.read();
-        std.debug.print("READ: {d}\n", .{read_time});
 
-        return read_time;
+        return .{
+            .read_time = read_time.asNanos(),
+            .write_time = write_time.asNanos(),
+        };
     }
 };

@@ -71,7 +71,6 @@ pub fn runBenchmark() !void {
     // let it run for ~4 measurements
     const NUM_MEAUSUREMENTS = 4;
     std.time.sleep(MEASURE_RATE.asNanos() * NUM_MEAUSUREMENTS);
-    std.debug.print("exiting\n", .{});
     exit.store(true, .release);
 
     reader_handle.join();
