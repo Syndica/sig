@@ -101,7 +101,7 @@ const VariantIndexer = struct {
     }
 
     pub fn index(self: Self, err: self.EnumOrError) usize {
-        return self.int_to_index[toInt(err)];
+        return self.int_to_index[toInt(err) - self.offset];
     }
 
     pub fn names(self: Self) [self.len][]const u8 {

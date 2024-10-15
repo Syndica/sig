@@ -115,6 +115,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .exit = exit,
         .slots_per_full_snapshot = 50_000,
         .slots_per_incremental_snapshot = 5_000,
+        .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
     } });
     errdefer {
         exit.store(true, .release);
