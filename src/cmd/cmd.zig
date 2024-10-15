@@ -110,6 +110,22 @@ pub fn run() !void {
         .value_name = "Number of turbine retransmit sockets",
     };
 
+    var turbine_num_retransmit_threads = cli.Option{
+        .long_name = "num-retransmit-threads",
+        .help = "The number of retransmit threads to use for the turbine service - default: cpu count",
+        .value_ref = cli.mkRef(&config.current.turbine.num_retransmit_threads),
+        .required = false,
+        .value_name = "Number of turbine retransmit threads",
+    };
+
+    var turbine_overwrite_stake_for_testing = cli.Option{
+        .long_name = "overwrite-stake-for-testing",
+        .help = "Overwrite the stake for testing purposes",
+        .value_ref = cli.mkRef(&config.current.turbine.overwrite_stake_for_testing),
+        .required = false,
+        .value_name = "Overwrite stake for testing",
+    };
+
     var leader_schedule_option = cli.Option{
         .long_name = "leader-schedule",
         .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
@@ -429,6 +445,8 @@ pub fn run() !void {
                             &max_shreds_option,
                             // turbine
                             &turbine_num_retransmit_sockets,
+                            &turbine_num_retransmit_threads,
+                            &turbine_overwrite_stake_for_testing,
                             // accounts-db
                             &snapshot_dir_option,
                             &use_disk_index_option,
@@ -823,6 +841,7 @@ fn validator() !void {
         &retransmit_shred_channel,
         config.current.turbine.num_retransmit_sockets,
         config.current.turbine.num_retransmit_threads,
+        config.current.turbine.overwrite_stake_for_testing,
         &app_base.exit,
         rng.random(),
         app_base.logger,

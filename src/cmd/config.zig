@@ -161,6 +161,7 @@ const TestTransactionSenderConfig = struct {
 };
 
 pub const TurbineConfig = struct {
-    num_retransmit_sockets: usize = 1,
-    num_retransmit_threads: ?usize = null,
+    num_retransmit_sockets: usize = 1, // Default to 1 socket
+    num_retransmit_threads: ?usize = null, // Default to number of CPUs
+    overwrite_stake_for_testing: bool = false,
 };
