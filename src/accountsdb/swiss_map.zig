@@ -644,7 +644,12 @@ pub const BenchmarkSwissMap = struct {
         },
     };
 
-    pub fn swissmapReadWriteBenchmark(bench_args: BenchArgs) !sig.time.Duration {
+    pub fn swissmapReadWriteBenchmark(bench_args: BenchArgs) !struct {
+        read_time: u64,
+        write_time: u64,
+        read_speedup_vs_std: f32,
+        write_speedup_vs_std: f32,
+    } {
         const allocator = std.heap.c_allocator;
         const n_accounts = bench_args.n_accounts;
 
@@ -686,21 +691,28 @@ pub const BenchmarkSwissMap = struct {
 
         const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos())) / @as(f32, @floatFromInt(write_time.asNanos()));
         const write_faster_or_slower = if (write_speedup < 1.0) "slower" else "faster";
-        std.debug.print("\tWRITE: {} ({d:.2}x {s} than std)\n", .{
-            std.fmt.fmtDuration(write_time.asNanos()),
-            write_speedup,
-            write_faster_or_slower,
-        });
+        _ = write_faster_or_slower;
+        // std.debug.print("\tWRITE: {} ({d:.2}x {s} than std)\n", .{
+        //     std.fmt.fmtDuration(write_time.asNanos()),
+        //     write_speedup,
+        //     write_faster_or_slower,
+        // });
 
         const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
         const read_faster_or_slower = if (read_speedup < 1.0) "slower" else "faster";
-        std.debug.print("\tREAD: {} ({d:.2}x {s} than std)\n", .{
-            std.fmt.fmtDuration(read_time.asNanos()),
-            read_speedup,
-            read_faster_or_slower,
-        });
+        _ = read_faster_or_slower;
+        // std.debug.print("\tREAD: {} ({d:.2}x {s} than std)\n", .{
+        //     std.fmt.fmtDuration(read_time.asNanos()),
+        //     read_speedup,
+        //     read_faster_or_slower,
+        // });
 
-        return write_time;
+        return .{
+            .read_time = read_time.asNanos(),
+            .write_time = write_time.asNanos(),
+            .read_speedup_vs_std = read_speedup,
+            .write_speedup_vs_std = write_speedup,
+        };
     }
 };
 
