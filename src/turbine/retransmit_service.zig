@@ -211,11 +211,11 @@ inline fn dedupAndGroupShredsBySlot(
 
         switch (deduper.dedup(&shred_id, &shred_packet.data, DEDUPER_MAX_DUPLICATE_COUNT)) {
             .ByteDuplicate => {
-                stats.retransmit_shred_byte_filtered_count.add(1);
+                stats.retransmit_shred_byte_filtered_count.inc();
                 continue;
             },
             .ShredIdDuplicate => {
-                stats.retransmit_shred_id_filtered_count.add(1);
+                stats.retransmit_shred_id_filtered_count.inc();
                 continue;
             },
             .NotDuplicate => {},
@@ -324,7 +324,7 @@ fn retransmitShreds(
             }
         }
 
-        stats.retransmit_shreds_sent_count.add(1);
+        stats.retransmit_shreds_sent_count.inc();
         stats.retransmit_turbine_level.set(level);
         stats.retransmit_turbine_children.set(children.items.len);
         stats.retransmit_turbine_children_with_addresses.set(children_with_addresses_count);
