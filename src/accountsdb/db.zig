@@ -1131,8 +1131,8 @@ pub const AccountsDB = struct {
 
         // TODO: get rid of this once `generateFullSnapshot` can actually
         // derive this data correctly by itself.
-        var rand = std.Random.DefaultPrng.init(1234);
-        var tmp_bank_fields = try BankFields.random(self.allocator, rand.random(), 128);
+        var prng = std.Random.DefaultPrng.init(1234);
+        var tmp_bank_fields = try BankFields.initRandom(self.allocator, prng.random(), 128);
         defer tmp_bank_fields.deinit(self.allocator);
 
         while (!exit.load(.acquire)) {
@@ -1208,7 +1208,7 @@ pub const AccountsDB = struct {
                 _ = try self.generateFullSnapshotWithCompressor(zstd_compressor, zstd_buffer, .{
                     .target_slot = largest_flushed_slot,
                     .bank_fields = &tmp_bank_fields,
-                    .lamports_per_signature = rand.random().int(u64),
+                    .lamports_per_signature = prng.random().int(u64),
                     .old_snapshot_action = .delete_old,
                 });
             }
@@ -1236,7 +1236,7 @@ pub const AccountsDB = struct {
                 _ = try self.generateIncrementalSnapshotWithCompressor(zstd_compressor, zstd_buffer, .{
                     .target_slot = largest_flushed_slot,
                     .bank_fields = &tmp_bank_fields,
-                    .lamports_per_signature = rand.random().int(u64),
+                    .lamports_per_signature = prng.random().int(u64),
                     .old_snapshot_action = .delete_old,
                 });
             }
@@ -3213,8 +3213,8 @@ test "write and read an account" {
         snapshots.deinit(allocator);
     }
 
-    var rng = std.rand.DefaultPrng.init(0);
-    const pubkey = Pubkey.random(rng.random());
+    var prng = std.rand.DefaultPrng.init(0);
+    const pubkey = Pubkey.initRandom(prng.random());
     var data = [_]u8{ 1, 2, 3 };
     const test_account = Account{
         .data = &data,
@@ -3361,8 +3361,8 @@ test "flushing slots works" {
     }, null);
     defer accounts_db.deinit();
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
     const n_accounts = 3;
 
     // we dont defer deinit to make sure that they are cleared on purge
@@ -3370,8 +3370,8 @@ test "flushing slots works" {
     var accounts: [n_accounts]Account = undefined;
     for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
         errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
-        pubkey.* = Pubkey.random(rng);
-        account.* = try Account.random(allocator, rng, i % 1_000);
+        pubkey.* = Pubkey.initRandom(random);
+        account.* = try Account.initRandom(allocator, random, i % 1_000);
     }
     defer for (accounts) |account| account.deinit(allocator);
 
@@ -3412,8 +3412,8 @@ test "purge accounts in cache works" {
     }, null);
     defer accounts_db.deinit();
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
     const n_accounts = 3;
 
     var pubkeys: [n_accounts]Pubkey = undefined;
@@ -3421,8 +3421,8 @@ test "purge accounts in cache works" {
 
     for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
         errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
-        pubkey.* = Pubkey.random(rng);
-        account.* = try Account.random(allocator, rng, i % 1_000);
+        pubkey.* = Pubkey.initRandom(random);
+        account.* = try Account.initRandom(allocator, random, i % 1_000);
     }
     defer for (accounts) |account| account.deinit(allocator);
 
@@ -3469,8 +3469,8 @@ test "clean to shrink account file works with zero-lamports" {
     }, null);
     defer accounts_db.deinit();
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
     const n_accounts = 10;
 
     // generate the account file for slot 0
@@ -3478,8 +3478,8 @@ test "clean to shrink account file works with zero-lamports" {
     var accounts: [n_accounts]Account = undefined;
     for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
         errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
-        pubkey.* = Pubkey.random(rng);
-        account.* = try Account.random(allocator, rng, 100);
+        pubkey.* = Pubkey.initRandom(random);
+        account.* = try Account.initRandom(allocator, random, 100);
     }
     defer for (accounts) |account| account.deinit(allocator);
 
@@ -3496,7 +3496,7 @@ test "clean to shrink account file works with zero-lamports" {
     @memcpy(&pubkeys2, pubkeys[0..new_len]);
     for (&accounts2, 0..) |*account, i| {
         errdefer for (accounts2[0..i]) |prev_account| prev_account.deinit(allocator);
-        account.* = try Account.random(allocator, rng, i % 1_000);
+        account.* = try Account.initRandom(allocator, random, i % 1_000);
         account.lamports = 0; // !
     }
     defer for (accounts2) |account| account.deinit(allocator);
@@ -3545,8 +3545,8 @@ test "clean to shrink account file works" {
     }, null);
     defer accounts_db.deinit();
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
     const n_accounts = 10;
 
     // generate the account file for slot 0
@@ -3554,8 +3554,8 @@ test "clean to shrink account file works" {
     var accounts: [n_accounts]Account = undefined;
     for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
         errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
-        pubkey.* = Pubkey.random(rng);
-        account.* = try Account.random(allocator, rng, 100);
+        pubkey.* = Pubkey.initRandom(random);
+        account.* = try Account.initRandom(allocator, random, 100);
     }
     defer for (accounts) |account| account.deinit(allocator);
 
@@ -3569,7 +3569,7 @@ test "clean to shrink account file works" {
     @memcpy(&pubkeys2, pubkeys[0..new_len]);
     for (&accounts2, 0..) |*account, i| {
         errdefer for (accounts2[0..i]) |prev_account| prev_account.deinit(allocator);
-        account.* = try Account.random(allocator, rng, i % 1_000);
+        account.* = try Account.initRandom(allocator, random, i % 1_000);
     }
     defer for (accounts2) |account| account.deinit(allocator);
 
@@ -3613,8 +3613,8 @@ test "full clean account file works" {
     }, null);
     defer accounts_db.deinit();
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
     const n_accounts = 3;
 
     // generate the account file for slot 0
@@ -3622,8 +3622,8 @@ test "full clean account file works" {
     var accounts: [n_accounts]Account = undefined;
     for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
         errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
-        pubkey.* = Pubkey.random(rng);
-        account.* = try Account.random(allocator, rng, i % 1_000);
+        pubkey.* = Pubkey.initRandom(random);
+        account.* = try Account.initRandom(allocator, random, i % 1_000);
     }
     defer for (accounts) |account| account.deinit(allocator);
 
@@ -3636,7 +3636,7 @@ test "full clean account file works" {
     @memcpy(&pubkeys2, &pubkeys);
     for (&accounts2, 0..) |*account, i| {
         errdefer for (accounts2[0..i]) |prev_account| prev_account.deinit(allocator);
-        account.* = try Account.random(allocator, rng, i % 1_000);
+        account.* = try Account.initRandom(allocator, random, i % 1_000);
     }
     defer for (&accounts2) |account| account.deinit(allocator);
 
@@ -3698,8 +3698,8 @@ test "shrink account file works" {
     }, null);
     defer accounts_db.deinit();
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
     const n_accounts = 10;
 
@@ -3709,8 +3709,8 @@ test "shrink account file works" {
 
     for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
         errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
-        pubkey.* = Pubkey.random(rng);
-        account.* = try Account.random(allocator, rng, 100);
+        pubkey.* = Pubkey.initRandom(random);
+        account.* = try Account.initRandom(allocator, random, 100);
     }
     defer for (accounts) |account| account.deinit(allocator);
 
@@ -3726,7 +3726,7 @@ test "shrink account file works" {
     var accounts2: [new_len]Account = undefined;
     @memcpy(&pubkeys2, pubkeys[0..new_len]);
     for (&accounts2, 0..new_len) |*account, i| {
-        account.* = try Account.random(allocator, rng, i % 1_000);
+        account.* = try Account.initRandom(allocator, random, i % 1_000);
     }
     defer for (accounts2) |account| account.deinit(allocator);
 
@@ -4090,13 +4090,13 @@ pub const BenchmarkAccountsDB = struct {
         }, null);
         defer accounts_db.deinit();
 
-        var random = std.Random.DefaultPrng.init(19);
-        const rng = random.random();
+        var prng = std.Random.DefaultPrng.init(19);
+        const random = prng.random();
 
         var pubkeys = try allocator.alloc(Pubkey, n_accounts);
         defer allocator.free(pubkeys);
         for (0..n_accounts) |i| {
-            pubkeys[i] = Pubkey.random(rng);
+            pubkeys[i] = Pubkey.initRandom(random);
         }
 
         var all_filenames = try ArrayList([]const u8).initCapacity(allocator, slot_list_len + bench_args.n_accounts_multiple);
@@ -4113,7 +4113,7 @@ pub const BenchmarkAccountsDB = struct {
             const n_accounts_init = bench_args.n_accounts_multiple * bench_args.n_accounts;
             const accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));
             for (0..(total_n_accounts + n_accounts_init)) |i| {
-                accounts[i] = try Account.random(allocator, rng, i % 1_000);
+                accounts[i] = try Account.initRandom(allocator, random, i % 1_000);
             }
 
             if (n_accounts_init > 0) {
@@ -4177,7 +4177,7 @@ pub const BenchmarkAccountsDB = struct {
 
                     var offset: usize = 0;
                     for (0..n_accounts) |i| {
-                        const account = try Account.random(allocator, rng, i % 1_000);
+                        const account = try Account.initRandom(allocator, random, i % 1_000);
                         defer allocator.free(account.data);
                         var pubkey = pubkeys[i % n_accounts];
                         offset += account.writeToBuf(&pubkey, memory[offset..]);

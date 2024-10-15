@@ -10,16 +10,15 @@ const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 const BankFields = sig.accounts_db.snapshots.BankFields;
-const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
     slot: u64,
     data: []u8,
 
-    pub fn random(rand: std.rand.Random, slot: Slot, allocator: std.mem.Allocator) !TrackedAccount {
+    pub fn initRandom(random: std.rand.Random, slot: Slot, allocator: std.mem.Allocator) !TrackedAccount {
         return .{
-            .pubkey = Pubkey.random(rand),
+            .pubkey = Pubkey.initRandom(random),
             .slot = slot,
             .data = try allocator.alloc(u8, 32),
         };
@@ -51,7 +50,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     };
 
     var prng = std.Random.DefaultPrng.init(seed);
-    const rand = prng.random();
+    const random = prng.random();
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();
@@ -66,7 +65,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const logger = std_logger.logger();
 
-    const use_disk = rand.boolean();
+    const use_disk = random.boolean();
 
     var test_data_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer test_data_dir.close();
@@ -130,10 +129,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     };
     try tracked_accounts.ensureTotalCapacity(10_000);
 
-    var random_bank_fields = try BankFields.random(allocator, rand, 1 << 8);
+    var random_bank_fields = try BankFields.initRandom(allocator, random, 1 << 8);
     defer random_bank_fields.deinit(allocator);
-
-    // const random_bank_hash_info = BankHashInfo.random(rand);
 
     const zstd_compressor = try zstd.Compressor.init(.{});
     defer zstd_compressor.deinit();
@@ -151,7 +148,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
         defer slot += 1;
 
-        const action = rand.enumValue(enum { put, get });
+        const action = random.enumValue(enum { put, get });
         switch (action) {
             .put => {
                 const N_ACCOUNTS_PER_SLOT = 10;
@@ -162,11 +159,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
                     errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
 
-                    var tracked_account = try TrackedAccount.random(rand, slot, allocator);
+                    var tracked_account = try TrackedAccount.initRandom(random, slot, allocator);
 
-                    const existing_pubkey = rand.boolean();
+                    const existing_pubkey = random.boolean();
                     if (existing_pubkey and tracked_accounts.count() > 0) {
-                        const index = rand.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
+                        const index = random.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
                         const key = tracked_accounts.keys()[index];
                         tracked_account.pubkey = key;
                     }
@@ -195,7 +192,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 if (n_keys == 0) {
                     continue;
                 }
-                const index = rand.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
+                const index = random.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
                 const key = tracked_accounts.keys()[index];
 
                 const tracked_account = tracked_accounts.get(key).?;
@@ -208,7 +205,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             },
         }
 
-        const create_new_root = rand.boolean();
+        const create_new_root = random.boolean();
         if (create_new_root) {
             largest_rooted_slot = @min(slot, largest_rooted_slot + 2);
             accounts_db.largest_rooted_slot.store(largest_rooted_slot, .monotonic);
