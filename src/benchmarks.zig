@@ -236,9 +236,17 @@ pub fn benchmarkCSV(
             switch (result_type) {
                 Duration => {
                     // print column headers
-                    std.debug.print(" min, max, mean\n", .{});
+                    std.debug.print(" min, max, mean, variance\n", .{});
+                    const mean = sum / iter_count;
+                    var variance: u64 = 0;
+                    for (runtimes.items(.result)) |runtime| {
+                        const d = if (runtime > mean) runtime - mean else mean - runtime;
+                        const d_sq = d * d;
+                        variance += d_sq;
+                    }
+                    variance /= iter_count;
                     // print column results
-                    std.debug.print("_, {d}, {d}, {d}\n", .{ min, max, sum / iter_count });
+                    std.debug.print("_, {d}, {d}, {d}, {d}\n", .{ min, max, mean, variance });
                 },
                 inline else => {
                     // print column headers
