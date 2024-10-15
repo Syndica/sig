@@ -30,12 +30,11 @@ const ShredDeduper = sig.turbine.shred_deduper.ShredDeduper;
 
 const globalRegistry = sig.prometheus.globalRegistry;
 
+/// Shred deduper configuration from agave
 const DEDUPER_MAX_DUPLICATE_COUNT: usize = 2;
 const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
 const DEDUPER_RESET_CYCLE: Duration = Duration.fromSecs(5 * 60);
 const DEDUPER_NUM_BITS: u64 = 637_534_199;
-
-const USE_STAKE_HACK_FOR_TESTING = false;
 
 /// Retransmit Service
 /// The retransmit service receives verified shreds from the shred collector and retransmits them to the network.
@@ -53,6 +52,7 @@ pub fn run(
     receiver: *Channel(Packet),
     num_retransmit_sockets: usize,
     maybe_num_retransmit_threads: ?usize,
+    overwrite_stake_for_testing: bool,
     exit: *AtomicBool,
     rand: Random,
     logger: Logger,
@@ -61,6 +61,11 @@ pub fn run(
         logger.info().log("retransmit service failed");
         exit.store(false, .monotonic);
     }
+    const num_retransmit_threads = maybe_num_retransmit_threads orelse try std.Thread.getCpuCount();
+    logger.info().logf("starting retransmit service: num_retransmit_sockets={} num_retransmit_threads={}", .{
+        num_retransmit_sockets,
+        num_retransmit_threads,
+    });
 
     var stats = try Stats.init();
 
@@ -70,9 +75,11 @@ pub fn run(
     var retransmit_to_socket_channel = try Channel(Packet).init(allocator);
     defer retransmit_to_socket_channel.deinit();
 
-    var retransmit_shred_threads = std.ArrayList(std.Thread).init(allocator);
-    defer retransmit_shred_threads.deinit();
-    const num_retransmit_threads = if (maybe_num_retransmit_threads) |num| num else try std.Thread.getCpuCount();
+    var retransmit_threads = std.ArrayList(std.Thread).init(allocator);
+    defer retransmit_threads.deinit();
+
+    var socket_threads = std.ArrayList(std.Thread).init(allocator);
+    defer socket_threads.deinit();
 
     var retransmit_sockets: std.ArrayList(UdpSocket) = std.ArrayList(UdpSocket).init(allocator);
     defer {
@@ -86,10 +93,7 @@ pub fn run(
         try retransmit_sockets.append(try UdpSocket.create(.ipv4, .udp));
     }
 
-    var send_socket_threads = std.ArrayList(std.Thread).init(allocator);
-    defer send_socket_threads.deinit();
-
-    const receive_shred_thread = try std.Thread.spawn(
+    const receive_thread = try std.Thread.spawn(
         .{},
         receiveShreds,
         .{
@@ -104,11 +108,12 @@ pub fn run(
             exit,
             logger,
             &stats,
+            overwrite_stake_for_testing,
         },
     );
 
     for (0..num_retransmit_threads) |_| {
-        try retransmit_shred_threads.append(try std.Thread.spawn(
+        try retransmit_threads.append(try std.Thread.spawn(
             .{},
             retransmitShreds,
             .{
@@ -122,7 +127,7 @@ pub fn run(
     }
 
     for (retransmit_sockets.items) |socket| {
-        try send_socket_threads.append(try std.Thread.spawn(
+        try socket_threads.append(try std.Thread.spawn(
             .{},
             socket_utils.sendSocket,
             .{
@@ -136,9 +141,9 @@ pub fn run(
         ));
     }
 
-    receive_shred_thread.join();
-    for (retransmit_shred_threads.items) |thread| thread.join();
-    for (send_socket_threads.items) |thread| thread.join();
+    receive_thread.join();
+    for (retransmit_threads.items) |thread| thread.join();
+    for (socket_threads.items) |thread| thread.join();
 }
 
 /// Receive shreds from the network, deduplicate them, and then package
@@ -155,6 +160,7 @@ fn receiveShreds(
     exit: *AtomicBool,
     logger: Logger,
     stats: *Stats,
+    overwrite_stake_for_testing: bool,
 ) !void {
     var turbine_tree_cache = TurbineTreeCache.init(allocator);
     defer turbine_tree_cache.deinit();
@@ -181,8 +187,8 @@ fn receiveShreds(
             DEDUPER_FALSE_POSITIVE_RATE,
             DEDUPER_RESET_CYCLE,
         );
-        if (bytes_filter_saturated) stats.retransmit_shred_byte_filter_saturated_count.reset();
-        if (shred_id_filter_saturated) stats.retransmit_shred_id_filter_saturated_count.reset();
+        stats.retransmit_shred_byte_filter_saturated.set(@intFromBool(bytes_filter_saturated));
+        stats.retransmit_shred_id_filter_saturated.set(@intFromBool(shred_id_filter_saturated));
 
         var grouped_shreds = try dedupAndGroupShredsBySlot(
             allocator,
@@ -205,10 +211,13 @@ fn receiveShreds(
             &turbine_tree_cache,
             sender,
             stats,
+            overwrite_stake_for_testing,
         );
 
         stats.retransmit_shreds_received_count.add(shreds.items.len);
-        stats.retransmit_receive_shreds_micros.set(@divFloor(receive_shreds_timer.read().asMicros(), shreds.items.len));
+        stats.retransmit_shreds_received_batch_size.set(shreds.items.len);
+        stats.retransmit_receive_shred_nanos.set(@divFloor(receive_shreds_timer.read().asNanos(), shreds.items.len));
+
         stats.log(logger);
     }
 }
@@ -221,8 +230,8 @@ inline fn dedupAndGroupShredsBySlot(
     deduper: *ShredDeduper(2),
     stats: *Stats,
 ) !std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)) {
-    var group_shreds_timer = try sig.time.Timer.start();
-    var grouped_shreds = std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
+    var dedup_and_group_shreds_timer = try sig.time.Timer.start();
+    var result = std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
     for (shreds.items) |shred_packet| {
         const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
 
@@ -238,16 +247,16 @@ inline fn dedupAndGroupShredsBySlot(
             .NotDuplicate => {},
         }
 
-        if (grouped_shreds.getEntry(shred_id.slot)) |entry| {
+        if (result.getEntry(shred_id.slot)) |entry| {
             try entry.value_ptr.append(.{ shred_id, shred_packet });
         } else {
             var new_slot_shreds = std.ArrayList(ShredIdAndPacket).init(allocator);
             try new_slot_shreds.append(.{ shred_id, shred_packet });
-            try grouped_shreds.put(shred_id.slot, new_slot_shreds);
+            try result.put(shred_id.slot, new_slot_shreds);
         }
     }
-    stats.retransmit_group_shreds_micros.set(group_shreds_timer.read().asMicros());
-    return grouped_shreds;
+    stats.retransmit_dedup_and_group_shreds_nanos.set(dedup_and_group_shreds_timer.read().asNanos());
+    return result;
 }
 
 /// Create and send retransmit info to the retransmit shred threads
@@ -262,16 +271,20 @@ inline fn createAndSendRetransmitInfo(
     turbine_tree_cache: *TurbineTreeCache,
     sender: *Channel(RetransmitShredInfo),
     stats: *Stats,
+    overwrite_stake_for_testing: bool,
 ) !void {
-    var send_retransmit_info_timer = try sig.time.Timer.start();
+    var create_and_send_retransmit_info_timer = try sig.time.Timer.start();
     for (shreds.keys(), shreds.values()) |slot, slot_shreds| {
         const epoch, _ = bank.epoch_schedule.getEpochAndSlotIndex(slot);
 
+        var get_slot_leader_timer = try sig.time.Timer.start();
         const slot_leader = if (leader_schedule_cache.slotLeader(slot)) |leader| leader else blk: {
             try leader_schedule_cache.put(epoch, try bank.leaderSchedule(allocator));
             break :blk leader_schedule_cache.slotLeader(slot) orelse @panic("failed to get slot leader");
         };
+        stats.retransmit_get_slot_leader_nanos.set(get_slot_leader_timer.read().asNanos());
 
+        var get_turbine_tree_timer = try sig.time.Timer.start();
         const turbine_tree = if (try turbine_tree_cache.get(epoch)) |tree| tree else blk: {
             const turbine_tree = try allocator.create(TurbineTree);
             turbine_tree.* = try TurbineTree.initForRetransmit(
@@ -279,12 +292,13 @@ inline fn createAndSendRetransmitInfo(
                 my_contact_info,
                 gossip_table_rw,
                 try bank.getStakedNodes(allocator, epoch),
-                USE_STAKE_HACK_FOR_TESTING,
+                overwrite_stake_for_testing,
             );
             try turbine_tree_cache.put(epoch, turbine_tree);
             break :blk turbine_tree;
         };
         defer turbine_tree.releaseUnsafe();
+        stats.retransmit_get_turbine_tree_nanos.set(get_turbine_tree_timer.read().asNanos());
 
         for (slot_shreds.items) |shred_id_and_packet| {
             try sender.send(.{
@@ -299,7 +313,8 @@ inline fn createAndSendRetransmitInfo(
             });
         }
     }
-    stats.retransmit_send_retransmit_info_micros.set(send_retransmit_info_timer.read().asMicros());
+    stats.retransmit_create_retransmit_info_nanos.set(create_and_send_retransmit_info_timer.read().asNanos());
+    stats.retransmit_create_retransmit_info_per_slot_nanos.set(@divFloor(create_and_send_retransmit_info_timer.read().asNanos(), shreds.keys().len));
 }
 
 /// Retransmit shreds to nodes in the network
@@ -318,7 +333,7 @@ fn retransmitShreds(
 
         const retransmit_info: RetransmitShredInfo = receiver.receive() orelse continue;
 
-        var compute_turbine_children_timer = try sig.time.Timer.start();
+        var get_retransmit_children_timer = try sig.time.Timer.start();
         const level, const children = try retransmit_info.turbine_tree.getRetransmitChildren(
             allocator,
             retransmit_info.slot_leader,
@@ -327,7 +342,7 @@ fn retransmitShreds(
         );
         defer children.deinit();
         defer retransmit_info.turbine_tree.releaseUnsafe();
-        stats.retransmit_compute_turbine_children_micros.set(compute_turbine_children_timer.read().asMicros());
+        stats.retransmit_get_children_nanos.set(get_retransmit_children_timer.read().asNanos());
 
         var children_with_addresses_count: usize = 0;
         for (children.items) |child| {
@@ -341,11 +356,14 @@ fn retransmitShreds(
             }
         }
 
-        stats.retransmit_shreds_sent_count.inc();
-        stats.retransmit_turbine_level.set(level);
-        stats.retransmit_turbine_children.set(children.items.len);
-        stats.retransmit_turbine_children_with_addresses.set(children_with_addresses_count);
-        stats.retransmit_retransmit_shreds_micros.set(retransmit_shred_timer.read().asMicros());
+        if (children_with_addresses_count > 0) {
+            stats.retransmit_shreds_sent_count.inc();
+        }
+
+        stats.retransmit_level.set(level);
+        stats.retransmit_children.set(children.items.len);
+        stats.retransmit_children_with_addresses.set(children_with_addresses_count);
+        stats.retransmit_shred_nanos.set(retransmit_shred_timer.read().asNanos());
     }
 }
 
@@ -362,24 +380,31 @@ const RetransmitShredInfo = struct {
 };
 
 pub const Stats = struct {
+    // receiveShreds
+    retransmit_shreds_received_batch_size: *Gauge(u64),
     retransmit_shreds_received_count: *Counter,
-    retransmit_shreds_sent_count: *Counter,
+    retransmit_shred_byte_filter_saturated: *Gauge(u64),
+    retransmit_shred_id_filter_saturated: *Gauge(u64),
+    retransmit_receive_shred_nanos: *Gauge(u64),
 
+    // dedupAndGroupShredsBySlot
     retransmit_shred_byte_filtered_count: *Counter,
-    retransmit_shred_byte_filter_saturated_count: *Counter,
     retransmit_shred_id_filtered_count: *Counter,
-    retransmit_shred_id_filter_saturated_count: *Counter,
+    retransmit_dedup_and_group_shreds_nanos: *Gauge(u64),
 
-    retransmit_turbine_level: *Gauge(u64),
-    retransmit_turbine_children: *Gauge(u64),
-    retransmit_turbine_children_with_addresses: *Gauge(u64),
+    // createAndSendRetransmitInfo
+    retransmit_get_slot_leader_nanos: *Gauge(u64),
+    retransmit_get_turbine_tree_nanos: *Gauge(u64),
+    retransmit_create_retransmit_info_nanos: *Gauge(u64),
+    retransmit_create_retransmit_info_per_slot_nanos: *Gauge(u64),
 
-    retransmit_send_retransmit_info_micros: *Gauge(u64),
-    retransmit_group_shreds_micros: *Gauge(u64),
-    retransmit_receive_shreds_micros: *Gauge(u64),
-
-    retransmit_compute_turbine_children_micros: *Gauge(u64),
-    retransmit_retransmit_shreds_micros: *Gauge(u64),
+    // retransmitShreds
+    retransmit_shreds_sent_count: *Counter,
+    retransmit_level: *Gauge(u64),
+    retransmit_children: *Gauge(u64),
+    retransmit_children_with_addresses: *Gauge(u64),
+    retransmit_shred_nanos: *Gauge(u64),
+    retransmit_get_children_nanos: *Gauge(u64),
 
     pub fn init() GetMetricError!Stats {
         var self: Stats = undefined;
