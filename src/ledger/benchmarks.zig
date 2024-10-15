@@ -35,6 +35,8 @@ fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
 }
 
 pub const BenchmarLegder = struct {
+    const Slot = sig.core.Slot;
+    const SlotMeta = ledger.meta.SlotMeta;
     pub const min_iterations = 5;
     pub const max_iterations = 5;
 
@@ -152,5 +154,42 @@ pub const BenchmarLegder = struct {
         var timer = try sig.time.Timer.start();
         _ = try state.db.getBytes(schema.rewards, slot);
         return timer.read();
+    }
+
+    pub fn benchReaderSlotRangeConnected() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try State.init(allocator, "slotRangeConnected", .noop);
+        defer state.deinit();
+        var reader = try state.reader();
+        var db = state.db;
+
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+
+        const slot_per_epoch = 432_000;
+        var parent_slot: ?Slot = null;
+        for (1..(slot_per_epoch + 1)) |slot| {
+            var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
+            defer slot_meta.deinit();
+            // ensure isFull() is true
+            slot_meta.last_index = 1;
+            slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
+            // update next slots
+            if (slot < (slot_per_epoch + 1)) {
+                try slot_meta.next_slots.append(slot + 1);
+            }
+            try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
+            // connect the chain
+            parent_slot = slot;
+        }
+        try db.commit(write_batch);
+
+        var timer = try sig.time.Timer.start();
+        const is_connected = try reader.slotRangeConnected(1, slot_per_epoch);
+        const duration = timer.read();
+
+        try std.testing.expectEqual(true, is_connected);
+
+        return duration;
     }
 };
