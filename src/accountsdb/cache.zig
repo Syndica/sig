@@ -6,8 +6,9 @@ const zstd = @import("zstd");
 const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
-
 const LruCacheCustom = sig.common.lru.LruCacheCustom;
+const ReferenceCounter = sig.sync.reference_counter.ReferenceCounter;
+
 /// Stores read-only in-memory copies of commonly used accounts
 pub const AccountsCache = struct {
     slot_lrus: SlotLRUs,
@@ -22,12 +23,12 @@ pub const AccountsCache = struct {
         /// represents whether this account has been mutated, and shouldn't progress to newer slots
         // TODO: when we start mutating accounts, make sure to set this field
         is_dirty: std.atomic.Value(bool) = .{ .raw = false },
-        ref_count: std.atomic.Value(usize),
+        ref_count: ReferenceCounter,
 
         pub fn init(allocator: std.mem.Allocator, account: Account) !CachedAccount {
             return .{
                 .account = try account.clone(allocator),
-                .ref_count = std.atomic.Value(usize).init(1),
+                .ref_count = .{},
             };
         }
 
@@ -37,9 +38,7 @@ pub const AccountsCache = struct {
         }
 
         pub fn releaseOrDestroy(self: *CachedAccount, allocator: std.mem.Allocator) void {
-            const current_count = self.ref_count.fetchSub(1, .release);
-            if (current_count == 1) {
-                _ = self.ref_count.load(.acquire);
+            if (self.ref_count.release()) {
                 self.deinit(allocator);
                 allocator.destroy(self);
             }
@@ -51,14 +50,17 @@ pub const AccountsCache = struct {
         }
 
         pub fn copyRef(self: *CachedAccount) *CachedAccount {
-            _ = self.ref_count.fetchAdd(1, .monotonic);
-            return self;
+            if (self.ref_count.acquire()) {
+                return self;
+            } else {
+                @panic("Attempted to acquire reference to destroyed CachedAccount");
+            }
         }
 
         pub fn getMeta(self: *CachedAccount) CachedAccountMeta {
             return .{
                 .is_dirty = self.is_dirty.load(.monotonic),
-                .ref_count = self.ref_count.load(.monotonic),
+                .ref_count = self.ref_count,
             };
         }
     };
@@ -66,7 +68,7 @@ pub const AccountsCache = struct {
     /// A copy of a CachedAccout's fields, without the account
     pub const CachedAccountMeta = struct {
         is_dirty: bool,
-        ref_count: usize,
+        ref_count: ReferenceCounter,
     };
 
     pub const LRU = LruCacheCustom(
@@ -220,15 +222,15 @@ test "CachedAccount ref_count" {
     cached_account.* = try AccountsCache.CachedAccount.init(allocator, account);
     defer cached_account.releaseOrDestroy(allocator);
 
-    try std.testing.expectEqual(cached_account.ref_count.load(.acquire), 1);
+    try std.testing.expectEqual(cached_account.ref_count.state.raw, 1);
 
     const cached_account_ref = cached_account.copyRef();
 
-    try std.testing.expectEqual(cached_account.ref_count.load(.acquire), 2);
+    try std.testing.expectEqual(cached_account.ref_count.state.raw, 2);
 
     cached_account_ref.releaseOrDestroy(allocator);
 
-    try std.testing.expectEqual(cached_account.ref_count.load(.acquire), 1);
+    try std.testing.expectEqual(cached_account.ref_count.state.raw, 1);
 }
 
 test "AccountsCache put and get account" {
@@ -287,11 +289,11 @@ test "AccountsCache put & copySlot ref counting" {
 
     try accounts_cache.put(old_slot, pubkey, account);
 
-    try std.testing.expectEqual(accounts_cache.getMeta(old_slot, pubkey).?.ref_count, 1);
+    try std.testing.expectEqual(accounts_cache.getMeta(old_slot, pubkey).?.ref_count.state.raw, 1);
 
     try accounts_cache.shiftLRUForward(old_slot, new_slot);
 
-    try std.testing.expectEqual(accounts_cache.getMeta(old_slot, pubkey).?.ref_count, 2);
+    try std.testing.expectEqual(accounts_cache.getMeta(old_slot, pubkey).?.ref_count.state.raw, 2);
 
     const cached_account = accounts_cache.get(new_slot, pubkey);
     defer if (cached_account) |cached| cached.releaseOrDestroy(allocator);
