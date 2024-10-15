@@ -157,5 +157,6 @@ const TestTransactionSenderConfig = struct {
 };
 
 pub const TurbineConfig = struct {
-    num_retransmit_sockets: u8 = 1,
+    num_retransmit_sockets: usize = 1,
+    num_retransmit_threads: ?usize = null,
 };

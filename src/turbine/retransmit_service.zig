@@ -6,6 +6,7 @@ const socket_utils = sig.net.socket_utils;
 
 const Random = std.rand.Random;
 const UdpSocket = net.Socket;
+const EndPoint = net.EndPoint;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicU64 = std.atomic.Value(u64);
 
@@ -34,8 +35,6 @@ const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
 const DEDUPER_RESET_CYCLE: Duration = Duration.fromSecs(5 * 60);
 const DEDUPER_NUM_BITS: u64 = 637_534_199;
 
-const SEND_SHRED_THREADS: usize = 8;
-
 const USE_STAKE_HACK_FOR_TESTING = false;
 
 /// Retransmit Service
@@ -50,9 +49,10 @@ pub fn run(
     my_contact_info: ThreadSafeContactInfo,
     bank_fields: *const BankFields,
     leader_schedule_cache: *LeaderScheduleCache,
-    receiver: *Channel(Packet),
-    retransmit_sockets: []const UdpSocket,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
+    receiver: *Channel(Packet),
+    num_retransmit_sockets: usize,
+    maybe_num_retransmit_threads: ?usize,
     exit: *AtomicBool,
     rand: Random,
     logger: Logger,
@@ -69,6 +69,25 @@ pub fn run(
 
     var retransmit_to_socket_channel = try Channel(Packet).init(allocator);
     defer retransmit_to_socket_channel.deinit();
+
+    var retransmit_shred_threads = std.ArrayList(std.Thread).init(allocator);
+    defer retransmit_shred_threads.deinit();
+    const num_retransmit_threads = if (maybe_num_retransmit_threads) |num| num else try std.Thread.getCpuCount();
+
+    var retransmit_sockets: std.ArrayList(UdpSocket) = std.ArrayList(UdpSocket).init(allocator);
+    defer {
+        for (retransmit_sockets.items) |socket| socket.close();
+        retransmit_sockets.deinit();
+    }
+
+    for (0..num_retransmit_sockets) |_| {
+        var socket = try UdpSocket.create(.ipv4, .udp);
+        try socket.bind(try EndPoint.parse("0.0.0.0:0"));
+        try retransmit_sockets.append(try UdpSocket.create(.ipv4, .udp));
+    }
+
+    var send_socket_threads = std.ArrayList(std.Thread).init(allocator);
+    defer send_socket_threads.deinit();
 
     const receive_shred_thread = try std.Thread.spawn(
         .{},
@@ -88,9 +107,8 @@ pub fn run(
         },
     );
 
-    var send_shred_threads: [SEND_SHRED_THREADS]std.Thread = undefined;
-    for (0..SEND_SHRED_THREADS) |i| {
-        send_shred_threads[i] = try std.Thread.spawn(
+    for (0..num_retransmit_threads) |_| {
+        try retransmit_shred_threads.append(try std.Thread.spawn(
             .{},
             retransmitShreds,
             .{
@@ -100,11 +118,10 @@ pub fn run(
                 &stats,
                 exit,
             },
-        );
+        ));
     }
 
-    var send_socket_threads = std.ArrayList(std.Thread).init(allocator);
-    for (retransmit_sockets) |socket| {
+    for (retransmit_sockets.items) |socket| {
         try send_socket_threads.append(try std.Thread.spawn(
             .{},
             socket_utils.sendSocket,
@@ -120,7 +137,7 @@ pub fn run(
     }
 
     receive_shred_thread.join();
-    for (send_shred_threads) |thread| thread.join();
+    for (retransmit_shred_threads.items) |thread| thread.join();
     for (send_socket_threads.items) |thread| thread.join();
 }
 
