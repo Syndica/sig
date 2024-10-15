@@ -36,7 +36,7 @@ pub fn main() !void {
         }
     };
 
-    const max_time_per_bench = Duration.fromSecs(3); // !!
+    const max_time_per_bench = Duration.fromSecs(30); // !!
     const run_all_benchmarks = filter.len == 0;
 
     if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
@@ -241,8 +241,8 @@ pub fn benchmarkCSV(
                     var variance: u64 = 0;
                     for (runtimes.items(.result)) |runtime| {
                         const d = if (runtime > mean) runtime - mean else mean - runtime;
-                        const d_sq = d * d;
-                        variance += d_sq;
+                        const d_sq = d *| d;
+                        variance +|= d_sq;
                     }
                     variance /= iter_count;
                     // print column results
@@ -261,18 +261,21 @@ pub fn benchmarkCSV(
                         const f_max = @field(max_s, field.name);
                         const f_min = @field(min_s, field.name);
                         const f_sum = @field(sum_s, field.name);
-                        const n_iters = switch (@typeInfo(@TypeOf(f_sum))) {
-                            .Float => @as(@TypeOf(f_sum), @floatFromInt(iter_count)),
+                        const T = @TypeOf(f_sum);
+                        const n_iters = switch (@typeInfo(T)) {
+                            .Float => @as(T, @floatFromInt(iter_count)),
                             else => iter_count,
                         };
                         const f_mean = f_sum / n_iters;
 
-                        var f_variance: @TypeOf(f_sum) = 0;
+                        var f_variance: T = 0;
                         const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
                         for (runtimes.items(x)) |f_runtime| {
                             const d = if (f_runtime > f_mean) f_runtime - f_mean else f_mean - f_runtime;
-                            const d_sq = d * d;
-                            f_variance += d_sq;
+                            switch (@typeInfo(T)) {
+                                .Float => f_variance = d * d,
+                                else => f_variance +|= d *| d,
+                            }
                         }
                         f_variance /= n_iters;
 
