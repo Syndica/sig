@@ -217,8 +217,7 @@ fn receiveShreds(
         }
 
         stats.retransmit_shreds_received_count.add(shreds.items.len);
-        stats.retransmit_shreds_received_batch_size.set(shreds.items.len);
-        stats.retransmit_receive_shred_nanos.set(@divFloor(receive_shreds_timer.read().asNanos(), shreds.items.len));
+        stats.retransmit_receive_shreds_nanos.set(receive_shreds_timer.read().asNanos());
 
         stats.log(logger);
     }
@@ -315,8 +314,7 @@ fn createAndSendRetransmitInfo(
             });
         }
     }
-    stats.retransmit_create_retransmit_info_nanos.set(create_and_send_retransmit_info_timer.read().asNanos());
-    stats.retransmit_create_retransmit_info_per_slot_nanos.set(@divFloor(create_and_send_retransmit_info_timer.read().asNanos(), shreds.keys().len));
+    stats.retransmit_create_and_send_retransmit_info_nanos.set(create_and_send_retransmit_info_timer.read().asNanos());
 }
 
 /// Retransmit shreds to nodes in the network
@@ -383,11 +381,10 @@ const RetransmitShredInfo = struct {
 
 pub const Stats = struct {
     // receiveShreds
-    retransmit_shreds_received_batch_size: *Gauge(u64),
     retransmit_shreds_received_count: *Counter,
     retransmit_shred_byte_filter_saturated: *Gauge(u64),
     retransmit_shred_id_filter_saturated: *Gauge(u64),
-    retransmit_receive_shred_nanos: *Gauge(u64),
+    retransmit_receive_shreds_nanos: *Gauge(u64),
 
     // dedupAndGroupShredsBySlot
     retransmit_shred_byte_filtered_count: *Counter,
@@ -397,8 +394,7 @@ pub const Stats = struct {
     // createAndSendRetransmitInfo
     retransmit_get_slot_leader_nanos: *Gauge(u64),
     retransmit_get_turbine_tree_nanos: *Gauge(u64),
-    retransmit_create_retransmit_info_nanos: *Gauge(u64),
-    retransmit_create_retransmit_info_per_slot_nanos: *Gauge(u64),
+    retransmit_create_and_send_retransmit_info_nanos: *Gauge(u64),
 
     // retransmitShreds
     retransmit_shreds_sent_count: *Counter,
