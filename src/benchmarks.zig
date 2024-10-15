@@ -8,7 +8,6 @@ const Decl = std.builtin.Type.Declaration;
 
 const io = std.io;
 const math = std.math;
-const meta = std.meta;
 
 /// to run gossip benchmarks:
 /// zig build benchmark -- gossip
