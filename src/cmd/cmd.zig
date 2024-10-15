@@ -793,7 +793,7 @@ fn validator() !void {
     var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
     defer retransmit_shred_channel.deinit();
 
-    const retransmit_send_sockets: std.ArrayList(network.Socket) = std.ArrayList(network.Socket).init(allocator);
+    var retransmit_send_sockets: std.ArrayList(network.Socket) = std.ArrayList(network.Socket).init(allocator);
     defer {
         for (retransmit_send_sockets.items) |socket| socket.close();
         retransmit_send_sockets.deinit();
@@ -811,7 +811,7 @@ fn validator() !void {
         snapshot.bank.bank_fields,
         &leader_schedule_cache,
         &retransmit_shred_channel,
-        &retransmit_send_sockets,
+        retransmit_send_sockets.items,
         &gossip_service.gossip_table_rw,
         &app_base.exit,
         rng.random(),
