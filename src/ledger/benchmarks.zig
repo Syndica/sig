@@ -62,6 +62,40 @@ pub const BenchmarLegder = struct {
         return timer.read();
     }
 
+    // Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
+    pub fn benchSerializeWriteBincode() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try State.init(allocator, "bench serialize write bincode", .noop);
+        defer state.deinit();
+        const slot: u32 = 0;
+
+        var rewards: Rewards = try createRewards(allocator, 100);
+        var timer = try sig.time.Timer.start();
+        try state.db.put(schema.rewards, slot, .{
+            .rewards = try rewards.toOwnedSlice(),
+            .num_partitions = null,
+        });
+        return timer.read();
+    }
+
+    pub fn benchReadBincode() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try State.init(allocator, "bench read bincode", .noop);
+        defer state.deinit();
+        const slot: u32 = 1;
+
+        var rewards: Rewards = try createRewards(allocator, 100);
+        try state.db.put(schema.rewards, slot, .{
+            .rewards = try rewards.toOwnedSlice(),
+            .num_partitions = null,
+        });
+        var timer = try sig.time.Timer.start();
+        _ = try state.db.getBytes(schema.rewards, slot);
+        return timer.read();
+    }
+
+    /// Benchmarks for BlockstoreReader.
+
     // Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
     pub fn benchReadSequential() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
@@ -121,38 +155,6 @@ pub const BenchmarLegder = struct {
         for (indices.items) |shred_index| {
             _ = try reader.getDataShred(slot, shred_index);
         }
-        return timer.read();
-    }
-
-    // Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
-    pub fn benchSerializeWriteBincode() !sig.time.Duration {
-        const allocator = std.heap.c_allocator;
-        var state = try State.init(allocator, "bench serialize write bincode", .noop);
-        defer state.deinit();
-        const slot: u32 = 0;
-
-        var rewards: Rewards = try createRewards(allocator, 100);
-        var timer = try sig.time.Timer.start();
-        try state.db.put(schema.rewards, slot, .{
-            .rewards = try rewards.toOwnedSlice(),
-            .num_partitions = null,
-        });
-        return timer.read();
-    }
-
-    pub fn benchReadBincode() !sig.time.Duration {
-        const allocator = std.heap.c_allocator;
-        var state = try State.init(allocator, "bench read bincode", .noop);
-        defer state.deinit();
-        const slot: u32 = 1;
-
-        var rewards: Rewards = try createRewards(allocator, 100);
-        try state.db.put(schema.rewards, slot, .{
-            .rewards = try rewards.toOwnedSlice(),
-            .num_partitions = null,
-        });
-        var timer = try sig.time.Timer.start();
-        _ = try state.db.getBytes(schema.rewards, slot);
         return timer.read();
     }
 
