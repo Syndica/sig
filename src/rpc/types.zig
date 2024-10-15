@@ -103,3 +103,5 @@ pub const ClusterType = union(enum(u8)) {
         url: []const u8,
     },
 };
+
+pub const Signature = []const u8;
