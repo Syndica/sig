@@ -1,7 +1,9 @@
+pub const ahash = @import("ahash.zig");
 pub const allocators = @import("allocators.zig");
 pub const collections = @import("collections.zig");
 pub const closure = @import("closure.zig");
 pub const bitflags = @import("bitflags.zig");
+pub const deduper = @import("deduper.zig");
 pub const directory = @import("directory.zig");
 pub const interface = @import("interface.zig");
 pub const io = @import("io.zig");
