@@ -939,12 +939,15 @@ fn createSnapshot() !void {
     defer output_dir.close();
 
     app_base.logger.info().logf("accountsdb[manager]: generating full snapshot for slot {d}", .{slot});
-    try accounts_db.buildFullSnapshot(
-        slot,
-        output_dir,
-        &snapshot_result.snapshot_fields.full.bank_fields,
-        snapshot_result.status_cache,
-    );
+    _ = try accounts_db.generateFullSnapshot(.{
+        .target_slot = slot,
+        .bank_fields = &snapshot_result.snapshot_fields.full.bank_fields,
+        .lamports_per_signature = lps: {
+            var prng = std.Random.DefaultPrng.init(1234);
+            break :lps prng.random().int(u64);
+        },
+        .old_snapshot_action = .delete_old,
+    });
 }
 
 fn validateSnapshot() !void {

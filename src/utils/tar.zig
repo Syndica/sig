@@ -22,6 +22,9 @@ fn stripComponents(path: []const u8, count: u32) ![]const u8 {
     return path[i..];
 }
 
+/// Two zeroed out blocks representing the end of an archive.
+pub const sentinel_blocks: [512 * 2]u8 = .{0} ** (512 * 2);
+
 pub const UnTarEntry = struct {
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
