@@ -45,9 +45,7 @@ pub const AHasher = struct {
                     self.hash(field.type, &@field(data, field.name));
                 }
             },
-            .Enum => |enum_info| {
-                // TODO: this feels insufficient, but not sure of correct approach
-                _ = enum_info;
+            .Enum => |_| {
                 self.hash(u32, &@as(u32, @intFromEnum(data.*)));
             },
             else => {
