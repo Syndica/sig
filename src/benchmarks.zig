@@ -1,20 +1,25 @@
 const std = @import("std");
 const builtin = @import("builtin");
-
 const sig = @import("sig.zig");
-const Duration = sig.time.Duration;
 
 const Decl = std.builtin.Type.Declaration;
-
-const io = std.io;
 const math = std.math;
+const Duration = sig.time.Duration;
 
 /// to run gossip benchmarks:
 /// zig build benchmark -- gossip
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
+    var std_logger = try sig.trace.ChannelPrintLogger.init(.{
+        .allocator = allocator,
+        // NOTE: run with .info for proper CSV output, otherwise use .debug
+        .max_level = .info,
+        .max_buffer = 1 << 30,
+    });
+    defer std_logger.deinit();
+    const logger = std_logger.logger();
 
-    if (builtin.mode == .Debug) std.debug.print("warning: running benchmark in Debug mode\n", .{});
+    if (builtin.mode == .Debug) logger.warn().log("warning: running benchmark in Debug mode");
 
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
@@ -23,31 +28,24 @@ pub fn main() !void {
     const maybe_filter = cli_args.next();
     const filter = blk: {
         if (maybe_filter) |filter| {
-            std.debug.print("filtering benchmarks with prefix: {s}\n", .{filter});
+            logger.debug().logf("filtering benchmarks with prefix: {s}", .{filter});
             break :blk filter;
         } else {
-            std.debug.print("no filter: running all benchmarks\n", .{});
+            logger.debug().logf("no filter: running all benchmarks", .{});
             break :blk "";
         }
     };
 
-    // TODO: very manual for now (bc we only have 2 benchmarks)
-    // if we have more benchmarks we can make this more efficient
-    const max_time_per_bench = 2 * std.time.ms_per_s; // !!
+    const max_time_per_bench = Duration.fromSecs(3); // !!
     const run_all_benchmarks = filter.len == 0;
 
     if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
         try benchmarkCSV(
             allocator,
+            logger,
             @import("accountsdb/index.zig").BenchmarkSwissMap,
             max_time_per_bench,
-            .microseconds,
         );
-    }
-
-    if (std.mem.startsWith(u8, filter, "geyser") or run_all_benchmarks) {
-        std.debug.print("Geyser Streaming Benchmark:\n", .{});
-        try @import("geyser/lib.zig").benchmark.runBenchmark();
     }
 
     if (std.mem.startsWith(u8, filter, "accounts_db") or run_all_benchmarks) {
@@ -59,9 +57,9 @@ pub fn main() !void {
         if (std.mem.eql(u8, "accounts_db_readwrite", filter) or run_all) {
             try benchmarkCSV(
                 allocator,
+                logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
-                .seconds,
             );
         }
 
@@ -70,16 +68,16 @@ pub fn main() !void {
             // and run as a binary ./zig-out/bin/... so the open file limits are ok
             const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
             var snapshot_dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
-                std.debug.print("[accounts_db_snapshot]: need to setup a snapshot in {s} for this benchmark...\n", .{dir_path});
+                logger.debug().logf("[accounts_db_snapshot]: need to setup a snapshot in {s} for this benchmark...", .{dir_path});
                 break :blk;
             };
             snapshot_dir.close();
 
             try benchmarkCSV(
                 allocator,
+                logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
-                .seconds,
             );
         }
     }
@@ -87,70 +85,50 @@ pub fn main() !void {
     if (std.mem.startsWith(u8, filter, "socket_utils") or run_all_benchmarks) {
         try benchmarkCSV(
             allocator,
+            logger,
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
-            .milliseconds,
         );
     }
 
     if (std.mem.startsWith(u8, filter, "gossip") or run_all_benchmarks) {
         try benchmarkCSV(
             allocator,
+            logger,
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
-            .milliseconds,
         );
         try benchmarkCSV(
             allocator,
+            logger,
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
-            .milliseconds,
         );
     }
 
     if (std.mem.startsWith(u8, filter, "sync") or run_all_benchmarks) {
         try benchmarkCSV(
             allocator,
+            logger,
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
-            .microseconds,
         );
+    }
+
+    // NOTE: we dont support CSV output on this method so all results are printed as debug
+    if (std.mem.startsWith(u8, filter, "geyser") or run_all_benchmarks) {
+        logger.debug().log("Geyser Streaming Benchmark:");
+        try @import("geyser/lib.zig").benchmark.runBenchmark(logger);
     }
 }
 
-const TimeUnits = enum {
-    nanoseconds,
-    microseconds,
-    milliseconds,
-    seconds,
-
-    const Self = @This();
-
-    pub fn toString(self: Self) []const u8 {
-        return switch (self) {
-            .nanoseconds => "ns",
-            .milliseconds => "ms",
-            .microseconds => "us",
-            .seconds => "s",
-        };
-    }
-
-    pub fn unitsfromNanoseconds(self: Self, time_ns: u64) !u64 {
-        return switch (self) {
-            .nanoseconds => time_ns,
-            .milliseconds => try std.math.divCeil(u64, time_ns, std.time.ns_per_ms),
-            .microseconds => try std.math.divCeil(u64, time_ns, std.time.ns_per_us),
-            .seconds => time_ns / std.time.ns_per_s,
-        };
-    }
-};
-
-// src: https://github.com/Hejsil/zig-bench
+/// src: https://github.com/Hejsil/zig-bench
+/// NOTE: we only support Nanos for now beacuse we also support floats which makes it harder to implement.
 pub fn benchmarkCSV(
     allocator: std.mem.Allocator,
+    logger: sig.trace.Logger,
     comptime B: type,
-    max_time: u128,
-    time_unit: TimeUnits,
+    max_time_per_benchmark: Duration,
 ) !void {
     const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
     const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10000;
@@ -186,50 +164,64 @@ pub fn benchmarkCSV(
             // type.
             const result_type: type = @TypeOf(try @call(.auto, benchFunction, arguments));
             const runtime_type = switch (result_type) {
+                // single value
                 Duration => struct { result: u64 },
+                // multiple values
                 else => result_type,
             };
             var runtimes: std.MultiArrayList(runtime_type) = .{};
             defer runtimes.deinit(allocator);
 
+            //
             var min: u64 = math.maxInt(u64);
             var max: u64 = 0;
-            var runtime_sum: u128 = 0;
+            var sum: u64 = 0;
 
+            // NOTE: these are set to valid values on first iteration
+            const U = @typeInfo(runtime_type).Struct;
+            var sum_s: runtime_type = undefined;
             var min_s: runtime_type = undefined;
             var max_s: runtime_type = undefined;
 
-            var i: u64 = 0;
-            while (i < min_iterations or
-                (i < max_iterations and runtime_sum < max_time)) : (i += 1)
+            //
+            var ran_out_of_time = false;
+            var runtime_timer = try sig.time.Timer.start();
+            var iter_count: u64 = 0;
+            while (iter_count < min_iterations or
+                (iter_count < max_iterations and ran_out_of_time)) : (iter_count += 1)
             {
                 switch (result_type) {
                     Duration => {
                         const duration = try @call(.auto, benchFunction, arguments);
-                        const runtime = try time_unit.unitsfromNanoseconds(duration.asNanos());
-                        try runtimes.append(allocator, .{ .result = runtime });
-                        runtime_sum += runtime;
-                        min = @min(runtimes.items(.result)[i], min);
-                        max = @max(runtimes.items(.result)[i], max);
+                        try runtimes.append(allocator, .{ .result = duration.asNanos() });
+                        min = @min(runtimes.items(.result)[iter_count], min);
+                        max = @max(runtimes.items(.result)[iter_count], max);
+                        sum += duration.asNanos();
                     },
                     inline else => {
                         const result = try @call(.auto, benchFunction, arguments);
                         try runtimes.append(allocator, result);
 
-                        if (i == 0) {
+                        if (iter_count == 0) {
                             min_s = result;
                             max_s = result;
+                            sum_s = result;
                         } else {
-                            const U = @typeInfo(result_type).Struct;
                             inline for (U.fields) |field| {
                                 const f_max = @field(max_s, field.name);
                                 const f_min = @field(min_s, field.name);
                                 @field(max_s, field.name) = @max(@field(result, field.name), f_max);
                                 @field(min_s, field.name) = @min(@field(result, field.name), f_min);
+                                @field(sum_s, field.name) += @field(result, field.name);
                             }
                         }
                     },
                 }
+                ran_out_of_time = runtime_timer.read().asNanos() < max_time_per_benchmark.asNanos();
+            }
+
+            if (ran_out_of_time) {
+                logger.debug().logf("Benchmark {s} ran out of time", .{def.name});
             }
 
             switch (@TypeOf(arg)) {
@@ -237,138 +229,50 @@ pub fn benchmarkCSV(
                     std.debug.print("{s},", .{def.name});
                 },
                 else => {
-                    std.debug.print("{s} ({s}),", .{ def.name, arg.name });
+                    std.debug.print("{s}({s}),", .{ def.name, arg.name });
                 },
             }
 
             switch (result_type) {
                 Duration => {
                     // print column headers
-                    std.debug.print("min,max\n", .{});
+                    std.debug.print(" min, max, mean\n", .{});
                     // print column results
-                    std.debug.print("_, {d}, {d}", .{ min, max });
+                    std.debug.print("_, {d}, {d}, {d}\n", .{ min, max, sum / iter_count });
                 },
                 inline else => {
                     // print column headers
-                    const U = @typeInfo(result_type).Struct;
                     inline for (U.fields) |field| {
-                        std.debug.print("{s}_max,", .{field.name});
-                    }
-                    inline for (U.fields) |field| {
-                        std.debug.print("{s}_min,", .{field.name});
+                        std.debug.print(" {s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
                     }
                     std.debug.print("\n", .{});
+
                     // print results
                     std.debug.print("_, ", .{}); // account for the function name
-                    inline for (U.fields) |field| {
+                    inline for (U.fields, 0..) |field, j| {
                         const f_max = @field(max_s, field.name);
                         const f_min = @field(min_s, field.name);
-                        std.debug.print("{d}, {d}, ", .{ f_max, f_min });
+                        const f_sum = @field(sum_s, field.name);
+                        const n_iters = switch (@typeInfo(@TypeOf(f_sum))) {
+                            .Float => @as(@TypeOf(f_sum), @floatFromInt(iter_count)),
+                            else => iter_count,
+                        };
+                        const f_mean = f_sum / n_iters;
+
+                        var f_variance: @TypeOf(f_sum) = 0;
+                        const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
+                        for (runtimes.items(x)) |f_runtime| {
+                            const d = if (f_runtime > f_mean) f_runtime - f_mean else f_mean - f_runtime;
+                            const d_sq = d * d;
+                            f_variance += d_sq;
+                        }
+                        f_variance /= n_iters;
+
+                        std.debug.print("{d}, {d}, {any}, {any}, ", .{ f_max, f_min, f_mean, f_variance });
                     }
+                    std.debug.print("\n", .{});
                 },
             }
-
-            // NOTE: can do this for future functionality
-            // const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
-            // const f_max = runtimes.items(x)[0];
-            std.debug.print("\n", .{});
         }
     }
-}
-
-fn printResult(
-    writer: anytype,
-    min_widths: [6]u64,
-    runtime_sum: u128,
-    runtimes: []const u64,
-    iterations: u64,
-    function_name: []const u8,
-    arg_name: anytype,
-    min: u64,
-    max: u64,
-) !void {
-    const runtime_mean: u64 = @intCast(runtime_sum / iterations);
-
-    var d_sq_sum: u128 = 0;
-    for (runtimes[0..iterations]) |runtime| {
-        const d = @as(i64, @intCast(@as(i128, @intCast(runtime)) - runtime_mean));
-        d_sq_sum += @as(u64, @intCast(d * d));
-    }
-    const variance = d_sq_sum / iterations;
-    _ = try printBenchmark(
-        writer,
-        min_widths,
-        function_name,
-        arg_name,
-        iterations,
-        min,
-        max,
-        variance,
-        runtime_mean,
-    );
-}
-
-fn printBenchmark(
-    writer: anytype,
-    min_widths: [6]u64,
-    func_name: []const u8,
-    arg_name: anytype,
-    iterations: anytype,
-    min_runtime: anytype,
-    max_runtime: anytype,
-    variance: anytype,
-    mean_runtime: anytype,
-) ![6]u64 {
-    const arg_len = std.fmt.count("{}", .{arg_name});
-    const name_len = try alignedPrint(writer, .left, min_widths[0], "{s}{s}{}{s}", .{
-        func_name,
-        "("[0..@intFromBool(arg_len != 0)],
-        arg_name,
-        ")"[0..@intFromBool(arg_len != 0)],
-    });
-    try writer.writeAll(" ");
-    const it_len = try alignedPrint(writer, .right, min_widths[1], "{}", .{iterations});
-    try writer.writeAll(" ");
-    const min_runtime_len = try alignedPrint(writer, .right, min_widths[2], "{}", .{min_runtime});
-    try writer.writeAll(" ");
-    const max_runtime_len = try alignedPrint(writer, .right, min_widths[3], "{}", .{max_runtime});
-    try writer.writeAll(" ");
-    const variance_len = try alignedPrint(writer, .right, min_widths[4], "{}", .{variance});
-    try writer.writeAll(" ");
-    const mean_runtime_len = try alignedPrint(writer, .right, min_widths[5], "{}", .{mean_runtime});
-
-    return [_]u64{ name_len, it_len, min_runtime_len, max_runtime_len, variance_len, mean_runtime_len };
-}
-
-fn formatter(comptime fmt_str: []const u8, value: anytype) Formatter(fmt_str, @TypeOf(value)) {
-    return .{ .value = value };
-}
-
-fn Formatter(comptime fmt_str: []const u8, comptime T: type) type {
-    return struct {
-        value: T,
-
-        pub fn format(
-            self: @This(),
-            comptime fmt: []const u8,
-            options: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
-            _ = fmt;
-            _ = options;
-            try std.fmt.format(writer, fmt_str, .{self.value});
-        }
-    };
-}
-
-fn alignedPrint(writer: anytype, dir: enum { left, right }, width: u64, comptime fmt: []const u8, args: anytype) !u64 {
-    const value_len = std.fmt.count(fmt, args);
-
-    var cow = io.countingWriter(writer);
-    if (dir == .right)
-        try cow.writer().writeByteNTimes(' ', math.sub(u64, width, value_len) catch 0);
-    try cow.writer().print(fmt, args);
-    if (dir == .left)
-        try cow.writer().writeByteNTimes(' ', math.sub(u64, width, value_len) catch 0);
-    return cow.bytes_written;
 }
