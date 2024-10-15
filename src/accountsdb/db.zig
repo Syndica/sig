@@ -3993,16 +3993,23 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             snapshot.accounts_db_fields,
             bench_args.n_threads,
             allocator,
-            1_500,
+            500,
         );
 
         const full_snapshot = snapshots.full;
-        const validate_duration = try accounts_db.validateLoadFromSnapshot(
-            snapshot.bank_fields_inc.snapshot_persistence,
-            full_snapshot.bank_fields.slot,
-            full_snapshot.bank_fields.capitalization,
-            snapshot.accounts_db_fields.bank_hash_info.accounts_hash,
-        );
+        var validate_timer = try sig.time.Timer.start();
+        try accounts_db.validateLoadFromSnapshot(.{
+            .full_slot = full_snapshot.bank_fields.slot,
+            .expected_full = .{
+                .accounts_hash = snapshot.accounts_db_fields.bank_hash_info.accounts_hash,
+                .capitalization = full_snapshot.bank_fields.capitalization,
+            },
+            .expected_incremental = if (snapshot.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+                .accounts_hash = inc_persistence.incremental_hash,
+                .capitalization = inc_persistence.incremental_capitalization,
+            } else null,
+        });
+        const validate_duration = validate_timer.read();
 
         return .{
             .load_time = loading_duration.asNanos(),
