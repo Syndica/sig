@@ -8,9 +8,14 @@ const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 
 const LruCacheCustom = sig.common.lru.LruCacheCustom;
-
 /// Stores read-only in-memory copies of commonly used accounts
 pub const AccountsCache = struct {
+    slot_lrus: SlotLRUs,
+    allocator: std.mem.Allocator,
+    max_items: usize,
+    max_slots: usize,
+    highest_slot: ?Slot,
+
     /// Atomically refcounted account
     pub const CachedAccount = struct {
         account: Account,
@@ -32,12 +37,11 @@ pub const AccountsCache = struct {
         }
 
         pub fn releaseOrDestroy(self: *CachedAccount, allocator: std.mem.Allocator) void {
-            const current_count = self.ref_count.load(.acquire);
+            const current_count = self.ref_count.fetchSub(1, .release);
             if (current_count == 1) {
+                _ = self.ref_count.load(.acquire);
                 self.deinit(allocator);
                 allocator.destroy(self);
-            } else {
-                _ = self.ref_count.fetchSub(1, .acq_rel);
             }
         }
 
@@ -47,14 +51,14 @@ pub const AccountsCache = struct {
         }
 
         pub fn copyRef(self: *CachedAccount) *CachedAccount {
-            _ = self.ref_count.fetchAdd(1, .acq_rel);
+            _ = self.ref_count.fetchAdd(1, .monotonic);
             return self;
         }
 
         pub fn getMeta(self: *CachedAccount) CachedAccountMeta {
             return .{
-                .is_dirty = self.is_dirty.load(.acquire),
-                .ref_count = self.ref_count.load(.acquire),
+                .is_dirty = self.is_dirty.load(.monotonic),
+                .ref_count = self.ref_count.load(.monotonic),
             };
         }
     };
@@ -76,12 +80,6 @@ pub const AccountsCache = struct {
 
     const Self = @This();
 
-    slot_lrus: SlotLRUs,
-    allocator: std.mem.Allocator,
-    max_items: usize,
-    max_slots: usize,
-    highest_slot: ?Slot,
-
     pub fn init(
         allocator: std.mem.Allocator,
         max_items: usize,
@@ -99,13 +97,15 @@ pub const AccountsCache = struct {
     /// user is expected to release the returned CachedAccount
     pub fn get(self: *const Self, slot: Slot, pubkey: Pubkey) ?*CachedAccount {
         const slot_lru = self.slot_lrus.getPtr(slot) orelse return null;
-        return (slot_lru.get(pubkey) orelse return null).copyRef();
+        const account = slot_lru.get(pubkey) orelse return null;
+        return account.copyRef();
     }
 
     /// Returns a copy of the CachedAccount's meta. Likely shouldn't be used outside of tests.
     pub fn getMeta(self: *const Self, slot: Slot, pubkey: Pubkey) ?CachedAccountMeta {
         const slot_lru = self.slot_lrus.getPtr(slot) orelse return null;
-        return (slot_lru.get(pubkey) orelse return null).getMeta();
+        const account = slot_lru.get(pubkey) orelse return null;
+        return account.getMeta();
     }
 
     /// does not influence underlying LRU's cache ordering
@@ -114,7 +114,7 @@ pub const AccountsCache = struct {
         return slot_lru.contains(pubkey);
     }
 
-    /// should only be called iff account is not already present
+    /// will return an error for existing entries, leaving the state unmodified
     pub fn put(self: *Self, slot: Slot, pubkey: Pubkey, account: Account) !void {
         const slot_lru = self.slot_lrus.getPtr(slot) orelse blk: {
             if (self.highest_slot) |highest_slot| {
@@ -171,7 +171,7 @@ pub const AccountsCache = struct {
 
             var it = old_slot_lru.dbl_link_list.first;
             while (it) |node| : (it = node.next) {
-                if (node.data.value.is_dirty.load(.acquire)) continue; // do not copy forward modified accounts
+                if (node.data.value.is_dirty.load(.monotonic)) continue; // do not copy forward modified accounts
 
                 _ = new_slot_lru.put(node.data.key, node.data.value.copyRef());
             }
@@ -192,7 +192,7 @@ pub const AccountsCache = struct {
             var lowest_slot: Slot = std.math.maxInt(usize);
             var iter = self.slot_lrus.iterator();
             while (iter.next()) |entry| {
-                if (entry.key_ptr.* < lowest_slot) lowest_slot = entry.key_ptr.*;
+                lowest_slot = @min(lowest_slot, entry.key_ptr.*);
             }
             self.purgeSlot(lowest_slot);
         }
