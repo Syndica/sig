@@ -622,7 +622,7 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
 
 pub const BenchmarkSwissMap = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const max_iterations = 100;
 
     pub const BenchArgs = struct {
         n_accounts: usize,

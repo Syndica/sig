@@ -452,6 +452,7 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
 
 pub fn streamReader(
     allocator: std.mem.Allocator,
+    logger: sig.trace.Logger,
     exit: *std.atomic.Value(bool),
     pipe_path: []const u8,
     measure_rate: ?sig.time.Duration,
@@ -468,7 +469,7 @@ pub fn streamReader(
             if (err == error.PipeBlockedWithExitSignaled) {
                 break;
             } else {
-                std.debug.print("error reading from pipe: {}\n", .{err});
+                logger.err().logf("error reading from pipe: {}", .{err});
                 return err;
             }
         };
@@ -485,7 +486,7 @@ pub fn streamReader(
             const bytes_per_sec = bytes_read / elapsed;
             const mb_per_sec = bytes_per_sec / 1_000_000;
             const mb_per_sec_dec = (bytes_per_sec - mb_per_sec * 1_000_000) / (1_000_000 / 100);
-            std.debug.print("read mb/sec: {}.{}\n", .{ mb_per_sec, mb_per_sec_dec });
+            logger.debug().logf("read mb/sec: {}.{}", .{ mb_per_sec, mb_per_sec_dec });
 
             bytes_read = 0;
             timer.reset();

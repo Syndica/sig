@@ -3252,6 +3252,7 @@ test "geyser stream on load" {
 
     const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
         allocator,
+        .noop,
         geyser_exit,
         geyser_pipe_path,
         null,

@@ -324,15 +324,25 @@ pub fn csvDumpIOWriter(
     }
 }
 
+/// NOTE: this is different from the other benchmarks because it reads from a stream
+/// without writing. This allows us to benchmark any type of data from the pipe.
 pub fn benchmark() !void {
     const allocator = std.heap.c_allocator;
+    var std_logger = try sig.trace.ChannelPrintLogger.init(.{
+        .allocator = allocator,
+        .max_level = .debug,
+        .max_buffer = 1 << 30,
+    });
+    defer std_logger.deinit();
+    const logger = std_logger.logger();
 
     const pipe_path = config.pipe_path;
-    std.debug.print("using pipe path: {s}\n", .{pipe_path});
+    logger.info().logf("using pipe path: {s}", .{pipe_path});
 
     var exit = std.atomic.Value(bool).init(false);
     try sig.geyser.core.streamReader(
         allocator,
+        logger,
         &exit,
         pipe_path,
         sig.time.Duration.fromSecs(config.measure_rate_secs),
