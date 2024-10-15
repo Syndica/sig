@@ -201,18 +201,20 @@ fn receiveShreds(
             grouped_shreds.deinit();
         }
 
-        try createAndSendRetransmitInfo(
-            allocator,
-            grouped_shreds,
-            my_contact_info,
-            bank_fields,
-            gossip_table_rw,
-            leader_schedule_cache,
-            &turbine_tree_cache,
-            sender,
-            stats,
-            overwrite_stake_for_testing,
-        );
+        if (grouped_shreds.count() > 0) {
+            try createAndSendRetransmitInfo(
+                allocator,
+                grouped_shreds,
+                my_contact_info,
+                bank_fields,
+                gossip_table_rw,
+                leader_schedule_cache,
+                &turbine_tree_cache,
+                sender,
+                stats,
+                overwrite_stake_for_testing,
+            );
+        }
 
         stats.retransmit_shreds_received_count.add(shreds.items.len);
         stats.retransmit_shreds_received_batch_size.set(shreds.items.len);
@@ -224,7 +226,7 @@ fn receiveShreds(
 
 /// Group shreds by slot and deduplicate them in the process
 /// Returns a map of slot to a list of shred_id and packet pairs
-inline fn dedupAndGroupShredsBySlot(
+fn dedupAndGroupShredsBySlot(
     allocator: std.mem.Allocator,
     shreds: *std.ArrayList(Packet),
     deduper: *ShredDeduper(2),
@@ -261,7 +263,7 @@ inline fn dedupAndGroupShredsBySlot(
 
 /// Create and send retransmit info to the retransmit shred threads
 /// Retransmit info contains the slot leader, the shred_id, the shred_packet, and the turbine_tree
-inline fn createAndSendRetransmitInfo(
+fn createAndSendRetransmitInfo(
     allocator: std.mem.Allocator,
     shreds: std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)),
     my_contact_info: ThreadSafeContactInfo,
