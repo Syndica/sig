@@ -7,6 +7,8 @@ const socket_utils = sig.net.socket_utils;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
 const UdpSocket = network.Socket;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const Pubkey = sig.core.Pubkey;
 
 const Slot = sig.core.Slot;
 const Signature = sig.core.Signature;
@@ -45,15 +47,17 @@ pub const Service = struct {
     transaction_pool: TransactionPool,
     leader_info_rw: RwMux(LeaderInfo),
     send_socket: UdpSocket,
+    /// Channel used inside to move processed transactions to the socket sender.
     send_channel: *Channel(Packet),
-    receive_channel: *Channel(TransactionInfo),
+    /// Put transactions onto this channel to send them.
+    input_channel: *Channel(TransactionInfo),
     exit: *AtomicBool,
     logger: Logger,
 
     pub fn init(
         allocator: std.mem.Allocator,
         config: Config,
-        receive_channel: *Channel(TransactionInfo),
+        input_channel: *Channel(TransactionInfo),
         gossip_table_rw: *RwMux(GossipTable),
         exit: *AtomicBool,
         logger: Logger,
@@ -77,7 +81,7 @@ pub const Service = struct {
                 .udp,
             ),
             .send_channel = try Channel(Packet).create(allocator),
-            .receive_channel = receive_channel,
+            .input_channel = input_channel,
             .logger = logger,
             .exit = exit,
         };
@@ -116,45 +120,51 @@ pub const Service = struct {
 
     /// Receives transactions, performing an initial send and then adding to the pool
     fn receiveTransactionsThread(self: *Service) !void {
-        errdefer self.exit.store(true, .unordered);
+        errdefer self.exit.store(true, .monotonic);
 
         var last_batch_sent = Instant.now();
         var transaction_batch = std.AutoArrayHashMap(Signature, TransactionInfo).init(self.allocator);
         defer transaction_batch.deinit();
 
-        while (!self.exit.load(.unordered)) {
-            const transaction = self.receive_channel.receive() orelse break;
-            self.metrics.transactions_received_count.add(1);
+        while (!self.exit.load(.monotonic) or
+            self.input_channel.len() != 0)
+        {
+            while (self.input_channel.receive()) |transaction| {
+                self.metrics.transactions_received_count.inc();
 
-            if (!transaction_batch.contains(transaction.signature) and
-                !self.transaction_pool.contains(transaction.signature))
-            {
-                try transaction_batch.put(transaction.signature, transaction);
-            } else if (transaction_batch.count() == 0) {
-                continue;
-            }
+                // If the transaction signature isn't in the batch or the pool, add the transaction.
+                if (!transaction_batch.contains(transaction.signature) and
+                    !self.transaction_pool.contains(transaction.signature))
+                {
+                    try transaction_batch.put(transaction.signature, transaction);
+                }
+                // Otherwise, continue on, we're already going to process this transaction
+                else if (transaction_batch.count() == 0) {
+                    continue;
+                }
 
-            if (transaction_batch.count() >= self.config.batch_size or
-                last_batch_sent.elapsed().asNanos() >= self.config.batch_send_rate.asNanos())
-            {
-                const leader_addresses = try self.getLeaderAddresses();
-                defer leader_addresses.deinit();
+                if (transaction_batch.count() >= self.config.batch_size or
+                    last_batch_sent.elapsed().asNanos() >= self.config.batch_send_rate.asNanos())
+                {
+                    const leader_addresses = try self.getLeaderAddresses();
+                    defer self.allocator.free(leader_addresses);
 
-                try self.sendTransactions(transaction_batch.values(), leader_addresses);
-                last_batch_sent = Instant.now();
+                    try self.sendTransactions(transaction_batch.values(), leader_addresses);
+                    last_batch_sent = Instant.now();
 
-                self.transaction_pool.addTransactions(transaction_batch.values()) catch {
-                    self.logger.warn().log("Transaction pool is full, dropping transactions");
-                };
+                    self.transaction_pool.addTransactions(transaction_batch.values()) catch {
+                        self.logger.warn().log("Transaction pool is full, dropping transactions");
+                    };
 
-                transaction_batch.clearRetainingCapacity();
+                    transaction_batch.clearRetainingCapacity();
+                }
             }
         }
     }
 
     /// Retries transactions if they are still valid, otherwise remove from the pool
     fn processTransactionsThread(self: *Service) !void {
-        errdefer self.exit.store(true, .unordered);
+        errdefer self.exit.store(true, .monotonic);
 
         var rpc_client = RpcClient.init(
             self.allocator,
@@ -163,7 +173,7 @@ pub const Service = struct {
         );
         defer rpc_client.deinit();
 
-        while (!self.exit.load(.unordered)) {
+        while (!self.exit.load(.monotonic)) {
             std.time.sleep(self.config.pool_process_rate.asNanos());
             if (self.transaction_pool.count() == 0) continue;
             var timer = try Timer.start();
@@ -194,7 +204,8 @@ pub const Service = struct {
 
         // We need to hold a read lock until we are finished using the signatures and transactions, otherwise
         // the receiver thread could add new transactions and corrupt the underlying array
-        const signatures, const transactions, var transactions_lg = self.transaction_pool.readSignaturesAndTransactionsWithLock();
+        const signatures, const transactions, var transactions_lg =
+            self.transaction_pool.readSignaturesAndTransactionsWithLock();
         defer transactions_lg.unlock();
 
         var signature_statuses_timer = try Timer.start();
@@ -207,35 +218,39 @@ pub const Service = struct {
         const signature_statuses = try signature_statuses_response.result();
         self.metrics.rpc_signature_statuses_latency_millis.set(signature_statuses_timer.read().asMillis());
 
-        for (signature_statuses.value, signatures, transactions) |maybe_signature_status, signature, transaction_info| {
+        for (
+            signature_statuses.value,
+            signatures,
+            transactions,
+        ) |maybe_signature_status, signature, transaction_info| {
             if (maybe_signature_status) |signature_status| {
                 if (signature_status.confirmations == null) {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.metrics.transactions_rooted_count.add(1);
+                    self.metrics.transactions_rooted_count.inc();
                     continue;
                 }
 
                 if (signature_status.err) |_| {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.metrics.transactions_failed_count.add(1);
+                    self.metrics.transactions_failed_count.inc();
                     continue;
                 }
 
                 if (transaction_info.isExpired(block_height)) {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.metrics.transactions_expired_count.add(1);
+                    self.metrics.transactions_expired_count.inc();
                     continue;
                 }
             } else {
                 if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.metrics.transactions_exceeded_max_retries_count.add(1);
+                    self.metrics.transactions_exceeded_max_retries_count.inc();
                     continue;
                 }
 
                 if (transaction_info.shouldRetry(self.config.retry_rate)) {
                     try self.transaction_pool.retry_signatures.append(signature);
-                    self.metrics.transactions_retry_count.add(1);
+                    self.metrics.transactions_retry_count.inc();
                 }
             }
         }
@@ -246,14 +261,15 @@ pub const Service = struct {
         if (self.transaction_pool.hasRetrySignatures()) {
             // We need to hold a read lock until we are finished using the retry transactions, otherwise
             // the receiver thread could add new transactions and corrupt the underlying array
-            const retry_transactions, var transactions_lg = try self.transaction_pool.readRetryTransactionsWithLock(self.allocator);
+            const retry_transactions, var transactions_lg =
+                try self.transaction_pool.readRetryTransactionsWithLock(self.allocator);
             defer {
                 self.allocator.free(retry_transactions);
                 transactions_lg.unlock();
             }
 
             const leader_addresses = try self.getLeaderAddresses();
-            defer leader_addresses.deinit();
+            defer self.allocator.free(leader_addresses);
 
             var start_index: usize = 0;
             while (start_index < retry_transactions.len) {
@@ -266,7 +282,7 @@ pub const Service = struct {
     }
 
     /// Gets the leader TPU addresses from leader info
-    fn getLeaderAddresses(self: *Service) !std.ArrayList(SocketAddr) {
+    fn getLeaderAddresses(self: *Service) ![]const SocketAddr {
         var get_leader_addresses_timer = try Timer.start();
         const leader_addresses = blk: {
             const leader_info: *LeaderInfo, var leader_info_lg = self.leader_info_rw.writeWithLock();
@@ -274,18 +290,22 @@ pub const Service = struct {
             break :blk try leader_info.getLeaderAddresses(self.allocator);
         };
         self.metrics.get_leader_addresses_latency_millis.set(get_leader_addresses_timer.read().asMillis());
-        self.metrics.number_of_leaders_identified.set(leader_addresses.items.len);
+        self.metrics.number_of_leaders_identified.set(leader_addresses.len);
         return leader_addresses;
     }
 
     /// Sends transactions to the next N leaders TPU addresses
-    fn sendTransactions(self: *Service, transactions: []const TransactionInfo, leader_addresses: std.ArrayList(SocketAddr)) !void {
-        if (leader_addresses.items.len == 0) {
+    fn sendTransactions(
+        self: *Service,
+        transactions: []const TransactionInfo,
+        leader_addresses: []const SocketAddr,
+    ) !void {
+        if (leader_addresses.len == 0) {
             self.logger.warn().log("No leader addresses found");
             return;
         }
 
-        for (leader_addresses.items) |leader_address| {
+        for (leader_addresses) |leader_address| {
             for (transactions) |tx| {
                 try self.send_channel.send(Packet.init(
                     leader_address.toEndpoint(),

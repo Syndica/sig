@@ -1030,6 +1030,26 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?struct { Slot, LeaderSchedul
         null;
 }
 
+// zig fmt: off
+const bank_kp: KeyPair = .{
+    .public_key = .{ 
+        .bytes = .{ 239, 10, 4, 236, 219, 237, 69, 197, 199, 60, 
+                            117, 184, 223, 215, 132, 73, 93, 248, 200, 254, 
+                            212, 239, 251, 120, 223, 25, 201, 196, 20, 58, 163, 62 
+                }    
+    },
+    .secret_key = .{ 
+        .bytes = .{ 208, 26, 255, 64, 164, 52, 99, 120, 92, 227, 
+                            25, 240, 222, 245, 70, 77, 171, 89, 129, 64, 110, 
+                            73, 159, 230, 38, 212, 150, 202, 57, 157, 151, 175, 
+                            239, 10, 4, 236, 219, 237, 69, 197, 199, 60, 117, 
+                            184, 223, 215, 132, 73, 93, 248, 200, 254, 212, 239, 
+                            251, 120, 223, 25, 201, 196, 20, 58, 163, 62 
+                } 
+    },
+};
+// zig fmt: on
+
 pub fn testTransactionSenderService() !void {
     var app_base = try AppBase.init(gpa_allocator);
     defer app_base.deinit();
@@ -1065,6 +1085,7 @@ pub fn testTransactionSenderService() !void {
         gpa_allocator,
         transaction_channel,
         &app_base.exit,
+        app_base.logger,
     );
 
     var transaction_sender_service = try sig.transaction_sender.Service.init(
@@ -1168,7 +1189,7 @@ fn initGossip(
     logger.info().logf("gossip port: {d}", .{gossip_port});
 
     // setup contact info
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
     try contact_info.setSocket(.gossip, SocketAddr.init(gossip_host_ip, gossip_port));
     for (sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(gossip_host_ip, s.port));
@@ -1196,7 +1217,7 @@ fn startGossip(
     app_base.logger.info().logf("gossip port: {d}", .{gossip_port});
 
     // setup contact info
-    const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
+    const my_pubkey = try Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
     var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
     try contact_info.setSocket(.gossip, SocketAddr.init(app_base.my_ip, gossip_port));
     for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));
