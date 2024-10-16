@@ -55,12 +55,12 @@ pub fn main() !void {
         }
 
         if (std.mem.eql(u8, "accounts_db_readwrite", filter) or run_all) {
-            try benchmarkCSV(
-                allocator,
-                logger,
-                @import("accountsdb/db.zig").BenchmarkAccountsDB,
-                max_time_per_bench,
-            );
+            // try benchmarkCSV(
+            //     allocator,
+            //     logger,
+            //     @import("accountsdb/db.zig").BenchmarkAccountsDB,
+            //     max_time_per_bench,
+            // );
         }
 
         if (std.mem.eql(u8, "accounts_db_snapshot", filter) or run_all) blk: {
