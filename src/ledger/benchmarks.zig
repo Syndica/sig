@@ -158,6 +158,38 @@ pub const BenchmarLegder = struct {
         return timer.read();
     }
 
+    pub fn benchReadCodeRandom() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try State.init(allocator, "bench read randmom", .noop);
+        defer state.deinit();
+        var inserter = try state.shredInserter();
+        var reader = try state.reader();
+
+        const prefix = "agave.blockstore.bench_read.";
+        const shreds = try testShreds(std.heap.c_allocator, prefix ++ "shreds.bin");
+        defer deinitShreds(allocator, shreds);
+
+        const total_shreds = shreds.len;
+        _ = try ledger.insert_shred.insertShredsForTest(&inserter, shreds);
+
+        const slot: u32 = 0;
+
+        var rng = std.Random.DefaultPrng.init(100);
+
+        var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, total_shreds);
+        defer indices.deinit();
+        for (total_shreds) |_| {
+            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
+        }
+
+        var timer = try sig.time.Timer.start();
+        for (indices.items) |shred_index| {
+            // TODO confirm if getCodeShred can be rightly used with same input data
+            _ = try reader.getCodeShred(slot, shred_index);
+        }
+        return timer.read();
+    }
+
     pub fn benchReaderSlotRangeConnected() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try State.init(allocator, "slotRangeConnected", .noop);
