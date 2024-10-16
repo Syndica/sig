@@ -376,6 +376,10 @@ pub const AccountsDB = struct {
 
                 // NOTE: important `false` (ie, 1)
                 loading_thread.account_index.deinit(false);
+
+                const accounts_cache, var accounts_cache_lg = loading_thread.accounts_cache.writeWithLock();
+                defer accounts_cache_lg.unlock();
+                accounts_cache.deinit();
             }
             loading_threads.deinit();
         }
