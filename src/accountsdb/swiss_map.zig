@@ -609,16 +609,16 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    const accounts = try allocator.alloc(accounts_db.index.AccountRef, n_accounts);
+    const account_refs = try allocator.alloc(accounts_db.index.AccountRef, n_accounts);
     const pubkeys = try allocator.alloc(sig.core.Pubkey, n_accounts);
     for (0..n_accounts) |i| {
         random.bytes(&pubkeys[i].data);
-        accounts[i] = accounts_db.index.AccountRef.default();
-        accounts[i].pubkey = pubkeys[i];
+        account_refs[i] = accounts_db.index.AccountRef.default();
+        account_refs[i].pubkey = pubkeys[i];
     }
     random.shuffle(sig.core.Pubkey, pubkeys);
 
-    return .{ accounts, pubkeys };
+    return .{ account_refs, pubkeys };
 }
 
 pub const BenchmarkSwissMap = struct {
@@ -654,7 +654,11 @@ pub const BenchmarkSwissMap = struct {
         const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
         const n_accounts = bench_args.n_accounts;
 
-        const accounts, const pubkeys = try generateData(allocator, n_accounts);
+        const account_refs, const pubkeys = try generateData(allocator, n_accounts);
+        defer {
+            allocator.free(account_refs);
+            allocator.free(pubkeys);
+        }
 
         const write_time, const read_time = try benchGetOrPut(
             SwissMap(
@@ -664,7 +668,7 @@ pub const BenchmarkSwissMap = struct {
                 accounts_db.index.ShardedPubkeyRefMap.eql,
             ),
             allocator,
-            accounts,
+            account_refs,
             pubkeys,
             null,
         );
@@ -685,7 +689,7 @@ pub const BenchmarkSwissMap = struct {
         const std_write_time, const std_read_time = try benchGetOrPut(
             BenchHashMap(InnerT),
             allocator,
-            accounts,
+            account_refs,
             pubkeys,
             null,
         );
@@ -703,12 +707,6 @@ pub const BenchmarkSwissMap = struct {
         };
     }
 };
-
-test "bench swissmap read/write" {
-    _ = try BenchmarkSwissMap.swissmapReadWriteBenchmark(.{
-        .n_accounts = 1_000_000,
-    });
-}
 
 fn benchGetOrPut(
     comptime T: type,
@@ -791,4 +789,10 @@ pub fn BenchHashMap(T: type) type {
             return result;
         }
     };
+}
+
+test "bench swissmap read/write" {
+    _ = try BenchmarkSwissMap.swissmapReadWriteBenchmark(.{
+        .n_accounts = 1_000_000,
+    });
 }
