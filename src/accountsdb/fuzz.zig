@@ -30,7 +30,7 @@ pub const TrackedAccount = struct {
         return .{
             .lamports = 19,
             .data = try allocator.dupe(u8, &self.data),
-            .owner = Pubkey.zeroes,
+            .owner = Pubkey.ZEROES,
             .executable = false,
             .rent_epoch = 0,
         };

@@ -8,7 +8,7 @@ pub const Pubkey = extern struct {
     pub const size = 32;
     pub const @"!bincode-config:data" = sig.bincode.int.U8ArrayConfig(size);
 
-    pub const zeroes: Pubkey = .{ .data = .{0} ** size };
+    pub const ZEROES: Pubkey = .{ .data = .{0} ** size };
 
     const base58 = sig.crypto.base58.Base58Sized(size);
 
@@ -40,7 +40,7 @@ pub const Pubkey = extern struct {
     }
 
     pub fn isAllZeroes(self: *const Self) bool {
-        return self.equals(&zeroes);
+        return self.equals(&ZEROES);
     }
 
     pub fn string(self: Self) base58.String {

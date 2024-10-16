@@ -179,7 +179,7 @@ pub const Transaction = struct {
 
     pub const empty: Transaction = .{
         .signatures = &[_]Signature{},
-        .message = Message.empty,
+        .message = Message.EMPTY,
     };
 
     pub fn newUnsigned(allocator: std.mem.Allocator, message: Message) error{OutOfMemory}!Transaction {
@@ -225,7 +225,7 @@ pub const Message = struct {
     pub const @"!bincode-config:account_keys" = shortVecConfig([]const Pubkey);
     pub const @"!bincode-config:instructions" = shortVecConfig([]const CompiledInstruction);
 
-    pub const empty: Message = .{
+    pub const EMPTY: Message = .{
         .header = .{
             .num_required_signatures = 0,
             .num_readonly_signed_accounts = 0,
@@ -583,11 +583,11 @@ test "create transfer transaction" {
 }
 
 test "tmp" {
-    try std.testing.expect(Message.empty.account_keys.len == 0);
+    try std.testing.expect(Message.EMPTY.account_keys.len == 0);
 }
 
 test "blank Message fails to sanitize" {
-    try std.testing.expectError(error.MissingWritableFeePayer, Message.empty.sanitize());
+    try std.testing.expectError(error.MissingWritableFeePayer, Message.EMPTY.sanitize());
 }
 
 test "minimal valid Message sanitizes" {
@@ -597,7 +597,7 @@ test "minimal valid Message sanitizes" {
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &.{Pubkey.zeroes},
+        .account_keys = &.{Pubkey.ZEROES},
         .recent_blockhash = Hash.generateSha256Hash(&.{0}),
         .instructions = &.{},
     }));
@@ -610,7 +610,7 @@ test "Message sanitize fails if missing signers" {
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &.{Pubkey.zeroes},
+        .account_keys = &.{Pubkey.ZEROES},
         .recent_blockhash = Hash.generateSha256Hash(&.{0}),
         .instructions = &.{},
     }));
@@ -623,14 +623,14 @@ test "Message sanitize fails if missing unsigned" {
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 1,
         },
-        .account_keys = &.{Pubkey.zeroes},
+        .account_keys = &.{Pubkey.ZEROES},
         .recent_blockhash = Hash.generateSha256Hash(&.{0}),
         .instructions = &.{},
     }));
 }
 
 test "Message sanitize fails if no writable signed" {
-    var pubkeys = [_]Pubkey{ Pubkey.zeroes, Pubkey.zeroes };
+    var pubkeys = [_]Pubkey{ Pubkey.ZEROES, Pubkey.ZEROES };
     const message = Message{
         .header = MessageHeader{
             .num_required_signatures = 1,
@@ -645,7 +645,7 @@ test "Message sanitize fails if no writable signed" {
 }
 
 test "Message sanitize fails if missing program id" {
-    var pubkeys = [_]Pubkey{Pubkey.zeroes};
+    var pubkeys = [_]Pubkey{Pubkey.ZEROES};
     var instructions = [_]CompiledInstruction{.{
         .program_id_index = 1,
         .accounts = &[_]u8{},
@@ -665,7 +665,7 @@ test "Message sanitize fails if missing program id" {
 }
 
 test "Message sanitize fails if program id has index 0" {
-    var pubkeys = [_]Pubkey{Pubkey.zeroes};
+    var pubkeys = [_]Pubkey{Pubkey.ZEROES};
     var instructions = [_]CompiledInstruction{.{
         .program_id_index = 0,
         .accounts = &[_]u8{},
@@ -685,7 +685,7 @@ test "Message sanitize fails if program id has index 0" {
 }
 
 test "Message sanitize fails if account index is out of bounds" {
-    var pubkeys = [_]Pubkey{ Pubkey.zeroes, Pubkey.zeroes };
+    var pubkeys = [_]Pubkey{ Pubkey.ZEROES, Pubkey.ZEROES };
     var accounts = [_]u8{2};
     var instructions = [_]CompiledInstruction{.{
         .program_id_index = 1,

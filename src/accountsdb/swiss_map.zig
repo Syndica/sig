@@ -504,11 +504,11 @@ test "swissmap resize" {
     try map.ensureTotalCapacity(100);
 
     const ref = accounts_db.index.AccountRef.default();
-    map.putAssumeCapacity(sig.core.Pubkey.zeroes, ref);
+    map.putAssumeCapacity(sig.core.Pubkey.ZEROES, ref);
 
     // this will resize the map with the key still in there
     try map.ensureTotalCapacity(200);
-    const get_ref = map.get(sig.core.Pubkey.zeroes) orelse return error.MissingAccount;
+    const get_ref = map.get(sig.core.Pubkey.ZEROES) orelse return error.MissingAccount;
     try std.testing.expect(std.meta.eql(get_ref, ref));
 }
 

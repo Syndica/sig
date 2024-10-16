@@ -3220,7 +3220,7 @@ test "write and read an account" {
         .data = &data,
         .executable = false,
         .lamports = 100,
-        .owner = Pubkey.zeroes,
+        .owner = Pubkey.ZEROES,
         .rent_epoch = 0,
     };
 

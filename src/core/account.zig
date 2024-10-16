@@ -163,11 +163,11 @@ test "core.account: test account hash matches rust" {
     var account: Account = .{
         .lamports = 10,
         .data = &data,
-        .owner = Pubkey.zeroes,
+        .owner = Pubkey.ZEROES,
         .executable = false,
         .rent_epoch = 20,
     };
-    const pubkey = Pubkey.zeroes;
+    const pubkey = Pubkey.ZEROES;
 
     const hash = hashAccount(
         account.lamports,

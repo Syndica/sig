@@ -246,8 +246,8 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
     try purgeRangeWithCount(
         write_batch,
         schema.address_signatures,
-        .{ .slot = from_slot, .address = Pubkey.zeroes, .transaction_index = 0, .signature = Signature.default() },
-        .{ .slot = to_slot, .address = Pubkey.zeroes, .transaction_index = 0, .signature = Signature.default() },
+        .{ .slot = from_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.default() },
+        .{ .slot = to_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.default() },
         &delete_count,
     );
     try purgeRangeWithCount(write_batch, schema.transaction_memos, .{ Signature.default(), from_slot }, .{ Signature.default(), to_slot }, &delete_count);
@@ -261,7 +261,7 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
     try purgeRangeWithCount(write_batch, schema.merkle_root_meta, .{ .slot = from_slot, .fec_set_index = 0 }, .{ .slot = to_slot, .fec_set_index = 0 }, &delete_count);
     // slot is not indexed in this method, so this is a full purge
     // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back eventually
-    try purgeRangeWithCount(write_batch, schema.program_costs, Pubkey.zeroes, Pubkey.zeroes, &delete_count);
+    try purgeRangeWithCount(write_batch, schema.program_costs, Pubkey.ZEROES, Pubkey.ZEROES, &delete_count);
 
     // make sure we covered all the column families
     std.debug.assert(delete_count == ledger.schema.list.len);
@@ -303,8 +303,8 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
     try purgeFileRangeWithCount(
         db,
         schema.address_signatures,
-        .{ .slot = from_slot, .address = Pubkey.zeroes, .transaction_index = 0, .signature = Signature.default() },
-        .{ .slot = to_slot, .address = Pubkey.zeroes, .transaction_index = 0, .signature = Signature.default() },
+        .{ .slot = from_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.default() },
+        .{ .slot = to_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.default() },
         &delete_count,
     );
     try purgeFileRangeWithCount(db, schema.transaction_memos, .{ Signature.default(), from_slot }, .{ Signature.default(), to_slot }, &delete_count);
@@ -318,7 +318,7 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
     try purgeFileRangeWithCount(db, schema.merkle_root_meta, .{ .slot = from_slot, .fec_set_index = 0 }, .{ .slot = to_slot, .fec_set_index = 0 }, &delete_count);
     // slot is not indexed in this method, so this is a full purge
     // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back eventually
-    try purgeFileRangeWithCount(db, schema.program_costs, Pubkey.zeroes, Pubkey.zeroes, &delete_count);
+    try purgeFileRangeWithCount(db, schema.program_costs, Pubkey.ZEROES, Pubkey.ZEROES, &delete_count);
 
     // make sure we covered all the column families
     std.debug.assert(delete_count == ledger.schema.list.len);
