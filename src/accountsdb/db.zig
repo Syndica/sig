@@ -180,6 +180,9 @@ pub const AccountsDB = struct {
         );
         errdefer account_index.deinit(true);
 
+        var accounts_cache = try AccountsCache.init(allocator, 1_000); // TODO: make configurable
+        errdefer accounts_cache.deinit();
+
         const metrics = try AccountsDBMetrics.init();
         return .{
             .allocator = allocator,
@@ -188,7 +191,7 @@ pub const AccountsDB = struct {
             .logger = logger,
             .config = config,
             .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(allocator)),
-            .accounts_cache = RwMux(AccountsCache).init(try AccountsCache.init(allocator, 1_000, 10)), // TODO: make configurable
+            .accounts_cache = RwMux(AccountsCache).init(accounts_cache),
             .snapshot_dir = snapshot_dir,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .metrics = metrics,
@@ -1871,10 +1874,10 @@ pub const AccountsDB = struct {
         switch (account_ref.location) {
             .File => |ref_info| {
                 const account_in_cache = blk: {
-                    const accounts_cache, var accounts_cache_lg = self.accounts_cache.readWithLock();
+                    const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
                     defer accounts_cache_lg.unlock();
 
-                    const cached_account = accounts_cache.get(account_ref.slot, account_ref.pubkey) orelse break :blk null;
+                    const cached_account = accounts_cache.get(account_ref.pubkey) orelse break :blk null;
                     break :blk cached_account.account;
                 };
 
@@ -1889,7 +1892,7 @@ pub const AccountsDB = struct {
 
                     const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
                     defer accounts_cache_lg.unlock();
-                    try accounts_cache.put(account_ref.slot, account_ref.pubkey, account);
+                    try accounts_cache.put(account_ref.pubkey, account);
 
                     return account;
                 }
