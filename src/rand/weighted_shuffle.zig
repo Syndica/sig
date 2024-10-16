@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const Random = std.Random;
 const ChaChaRng = sig.rand.ChaChaRng(20);
 
 /// Implements an iterator where indices are shuffled according to their
@@ -29,8 +28,10 @@ pub fn WeightedShuffle(comptime T: type) type {
         const FANOUT: usize = 1 << BIT_SHIFT;
         const BIT_MASK: usize = FANOUT - 1;
 
+        const Self = @This();
+
         /// If weights are negative or overflow the total sum they are treated as zero.
-        pub fn init(allocator: std.mem.Allocator, weights: []const T) !WeightedShuffle(T) {
+        pub fn init(allocator: std.mem.Allocator, weights: []const T) !Self {
             var tree = try std.ArrayList([FANOUT - 1]T).initCapacity(
                 allocator,
                 getTreeSize(weights.len),
@@ -42,7 +43,7 @@ pub fn WeightedShuffle(comptime T: type) type {
             var num_negative: usize = 0;
             var num_overflow: usize = 0;
             for (weights, 0..) |weight, k| {
-                if (!(weight >= 0)) {
+                if (weight < 0) {
                     try zeros.append(k);
                     num_negative += 1;
                     continue;
@@ -54,7 +55,7 @@ pub fn WeightedShuffle(comptime T: type) type {
                     num_overflow += 1;
                     continue;
                 }
-                sum = sum + weight;
+                sum += weight;
                 var index = tree.items.len + k;
                 while (index != 0) {
                     const offset = index & BIT_MASK;
@@ -77,12 +78,12 @@ pub fn WeightedShuffle(comptime T: type) type {
             };
         }
 
-        pub fn deinit(self: *WeightedShuffle(T)) void {
+        pub fn deinit(self: *Self) void {
             self.tree.deinit();
             self.zeros.deinit();
         }
 
-        pub fn clone(self: *const WeightedShuffle(T)) !WeightedShuffle(T) {
+        pub fn clone(self: *const Self) !Self {
             return .{
                 .tree = try self.tree.clone(),
                 .weight = self.weight,
@@ -91,26 +92,26 @@ pub fn WeightedShuffle(comptime T: type) type {
         }
 
         // Removes given weight at index k.
-        pub fn remove(self: *WeightedShuffle(T), k: usize, weight: T) void {
+        pub fn remove(self: *Self, index: usize, weight: T) void {
             std.debug.assert(self.weight >= weight);
             self.weight -= weight;
             // Traverse the tree from the leaf node upwards to the root,
             // updating the sub-tree sums along the way
-            var index = self.tree.items.len + k; // leaf node
-            while (index != 0) {
-                const offset = index & BIT_MASK;
-                index = (index - 1) >> BIT_SHIFT; // parent node
+            var curr_index = self.tree.items.len + index; // leaf node
+            while (curr_index != 0) {
+                const offset = curr_index & BIT_MASK;
+                curr_index = (curr_index - 1) >> BIT_SHIFT; // parent node
                 if (offset > 0) {
-                    std.debug.assert(self.tree.items[index][offset - 1] >= weight);
-                    self.tree.items[index][offset - 1] -= weight;
+                    std.debug.assert(self.tree.items[curr_index][offset - 1] >= weight);
+                    self.tree.items[curr_index][offset - 1] -= weight;
                 }
             }
         }
 
         // Returns smallest index such that sum of weights[..=k] > val,
         // along with its respective weight.
-        pub fn search(self: *const WeightedShuffle(T), _val: T) struct { usize, T } {
-            var val = _val;
+        pub fn search(self: *const Self, value: T) struct { usize, T } {
+            var val = value;
 
             std.debug.assert(val >= 0);
             std.debug.assert(val < self.weight);
@@ -140,36 +141,36 @@ pub fn WeightedShuffle(comptime T: type) type {
             return .{ index - self.tree.items.len, weight };
         }
 
-        pub fn removeIndex(self: *WeightedShuffle(T), k: usize) void {
+        pub fn removeIndex(self: *Self, index: usize) void {
             // Traverse the tree from the leaf node upwards to the root, while
             // maintaining the sum of weights of subtrees *not* containing the leaf node.
-            var index = self.tree.items.len + k; // leaf node
+            var curr_index = self.tree.items.len + index; // leaf node
             var weight: T = 0;
-            while (index != 0) {
-                const offset = index & BIT_MASK;
-                index = (index - 1) >> BIT_SHIFT; // parent node
+            while (curr_index != 0) {
+                const offset = curr_index & BIT_MASK;
+                curr_index = (curr_index - 1) >> BIT_SHIFT; // parent node
                 if (offset > 0) {
-                    if (self.tree.items[index][offset - 1] != weight) {
-                        self.remove(k, self.tree.items[index][offset - 1] - weight);
+                    if (self.tree.items[curr_index][offset - 1] != weight) {
+                        self.remove(index, self.tree.items[curr_index][offset - 1] - weight);
                     } else {
-                        self.removeZero(k);
+                        self.removeZero(index);
                     }
                     return;
                 }
                 // The leaf node is in the right-most subtree of self.tree[index].
-                for (self.tree.items[index]) |node| {
+                for (self.tree.items[curr_index]) |node| {
                     weight += node;
                 }
             }
             // The leaf node is the right-most node of the whole tree.
             if (self.weight != weight) {
-                self.remove(k, self.weight - weight);
+                self.remove(index, self.weight - weight);
             } else {
-                self.removeZero(k);
+                self.removeZero(index);
             }
         }
 
-        pub fn removeZero(self: *WeightedShuffle(T), k: usize) void {
+        pub fn removeZero(self: *Self, k: usize) void {
             var found = false;
             for (self.zeros.items, 0..) |i, j| {
                 if (i == k) {
@@ -183,7 +184,7 @@ pub fn WeightedShuffle(comptime T: type) type {
 
         /// Returns the index of the first sampled weight.
         /// The function is non-destructive and does not remove the weights from the internal state.
-        pub fn first(self: *const WeightedShuffle(T), rng: Random) ?usize {
+        pub fn first(self: *const Self, rng: std.Random) ?usize {
             if (self.weight > 0) {
                 const sample = uintLessThanRust(T, rng, self.weight);
                 const index, _ = self.search(sample);
@@ -196,12 +197,12 @@ pub fn WeightedShuffle(comptime T: type) type {
             return self.zeros.items[index];
         }
 
-        /// Returns a shuffled list of weights.
+        /// Returns an iterator that generates a shuffled list of weights.
         /// The function is destructive and removes the weights from the internal state.
-        pub fn shuffle(self: *WeightedShuffle(T), rng: Random) Iterator {
+        pub fn shuffle(self: *Self, random: std.Random) Iterator {
             return .{
                 .shuffle = self,
-                .rng = rng,
+                .rng = random,
                 .index = 0,
             };
         }
@@ -216,9 +217,9 @@ pub fn WeightedShuffle(comptime T: type) type {
             return size;
         }
 
-        const Iterator = struct {
-            shuffle: *WeightedShuffle(T),
-            rng: Random,
+        pub const Iterator = struct {
+            shuffle: *Self,
+            rng: std.Random,
             index: usize = 0,
 
             pub fn next(self: *Iterator) ?usize {
@@ -238,12 +239,6 @@ pub fn WeightedShuffle(comptime T: type) type {
             pub fn consume(self: *Iterator) void {
                 while (self.next() != null) {}
             }
-
-            pub fn count(self: *Iterator) usize {
-                self.consume();
-                return self.index;
-            }
-
             pub fn intoArrayList(self: *Iterator, allocator: std.mem.Allocator) !std.ArrayList(usize) {
                 var list = std.ArrayList(usize).init(allocator);
                 while (self.next()) |k| {
@@ -258,28 +253,23 @@ pub fn WeightedShuffle(comptime T: type) type {
 /// Custom Rng downsampling function designed to match the agave sampler used
 /// in the agave implementation of the weighted shuffle.
 /// For use in place of: <T as SampleUniform>::Sampler::sample_single
-pub fn uintLessThanRust(comptime I: type, rng: Random, less_than: I) I {
-    const unsigned = switch (I) {
-        i8, u8 => u8,
-        i16, u16 => u16,
-        i32, u32 => u32,
-        i64, u64 => u64,
-        i128, u128 => u128,
-        isize, usize => usize,
-        else => @panic("Unsupported signed integer type"),
+pub fn uintLessThanRust(comptime T: type, random: std.Random, less_than: T) T {
+    const Unsigned, const UnsignedLarge = switch (T) {
+        i8, u8 => .{ u8, u32 },
+        i16, u16 => .{ u16, u32 },
+        i32, u32 => .{u32} ** 2,
+        i64, u64 => .{u64} ** 2,
+        i128, u128 => .{u128} ** 2,
+        isize, usize => .{usize} ** 2,
+        else => @compileError("Unsupported signed integer type"),
     };
 
-    const unsigned_large = switch (unsigned) {
-        u8, u16, u32 => u32,
-        else => unsigned,
-    };
+    const bits = @typeInfo(T).Int.bits;
+    const range: UnsignedLarge = @intCast(less_than);
+    if (range == 0) return random.int(T);
 
-    const bits = @typeInfo(I).Int.bits;
-    const range: unsigned_large = @intCast(less_than);
-    if (range == 0) return rng.int(I);
-
-    const zone: unsigned_large = if (std.math.maxInt(unsigned) <= std.math.maxInt(u16)) blk: {
-        const unsigned_max = std.math.maxInt(unsigned_large);
+    const zone: UnsignedLarge = if (std.math.maxInt(Unsigned) <= std.math.maxInt(u16)) blk: {
+        const unsigned_max = std.math.maxInt(UnsignedLarge);
         const ints_to_reject = (unsigned_max - range + 1) % range;
         break :blk unsigned_max - ints_to_reject;
     } else blk: {
@@ -287,26 +277,26 @@ pub fn uintLessThanRust(comptime I: type, rng: Random, less_than: I) I {
     };
 
     while (true) {
-        const v = rng.int(unsigned_large);
-        const m = std.math.mulWide(unsigned_large, v, range);
-        const lo: unsigned_large = @truncate(m);
-        const hi: unsigned = @truncate(m >> bits);
+        const v = random.int(UnsignedLarge);
+        const m = std.math.mulWide(UnsignedLarge, v, range);
+        const lo: UnsignedLarge = @truncate(m);
+        const hi: Unsigned = @truncate(m >> bits);
         if (lo <= zone) {
             return @intCast(hi);
         }
     }
 }
 
-fn testShuffledIndicesMatchExpected(T: type, rng: Random, shuffle: *WeightedShuffle(T), expected_slice: []const usize) !void {
+fn testShuffledIndicesMatchExpected(T: type, random: std.Random, shuffle: *WeightedShuffle(T), expected_slice: []const usize) !void {
     var shuffle_cloned = try shuffle.clone();
     defer shuffle_cloned.deinit();
-    var shuffled_iter = shuffle_cloned.shuffle(rng);
+    var shuffled_iter = shuffle_cloned.shuffle(random);
     const shuffled = try shuffled_iter.intoArrayList(std.testing.allocator);
     defer shuffled.deinit();
     try std.testing.expectEqualSlices(usize, expected_slice, shuffled.items);
 }
 
-fn testWeightedShuffleSlow(allocator: std.mem.Allocator, rng: Random, weights: []u64) !std.ArrayList(usize) {
+fn testWeightedShuffleSlow(allocator: std.mem.Allocator, random: std.Random, weights: []u64) !std.ArrayList(usize) {
     // Initialise high as sum of weights and zeros as indices of zero weights
     var high: u64 = 0;
     var zeros = try std.ArrayList(usize).initCapacity(allocator, weights.len);
@@ -322,7 +312,7 @@ fn testWeightedShuffleSlow(allocator: std.mem.Allocator, rng: Random, weights: [
     // Shuffle indices according to their weights
     var shuffle = try std.ArrayList(usize).initCapacity(allocator, weights.len);
     while (high != 0) {
-        const sample = uintLessThanRust(u64, rng, high);
+        const sample = uintLessThanRust(u64, random, high);
         var sum: u64 = 0;
         for (weights, 0..) |weight, k| {
             sum += weight;
@@ -337,7 +327,7 @@ fn testWeightedShuffleSlow(allocator: std.mem.Allocator, rng: Random, weights: [
 
     // Add zeros to the end
     while (zeros.items.len > 0) {
-        const index = uintLessThanRust(usize, rng, zeros.items.len);
+        const index = uintLessThanRust(usize, random, zeros.items.len);
         shuffle.appendAssumeCapacity(zeros.swapRemove(index));
     }
 
@@ -347,45 +337,45 @@ fn testWeightedShuffleSlow(allocator: std.mem.Allocator, rng: Random, weights: [
 test "uintLessThan" {
     const seed = [_]u8{1} ** 32;
     var chacha = ChaChaRng.fromSeed(seed);
-    const rng = chacha.random();
+    const random = chacha.random();
 
     for (0..1000) |_| {
-        const val = uintLessThanRust(u64, rng, 1);
+        const val = uintLessThanRust(u64, random, 1);
         try std.testing.expect(val == 0);
     }
 }
 
 test "agave: get tree size" {
-    try std.testing.expectEqual(WeightedShuffle(u64).getTreeSize(0), 0);
+    try std.testing.expectEqual(0, WeightedShuffle(u64).getTreeSize(0));
     for (1..17) |count| {
-        try std.testing.expectEqual(WeightedShuffle(u64).getTreeSize(count), 1);
+        try std.testing.expectEqual(1, WeightedShuffle(u64).getTreeSize(count));
     }
     for (17..257) |count| {
-        try std.testing.expectEqual(WeightedShuffle(u64).getTreeSize(count), 1 + 16);
+        try std.testing.expectEqual(1 + 16, WeightedShuffle(u64).getTreeSize(count));
     }
     for (257..4097) |count| {
-        try std.testing.expectEqual(WeightedShuffle(u64).getTreeSize(count), 1 + 16 + 16 * 16);
+        try std.testing.expectEqual(1 + 16 + 16 * 16, WeightedShuffle(u64).getTreeSize(count));
     }
     for (4097..65537) |count| {
-        try std.testing.expectEqual(WeightedShuffle(u64).getTreeSize(count), 1 + 16 + 16 * 16 + 16 * 16 * 16);
+        try std.testing.expectEqual(1 + 16 + 16 * 16 + 16 * 16 * 16, WeightedShuffle(u64).getTreeSize(count));
     }
 }
 
 test "agave: empty weights" {
     const weights = [_]u64{};
 
-    var xoshiro = std.rand.DefaultPrng.init(0);
-    const rng = xoshiro.random();
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
 
     var shuffle = try WeightedShuffle(u64).init(std.testing.allocator, &weights);
     defer shuffle.deinit();
 
     var shuffle_cloned = try shuffle.clone();
     defer shuffle_cloned.deinit();
-    var shuffle_cloned_iter = shuffle_cloned.shuffle(rng);
+    var shuffle_cloned_iter = shuffle_cloned.shuffle(random);
 
     try std.testing.expectEqual(shuffle_cloned_iter.next(), null);
-    try std.testing.expectEqual(shuffle.first(rng), null);
+    try std.testing.expectEqual(shuffle.first(random), null);
 }
 
 test "agave: zero weights" {
@@ -419,13 +409,13 @@ test "agave: sanity check" {
     for (1..32) |i| seed[i] = seed[i - 1] + 3;
 
     var chacha = ChaChaRng.fromSeed(seed);
-    const rng = chacha.random();
+    const random = chacha.random();
 
     var counts = [_]usize{0} ** 8;
     for (0..100_000) |_| {
         var shuffle = try WeightedShuffle(i32).init(std.testing.allocator, &weights);
         defer shuffle.deinit();
-        var shuffled = shuffle.shuffle(rng);
+        var shuffled = shuffle.shuffle(random);
         counts[shuffled.next().?] += 1;
         shuffled.consume();
     }
@@ -436,14 +426,14 @@ test "agave: sanity check" {
         &counts,
     );
 
-    counts = [_]usize{0} ** 8;
+    @memset(&counts, 0);
     for (0..100_000) |_| {
         var shuffle = try WeightedShuffle(i32).init(std.testing.allocator, &weights);
         defer shuffle.deinit();
         shuffle.removeIndex(5);
         shuffle.removeIndex(3);
         shuffle.removeIndex(1);
-        var shuffled = shuffle.shuffle(rng);
+        var shuffled = shuffle.shuffle(random);
         counts[shuffled.next().?] += 1;
         shuffled.consume();
     }
@@ -565,25 +555,24 @@ test "agave: hard coded" {
 
 test "agave: match slow" {
     // Initialise random weights
-    var xoshiro = std.rand.DefaultPrng.init(0);
-    const xrng = xoshiro.random();
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
     var weights = try std.ArrayList(u64).initCapacity(std.testing.allocator, 997);
     defer weights.deinit();
-    for (0..997) |_| weights.appendAssumeCapacity(xrng.intRangeLessThan(u64, 0, 1_000));
+    for (0..997) |_| weights.appendAssumeCapacity(random.intRangeLessThan(u64, 0, 1_000));
 
     //
     for (0..10) |_| {
         // Create random seed
-        var seed = [_]u8{0} ** 32;
-        for (0..32) |i| seed[i] = xrng.int(u8);
+        var seed: [32]u8 = undefined;
+        random.bytes(&seed);
 
         // Get shuffled indices using the fast implementation
         const shuffled_fast = blk: {
             var chacha = ChaChaRng.fromSeed(seed);
-            const crng = chacha.random();
             var shuffle = try WeightedShuffle(u64).init(std.testing.allocator, weights.items);
             defer shuffle.deinit();
-            var shuffle_iter = shuffle.shuffle(crng);
+            var shuffle_iter = shuffle.shuffle(chacha.random());
             break :blk try shuffle_iter.intoArrayList(std.testing.allocator);
         };
         defer shuffled_fast.deinit();
@@ -591,8 +580,7 @@ test "agave: match slow" {
         // Get shuffled indices using the slow implementation
         const shuffled_slow = blk: {
             var chacha = ChaChaRng.fromSeed(seed);
-            const crng = chacha.random();
-            break :blk try testWeightedShuffleSlow(std.testing.allocator, crng, weights.items);
+            break :blk try testWeightedShuffleSlow(std.testing.allocator, chacha.random(), weights.items);
         };
         defer shuffled_slow.deinit();
 
@@ -603,26 +591,25 @@ test "agave: match slow" {
 
 test "agave: paranoid" {
     // Default rng
-    var xoshiro = std.rand.DefaultPrng.init(0);
-    const xrng = xoshiro.random();
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
 
     for (0..1351) |size| {
         // Create random weights
         var weights = try std.ArrayList(u64).initCapacity(std.testing.allocator, size);
         defer weights.deinit();
-        for (0..size) |_| weights.appendAssumeCapacity(xrng.intRangeLessThan(u64, 0, 1_000));
+        for (0..size) |_| weights.appendAssumeCapacity(random.intRangeLessThan(u64, 0, 1_000));
 
         // Create random seed
-        var seed = [_]u8{0} ** 32;
-        for (0..32) |i| seed[i] = xrng.int(u8);
+        var seed: [32]u8 = undefined;
+        random.bytes(&seed);
 
         // Get shuffled indices using the fast implementation
         const shuffled_fast = blk: {
             var chacha = ChaChaRng.fromSeed(seed);
-            const crng = chacha.random();
             var shuffle = try WeightedShuffle(u64).init(std.testing.allocator, weights.items);
             defer shuffle.deinit();
-            var shuffle_iter = shuffle.shuffle(crng);
+            var shuffle_iter = shuffle.shuffle(chacha.random());
             break :blk try shuffle_iter.intoArrayList(std.testing.allocator);
         };
         defer shuffled_fast.deinit();
@@ -630,17 +617,15 @@ test "agave: paranoid" {
         // Get the first shuffled index using the fast implementation
         const maybe_shuffled_fast_first = blk: {
             var chacha = ChaChaRng.fromSeed(seed);
-            const crng = chacha.random();
             var shuffle = try WeightedShuffle(u64).init(std.testing.allocator, weights.items);
             defer shuffle.deinit();
-            break :blk shuffle.first(crng);
+            break :blk shuffle.first(chacha.random());
         };
 
         // Get shuffled indices using the slow implementation
         const shuffled_slow = blk: {
             var chacha = ChaChaRng.fromSeed(seed);
-            const crng = chacha.random();
-            break :blk try testWeightedShuffleSlow(std.testing.allocator, crng, weights.items);
+            break :blk try testWeightedShuffleSlow(std.testing.allocator, chacha.random(), weights.items);
         };
         defer shuffled_slow.deinit();
 

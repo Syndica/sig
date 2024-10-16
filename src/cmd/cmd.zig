@@ -738,14 +738,12 @@ fn validator() !void {
     }
 
     // snapshot
-    const snapshot = try loadSnapshot(
-        allocator,
-        app_base.logger,
-        gossip_service,
-        true,
-        geyser_writer,
-        config.current.accounts_db.snapshot_metadata_only,
-    );
+    const snapshot = try loadSnapshot(allocator, app_base.logger, .{
+        .gossip_service = gossip_service,
+        .geyser_writer = geyser_writer,
+        .validate_snapshot = true,
+        .metadata_only = config.current.accounts_db.snapshot_metadata_only,
+    });
 
     // leader schedule
     var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
@@ -803,7 +801,7 @@ fn validator() !void {
     defer cleanup_service_handle.join();
 
     // Random number generator
-    var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
     // Retransmit service
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
@@ -822,7 +820,7 @@ fn validator() !void {
         config.current.turbine.num_retransmit_threads,
         config.current.turbine.overwrite_stake_for_testing,
         &app_base.exit,
-        rng.random(),
+        prng.random(),
         app_base.logger,
     });
 
@@ -1025,14 +1023,12 @@ fn createSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const snapshot_result = try loadSnapshot(
-        allocator,
-        app_base.logger,
-        null,
-        false,
-        null,
-        false,
-    );
+    const snapshot_result = try loadSnapshot(allocator, app_base.logger, .{
+        .gossip_service = null,
+        .geyser_writer = null,
+        .validate_snapshot = false,
+        .metadata_only = false,
+    });
     defer snapshot_result.deinit();
 
     var accounts_db = snapshot_result.accounts_db;
@@ -1082,14 +1078,12 @@ fn validateSnapshot() !void {
         }
     }
 
-    const snapshot_result = try loadSnapshot(
-        allocator,
-        app_base.logger,
-        null,
-        true,
-        geyser_writer,
-        false,
-    );
+    const snapshot_result = try loadSnapshot(allocator, app_base.logger, .{
+        .gossip_service = null,
+        .geyser_writer = geyser_writer,
+        .validate_snapshot = true,
+        .metadata_only = false,
+    });
     defer snapshot_result.deinit();
 }
 
@@ -1104,14 +1098,12 @@ fn printLeaderSchedule() !void {
 
     const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
-        const loaded_snapshot = loadSnapshot(
-            allocator,
-            app_base.logger,
-            null,
-            true,
-            null,
-            false,
-        ) catch |err| {
+        const loaded_snapshot = loadSnapshot(allocator, app_base.logger, .{
+            .gossip_service = null,
+            .geyser_writer = null,
+            .validate_snapshot = true,
+            .metadata_only = false,
+        }) catch |err| {
             if (err == error.SnapshotsNotFoundAndNoGossipService) {
                 app_base.logger.err().log(
                     \\\ No snapshot found and no gossip service to download a snapshot from.
@@ -1529,9 +1521,21 @@ const LoadedSnapshot = struct {
     }
 };
 
+const LoadSnapshotOptions = struct {
+    /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
+    gossip_service: ?*GossipService,
+    /// optional geyser to write snapshot data to
+    geyser_writer: ?*GeyserWriter,
+    /// whether to validate the snapshot account data against the metadata
+    validate_snapshot: bool,
+    /// whether to load only the metadata of the snapshot
+    metadata_only: bool,
+};
+
 fn loadSnapshot(
     allocator: Allocator,
     logger: Logger,
+<<<<<<< HEAD
     /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
     maybe_gossip_service: ?*GossipService,
     /// whether to validate the snapshot account data against the metadata
@@ -1540,6 +1544,9 @@ fn loadSnapshot(
     geyser_writer: ?*GeyserWriter,
     /// whether to load only the metadata of the snapshot
     metadata_only: bool,
+=======
+    options: LoadSnapshotOptions,
+>>>>>>> 4d80e5fe (Address PR comments)
 ) !*LoadedSnapshot {
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
@@ -1552,7 +1559,11 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
+<<<<<<< HEAD
     var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, maybe_gossip_service, .{
+=======
+    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, options.gossip_service, .{
+>>>>>>> 4d80e5fe (Address PR comments)
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
@@ -1594,14 +1605,14 @@ fn loadSnapshot(
     });
     errdefer result.accounts_db.deinit();
 
-    if (metadata_only) {
+    if (options.metadata_only) {
         result.collapsed_snapshot_fields = try result.snapshot_fields.collapse();
     } else {
         result.collapsed_snapshot_fields = try result.accounts_db.loadWithDefaults(
             allocator,
             &all_snapshot_fields,
             n_threads_snapshot_load,
-            validate_snapshot,
+            options.validate_snapshot,
             config.current.accounts_db.accounts_per_file_estimate,
         );
     }
@@ -1623,7 +1634,7 @@ fn loadSnapshot(
     result.bank = Bank.init(&result.accounts_db, bank_fields);
     try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
-    if (metadata_only) {
+    if (options.metadata_only) {
         return result;
     }
 
