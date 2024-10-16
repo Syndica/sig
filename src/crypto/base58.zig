@@ -22,6 +22,12 @@ pub fn Base58Sized(decoded_size: usize) type {
             return result_data;
         }
 
+        pub fn decodeStream(reader: anytype) ![decoded_size]u8 {
+            var encoded: [base58.max_encoded_size]usize = undefined;
+            reader.readAll(&encoded);
+            return decode(&encoded);
+        }
+
         pub fn encode(data: [decoded_size]u8) String {
             var result: std.BoundedArray(u8, max_encoded_size) = .{};
             // unreachable because `max_encoded_size` is the

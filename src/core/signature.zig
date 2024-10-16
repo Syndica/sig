@@ -76,4 +76,8 @@ pub const Signature = struct {
     pub fn jsonStringify(self: Signature, writer: anytype) !void {
         try writer.print("\"{s}\"", .{self.base58String().slice()});
     }
+
+    pub fn jsonParse(_: std.mem.Allocator, reader: anytype, _: std.json.ParseOptions) !Self {
+        return try base58.decodeStream(&reader);
+    }
 };
