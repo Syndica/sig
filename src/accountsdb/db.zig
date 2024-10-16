@@ -2240,8 +2240,8 @@ pub const AccountsDB = struct {
         const head_ref, var head_ref_lg = self.account_index.getReferenceHeadRead(pubkey) orelse return error.PubkeyNotInIndex;
         defer head_ref_lg.unlock();
 
-        // NOTE: this will always be a safe unwrap since both bounds are null
         const ref = self.account_index.getRefFromHeadUnsafe(&head_ref);
+        // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = self.slotListMaxWithinBoundsNew(ref, null, null).?;
         const account = try self.getAccountFromRef(max_ref);
 
@@ -2459,7 +2459,8 @@ pub const AccountsDB = struct {
                 .location = .{ .Cache = .{ .index = i } },
             };
 
-            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref_ptr);
+            // const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref_ptr);
+            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(ref_ptr, i);
             if (!was_inserted) {
                 self.logger.warn().logf(
                     "duplicate reference not inserted: slot: {d} pubkey: {s}",
@@ -4316,34 +4317,34 @@ pub const BenchmarkAccountsDB = struct {
     };
 
     pub const args = [_]BenchArgs{
-        // BenchArgs{
-        //     .n_accounts = 100_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .ram,
-        //     .index = .ram,
-        //     .name = "100k accounts (1_slot - ram index - ram accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 100_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .ram,
-        //     .index = .disk,
-        //     .name = "100k accounts (1_slot - disk index - ram accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 100_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "100k accounts (1_slot - ram index - disk accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 100_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .disk,
-        //     .name = "100k accounts (1_slot - disk index - disk accounts)",
-        // },
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .ram,
+            .index = .ram,
+            .name = "100k accounts (1_slot - ram index - ram accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .ram,
+            .index = .disk,
+            .name = "100k accounts (1_slot - disk index - ram accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "100k accounts (1_slot - ram index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .disk,
+            .name = "100k accounts (1_slot - disk index - disk accounts)",
+        },
 
         // // test accounts in ram
         // BenchArgs{
