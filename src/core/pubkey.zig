@@ -53,8 +53,8 @@ pub const Pubkey = extern struct {
         return r;
     }
 
-    pub fn fromPublicKey(public_key: *const Ed25519.PublicKey) Self {
-        return Self.fromBytes(&public_key.bytes) catch unreachable;
+    pub fn fromPublicKey(public_key: *const Ed25519.PublicKey) !Self {
+        return Self.fromBytes(&public_key.bytes);
     }
 
     pub fn format(

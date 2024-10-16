@@ -741,7 +741,7 @@ test "bincode: custom enum" {
 }
 
 test "bincode: default on eof" {
-    const defaultArrayListOnEOFConfig = @import("../sig.zig").bincode.arraylist.defaultArrayListOnEOFConfig;
+    const defaultArrayListOnEOFConfig = arraylist.defaultArrayListOnEOFConfig;
     const Foo = struct {
         value: u8 = 0,
         accounts: std.ArrayList(u64),

@@ -326,7 +326,11 @@ pub const Instruction = struct {
     accounts: []AccountMeta,
     data: []u8,
 
-    pub fn initSystemInstruction(allocator: std.mem.Allocator, data: SystemInstruction, accounts: []AccountMeta) !Instruction {
+    pub fn initSystemInstruction(
+        allocator: std.mem.Allocator,
+        data: SystemInstruction,
+        accounts: []AccountMeta,
+    ) !Instruction {
         return .{
             .program_id = SYSTEM_PROGRAM_ID,
             .accounts = accounts,
@@ -405,8 +409,8 @@ pub const CompiledKeys = struct {
                 if (!account_meta_gopr.found_existing) {
                     account_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
                 }
-                account_meta_gopr.value_ptr.*.is_signer = account_meta_gopr.value_ptr.*.is_signer or account_meta.is_signer;
-                account_meta_gopr.value_ptr.*.is_writable = account_meta_gopr.value_ptr.*.is_writable or account_meta.is_writable;
+                account_meta_gopr.value_ptr.is_signer = account_meta_gopr.value_ptr.is_signer or account_meta.is_signer;
+                account_meta_gopr.value_ptr.is_writable = account_meta_gopr.value_ptr.is_writable or account_meta.is_writable;
             }
 
             if (maybe_payer) |payer| {
@@ -414,8 +418,8 @@ pub const CompiledKeys = struct {
                 if (!payer_meta_gopr.found_existing) {
                     payer_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
                 }
-                payer_meta_gopr.value_ptr.*.is_signer = true;
-                payer_meta_gopr.value_ptr.*.is_writable = true;
+                payer_meta_gopr.value_ptr.is_signer = true;
+                payer_meta_gopr.value_ptr.is_writable = true;
             }
         }
         return .{ .maybe_payer = maybe_payer, .key_meta_map = key_meta_map };
@@ -505,8 +509,21 @@ const SystemInstruction = union(enum(u8)) {
     },
 };
 
-pub fn buildTransferTansaction(allocator: std.mem.Allocator, from_keypair: KeyPair, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64, recent_blockhash: Hash) !Transaction {
-    const transfer_instruction = try transfer(allocator, from_pubkey, to_pubkey, lamports);
+pub fn buildTransferTansaction(
+    allocator: std.mem.Allocator,
+    from_keypair: KeyPair,
+    to_pubkey: Pubkey,
+    lamports: u64,
+    recent_blockhash: Hash,
+    rng: std.Random,
+) !Transaction {
+    const from_pubkey = try Pubkey.fromPublicKey(&from_keypair.public_key);
+    const transfer_instruction = try transfer(
+        allocator,
+        from_pubkey,
+        to_pubkey,
+        lamports,
+    );
     defer transfer_instruction.deinit(allocator);
     const instructions = [_]Instruction{transfer_instruction};
 
@@ -515,7 +532,9 @@ pub fn buildTransferTansaction(allocator: std.mem.Allocator, from_keypair: KeyPa
     defer allocator.free(message_bytes);
 
     var signatures = try allocator.alloc(Signature, 1);
-    signatures[0] = Signature.init((try from_keypair.sign(message_bytes, null)).toBytes());
+    var noise: [32]u8 = undefined;
+    rng.bytes(&noise);
+    signatures[0] = Signature.init((try from_keypair.sign(message_bytes, noise)).toBytes());
 
     return .{
         .signatures = signatures,
@@ -523,14 +542,27 @@ pub fn buildTransferTansaction(allocator: std.mem.Allocator, from_keypair: KeyPa
     };
 }
 
-pub fn transfer(allocator: std.mem.Allocator, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64) !Instruction {
+pub fn transfer(
+    allocator: std.mem.Allocator,
+    from_pubkey: Pubkey,
+    to_pubkey: Pubkey,
+    lamports: u64,
+) !Instruction {
     var account_metas = try allocator.alloc(AccountMeta, 2);
     account_metas[0] = AccountMeta.newMutable(from_pubkey, true);
     account_metas[1] = AccountMeta.newMutable(to_pubkey, false);
-    return try Instruction.initSystemInstruction(allocator, SystemInstruction{ .Transfer = .{ .lamports = lamports } }, account_metas);
+    return try Instruction.initSystemInstruction(
+        allocator,
+        .{ .Transfer = .{ .lamports = lamports } },
+        account_metas,
+    );
 }
 
-pub fn compileInstruction(allocator: std.mem.Allocator, instruction: Instruction, account_keys: []const Pubkey) !CompiledInstruction {
+pub fn compileInstruction(
+    allocator: std.mem.Allocator,
+    instruction: Instruction,
+    account_keys: []const Pubkey,
+) !CompiledInstruction {
     const program_id_index = indexOf(Pubkey, account_keys, instruction.program_id).?;
     var accounts = try allocator.alloc(u8, instruction.accounts.len);
     for (instruction.accounts, 0..) |account, i| {
@@ -543,7 +575,11 @@ pub fn compileInstruction(allocator: std.mem.Allocator, instruction: Instruction
     };
 }
 
-pub fn compileInstructions(allocator: std.mem.Allocator, instructions: []const Instruction, account_keys: []const Pubkey) ![]CompiledInstruction {
+pub fn compileInstructions(
+    allocator: std.mem.Allocator,
+    instructions: []const Instruction,
+    account_keys: []const Pubkey,
+) ![]CompiledInstruction {
     var compiled_instructions = try allocator.alloc(CompiledInstruction, instructions.len);
     for (instructions, 0..) |instruction, i| {
         compiled_instructions[i] = try compileInstruction(allocator, instruction, account_keys);
@@ -554,23 +590,28 @@ pub fn compileInstructions(allocator: std.mem.Allocator, instructions: []const I
 test "create transfer transaction" {
     const allocator = std.testing.allocator;
     const from_keypair = try KeyPair.create([_]u8{0} ** KeyPair.seed_length);
-    const from_pubkey = Pubkey{ .data = from_keypair.public_key.bytes };
     const to_pubkey = Pubkey{ .data = [_]u8{1} ** Pubkey.size };
     const recent_blockhash = Hash.generateSha256Hash(&[_]u8{0});
-    const tx = try buildTransferTansaction(allocator, from_keypair, from_pubkey, to_pubkey, 100, recent_blockhash);
+    const tx = try buildTransferTansaction(allocator, from_keypair, to_pubkey, 100, recent_blockhash);
     defer tx.deinit(allocator);
     const actual_bytes = try sig.bincode.writeAlloc(allocator, tx, .{});
     defer allocator.free(actual_bytes);
     const expected_bytes = [_]u8{
-        1,   179, 96,  234, 171, 102, 151, 31,  74,  246, 57,  213, 75,  38,  199, 70,  105, 32,  146, 18,  245, 92,  92,  138,
-        253, 30,  247, 119, 174, 140, 95,  67,  39,  148, 154, 255, 94,  118, 221, 113, 29,  20,  87,  102, 114, 28,  40,  39,
-        125, 107, 122, 16,  63,  237, 139, 165, 163, 143, 40,  229, 32,  132, 188, 201, 2,   1,   0,   1,   3,   59,  106, 39,
-        188, 206, 182, 164, 45,  98,  163, 168, 208, 42,  111, 13,  115, 101, 50,  21,  119, 29,  226, 67,  166, 58,  192, 72,
-        161, 139, 89,  218, 41,  1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
-        1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   110, 52,  11,
-        156, 255, 179, 122, 152, 156, 165, 68,  230, 187, 120, 10,  44,  120, 144, 29,  63,  179, 55,  56,  118, 133, 17,  163,
-        6,   23,  175, 160, 29,  1,   2,   2,   0,   1,   12,  2,   0,   0,   0,   100, 0,   0,   0,   0,   0,   0,   0,
+        1,   179, 96,  234, 171, 102, 151, 31,  74,  246, 57,  213, 75,  38,  199,
+        70,  105, 32,  146, 18,  245, 92,  92,  138, 253, 30,  247, 119, 174, 140,
+        95,  67,  39,  148, 154, 255, 94,  118, 221, 113, 29,  20,  87,  102, 114,
+        28,  40,  39,  125, 107, 122, 16,  63,  237, 139, 165, 163, 143, 40,  229,
+        32,  132, 188, 201, 2,   1,   0,   1,   3,   59,  106, 39,  188, 206, 182,
+        164, 45,  98,  163, 168, 208, 42,  111, 13,  115, 101, 50,  21,  119, 29,
+        226, 67,  166, 58,  192, 72,  161, 139, 89,  218, 41,  1,   1,   1,   1,
+        1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+        1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        110, 52,  11,  156, 255, 179, 122, 152, 156, 165, 68,  230, 187, 120, 10,
+        44,  120, 144, 29,  63,  179, 55,  56,  118, 133, 17,  163, 6,   23,  175,
+        160, 29,  1,   2,   2,   0,   1,   12,  2,   0,   0,   0,   100, 0,   0,
+        0,   0,   0,   0,   0,
     };
     try std.testing.expectEqualSlices(u8, &expected_bytes, actual_bytes);
 }

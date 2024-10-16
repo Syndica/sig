@@ -1,5 +1,4 @@
 const std = @import("std");
-
 const httpz = @import("httpz");
 
 const Registry = @import("registry.zig").Registry;

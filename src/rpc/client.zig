@@ -9,6 +9,7 @@ const Signature = sig.core.Signature;
 const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 pub const Client = struct {
     http_endpoint: []const u8,
@@ -158,7 +159,12 @@ pub const Client = struct {
     /// }
     /// however, this introduces another layer of indirection.
     /// Not a big deal here but I am curious if there is a way to do this.
-    pub fn getLeaderSchedule(self: *Client, allocator: std.mem.Allocator, maybe_slot: ?Slot, config: GetLeaderScheduleConfig) !Response(types.LeaderSchedule) {
+    pub fn getLeaderSchedule(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        maybe_slot: ?Slot,
+        config: GetLeaderScheduleConfig,
+    ) !Response(types.LeaderSchedule) {
         var request = try Request.init(allocator, "getLeaderSchedule");
         defer request.deinit();
         try request.addParameter(maybe_slot);
@@ -211,7 +217,12 @@ pub const Client = struct {
         searchTransactionHistory: ?bool = null,
     };
 
-    pub fn getSignatureStatuses(self: *Client, allocator: std.mem.Allocator, signatures: []const Signature, config: GetSignatureStatusesConfig) !Response(types.SignatureStatuses) {
+    pub fn getSignatureStatuses(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        signatures: []const Signature,
+        config: GetSignatureStatusesConfig,
+    ) !Response(types.SignatureStatuses) {
         var request = try Request.init(allocator, "getSignatureStatuses");
         defer request.deinit();
         try request.addParameter(signatures);
@@ -233,6 +244,25 @@ pub const Client = struct {
         return self.sendFetchRequest(allocator, Slot, request, .{});
     }
 
+    pub const RequestAirdropOptions = struct {
+        commitment: ?types.Commitment = null,
+    };
+
+    pub fn requestAirDrop(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        pubkey: Pubkey,
+        lamports: u64,
+        config: RequestAirdropOptions,
+    ) !Response(types.Signature) {
+        var request = try Request.init(allocator, "requestAirdrop");
+        defer request.deinit();
+        try request.addParameter(pubkey.string().slice());
+        try request.addParameter(lamports);
+        try request.addConfig(config);
+        return self.sendFetchRequest(allocator, types.Signature, request, .{});
+    }
+
     // TODO: getSlotLeader()
     // TODO: getSlotLeaders()
     // TODO: getStakeActivation()
@@ -249,7 +279,6 @@ pub const Client = struct {
     // TODO: getVoteAccounts()
     // TODO: isBlockhashValid()
     // TODO: minimumLedgerSlot()
-    // TODO: requestAirdrop()
     // TODO: sendTransaction()
     // TODO: simulateTransaction()
 
@@ -272,7 +301,7 @@ pub const Client = struct {
                 continue;
             };
 
-            if (result.status != std.http.Status.ok) {
+            if (result.status != .ok) {
                 self.logger.warn().logf("HTTP request failed ({d}/{d}): {}", .{ curr_retries, self.max_retries, result.status });
                 if (curr_retries == self.max_retries) return error.HttpRequestFailed;
                 response.bytes.clearRetainingCapacity();
@@ -290,11 +319,13 @@ pub const Client = struct {
         return response;
     }
 
-    fn fetchRequest(self: *Client, request_payload: []const u8, response_payload: *std.ArrayList(u8)) !std.http.Client.FetchResult {
+    fn fetchRequest(
+        self: *Client,
+        request_payload: []const u8,
+        response_payload: *std.ArrayList(u8),
+    ) !std.http.Client.FetchResult {
         return self.http_client.fetch(.{
-            .location = .{
-                .url = self.http_endpoint,
-            },
+            .location = .{ .url = self.http_endpoint },
             .method = .POST,
             .headers = .{
                 .content_type = .{
@@ -305,9 +336,7 @@ pub const Client = struct {
                 },
             },
             .payload = request_payload,
-            .response_storage = .{
-                .dynamic = response_payload,
-            },
+            .response_storage = .{ .dynamic = response_payload },
             .max_append_size = 100 * 1024 * 1024,
         });
     }
@@ -364,6 +393,21 @@ test "getEpochInfo" {
     defer client.deinit();
     const response = try client.getEpochInfo(allocator, .{});
     defer response.deinit();
+    _ = try response.result();
+}
+
+test "requestAirdrop" {
+    const allocator = std.testing.allocator;
+    var client = Client.init(allocator, .Devnet, .{});
+    defer client.deinit();
+
+    const account_pubkey = blk: {
+        const new_kp = try KeyPair.create(null);
+        break :blk try Pubkey.fromPublicKey(&new_kp.public_key);
+    };
+    const response = try client.requestAirDrop(allocator, account_pubkey, 1e9, .{});
+    defer response.deinit();
+
     _ = try response.result();
 }
 

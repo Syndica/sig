@@ -40,6 +40,7 @@ pub const LeaderInfo = struct {
         config: Config,
         gossip_table_rw: *RwMux(GossipTable),
         logger: Logger,
+        epoch_schedule: EpochSchedule,
     ) !LeaderInfo {
         return .{
             .allocator = allocator,
@@ -50,23 +51,33 @@ pub const LeaderInfo = struct {
                 config.cluster,
                 .{ .max_retries = config.rpc_retries, .logger = logger },
             ),
-            .leader_schedule_cache = LeaderScheduleCache.init(allocator, try EpochSchedule.default()),
+            .leader_schedule_cache = LeaderScheduleCache.init(allocator, epoch_schedule),
             .leader_addresses_cache = .{},
             .gossip_table_rw = gossip_table_rw,
         };
     }
 
-    pub fn getLeaderAddresses(self: *LeaderInfo, allocator: Allocator) !std.ArrayList(SocketAddr) {
+    pub fn getLeaderAddresses(self: *LeaderInfo, allocator: Allocator) ![]const SocketAddr {
         const current_slot_response = try self.rpc_client.getSlot(allocator, .{
             .commitment = .processed,
         });
         defer current_slot_response.deinit();
         const current_slot = try current_slot_response.result();
 
+        std.debug.print("current slot: {}\n", .{current_slot});
+
         var leader_addresses = std.ArrayList(SocketAddr).init(allocator);
         for (0..self.config.max_leaders_to_send_to) |i| {
             const slot = current_slot + i * self.config.number_of_consecutive_leader_slots;
             const leader = try self.slotLeader(slot) orelse continue;
+
+            std.debug.print(
+                "slot index: {}\n",
+                .{self.leader_schedule_cache.epoch_schedule.getEpochAndSlotIndex(slot)},
+            );
+
+            std.debug.print("leader: {}\n", .{leader});
+
             const socket = self.leader_addresses_cache.get(leader) orelse continue;
             try leader_addresses.append(socket);
         }
@@ -75,17 +86,18 @@ pub const LeaderInfo = struct {
             const gossip_table: *const GossipTable, var gossip_table_lg = self.gossip_table_rw.readWithLock();
             defer gossip_table_lg.unlock();
 
-            var unique_leaders = try self.leader_schedule_cache.uniqueLeaders(self.allocator);
-            defer unique_leaders.deinit();
+            const unique_leaders = try self.leader_schedule_cache.uniqueLeaders(self.allocator);
+            defer self.allocator.free(unique_leaders);
 
-            for (unique_leaders.keys()) |leader| {
+            for (unique_leaders) |leader| {
                 const contact_info = gossip_table.getThreadSafeContactInfo(leader);
                 if (contact_info == null or contact_info.?.tpu_addr == null) continue;
+
                 try self.leader_addresses_cache.put(self.allocator, leader, contact_info.?.tpu_addr.?);
             }
         }
 
-        return leader_addresses;
+        return leader_addresses.toOwnedSlice();
     }
 
     fn slotLeader(self: *LeaderInfo, slot: Slot) !?Pubkey {
