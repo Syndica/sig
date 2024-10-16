@@ -266,7 +266,7 @@ test "gossip.message: pull request serializes and deserializes" {
 
     // pull requests only use ContactInfo data
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
-    const unspecified_addr = SocketAddr.unspecified;
+    const unspecified_addr = SocketAddr.UNSPECIFIED;
     const legacy_contact_info = LegacyContactInfo{
         .id = pubkey,
         .gossip = gossip_addr,
@@ -310,7 +310,7 @@ test "gossip.message: push message serializes and deserializes correctly" {
     const id = Pubkey.fromPublicKey(&pk);
 
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
-    const unspecified_addr = SocketAddr.unspecified;
+    const unspecified_addr = SocketAddr.UNSPECIFIED;
 
     var buf = [_]u8{0} ** 1024;
 

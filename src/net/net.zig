@@ -8,7 +8,7 @@ pub const SocketAddr = union(enum(u8)) {
 
     const Self = @This();
 
-    pub const unspecified: SocketAddr = .{ .V4 = .{
+    pub const UNSPECIFIED: SocketAddr = .{ .V4 = .{
         .ip = .{ .octets = .{ 0, 0, 0, 0 } },
         .port = 0,
     } };

@@ -255,7 +255,7 @@ test "PingCache works" {
     var prng = std.rand.DefaultPrng.init(0);
     const random = prng.random();
 
-    const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.initRandom(random), .socket_addr = SocketAddr.unspecified };
+    const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.initRandom(random), .socket_addr = SocketAddr.UNSPECIFIED };
     const now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 
