@@ -46,7 +46,7 @@ pub const AccountsCache = struct {
             if (self.ref_count.acquire()) {
                 return self;
             } else {
-                @panic("Attempted to acquire reference to destroyed CachedAccount");
+                unreachable;
             }
         }
 
