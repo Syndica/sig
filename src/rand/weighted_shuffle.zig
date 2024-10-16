@@ -91,7 +91,7 @@ pub fn WeightedShuffle(comptime T: type) type {
             };
         }
 
-        // Removes given weight at index k.
+        // Removes given weight at the specified index
         pub fn remove(self: *Self, index: usize, weight: T) void {
             std.debug.assert(self.weight >= weight);
             self.weight -= weight;
