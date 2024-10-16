@@ -1860,7 +1860,7 @@ test "RestartHeaviestFork serialization matches rust" {
         .last_slot = 12,
         .observed_stake = 11,
         .shred_version = 20,
-        .last_slot_hash = Hash.default(),
+        .last_slot_hash = Hash.ZEROES,
     };
 
     var buf = [_]u8{0} ** 1024;
@@ -1884,7 +1884,7 @@ test "RestartLastVotedForkSlots serialization matches rust" {
         .from = try Pubkey.fromString("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
         .wallclock = 0,
         .last_voted_slot = 0,
-        .last_voted_hash = Hash.default(),
+        .last_voted_hash = Hash.ZEROES,
         .shred_version = 0,
         .offsets = offsets,
     };
@@ -2027,7 +2027,7 @@ test "sanitize invalid SnapshotHashes full slot has error" {
 test "sanitize invalid SnapshotHashes incremental slot has error" {
     var prng = std.rand.DefaultPrng.init(524145234);
     const random = prng.random();
-    var incremental: [1]SlotAndHash = .{.{ .slot = 1_000_000_000_487_283, .hash = Hash.default() }};
+    var incremental: [1]SlotAndHash = .{.{ .slot = 1_000_000_000_487_283, .hash = Hash.ZEROES }};
     var instance = SnapshotHashes.initRandom(random);
     instance.incremental = &incremental;
     const data = GossipData{ .SnapshotHashes = instance };
@@ -2037,7 +2037,7 @@ test "sanitize invalid SnapshotHashes incremental slot has error" {
 test "sanitize SnapshotHashes full > incremental has error" {
     var prng = std.rand.DefaultPrng.init(524145234);
     const random = prng.random();
-    var incremental: [1]SlotAndHash = .{.{ .slot = 1, .hash = Hash.default() }};
+    var incremental: [1]SlotAndHash = .{.{ .slot = 1, .hash = Hash.ZEROES }};
     var instance = SnapshotHashes.initRandom(random);
     instance.full.slot = 2;
     instance.incremental = &incremental;

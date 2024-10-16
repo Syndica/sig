@@ -1014,7 +1014,7 @@ pub const AccountsDB = struct {
                     }
                 } else {
                     // hashes arent always stored correctly in snapshots
-                    if (account_hash.order(&Hash.default()) == .eq) {
+                    if (account_hash.order(&Hash.ZEROES) == .eq) {
                         const account, var lock_guard = try self.getAccountFromRefWithReadLock(max_slot_ref);
                         defer lock_guard.unlock();
 
@@ -2334,7 +2334,7 @@ pub const AccountsDB = struct {
         });
 
         // TODO: this is a temporary value
-        const delta_hash = Hash.default();
+        const delta_hash = Hash.ZEROES;
 
         const archive_file = blk: {
             const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
@@ -2512,7 +2512,7 @@ pub const AccountsDB = struct {
         });
 
         // TODO: compute the correct value during account writes
-        const delta_hash = Hash.default();
+        const delta_hash = Hash.ZEROES;
 
         const archive_file = blk: {
             const archive_file_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
@@ -2580,7 +2580,7 @@ pub const AccountsDB = struct {
                 .slot = params.target_slot,
                 .bank_hash_info = .{
                     .accounts_delta_hash = delta_hash,
-                    .accounts_hash = Hash.default(),
+                    .accounts_hash = Hash.ZEROES,
                     .stats = bank_hash_stats,
                 },
                 .rooted_slots = .{},
