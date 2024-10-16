@@ -405,14 +405,14 @@ pub const CompiledKeys = struct {
         for (instructions) |instruction| {
             const instruction_meta_gopr = try key_meta_map.getOrPut(instruction.program_id);
             if (!instruction_meta_gopr.found_existing) {
-                instruction_meta_gopr.value_ptr.* = CompiledKeyMeta.all_false;
+                instruction_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
             }
             instruction_meta_gopr.value_ptr.*.is_invoked = true;
 
             for (instruction.accounts) |account_meta| {
                 const account_meta_gopr = try key_meta_map.getOrPut(account_meta.pubkey);
                 if (!account_meta_gopr.found_existing) {
-                    account_meta_gopr.value_ptr.* = CompiledKeyMeta.all_false;
+                    account_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
                 }
                 account_meta_gopr.value_ptr.*.is_signer = account_meta_gopr.value_ptr.*.is_signer or account_meta.is_signer;
                 account_meta_gopr.value_ptr.*.is_writable = account_meta_gopr.value_ptr.*.is_writable or account_meta.is_writable;
@@ -421,7 +421,7 @@ pub const CompiledKeys = struct {
             if (maybe_payer) |payer| {
                 const payer_meta_gopr = try key_meta_map.getOrPut(payer);
                 if (!payer_meta_gopr.found_existing) {
-                    payer_meta_gopr.value_ptr.* = CompiledKeyMeta.all_false;
+                    payer_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
                 }
                 payer_meta_gopr.value_ptr.*.is_signer = true;
                 payer_meta_gopr.value_ptr.*.is_writable = true;
@@ -489,7 +489,7 @@ pub const CompiledKeyMeta = packed struct {
     is_writable: bool,
     is_invoked: bool,
 
-    pub const all_false: CompiledKeyMeta = .{
+    pub const ALL_FALSE: CompiledKeyMeta = .{
         .is_signer = false,
         .is_writable = false,
         .is_invoked = false,
