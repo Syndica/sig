@@ -120,7 +120,7 @@ test "CachedAccount ref_count" {
     var prng = std.rand.DefaultPrng.init(19);
     const random = prng.random();
 
-    const account = try Account.random(allocator, random, 1);
+    const account = try Account.initRandom(allocator, random, 1);
     defer account.deinit(allocator);
 
     const cached_account = try allocator.create(AccountsCache.CachedAccount);
@@ -146,10 +146,10 @@ test "AccountsCache put and get account" {
     var accounts_cache = try AccountsCache.init(allocator, 10);
     defer accounts_cache.deinit();
 
-    const account = try Account.random(allocator, random, 1);
+    const account = try Account.initRandom(allocator, random, 1);
     defer account.deinit(allocator);
 
-    const pubkey = Pubkey.random(random);
+    const pubkey = Pubkey.initRandom(random);
 
     try accounts_cache.put(pubkey, account);
 
@@ -167,7 +167,7 @@ test "AccountsCache returns null when account is missing" {
     var accounts_cache = try AccountsCache.init(allocator, 10);
     defer accounts_cache.deinit();
 
-    const pubkey = Pubkey.random(random);
+    const pubkey = Pubkey.initRandom(random);
 
     const result = accounts_cache.get(pubkey);
     defer if (result) |cached| cached.releaseOrDestroy(allocator);
@@ -183,10 +183,10 @@ test "AccountsCache put ref counting" {
     var accounts_cache = try AccountsCache.init(allocator, 10);
     defer accounts_cache.deinit();
 
-    const account = try Account.random(allocator, random, 1);
+    const account = try Account.initRandom(allocator, random, 1);
     defer account.deinit(allocator);
 
-    const pubkey = Pubkey.random(random);
+    const pubkey = Pubkey.initRandom(random);
 
     // put: refcount = 1
     try accounts_cache.put(pubkey, account);
