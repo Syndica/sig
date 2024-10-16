@@ -716,6 +716,7 @@ fn benchGetOrPut(
     read_amount: ?usize,
 ) !struct { sig.time.Duration, sig.time.Duration } {
     var t = try T.initCapacity(allocator, accounts.len);
+    defer t.deinit();
 
     var timer = try sig.time.Timer.start();
     for (0..accounts.len) |i| {
@@ -764,19 +765,25 @@ pub fn BenchHashMap(T: type) type {
         //     }
         // }, false);
 
-        pub fn initCapacity(allocator: std.mem.Allocator, n: usize) !@This() {
-            var refs = T.init(allocator);
-            try refs.ensureTotalCapacity(@intCast(n));
-            return @This(){ .inner = refs };
+        const Self = @This();
+
+        pub fn deinit(self: *Self) void {
+            self.inner.deinit();
         }
 
-        pub fn write(self: *@This(), accounts: []accounts_db.index.AccountRef) !void {
+        pub fn initCapacity(allocator: std.mem.Allocator, n: usize) !Self {
+            var refs = T.init(allocator);
+            try refs.ensureTotalCapacity(@intCast(n));
+            return Self{ .inner = refs };
+        }
+
+        pub fn write(self: *Self, accounts: []accounts_db.index.AccountRef) !void {
             for (0..accounts.len) |i| {
                 self.inner.putAssumeCapacity(accounts[i].pubkey, accounts[i]);
             }
         }
 
-        pub fn read(self: *@This(), pubkey: *sig.core.Pubkey) !usize {
+        pub fn read(self: *Self, pubkey: *sig.core.Pubkey) !usize {
             if (self.inner.get(pubkey.*)) |acc| {
                 return 1 + @as(usize, @intCast(acc.offset));
             } else {
@@ -784,7 +791,7 @@ pub fn BenchHashMap(T: type) type {
             }
         }
 
-        pub fn getOrPutAssumeCapacity(self: *@This(), pubkey: sig.core.Pubkey) T.GetOrPutResult {
+        pub fn getOrPutAssumeCapacity(self: *Self, pubkey: sig.core.Pubkey) T.GetOrPutResult {
             const result = self.inner.getOrPutAssumeCapacity(pubkey);
             return result;
         }

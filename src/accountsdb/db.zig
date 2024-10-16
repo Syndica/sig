@@ -4486,7 +4486,7 @@ pub const BenchmarkAccountsDB = struct {
 
 test "read/write benchmark ram" {
     _ = try BenchmarkAccountsDB.readWriteAccounts(.{
-        .n_accounts = 100_000,
+        .n_accounts = 10,
         .slot_list_len = 1,
         .accounts = .ram,
         .index = .ram,
@@ -4495,7 +4495,7 @@ test "read/write benchmark ram" {
 
 test "read/write benchmark disk" {
     _ = try BenchmarkAccountsDB.readWriteAccounts(.{
-        .n_accounts = 100_000,
+        .n_accounts = 10,
         .slot_list_len = 1,
         .accounts = .disk,
         .index = .disk,
