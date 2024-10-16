@@ -26,22 +26,22 @@ pub const WeightedShuffle = weighted_shuffle.WeightedShuffle;
 /// 0. -> 1/6
 /// 1. -> 1/2
 /// 3. -> 1/3
-pub fn WeightedRandomSampler(comptime uint: type) type {
+pub fn WeightedRandomSampler(comptime T: type) type {
     return struct {
         allocator: Allocator,
         random: Random,
-        cumulative_weights: []const uint,
-        total: uint,
+        cumulative_weights: []const T,
+        total: T,
 
         const Self = @This();
 
         pub fn init(
             allocator: Allocator,
             random: Random,
-            weights: []const uint,
+            weights: []const T,
         ) Allocator.Error!Self {
-            var cumulative_weights: []uint = try allocator.alloc(uint, weights.len);
-            var total: uint = 0;
+            var cumulative_weights: []T = try allocator.alloc(T, weights.len);
+            var total: T = 0;
             for (0..weights.len) |i| {
                 total += weights[i];
                 cumulative_weights[i] = total;
@@ -59,8 +59,8 @@ pub fn WeightedRandomSampler(comptime uint: type) type {
         }
 
         /// Returns the index of the selected item
-        pub fn sample(self: *const Self) uint {
-            const want = uintLessThanRust(uint, self.random, self.total);
+        pub fn sample(self: *const Self) T {
+            const want = uintLessThanRust(T, self.random, self.total);
             var lower: usize = 0;
             var upper: usize = self.cumulative_weights.len - 1;
             var guess = upper / 2;
@@ -159,7 +159,7 @@ pub fn fillHashmapWithRng(
 /// Downsample a random number generator to a smaller range.
 /// This implementationc is based on the implementation in the rust rand crate
 /// and ensures the same sequence is generated.
-pub fn uintLessThanRust(comptime T: type, rng: Random, less_than: T) T {
+pub fn uintLessThanRust(comptime T: type, random: Random, less_than: T) T {
     comptime std.debug.assert(@typeInfo(T).Int.signedness == .unsigned);
     const bits = @typeInfo(T).Int.bits;
     const max = std.math.maxInt(T);
@@ -168,7 +168,7 @@ pub fn uintLessThanRust(comptime T: type, rng: Random, less_than: T) T {
     const z = (max - less_than + 1) % less_than;
     const zone = max - z;
     while (true) {
-        const v = rng.int(T);
+        const v = random.int(T);
         const m = std.math.mulWide(T, v, less_than);
         const lo: T = @truncate(m);
         if (lo <= zone) {
