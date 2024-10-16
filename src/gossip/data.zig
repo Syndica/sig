@@ -1441,18 +1441,18 @@ pub const ThreadSafeContactInfo = struct {
     tpu_addr: ?SocketAddr,
     tvu_addr: ?SocketAddr,
 
-    pub fn random(
-        rng: std.rand.Random,
+    pub fn initRandom(
+        random: std.rand.Random,
         pubkey: Pubkey,
         shred_version: u16,
     ) !ThreadSafeContactInfo {
         return .{
             .pubkey = pubkey,
             .shred_version = shred_version,
-            .gossip_addr = SocketAddr.random(rng),
-            .rpc_addr = SocketAddr.random(rng),
-            .tpu_addr = SocketAddr.random(rng),
-            .tvu_addr = SocketAddr.random(rng),
+            .gossip_addr = SocketAddr.random(random),
+            .rpc_addr = SocketAddr.random(random),
+            .tpu_addr = SocketAddr.random(random),
+            .tvu_addr = SocketAddr.random(random),
         };
     }
 
