@@ -63,7 +63,7 @@ pub const AccountsCache = struct {
     };
 
     pub const LRU = LruCacheCustom(
-        .locking,
+        .non_locking,
         Pubkey,
         *CachedAccount,
         std.mem.Allocator,
