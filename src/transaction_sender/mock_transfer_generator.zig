@@ -138,7 +138,7 @@ pub const MockTransferService = struct {
             try self.sender.send(transaction_info);
 
             // sleep as to not overload the http server
-            std.time.sleep(1 * std.time.ns_per_s);
+            std.time.sleep(10 * std.time.ns_per_s);
 
             // check if the SOL is in the account
             const bank_balance_response = try rpc_client.getBalance(

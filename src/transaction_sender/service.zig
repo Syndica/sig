@@ -311,7 +311,11 @@ pub const Service = struct {
         }
 
         for (leader_addresses) |leader_address| {
+            std.debug.print("endpoints: {}\n", .{leader_address.toEndpoint()});
+
             for (transactions) |tx| {
+                std.debug.print("sigs: {}\n", .{tx.signature});
+
                 try self.send_channel.send(Packet.init(
                     leader_address.toEndpoint(),
                     tx.wire_transaction,

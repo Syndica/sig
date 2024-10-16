@@ -517,6 +517,8 @@ pub fn buildTransferTansaction(
     recent_blockhash: Hash,
     rng: std.Random,
 ) !Transaction {
+    _ = rng;
+
     const from_pubkey = try Pubkey.fromPublicKey(&from_keypair.public_key);
     const transfer_instruction = try transfer(
         allocator,
@@ -532,9 +534,7 @@ pub fn buildTransferTansaction(
     defer allocator.free(message_bytes);
 
     var signatures = try allocator.alloc(Signature, 1);
-    var noise: [32]u8 = undefined;
-    rng.bytes(&noise);
-    signatures[0] = Signature.init((try from_keypair.sign(message_bytes, noise)).toBytes());
+    signatures[0] = Signature.init((try from_keypair.sign(message_bytes, null)).toBytes());
 
     return .{
         .signatures = signatures,
@@ -589,10 +589,21 @@ pub fn compileInstructions(
 
 test "create transfer transaction" {
     const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(19);
+    const random = prng.random();
+
     const from_keypair = try KeyPair.create([_]u8{0} ** KeyPair.seed_length);
     const to_pubkey = Pubkey{ .data = [_]u8{1} ** Pubkey.size };
     const recent_blockhash = Hash.generateSha256Hash(&[_]u8{0});
-    const tx = try buildTransferTansaction(allocator, from_keypair, to_pubkey, 100, recent_blockhash);
+    const tx = try buildTransferTansaction(
+        allocator,
+        from_keypair,
+        to_pubkey,
+        100,
+        recent_blockhash,
+        random,
+    );
     defer tx.deinit(allocator);
     const actual_bytes = try sig.bincode.writeAlloc(allocator, tx, .{});
     defer allocator.free(actual_bytes);

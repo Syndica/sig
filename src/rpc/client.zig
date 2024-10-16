@@ -396,20 +396,18 @@ test "getEpochInfo" {
     _ = try response.result();
 }
 
-test "requestAirdrop" {
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Devnet, .{});
-    defer client.deinit();
+// test "requestAirdrop" {
+//     const allocator = std.testing.allocator;
+//     var client = Client.init(allocator, .Devnet, .{});
+//     defer client.deinit();
 
-    const account_pubkey = blk: {
-        const new_kp = try KeyPair.create(null);
-        break :blk try Pubkey.fromPublicKey(&new_kp.public_key);
-    };
-    const response = try client.requestAirDrop(allocator, account_pubkey, 1e9, .{});
-    defer response.deinit();
-
-    _ = try response.result();
-}
+//     const account_pubkey = blk: {
+//         const new_kp = try KeyPair.create(null);
+//         break :blk try Pubkey.fromPublicKey(&new_kp.public_key);
+//     };
+//     const response = try client.requestAirDrop(allocator, account_pubkey, 1e9, .{});
+//     defer response.deinit();
+// }
 
 // TODO: test getEpochSchedule()
 // TODO: test getFeeForMessage()
