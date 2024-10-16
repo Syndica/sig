@@ -464,7 +464,7 @@ const TestEnvironment = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        rng: std.rand.Random,
+        random: std.rand.Random,
         num_known_nodes: usize,
         num_unknown_staked_nodes: usize,
         known_nodes_unstaked_ratio: struct { u64, u64 },
@@ -484,13 +484,13 @@ const TestEnvironment = struct {
         for (0..num_known_nodes) |i| {
             var contact_info = try ContactInfo.random(
                 allocator,
-                rng,
-                Pubkey.random(rng),
+                random,
+                Pubkey.random(random),
                 0,
                 0,
                 0,
             );
-            try contact_info.setSocket(.turbine_recv, SocketAddr.random(rng));
+            try contact_info.setSocket(.turbine_recv, SocketAddr.random(random));
             _ = try gossip_table.insert(
                 SignedGossipData.init(.{ .ContactInfo = contact_info }),
                 0,
@@ -504,8 +504,8 @@ const TestEnvironment = struct {
         while (contact_info_iterator.next()) |contact_info| {
             try staked_nodes.put(
                 contact_info.pubkey,
-                if (rng.intRangeAtMost(u64, 1, unstaked_denominator) > unstaked_numerator)
-                    rng.intRangeLessThan(u64, 0, 20)
+                if (random.intRangeAtMost(u64, 1, unstaked_denominator) > unstaked_numerator)
+                    random.intRangeLessThan(u64, 0, 20)
                 else
                     0,
             );
@@ -513,7 +513,7 @@ const TestEnvironment = struct {
 
         // Add unknown nodes with non-zero stakes
         for (0..num_unknown_staked_nodes) |_| {
-            try staked_nodes.put(Pubkey.random(rng), rng.intRangeLessThan(u64, 0, 20));
+            try staked_nodes.put(Pubkey.random(random), random.intRangeLessThan(u64, 0, 20));
         }
 
         return .{
