@@ -4058,7 +4058,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
 pub const BenchmarkAccountsDB = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 500;
+    pub const max_iterations = 5;
 
     pub const MemoryType = enum {
         ram,
@@ -4358,7 +4358,20 @@ pub const BenchmarkAccountsDB = struct {
     }
 };
 
-test "read/write benchmark" {
-    const arg = BenchmarkAccountsDB.args[0];
-    _ = try BenchmarkAccountsDB.readWriteAccounts(arg);
+test "read/write benchmark ram" {
+    _ = try BenchmarkAccountsDB.readWriteAccounts(.{
+        .n_accounts = 100_000,
+        .slot_list_len = 1,
+        .accounts = .ram,
+        .index = .ram,
+    });
+}
+
+test "read/write benchmark disk" {
+    _ = try BenchmarkAccountsDB.readWriteAccounts(.{
+        .n_accounts = 100_000,
+        .slot_list_len = 1,
+        .accounts = .disk,
+        .index = .disk,
+    });
 }
