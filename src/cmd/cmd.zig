@@ -1440,13 +1440,19 @@ fn loadSnapshot(
         manifest.accounts_db_fields,
     );
     const full_snapshot = all_snapshot_fields.full;
-    const validate_duration = try result.accounts_db.validateLoadFromSnapshot(
-        manifest.bank_fields_inc.snapshot_persistence,
-        full_snapshot.bank_fields.slot,
-        full_snapshot.bank_fields.capitalization,
-        manifest.accounts_db_fields.bank_hash_info.accounts_hash,
-    );
-    logger.info().logf("validated from snapshot in {s}", .{validate_duration});
+    var validate_timer = try sig.time.Timer.start();
+    try result.accounts_db.validateLoadFromSnapshot(.{
+        .full_slot = full_snapshot.bank_fields.slot,
+        .expected_full = .{
+            .accounts_hash = full_snapshot.accounts_db_fields.bank_hash_info.accounts_hash,
+            .capitalization = full_snapshot.bank_fields.capitalization,
+        },
+        .expected_incremental = if (full_snapshot.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+            .accounts_hash = inc_persistence.incremental_hash,
+            .capitalization = inc_persistence.incremental_capitalization,
+        } else null,
+    });
+    logger.info().logf("validated from snapshot in {any}", .{validate_timer.read()});
     if (config.current.accounts_db.use_disk_index) {
         @panic("ahhh");
     }

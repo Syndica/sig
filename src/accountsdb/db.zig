@@ -1053,13 +1053,13 @@ pub const AccountsDB = struct {
                 },
             });
         }
-        self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
+        self.logger.debug().logf("collecting hashes from accounts took: {any}", .{timer.read()});
         timer.reset();
 
         self.logger.info().logf("computing the merkle root over accounts...", .{});
         var hash_tree = NestedHashTree{ .hashes = hashes };
         const accounts_hash = try hash_tree.computeMerkleRoot(MERKLE_FANOUT);
-        self.logger.debug().logf("computing the merkle root over accounts took {s}", .{timer.read()});
+        self.logger.debug().logf("computing the merkle root over accounts took {any}", .{timer.read()});
         timer.reset();
 
         var total_lamports: u64 = 0;
