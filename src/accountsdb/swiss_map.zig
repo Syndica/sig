@@ -1,6 +1,7 @@
 //! custom hashmap used for the index's map
 //! based on google's swissmap
 
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
 const accounts_db = sig.accounts_db;
@@ -650,7 +651,7 @@ pub const BenchmarkSwissMap = struct {
         read_speedup_vs_std: f32,
         write_speedup_vs_std: f32,
     } {
-        const allocator = std.heap.c_allocator;
+        const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
         const n_accounts = bench_args.n_accounts;
 
         const accounts, const pubkeys = try generateData(allocator, n_accounts);
@@ -690,22 +691,9 @@ pub const BenchmarkSwissMap = struct {
         );
 
         const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos())) / @as(f32, @floatFromInt(write_time.asNanos()));
-        const write_faster_or_slower = if (write_speedup < 1.0) "slower" else "faster";
-        _ = write_faster_or_slower;
-        // std.debug.print("\tWRITE: {} ({d:.2}x {s} than std)\n", .{
-        //     std.fmt.fmtDuration(write_time.asNanos()),
-        //     write_speedup,
-        //     write_faster_or_slower,
-        // });
-
+        // const write_faster_or_slower = if (write_speedup < 1.0) "slower" else "faster";
         const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
-        const read_faster_or_slower = if (read_speedup < 1.0) "slower" else "faster";
-        _ = read_faster_or_slower;
-        // std.debug.print("\tREAD: {} ({d:.2}x {s} than std)\n", .{
-        //     std.fmt.fmtDuration(read_time.asNanos()),
-        //     read_speedup,
-        //     read_faster_or_slower,
-        // });
+        // const read_faster_or_slower = if (read_speedup < 1.0) "slower" else "faster";
 
         return .{
             .read_time = read_time.asNanos(),
@@ -715,6 +703,12 @@ pub const BenchmarkSwissMap = struct {
         };
     }
 };
+
+test "bench swissmap read/write" {
+    _ = try BenchmarkSwissMap.swissmapReadWriteBenchmark(.{
+        .n_accounts = 1_000_000,
+    });
+}
 
 fn benchGetOrPut(
     comptime T: type,

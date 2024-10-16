@@ -14,7 +14,7 @@ pub fn main() !void {
         .allocator = allocator,
         // NOTE: run with .info for proper CSV output, otherwise use .debug
         .max_level = .info,
-        .max_buffer = 1 << 30,
+        .max_buffer = 1 << 15,
     });
     defer std_logger.deinit();
     const logger = std_logger.logger();
