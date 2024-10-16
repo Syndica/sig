@@ -4,7 +4,6 @@ const builtin = @import("builtin");
 const zstd = @import("zstd");
 
 const Account = sig.core.Account;
-const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 const LruCacheCustom = sig.common.lru.LruCacheCustom;
 const ReferenceCounter = sig.sync.reference_counter.ReferenceCounter;
