@@ -244,8 +244,9 @@ pub fn benchmarkCSV(
                 inline else => {
                     // print column headers
                     if (arg_i == 0) {
+                        std.debug.print("benchmark, ", .{});
                         inline for (U.fields) |field| {
-                            std.debug.print("benchmark, {s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
+                            std.debug.print("{s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
                         }
                         std.debug.print("\n", .{});
                     }
