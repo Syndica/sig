@@ -152,7 +152,7 @@ pub fn benchmarkCSV(
     inline for (functions, 0..) |def, fcni| {
         _ = fcni;
 
-        inline for (args) |arg| {
+        inline for (args, 0..) |arg, arg_i| {
             const benchFunction = @field(B, def.name);
             const arguments = switch (@TypeOf(arg)) {
                 void => .{},
@@ -224,19 +224,12 @@ pub fn benchmarkCSV(
                 logger.debug().logf("Benchmark {s} ran out of time", .{def.name});
             }
 
-            switch (@TypeOf(arg)) {
-                void => {
-                    std.debug.print("{s},", .{def.name});
-                },
-                else => {
-                    std.debug.print("{s}({s}),", .{ def.name, arg.name });
-                },
-            }
-
             switch (result_type) {
                 Duration => {
                     // print column headers
-                    std.debug.print(" min, max, mean, variance\n", .{});
+                    if (arg_i == 0) {
+                        std.debug.print("benchmark, min, max, mean, variance\n", .{});
+                    }
                     const mean = sum / iter_count;
                     var variance: u64 = 0;
                     for (runtimes.items(.result)) |runtime| {
@@ -246,17 +239,19 @@ pub fn benchmarkCSV(
                     }
                     variance /= iter_count;
                     // print column results
-                    std.debug.print("_, {d}, {d}, {d}, {d}\n", .{ min, max, mean, variance });
+                    std.debug.print("{s}, {d}, {d}, {d}, {d}\n", .{ def.name, min, max, mean, variance });
                 },
                 inline else => {
                     // print column headers
-                    inline for (U.fields) |field| {
-                        std.debug.print(" {s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
+                    if (arg_i == 0) {
+                        inline for (U.fields) |field| {
+                            std.debug.print("benchmark, {s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
+                        }
+                        std.debug.print("\n", .{});
                     }
-                    std.debug.print("\n", .{});
 
                     // print results
-                    std.debug.print("_, ", .{}); // account for the function name
+                    std.debug.print("{s}({s}), ", .{ def.name, arg.name });
                     inline for (U.fields, 0..) |field, j| {
                         const f_max = @field(max_s, field.name);
                         const f_min = @field(min_s, field.name);
