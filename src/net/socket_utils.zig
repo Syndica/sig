@@ -214,7 +214,7 @@ pub fn benchmarkChannelRecv(
     }
 }
 
-test "benchmark packet processing" { 
+test "benchmark packet processing" {
     _ = try BenchmarkPacketProcessing.benchmarkReadSocket(.{
         .n_packets = 100_000,
     });

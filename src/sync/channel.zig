@@ -603,7 +603,7 @@ pub const BenchmarkChannel = struct {
     }
 };
 
-test "BenchmarkChannel.benchmarkSimplePacketBetterChannel" { 
+test "BenchmarkChannel.benchmarkSimplePacketBetterChannel" {
     _ = try BenchmarkChannel.benchmarkSimplePacketBetterChannel(.{
         .name = " 100k_items,   4_senders,   4_receivers ",
         .n_items = 100_000,
