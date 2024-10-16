@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 
@@ -152,7 +153,7 @@ pub const BenchmarkPacketProcessing = struct {
 
     pub fn benchmarkReadSocket(bench_args: BenchmarkArgs) !sig.time.Duration {
         const n_packets = bench_args.n_packets;
-        const allocator = std.heap.c_allocator;
+        const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
 
         var channel = try Channel(Packet).init(allocator);
         defer channel.deinit();
@@ -211,4 +212,10 @@ pub fn benchmarkChannelRecv(
             count += 1;
         }
     }
+}
+
+test "benchmark packet processing" { 
+    _ = try BenchmarkPacketProcessing.benchmarkReadSocket(.{
+        .n_packets = 100_000,
+    });
 }

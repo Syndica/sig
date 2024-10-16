@@ -540,7 +540,7 @@ pub const BenchmarkChannel = struct {
         const receivers_count = argss.n_receivers;
         var timer = try sig.time.Timer.start();
 
-        const allocator = std.heap.c_allocator;
+        const allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.c_allocator;
         var channel = try Channel(usize).init(allocator);
         defer channel.deinit();
 
@@ -602,3 +602,12 @@ pub const BenchmarkChannel = struct {
         return timer.read();
     }
 };
+
+test "BenchmarkChannel.benchmarkSimplePacketBetterChannel" { 
+    _ = try BenchmarkChannel.benchmarkSimplePacketBetterChannel(.{
+        .name = " 100k_items,   4_senders,   4_receivers ",
+        .n_items = 100_000,
+        .n_senders = 4,
+        .n_receivers = 4,
+    });
+}
