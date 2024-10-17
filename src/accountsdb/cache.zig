@@ -41,11 +41,6 @@ pub const AccountsCache = struct {
             }
         }
 
-        // satisfies the type LruCacheCustom expects
-        pub fn releaseOrDestroyDoublePtr(self: **CachedAccount, allocator: std.mem.Allocator) void {
-            releaseOrDestroy(self.*, allocator);
-        }
-
         pub fn copyRef(self: *CachedAccount) *CachedAccount {
             if (self.ref_count.acquire()) {
                 return self;
@@ -71,7 +66,7 @@ pub const AccountsCache = struct {
         Pubkey,
         *CachedAccount,
         std.mem.Allocator,
-        CachedAccount.releaseOrDestroyDoublePtr,
+        CachedAccount.releaseOrDestroy,
     );
 
     const Self = @This();
