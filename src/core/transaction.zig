@@ -177,7 +177,7 @@ pub const Transaction = struct {
 
     pub const MAX_BYTES: usize = 1232;
 
-    pub const empty: Transaction = .{
+    pub const EMPTY: Transaction = .{
         .signatures = &[_]Signature{},
         .message = Message.EMPTY,
     };
