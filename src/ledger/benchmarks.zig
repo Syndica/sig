@@ -200,6 +200,8 @@ pub const BenchmarLegder = struct {
         var write_batch = try db.initWriteBatch();
         defer write_batch.deinit();
 
+        // TODO this is essentially slots with little or no data consturcted manually
+        // Will it be more realistic to not manually construct the benchmarking data?
         const slot_per_epoch = 432_000;
         var parent_slot: ?Slot = null;
         for (1..(slot_per_epoch + 1)) |slot| {
@@ -226,4 +228,5 @@ pub const BenchmarLegder = struct {
 
         return duration;
     }
+
 };
