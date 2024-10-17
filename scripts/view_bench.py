@@ -15,7 +15,10 @@ def view_results(paths, units):
     dfs = []
     benchmark_names = []
     for i, path in enumerate(paths):
+        # NOTE: make sure format() has been run
         df = pd.read_csv(path, sep=",", header=None)
+        # remove first row 
+        df = df.iloc[1:]
         if i == 0: 
             benchmark_names = df[0]
         else: 
@@ -25,7 +28,7 @@ def view_results(paths, units):
         dfs.append(df)
     
     colors = [random_color_generator() for _ in range(len(paths))]
-    for i in range(len(benchmark_names)):
+    for i in range(1, len(benchmark_names)+1):
         plt.clf()
         plt.title(benchmark_names[i] + f"{units}", wrap=True)
 
@@ -48,6 +51,30 @@ def view_results(paths, units):
         output_path = f"results/{benchmark_names[i]}.png"
         plt.savefig(output_path)
         print("Saved to", output_path)
+
+# makes the files readable by pandas
+def format(paths): 
+    for path in paths: 
+        # count number of separators in each line 
+        # then create new header line with that many separators and increasing numbers
+        # overwrite the file
+        with open(path, 'r') as file:
+            lines = file.readlines()
+
+        # if already formatted, skip
+        if lines[0].startswith("formatted"):
+            continue
+
+        max_separators = 0
+        for line in lines: 
+            max_separators = max(max_separators, line.count(','))
+
+        header = "formatted, " + ','.join(str(i) for i in range(max_separators + 1)) + '\n'
+        lines.insert(0, header)
+
+        print("Formatted", path)
+        with open(path, 'w') as file:
+            file.writelines(lines)
 
 if __name__ == "__main__":
     # read cli -- either single file or multiple files
@@ -72,4 +99,6 @@ if __name__ == "__main__":
     import os
     if not os.path.exists("results"):
         os.makedirs("results")
+
+    format(args.files)
     view_results(args.files, args.unit)
