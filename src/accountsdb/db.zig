@@ -30,8 +30,6 @@ const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
-const StandardErrLogger = sig.trace.log.ChannelPrintLogger;
-const Level = sig.trace.level.Level;
 const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Counter = sig.prometheus.counter.Counter;
@@ -4033,7 +4031,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
 pub const BenchmarkAccountsDB = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 5;
+    pub const max_iterations = 200;
 
     pub const MemoryType = enum {
         ram,
