@@ -508,25 +508,25 @@ pub const BenchmarkChannel = struct {
 
     pub const args = [_]BenchmarkArgs{
         .{
-            .name = "  10k_items,   1_senders,   1_receivers ",
+            .name = "  10k_items-   1_senders-   1_receivers ",
             .n_items = 10_000,
             .n_senders = 1,
             .n_receivers = 1,
         },
         .{
-            .name = " 100k_items,   4_senders,   4_receivers ",
+            .name = " 100k_items-   4_senders-   4_receivers ",
             .n_items = 100_000,
             .n_senders = 4,
             .n_receivers = 4,
         },
         .{
-            .name = " 500k_items,   8_senders,   8_receivers ",
+            .name = " 500k_items-   8_senders-   8_receivers ",
             .n_items = 500_000,
             .n_senders = 8,
             .n_receivers = 8,
         },
         .{
-            .name = "   1m_items,  16_senders,  16_receivers ",
+            .name = "   1m_items-  16_senders-  16_receivers ",
             .n_items = 1_000_000,
             .n_senders = 16,
             .n_receivers = 16,
@@ -605,7 +605,6 @@ pub const BenchmarkChannel = struct {
 
 test "BenchmarkChannel.benchmarkSimplePacketBetterChannel" {
     _ = try BenchmarkChannel.benchmarkSimplePacketBetterChannel(.{
-        .name = " 100k_items,   4_senders,   4_receivers ",
         .n_items = 100_000,
         .n_senders = 4,
         .n_receivers = 4,
