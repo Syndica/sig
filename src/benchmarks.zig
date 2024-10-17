@@ -36,6 +36,17 @@ pub fn main() !void {
         }
     };
 
+    const next_cli_arg = cli_args.next();
+    const output_runtimes = blk: {
+        if (next_cli_arg != null and std.mem.eql(u8, "-r", next_cli_arg.?)) {
+            logger.debug().log("outputting runtimes");
+            break :blk true;
+        } else {
+            logger.debug().log("outputting aggregated results");
+            break :blk false;
+        }
+    };
+
     const max_time_per_bench = Duration.fromSecs(30); // !!
     const run_all_benchmarks = filter.len == 0;
 
@@ -45,6 +56,7 @@ pub fn main() !void {
             logger,
             @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
             max_time_per_bench,
+            output_runtimes,
         );
     }
 
@@ -60,6 +72,7 @@ pub fn main() !void {
                 logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
+                output_runtimes,
             );
         }
 
@@ -78,6 +91,7 @@ pub fn main() !void {
                 logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
+                output_runtimes,
             );
         }
     }
@@ -88,6 +102,7 @@ pub fn main() !void {
             logger,
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
+            output_runtimes,
         );
     }
 
@@ -97,12 +112,14 @@ pub fn main() !void {
             logger,
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
+            output_runtimes,
         );
         try benchmarkCSV(
             allocator,
             logger,
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
+            output_runtimes,
         );
     }
 
@@ -112,6 +129,7 @@ pub fn main() !void {
             logger,
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
+            output_runtimes,
         );
     }
 
@@ -138,9 +156,8 @@ pub fn benchmarkCSV(
     logger: sig.trace.Logger,
     comptime B: type,
     max_time_per_benchmark: Duration,
+    output_runtimes: bool,
 ) !void {
-    const aggregate = false;
-
     const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
     const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10000;
     const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100000;
@@ -235,7 +252,46 @@ pub fn benchmarkCSV(
                 logger.debug().logf("Benchmark {s} ran out of time", .{def.name});
             }
 
-            if (aggregate) { 
+            if (output_runtimes) {
+                // print column headers
+                if (arg_i == 0) {
+                    std.debug.print("benchmark, results (ns)\n", .{});
+                }
+
+                // print all results, eg:
+                //
+                // benchmark, result
+                // read_write (100k) (read), [1, 2, 3, 4],
+                // read_write (100k) (write), [1, 2, 3, 4],
+                switch (result_type) {
+                    Duration => {
+                        std.debug.print("{s}({s}), ", .{ def.name, arg.name });
+                        std.debug.print("[", .{});
+                        for (runtimes.items(.result), 0..) |runtime, i| {
+                            if (i != 0) std.debug.print(", ", .{});
+                            std.debug.print("{d}", .{runtime});
+                        }
+                        std.debug.print("]\n", .{});
+                    },
+                    else => {
+                        inline for (U.fields, 0..) |field, j| {
+                            std.debug.print("{s}({s}) ({s}), ", .{ def.name, arg.name, field.name });
+                            std.debug.print("[", .{});
+                            const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
+                            for (runtimes.items(x), 0..) |runtime, i| {
+                                if (i != 0) std.debug.print(", ", .{});
+                                std.debug.print("{d}", .{runtime});
+                            }
+                            std.debug.print("]\n", .{});
+                        }
+                    },
+                }
+            } else {
+                // print aggregated results, eg:
+                //
+                // benchmark, read_min, read_max, read_mean, read_variance, write_min, write_max, write_mean, write_variance
+                // read_write (100k), 1, 2, 3, 4, 1, 2, 3, 4
+                // read_write (200k), 1, 2, 3, 4, 1, 2, 3, 4
                 switch (result_type) {
                     Duration => {
                         // print column headers
@@ -291,28 +347,6 @@ pub fn benchmarkCSV(
                         }
                         std.debug.print("\n", .{});
                     },
-                }
-            } else { 
-                // print column headers
-                if (arg_i == 0) {
-                    std.debug.print("benchmark, result\n", .{});
-                }
-
-                // print all results, eg:
-                // 
-                // benchmark, result
-                // read_write (100k) (read), [1, 2, 3, 4], 
-                // read_write (100k) (write), [1, 2, 3, 4], 
-                switch (result_type) {
-                    Duration => {
-                        std.debug.print("{s}({s}), ", .{ def.name, arg.name });
-                        for (runtimes.items(.result)) |runtime| {
-                            std.debug.print("{s}, {d}\n", .{ def.name, runtime });
-                        }
-                    },
-                    else => { 
-
-                    }
                 }
             }
         }
