@@ -41,8 +41,8 @@ pub fn LruCacheCustom(
         }.f,
 
         fn (V) void => struct {
-            fn f(v: V, _: DeinitContext) void {
-                V.deinit(v);
+            fn f(v: *V, _: DeinitContext) void {
+                V.deinit(v.*);
             }
         }.f,
 
