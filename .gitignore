@@ -3,6 +3,7 @@ zig-cache/
 zig-out/
 data/
 
+results/
 /validator/
 alt_validator/
 /ledger/

@@ -244,11 +244,6 @@ pub fn benchmarkCSV(
             }
 
             if (output_runtimes) {
-                // print column headers
-                if (arg_i == 0) {
-                    std.debug.print("benchmark, results (ns)\n", .{});
-                }
-
                 // print all results, eg:
                 //
                 // benchmark, result
@@ -257,23 +252,20 @@ pub fn benchmarkCSV(
                 switch (result_type) {
                     Duration => {
                         std.debug.print("{s}({s}), ", .{ def.name, arg.name });
-                        std.debug.print("[", .{});
                         for (runtimes.items(.result), 0..) |runtime, i| {
                             if (i != 0) std.debug.print(", ", .{});
                             std.debug.print("{d}", .{runtime});
                         }
-                        std.debug.print("]\n", .{});
                     },
                     else => {
                         inline for (U.fields, 0..) |field, j| {
                             std.debug.print("{s}({s}) ({s}), ", .{ def.name, arg.name, field.name });
-                            std.debug.print("[", .{});
                             const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
                             for (runtimes.items(x), 0..) |runtime, i| {
                                 if (i != 0) std.debug.print(", ", .{});
                                 std.debug.print("{d}", .{runtime});
                             }
-                            std.debug.print("]\n", .{});
+                            std.debug.print("\n", .{});
                         }
                     },
                 }
