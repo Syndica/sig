@@ -159,6 +159,10 @@ pub const TurbineTree = struct {
         );
         errdefer nodes.deinit();
 
+        // for (nodes.items) |node| {
+        //     std.debug.print("{s}:{any}:{}\n", .{ node.pubkey().string().slice(), node.tvuAddress(), node.stake });
+        // }
+
         var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
         errdefer index.deinit();
         for (nodes.items, 0..) |node, i| try index.put(node.pubkey(), i);
@@ -166,6 +170,8 @@ pub const TurbineTree = struct {
         var node_stakes = try std.ArrayList(u64).initCapacity(allocator, nodes.items.len);
         defer node_stakes.deinit();
         for (nodes.items) |node| node_stakes.appendAssumeCapacity(node.stake);
+
+        std.debug.print("node stakes: {any}\n\n", .{node_stakes.items});
 
         const weighted_shuffle = try WeightedShuffle.init(allocator, node_stakes.items);
 
@@ -783,22 +789,122 @@ test "agave-equivalence: get seeeded rng" {
         try std.testing.expectEqual(11492004887003779529, rng.int(u64));
         try std.testing.expectEqual(8278812339973083991, rng.int(u64));
     }
+}
 
-    // fn test_get_seeded_rng(leader: &str, slot: u64, index: u32) {
-    //     let leader = Pubkey::from_str(leader).unwrap();
-    //     let shred = Shred::new_from_data(
-    //         slot,
-    //         index,
-    //         0,
-    //         &[],
-    //         ShredFlags::default(),
-    //         0,
-    //         0,
-    //         0,
-    //     );
-    //     let mut rng = get_seeded_rng(&leader, &shred.id());
-    //     let result = (0..3).map(|_| rng.gen::<u64>()).collect::<Vec<_>>();
-    //     println!("{:?}", result);
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 
-    // }
+const uintLessThanRust = sig.rand.weighted_shuffle.uintLessThanRust;
+const intRangeLessThanRust = sig.rand.weighted_shuffle.intRangeLessThanRust;
+
+pub fn makeTestCluster(
+    allocator: std.mem.Allocator,
+    random: std.rand.Random,
+    my_pubkey: Pubkey,
+    my_stake: u64,
+    min_stake: u64,
+    max_stake: u64,
+    num_staked_nodes: usize,
+    num_staked_nodes_in_gossip_table: usize,
+    num_unstaked_nodes_in_gossip_table: usize,
+) !struct {
+    std.AutoArrayHashMap(Pubkey, u64),
+    RwMux(GossipTable),
+} {
+    var stakes = std.AutoArrayHashMap(Pubkey, u64).init(allocator);
+    errdefer stakes.deinit();
+
+    var gossip_table_tp = ThreadPool.init(.{});
+    var gossip_table = try GossipTable.init(
+        allocator,
+        &gossip_table_tp,
+    );
+    errdefer gossip_table.deinit();
+
+    for (0..num_staked_nodes - @intFromBool(my_stake > 0)) |_| {
+        try stakes.put(
+            Pubkey.random(random),
+            intRangeLessThanRust(u64, random, min_stake, max_stake),
+        );
+    }
+
+    var stakes_iter = stakes.iterator();
+    for (0..num_staked_nodes_in_gossip_table + num_unstaked_nodes_in_gossip_table) |i| {
+        const pubkey = if (i < num_staked_nodes_in_gossip_table) stakes_iter.next().?.key_ptr.* else Pubkey.random(random);
+        var contact_info = ContactInfo.init(allocator, pubkey, 0, 0);
+        try contact_info.setSocket(.turbine_recv, SocketAddr.init(
+            IpAddr.newIpv4(intRangeLessThanRust(u8, random, 128, 200), random.int(u8), random.int(u8), random.int(u8)),
+            random.int(u16),
+        ));
+        _ = try gossip_table.insert(
+            SignedGossipData.init(.{ .ContactInfo = contact_info }),
+            0,
+        );
+    }
+
+    if (my_stake > 0) {
+        try stakes.put(my_pubkey, my_stake);
+    }
+
+    std.debug.assert(num_staked_nodes == stakes.count());
+
+    return .{ stakes, RwMux(GossipTable).init(gossip_table) };
+}
+
+test "AgaveEquivalence.getRetransmitChildren" {
+    const my_keypair = try KeyPair.fromSecretKey(try SecretKey.fromBytes([_]u8{
+        233, 236, 240, 63,  159, 199, 2,   210,
+        8,   217, 34,  214, 242, 104, 123, 94,
+        233, 1,   168, 142, 186, 47,  171, 97,
+        172, 81,  163, 22,  75,  105, 195, 199,
+        105, 158, 161, 231, 207, 32,  51,  255,
+        135, 190, 20,  23,  194, 223, 232, 180,
+        163, 129, 226, 85,  141, 255, 100, 225,
+        191, 82,  231, 195, 46,  182, 188, 220,
+    }));
+
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_contact_info = ContactInfo.init(std.testing.allocator, my_pubkey, 0, 0);
+    const my_threadsafe_contact_info = ThreadSafeContactInfo.fromContactInfo(my_contact_info);
+
+    {
+        var chacha = ChaChaRng.fromSeed([_]u8{0} ** 32);
+        const random = chacha.random();
+
+        var stakes, var gossip_table_rw = try makeTestCluster(
+            std.testing.allocator,
+            random,
+            my_pubkey,
+            1,
+            1,
+            20,
+            201,
+            100,
+            200,
+        );
+        defer {
+            stakes.deinit();
+            const gossip_table: *GossipTable, _ = gossip_table_rw.writeWithLock();
+            gossip_table.deinit();
+        }
+
+        var turbine_tree = try TurbineTree.initForRetransmit(
+            std.testing.allocator,
+            my_threadsafe_contact_info,
+            &gossip_table_rw,
+            &stakes.unmanaged,
+            false,
+        );
+        defer turbine_tree.deinit();
+
+        var weighted_shuffle = try turbine_tree.weighted_shuffle.clone();
+        defer weighted_shuffle.deinit();
+
+        var shuffled_iterator = weighted_shuffle.shuffle(chacha.random());
+
+        const shuffled_indices = try shuffled_iterator.intoArrayList(std.testing.allocator);
+        defer shuffled_indices.deinit();
+
+        std.debug.print("shuffled indices: {any}\n\n", .{shuffled_indices.items});
+    }
 }
