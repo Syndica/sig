@@ -2299,6 +2299,7 @@ pub const AccountsDB = struct {
         defer self.allocator.free(bin_counts);
         @memset(bin_counts, 0);
 
+        const recycle_start_index = self.account_index.recycle_fba.fba_allocator.end_index;
         const ref_buf = try self.account_index.recycle_fba.allocator().alloc(AccountRef, n_accounts);
         var references = std.ArrayListUnmanaged(AccountRef).fromOwnedSlice(ref_buf);
         references.items.len = 0;
@@ -2356,7 +2357,8 @@ pub const AccountsDB = struct {
         // compute how many account_references for each pubkey
         var accounts_dead_count: u64 = 0;
         for (references.items, 0..) |*ref, index| {
-            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(ref, index);
+            const start_index_u8 = recycle_start_index + @sizeOf(AccountRef) * index;
+            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(ref, start_index_u8);
             if (!was_inserted) {
                 accounts_dead_count += 1;
                 self.logger.warn().logf(
@@ -4317,20 +4319,20 @@ pub const BenchmarkAccountsDB = struct {
     };
 
     pub const args = [_]BenchArgs{
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .ram,
-            .index = .ram,
-            .name = "100k accounts (1_slot - ram index - ram accounts)",
-        },
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .ram,
-            .index = .disk,
-            .name = "100k accounts (1_slot - disk index - ram accounts)",
-        },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .ram,
+        //     .index = .ram,
+        //     .name = "100k accounts (1_slot - ram index - ram accounts)",
+        // },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .ram,
+        //     .index = .disk,
+        //     .name = "100k accounts (1_slot - disk index - ram accounts)",
+        // },
         BenchArgs{
             .n_accounts = 100_000,
             .slot_list_len = 1,

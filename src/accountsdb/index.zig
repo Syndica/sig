@@ -14,13 +14,13 @@ const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 
 const RefIndex = struct {
-    slot: Slot,
+    // slot: Slot,
     index: u64,
 };
 
 pub const AccountReferenceHead = struct {
     ref_ptr: *AccountRef, // TODO: remove
-    ref_index: RefIndex = .{ .slot = 0, .index = 0 }, // TODO: make mandatory
+    ref_index: RefIndex = .{ .index = 0 }, // TODO: make mandatory
 
     const Self = @This();
 
@@ -213,11 +213,10 @@ pub const AccountIndex = struct {
     // TODO: position in struct
     pub fn getNextRef(self: *Self, ref: *AccountRef) ?*AccountRef {
         if (ref.next_ref_index) |next_ref_index| {
-            const ref_memory, var ref_memory_lg = self.reference_memory.readWithLock();
-            defer ref_memory_lg.unlock();
-
-            const ref_list = ref_memory.get(next_ref_index.slot) orelse return null;
-            return &ref_list[next_ref_index.index];
+            // TODO: very unsafe
+            const ref_buf_u8 = self.recycle_fba.fba_allocator.buffer;
+            const next_ref = std.mem.bytesAsValue(AccountRef, ref_buf_u8[next_ref_index.index..][0..@sizeOf(AccountRef)]);
+            return @alignCast(next_ref);
         } else {
             return null;
         }
@@ -225,10 +224,15 @@ pub const AccountIndex = struct {
 
     pub fn getRefFromHeadUnsafe(self: *Self, head: *const AccountReferenceHead) *AccountRef {
         const index = head.ref_index;
-        // VERY UNSAFE
-        const ref_memory = &self.reference_memory.private.v;
-        const slot_ref_list = ref_memory.get(index.slot) orelse unreachable;
-        return &slot_ref_list[index.index];
+
+        const ref_buf_u8 = self.recycle_fba.fba_allocator.buffer;
+        const ref = std.mem.bytesAsValue(AccountRef, ref_buf_u8[index.index..][0..@sizeOf(AccountRef)]);
+        return @alignCast(ref);
+
+        // // v1: VERY UNSAFE
+        // const ref_memory = &self.reference_memory.private.v;
+        // const slot_ref_list = ref_memory.get(index.slot) orelse unreachable;
+        // return &slot_ref_list[index.index];
     }
 
     pub fn ensureTotalCapacity(self: *Self, size: u32) !void {
@@ -340,7 +344,7 @@ pub const AccountIndex = struct {
         const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey);
         if (!gop.found_existing) {
             // TODO: remove ref_ptr
-            gop.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = .{ .slot = account_ref.slot, .index = index } };
+            gop.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = .{ .index = index } };
             return true;
         }
 
@@ -357,7 +361,7 @@ pub const AccountIndex = struct {
             const next_ptr = self.getNextRef(curr) orelse {
                 // end of the list => INSERT it here
                 curr.next_ptr = account_ref; // TODO: remove
-                curr.next_ref_index = .{ .slot = account_ref.slot, .index = index };
+                curr.next_ref_index = .{ .index = index };
                 return true;
             };
 
