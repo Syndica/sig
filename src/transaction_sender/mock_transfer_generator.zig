@@ -125,30 +125,25 @@ pub const MockTransferService = struct {
                 random,
             );
 
-            std.debug.print("sig: {}\n", .{transaction.signatures[0]});
+            const response = try rpc_client.sendTransaction(self.allocator, transaction, .{});
+            const result = try response.result();
 
-            defer transaction.deinit(self.allocator);
-            const transaction_info = try TransactionInfo.new(
-                transaction,
-                last_valid_blockheight,
-                null,
-                null,
-            );
+            std.debug.print("result: {s}\n", .{result});
 
-            try self.sender.send(transaction_info);
+            // try self.sender.send(transaction_info);
 
-            // sleep as to not overload the http server
-            std.time.sleep(10 * std.time.ns_per_s);
+            // // sleep as to not overload the http server
+            // std.time.sleep(10 * std.time.ns_per_s);
 
-            // check if the SOL is in the account
-            const bank_balance_response = try rpc_client.getBalance(
-                self.allocator,
-                account_a_pubkey,
-                .{},
-            );
-            defer bank_balance_response.deinit();
-            const bank_balance = try bank_balance_response.result();
-            if (bank_balance.value == 5e8) break;
+            // // check if the SOL is in the account
+            // const bank_balance_response = try rpc_client.getBalance(
+            //     self.allocator,
+            //     account_a_pubkey,
+            //     .{},
+            // );
+            // defer bank_balance_response.deinit();
+            // const bank_balance = try bank_balance_response.result();
+            // if (bank_balance.value == 5e8) break;
         }
 
         // const from_pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");

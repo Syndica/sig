@@ -1,4 +1,5 @@
 const std = @import("std");
+const base58 = @import("base58-zig");
 const sig = @import("../sig.zig");
 
 const types = sig.rpc.types;
@@ -10,6 +11,7 @@ const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const Transaction = sig.core.transaction.Transaction;
 
 pub const Client = struct {
     http_endpoint: []const u8,
@@ -279,7 +281,32 @@ pub const Client = struct {
     // TODO: getVoteAccounts()
     // TODO: isBlockhashValid()
     // TODO: minimumLedgerSlot()
-    // TODO: sendTransaction()
+
+    const SendTransactionConfig = struct {};
+
+    pub fn sendTransaction(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        transaction: Transaction,
+        config: SendTransactionConfig,
+    ) !Response(types.Signature) {
+        var request = try Request.init(allocator, "sendTransaction");
+        defer request.deinit();
+
+        var buffer: [sig.net.PACKET_DATA_SIZE]u8 = undefined;
+        const written = try sig.bincode.writeToSlice(&buffer, transaction, .{});
+
+        const sized = sig.crypto.base58.Base58Sized(sig.net.PACKET_DATA_SIZE);
+        var encode_buffer: [sized.max_encoded_size]u8 = undefined;
+
+        var encoder = base58.Encoder.init(.{});
+        const length = try encoder.encode(written, &encode_buffer);
+
+        try request.addParameter(encode_buffer[0..length]);
+        try request.addConfig(config);
+
+        return self.sendFetchRequest(allocator, types.Signature, request, .{});
+    }
     // TODO: simulateTransaction()
 
     /// Sends a JSON-RPC request to the HTTP endpoint and parses the response.

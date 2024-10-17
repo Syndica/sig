@@ -240,7 +240,12 @@ pub const Message = struct {
         };
     }
 
-    pub fn init(allocator: std.mem.Allocator, instructions: []const Instruction, payer: Pubkey, recent_blockhash: Hash) !Message {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        instructions: []const Instruction,
+        payer: Pubkey,
+        recent_blockhash: Hash,
+    ) !Message {
         var compiled_keys = try CompiledKeys.init(allocator, instructions, payer);
         defer compiled_keys.deinit();
         const header, const account_keys = try compiled_keys.intoMessageHeaderAndAccountKeys(allocator);
