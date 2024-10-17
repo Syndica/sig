@@ -39,7 +39,7 @@ pub const Pubkey = extern struct {
         return @reduce(.And, xx == yy);
     }
 
-    pub fn isAllZeroes(self: *const Self) bool {
+    pub fn isZeroed(self: *const Self) bool {
         return self.equals(&ZEROES);
     }
 
