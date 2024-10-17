@@ -178,7 +178,7 @@ pub const Transaction = struct {
     pub const MAX_BYTES: usize = 1232;
 
     pub const EMPTY: Transaction = .{
-        .signatures = &[_]Signature{},
+        .signatures = &.{},
         .message = Message.EMPTY,
     };
 
@@ -601,7 +601,7 @@ test "minimal valid Message sanitizes" {
 
 test "Message sanitize fails if missing signers" {
     try std.testing.expectError(error.NotEnoughAccounts, Message.sanitize(&.{
-        .header = MessageHeader{
+        .header = .{
             .num_required_signatures = 2,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
@@ -614,7 +614,7 @@ test "Message sanitize fails if missing signers" {
 
 test "Message sanitize fails if missing unsigned" {
     try std.testing.expectError(error.NotEnoughAccounts, Message.sanitize(&.{
-        .header = MessageHeader{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 1,
@@ -626,79 +626,67 @@ test "Message sanitize fails if missing unsigned" {
 }
 
 test "Message sanitize fails if no writable signed" {
-    var pubkeys = [_]Pubkey{ Pubkey.ZEROES, Pubkey.ZEROES };
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectError(error.MissingWritableFeePayer, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 1,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
         .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &[_]CompiledInstruction{},
-    };
-    try std.testing.expect(error.MissingWritableFeePayer == message.sanitize());
+        .instructions = &.{},
+    }));
 }
 
 test "Message sanitize fails if missing program id" {
-    var pubkeys = [_]Pubkey{Pubkey.ZEROES};
-    var instructions = [_]CompiledInstruction{.{
-        .program_id_index = 1,
-        .accounts = &[_]u8{},
-        .data = &[_]u8{},
-    }};
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectError(error.ProgramIdAccountMissing, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{Pubkey.ZEROES},
         .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &instructions,
-    };
-    try std.testing.expect(error.ProgramIdAccountMissing == message.sanitize());
+        .instructions = &.{.{
+            .program_id_index = 1,
+            .accounts = &.{},
+            .data = &.{},
+        }},
+    }));
 }
 
 test "Message sanitize fails if program id has index 0" {
-    var pubkeys = [_]Pubkey{Pubkey.ZEROES};
-    var instructions = [_]CompiledInstruction{.{
-        .program_id_index = 0,
-        .accounts = &[_]u8{},
-        .data = &[_]u8{},
-    }};
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectError(error.ProgramIdCannotBePayer, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{Pubkey.ZEROES},
         .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &instructions,
-    };
-    try std.testing.expect(error.ProgramIdCannotBePayer == message.sanitize());
+        .instructions = &.{.{
+            .program_id_index = 0,
+            .accounts = &.{},
+            .data = &.{},
+        }},
+    }));
 }
 
 test "Message sanitize fails if account index is out of bounds" {
-    var pubkeys = [_]Pubkey{ Pubkey.ZEROES, Pubkey.ZEROES };
-    var accounts = [_]u8{2};
-    var instructions = [_]CompiledInstruction{.{
-        .program_id_index = 1,
-        .accounts = &accounts,
-        .data = &[_]u8{},
-    }};
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectError(error.AccountIndexOutOfBounds, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 1,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
         .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &instructions,
-    };
-    try std.testing.expect(error.AccountIndexOutOfBounds == message.sanitize());
+        .instructions = &.{.{
+            .program_id_index = 1,
+            .accounts = &.{2},
+            .data = &.{},
+        }},
+    }));
 }
 
 test "V0Message serialization and deserialization" {
@@ -721,7 +709,7 @@ test "VersionedMessage v0 serialization and deserialization" {
 
 pub const test_v0_transaction = struct {
     pub fn asStruct(allocator: std.mem.Allocator) !VersionedTransaction {
-        return VersionedTransaction{
+        return .{
             .signatures = try allocator.dupe(Signature, &.{
                 try Signature.fromString("2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw"),
                 try Signature.fromString("4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj"),
@@ -773,8 +761,8 @@ pub const test_v0_versioned_message = struct {
 
 pub const test_v0_message = struct {
     pub fn asStruct(allocator: std.mem.Allocator) !V0Message {
-        return V0Message{
-            .header = MessageHeader{
+        return .{
+            .header = .{
                 .num_required_signatures = 39,
                 .num_readonly_signed_accounts = 12,
                 .num_readonly_unsigned_accounts = 102,
@@ -783,8 +771,7 @@ pub const test_v0_message = struct {
                 try Pubkey.fromString("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE"),
                 try Pubkey.fromString("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4"),
             }),
-            .recent_blockhash = try Hash
-                .parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW"),
+            .recent_blockhash = try Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW"),
             .instructions = try allocator.dupe(CompiledInstruction, &.{.{
                 .program_id_index = 100,
                 .accounts = try allocator.dupe(u8, &.{ 1, 3 }),
@@ -796,7 +783,7 @@ pub const test_v0_message = struct {
             .address_table_lookups = try allocator.dupe(MessageAddressTableLookup, &.{.{
                 .account_key = try Pubkey.fromString("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD"),
                 .writable_indexes = try allocator.dupe(u8, &.{ 1, 3, 5, 7, 90 }),
-                .readonly_indexes = try allocator.dupe(u8, &.{}),
+                .readonly_indexes = &.{},
             }}),
         };
     }
