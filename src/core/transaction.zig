@@ -582,10 +582,6 @@ test "create transfer transaction" {
     try std.testing.expectEqualSlices(u8, &expected_bytes, actual_bytes);
 }
 
-test "tmp" {
-    try std.testing.expect(Message.EMPTY.account_keys.len == 0);
-}
-
 test "blank Message fails to sanitize" {
     try std.testing.expectError(error.MissingWritableFeePayer, Message.EMPTY.sanitize());
 }
