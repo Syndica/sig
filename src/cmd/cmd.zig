@@ -211,6 +211,7 @@ pub fn run() !void {
 
     var use_disk_index_option = cli.Option{
         .long_name = "use-disk-index",
+        .short_alias = 'd',
         .help = "use disk-memory for the account index",
         .value_ref = cli.mkRef(&config.current.accounts_db.use_disk_index),
         .required = false,
@@ -478,6 +479,7 @@ pub fn run() !void {
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
                             &geyser_writer_fba_bytes_option,
+                            &network_option,
                         },
                         .target = .{
                             .action = .{
@@ -1431,6 +1433,29 @@ fn loadSnapshot(
         geyser_writer,
     );
     errdefer result.accounts_db.deinit();
+
+    // TODO: load from disk index
+    const manifest = try all_snapshot_fields.collapse();
+    try result.accounts_db.fastLoadWithDiskIndexes(
+        manifest.accounts_db_fields,
+    );
+    const full_snapshot = all_snapshot_fields.full;
+    var validate_timer = try sig.time.Timer.start();
+    try result.accounts_db.validateLoadFromSnapshot(.{
+        .full_slot = full_snapshot.bank_fields.slot,
+        .expected_full = .{
+            .accounts_hash = full_snapshot.accounts_db_fields.bank_hash_info.accounts_hash,
+            .capitalization = full_snapshot.bank_fields.capitalization,
+        },
+        .expected_incremental = if (full_snapshot.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+            .accounts_hash = inc_persistence.incremental_hash,
+            .capitalization = inc_persistence.incremental_capitalization,
+        } else null,
+    });
+    logger.info().logf("validated from snapshot in {any}", .{validate_timer.read()});
+    if (config.current.accounts_db.use_disk_index) {
+        @panic("ahhh");
+    }
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(
         allocator,

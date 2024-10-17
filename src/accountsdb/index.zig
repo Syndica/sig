@@ -7,13 +7,20 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const RwMux = sig.sync.RwMux;
 
-pub const SwissMap = sig.accounts_db.swiss_map.SwissMap;
-pub const SwissMapUnmanaged = sig.accounts_db.swiss_map.SwissMapUnmanaged;
-pub const BenchHashMap = sig.accounts_db.swiss_map.BenchHashMap;
-pub const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
+const SwissMap = sig.accounts_db.swiss_map.SwissMap;
+const SwissMapUnmanaged = sig.accounts_db.swiss_map.SwissMapUnmanaged;
+const BenchHashMap = sig.accounts_db.swiss_map.BenchHashMap;
+const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
+const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
+
+const RefIndex = struct {
+    // slot: Slot,
+    index: u64,
+};
 
 pub const AccountReferenceHead = struct {
-    ref_ptr: *AccountRef,
+    ref_ptr: *AccountRef, // TODO: remove
+    ref_index: RefIndex = .{ .index = 0 }, // TODO: make mandatory
 
     const Self = @This();
 
@@ -69,7 +76,8 @@ pub const AccountRef = struct {
     pubkey: Pubkey,
     slot: Slot,
     location: AccountLocation,
-    next_ptr: ?*AccountRef = null,
+    next_ptr: ?*AccountRef = null, // TODO: remove
+    next_ref_index: ?RefIndex = null,
 
     /// Analogous to [StorageLocation](https://github.com/anza-xyz/agave/blob/b47a4ec74d85dae0b6d5dd24a13a8923240e03af/accounts-db/src/account_info.rs#L23)
     pub const AccountLocation = union(enum(u8)) {
@@ -93,40 +101,83 @@ pub const AccountRef = struct {
     }
 };
 
+pub const DiskIndexConfig = struct {
+    accountsdb_dir: std.fs.Dir,
+};
+
 /// stores the mapping from Pubkey to the account location (AccountRef)
 ///
 /// Analogous to [AccountsIndex](https://github.com/anza-xyz/agave/blob/a6b2283142192c5360ad0f53bec1eb4a9fb36154/accounts-db/src/accounts_index.rs#L644)
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
-    reference_allocator: std.mem.Allocator,
+    underlying_reference_allocator: std.mem.Allocator,
+    recycle_fba: *sig.utils.allocators.RecycleFBA(.{}), // TODO: does this need to be a pointer?
     reference_memory: RwMux(ReferenceMemory),
     bins: []RwMux(RefMap),
     pubkey_bin_calculator: PubkeyBinCalculator,
-    const Self = @This();
+    disk_allocator_ptr: ?*DiskMemoryAllocator = null,
 
-    pub const ReferenceMemory = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
+    pub const ReferenceMemory = std.AutoHashMap(Slot, []AccountRef);
     pub const RefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
-
     pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
+
+    const Self = @This();
 
     pub fn init(
         /// used to allocate the hashmap data
         allocator: std.mem.Allocator,
-        /// used to allocate the references
-        reference_allocator: std.mem.Allocator,
+        logger: sig.trace.Logger,
+        /// use disk memory for the index
+        maybe_disk_index_config: ?DiskIndexConfig,
         /// number of bins to shard across
         number_of_bins: usize,
+        max_number_of_references: u64,
     ) !Self {
+        const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
+        const underlying_reference_allocator: std.mem.Allocator //
+        = blk: {
+            if (maybe_disk_index_config) |config| {
+                var index_bin_dir = try config.accountsdb_dir.makeOpenPath("index", .{});
+                errdefer index_bin_dir.close();
+                logger.info().logf("using disk index in {s}", .{sig.utils.fmt.tryRealPath(index_bin_dir, ".")});
+
+                const ptr = try allocator.create(DiskMemoryAllocator);
+                ptr.* = .{
+                    .dir = index_bin_dir,
+                    .logger = logger,
+                };
+
+                break :blk .{ ptr, ptr.allocator() };
+            } else {
+                logger.info().log("using ram index");
+                break :blk .{ null, allocator };
+            }
+        };
+        errdefer if (maybe_disk_allocator_ptr) |ptr| {
+            ptr.dir.close();
+            allocator.destroy(ptr);
+        };
+
         const bins = try allocator.alloc(RwMux(RefMap), number_of_bins);
-        errdefer allocator.free(number_of_bins);
+        errdefer allocator.free(bins);
         @memset(bins, RwMux(RefMap).init(RefMap.init(allocator)));
+
+        const T = sig.utils.allocators.RecycleFBA(.{});
+        const recycle_fba = try allocator.create(T);
+        recycle_fba.* = try T.initNew(
+            allocator,
+            underlying_reference_allocator,
+            max_number_of_references,
+        );
 
         return Self{
             .allocator = allocator,
-            .reference_allocator = reference_allocator,
+            .underlying_reference_allocator = underlying_reference_allocator,
             .bins = bins,
             .pubkey_bin_calculator = PubkeyBinCalculator.init(number_of_bins),
             .reference_memory = RwMux(ReferenceMemory).init(ReferenceMemory.init(allocator)),
+            .disk_allocator_ptr = maybe_disk_allocator_ptr,
+            .recycle_fba = recycle_fba,
         };
     }
 
@@ -145,11 +196,43 @@ pub const AccountIndex = struct {
             if (free_memory) {
                 var iter = reference_memory.iterator();
                 while (iter.next()) |entry| {
-                    entry.value_ptr.deinit();
+                    _ = entry;
+                    // TODO: fix
+                    // self.recycle_fba.allocator().free(entry.value_ptr.*);
                 }
             }
             reference_memory.deinit();
         }
+
+        if (self.disk_allocator_ptr) |ptr| {
+            ptr.dir.close();
+            self.allocator.destroy(ptr);
+        }
+    }
+
+    // TODO: position in struct
+    pub fn getNextRef(self: *Self, ref: *AccountRef) ?*AccountRef {
+        if (ref.next_ref_index) |next_ref_index| {
+            // TODO: very unsafe
+            const ref_buf_u8 = self.recycle_fba.fba_allocator.buffer;
+            const next_ref = std.mem.bytesAsValue(AccountRef, ref_buf_u8[next_ref_index.index..][0..@sizeOf(AccountRef)]);
+            return @alignCast(next_ref);
+        } else {
+            return null;
+        }
+    }
+
+    pub fn getRefFromHeadUnsafe(self: *Self, head: *const AccountReferenceHead) *AccountRef {
+        const index = head.ref_index;
+
+        const ref_buf_u8 = self.recycle_fba.fba_allocator.buffer;
+        const ref = std.mem.bytesAsValue(AccountRef, ref_buf_u8[index.index..][0..@sizeOf(AccountRef)]);
+        return @alignCast(ref);
+
+        // // v1: VERY UNSAFE
+        // const ref_memory = &self.reference_memory.private.v;
+        // const slot_ref_list = ref_memory.get(index.slot) orelse unreachable;
+        // return &slot_ref_list[index.index];
     }
 
     pub fn ensureTotalCapacity(self: *Self, size: u32) !void {
@@ -164,7 +247,7 @@ pub const AccountIndex = struct {
     pub fn putReferenceBlock(self: *Self, slot: Slot, references: std.ArrayList(AccountRef)) !void {
         const reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
         defer reference_memory_lg.unlock();
-        try reference_memory.putNoClobber(slot, references);
+        try reference_memory.putNoClobber(slot, references.items);
     }
 
     pub fn freeReferenceBlock(self: *Self, slot: Slot) error{MemoryNotFound}!void {
@@ -172,7 +255,7 @@ pub const AccountIndex = struct {
         defer reference_memory_lg.unlock();
 
         const removed_kv = reference_memory.fetchRemove(slot) orelse return error.MemoryNotFound;
-        removed_kv.value.deinit();
+        self.recycle_fba.allocator().free(removed_kv.value);
     }
 
     /// Get a read-safe account reference head, and its associated lock guard.
@@ -250,6 +333,41 @@ pub const AccountIndex = struct {
         } else false;
 
         return does_exist;
+    }
+
+    /// adds the reference to the index if there is not a duplicate (ie, the same slot).
+    /// returns if the reference was inserted.
+    pub fn indexRefIfNotDuplicateSlotAssumeCapacityUnsafe(self: *Self, account_ref: *AccountRef, index: u64) bool {
+        // UNSAFE: only use if you know what you are doing
+        const bin = &self.getBinFromPubkey(&account_ref.pubkey).private.v;
+
+        const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey);
+        if (!gop.found_existing) {
+            // TODO: remove ref_ptr
+            gop.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = .{ .index = index } };
+            return true;
+        }
+
+        // traverse until you find the end
+        const head_ref = gop.value_ptr.*;
+        var curr = self.getRefFromHeadUnsafe(&head_ref);
+        while (true) {
+            if (curr.slot == account_ref.slot) {
+                // found a DUPLICATE => dont do the insertion
+                return false;
+            }
+
+            // const next_ptr = curr.next_ptr orelse {
+            const next_ptr = self.getNextRef(curr) orelse {
+                // end of the list => INSERT it here
+                curr.next_ptr = account_ref; // TODO: remove
+                curr.next_ref_index = .{ .index = index };
+                return true;
+            };
+
+            // keep traversing
+            curr = next_ptr;
+        }
     }
 
     /// adds the reference to the index if there is not a duplicate (ie, the same slot).
@@ -434,7 +552,7 @@ pub const PubkeyBinCalculator = struct {
 test "account index update/remove reference" {
     const allocator = std.testing.allocator;
 
-    var index = try AccountIndex.init(allocator, allocator, 8);
+    var index = try AccountIndex.init(allocator, .noop, null, 8, 0);
     defer index.deinit(true);
     try index.ensureTotalCapacity(100);
 
