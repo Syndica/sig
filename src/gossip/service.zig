@@ -2563,7 +2563,10 @@ test "handle pull request" {
         &counter,
         logger,
     );
-    defer gossip_service.deinit();
+    defer { 
+        gossip_service.shutdown();
+        gossip_service.deinit();
+    }
 
     // insert random values
     const N_FILTER_BITS = 1;
