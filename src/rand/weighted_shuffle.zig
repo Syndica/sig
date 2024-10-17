@@ -253,7 +253,7 @@ pub fn WeightedShuffle(comptime T: type) type {
 /// Custom Rng downsampling function designed to match the agave sampler used
 /// in the agave implementation of the weighted shuffle.
 /// For use in place of: <T as SampleUniform>::Sampler::sample_single
-pub fn uintLessThanRust(comptime T: type, random: std.Random, less_than: T) T {
+pub fn intRangeLessThanRust(comptime T: type, random: std.Random, at_least: T, less_than: T) T {
     const Unsigned, const UnsignedLarge = switch (T) {
         i8, u8 => .{ u8, u32 },
         i16, u16 => .{ u16, u32 },
@@ -264,27 +264,34 @@ pub fn uintLessThanRust(comptime T: type, random: std.Random, less_than: T) T {
         else => @compileError("Unsupported signed integer type"),
     };
 
-    const bits = @typeInfo(T).Int.bits;
-    const range: UnsignedLarge = @intCast(less_than);
-    if (range == 0) return random.int(T);
+    const range_t = less_than -% at_least;
+    const range_u: Unsigned = @intCast(range_t);
+    const range_ul: UnsignedLarge = @intCast(range_u);
 
-    const zone: UnsignedLarge = if (std.math.maxInt(Unsigned) <= std.math.maxInt(u16)) blk: {
+    if (range_ul == 0) return random.int(T);
+
+    const zone_ul: UnsignedLarge = if (std.math.maxInt(Unsigned) <= std.math.maxInt(u16)) blk: {
         const unsigned_max = std.math.maxInt(UnsignedLarge);
-        const ints_to_reject = (unsigned_max - range + 1) % range;
+        const ints_to_reject = (unsigned_max - range_ul + 1) % range_ul;
         break :blk unsigned_max - ints_to_reject;
     } else blk: {
-        break :blk (range << @truncate(@clz(range))) -% 1;
+        break :blk (range_ul << @truncate(@clz(range_ul))) -% 1;
     };
 
     while (true) {
-        const v = random.int(UnsignedLarge);
-        const m = std.math.mulWide(UnsignedLarge, v, range);
-        const lo: UnsignedLarge = @truncate(m);
-        const hi: Unsigned = @truncate(m >> bits);
-        if (lo <= zone) {
-            return @intCast(hi);
-        }
+        const v_ul = random.int(UnsignedLarge);
+        const tmp = std.math.mulWide(UnsignedLarge, v_ul, range_ul);
+        const lo: UnsignedLarge = @truncate(tmp);
+        const hi: Unsigned = @truncate(tmp >> @typeInfo(UnsignedLarge).Int.bits);
+        if (lo <= zone_ul) return at_least + @as(T, @intCast(hi));
     }
+}
+
+/// Custom Rng downsampling function designed to match the agave sampler used
+/// in the agave implementation of the weighted shuffle.
+/// For use in place of: <T as SampleUniform>::Sampler::sample_single
+pub fn uintLessThanRust(comptime T: type, random: std.Random, less_than: T) T {
+    return intRangeLessThanRust(T, random, 0, less_than);
 }
 
 fn testShuffledIndicesMatchExpected(T: type, random: std.Random, shuffle: *WeightedShuffle(T), expected_slice: []const usize) !void {
@@ -337,12 +344,29 @@ fn testWeightedShuffleSlow(allocator: std.mem.Allocator, random: std.Random, wei
 test "uintLessThan" {
     const seed = [_]u8{1} ** 32;
     var chacha = ChaChaRng.fromSeed(seed);
+
     const random = chacha.random();
 
-    for (0..1000) |_| {
-        const val = uintLessThanRust(u64, random, 1);
-        try std.testing.expect(val == 0);
-    }
+    try std.testing.expectEqual(12, intRangeLessThanRust(u8, random, 0, 100));
+    try std.testing.expectEqual(76, intRangeLessThanRust(u16, random, 0, 100));
+    try std.testing.expectEqual(11, intRangeLessThanRust(u32, random, 0, 100));
+    try std.testing.expectEqual(52, intRangeLessThanRust(u64, random, 0, 100));
+    try std.testing.expectEqual(81, intRangeLessThanRust(u128, random, 0, 100));
+    try std.testing.expectEqual(55, intRangeLessThanRust(usize, random, 0, 100));
+
+    try std.testing.expectEqual(82, intRangeLessThanRust(u8, random, 50, 150));
+    try std.testing.expectEqual(56, intRangeLessThanRust(u16, random, 50, 150));
+    try std.testing.expectEqual(53, intRangeLessThanRust(u32, random, 50, 150));
+    try std.testing.expectEqual(77, intRangeLessThanRust(u64, random, 50, 150));
+    try std.testing.expectEqual(129, intRangeLessThanRust(u128, random, 50, 150));
+    try std.testing.expectEqual(94, intRangeLessThanRust(usize, random, 50, 150));
+
+    try std.testing.expectEqual(-1, intRangeLessThanRust(i8, random, -5, 5));
+    try std.testing.expectEqual(3, intRangeLessThanRust(i16, random, -5, 5));
+    try std.testing.expectEqual(-4, intRangeLessThanRust(i32, random, -5, 5));
+    try std.testing.expectEqual(-4, intRangeLessThanRust(i64, random, -5, 5));
+    try std.testing.expectEqual(-1, intRangeLessThanRust(i128, random, -5, 5));
+    try std.testing.expectEqual(-1, intRangeLessThanRust(isize, random, -5, 5));
 }
 
 test "agave: get tree size" {
