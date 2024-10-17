@@ -263,7 +263,7 @@ pub const Message = struct {
             errdefer for (instructions[0..i]) |prev_ci| prev_ci.deinit(allocator);
             ci.* = try original_ci.clone(allocator);
         }
-        errdefer for (instructions) |instruction| instruction.deinit(allocator);
+        errdefer comptime unreachable; // otherwise we have to remember to free each instruction
 
         return .{
             .header = self.header,
