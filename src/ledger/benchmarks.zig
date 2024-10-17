@@ -229,4 +229,29 @@ pub const BenchmarLegder = struct {
         return duration;
     }
 
+    pub fn benchGetCompleteBlock() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        const state = try State.init(allocator, "bentch read sequential", .noop);
+        const result = try ledger_tests.insertDataForBlockTest(state);
+        const entries = result.entries;
+        const expected_transactions = result.expected_transactions;
+        defer {
+            for (expected_transactions.items) |etx| {
+                allocator.free(etx.meta.pre_balances);
+                allocator.free(etx.meta.post_balances);
+            }
+            expected_transactions.deinit();
+        }
+        defer {
+            for (entries) |e| e.deinit(allocator);
+            allocator.free(entries);
+        }
+        defer state.deinit();
+        var reader = try state.reader();
+        const slot = 10;
+
+        var timer = try sig.time.Timer.start();
+        _ = try reader.getCompleteBlock(slot + 2, true);
+        return timer.read();
+    }
 };
