@@ -3944,85 +3944,10 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         // },
     };
 
-    pub fn loadSnapshot(bench_args: BenchArgs) !sig.time.Duration {
-        const allocator = std.heap.c_allocator;
-
-        var std_logger = try StandardErrLogger.init(.{
-            .allocator = allocator,
-            .max_level = Level.debug,
-            .max_buffer = 1 << 20,
-        });
-        defer std_logger.deinit();
-
-        const logger = std_logger.logger();
-
-        // unpack the snapshot
-        // NOTE: usually this will be an incremental snapshot
-        // renamed as a full snapshot (mv {inc-snap-fmt}.tar.zstd {full-snap-fmt}.tar.zstd)
-        // (because test snapshots are too small and full snapshots are too big)
-        const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
-        var snapshot_dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
-            std.debug.print("need to setup a snapshot in {s} for this benchmark...\n", .{dir_path});
-            return sig.time.Duration.fromNanos(0);
-        };
-        defer snapshot_dir.close();
-
-        const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
-
-        var accounts_dir = inline for (0..2) |attempt| {
-            if (snapshot_dir.openDir("accounts", .{ .iterate = true })) |accounts_dir|
-                break accounts_dir
-            else |err| switch (err) {
-                else => |e| return e,
-                error.FileNotFound => if (attempt == 0) {
-                    const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
-                    defer archive_file.close();
-                    try parallelUnpackZstdTarBall(
-                        allocator,
-                        logger,
-                        archive_file,
-                        snapshot_dir,
-                        try std.Thread.getCpuCount() / 2,
-                        true,
-                    );
-                },
-            }
-        } else return error.SnapshotMissingAccountsDir;
-        defer accounts_dir.close();
-
-        var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
-        defer snapshots.deinit(allocator);
-        const snapshot = try snapshots.collapse();
-
-        var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-            .number_of_index_shards = 32,
-            .use_disk_index = bench_args.use_disk,
-            .lru_size = 10_000,
-        }, null);
-        defer accounts_db.deinit();
-
-        const duration = try accounts_db.loadFromSnapshot(
-            snapshot.accounts_db_fields,
-            bench_args.n_threads,
-            allocator,
-            250, // should be safe for testnet snapshots
-        );
-
-        // sanity check
-        const accounts_hash, const total_lamports = try accounts_db.computeAccountHashesAndLamports(.{
-            .FullAccountHash = .{ .max_slot = accounts_db.largest_rooted_slot.load(.monotonic) },
-        });
-        std.debug.print("r: hash: {}, lamports: {}\n", .{ accounts_hash, total_lamports });
-
-        return duration;
-    }
-
-    const BenchResult = struct {
+    pub fn loadAndVerifySnapshot(bench_args: BenchArgs) !struct {
         load_time: u64,
         validate_time: u64,
-    };
-
-    pub fn loadAndVerifySnapshot(bench_args: BenchArgs) !BenchResult {
+    } {
         const allocator = std.heap.c_allocator;
 
         const logger = Logger{ .noop = {} };
