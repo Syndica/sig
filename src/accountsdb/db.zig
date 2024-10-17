@@ -1881,7 +1881,7 @@ pub const AccountsDB = struct {
                     const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
                     defer accounts_cache_lg.unlock();
 
-                    const cached_account = accounts_cache.get(account_ref.pubkey) orelse break :blk null;
+                    const cached_account = accounts_cache.get(account_ref.pubkey, account_ref.slot) orelse break :blk null;
                     break :blk cached_account.account;
                 };
 
@@ -1896,7 +1896,7 @@ pub const AccountsDB = struct {
 
                     const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
                     defer accounts_cache_lg.unlock();
-                    try accounts_cache.put(account_ref.pubkey, account);
+                    try accounts_cache.put(account_ref.pubkey, account_ref.slot, account);
 
                     return account;
                 }
