@@ -1193,7 +1193,7 @@ pub const ContactInfo = struct {
     addrs: ArrayList(IpAddr),
     sockets: ArrayList(SocketEntry),
     extensions: ArrayList(Extension),
-    cache: [SOCKET_CACHE_SIZE]SocketAddr = socket_addrs_unspecified,
+    cache: [SOCKET_CACHE_SIZE]SocketAddr = .{SocketAddr.UNSPECIFIED} ** SOCKET_CACHE_SIZE,
 
     // TODO: improve implementation of post deserialise method
     pub const @"!bincode-config:post-deserialize" = bincode.FieldConfig(ContactInfo){ .post_deserialize_fn = ContactInfo.buildCache };
@@ -1251,7 +1251,6 @@ pub const ContactInfo = struct {
             .addrs = ArrayList(IpAddr).init(allocator),
             .sockets = ArrayList(SocketEntry).init(allocator),
             .extensions = ArrayList(void).init(allocator),
-            .cache = socket_addrs_unspecified,
         };
     }
 
@@ -1477,8 +1476,6 @@ pub const SocketEntry = struct {
             self.offset == other.offset;
     }
 };
-
-const socket_addrs_unspecified: [SOCKET_CACHE_SIZE]SocketAddr = .{SocketAddr.UNSPECIFIED} ** SOCKET_CACHE_SIZE;
 
 pub const RestartHeaviestFork = struct {
     from: Pubkey,
