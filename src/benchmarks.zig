@@ -25,25 +25,25 @@ pub fn main() !void {
     defer cli_args.deinit();
 
     _ = cli_args.skip();
-    const maybe_filter = cli_args.next();
-    const filter = blk: {
-        if (maybe_filter) |filter| {
-            logger.debug().logf("filtering benchmarks with prefix: {s}", .{filter});
-            break :blk filter;
-        } else {
-            logger.debug().logf("no filter: running all benchmarks", .{});
-            break :blk "";
-        }
-    };
-
     const next_cli_arg = cli_args.next();
     const output_runtimes = blk: {
         if (next_cli_arg != null and std.mem.eql(u8, "-r", next_cli_arg.?)) {
-            logger.debug().log("outputting runtimes");
+            logger.info().log("outputting runtimes");
             break :blk true;
         } else {
-            logger.debug().log("outputting aggregated results");
+            logger.info().log("outputting aggregated results");
             break :blk false;
+        }
+    };
+
+    const maybe_filter = if (output_runtimes) cli_args.next() else next_cli_arg;
+    const filter = blk: {
+        if (maybe_filter) |filter| {
+            logger.info().logf("filtering benchmarks with prefix: {s}", .{filter});
+            break :blk filter;
+        } else {
+            logger.info().logf("no filter: running all benchmarks", .{});
+            break :blk "";
         }
     };
 
@@ -256,6 +256,7 @@ pub fn benchmarkCSV(
                             if (i != 0) std.debug.print(", ", .{});
                             std.debug.print("{d}", .{runtime});
                         }
+                        std.debug.print("\n", .{});
                     },
                     else => {
                         inline for (U.fields, 0..) |field, j| {
