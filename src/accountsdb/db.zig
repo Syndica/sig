@@ -64,9 +64,6 @@ pub const DELETE_ACCOUNT_FILES_MIN = 100;
 pub const AccountsDB = struct {
     allocator: std.mem.Allocator,
 
-    /// Used to store mmapped data in ./index/bin (see see accountsdb/readme.md)
-    disk_allocator_ptr: ?*DiskMemoryAllocator = null,
-
     /// maps pubkeys to account locations
     account_index: AccountIndex,
 
@@ -141,52 +138,28 @@ pub const AccountsDB = struct {
         config: InitConfig,
         geyser_writer: ?*GeyserWriter,
     ) !Self {
-        const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
-        const reference_allocator: std.mem.Allocator //
-        = blk: {
-            if (config.use_disk_index) {
-                var index_bin_dir = try snapshot_dir.makeOpenPath("index", .{});
-                errdefer index_bin_dir.close();
-
-                logger.info().logf("using disk index in {s}", .{sig.utils.fmt.tryRealPath(index_bin_dir, ".")});
-
-                const ptr = try allocator.create(DiskMemoryAllocator);
-                ptr.* = .{
-                    .dir = index_bin_dir,
-                    .logger = logger,
-                };
-
-                break :blk .{ ptr, ptr.allocator() };
-            } else {
-                logger.info().logf("using ram index", .{});
-                break :blk .{ null, allocator };
-            }
-        };
-        errdefer if (maybe_disk_allocator_ptr) |ptr| {
-            ptr.dir.close();
-            allocator.destroy(ptr);
-        };
-
-        // ensure accounts/ exists
-        snapshot_dir.makePath("accounts") catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => |e| return e,
-        };
-
+        // init index
+        const index_allocator_config: AccountIndex.AllocatorConfig = if (config.use_disk_index)
+            .{ .Disk = .{ .accountsdb_dir = snapshot_dir } }
+        else
+            .{ .Ram = .{ .allocator = allocator } };
         var account_index = try AccountIndex.init(
             allocator,
-            reference_allocator,
+            logger,
+            index_allocator_config,
             config.number_of_index_bins,
+            0,
         );
         errdefer account_index.deinit(true);
 
+        // init cache
         var accounts_cache = try AccountsCache.init(allocator, 1_000); // TODO: make configurable
         errdefer accounts_cache.deinit();
 
         const metrics = try AccountsDBMetrics.init();
+
         return .{
             .allocator = allocator,
-            .disk_allocator_ptr = maybe_disk_allocator_ptr,
             .account_index = account_index,
             .logger = logger,
             .config = config,
@@ -201,10 +174,6 @@ pub const AccountsDB = struct {
 
     pub fn deinit(self: *Self) void {
         self.account_index.deinit(true);
-        if (self.disk_allocator_ptr) |ptr| {
-            ptr.dir.close();
-            self.allocator.destroy(ptr);
-        }
 
         {
             const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
@@ -299,14 +268,16 @@ pub const AccountsDB = struct {
         // used to merge thread results
         const n_combine_threads = n_threads;
 
+        // ensure accounts/ exists
+        self.snapshot_dir.makePath("accounts") catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
         var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
         defer accounts_dir.close();
 
-        var timer = try sig.time.Timer.start();
-
         const n_account_files = snapshot_manifest.file_map.count();
         self.logger.info().logf("found {d} account files", .{n_account_files});
-
         std.debug.assert(n_account_files > 0);
 
         {
@@ -315,6 +286,7 @@ pub const AccountsDB = struct {
             bhs.accumulate(snapshot_manifest.bank_hash_info.stats);
         }
 
+        var timer = try sig.time.Timer.start();
         // short path
         if (n_threads == 1) {
             try self.loadAndVerifyAccountsFiles(
@@ -354,8 +326,8 @@ pub const AccountsDB = struct {
 
             // set the disk allocator after init() doesnt create a new one
             if (use_disk_index) {
-                thread_db.disk_allocator_ptr = self.disk_allocator_ptr;
-                thread_db.account_index.reference_allocator = thread_db.disk_allocator_ptr.?.allocator();
+                thread_db.account_index.disk_allocator = self.account_index.disk_allocator;
+                thread_db.account_index.reference_allocator = thread_db.account_index.disk_allocator.?.allocator();
             }
         }
         defer {
@@ -375,6 +347,7 @@ pub const AccountsDB = struct {
                 file_map.deinit(per_thread_allocator);
 
                 // NOTE: important `false` (ie, 1)
+                loading_thread.account_index.disk_allocator = null; // dont destory the allocator (since its shared)
                 loading_thread.account_index.deinit(false);
 
                 const accounts_cache, var accounts_cache_lg = loading_thread.accounts_cache.writeWithLock();
@@ -3230,9 +3203,6 @@ test "geyser stream on load" {
         accounts_db.deinit();
         snapshots.deinit(allocator);
     }
-
-    var accounts_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR ++ "accounts", .{});
-    defer accounts_dir.close();
 
     _ = try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields,

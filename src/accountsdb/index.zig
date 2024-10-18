@@ -6,11 +6,8 @@ const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const RwMux = sig.sync.RwMux;
-
-pub const SwissMap = sig.accounts_db.swiss_map.SwissMap;
-pub const SwissMapUnmanaged = sig.accounts_db.swiss_map.SwissMapUnmanaged;
-pub const BenchHashMap = sig.accounts_db.swiss_map.BenchHashMap;
-pub const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
+const SwissMap = sig.accounts_db.swiss_map.SwissMap;
+const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 
 pub const AccountReferenceHead = struct {
     ref_ptr: *AccountRef,
@@ -96,36 +93,67 @@ pub const AccountRef = struct {
 /// Analogous to [AccountsIndex](https://github.com/anza-xyz/agave/blob/a6b2283142192c5360ad0f53bec1eb4a9fb36154/accounts-db/src/accounts_index.rs#L644)
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
-    reference_allocator: std.mem.Allocator,
-    reference_memory: RwMux(ReferenceMemory),
+
+    // map from Pubkey -> AccountRefHead
     bins: []RwMux(RefMap),
     pubkey_bin_calculator: PubkeyBinCalculator,
-    const Self = @This();
 
+    // things for managing the AccountRef memory
+    reference_allocator: std.mem.Allocator,
+    /// Used to AccountRef mmapped data on disk in ./index/bin (see see accountsdb/readme.md)
+    disk_allocator: ?*DiskMemoryAllocator,
+    /// organizes AccountRef memory by *slot*
+    reference_memory: RwMux(ReferenceMemory),
+
+    // TODO(fastload): add field []AccountRef which is a single allocation of a large array of AccountRefs
+    // reads can access this directly
+    // TODO(fastload): recycle_fba.init([]AccountRef) - this will manage the state of free/used AccountRefs
+
+    // TODO(fastload): change to []AccountRef
     pub const ReferenceMemory = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
     pub const RefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
-
+    pub const AllocatorConfig = union(enum) { Ram: struct { allocator: std.mem.Allocator }, Disk: struct { accountsdb_dir: std.fs.Dir } };
     pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
 
+    const Self = @This();
+
     pub fn init(
-        /// used to allocate the hashmap data
         allocator: std.mem.Allocator,
-        /// used to allocate the references
-        reference_allocator: std.mem.Allocator,
+        logger: sig.trace.Logger,
+        allocator_config: AllocatorConfig,
         /// number of bins to shard across
         number_of_bins: usize,
+        max_account_references: u64,
     ) !Self {
-        const bins = try allocator.alloc(RwMux(RefMap), number_of_bins);
-        errdefer allocator.free(number_of_bins);
-        @memset(bins, RwMux(RefMap).init(RefMap.init(allocator)));
+        var self: Self = undefined;
+        _ = max_account_references; // TODO(fastload): use this
 
-        return Self{
-            .allocator = allocator,
-            .reference_allocator = reference_allocator,
-            .bins = bins,
-            .pubkey_bin_calculator = PubkeyBinCalculator.init(number_of_bins),
-            .reference_memory = RwMux(ReferenceMemory).init(ReferenceMemory.init(allocator)),
-        };
+        switch (allocator_config) {
+            .Ram => |ram| {
+                self.disk_allocator = null;
+                self.reference_allocator = ram.allocator;
+                logger.info().logf("using ram memory for account index", .{});
+            },
+            .Disk => |disk| {
+                var index_dir = try disk.accountsdb_dir.makeOpenPath("index", .{});
+                errdefer index_dir.close();
+                self.disk_allocator = try allocator.create(DiskMemoryAllocator);
+                self.disk_allocator.?.* = .{ .dir = index_dir, .logger = logger };
+                self.reference_allocator = self.disk_allocator.?.allocator();
+
+                logger.info().logf("using disk memory (@{s}) for account index", .{sig.utils.fmt.tryRealPath(index_dir, ".")});
+            },
+        }
+
+        self.allocator = allocator;
+        self.bins = try self.allocator.alloc(RwMux(RefMap), number_of_bins);
+        errdefer self.allocator.free(number_of_bins);
+        @memset(self.bins, RwMux(RefMap).init(RefMap.init(self.allocator)));
+
+        self.pubkey_bin_calculator = PubkeyBinCalculator.init(number_of_bins);
+        self.reference_memory = RwMux(ReferenceMemory).init(ReferenceMemory.init(allocator));
+
+        return self;
     }
 
     pub fn deinit(self: *Self, free_memory: bool) void {
@@ -147,6 +175,11 @@ pub const AccountIndex = struct {
                 }
             }
             reference_memory.deinit();
+        }
+
+        if (self.disk_allocator) |d_alloc| {
+            d_alloc.dir.close();
+            self.allocator.destroy(d_alloc);
         }
     }
 
@@ -432,7 +465,7 @@ pub const PubkeyBinCalculator = struct {
 test "account index update/remove reference" {
     const allocator = std.testing.allocator;
 
-    var index = try AccountIndex.init(allocator, allocator, 8);
+    var index = try AccountIndex.init(allocator, .noop, .{ .Ram = .{ .allocator = allocator } }, 8, 100);
     defer index.deinit(true);
     try index.ensureTotalCapacity(100);
 
