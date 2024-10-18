@@ -28,7 +28,6 @@ const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
-const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
 const StandardErrLogger = sig.trace.log.ChannelPrintLogger;
@@ -144,14 +143,14 @@ pub const AccountsDB = struct {
         geyser_writer: ?*GeyserWriter,
     ) !Self {
         // init index
-        const index_allocator_config: AccountIndex.AllocatorConfig = if (config.use_disk_index)
+        const index_config: AccountIndex.AllocatorConfig = if (config.use_disk_index)
             .{ .Disk = .{ .accountsdb_dir = snapshot_dir } }
         else
             .{ .Ram = .{ .allocator = allocator } };
         var account_index = try AccountIndex.init(
             allocator,
             logger,
-            index_allocator_config,
+            index_config,
             config.number_of_index_bins,
             0,
         );
@@ -453,14 +452,14 @@ pub const AccountsDB = struct {
         var timer = try sig.time.Timer.start();
         var progress_timer = try sig.time.Timer.start();
 
-        if (n_account_files > std.math.maxInt(AccountIndex.ReferenceMemory.Size)) {
+        if (n_account_files > std.math.maxInt(AccountIndex.SlotRefMap.Size)) {
             return error.FileMapTooBig;
         }
         // its ok to hold this lock for the entire function because nothing else
         // should be accessing the account index while loading from a snapshot
-        const reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
-        defer reference_memory_lg.unlock();
-        try reference_memory.ensureTotalCapacity(@intCast(n_account_files));
+        const slot_reference_map, var slot_reference_map_lg = self.account_index.slot_reference_map.writeWithLock();
+        defer slot_reference_map_lg.unlock();
+        try slot_reference_map.ensureTotalCapacity(@intCast(n_account_files));
 
         // init storage which holds temporary account data per slot
         // which is eventually written to geyser
@@ -548,7 +547,7 @@ pub const AccountsDB = struct {
                     ref_slice,
                 );
                 counting_alloc.count += 1;
-                reference_memory.putAssumeCapacityNoClobber(slot, ref_list);
+                slot_reference_map.putAssumeCapacityNoClobber(slot, ref_list);
             }
 
             const file_id = file_info.id;
@@ -597,9 +596,9 @@ pub const AccountsDB = struct {
         var ref_count: usize = 0;
         timer.reset();
 
-        var slot_iter = reference_memory.keyIterator();
+        var slot_iter = slot_reference_map.keyIterator();
         while (slot_iter.next()) |slot| {
-            const refs = reference_memory.get(slot.*).?;
+            const refs = slot_reference_map.get(slot.*).?;
             for (refs.items) |*ref| {
                 _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
                 ref_count += 1;
@@ -642,16 +641,16 @@ pub const AccountsDB = struct {
         // ensure enough capacity
         var ref_mem_capacity: u32 = 0;
         for (thread_dbs) |*thread_db| {
-            const thread_ref_memory, var thread_ref_memory_lg = thread_db.account_index.reference_memory.readWithLock();
+            const thread_ref_memory, var thread_ref_memory_lg = thread_db.account_index.slot_reference_map.readWithLock();
             defer thread_ref_memory_lg.unlock();
             ref_mem_capacity += thread_ref_memory.count();
         }
 
         // NOTE: its ok to hold this lock while we merge because
         // nothing else should be accessing the account index while loading from a snapshot
-        const reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
-        defer reference_memory_lg.unlock();
-        try reference_memory.ensureTotalCapacity(ref_mem_capacity);
+        const slot_reference_map, var slot_reference_map_lg = self.account_index.slot_reference_map.writeWithLock();
+        defer slot_reference_map_lg.unlock();
+        try slot_reference_map.ensureTotalCapacity(ref_mem_capacity);
 
         // NOTE: nothing else should try to access the file_map
         // while we are merging so this long hold is ok.
@@ -680,12 +679,12 @@ pub const AccountsDB = struct {
             self.largest_flushed_slot.store(self.largest_rooted_slot.load(.monotonic), .monotonic);
 
             // combine underlying memory
-            const thread_reference_memory, var thread_reference_memory_lg = thread_db.account_index.reference_memory.readWithLock();
-            defer thread_reference_memory_lg.unlock();
+            const thread_slot_reference_map, var thread_slot_reference_map_lg = thread_db.account_index.slot_reference_map.readWithLock();
+            defer thread_slot_reference_map_lg.unlock();
 
-            var thread_ref_iter = thread_reference_memory.iterator();
+            var thread_ref_iter = thread_slot_reference_map.iterator();
             while (thread_ref_iter.next()) |thread_entry| {
-                reference_memory.putAssumeCapacityNoClobber(
+                slot_reference_map.putAssumeCapacityNoClobber(
                     thread_entry.key_ptr.*,
                     thread_entry.value_ptr.*,
                 );
@@ -965,7 +964,7 @@ pub const AccountsDB = struct {
     pub fn getHashesFromIndex(
         self: *AccountsDB,
         config: AccountsDB.AccountHashesConfig,
-        thread_bins: []RwMux(AccountIndex.RefMap),
+        thread_bins: []RwMux(AccountIndex.PubkeyRefMap),
         hashes_allocator: std.mem.Allocator,
         hashes: *ArrayListUnmanaged(Hash),
         total_lamports: *u64,
@@ -1791,17 +1790,17 @@ pub const AccountsDB = struct {
 
             // update slot's reference memory
             {
-                const reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
-                defer reference_memory_lg.unlock();
+                const slot_reference_map, var slot_reference_map_lg = self.account_index.slot_reference_map.writeWithLock();
+                defer slot_reference_map_lg.unlock();
 
-                const reference_memory_entry = reference_memory.getEntry(slot) orelse {
+                const slot_reference_map_entry = slot_reference_map.getEntry(slot) orelse {
                     std.debug.panic("missing corresponding reference memory for slot {d}\n", .{slot});
                 };
                 // NOTE: this is ok because nothing points to this old reference memory
                 // deinit old block of reference memory
-                reference_memory_entry.value_ptr.deinit();
+                slot_reference_map_entry.value_ptr.deinit();
                 // point to new block
-                reference_memory_entry.value_ptr.* = new_reference_block;
+                slot_reference_map_entry.value_ptr.* = new_reference_block;
             }
 
             // queue the old account_file for deletion
@@ -3498,10 +3497,10 @@ test "purge accounts in cache works" {
 
     // ref backing memory is cleared
     {
-        const reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
-        defer reference_memory_lg.unlock();
+        const slot_reference_map, var slot_reference_map_lg = accounts_db.account_index.slot_reference_map.readWithLock();
+        defer slot_reference_map_lg.unlock();
 
-        try std.testing.expect(reference_memory.count() == 0);
+        try std.testing.expect(slot_reference_map.count() == 0);
     }
     // account cache is cleared
     {
@@ -3832,10 +3831,10 @@ test "shrink account file works" {
 
     // full memory block
     {
-        const reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
-        defer reference_memory_lg.unlock();
+        const slot_reference_map, var slot_reference_map_lg = accounts_db.account_index.slot_reference_map.readWithLock();
+        defer slot_reference_map_lg.unlock();
 
-        const slot_mem = reference_memory.get(new_slot).?;
+        const slot_mem = slot_reference_map.get(new_slot).?;
         try std.testing.expect(slot_mem.items.len == accounts2.len);
     }
 
@@ -3877,10 +3876,10 @@ test "shrink account file works" {
 
     // test: memory block is shrunk too
     {
-        const reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
-        defer reference_memory_lg.unlock();
+        const slot_reference_map, var slot_reference_map_lg = accounts_db.account_index.slot_reference_map.readWithLock();
+        defer slot_reference_map_lg.unlock();
 
-        const slot_mem = reference_memory.get(slot).?;
+        const slot_mem = slot_reference_map.get(slot).?;
         try std.testing.expectEqual(1, slot_mem.items.len);
     }
 

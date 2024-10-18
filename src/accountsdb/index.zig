@@ -94,25 +94,28 @@ pub const AccountRef = struct {
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
 
-    // map from Pubkey -> AccountRefHead
-    bins: []RwMux(RefMap),
+    /// map from Pubkey -> AccountRefHead
+    bins: []RwMux(PubkeyRefMap),
     pubkey_bin_calculator: PubkeyBinCalculator,
 
-    // things for managing the AccountRef memory
+    /// things for managing the AccountRef memory
     reference_allocator: std.mem.Allocator,
     /// Used to AccountRef mmapped data on disk in ./index/bin (see see accountsdb/readme.md)
     disk_allocator: ?*DiskMemoryAllocator,
-    /// organizes AccountRef memory by *slot*
-    reference_memory: RwMux(ReferenceMemory),
+    /// map from slot -> []AccountRef
+    slot_reference_map: RwMux(SlotRefMap),
 
     // TODO(fastload): add field []AccountRef which is a single allocation of a large array of AccountRefs
     // reads can access this directly
     // TODO(fastload): recycle_fba.init([]AccountRef) - this will manage the state of free/used AccountRefs
 
     // TODO(fastload): change to []AccountRef
-    pub const ReferenceMemory = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
-    pub const RefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
-    pub const AllocatorConfig = union(enum) { Ram: struct { allocator: std.mem.Allocator }, Disk: struct { accountsdb_dir: std.fs.Dir } };
+    pub const SlotRefMap = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
+    pub const PubkeyRefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
+    pub const AllocatorConfig = union(enum) {
+        Ram: struct { allocator: std.mem.Allocator },
+        Disk: struct { accountsdb_dir: std.fs.Dir },
+    };
     pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
 
     const Self = @This();
@@ -146,12 +149,12 @@ pub const AccountIndex = struct {
         }
 
         self.allocator = allocator;
-        self.bins = try self.allocator.alloc(RwMux(RefMap), number_of_bins);
+        self.bins = try self.allocator.alloc(RwMux(PubkeyRefMap), number_of_bins);
         errdefer self.allocator.free(number_of_bins);
-        @memset(self.bins, RwMux(RefMap).init(RefMap.init(self.allocator)));
+        @memset(self.bins, RwMux(PubkeyRefMap).init(PubkeyRefMap.init(self.allocator)));
 
         self.pubkey_bin_calculator = PubkeyBinCalculator.init(number_of_bins);
-        self.reference_memory = RwMux(ReferenceMemory).init(ReferenceMemory.init(allocator));
+        self.slot_reference_map = RwMux(SlotRefMap).init(SlotRefMap.init(allocator));
 
         return self;
     }
@@ -165,16 +168,16 @@ pub const AccountIndex = struct {
         self.allocator.free(self.bins);
 
         {
-            const reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
-            defer reference_memory_lg.unlock();
+            const slot_reference_map, var slot_reference_map_lg = self.slot_reference_map.writeWithLock();
+            defer slot_reference_map_lg.unlock();
 
             if (free_memory) {
-                var iter = reference_memory.iterator();
+                var iter = slot_reference_map.iterator();
                 while (iter.next()) |entry| {
                     entry.value_ptr.deinit();
                 }
             }
-            reference_memory.deinit();
+            slot_reference_map.deinit();
         }
 
         if (self.disk_allocator) |d_alloc| {
@@ -193,23 +196,23 @@ pub const AccountIndex = struct {
     }
 
     pub fn putReferenceBlock(self: *Self, slot: Slot, references: std.ArrayList(AccountRef)) !void {
-        const reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
-        defer reference_memory_lg.unlock();
-        try reference_memory.putNoClobber(slot, references);
+        const slot_reference_map, var slot_reference_map_lg = self.slot_reference_map.writeWithLock();
+        defer slot_reference_map_lg.unlock();
+        try slot_reference_map.putNoClobber(slot, references);
     }
 
     pub fn freeReferenceBlock(self: *Self, slot: Slot) error{MemoryNotFound}!void {
-        const reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
-        defer reference_memory_lg.unlock();
+        const slot_reference_map, var slot_reference_map_lg = self.slot_reference_map.writeWithLock();
+        defer slot_reference_map_lg.unlock();
 
-        const removed_kv = reference_memory.fetchRemove(slot) orelse return error.MemoryNotFound;
+        const removed_kv = slot_reference_map.fetchRemove(slot) orelse return error.MemoryNotFound;
         removed_kv.value.deinit();
     }
 
     /// Get a read-safe account reference head, and its associated lock guard.
     /// If access to many different account reference heads which are potentially in the same bin is
     /// required, prefer instead to use `getBinFromPubkey(pubkey).read*(){.get(pubkey)}` directly.
-    pub fn getReferenceHeadRead(self: *Self, pubkey: *const Pubkey) ?struct { AccountReferenceHead, RwMux(RefMap).RLockGuard } {
+    pub fn getReferenceHeadRead(self: *Self, pubkey: *const Pubkey) ?struct { AccountReferenceHead, RwMux(PubkeyRefMap).RLockGuard } {
         const bin, var bin_lg = self.getBinFromPubkey(pubkey).readWithLock();
         const ref_head = bin.get(pubkey.*) orelse {
             bin_lg.unlock();
@@ -221,7 +224,7 @@ pub const AccountIndex = struct {
     /// Get a write-safe account reference head, and its associated lock guard.
     /// If access to many different account reference heads which are potentially in the same bin is
     /// required, prefer instead to use `getBinFromPubkey(pubkey).write*(){.get(pubkey)}` directly.
-    pub fn getReferenceHeadWrite(self: *Self, pubkey: *const Pubkey) ?struct { AccountReferenceHead, RwMux(RefMap).WLockGuard } {
+    pub fn getReferenceHeadWrite(self: *Self, pubkey: *const Pubkey) ?struct { AccountReferenceHead, RwMux(PubkeyRefMap).WLockGuard } {
         const bin, const bin_lg = self.getBinFromPubkey(pubkey).writeWithLock();
         const ref_head = bin.get(pubkey.*) orelse return null;
         return .{ ref_head, bin_lg };
@@ -240,7 +243,7 @@ pub const AccountIndex = struct {
         self: *const Self,
         pubkey: *const Pubkey,
         slot: Slot,
-    ) GetAccountRefError!struct { ReferenceParent, RwMux(RefMap).WLockGuard } {
+    ) GetAccountRefError!struct { ReferenceParent, RwMux(PubkeyRefMap).WLockGuard } {
         const bin, var bin_lg = self.getBinFromPubkey(pubkey).writeWithLock();
         errdefer bin_lg.unlock();
 
@@ -380,14 +383,14 @@ pub const AccountIndex = struct {
         return self.pubkey_bin_calculator.binIndex(pubkey);
     }
 
-    pub inline fn getBin(self: *const Self, index: usize) *RwMux(RefMap) {
+    pub inline fn getBin(self: *const Self, index: usize) *RwMux(PubkeyRefMap) {
         return &self.bins[index];
     }
 
     pub inline fn getBinFromPubkey(
         self: *const Self,
         pubkey: *const Pubkey,
-    ) *RwMux(RefMap) {
+    ) *RwMux(PubkeyRefMap) {
         const bin_index = self.pubkey_bin_calculator.binIndex(pubkey);
         return self.getBin(bin_index);
     }
