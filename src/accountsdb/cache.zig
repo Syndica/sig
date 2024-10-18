@@ -101,11 +101,6 @@ pub const AccountsCache = struct {
         }
     }
 
-    /// Does not influence underlying LRU's cache ordering
-    pub fn contains(self: *const Self, pubkey: Pubkey) bool {
-        return self.lru.contains(pubkey);
-    }
-
     /// Replaces the previous entry, if one existed
     pub fn put(self: *Self, pubkey: Pubkey, slot: Slot, account: Account) error{OutOfMemory}!void {
         if (self.lru.peek(pubkey)) |existing_entry| {
