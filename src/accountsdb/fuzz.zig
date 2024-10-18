@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 const zstd = @import("zstd");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const Logger = sig.trace.Logger;
 const StandardErrLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
 const Account = sig.core.Account;
@@ -56,11 +55,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
 
-    var std_logger = StandardErrLogger.init(.{
+    var std_logger = try StandardErrLogger.init(.{
         .allocator = allocator,
         .max_level = Level.debug,
-        .max_buffer = 1 << 30,
-    }) catch @panic("Logger init failed");
+        .max_buffer = 1 << 20,
+    });
     defer std_logger.deinit();
 
     const logger = std_logger.logger();

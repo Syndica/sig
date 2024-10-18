@@ -596,11 +596,11 @@ pub fn run() !void {
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    var std_logger = ChannelPrintLogger.init(.{
+    var std_logger = try ChannelPrintLogger.init(.{
         .allocator = gpa_allocator,
         .max_level = config.current.log_level,
-        .max_buffer = 1 << 30,
-    }) catch @panic("Logger init failed");
+        .max_buffer = 1 << 20,
+    });
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
@@ -1343,11 +1343,11 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 }
 
 fn spawnLogger() !Logger {
-    var std_logger = ChannelPrintLogger.init(.{
+    var std_logger = try ChannelPrintLogger.init(.{
         .allocator = gpa_allocator,
         .max_level = config.current.log_level,
-        .max_buffer = 1 << 30,
-    }) catch @panic("Logger init failed");
+        .max_buffer = 1 << 20,
+    });
     return std_logger.logger();
 }
 
