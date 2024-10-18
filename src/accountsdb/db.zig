@@ -28,7 +28,6 @@ const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
-const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
 const StandardErrLogger = sig.trace.log.ChannelPrintLogger;
@@ -63,9 +62,6 @@ pub const DELETE_ACCOUNT_FILES_MIN = 100;
 /// Analogous to [AccountsDb](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1363)
 pub const AccountsDB = struct {
     allocator: std.mem.Allocator,
-
-    /// Used to store mmapped data in ./index/bin (see see accountsdb/readme.md)
-    disk_allocator_ptr: ?*DiskMemoryAllocator = null,
 
     /// maps pubkeys to account locations
     account_index: AccountIndex,
@@ -146,31 +142,6 @@ pub const AccountsDB = struct {
         config: InitConfig,
         geyser_writer: ?*GeyserWriter,
     ) !Self {
-        const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
-        const reference_allocator: std.mem.Allocator //
-        = blk: {
-            if (config.use_disk_index) {
-                var index_bin_dir = try snapshot_dir.makeOpenPath("index", .{});
-                errdefer index_bin_dir.close();
-
-                logger.info().logf("using disk index in {s}", .{sig.utils.fmt.tryRealPath(index_bin_dir, ".")});
-
-                const ptr = try allocator.create(DiskMemoryAllocator);
-                ptr.* = .{
-                    .dir = index_bin_dir,
-                    .logger = logger,
-                };
-
-                break :blk .{ ptr, ptr.allocator() };
-            } else {
-                logger.info().logf("using ram index", .{});
-                break :blk .{ null, allocator };
-            }
-        };
-        errdefer if (maybe_disk_allocator_ptr) |ptr| {
-            ptr.dir.close();
-            allocator.destroy(ptr);
-        };
 
         // ensure accounts/ exists
         snapshot_dir.makePath("accounts") catch |err| switch (err) {
@@ -180,7 +151,8 @@ pub const AccountsDB = struct {
 
         var account_index = try AccountIndex.init(
             allocator,
-            reference_allocator,
+            logger,
+            if (config.use_disk_index) .{ .accountsdb_dir = snapshot_dir } else null,
             config.number_of_index_bins,
         );
         errdefer account_index.deinit(true);
@@ -191,7 +163,6 @@ pub const AccountsDB = struct {
         const metrics = try AccountsDBMetrics.init();
         return .{
             .allocator = allocator,
-            .disk_allocator_ptr = maybe_disk_allocator_ptr,
             .account_index = account_index,
             .logger = logger,
             .config = config,
@@ -206,10 +177,6 @@ pub const AccountsDB = struct {
 
     pub fn deinit(self: *Self) void {
         self.account_index.deinit(true);
-        if (self.disk_allocator_ptr) |ptr| {
-            ptr.dir.close();
-            self.allocator.destroy(ptr);
-        }
 
         {
             const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
@@ -359,8 +326,8 @@ pub const AccountsDB = struct {
 
             // set the disk allocator after init() doesnt create a new one
             if (use_disk_index) {
-                thread_db.disk_allocator_ptr = self.disk_allocator_ptr;
-                thread_db.account_index.reference_allocator = thread_db.disk_allocator_ptr.?.allocator();
+                thread_db.account_index.disk_allocator = self.account_index.disk_allocator;
+                thread_db.account_index.reference_allocator = thread_db.account_index.disk_allocator.?.allocator();
             }
         }
         defer {
@@ -380,6 +347,7 @@ pub const AccountsDB = struct {
                 file_map.deinit(per_thread_allocator);
 
                 // NOTE: important `false` (ie, 1)
+                loading_thread.account_index.disk_allocator = null; // dont destory the allocator (since its shared)
                 loading_thread.account_index.deinit(false);
 
                 const accounts_cache, var accounts_cache_lg = loading_thread.accounts_cache.writeWithLock();
