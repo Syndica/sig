@@ -41,6 +41,9 @@ pub fn build(b: *Build) void {
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
 
+    const xquic_dep = b.dependency("xquic", dep_opts);
+    const xquic_mod = xquic_dep.module("xquic");
+
     // expose Sig as a module
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/sig.zig"),
@@ -69,6 +72,7 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("zig-network", zig_network_module);
     sig_exe.root_module.addImport("zstd", zstd_mod);
     sig_exe.root_module.addImport("rocksdb", rocksdb_mod);
+    sig_exe.root_module.addImport("xquic", xquic_mod);
     sig_exe.linkLibC();
 
     const main_exe_run = b.addRunArtifact(sig_exe);
