@@ -6,7 +6,6 @@ const AtomicBool = std.atomic.Value(bool);
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const ContactInfo = sig.gossip.data.ContactInfo;
-const Logger = sig.trace.log.Logger;
 const Pubkey = sig.core.pubkey.Pubkey;
 const GossipTable = sig.gossip.GossipTable;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
