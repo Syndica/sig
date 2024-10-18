@@ -204,7 +204,10 @@ pub fn csvDump() !void {
 
     // preallocate memory for csv rows
     const recycle_fba = try allocator.create(sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }));
-    recycle_fba.* = try sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }).init(allocator, config.csv_buf_len);
+    recycle_fba.* = try sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }).init(.{
+        .records_allocator = allocator,
+        .bytes_allocator = allocator,
+    }, config.csv_buf_len);
     defer {
         recycle_fba.deinit();
         allocator.destroy(recycle_fba);
