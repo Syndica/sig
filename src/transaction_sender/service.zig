@@ -133,8 +133,6 @@ pub const Service = struct {
             while (self.input_channel.receive()) |transaction| {
                 self.metrics.transactions_received_count.inc();
 
-                std.debug.print("here\n", .{});
-
                 // If the transaction signature isn't in the batch or the pool, add the transaction.
                 if (!transaction_batch.contains(transaction.signature) and
                     !self.transaction_pool.contains(transaction.signature))
