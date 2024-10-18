@@ -3898,7 +3898,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         var std_logger = StandardErrLogger.init(.{
             .allocator = allocator,
             .max_level = Level.debug,
-            .max_buffer = 1 << 30,
+            .max_buffer = 1 << 20,
         }) catch @panic("Logger init failed");
         defer std_logger.deinit();
 
