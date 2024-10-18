@@ -33,12 +33,14 @@ pub const Context = extern struct {
 };
 
 pub fn initEngine() !*xquic.xqc_engine_t {
+    // specifically using the c_allocator due to engine_deinit calling free()
+    const allocator = std.heap.c_allocator;
     const engine_type = xquic.XQC_ENGINE_CLIENT;
 
-    var engine_ssl_config: xquic.xqc_engine_ssl_config_t = undefined;
-
-    engine_ssl_config.ciphers = xquic.XQC_TLS_CIPHERS;
-    engine_ssl_config.groups = XQC_INTEROP_TLS_GROUPS;
+    var engine_ssl_config: xquic.xqc_engine_ssl_config_t = .{
+        .ciphers = try allocator.dupeZ(u8, xquic.XQC_TLS_CIPHERS),
+        .groups = try allocator.dupeZ(u8, XQC_INTEROP_TLS_GROUPS),
+    };
 
     const engine_cbs: xquic.xqc_engine_callback_t = .{
         .set_event_timer = EngineLayerCallbacks.setEventTimer,
