@@ -60,7 +60,7 @@ const base58Encoder = base58.Encoder.init(.{});
 pub fn run() !void {
     defer {
         // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
-        _ = gossip_value_gpa.deinit();
+        // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
     }
 
     var gossip_host_option = cli.Option{
@@ -1056,22 +1056,23 @@ const bank_kp: KeyPair = .{
 };
 
 pub fn testTransactionSenderService() !void {
-    var app_base = try AppBase.init(gpa_allocator);
+    const allocator = gpa_allocator;
+
+    var app_base = try AppBase.init(allocator);
     defer app_base.deinit();
 
     const genesis_file_path = try config.current.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
 
-    const genesis_config = try readGenesisConfig(gpa_allocator, genesis_file_path);
+    const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
 
-    const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
+    const gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
     defer {
-        app_base.shutdown();
         gossip_service.shutdown();
         gossip_manager.deinit();
     }
 
-    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(gpa_allocator);
+    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
     defer transaction_channel.deinit();
 
     const transaction_sender_config = sig.transaction_sender.service.Config{
@@ -1080,14 +1081,15 @@ pub fn testTransactionSenderService() !void {
     };
 
     var mock_transfer_service = try sig.transaction_sender.MockTransferService.init(
-        gpa_allocator,
+        allocator,
+        transaction_sender_config.cluster,
         transaction_channel,
         &app_base.exit,
         app_base.logger,
     );
 
     var transaction_sender_service = try sig.transaction_sender.Service.init(
-        gpa_allocator,
+        allocator,
         transaction_sender_config,
         transaction_channel,
         &gossip_service.gossip_table_rw,
@@ -1101,7 +1103,6 @@ pub fn testTransactionSenderService() !void {
         sig.transaction_sender.MockTransferService.run,
         .{
             &mock_transfer_service,
-            transaction_sender_config.cluster,
         },
     );
 
@@ -1112,6 +1113,8 @@ pub fn testTransactionSenderService() !void {
     );
 
     mock_transfer_generator_handle.join();
+    app_base.shutdown();
+
     transaction_sender_handle.join();
     gossip_manager.join();
 }

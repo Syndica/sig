@@ -108,7 +108,12 @@ pub const Client = struct {
     // TODO: getBlockTime()
     // TODO: getBlocks()
     // TODO: getBlocksWithLimit()
-    // TODO: getClusterNodes()
+
+    pub fn getClusterNodes(self: *Client, allocator: std.mem.Allocator) !Response([]const types.ClusterNode) {
+        var request = try Request.init(allocator, "getClusterNodes");
+        defer request.deinit();
+        return self.sendFetchRequest(allocator, []const types.ClusterNode, request, .{});
+    }
 
     pub const GetEpochInfoConfig = struct {
         commitment: ?types.Commitment = null,

@@ -7,26 +7,40 @@ const AtomicBool = std.atomic.Value(bool);
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Channel = sig.sync.Channel;
 
+const Signature = sig.core.Signature;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const RpcClient = sig.rpc.Client;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const Duration = sig.time.Duration;
 
+const TRANSFER_FEE: u64 = 5000;
+const TOTAL_TRANSFER_AMOUNT: u64 = 5e8;
+const NUMBER_OF_TRANSACTIONS: u64 = 2;
+
+const MAX_RPC_RETRIES: u64 = 5;
+const MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION: Duration = Duration.fromSecs(30);
+
+const MAX_SIG_RETRIES: u64 = 5;
+const MAX_SIG_WAIT_FOR_SIGNATURE_CONFIRMATION: Duration = Duration.fromSecs(300);
+
 pub const MockTransferService = struct {
     allocator: std.mem.Allocator,
-    logger: Logger,
+    network: types.ClusterType,
     sender: *Channel(TransactionInfo),
     exit: *AtomicBool,
+    logger: Logger,
 
     pub fn init(
         allocator: std.mem.Allocator,
+        network: types.ClusterType,
         sender: *Channel(TransactionInfo),
         exit: *AtomicBool,
         logger: Logger,
     ) !MockTransferService {
         return .{
             .allocator = allocator,
+            .network = network,
             .sender = sender,
             .exit = exit,
             .logger = logger,
@@ -34,7 +48,7 @@ pub const MockTransferService = struct {
     }
 
     /// https://explorer.solana.com/address/H67JSziFxAZR1KSQshWfa8Rdpr7LSv1VkT2cFQHL79rd?cluster=testnet
-    const bank_kp: KeyPair = .{
+    const bank_keypair: KeyPair = .{
         .public_key = .{ .bytes = .{
             239, 10,  4,   236, 219, 237, 69,  197, 199, 60,  117, 184,
             223, 215, 132, 73,  93,  248, 200, 254, 212, 239, 251, 120,
@@ -49,62 +63,167 @@ pub const MockTransferService = struct {
             20,  58,  163, 62,
         } },
     };
+    const bank_pubkey: Pubkey = .{
+        .data = .{
+            239, 10,  4,   236, 219, 237, 69,  197, 199, 60,  117, 184,
+            223, 215, 132, 73,  93,  248, 200, 254, 212, 239, 251, 120,
+            223, 25,  201, 196, 20,  58,  163, 62,
+        },
+    };
 
-    /// Mock transaction generator that sends a transaction every 10 seconds
-    /// Used to test the transaction sender
-    /// TODO:
-    /// - Pass sender keypair and receiver pubkey
-    pub fn run(self: *MockTransferService, network: types.ClusterType) !void {
-        errdefer self.exit.store(true, .monotonic);
-        var rpc_client = RpcClient.init(self.allocator, network, .{});
-        defer rpc_client.deinit();
+    const account_a_keypair: KeyPair = .{
+        .public_key = .{ .bytes = .{
+            3,  140, 214, 34,  176, 145, 149, 13,  169, 145, 117, 3,
+            98, 140, 206, 183, 20,  52,  35,  97,  89,  82,  55,  162,
+            13, 26,  172, 9,   77,  242, 217, 211,
+        } },
+        .secret_key = .{ .bytes = .{
+            28,  57,  92,  177, 192, 198, 0,   137, 66,  122, 128, 0,
+            112, 193, 184, 209, 72,  187, 109, 65,  115, 173, 181, 139,
+            194, 185, 253, 182, 173, 110, 184, 124, 3,   140, 214, 34,
+            176, 145, 149, 13,  169, 145, 117, 3,   98,  140, 206, 183,
+            20,  52,  35,  97,  89,  82,  55,  162, 13,  26,  172, 9,
+            77,  242, 217, 211,
+        } },
+    };
+    const account_a_pubkey: Pubkey = .{
+        .data = .{
+            3,  140, 214, 34,  176, 145, 149, 13,  169, 145, 117, 3,
+            98, 140, 206, 183, 20,  52,  35,  97,  89,  82,  55,  162,
+            13, 26,  172, 9,   77,  242, 217, 211,
+        },
+    };
 
-        const bank_pubkey = try Pubkey.fromPublicKey(&bank_kp.public_key);
+    const account_b_keypair: KeyPair = .{
+        .public_key = .{ .bytes = .{
+            214, 249, 254, 104, 120, 241, 160, 197, 198, 112, 216, 225,
+            214, 43,  186, 232, 237, 73,  88,  96,  113, 228, 175, 163,
+            237, 251, 236, 117, 20,  45,  61,  167,
+        } },
+        .secret_key = .{ .bytes = .{
+            130, 75,  103, 204, 182, 105, 141, 67,  102, 204, 102, 107,
+            63,  0,   54,  80,  84,  101, 103, 222, 176, 198, 47,  111,
+            94,  197, 121, 43,  226, 185, 95,  236, 214, 249, 254, 104,
+            120, 241, 160, 197, 198, 112, 216, 225, 214, 43,  186, 232,
+            237, 73,  88,  96,  113, 228, 175, 163, 237, 251, 236, 117,
+            20,  45,  61,  167,
+        } },
+    };
+    const account_b_pubkey: Pubkey = .{
+        .data = .{
+            214, 249, 254, 104, 120, 241, 160, 197, 198, 112, 216, 225,
+            214, 43,  186, 232, 237, 73,  88,  96,  113, 228, 175, 163,
+            237, 251, 236, 117, 20,  45,  61,  167,
+        },
+    };
 
-        self.logger.debug().logf("bank key: {}", .{bank_pubkey});
-        {
-            const bank_balance_response = try rpc_client.getBalance(
+    /// Wait for a signature to be confirmed, return true if confirmed, false if failed
+    pub fn waitForSignatureConfirmation(self: *MockTransferService, rpc_client: *RpcClient, signature: Signature, max_wait: Duration) !bool {
+        const start = sig.time.Instant.now();
+        while (start.elapsed().asNanos() < max_wait.asNanos()) {
+            self.logger.info().logf("(transaction_sender.MockTransferService) waiting for signature confirmation ({}s remaining): {s}", .{
+                max_wait.asSecs() - start.elapsed().asSecs(),
+                signature.base58String().slice(),
+            });
+            const signature_statuses_response = try rpc_client.getSignatureStatuses(
                 self.allocator,
-                bank_pubkey,
+                &[_]Signature{signature},
                 .{},
             );
-            defer bank_balance_response.deinit();
-            const bank_balance = try bank_balance_response.result();
+            defer signature_statuses_response.deinit();
+            const signature_statuses = try signature_statuses_response.result();
+            if (signature_statuses.value[0]) |signature_status| {
+                if (signature_status.confirmations == null) return true;
+                if (signature_status.err) |_| return false;
+            }
+            std.time.sleep(sig.time.Duration.fromSecs(1).asNanos());
+        }
+        return false;
+    }
 
-            self.logger.debug().logf(
-                "bank balance: {} lamports, or about {d:.4} SOL",
-                .{ bank_balance.value, @as(f32, @floatFromInt(bank_balance.value)) / 1e9 },
-            );
+    /// Get the balance of a pubkey
+    pub fn getBalance(self: *MockTransferService, rpc_client: *RpcClient, pubkey: Pubkey) !u64 {
+        const balance_response = try rpc_client.getBalance(self.allocator, pubkey, .{});
+        defer balance_response.deinit();
+        const balance = try balance_response.result();
+        return balance.value;
+    }
 
-            std.time.sleep(1 * std.time.ns_per_s);
+    /// Open bank and ensure that it has at least 1 SOL
+    pub fn openBank(self: *MockTransferService, rpc_client: *RpcClient) !void {
+        const balance = try self.getBalance(
+            rpc_client,
+            bank_pubkey,
+        );
 
-            // if we have less than 1 SOL, airdrop some more
-            if (bank_balance.value < 1e9) {}
+        if (balance < 1e9) {
+            for (0..5) |_| {
+                const signature = blk: {
+                    const response = try rpc_client.requestAirDrop(self.allocator, bank_pubkey, 5e9, .{});
+                    defer response.deinit();
+                    const signature_string = try response.result();
+                    break :blk try Signature.fromString(signature_string);
+                };
+                if (try self.waitForSignatureConfirmation(rpc_client, signature, MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION)) return;
+            }
+            return error.OpenBankFailed;
         }
 
-        // create test accounts
-        // it's important the test code doesn't have the secret key of the accounts,
-        // to better mimick real-world.
+        const new_balance = try self.getBalance(
+            rpc_client,
+            bank_pubkey,
+        );
 
-        const account_a_pubkey = blk: {
-            const new_kp = try KeyPair.create(null);
-            break :blk try Pubkey.fromPublicKey(&new_kp.public_key);
-        };
+        if (new_balance < 1e9) return error.OpenBankFailed;
+    }
 
-        const account_b_pubkey = blk: {
-            const new_kp = try KeyPair.create(null);
-            break :blk try Pubkey.fromPublicKey(&new_kp.public_key);
-        };
+    /// Closes an account by transferring all SOL to the bank
+    pub fn closeAccount(self: *MockTransferService, random: std.Random, rpc_client: *RpcClient, keypair: KeyPair) !void {
+        const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
+        const balance = try self.getBalance(rpc_client, pubkey);
+        if (balance == 0) return;
 
-        var prng = std.Random.DefaultPrng.init(10);
-        const random = prng.random();
+        self.logger.info().logf("(transaction_sender.MockTransferService) closing account: transfering {} from {s} to {s}", .{ balance - TRANSFER_FEE, pubkey.string().slice(), bank_pubkey.string().slice() });
+        try self.rpcTransferAndWait(
+            random,
+            rpc_client,
+            keypair,
+            bank_pubkey,
+            balance - TRANSFER_FEE,
+        );
 
-        self.logger.debug().logf("account a: {}", .{account_a_pubkey});
-        self.logger.debug().logf("account b: {}", .{account_b_pubkey});
+        const new_balance = try self.getBalance(
+            rpc_client,
+            try Pubkey.fromPublicKey(&keypair.public_key),
+        );
 
-        // move 0.5 SOL to account A
-        while (true) {
-            const latest_blockhash, const last_valid_blockheight = blk: {
+        if (new_balance != 0) return error.CloseAccountFailed;
+    }
+
+    /// Log account balances with a message
+    pub fn logBalances(self: *MockTransferService, rpc_client: *RpcClient, message: []const u8) !void {
+        self.logger.info().logf(
+            "{s}: bank={}, account_a={}, account_b={}",
+            .{
+                message,
+                try self.getBalance(rpc_client, bank_pubkey),
+                try self.getBalance(rpc_client, account_a_pubkey),
+                try self.getBalance(rpc_client, account_b_pubkey),
+            },
+        );
+    }
+
+    /// Transfer lamports via rpc from one account to another, retries transaction 5 times
+    pub fn rpcTransferAndWait(self: *MockTransferService, random: std.Random, rpc_client: *RpcClient, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
+        const from_pubkey = try Pubkey.fromPublicKey(&from_keypair.public_key);
+        for (0..MAX_RPC_RETRIES) |_| {
+            self.logger.info().logf("(transaction_sender.MockTransferService) attempting transfer: from_pubkey={s} to_pubkey={s} amount={}", .{
+                from_pubkey.string().slice(),
+                to_pubkey.string().slice(),
+                lamports,
+            });
+
+            const latest_blockhash, _ = blk: {
                 const blockhash_response = try rpc_client.getLatestBlockhash(self.allocator, .{});
                 defer blockhash_response.deinit();
                 const blockhash = try blockhash_response.result();
@@ -114,57 +233,124 @@ pub const MockTransferService = struct {
                 };
             };
 
-            std.debug.print("block height: {}\n", .{last_valid_blockheight});
+            const transaction = try sig.core.transaction.buildTransferTansaction(
+                self.allocator,
+                random,
+                from_keypair,
+                to_pubkey,
+                lamports,
+                latest_blockhash,
+            );
+            defer transaction.deinit(self.allocator);
+
+            const signature = blk: {
+                const response = try rpc_client.sendTransaction(self.allocator, transaction, .{});
+                defer response.deinit();
+                const signature_string = response.result() catch |err| {
+                    const data_str = try response.parsed.@"error".?.dataAsString(self.allocator);
+                    defer self.allocator.free(data_str);
+                    self.logger.info().logf("(transaction_sender.MockTransferService) {}: amount={} message={s} data={s}", .{ err, lamports, response.parsed.@"error".?.message, data_str });
+                    return error.RpcTransferFailed;
+                };
+                break :blk try Signature.fromString(signature_string);
+            };
+
+            const signature_confirmed = try self.waitForSignatureConfirmation(
+                rpc_client,
+                signature,
+                MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION,
+            );
+
+            if (signature_confirmed) return;
+        }
+        return error.RpcTransferFailedMaxRetries;
+    }
+
+    /// Transfer lamports via sig from one account to another, retries transaction max
+    pub fn sigTransferAndWait(self: *MockTransferService, random: std.Random, rpc_client: *RpcClient, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
+        for (0..MAX_SIG_RETRIES) |_| {
+            const block_height = blk: {
+                const block_height_response = try rpc_client.getBlockHeight(self.allocator, .{});
+                defer block_height_response.deinit();
+                const block_height = try block_height_response.result();
+                break :blk block_height;
+            };
+
+            const latest_blockhash, const last_valid_block_height = blk: {
+                const blockhash_response = try rpc_client.getLatestBlockhash(self.allocator, .{});
+                defer blockhash_response.deinit();
+                const blockhash = try blockhash_response.result();
+                break :blk .{
+                    try Hash.parseBase58String(blockhash.value.blockhash),
+                    blockhash.value.lastValidBlockHeight,
+                };
+            };
 
             const transaction = try sig.core.transaction.buildTransferTansaction(
                 self.allocator,
-                bank_kp,
-                account_a_pubkey,
-                5e8, // 0.5 SOL
-                latest_blockhash,
                 random,
+                from_keypair,
+                to_pubkey,
+                lamports,
+                latest_blockhash,
+            );
+            defer transaction.deinit(self.allocator);
+
+            const transaction_info = try TransactionInfo.init(
+                transaction,
+                last_valid_block_height,
+                null,
+                null,
             );
 
-            const response = try rpc_client.sendTransaction(self.allocator, transaction, .{});
-            const result = try response.result();
+            try self.sender.send(transaction_info);
 
-            std.debug.print("result: {s}\n", .{result});
+            const signature_confirmed = try self.waitForSignatureConfirmation(
+                rpc_client,
+                transaction_info.signature,
+                Duration.fromMillis(@min(
+                    MAX_SIG_WAIT_FOR_SIGNATURE_CONFIRMATION.asMillis(),
+                    (last_valid_block_height - block_height) * 400,
+                )),
+            );
 
-            // try self.sender.send(transaction_info);
+            if (signature_confirmed) return;
+        }
+        return error.SigTransferFailedMaxRetries;
+    }
 
-            // // sleep as to not overload the http server
-            // std.time.sleep(10 * std.time.ns_per_s);
+    /// Run the mock transfer service
+    pub fn run(self: *MockTransferService) !void {
+        errdefer self.exit.store(true, .monotonic);
 
-            // // check if the SOL is in the account
-            // const bank_balance_response = try rpc_client.getBalance(
-            //     self.allocator,
-            //     account_a_pubkey,
-            //     .{},
-            // );
-            // defer bank_balance_response.deinit();
-            // const bank_balance = try bank_balance_response.result();
-            // if (bank_balance.value == 5e8) break;
+        var prng = std.Random.DefaultPrng.init(10);
+        const random = prng.random();
+
+        var rpc_client = RpcClient.init(self.allocator, self.network, .{});
+        defer rpc_client.deinit();
+
+        try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) resetting mock transfer accounts");
+        try self.openBank(&rpc_client);
+        try self.closeAccount(random, &rpc_client, account_a_keypair);
+        try self.closeAccount(random, &rpc_client, account_b_keypair);
+
+        try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) initialising mock transfer accounts");
+        try self.rpcTransferAndWait(random, &rpc_client, bank_keypair, account_a_pubkey, TOTAL_TRANSFER_AMOUNT + TRANSFER_FEE * NUMBER_OF_TRANSACTIONS);
+
+        { // CORE TRANSFER LOGIC
+            for (0..NUMBER_OF_TRANSACTIONS) |i| {
+                self.logger.info().logf("(transaction_sender.MockTransferService) executing mock transfer {} of {}", .{ i, NUMBER_OF_TRANSACTIONS });
+                try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) executing mock transfer from A to B");
+                // try self.rpcTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
+                try self.sigTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
+            }
         }
 
-        // const from_pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
-        // const from_keypair = KeyPair{
-        //     .public_key = .{ .bytes = from_pubkey.data },
-        //     .secret_key = .{ .bytes = [_]u8{ 76, 196, 192, 17, 40, 245, 120, 49, 64, 133, 213, 227, 12, 42, 183, 70, 235, 64, 235, 96, 246, 205, 78, 13, 173, 111, 254, 96, 210, 208, 121, 240, 159, 193, 185, 89, 227, 77, 234, 91, 232, 234, 253, 119, 162, 105, 200, 227, 123, 90, 111, 105, 72, 53, 60, 147, 76, 154, 44, 72, 29, 165, 2, 246 } },
-        // };
-        // const to_pubkey = try Pubkey.fromString("GDFVa3uYXDcNhcNk8A4v28VeF4wcMn8mauZNwVWbpcN");
-        // const lamports: u64 = 1000;
+        try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) resetting mock transfer accounts");
+        try self.closeAccount(random, &rpc_client, account_a_keypair);
+        try self.closeAccount(random, &rpc_client, account_b_keypair);
 
-        // var rpc_client = RpcClient.init(self.allocator, .Testnet, .{});
-        // defer rpc_client.deinit();
-
-        // while (!self.exit.load(.monotonic)) {
-        //     std.time.sleep(Duration.fromSecs(10).asNanos());
-
-        //     self.logger.debugf(
-        //         "latest blockhash: {}, last valid blockheight: {}",
-        //         .{ latest_blockhash, last_valid_blockheight },
-        //     );
-
-        // }
+        try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) exiting mock transfer service");
+        self.exit.store(false, .monotonic);
     }
 };

@@ -45,16 +45,22 @@ pub fn Response(comptime T: type) type {
     };
 }
 
+pub const Error = struct {
+    code: i64,
+    message: []const u8,
+    data: ?std.json.Value = null,
+
+    // TODO: Replace data with structured data
+    pub fn dataAsString(self: *const Error, allocator: std.mem.Allocator) ![]const u8 {
+        return std.json.stringifyAlloc(allocator, self.data.?, .{});
+    }
+};
+
 pub fn ParsedResponse(comptime T: type) type {
     return struct {
         id: ?u64,
         jsonrpc: []const u8,
         result: ?T = null,
         @"error": ?Error = null,
-
-        const Error = struct {
-            code: i64,
-            message: []const u8,
-        };
     };
 }

@@ -516,14 +516,12 @@ const SystemInstruction = union(enum(u8)) {
 
 pub fn buildTransferTansaction(
     allocator: std.mem.Allocator,
+    random: std.Random,
     from_keypair: KeyPair,
     to_pubkey: Pubkey,
     lamports: u64,
     recent_blockhash: Hash,
-    rng: std.Random,
 ) !Transaction {
-    _ = rng;
-
     const from_pubkey = try Pubkey.fromPublicKey(&from_keypair.public_key);
     const transfer_instruction = try transfer(
         allocator,
@@ -539,7 +537,9 @@ pub fn buildTransferTansaction(
     defer allocator.free(message_bytes);
 
     var signatures = try allocator.alloc(Signature, 1);
-    signatures[0] = Signature.init((try from_keypair.sign(message_bytes, null)).toBytes());
+    var noise: [KeyPair.seed_length]u8 = undefined;
+    random.bytes(noise[0..]);
+    signatures[0] = Signature.init((try from_keypair.sign(message_bytes, noise)).toBytes());
 
     return .{
         .signatures = signatures,
@@ -603,11 +603,11 @@ test "create transfer transaction" {
     const recent_blockhash = Hash.generateSha256Hash(&[_]u8{0});
     const tx = try buildTransferTansaction(
         allocator,
+        random,
         from_keypair,
         to_pubkey,
         100,
         recent_blockhash,
-        random,
     );
     defer tx.deinit(allocator);
     const actual_bytes = try sig.bincode.writeAlloc(allocator, tx, .{});
