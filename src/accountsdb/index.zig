@@ -6,11 +6,7 @@ const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const RwMux = sig.sync.RwMux;
-
-pub const SwissMap = sig.accounts_db.swiss_map.SwissMap;
-pub const SwissMapUnmanaged = sig.accounts_db.swiss_map.SwissMapUnmanaged;
-pub const BenchHashMap = sig.accounts_db.swiss_map.BenchHashMap;
-pub const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
+const SwissMap = sig.accounts_db.swiss_map.SwissMap;
 
 pub const AccountReferenceHead = struct {
     ref_ptr: *AccountRef,
@@ -100,8 +96,14 @@ pub const AccountIndex = struct {
     reference_memory: RwMux(ReferenceMemory),
     bins: []RwMux(RefMap),
     pubkey_bin_calculator: PubkeyBinCalculator,
+
+    // TODO(fastload): add field []AccountRef which is a single allocation of a large array of AccountRefs
+    // reads can access this directly
+    // TODO(fastload): recycle_fba.init([]AccountRef) - this will manage the state of free/used AccountRefs
+
     const Self = @This();
 
+    // TODO(fastload): change to []AccountRef
     pub const ReferenceMemory = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
     pub const RefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
 
