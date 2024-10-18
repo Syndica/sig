@@ -138,8 +138,7 @@ pub const ChannelPrintLogger = struct {
             .exit = AtomicBool.init(false),
             .max_level = config.max_level,
             .handle = null,
-            .channel = Channel([]const u8).create(config.allocator) catch
-                @panic("could not allocate LogMsg channel"),
+            .channel = try Channel([]const u8).create(config.allocator),
         };
         self.handle = try std.Thread.spawn(.{}, run, .{self});
         return self;
@@ -268,11 +267,11 @@ const test_level = Level.err;
 
 test "direct" {
     const allocator = std.testing.allocator;
-    const std_logger = ChannelPrintLogger.init(.{
+    const std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = test_level,
-        .max_buffer = 1 << 30,
-    }) catch @panic("Logger init failed");
+        .max_buffer = 1 << 20,
+    });
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
@@ -317,11 +316,11 @@ test "trace_ngswitch" {
 
     const allocator = std.testing.allocator;
 
-    const std_logger = ChannelPrintLogger.init(.{
+    const std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = test_level,
-        .max_buffer = 1 << 30,
-    }) catch @panic("Logger init failed");
+        .max_buffer = 1 << 20,
+    });
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
@@ -339,11 +338,11 @@ test "trace_ngswitch" {
 test "reclaim" {
     const allocator = std.testing.allocator;
 
-    var std_logger = ChannelPrintLogger.init(.{
+    var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = test_level,
         .max_buffer = 4048,
-    }) catch @panic("Logger init failed");
+    });
 
     defer std_logger.deinit();
 
@@ -361,11 +360,11 @@ test "reclaim" {
 test "level" {
     const allocator = std.testing.allocator;
 
-    var std_logger = ChannelPrintLogger.init(.{
+    var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = test_level,
-        .max_buffer = 1 << 30,
-    }) catch @panic("Logger init failed");
+        .max_buffer = 1 << 20,
+    });
 
     defer std_logger.deinit();
 

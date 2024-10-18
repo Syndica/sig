@@ -6,7 +6,6 @@ const AtomicBool = std.atomic.Value(bool);
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const ContactInfo = sig.gossip.data.ContactInfo;
-const Logger = sig.trace.log.Logger;
 const Pubkey = sig.core.pubkey.Pubkey;
 const GossipTable = sig.gossip.GossipTable;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
@@ -36,11 +35,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var std_logger = StandardErrLogger.init(.{
+    var std_logger = try StandardErrLogger.init(.{
         .allocator = allocator,
         .max_level = Level.debug,
-        .max_buffer = 1 << 30,
-    }) catch @panic("Logger init failed");
+        .max_buffer = 1 << 20,
+    });
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
