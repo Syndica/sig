@@ -44,6 +44,9 @@ pub fn build(b: *Build) void {
     const xquic_dep = b.dependency("xquic", dep_opts);
     const xquic_mod = xquic_dep.module("xquic");
 
+    const xev_dep = b.dependency("xev", dep_opts);
+    const xev_mod = xev_dep.module("xev");
+
     // expose Sig as a module
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/sig.zig"),
@@ -73,6 +76,7 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("zstd", zstd_mod);
     sig_exe.root_module.addImport("rocksdb", rocksdb_mod);
     sig_exe.root_module.addImport("xquic", xquic_mod);
+    sig_exe.root_module.addImport("xev", xev_mod);
     sig_exe.linkLibC();
 
     const main_exe_run = b.addRunArtifact(sig_exe);

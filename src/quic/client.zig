@@ -1,5 +1,6 @@
 const std = @import("std");
 const xquic = @import("xquic");
+const xev = @import("xev");
 
 const XQC_INTEROP_TLS_GROUPS = "X25519:P-256:P-384:P-521";
 
@@ -7,8 +8,8 @@ pub const Config = extern struct {
     log_level: u32,
 };
 
-pub const Client = extern struct {
-    xqc_engine: *xquic.xqc_engine_t,
+pub const Context = extern struct {
+    engine: *xquic.xqc_engine_t,
 
     // /* libevent context */
     // struct event    *ev_engine;
@@ -31,7 +32,7 @@ pub const Client = extern struct {
 
 };
 
-pub fn initEngine() !?*xquic.xqc_engine_t {
+pub fn initEngine() !*xquic.xqc_engine_t {
     const engine_type = xquic.XQC_ENGINE_CLIENT;
 
     var engine_ssl_config: xquic.xqc_engine_ssl_config_t = undefined;
@@ -39,7 +40,7 @@ pub fn initEngine() !?*xquic.xqc_engine_t {
     engine_ssl_config.ciphers = xquic.XQC_TLS_CIPHERS;
     engine_ssl_config.groups = XQC_INTEROP_TLS_GROUPS;
 
-    var engine_cbs: xquic.xqc_engine_callback_t = .{
+    const engine_cbs: xquic.xqc_engine_callback_t = .{
         .set_event_timer = EngineLayerCallbacks.setEventTimer,
     };
 
@@ -67,12 +68,36 @@ pub fn initEngine() !?*xquic.xqc_engine_t {
         &engine_cbs,
         &transport_cbs,
         null,
-    );
+    ) orelse @panic("failed to init engine");
 }
 
 pub fn runClient() !void {
-    const engine = try initEngine() orelse @panic("failed to init engine");
-    std.debug.print("engine: {any}\n", .{engine});
+    const context: Context = .{
+        .engine = try initEngine(),
+    };
+    _ = context;
+
+    var loop = try xev.Loop.init(.{});
+    defer loop.deinit();
+
+    var c: xev.Completion = undefined;
+    var engine_event = try xev.Async.init();
+
+    engine_event.wait(&loop, &c, void, null, engineCallback);
+    try engine_event.notify();
+}
+
+fn engineCallback(
+    _: ?*void,
+    _: *xev.Loop,
+    _: *xev.Completion,
+    result: xev.Async.WaitError!void,
+) xev.CallbackAction {
+    _ = result catch unreachable;
+
+    std.debug.print("after!\n", .{});
+
+    return .disarm;
 }
 
 const EngineLayerCallbacks = struct {
