@@ -245,6 +245,8 @@ pub const Service = struct {
                     continue;
                 }
             } else {
+                // TODO: check against transaction_info.last_valid_block_height
+
                 if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
                     try self.transaction_pool.drop_signatures.append(signature);
                     self.metrics.transactions_exceeded_max_retries_count.inc();
@@ -309,11 +311,8 @@ pub const Service = struct {
         }
 
         for (leader_addresses) |leader_address| {
-            std.debug.print("endpoints: {}\n", .{leader_address.toEndpoint()});
-
             for (transactions) |tx| {
-                std.debug.print("sigs: {}\n", .{tx.signature});
-
+                self.logger.info().logf("(transaction_sender.Service) sending transaction {} to leader at {}", .{ tx.signature, leader_address });
                 try self.send_channel.send(Packet.init(
                     leader_address.toEndpoint(),
                     tx.wire_transaction,
@@ -342,7 +341,7 @@ pub const Config = struct {
     // Time waited between processing the transaction pool
     pool_process_rate: Duration = Duration.fromSecs(1),
     // Maximum number of leaders to forward to ahead of the current leader
-    max_leaders_to_send_to: usize = 50,
+    max_leaders_to_send_to: usize = 5,
     // Number of consecutive leader slots (TODO: this should come from other config somewhere)
     number_of_consecutive_leader_slots: u64 = 4,
     // Maximum number of retries for a transaction whoes max_retries is null
