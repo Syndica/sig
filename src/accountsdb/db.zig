@@ -28,6 +28,7 @@ const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
+const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
 const StandardErrLogger = sig.trace.log.ChannelPrintLogger;
@@ -142,25 +143,26 @@ pub const AccountsDB = struct {
         config: InitConfig,
         geyser_writer: ?*GeyserWriter,
     ) !Self {
-
-        // ensure accounts/ exists
-        snapshot_dir.makePath("accounts") catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => |e| return e,
-        };
-
+        // init index
+        const index_allocator_config: AccountIndex.AllocatorConfig = if (config.use_disk_index)
+            .{ .Disk = .{ .accountsdb_dir = snapshot_dir } }
+        else
+            .{ .Ram = .{ .allocator = allocator } };
         var account_index = try AccountIndex.init(
             allocator,
             logger,
-            if (config.use_disk_index) .{ .accountsdb_dir = snapshot_dir } else null,
+            index_allocator_config,
             config.number_of_index_bins,
+            0,
         );
         errdefer account_index.deinit(true);
 
+        // init cache
         var accounts_cache = try AccountsCache.init(allocator, 1_000); // TODO: make configurable
         errdefer accounts_cache.deinit();
 
         const metrics = try AccountsDBMetrics.init();
+
         return .{
             .allocator = allocator,
             .account_index = account_index,
@@ -271,14 +273,16 @@ pub const AccountsDB = struct {
         // used to merge thread results
         const n_combine_threads = n_threads;
 
+        // ensure accounts/ exists
+        self.snapshot_dir.makePath("accounts") catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
         var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
         defer accounts_dir.close();
 
-        var timer = try sig.time.Timer.start();
-
         const n_account_files = snapshot_manifest.file_map.count();
         self.logger.info().logf("found {d} account files", .{n_account_files});
-
         std.debug.assert(n_account_files > 0);
 
         {
@@ -287,6 +291,7 @@ pub const AccountsDB = struct {
             bhs.accumulate(snapshot_manifest.bank_hash_info.stats);
         }
 
+        var timer = try sig.time.Timer.start();
         // short path
         if (n_threads == 1) {
             try self.loadAndVerifyAccountsFiles(
@@ -3248,9 +3253,6 @@ test "geyser stream on load" {
         accounts_db.deinit();
         snapshots.deinit(allocator);
     }
-
-    var accounts_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR ++ "accounts", .{});
-    defer accounts_dir.close();
 
     _ = try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields,
