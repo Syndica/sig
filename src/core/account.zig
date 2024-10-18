@@ -160,14 +160,14 @@ pub fn hashAccount(
 
 test "core.account: test account hash matches rust" {
     var data: [3]u8 = .{ 1, 2, 3 };
-    var account = Account{
+    var account: Account = .{
         .lamports = 10,
         .data = &data,
-        .owner = Pubkey.default(),
+        .owner = Pubkey.ZEROES,
         .executable = false,
         .rent_epoch = 20,
     };
-    const pubkey = Pubkey.default();
+    const pubkey = Pubkey.ZEROES;
 
     const hash = hashAccount(
         account.lamports,

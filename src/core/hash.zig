@@ -9,16 +9,14 @@ pub const Hash = extern struct {
 
     pub const size = 32;
 
+    pub const ZEROES: Hash = .{ .data = .{0} ** size };
+
     const base58 = sig.crypto.base58.Base58Sized(size);
 
     pub fn fromSizedSlice(data: *const [size]u8) Hash {
         var hash: Hash = undefined;
         @memcpy(&hash.data, data);
         return hash;
-    }
-
-    pub fn default() Hash {
-        return .{ .data = .{0} ** size };
     }
 
     pub fn generateSha256Hash(bytes: []const u8) Hash {

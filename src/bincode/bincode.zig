@@ -547,20 +547,8 @@ pub fn free(allocator: std.mem.Allocator, value: anytype) void {
                 }
             } else inline for (info.fields) |field| {
                 if (getFieldConfig(T, field)) |field_config| {
-                    if (field_config.free) |free_fcn| {
-                        var field_value = @field(value, field.name);
-                        switch (@typeInfo(field.type)) {
-                            .Pointer => |*field_info| {
-                                // TODO: Why do we do only slice?
-                                if (field_info.size == .Slice) {
-                                    free_fcn(allocator, field_value);
-                                }
-                            },
-                            else => {
-                                free_fcn(allocator, &field_value);
-                            },
-                        }
-
+                    if (field_config.free) |freeFn| {
+                        freeFn(allocator, @field(value, field.name));
                         continue;
                     }
                 }
@@ -631,7 +619,7 @@ pub fn getConfig(comptime T: type) ?FieldConfig(T) {
     return if (comptime hashMapInfo(T) != null)
         hashmap.hashMapFieldConfig(T, .{})
     else if (comptime arrayListInfo(T) != null)
-        arraylist.arrayListFieldConfig(T)
+        arraylist.standardConfig(T)
     else
         null;
 }
@@ -661,8 +649,8 @@ pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !u
     return ser_slice.len;
 }
 
-pub fn writeToArray(alloc: std.mem.Allocator, data: anytype, params: Params) !std.ArrayList(u8) {
-    var array_buf = try std.ArrayList(u8).initCapacity(alloc, 2048);
+pub fn writeToArray(allocator: std.mem.Allocator, data: anytype, params: Params) !std.ArrayList(u8) {
+    var array_buf = try std.ArrayList(u8).initCapacity(allocator, 2048);
     try bincode.write(array_buf.writer(), data, params);
 
     return array_buf;
@@ -741,11 +729,10 @@ test "bincode: custom enum" {
 }
 
 test "bincode: default on eof" {
-    const defaultArrayListOnEOFConfig = @import("../sig.zig").bincode.arraylist.defaultArrayListOnEOFConfig;
     const Foo = struct {
         value: u8 = 0,
         accounts: std.ArrayList(u64),
-        pub const @"!bincode-config:accounts" = defaultArrayListOnEOFConfig(u64);
+        pub const @"!bincode-config:accounts" = arraylist.defaultOnEofConfig(std.ArrayList(u64));
         pub const @"!bincode-config:value" = int.defaultOnEof(u8, 0);
     };
 

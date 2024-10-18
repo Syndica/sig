@@ -84,7 +84,7 @@ pub const AccountRef = struct {
 
     pub fn default() AccountRef {
         return AccountRef{
-            .pubkey = Pubkey.default(),
+            .pubkey = Pubkey.ZEROES,
             .slot = 0,
             .location = .{ .UnrootedMap = .{ .index = 0 } },
         };

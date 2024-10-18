@@ -23,7 +23,6 @@ const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
 
 const Logger = sig.trace.Logger;
 
-const defaultArrayListUnmanagedOnEOFConfig = bincode.arraylist.defaultArrayListUnmanagedOnEOFConfig;
 const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
 const readDirectory = sig.utils.directory.readDirectory;
 
@@ -675,9 +674,9 @@ pub const BankIncrementalSnapshotPersistence = struct {
     pub fn default() @This() {
         return .{
             .full_slot = 0,
-            .full_hash = Hash.default(),
+            .full_hash = Hash.ZEROES,
             .full_capitalization = 0,
-            .incremental_hash = Hash.default(),
+            .incremental_hash = Hash.ZEROES,
             .incremental_capitalization = 0,
         };
     }
@@ -1066,8 +1065,8 @@ pub const AccountsDbFields = struct {
     pub const @"!bincode-config:file_map" = bincode.hashmap.hashMapFieldConfig(FileMap, .{
         .value = bincode.list.valueEncodedAsSlice(AccountFileInfo, .{}),
     });
-    pub const @"!bincode-config:rooted_slots" = defaultArrayListUnmanagedOnEOFConfig(Slot);
-    pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListUnmanagedOnEOFConfig(SlotAndHash);
+    pub const @"!bincode-config:rooted_slots" = bincode.arraylist.defaultOnEofConfig(std.ArrayListUnmanaged(Slot));
+    pub const @"!bincode-config:rooted_slot_hashes" = bincode.arraylist.defaultOnEofConfig(std.ArrayListUnmanaged(SlotAndHash));
 
     pub const FileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
 
@@ -1599,7 +1598,7 @@ pub const FullSnapshotFileInfo = struct {
     test snapshotNameStr {
         try std.testing.expectEqualStrings(
             "snapshot-10-11111111111111111111111111111111.tar.zst",
-            snapshotNameStr(.{ .slot = 10, .hash = Hash.default() }).constSlice(),
+            snapshotNameStr(.{ .slot = 10, .hash = Hash.ZEROES }).constSlice(),
         );
     }
 };
@@ -1669,7 +1668,7 @@ pub const IncrementalSnapshotFileInfo = struct {
     test snapshotNameStr {
         try std.testing.expectEqualStrings(
             "incremental-snapshot-10-25-11111111111111111111111111111111.tar.zst",
-            snapshotNameStr(.{ .base_slot = 10, .slot = 25, .hash = Hash.default() }).constSlice(),
+            snapshotNameStr(.{ .base_slot = 10, .slot = 25, .hash = Hash.ZEROES }).constSlice(),
         );
     }
 };

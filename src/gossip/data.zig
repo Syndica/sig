@@ -21,7 +21,6 @@ const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
 const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
-const ShortVecArrayListConfig = sig.bincode.shortvec.ShortVecArrayListConfig;
 const sanitizeWallclock = sig.gossip.message.sanitizeWallclock;
 
 const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
@@ -631,7 +630,7 @@ pub const Vote = struct {
     pub fn initRandom(random: std.rand.Random) Vote {
         return Vote{
             .from = Pubkey.initRandom(random),
-            .transaction = Transaction.default(),
+            .transaction = Transaction.EMPTY,
             .wallclock = getWallclockMs(),
             .slot = random.int(u64),
         };
@@ -1194,14 +1193,14 @@ pub const ContactInfo = struct {
     addrs: ArrayList(IpAddr),
     sockets: ArrayList(SocketEntry),
     extensions: ArrayList(Extension),
-    cache: [SOCKET_CACHE_SIZE]SocketAddr = socket_addrs_unspecified(),
+    cache: [SOCKET_CACHE_SIZE]SocketAddr = .{SocketAddr.UNSPECIFIED} ** SOCKET_CACHE_SIZE,
 
     // TODO: improve implementation of post deserialise method
     pub const @"!bincode-config:post-deserialize" = bincode.FieldConfig(ContactInfo){ .post_deserialize_fn = ContactInfo.buildCache };
     pub const @"!bincode-config:cache" = bincode.FieldConfig([SOCKET_CACHE_SIZE]SocketAddr){ .skip = true };
-    pub const @"!bincode-config:addrs" = ShortVecArrayListConfig(IpAddr);
-    pub const @"!bincode-config:sockets" = ShortVecArrayListConfig(SocketEntry);
-    pub const @"!bincode-config:extensions" = ShortVecArrayListConfig(Extension);
+    pub const @"!bincode-config:addrs" = bincode.shortvec.arrayListConfig(IpAddr);
+    pub const @"!bincode-config:sockets" = bincode.shortvec.arrayListConfig(SocketEntry);
+    pub const @"!bincode-config:extensions" = bincode.shortvec.arrayListConfig(Extension);
     pub const @"!bincode-config:wallclock" = var_int_config_u64;
 
     const Self = @This();
@@ -1248,11 +1247,10 @@ pub const ContactInfo = struct {
             .wallclock = wallclock,
             .outset = outset,
             .shred_version = shred_version,
-            .version = ClientVersion.default(),
+            .version = ClientVersion.CURRENT,
             .addrs = ArrayList(IpAddr).init(allocator),
             .sockets = ArrayList(SocketEntry).init(allocator),
             .extensions = ArrayList(void).init(allocator),
-            .cache = socket_addrs_unspecified(),
         };
     }
 
@@ -1341,7 +1339,7 @@ pub const ContactInfo = struct {
                 next_entry.offset += removed_entry.offset;
             }
             self.removeAddrIfUnused(removed_entry.index);
-            self.cache[@intFromEnum(key)] = SocketAddr.unspecified();
+            self.cache[@intFromEnum(key)] = SocketAddr.UNSPECIFIED;
         }
     }
 
@@ -1478,10 +1476,6 @@ pub const SocketEntry = struct {
             self.offset == other.offset;
     }
 };
-
-fn socket_addrs_unspecified() [SOCKET_CACHE_SIZE]SocketAddr {
-    return .{SocketAddr.unspecified()} ** SOCKET_CACHE_SIZE;
-}
 
 pub const RestartHeaviestFork = struct {
     from: Pubkey,
@@ -1863,7 +1857,7 @@ test "RestartHeaviestFork serialization matches rust" {
         .last_slot = 12,
         .observed_stake = 11,
         .shred_version = 20,
-        .last_slot_hash = Hash.default(),
+        .last_slot_hash = Hash.ZEROES,
     };
 
     var buf = [_]u8{0} ** 1024;
@@ -1887,7 +1881,7 @@ test "RestartLastVotedForkSlots serialization matches rust" {
         .from = try Pubkey.fromString("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
         .wallclock = 0,
         .last_voted_slot = 0,
-        .last_voted_hash = Hash.default(),
+        .last_voted_hash = Hash.ZEROES,
         .shred_version = 0,
         .offsets = offsets,
     };
@@ -2030,7 +2024,7 @@ test "sanitize invalid SnapshotHashes full slot has error" {
 test "sanitize invalid SnapshotHashes incremental slot has error" {
     var prng = std.rand.DefaultPrng.init(524145234);
     const random = prng.random();
-    var incremental: [1]SlotAndHash = .{.{ .slot = 1_000_000_000_487_283, .hash = Hash.default() }};
+    var incremental: [1]SlotAndHash = .{.{ .slot = 1_000_000_000_487_283, .hash = Hash.ZEROES }};
     var instance = SnapshotHashes.initRandom(random);
     instance.incremental = &incremental;
     const data = GossipData{ .SnapshotHashes = instance };
@@ -2040,7 +2034,7 @@ test "sanitize invalid SnapshotHashes incremental slot has error" {
 test "sanitize SnapshotHashes full > incremental has error" {
     var prng = std.rand.DefaultPrng.init(524145234);
     const random = prng.random();
-    var incremental: [1]SlotAndHash = .{.{ .slot = 1, .hash = Hash.default() }};
+    var incremental: [1]SlotAndHash = .{.{ .slot = 1, .hash = Hash.ZEROES }};
     var instance = SnapshotHashes.initRandom(random);
     instance.full.slot = 2;
     instance.incremental = &incremental;
