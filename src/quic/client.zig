@@ -3,11 +3,11 @@ const xquic = @import("xquic");
 
 const XQC_INTEROP_TLS_GROUPS = "X25519:P-256:P-384:P-521";
 
-pub const Config = struct {
+pub const Config = extern struct {
     log_level: u32,
 };
 
-pub const Client = struct {
+pub const Client = extern struct {
     xqc_engine: *xquic.xqc_engine_t,
 
     // /* libevent context */
@@ -39,32 +39,20 @@ pub fn initEngine() !?*xquic.xqc_engine_t {
     engine_ssl_config.ciphers = xquic.XQC_TLS_CIPHERS;
     engine_ssl_config.groups = XQC_INTEROP_TLS_GROUPS;
 
-    var transport_cbs: xquic.xqc_transport_callbacks_t = undefined;
-    var callback: xquic.xqc_engine_callback_t = undefined;
+    var engine_cbs: xquic.xqc_engine_callback_t = .{
+        .set_event_timer = EngineLayerCallbacks.setEventTimer,
+    };
 
-    // static xqc_engine_callback_t callback = {
-    //     .log_callbacks = {
-    //         .xqc_log_write_err = xqc_demo_cli_write_log_file,
-    //         .xqc_log_write_stat = xqc_demo_cli_write_log_file,
-    //         .xqc_qlog_event_write = xqc_demo_cli_write_qlog_file,
-    //     },
-    //     .keylog_cb = xqc_demo_cli_keylog_cb,
-    //     .set_event_timer = xqc_demo_cli_set_event_timer,
-    // };
-
-    // static xqc_transport_callbacks_t tcb = {
-    //     .write_socket = xqc_demo_cli_write_socket,
-    //     .write_socket_ex = xqc_demo_cli_write_socket_ex,
-    //     .save_token = xqc_demo_cli_save_token, /* save token */
-    //     .save_session_cb = xqc_demo_cli_save_session_cb,
-    //     .save_tp_cb = xqc_demo_cli_save_tp_cb,
-    //     .conn_update_cid_notify = xqc_demo_cli_conn_update_cid_notify,
-    //     .ready_to_create_path_notify = xqc_demo_cli_conn_create_path,
-    //     .path_removed_notify = xqc_demo_cli_path_removed,
-    // };
-
-    // *cb = callback;
-    // *transport_cbs = tcb;
+    const transport_cbs: xquic.xqc_transport_callbacks_t = .{
+        .write_socket = TransportCallbacks.writeSocket,
+        .write_socket_ex = TransportCallbacks.writeSocketEx,
+        .save_token = TransportCallbacks.saveToken,
+        .save_session_cb = TransportCallbacks.saveSessionCb,
+        .save_tp_cb = TransportCallbacks.saveTpCb,
+        .conn_update_cid_notify = TransportCallbacks.connUpdateCidNotify,
+        .ready_to_create_path_notify = TransportCallbacks.readyToCreatePathNotify,
+        .path_removed_notify = TransportCallbacks.pathRemoved,
+    };
 
     var config: xquic.xqc_config_t = undefined;
     if (xquic.xqc_engine_get_default_config(&config, engine_type) < 0) {
@@ -76,18 +64,157 @@ pub fn initEngine() !?*xquic.xqc_engine_t {
         engine_type,
         &config,
         &engine_ssl_config,
-        &callback,
+        &engine_cbs,
         &transport_cbs,
         null,
     );
 }
 
 pub fn runClient() !void {
-    // const client: Client = .{};
-
-    // client.eb = event_base_new();
-    // client.ev_engine = event_new(ctx->eb, -1, 0, xqc_demo_cli_engine_callback, ctx);
-
     const engine = try initEngine() orelse @panic("failed to init engine");
     std.debug.print("engine: {any}\n", .{engine});
 }
+
+const EngineLayerCallbacks = struct {
+    fn writeLogFile(
+        level: xquic.xqc_log_level_t,
+        buf: ?*const anyopaque,
+        size: usize,
+        engine_user_data: ?*anyopaque,
+    ) callconv(.C) void {
+        _ = level;
+        _ = buf;
+        _ = size;
+        _ = engine_user_data;
+        std.debug.print("writeLogFile\n", .{});
+    }
+
+    fn writeQLogFile(
+        imp: xquic.qlog_event_importance_t,
+        buf: ?*const anyopaque,
+        size: usize,
+        engine_user_data: ?*anyopaque,
+    ) callconv(.C) void {
+        _ = imp;
+        _ = buf;
+        _ = size;
+        _ = engine_user_data;
+        std.debug.print("writeQLogFile\n", .{});
+    }
+
+    fn keyLogCb(
+        scid: ?*const xquic.xqc_cid_t,
+        line: ?[*]const u8,
+        engine_user_data: ?*anyopaque,
+    ) callconv(.C) void {
+        _ = scid;
+        _ = line;
+        _ = engine_user_data;
+        std.debug.print("keyLogCb\n", .{});
+    }
+
+    fn setEventTimer(wake_after: xquic.xqc_usec_t, engine_user_data: ?*anyopaque) callconv(.C) void {
+        _ = wake_after;
+        _ = engine_user_data;
+        std.debug.print("setEventTimer\n", .{});
+    }
+};
+
+const AlpnCallbacks = struct {};
+
+const TransportCallbacks = struct {
+    fn writeSocket(
+        buf: ?[*]const u8,
+        size: usize,
+        peer_address: ?*const xquic.struct_sockaddr,
+        addr_len: std.c.socklen_t,
+        user_data: ?*anyopaque,
+    ) callconv(.C) isize {
+        std.debug.print("writeSocket\n", .{});
+        return writeSocketEx(
+            0,
+            buf,
+            size,
+            peer_address,
+            addr_len,
+            user_data,
+        );
+    }
+    fn writeSocketEx(
+        path_id: u64,
+        buf: ?[*]const u8,
+        size: usize,
+        peer_address: ?*const xquic.struct_sockaddr,
+        addr_len: std.c.socklen_t,
+        user_data: ?*anyopaque,
+    ) callconv(.C) isize {
+        std.debug.print("writeSocketEx\n", .{});
+        _ = path_id;
+        _ = buf;
+        _ = size;
+        _ = peer_address;
+        _ = addr_len;
+        _ = user_data;
+        return -1;
+    }
+    fn saveToken(
+        token: ?[*]const u8,
+        token_len: u32,
+        user_data: ?*anyopaque,
+    ) callconv(.C) void {
+        _ = token;
+        _ = token_len;
+        _ = user_data;
+        std.debug.print("saveToken\n", .{});
+    }
+    fn saveSessionCb(
+        data: ?[*]const u8,
+        data_len: usize,
+        user_data: ?*anyopaque,
+    ) callconv(.C) void {
+        _ = data;
+        _ = data_len;
+        _ = user_data;
+        std.debug.print("saveSessionCb\n", .{});
+    }
+    fn saveTpCb(
+        data: ?[*]const u8,
+        data_len: usize,
+        user_data: ?*anyopaque,
+    ) callconv(.C) void {
+        _ = data;
+        _ = data_len;
+        _ = user_data;
+        std.debug.print("saveSessionCb\n", .{});
+    }
+    fn connUpdateCidNotify(
+        conn: ?*xquic.xqc_connection_t,
+        retire_cid: ?*const xquic.xqc_cid_t,
+        new_cid: ?*const xquic.xqc_cid_t,
+        user_data: ?*anyopaque,
+    ) callconv(.C) void {
+        _ = conn;
+        _ = retire_cid;
+        _ = new_cid;
+        _ = user_data;
+        std.debug.print("connUpdateCidNotify\n", .{});
+    }
+    fn readyToCreatePathNotify(
+        cid: ?*const xquic.xqc_cid_t,
+        conn_user_data: ?*anyopaque,
+    ) callconv(.C) void {
+        _ = cid;
+        _ = conn_user_data;
+        std.debug.print("connCreatePath\n", .{});
+    }
+    fn pathRemoved(
+        scid: ?*const xquic.xqc_cid_t,
+        path_id: u64,
+        user_data: ?*anyopaque,
+    ) callconv(.C) void {
+        _ = scid;
+        _ = path_id;
+        _ = user_data;
+        std.debug.print("pathRemoved\n", .{});
+    }
+};
