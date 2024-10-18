@@ -41,6 +41,7 @@ const Histogram = sig.prometheus.histogram.Histogram;
 const StatusCache = sig.accounts_db.StatusCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
+const AccountsCache = sig.accounts_db.cache.AccountsCache;
 const PubkeyBinCalculator = sig.accounts_db.index.PubkeyBinCalculator;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
@@ -63,12 +64,18 @@ pub const DELETE_ACCOUNT_FILES_MIN = 100;
 pub const AccountsDB = struct {
     allocator: std.mem.Allocator,
 
-    /// maps a pubkey to the account location
-    account_index: AccountIndex,
+    /// Used to store mmapped data in ./index/bin (see see accountsdb/readme.md)
     disk_allocator_ptr: ?*DiskMemoryAllocator = null,
 
-    /// track per-slot for purge/flush
-    account_cache: RwMux(AccountCache),
+    /// maps pubkeys to account locations
+    account_index: AccountIndex,
+
+    /// per-slot map containing a list of pubkeys and accounts.
+    /// This is tracked per-slot for purge/flush
+    unrooted_accounts: RwMux(SlotPubkeyAccounts),
+
+    // pubkey->account LRU maps
+    accounts_cache: RwMux(AccountsCache),
 
     /// NOTE: see accountsdb/readme.md for more details on how these are used
     file_map: RwMux(FileMap) = RwMux(FileMap).init(.{}),
@@ -117,7 +124,7 @@ pub const AccountsDB = struct {
     const Self = @This();
 
     pub const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
-    pub const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
+    pub const SlotPubkeyAccounts = std.AutoHashMap(Slot, PubkeysAndAccounts);
     pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
@@ -173,6 +180,9 @@ pub const AccountsDB = struct {
         );
         errdefer account_index.deinit(true);
 
+        var accounts_cache = try AccountsCache.init(allocator, 1_000); // TODO: make configurable
+        errdefer accounts_cache.deinit();
+
         const metrics = try AccountsDBMetrics.init();
         return .{
             .allocator = allocator,
@@ -180,7 +190,8 @@ pub const AccountsDB = struct {
             .account_index = account_index,
             .logger = logger,
             .config = config,
-            .account_cache = RwMux(AccountCache).init(AccountCache.init(allocator)),
+            .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(allocator)),
+            .accounts_cache = RwMux(AccountsCache).init(accounts_cache),
             .snapshot_dir = snapshot_dir,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .metrics = metrics,
@@ -196,16 +207,22 @@ pub const AccountsDB = struct {
         }
 
         {
-            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
-            defer account_cache_lg.unlock();
-            var iter = account_cache.valueIterator();
+            const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
+            defer accounts_cache_lg.unlock();
+            accounts_cache.deinit();
+        }
+
+        {
+            const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.writeWithLock();
+            defer unrooted_accounts_lg.unlock();
+            var iter = unrooted_accounts.valueIterator();
             while (iter.next()) |pubkeys_and_accounts| {
                 const pubkeys, const accounts = pubkeys_and_accounts.*;
                 for (accounts) |account| account.deinit(self.allocator);
                 self.allocator.free(pubkeys);
                 self.allocator.free(accounts);
             }
-            account_cache.deinit();
+            unrooted_accounts.deinit();
         }
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
@@ -359,6 +376,10 @@ pub const AccountsDB = struct {
 
                 // NOTE: important `false` (ie, 1)
                 loading_thread.account_index.deinit(false);
+
+                const accounts_cache, var accounts_cache_lg = loading_thread.accounts_cache.writeWithLock();
+                defer accounts_cache_lg.unlock();
+                accounts_cache.deinit();
             }
             loading_threads.deinit();
         }
@@ -1019,15 +1040,15 @@ pub const AccountsDB = struct {
                         defer lock_guard.unlock();
 
                         account_hash = switch (account) {
-                            .file => |in_file| sig.core.account.hashAccount(
-                                in_file.lamports().*,
-                                in_file.data,
-                                &in_file.owner().data,
-                                in_file.executable().*,
-                                in_file.rent_epoch().*,
-                                &in_file.pubkey().data,
+                            .file => |in_file_account| sig.core.account.hashAccount(
+                                in_file_account.lamports().*,
+                                in_file_account.data,
+                                &in_file_account.owner().data,
+                                in_file_account.executable().*,
+                                in_file_account.rent_epoch().*,
+                                &in_file_account.pubkey().data,
                             ),
-                            .cache => |cached| cached.hash(&key),
+                            .unrooted_map => |unrooted_account| unrooted_account.hash(&key),
                         };
                     }
                 }
@@ -1145,8 +1166,8 @@ pub const AccountsDB = struct {
             }
 
             {
-                const account_cache, var account_cache_lg = self.account_cache.readWithLock();
-                defer account_cache_lg.unlock();
+                const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.readWithLock();
+                defer unrooted_accounts_lg.unlock();
 
                 // we're careful to load this value only after acquiring a read lock on the
                 // account cache, such as to avoid the edge case where:
@@ -1159,13 +1180,14 @@ pub const AccountsDB = struct {
                 const root_slot = self.largest_rooted_slot.load(.monotonic);
 
                 // flush slots <= root slot
-                var cache_slot_iter = account_cache.keyIterator();
-                while (cache_slot_iter.next()) |cache_slot| {
-                    if (cache_slot.* <= root_slot) {
+                // TODO: account for forks when consensus is implemented
+                var unrooted_slot_iter = unrooted_accounts.keyIterator();
+                while (unrooted_slot_iter.next()) |unrooted_slot| {
+                    if (unrooted_slot.* <= root_slot) {
                         // NOTE: need to flush all references <= root_slot before we call clean
-                        // or things break by trying to clean cache references
+                        // or things break by trying to clean unrooted references
                         // NOTE: this might be too much in production, not sure
-                        try flush_slots.append(cache_slot.*);
+                        try flush_slots.append(unrooted_slot.*);
                     }
                 }
             }
@@ -1281,10 +1303,10 @@ pub const AccountsDB = struct {
         const pubkeys, const accounts: []const Account = blk: {
             // NOTE: flush should be the only function to delete/free cache slices of a flushed slot
             // -- purgeSlot removes slices but we should never purge rooted slots
-            const account_cache, var account_cache_lg = self.account_cache.readWithLock();
-            defer account_cache_lg.unlock();
+            const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.readWithLock();
+            defer unrooted_accounts_lg.unlock();
 
-            const pubkeys, const accounts = account_cache.get(slot) orelse return error.SlotNotFound;
+            const pubkeys, const accounts = unrooted_accounts.get(slot) orelse return error.SlotNotFound;
             break :blk .{ pubkeys, accounts };
         };
         std.debug.assert(accounts.len == pubkeys.len);
@@ -1336,7 +1358,7 @@ pub const AccountsDB = struct {
                     ref.location = .{ .File = .{ .file_id = file_id, .offset = offset } };
                     // NOTE: we break here because we dont allow multiple account states per slot
                     // NOTE: if there are multiple states, then it will likely break during clean
-                    // trying to access a .File location which is actually still .Cache (bc it
+                    // trying to access a .File location which is actually still .UnrootedMap (bc it
                     // was never updated)
                     break true;
                 }
@@ -1348,11 +1370,11 @@ pub const AccountsDB = struct {
 
         // remove old references
         {
-            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
-            defer account_cache_lg.unlock();
+            const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.writeWithLock();
+            defer unrooted_accounts_lg.unlock();
 
             // remove from cache map
-            const did_remove = account_cache.remove(slot);
+            const did_remove = unrooted_accounts.remove(slot);
             std.debug.assert(did_remove);
 
             // free slices
@@ -1433,8 +1455,8 @@ pub const AccountsDB = struct {
 
                 // short exit because nothing else to do
                 if (rooted_ref_count == 0) continue;
-
                 // if there are extra references, remove them
+
                 var curr: ?*AccountRef = head_ref.ref_ptr;
                 while (curr) |ref| : (curr = ref.next_ptr) {
                     const is_not_rooted = ref.slot > rooted_slot_max;
@@ -1817,10 +1839,10 @@ pub const AccountsDB = struct {
         const pubkeys: []const Pubkey, //
         const accounts: []const Account //
         = blk: {
-            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
-            defer account_cache_lg.unlock();
+            const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.writeWithLock();
+            defer unrooted_accounts_lg.unlock();
 
-            const removed_entry = account_cache.fetchRemove(slot) orelse {
+            const removed_entry = unrooted_accounts.fetchRemove(slot) orelse {
                 // the way it works right now, account files only exist for rooted slots
                 // rooted slots should never need to be purged so we should never get here
                 @panic("purging an account file not supported");
@@ -1855,17 +1877,35 @@ pub const AccountsDB = struct {
     pub fn getAccountFromRef(self: *Self, account_ref: *const AccountRef) !Account {
         switch (account_ref.location) {
             .File => |ref_info| {
-                return try self.getAccountInFile(
-                    self.allocator,
-                    ref_info.file_id,
-                    ref_info.offset,
-                );
-            },
-            .Cache => |ref_info| {
-                const account_cache, var account_cache_lg = self.account_cache.readWithLock();
-                defer account_cache_lg.unlock();
+                const account_in_cache = blk: {
+                    const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
+                    defer accounts_cache_lg.unlock();
 
-                _, const accounts = account_cache.get(account_ref.slot) orelse return error.SlotNotFound;
+                    const cached_account = accounts_cache.get(account_ref.pubkey, account_ref.slot) orelse break :blk null;
+                    break :blk cached_account.account;
+                };
+
+                if (account_in_cache) |account| {
+                    return account;
+                } else {
+                    const account = try self.getAccountInFile(
+                        self.allocator,
+                        ref_info.file_id,
+                        ref_info.offset,
+                    );
+
+                    const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
+                    defer accounts_cache_lg.unlock();
+                    try accounts_cache.put(account_ref.pubkey, account_ref.slot, account);
+
+                    return account;
+                }
+            },
+            .UnrootedMap => |ref_info| {
+                const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.readWithLock();
+                defer unrooted_accounts_lg.unlock();
+
+                _, const accounts = unrooted_accounts.get(account_ref.slot) orelse return error.SlotNotFound;
                 const account = accounts[ref_info.index];
 
                 return account.clone(self.allocator);
@@ -1873,19 +1913,16 @@ pub const AccountsDB = struct {
         }
     }
 
-    pub const AccountInCacheOrFileTag = enum { file, cache };
-    pub const AccountInCacheOrFile = union(AccountInCacheOrFileTag) {
-        file: AccountInFile,
-        cache: Account,
-    };
+    pub const AccountInCacheOrFileTag = enum { file, unrooted_map };
+    pub const AccountInCacheOrFile = union(AccountInCacheOrFileTag) { file: AccountInFile, unrooted_map: Account };
     pub const AccountInCacheOrFileLock = union(AccountInCacheOrFileTag) {
         file: *std.Thread.RwLock,
-        cache: RwMux(AccountCache).RLockGuard,
+        unrooted_map: RwMux(SlotPubkeyAccounts).RLockGuard,
 
         pub fn unlock(lock: *AccountInCacheOrFileLock) void {
             switch (lock.*) {
                 .file => |rwlock| rwlock.unlockShared(),
-                .cache => |*lg| lg.unlock(),
+                .unrooted_map => |*lg| lg.unlock(),
             }
         }
     };
@@ -1906,14 +1943,14 @@ pub const AccountsDB = struct {
                     .{ .file = &self.file_map_fd_rw },
                 };
             },
-            .Cache => |ref_info| {
-                const account_cache, var account_cache_lg = self.account_cache.readWithLock();
-                errdefer account_cache_lg.unlock();
+            .UnrootedMap => |ref_info| {
+                const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.readWithLock();
+                errdefer unrooted_accounts_lg.unlock();
 
-                _, const accounts = account_cache.get(account_ref.slot) orelse return error.SlotNotFound;
+                _, const accounts = unrooted_accounts.get(account_ref.slot) orelse return error.SlotNotFound;
                 return .{
-                    .{ .cache = accounts[ref_info.index] },
-                    .{ .cache = account_cache_lg },
+                    .{ .unrooted_map = accounts[ref_info.index] },
+                    .{ .unrooted_map = unrooted_accounts_lg },
                 };
             },
         }
@@ -1990,7 +2027,7 @@ pub const AccountsDB = struct {
                 };
             },
             // we dont use this method for cache
-            .Cache => @panic("getAccountHashAndLamportsFromRef is not implemented on cache references"),
+            .UnrootedMap => @panic("getAccountHashAndLamportsFromRef is not implemented on UnrootedMap references"),
         }
     }
 
@@ -2030,8 +2067,8 @@ pub const AccountsDB = struct {
         defer lock_guard.unlock();
 
         const file_data: []const u8 = switch (account) {
-            .file => |in_file| in_file.data,
-            .cache => |cached| cached.data,
+            .file => |in_file_account| in_file_account.data,
+            .unrooted_map => |unrooted_map_account| unrooted_map_account.data,
         };
         const t = bincode.readFromSlice(self.allocator, T, file_data, .{}) catch {
             return error.DeserializationError;
@@ -2131,6 +2168,7 @@ pub const AccountsDB = struct {
     }
 
     /// writes a batch of accounts to storage and updates the index
+    /// NOTE: only currently used in benchmarks and tests
     pub fn putAccountSlice(
         self: *Self,
         accounts: []const Account,
@@ -2171,10 +2209,10 @@ pub const AccountsDB = struct {
             const pubkeys_duped = try self.allocator.dupe(Pubkey, pubkeys);
             errdefer self.allocator.free(pubkeys_duped);
 
-            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
-            defer account_cache_lg.unlock();
+            const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.writeWithLock();
+            defer unrooted_accounts_lg.unlock();
             // NOTE: there should only be a single state per slot
-            try account_cache.putNoClobber(slot, .{ pubkeys_duped, accounts_duped });
+            try unrooted_accounts.putNoClobber(slot, .{ pubkeys_duped, accounts_duped });
         }
 
         // prealloc the bins
@@ -2210,7 +2248,7 @@ pub const AccountsDB = struct {
             ref_ptr.* = AccountRef{
                 .pubkey = pubkeys[i],
                 .slot = slot,
-                .location = .{ .Cache = .{ .index = i } },
+                .location = .{ .UnrootedMap = .{ .index = i } },
             };
 
             const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref_ptr);
@@ -3447,7 +3485,7 @@ test "purge accounts in cache works" {
     }
     // account cache is cleared
     {
-        var lg = accounts_db.account_cache.read();
+        var lg = accounts_db.unrooted_accounts.read();
         defer lg.unlock();
         try std.testing.expect(lg.get().count() == 0);
     }
