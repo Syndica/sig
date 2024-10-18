@@ -103,6 +103,11 @@ pub const AccountsDB = struct {
     latest_full_snapshot_info: RwMux(?FullSnapshotGenerationInfo) = RwMux(?FullSnapshotGenerationInfo).init(null),
     latest_incremental_snapshot_info: RwMux(?IncSnapshotGenerationInfo) = RwMux(?IncSnapshotGenerationInfo).init(null),
 
+    account_hashes_and_lamports_cache: struct {
+        first_full: RwMux(?FullSnapshotGenerationInfo) = RwMux(?FullSnapshotGenerationInfo).init(null),
+        first_incremental: RwMux(?IncSnapshotGenerationInfo) = RwMux(?IncSnapshotGenerationInfo).init(null),
+    } = .{},
+
     /// Not closed by the `AccountsDB`, but must live at least as long as it.
     snapshot_dir: std.fs.Dir,
 
@@ -868,6 +873,12 @@ pub const AccountsDB = struct {
         self: *Self,
         params: ValidateLoadFromSnapshotParams,
     ) (ValidateLoadFromSnapshotError || ComputeAccountHashesAndLamportsError)!void {
+        const p_first_full, var first_full_lg = self.account_hashes_and_lamports_cache.first_full.writeWithLock();
+        defer first_full_lg.unlock();
+
+        const p_first_incremental, var first_incremental_lg = self.account_hashes_and_lamports_cache.first_incremental.writeWithLock();
+        defer first_incremental_lg.unlock();
+
         // validate the full snapshot
         self.logger.info().logf("validating the full snapshot", .{});
         const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
@@ -875,6 +886,13 @@ pub const AccountsDB = struct {
                 .max_slot = params.full_slot,
             },
         });
+
+        p_first_full.* = .{
+            .slot = params.full_slot,
+            .hash = accounts_hash,
+            .capitalization = total_lamports,
+        };
+        errdefer p_first_full.* = null;
 
         if (params.expected_full.accounts_hash.order(&accounts_hash) != .eq) {
             self.logger.err().logf(
@@ -901,6 +919,13 @@ pub const AccountsDB = struct {
                     .min_slot = params.full_slot,
                 },
             });
+            p_first_incremental.* = .{
+                .base_slot = params.full_slot,
+                .slot = self.largest_rooted_slot.load(.acquire),
+                .hash = accounts_delta_hash,
+                .capitalization = incremental_lamports,
+            };
+            errdefer p_first_incremental.* = null;
 
             if (expected_incremental.capitalization != incremental_lamports) {
                 self.logger.err().logf(
@@ -2327,11 +2352,23 @@ pub const AccountsDB = struct {
         std.debug.assert(zstd_buffer.len != 0);
         std.debug.assert(params.target_slot <= self.largest_flushed_slot.load(.monotonic));
 
-        const full_hash, const full_capitalization = try self.computeAccountHashesAndLamports(.{
-            .FullAccountHash = .{
-                .max_slot = params.target_slot,
-            },
-        });
+        const full_hash, const full_capitalization = compute: {
+            check_cache: {
+                const p_maybe_first_full, var first_full_lg = self.account_hashes_and_lamports_cache.first_full.readWithLock();
+                defer first_full_lg.unlock();
+
+                const first_full = p_maybe_first_full.* orelse break :check_cache;
+                if (first_full.slot != params.target_slot) break :check_cache;
+
+                break :compute .{ first_full.hash, first_full.capitalization };
+            }
+
+            break :compute try self.computeAccountHashesAndLamports(.{
+                .FullAccountHash = .{
+                    .max_slot = params.target_slot,
+                },
+            });
+        };
 
         // TODO: this is a temporary value
         const delta_hash = Hash.default();
@@ -2504,12 +2541,25 @@ pub const AccountsDB = struct {
 
         const incremental_hash, //
         const incremental_capitalization //
-        = try self.computeAccountHashesAndLamports(.{
-            .IncrementalAccountHash = .{
-                .min_slot = full_snapshot_info.slot,
-                .max_slot = params.target_slot,
-            },
-        });
+        = compute: {
+            check_cache: {
+                const p_maybe_first_inc, var first_inc_lg = self.account_hashes_and_lamports_cache.first_incremental.readWithLock();
+                defer first_inc_lg.unlock();
+
+                const first_inc = p_maybe_first_inc.* orelse break :check_cache;
+                if (first_inc.base_slot != full_snapshot_info.slot) break :check_cache;
+                if (first_inc.slot != params.target_slot) break :check_cache;
+
+                break :compute .{ first_inc.hash, first_inc.capitalization };
+            }
+
+            break :compute try self.computeAccountHashesAndLamports(.{
+                .IncrementalAccountHash = .{
+                    .min_slot = full_snapshot_info.slot,
+                    .max_slot = params.target_slot,
+                },
+            });
+        };
 
         // TODO: compute the correct value during account writes
         const delta_hash = Hash.default();
