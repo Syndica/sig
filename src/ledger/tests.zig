@@ -174,7 +174,7 @@ test "insert shreds and transaction statuses then get blocks" {
             .transactions = expected_transactions.items,
             .parent_slot = slot - 1,
             .blockhash = blockhash_string.slice(),
-            .previous_blockhash = sig.core.Hash.default().base58String().slice(),
+            .previous_blockhash = sig.core.Hash.ZEROES.base58String().slice(),
             .rewards = &.{},
             .num_partitions = null,
             .block_time = null,

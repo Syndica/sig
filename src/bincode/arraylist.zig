@@ -9,8 +9,8 @@ const Params = bincode.Params;
 const readIntAsLength = bincode.readIntAsLength;
 
 /// The standard bincode serialization for an ArrayList
-pub fn arrayListFieldConfig(comptime ArrayListType: type) bincode.FieldConfig(ArrayListType) {
-    const list_info = arrayListInfo(ArrayListType).?;
+pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
+    const list_info = arrayListInfo(List).?;
 
     const S = struct {
         fn serialize(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
@@ -24,10 +24,10 @@ pub fn arrayListFieldConfig(comptime ArrayListType: type) bincode.FieldConfig(Ar
             allocator: std.mem.Allocator,
             reader: anytype,
             params: Params,
-        ) anyerror!ArrayListType {
+        ) anyerror!List {
             const len = (try readIntAsLength(usize, reader, params)) orelse return error.ArrayListTooBig;
 
-            var data: ArrayListType = try ArrayListType.initCapacity(allocator, len);
+            var data: List = try List.initCapacity(allocator, len);
             errdefer bincode.free(allocator, data);
             for (0..len) |_| {
                 data.appendAssumeCapacity(try bincode.read(allocator, list_info.Elem, reader, params));
@@ -51,41 +51,37 @@ pub fn arrayListFieldConfig(comptime ArrayListType: type) bincode.FieldConfig(Ar
     };
 }
 
-pub fn defaultArrayListUnmanagedOnEOFConfig(comptime T: type) bincode.FieldConfig(std.ArrayListUnmanaged(T)) {
+/// Defaults the field of type `List` to an empty state on EOF.
+pub fn defaultOnEofConfig(comptime List: type) bincode.FieldConfig(List) {
+    const al_info = arrayListInfo(List) orelse @compileError("Expected std.ArrayList[Unmanaged]Aligned(T), got " ++ @typeName(List));
     const S = struct {
-        fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!std.ArrayListUnmanaged(T) {
+        fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!List {
             const len = if (bincode.readIntAsLength(usize, reader, params)) |maybe_len|
                 (maybe_len orelse return error.ArrayListTooBig)
-            else |err| {
-                if (err == error.EndOfStream) return .{};
-                return err;
+            else |err| switch (err) {
+                error.EndOfStream,
+                => return switch (al_info.management) {
+                    .managed => List.init(allocator),
+                    .unmanaged => .{},
+                },
+                else => |e| return e,
             };
 
-            const slice = try allocator.alloc(T, len);
+            const slice = try allocator.alignedAlloc(al_info.Elem, al_info.alignment, len);
             errdefer allocator.free(slice);
 
-            return std.ArrayListUnmanaged(T).fromOwnedSlice(slice);
+            return switch (al_info.management) {
+                .managed => List.fromOwnedSlice(allocator, slice),
+                .unmanaged => List.fromOwnedSlice(slice),
+            };
         }
 
         fn free(allocator: std.mem.Allocator, data: anytype) void {
-            data.deinit(allocator);
-        }
-    };
-
-    return .{
-        .deserializer = S.deserialize,
-        .free = S.free,
-    };
-}
-pub fn defaultArrayListOnEOFConfig(comptime T: type) bincode.FieldConfig(std.ArrayList(T)) {
-    const S = struct {
-        fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!std.ArrayList(T) {
-            var unmanaged = try defaultArrayListUnmanagedOnEOFConfig(T).deserializer.?(allocator, reader, params);
-            return unmanaged.toManaged(allocator);
-        }
-
-        fn free(_: std.mem.Allocator, data: anytype) void {
-            data.deinit();
+            var copy = data;
+            switch (al_info.management) {
+                .managed => copy.deinit(),
+                .unmanaged => copy.deinit(allocator),
+            }
         }
     };
 

@@ -50,24 +50,24 @@ test "core.shred: test ShredVersion" {
 
     const logger = test_logger.logger();
 
-    const shred_version_one = ShredVersion.computeShredVersion(Hash.default(), null);
+    const shred_version_one = ShredVersion.computeShredVersion(Hash.ZEROES, null);
     try std.testing.expect(shred_version_one == 1);
     logger.debug().logf("shred_version_one: {}", .{shred_version_one});
 
     var hard_forks = HardForks.default(testing_alloc);
     defer _ = hard_forks.deinit();
 
-    const shred_version_two = ShredVersion.computeShredVersion(Hash.default(), hard_forks);
+    const shred_version_two = ShredVersion.computeShredVersion(Hash.ZEROES, hard_forks);
     try std.testing.expect(shred_version_two == 1);
     logger.debug().logf("shred_version_two: {}", .{shred_version_two});
 
     try hard_forks.register(1);
-    const shred_version_three = ShredVersion.computeShredVersion(Hash.default(), hard_forks);
+    const shred_version_three = ShredVersion.computeShredVersion(Hash.ZEROES, hard_forks);
     try std.testing.expect(shred_version_three == 55551);
     logger.debug().logf("shred_version_three: {}", .{shred_version_three});
 
     try hard_forks.register(1);
-    const shred_version_four = ShredVersion.computeShredVersion(Hash.default(), hard_forks);
+    const shred_version_four = ShredVersion.computeShredVersion(Hash.ZEROES, hard_forks);
     try std.testing.expect(shred_version_four == 46353);
     logger.debug().logf("shred_version_three: {}", .{shred_version_four});
 }

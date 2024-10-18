@@ -547,7 +547,7 @@ pub const BlockstoreReader = struct {
         const previous_blockhash = if (parent_slot_entries.items.len != 0)
             parent_slot_entries.items[parent_slot_entries.items.len - 1].hash
         else
-            Hash.default();
+            Hash.ZEROES;
 
         const rewards = try self.db.get(self.allocator, schema.rewards, slot) orelse
             schema.rewards.Value{ .rewards = &.{}, .num_partitions = null };

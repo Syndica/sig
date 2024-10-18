@@ -6,7 +6,8 @@ const bincode = sig.bincode;
 const serialize_short_u16 = sig.bincode.varint.serialize_short_u16;
 const deserialize_short_u16 = sig.bincode.varint.deserialize_short_u16;
 
-pub fn ShortVecConfig(comptime Child: type) bincode.FieldConfig([]Child) {
+pub fn sliceConfig(comptime Slice: type) bincode.FieldConfig(Slice) {
+    const Child = std.meta.Elem(Slice);
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
             const len: u16 = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
@@ -16,7 +17,7 @@ pub fn ShortVecConfig(comptime Child: type) bincode.FieldConfig([]Child) {
             }
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) ![]Child {
+        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !Slice {
             const len = try deserialize_short_u16(reader, params);
             const elems = try allocator.alloc(Child, len);
             errdefer allocator.free(elems);
@@ -28,18 +29,19 @@ pub fn ShortVecConfig(comptime Child: type) bincode.FieldConfig([]Child) {
         }
 
         pub fn free(allocator: std.mem.Allocator, data: anytype) void {
+            for (data) |elem| bincode.free(allocator, elem);
             allocator.free(data);
         }
     };
 
-    return bincode.FieldConfig([]Child){
+    return .{
         .serializer = S.serialize,
         .deserializer = S.deserialize,
         .free = S.free,
     };
 }
 
-pub fn ShortVecArrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(Child)) {
+pub fn arrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(Child)) {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
             const list: std.ArrayList(Child) = data;
@@ -66,7 +68,7 @@ pub fn ShortVecArrayListConfig(comptime Child: type) bincode.FieldConfig(std.Arr
         }
     };
 
-    return bincode.FieldConfig(std.ArrayList(Child)){
+    return .{
         .serializer = S.serialize,
         .deserializer = S.deserialize,
         .free = S.free,

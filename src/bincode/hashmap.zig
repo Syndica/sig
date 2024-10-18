@@ -73,10 +73,11 @@ pub fn hashMapFieldConfig(
         }
 
         fn free(allocator: std.mem.Allocator, data: anytype) void {
+            var copy = data;
             if (hm_info.management == .managed) {
-                data.deinit();
+                copy.deinit();
             } else {
-                data.deinit(allocator);
+                copy.deinit(allocator);
             }
         }
     };
