@@ -153,11 +153,11 @@ pub fn csvDump() !void {
         std.heap.c_allocator;
     defer _ = gpa.deinit();
 
-    var std_logger = sig.trace.ChannelPrintLogger.init(.{
+    var std_logger = try sig.trace.ChannelPrintLogger.init(.{
         .allocator = std.heap.c_allocator,
         .max_level = sig.trace.Level.debug,
         .max_buffer = 1 << 20,
-    }) catch @panic("Logger init failed");
+    });
     defer std_logger.deinit();
 
     const logger = std_logger.logger();

@@ -28,11 +28,11 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var std_logger = StandardErrLogger.init(.{
+    var std_logger = try StandardErrLogger.init(.{
         .allocator = std.heap.c_allocator,
         .max_level = Level.debug,
         .max_buffer = 1 << 20,
-    }) catch @panic("Logger init failed");
+    });
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
