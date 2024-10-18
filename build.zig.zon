@@ -36,8 +36,8 @@
             .hash = "1220aeb80b2f8bb48c131ef306fe48ddfcb537210c5f77742e921cbf40fc4c19b41e",
         },
         .xquic = .{
-            .url = "https://github.com/Syndica/xquic/archive/a931c7826b5ec695ef3e7c8320440b288056034b.tar.gz",
-            .hash = "12208b80db75388d0901b6a58d747968b721f5dbb702c929334ea3f034fa904d5f8a",
+            .url = "https://github.com/Syndica/xquic/archive/ed5229a2f404f7d27130cee450a4aafbcf006625.tar.gz",
+            .hash = "1220cfb95c55c109eb2b821087100b9a509e79903243270513ee0b884fdca2be2f2b",
         },
     },
 }
