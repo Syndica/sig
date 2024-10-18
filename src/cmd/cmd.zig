@@ -458,6 +458,20 @@ pub fn run() !void {
                     },
 
                     &cli.Command{
+                        .name = "xquic-client",
+                        .description = .{
+                            .one_line = "Runs XQuic demo client",
+                            .detailed = "",
+                        },
+                        .options = &.{},
+                        .target = .{
+                            .action = .{
+                                .exec = xquic_client,
+                            },
+                        },
+                    },
+
+                    &cli.Command{
                         .name = "snapshot-validate",
                         .description = .{
                             .one_line = "Validates a snapshot",
@@ -748,6 +762,10 @@ fn validator() !void {
 
     service_manager.join();
     shred_collector_manager.join();
+}
+
+fn xquic_client() !void {
+    try @import("../quic/client.zig").runClient();
 }
 
 fn shredCollector() !void {
