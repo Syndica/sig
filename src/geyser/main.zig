@@ -331,7 +331,7 @@ pub fn benchmark() !void {
     var std_logger = try sig.trace.ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = .debug,
-        .max_buffer = 1 << 30,
+        .max_buffer = 1 << 15,
     });
     defer std_logger.deinit();
     const logger = std_logger.logger();
