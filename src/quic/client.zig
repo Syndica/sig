@@ -10,6 +10,8 @@ pub const Config = extern struct {
 
 pub const Context = extern struct {
     engine: *xquic.xqc_engine_t,
+    engine_event: *xev.Async,
+    task_event: *xev.Async,
 
     // /* libevent context */
     // struct event    *ev_engine;
@@ -30,6 +32,9 @@ pub const Context = extern struct {
     // /* task schedule context */
     // xqc_demo_cli_task_ctx_t     task_ctx;
 
+    fn deinit(ctx: *Context) void {
+        xquic.xqc_engine_destroy(ctx.engine);
+    }
 };
 
 pub fn initEngine() !*xquic.xqc_engine_t {
@@ -74,32 +79,60 @@ pub fn initEngine() !*xquic.xqc_engine_t {
 }
 
 pub fn runClient() !void {
-    const context: Context = .{
-        .engine = try initEngine(),
-    };
-    _ = context;
-
     var loop = try xev.Loop.init(.{});
     defer loop.deinit();
 
-    var c: xev.Completion = undefined;
     var engine_event = try xev.Async.init();
+    var task_event = try xev.Async.init();
 
-    engine_event.wait(&loop, &c, void, null, engineCallback);
-    try engine_event.notify();
+    var context: Context = .{
+        .engine = try initEngine(),
+        .engine_event = &engine_event,
+        .task_event = &task_event,
+    };
+    defer context.deinit();
+
+    var engine_c: xev.Completion = undefined;
+    var task_c: xev.Completion = undefined;
+
+    std.debug.print("before\n", .{});
+
+    engine_event.wait(&loop, &engine_c, Context, &context, engineCallback);
+    task_event.wait(&loop, &task_c, Context, &context, taskScheduleCallback);
+
+    std.debug.print("after\n", .{});
+    std.debug.print("loop len: {}\n", .{loop.active});
+
+    try loop.run(.until_done);
 }
 
 fn engineCallback(
-    _: ?*void,
+    _: ?*Context,
     _: *xev.Loop,
     _: *xev.Completion,
     result: xev.Async.WaitError!void,
 ) xev.CallbackAction {
     _ = result catch unreachable;
 
-    std.debug.print("after!\n", .{});
+    // std.debug.print("after!\n", .{});
+    std.debug.print("engineCallback\n", .{});
 
     return .disarm;
+}
+
+fn taskScheduleCallback(
+    _: ?*Context,
+    _: *xev.Loop,
+    _: *xev.Completion,
+    result: xev.Async.WaitError!void,
+) xev.CallbackAction {
+    _ = result catch unreachable;
+
+    // std.debug.print("after!\n", .{});
+    std.debug.print("taskScheduleCallback\n", .{});
+
+    // start the next task scheduling round
+    return .rearm;
 }
 
 const EngineLayerCallbacks = struct {
