@@ -1,22 +1,25 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const prometheus = @import("lib.zig");
+
 const fmt = std.fmt;
 const hash_map = std.hash_map;
 const heap = std.heap;
 const mem = std.mem;
 const testing = std.testing;
 
-const OnceCell = @import("../sync/once_cell.zig").OnceCell;
-
-const Metric = @import("metric.zig").Metric;
-const Counter = @import("counter.zig").Counter;
-const Gauge = @import("gauge.zig").Gauge;
-const GaugeFn = @import("gauge_fn.zig").GaugeFn;
-const GaugeCallFnType = @import("gauge_fn.zig").GaugeCallFnType;
-const Histogram = @import("histogram.zig").Histogram;
-const DEFAULT_BUCKETS = @import("histogram.zig").DEFAULT_BUCKETS;
-
+const OnceCell = sig.sync.OnceCell;
 const ReturnType = sig.utils.types.ReturnType;
+
+const Metric = prometheus.metric.Metric;
+const Counter = prometheus.counter.Counter;
+const VariantCounter = prometheus.variant_counter.VariantCounter;
+const Gauge = prometheus.gauge.Gauge;
+const GaugeFn = prometheus.gauge_fn.GaugeFn;
+const GaugeCallFnType = prometheus.gauge_fn.GaugeCallFnType;
+const Histogram = prometheus.histogram.Histogram;
+
+const DEFAULT_BUCKETS = prometheus.histogram.DEFAULT_BUCKETS;
 
 pub const GetMetricError = error{
     /// Returned when trying to add a metric to an already full registry.
@@ -47,6 +50,10 @@ const RegistryOptions = struct {
 
 pub fn Registry(comptime options: RegistryOptions) type {
     return struct {
+        arena_state: heap.ArenaAllocator,
+        mutex: std.Thread.Mutex,
+        metrics: MetricMap,
+
         const Self = @This();
 
         const MetricMap = hash_map.StringHashMapUnmanaged(struct {
@@ -54,10 +61,6 @@ pub fn Registry(comptime options: RegistryOptions) type {
             type_name: []const u8,
             metric: *Metric,
         });
-
-        arena_state: heap.ArenaAllocator,
-        mutex: std.Thread.Mutex,
-        metrics: MetricMap,
 
         pub fn init(allocator: mem.Allocator) Self {
             return .{
@@ -69,6 +72,116 @@ pub fn Registry(comptime options: RegistryOptions) type {
 
         pub fn deinit(self: *Self) void {
             self.arena_state.deinit();
+        }
+
+        /// Initialize a struct full of metrics.
+        /// Every field must be a supported metric type.
+        pub fn initStruct(self: *Self, comptime Struct: type) GetMetricError!Struct {
+            var metrics_struct: Struct = undefined;
+            inline for (@typeInfo(Struct).Struct.fields) |field| {
+                try self.initMetric(Struct, &@field(metrics_struct, field.name), field.name);
+            }
+            return metrics_struct;
+        }
+
+        /// Initialize any fields within the struct that are supported metric types.
+        /// Leaves other fields untouched.
+        ///
+        /// Returns the number of fields that were *not* initialized.
+        pub fn initFields(
+            self: *Self,
+            /// Mutable pointer to a struct containing metrics.
+            metrics_struct: anytype,
+        ) GetMetricError!usize {
+            const Struct = @typeInfo(@TypeOf(metrics_struct)).Pointer.child;
+            const fields = @typeInfo(Struct).Struct.fields;
+            var num_fields_skipped: usize = fields.len;
+            inline for (@typeInfo(Struct).Struct.fields) |field| {
+                if (@typeInfo(field.type) == .Pointer) {
+                    const MetricType = @typeInfo(field.type).Pointer.child;
+                    if (@hasDecl(MetricType, "metric_type")) {
+                        try self.initMetric(Struct, &@field(metrics_struct, field.name), field.name);
+                        num_fields_skipped -= 1;
+                    }
+                }
+            }
+            return num_fields_skipped;
+        }
+
+        /// Assumes the metric type is **SomeMetric and initializes it.
+        ///
+        /// Uses the following declarations from Config:
+        /// - `prefix` if it exists
+        /// - `buckets` - required if metric is a *Histogram
+        ///
+        /// NOTE: does not support GaugeFn
+        ///
+        /// If expectations are violated, throws a compile error.
+        fn initMetric(
+            self: *Self,
+            Config: type,
+            /// Should be a mutable pointer to the location containing the
+            /// pointer to the metric, so `**SomeMetric` (ptr to a ptr)
+            metric: anytype,
+            comptime local_name: []const u8,
+        ) GetMetricError!void {
+            const MetricType = @typeInfo(@typeInfo(@TypeOf(metric)).Pointer.child).Pointer.child;
+            const prefix = if (@hasDecl(Config, "prefix")) Config.prefix ++ "_" else "";
+            const name = prefix ++ local_name;
+            metric.* = switch (MetricType.metric_type) {
+                .counter => try self.getOrCreateCounter(name),
+                .variant_counter => try self.getOrCreateVariantCounter(name, MetricType.Type),
+                .gauge => try self.getOrCreateGauge(name, MetricType.Data),
+                .gauge_fn => @compileError("GaugeFn does not support auto-init."),
+                .histogram => try self
+                    .getOrCreateHistogram(name, histogramBuckets(Config, local_name)),
+            };
+        }
+
+        fn histogramBuckets(
+            comptime Config: type,
+            comptime local_histogram_name: []const u8,
+        ) []const f64 {
+            const has_fn = @hasDecl(Config, "histogramBucketsForField");
+            const has_const = @hasDecl(Config, "histogram_buckets");
+            if (has_const and has_fn) {
+                @compileError(@typeName(Config) ++ " has both histogramBucketsForField and" ++
+                    " histogram_buckets, but it should only have one.");
+            } else if (has_const) {
+                comptime if (!isSlicable(@TypeOf(Config.histogram_buckets), f64)) {
+                    @compileError(@typeName(Config) ++
+                        ".histogram_buckets should be a slice or array of f64");
+                };
+                return Config.histogram_buckets[0..];
+            } else if (has_fn) {
+                const info = @typeInfo(@TypeOf(Config.histogramBucketsForField));
+                comptime if (info != .Fn or
+                    info.Fn.params.len != 1 or
+                    info.Fn.params[0].type != []const u8 or
+                    !isSlicable(info.Fn.return_type.?, f64))
+                {
+                    @compileError(@typeName(Config) ++
+                        ".histogramBucketsForField should take one param `[]const u8` and " ++
+                        "return either a slice or array of f64");
+                };
+                return Config.histogramBucketsForField(local_histogram_name)[0..];
+            } else {
+                @compileError(@typeName(Config) ++ " must provide the histogram buckets for " ++
+                    local_histogram_name ++ ", either with a const `histogram_buckets` " ++
+                    "that defines the buckets to use for all histograms in the struct, or with " ++
+                    "a function histogramBucketsForField that accepts the local histogram name " ++
+                    "as an input and returns the buckets for that histogram. In either case, " ++
+                    "the buckets should be provided as either a slice or array of f64.");
+            }
+        }
+
+        fn isSlicable(comptime T: type, comptime DesiredChild: type) bool {
+            return switch (@typeInfo(T)) {
+                .Array => |a| a.child == DesiredChild,
+                .Pointer => |p| p.size != .One and p.child == DesiredChild or
+                    p.size == .One and isSlicable(p.child, DesiredChild),
+                else => false,
+            };
         }
 
         fn nbMetrics(self: *const Self) usize {
@@ -102,6 +215,14 @@ pub fn Registry(comptime options: RegistryOptions) type {
             buckets: []const f64,
         ) GetMetricError!*Histogram {
             return self.getOrCreateMetric(name, Histogram, .{buckets});
+        }
+
+        pub fn getOrCreateVariantCounter(
+            self: *Self,
+            name: []const u8,
+            ErrorSet: type,
+        ) GetMetricError!*VariantCounter(ErrorSet) {
+            return self.getOrCreateMetric(name, VariantCounter(ErrorSet), .{});
         }
 
         /// MetricType must be initializable in one of these ways:

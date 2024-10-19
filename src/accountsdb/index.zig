@@ -64,7 +64,7 @@ pub const AccountReferenceHead = struct {
     }
 };
 
-/// reference to an account (either in a file or cache)
+/// reference to an account (either in a file or in the unrooted_map)
 pub const AccountRef = struct {
     pubkey: Pubkey,
     slot: Slot,
@@ -77,18 +77,16 @@ pub const AccountRef = struct {
             file_id: FileId,
             offset: usize,
         },
-        Cache: struct {
+        UnrootedMap: struct {
             index: usize,
         },
     };
 
     pub fn default() AccountRef {
         return AccountRef{
-            .pubkey = Pubkey.default(),
+            .pubkey = Pubkey.ZEROES,
             .slot = 0,
-            .location = .{
-                .Cache = .{ .index = 0 },
-            },
+            .location = .{ .UnrootedMap = .{ .index = 0 } },
         };
     }
 };
@@ -455,7 +453,7 @@ test "account index update/remove reference" {
     }
 
     // update the tail
-    try std.testing.expect(ref_b.location == .Cache);
+    try std.testing.expect(ref_b.location == .UnrootedMap);
     var ref_b2 = ref_b;
     ref_b2.location = .{ .File = .{
         .file_id = FileId.fromInt(@intCast(1)),

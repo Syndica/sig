@@ -40,40 +40,39 @@ pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
     return packet;
 }
 
-pub fn randomPing(rng: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
+pub fn randomPing(random: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
     const ping = GossipMessage{
-        .PingMessage = try Ping.random(rng, keypair),
+        .PingMessage = try Ping.initRandom(random, keypair),
     };
     return ping;
 }
 
-pub fn randomPingPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
-    const ping = try randomPing(rng, keypair);
+pub fn randomPingPacket(random: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+    const ping = try randomPing(random, keypair);
     const packet = try serializeToPacket(ping, to_addr);
     return packet;
 }
 
-pub fn randomPong(rng: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
-    return .{ .PongMessage = try Pong.random(rng, keypair) };
+pub fn randomPong(random: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
+    return .{ .PongMessage = try Pong.initRandom(random, keypair) };
 }
 
-pub fn randomPongPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
-    const pong = try randomPong(rng, keypair);
+pub fn randomPongPacket(random: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+    const pong = try randomPong(random, keypair);
     const packet = try serializeToPacket(pong, to_addr);
     return packet;
 }
 
-pub fn randomSignedGossipData(rng: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !SignedGossipData {
+pub fn randomSignedGossipData(random: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !SignedGossipData {
     var keypair = try KeyPair.create(null);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
     // will have random id
-    // var value = try SignedGossipData.random(rng, &keypair);
-    var value = try SignedGossipData.randomWithIndex(rng, &keypair, 0);
+    var value = try SignedGossipData.randomWithIndex(random, &keypair, 0);
     value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key));
     try value.sign(&keypair);
 
-    const should_pass_sig_verification = maybe_should_pass_sig_verification orelse rng.boolean();
+    const should_pass_sig_verification = maybe_should_pass_sig_verification orelse random.boolean();
     if (should_pass_sig_verification) {
         value.data.setId(pubkey);
         try value.sign(&keypair);
@@ -84,15 +83,15 @@ pub fn randomSignedGossipData(rng: std.rand.Random, maybe_should_pass_sig_verifi
 
 pub fn randomPushMessage(
     allocator: std.mem.Allocator,
-    rng: std.rand.Random,
+    random: std.rand.Random,
     keypair: *const KeyPair,
     to_addr: EndPoint,
 ) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
     var values: [size]SignedGossipData = undefined;
-    const should_pass_sig_verification = rng.boolean();
+    const should_pass_sig_verification = random.boolean();
     for (0..size) |i| {
-        const value = try randomSignedGossipData(rng, should_pass_sig_verification);
+        const value = try randomSignedGossipData(random, should_pass_sig_verification);
         values[i] = value;
     }
 
@@ -106,12 +105,12 @@ pub fn randomPushMessage(
     return packets;
 }
 
-pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
+pub fn randomPullResponse(random: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
     var values: [size]SignedGossipData = undefined;
-    const should_pass_sig_verification = rng.boolean();
+    const should_pass_sig_verification = random.boolean();
     for (0..size) |i| {
-        const value = try randomSignedGossipData(rng, should_pass_sig_verification);
+        const value = try randomSignedGossipData(random, should_pass_sig_verification);
         values[i] = value;
     }
 
@@ -131,7 +130,7 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
 pub fn randomPullRequest(
     allocator: std.mem.Allocator,
     contact_info: LegacyContactInfo,
-    rng: std.rand.Random,
+    random: std.rand.Random,
     keypair: *const KeyPair,
     to_addr: EndPoint,
 ) !Packet {
@@ -141,7 +140,7 @@ pub fn randomPullRequest(
 
     return randomPullRequestWithContactInfo(
         allocator,
-        rng,
+        random,
         to_addr,
         value,
     );
@@ -149,14 +148,14 @@ pub fn randomPullRequest(
 
 pub fn randomPullRequestWithContactInfo(
     allocator: std.mem.Allocator,
-    rng: std.rand.Random,
+    random: std.rand.Random,
     to_addr: EndPoint,
     contact_info: SignedGossipData,
 ) !Packet {
-    const N_FILTER_BITS = rng.intRangeAtMost(u6, 1, 10);
+    const N_FILTER_BITS = random.intRangeAtMost(u6, 1, 10);
 
     // only consider the first bit so we know well get matches
-    var bloom = try Bloom.random(allocator, rng, 100, 0.1, N_FILTER_BITS);
+    var bloom = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
     var filter = GossipPullFilter{
@@ -168,12 +167,12 @@ pub fn randomPullRequestWithContactInfo(
     // const invalid_filter = rng.boolean();
     const invalid_filter = false;
     if (invalid_filter) {
-        filter.mask = (~@as(usize, 0)) >> rng.intRangeAtMost(u6, 1, 10);
-        filter.mask_bits = rng.intRangeAtMost(u6, 1, 10);
+        filter.mask = (~@as(usize, 0)) >> random.intRangeAtMost(u6, 1, 10);
+        filter.mask_bits = random.intRangeAtMost(u6, 1, 10);
 
         // add more random hashes
         for (0..5) |_| {
-            const rand_value = try randomSignedGossipData(rng, true);
+            const rand_value = try randomSignedGossipData(random, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
             const bytes = try bincode.writeToSlice(&buf, rand_value, bincode.Params.standard);
             const value_hash = Hash.generateSha256Hash(bytes);
@@ -181,17 +180,17 @@ pub fn randomPullRequestWithContactInfo(
         }
     } else {
         // add some valid hashes
-        var filter_set = try GossipPullFilterSet.initTest(allocator, rng, filter.mask_bits);
+        var filter_set = try GossipPullFilterSet.initTest(allocator, random, filter.mask_bits);
 
         for (0..5) |_| {
-            const rand_value = try randomSignedGossipData(rng, true);
+            const rand_value = try randomSignedGossipData(random, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
             const bytes = try bincode.writeToSlice(&buf, rand_value, bincode.Params.standard);
             const value_hash = Hash.generateSha256Hash(bytes);
             filter_set.add(&value_hash);
         }
 
-        var filters = try filter_set.consumeForGossipPullFilters(allocator, rng, 1);
+        var filters = try filter_set.consumeForGossipPullFilters(allocator, random, 1);
         filter.filter = filters.items[0].filter;
         filter.mask = filters.items[0].mask;
         filter.mask_bits = filters.items[0].mask_bits;
@@ -228,7 +227,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
     defer _ = gpa.deinit();
 
-    var rng = std.rand.DefaultPrng.init(seed);
+    var prng = std.rand.DefaultPrng.init(seed);
 
     // parse cli args to define where to send packets
     const maybe_max_messages_string = args.next();
@@ -343,7 +342,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         allocator,
         &fuzzing_loop_exit,
         maybe_max_messages,
-        rng.random(),
+        prng.random(),
         &fuzz_keypair,
         LegacyContactInfo.fromContactInfo(&fuzz_contact_info),
         to_entrypoint,
@@ -362,7 +361,7 @@ pub fn fuzz(
     allocator: std.mem.Allocator,
     loop_exit: *Atomic(bool),
     maybe_max_messages: ?usize,
-    rng: std.Random,
+    random: std.Random,
     keypair: *const KeyPair,
     contact_info: LegacyContactInfo,
     to_endpoint: EndPoint,
@@ -378,7 +377,7 @@ pub fn fuzz(
             }
         }
 
-        const action = rng.enumValue(enum {
+        const action = random.enumValue(enum {
             ping,
             pong,
             push,
@@ -388,17 +387,17 @@ pub fn fuzz(
         const packet = switch (action) {
             .ping => blk: {
                 // send ping message
-                const packet = randomPingPacket(rng, keypair, to_endpoint);
+                const packet = randomPingPacket(random, keypair, to_endpoint);
                 break :blk packet;
             },
             .pong => blk: {
                 // send pong message
-                const packet = randomPongPacket(rng, keypair, to_endpoint);
+                const packet = randomPongPacket(random, keypair, to_endpoint);
                 break :blk packet;
             },
             .push => blk: {
                 // send push message
-                const packets = randomPushMessage(allocator, rng, keypair, to_endpoint) catch |err| {
+                const packets = randomPushMessage(allocator, random, keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -409,7 +408,7 @@ pub fn fuzz(
             },
             .pull_request => blk: {
                 // send pull response
-                const packets = randomPullResponse(rng, keypair, to_endpoint) catch |err| {
+                const packets = randomPullResponse(random, keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -423,7 +422,7 @@ pub fn fuzz(
                 const packet = randomPullRequest(
                     allocator,
                     contact_info,
-                    rng,
+                    random,
                     keypair,
                     to_endpoint,
                 );
@@ -440,7 +439,7 @@ pub fn fuzz(
         // send it
         try outgoing_channel.send(packet);
 
-        const send_duplicate = rng.boolean();
+        const send_duplicate = random.boolean();
         if (send_duplicate) {
             msg_count +|= 1;
             try outgoing_channel.send(packet);

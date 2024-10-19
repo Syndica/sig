@@ -99,13 +99,13 @@ pub const EpochSchedule = extern struct {
         };
     }
 
-    pub fn random(rand: std.Random) EpochSchedule {
+    pub fn initRandom(random: std.Random) EpochSchedule {
         return .{
-            .slots_per_epoch = rand.int(u64),
-            .leader_schedule_slot_offset = rand.int(u64),
-            .warmup = rand.boolean(),
-            .first_normal_epoch = rand.int(Epoch),
-            .first_normal_slot = rand.int(Slot),
+            .slots_per_epoch = random.int(u64),
+            .leader_schedule_slot_offset = random.int(u64),
+            .warmup = random.boolean(),
+            .first_normal_epoch = random.int(Epoch),
+            .first_normal_slot = random.int(Slot),
         };
     }
 };

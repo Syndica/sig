@@ -114,9 +114,9 @@ pub fn BlockRng(
     };
 }
 
-pub fn errorValue(rand: std.Random, comptime ErrorSet: type) ErrorSet {
+pub fn errorValue(random: std.Random, comptime ErrorSet: type) ErrorSet {
     if (ErrorSet == anyerror) @compileError("Can't return a random instance of " ++ @typeName(anyerror));
-    switch (rand.enumValue(std.meta.FieldEnum(ErrorSet))) {
+    switch (random.enumValue(std.meta.FieldEnum(ErrorSet))) {
         inline else => |itag| return @field(ErrorSet, @tagName(itag)),
     }
 }
@@ -128,12 +128,12 @@ pub fn fillHashmapWithRng(
     /// `*std.ArrayHashMap(Key, Value, _, _)`
     /// `*std.HashMap(Key, Value, _, _)`
     hashmap: anytype,
-    rand: std.Random,
+    random: std.Random,
     /// The length to set the hashmap to.
     hm_len: if (sig.utils.types.hashMapInfo(@TypeOf(hashmap.*))) |hm_info| hm_info.Size() else usize,
     /// Expected to provide methods & fields/decls:
-    /// * `fn randomKey(context, rand: std.Random) Key`
-    /// * `fn randomValue(context, rand: std.Random) Value`
+    /// * `fn randomKey(context, random: std.Random) Key`
+    /// * `fn randomValue(context, random: std.Random) Value`
     context: anytype,
 ) !void {
     const Hm = @TypeOf(hashmap.*);
@@ -144,10 +144,10 @@ pub fn fillHashmapWithRng(
 
     for (0..hm_len) |_| {
         while (true) {
-            const new_key: hm_info.Key = try context.randomKey(rand);
+            const new_key: hm_info.Key = try context.randomKey(random);
             const gop = hashmap.getOrPutAssumeCapacity(new_key);
             if (gop.found_existing) continue;
-            gop.value_ptr.* = try context.randomValue(rand);
+            gop.value_ptr.* = try context.randomValue(random);
             break;
         }
     }

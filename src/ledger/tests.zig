@@ -20,8 +20,8 @@ const comptimePrint = std.fmt.comptimePrint;
 const schema = ledger.schema.schema;
 
 test "put/get data consistency for merkle root" {
-    var rng = std.Random.DefaultPrng.init(100);
-    const random = rng.random();
+    var prng = std.Random.DefaultPrng.init(100);
+    const random = prng.random();
 
     var db = try DB.init("bsdbMerkleRootDatabaseConsistency");
     defer db.deinit();
@@ -30,7 +30,7 @@ test "put/get data consistency for merkle root" {
         .slot = 1234127498,
         .fec_set_index = 4932874234,
     };
-    const root = sig.core.Hash.random(random);
+    const root = sig.core.Hash.initRandom(random);
 
     try db.put(
         schema.merkle_root_meta,
@@ -175,7 +175,7 @@ test "insert shreds and transaction statuses then get blocks" {
             .transactions = expected_transactions.items,
             .parent_slot = slot - 1,
             .blockhash = blockhash_string.slice(),
-            .previous_blockhash = sig.core.Hash.default().base58String().slice(),
+            .previous_blockhash = sig.core.Hash.ZEROES.base58String().slice(),
             .rewards = &.{},
             .num_partitions = null,
             .block_time = null,
