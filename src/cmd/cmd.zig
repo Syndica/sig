@@ -466,7 +466,7 @@ pub fn run() !void {
                         .options = &.{},
                         .target = .{
                             .action = .{
-                                .exec = xquic_client,
+                                .exec = sig.quic.client.runClient,
                             },
                         },
                     },
@@ -762,10 +762,6 @@ fn validator() !void {
 
     service_manager.join();
     shred_collector_manager.join();
-}
-
-fn xquic_client() !void {
-    try @import("../quic/client.zig").runClient();
 }
 
 fn shredCollector() !void {

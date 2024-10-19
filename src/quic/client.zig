@@ -1,11 +1,17 @@
 const std = @import("std");
 const xquic = @import("xquic");
 const xev = @import("xev");
+const sig = @import("../sig.zig");
+
+const ConnectionCallbacks = sig.quic.ConnectionCallbacks;
+const DhCallbacks = sig.quic.DhCallbacks;
+const EngineCallbacks = sig.quic.EngineCallbacks;
+const TransportCallbacks = sig.quic.TransportCallbacks;
 
 const XQC_INTEROP_TLS_GROUPS = "X25519:P-256:P-384:P-521";
 
-pub const Config = extern struct {
-    log_level: u32,
+pub const Args = extern struct {
+    log_level: u32 = xquic.XQC_LOG_DEBUG,
 };
 
 pub const Context = extern struct {
@@ -37,20 +43,67 @@ pub const Context = extern struct {
     }
 };
 
-pub fn initEngine() !*xquic.xqc_engine_t {
+const DhContext = struct {
+    dh_cbs: DhCallbacks,
+};
+
+pub fn registerCallbacks(engine: *xquic.xqc_engine_t) !void {
+    // https://github.com/alibaba/xquic/blob/main/include/xquic/xquic.h#L816
+    var app_proto_cbs: xquic.xqc_app_proto_callbacks_t = .{
+        // https://github.com/alibaba/xquic/blob/main/include/xquic/xquic.h#L698
+        .conn_cbs = .{
+            .conn_create_notify = ConnectionCallbacks.connCreateNotify,
+            .conn_close_notify = ConnectionCallbacks.connCloseNotify,
+            .conn_handshake_finished = ConnectionCallbacks.connHandshakeFinished,
+            .conn_ping_acked = ConnectionCallbacks.connPingAcked,
+        },
+    };
+
+    // Create our custom callbacks context
+    // This is a ... api
+    const dh_ctx = try std.heap.c_allocator.create(DhContext);
+    dh_ctx.* = DhContext{
+        .dh_cbs = .{
+            //     .hqc_cbs = {
+            //         .conn_create_notify = xqc_demo_cli_hq_conn_create_notify,
+            //         .conn_close_notify = xqc_demo_cli_hq_conn_close_notify,
+            //     },
+            //     .hqr_cbs = {
+            //         .req_close_notify = xqc_demo_cli_hq_req_close_notify,
+            //         .req_read_notify = xqc_demo_cli_hq_req_read_notify,
+            //         .req_write_notify = xqc_demo_cli_hq_req_write_notify,
+            //     }
+        },
+    };
+
+    if (xquic.xqc_engine_register_alpn(
+        engine,
+        "dh",
+        2,
+        &app_proto_cbs,
+        dh_ctx,
+    ) != xquic.XQC_OK) return error.EngineRegisterAlpnFailed;
+}
+
+pub fn initEngine(args: *const Args) !*xquic.xqc_engine_t {
     // specifically using the c_allocator due to engine_deinit calling free()
     const allocator = std.heap.c_allocator;
+
+    // Engine type: either client or server
     const engine_type = xquic.XQC_ENGINE_CLIENT;
 
+    // SSL configuration: copies from xquic/demo/demo_client.c
     var engine_ssl_config: xquic.xqc_engine_ssl_config_t = .{
         .ciphers = try allocator.dupeZ(u8, xquic.XQC_TLS_CIPHERS),
         .groups = try allocator.dupeZ(u8, XQC_INTEROP_TLS_GROUPS),
     };
 
+    // Engine callbacks: see docs
     const engine_cbs: xquic.xqc_engine_callback_t = .{
-        .set_event_timer = EngineLayerCallbacks.setEventTimer,
+        .set_event_timer = EngineCallbacks.setEventTimer,
     };
 
+    // Transport callbacks: see docs
     const transport_cbs: xquic.xqc_transport_callbacks_t = .{
         .write_socket = TransportCallbacks.writeSocket,
         .write_socket_ex = TransportCallbacks.writeSocketEx,
@@ -62,13 +115,15 @@ pub fn initEngine() !*xquic.xqc_engine_t {
         .path_removed_notify = TransportCallbacks.pathRemoved,
     };
 
+    // Engine configuration: load defaults and set log level
     var config: xquic.xqc_config_t = undefined;
     if (xquic.xqc_engine_get_default_config(&config, engine_type) < 0) {
         std.debug.print("failed to get default config\n", .{});
     }
-    config.cfg_log_level = xquic.XQC_LOG_DEBUG;
+    config.cfg_log_level = args.log_level;
 
-    return xquic.xqc_engine_create(
+    // Create xquic engine
+    const engine = xquic.xqc_engine_create(
         engine_type,
         &config,
         &engine_ssl_config,
@@ -76,9 +131,15 @@ pub fn initEngine() !*xquic.xqc_engine_t {
         &transport_cbs,
         null,
     ) orelse @panic("failed to init engine");
+
+    // Register callbacks
+    try registerCallbacks(engine);
+
+    return engine;
 }
 
 pub fn runClient() !void {
+<<<<<<< Updated upstream
     var loop = try xev.Loop.init(.{});
     defer loop.deinit();
 
@@ -278,3 +339,15 @@ const TransportCallbacks = struct {
         std.debug.print("pathRemoved\n", .{});
     }
 };
+=======
+    // Initialize our Args
+    const args = Args{};
+
+    // Initialize our context
+    const ctx = Context{
+        .engine = try initEngine(&args),
+    };
+
+    _ = ctx;
+}
+>>>>>>> Stashed changes
