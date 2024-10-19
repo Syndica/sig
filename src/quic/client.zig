@@ -156,43 +156,42 @@ pub fn runClient() !void {
     var engine_c: xev.Completion = undefined;
     var task_c: xev.Completion = undefined;
 
-    std.debug.print("before\n", .{});
-
     engine_event.wait(&loop, &engine_c, Context, &context, engineCallback);
     task_event.wait(&loop, &task_c, Context, &context, taskScheduleCallback);
+    try task_event.notify();
 
-    std.debug.print("after\n", .{});
-    std.debug.print("loop len: {}\n", .{loop.active});
+    const connection_settings: xquic.xqc_conn_settings_t = .{
+        .pacing_on = 0,
+    };
+    _ = connection_settings;
 
     try loop.run(.until_done);
 }
 
 fn engineCallback(
-    _: ?*Context,
+    ctx: ?*Context,
     _: *xev.Loop,
     _: *xev.Completion,
     result: xev.Async.WaitError!void,
 ) xev.CallbackAction {
-    _ = result catch unreachable;
-
-    // std.debug.print("after!\n", .{});
-    std.debug.print("engineCallback\n", .{});
-
+    _ = result catch @panic("callback paniced");
+    const engine = ctx.?.engine;
+    xquic.xqc_engine_main_logic(engine);
     return .disarm;
 }
 
 fn taskScheduleCallback(
-    _: ?*Context,
+    ctx: ?*Context,
     _: *xev.Loop,
     _: *xev.Completion,
     result: xev.Async.WaitError!void,
 ) xev.CallbackAction {
-    _ = result catch unreachable;
+    _ = result catch @panic("callback paniced");
 
-    // std.debug.print("after!\n", .{});
     std.debug.print("taskScheduleCallback\n", .{});
 
-    // start the next task scheduling round
+    ctx.?.task_event.notify() catch
+        @panic("failed to re-notify");
     return .rearm;
 }
 
