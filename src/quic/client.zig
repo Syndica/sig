@@ -4,47 +4,64 @@ const xev = @import("xev");
 const sig = @import("../sig.zig");
 
 const ConnectionCallbacks = sig.quic.ConnectionCallbacks;
-const DhCallbacks = sig.quic.DhCallbacks;
+const SolCallbacks = sig.quic.SolCallbacks;
 const EngineCallbacks = sig.quic.EngineCallbacks;
 const TransportCallbacks = sig.quic.TransportCallbacks;
 
 const XQC_INTEROP_TLS_GROUPS = "X25519:P-256:P-384:P-521";
 
-pub const Args = extern struct {
+pub const Args = struct {
     log_level: u32 = xquic.XQC_LOG_DEBUG,
 };
 
-pub const Context = extern struct {
+pub const Context = struct {
+    // underlying xquic engine
     engine: *xquic.xqc_engine_t,
+
+    // events for managing the event loop
     engine_event: *xev.Async,
     task_event: *xev.Async,
 
-    // /* libevent context */
-    // struct event    *ev_engine;
-    // struct event    *ev_task;
-    // struct event    *ev_kill;
-    // struct event_base *eb;  /* handle of libevent */
+    // task scheduling
+    mode: TaskMode,
+    tasks: TaskContext,
 
-    // /* log context */
-    // int             log_fd;
-    // char            log_path[256];
+    const TaskMode = enum {
+        // send multi requests in single connection with multi streams
+        scmr,
+        // serially send multi requests in multi connections, with one request each connection
+        scsr_serial,
+        // concurrently send multi requests in multi connections, with one request each connection
+        scsr_concurrent,
+    };
 
-    // /* key log context */
-    // int             keylog_fd;
+    const TaskContext = struct {
+        /// Numbers of "connections". Tasks can be thought of as connections.
+        count: usize,
+        tasks: []const Task,
+    };
 
-    // /* client context */
-    // xqc_demo_cli_client_args_t  *args;
+    const Task = struct {
+        connection: Connection,
+        requests: []const Request,
 
-    // /* task schedule context */
-    // xqc_demo_cli_task_ctx_t     task_ctx;
+        const Request = struct {};
+    };
 
-    fn deinit(ctx: *Context) void {
+    const Connection = struct {};
+
+    fn initTasks(ctx: *Context, allocator: std.mem.Allocator) !void {
+        _ = ctx;
+        _ = allocator;
+    }
+
+    fn deinit(ctx: *const Context) void {
         xquic.xqc_engine_destroy(ctx.engine);
     }
 };
 
-const DhContext = struct {
-    dh_cbs: DhCallbacks,
+const SolContext = struct {
+    sol_cbs: SolCallbacks,
 };
 
 pub fn registerCallbacks(engine: *xquic.xqc_engine_t) !void {
@@ -61,9 +78,9 @@ pub fn registerCallbacks(engine: *xquic.xqc_engine_t) !void {
 
     // Create our custom callbacks context
     // This is a ... api
-    const dh_ctx = try std.heap.c_allocator.create(DhContext);
-    dh_ctx.* = DhContext{
-        .dh_cbs = .{
+    const sol_ctx = try std.heap.c_allocator.create(SolContext);
+    sol_ctx.* = SolContext{
+        .sol_cbs = .{
             //     .hqc_cbs = {
             //         .conn_create_notify = xqc_demo_cli_hq_conn_create_notify,
             //         .conn_close_notify = xqc_demo_cli_hq_conn_close_notify,
@@ -78,10 +95,10 @@ pub fn registerCallbacks(engine: *xquic.xqc_engine_t) !void {
 
     if (xquic.xqc_engine_register_alpn(
         engine,
-        "dh",
-        2,
+        "sol-interop".ptr,
+        "sol-interop".len,
         &app_proto_cbs,
-        dh_ctx,
+        sol_ctx,
     ) != xquic.XQC_OK) return error.EngineRegisterAlpnFailed;
 }
 
@@ -139,214 +156,71 @@ pub fn initEngine(args: *const Args) !*xquic.xqc_engine_t {
 }
 
 pub fn runClient() !void {
-<<<<<<< Updated upstream
+    // Initialize our Args
+    const args = Args{};
+
+    // Setup the event loop.
     var loop = try xev.Loop.init(.{});
     defer loop.deinit();
 
     var engine_event = try xev.Async.init();
     var task_event = try xev.Async.init();
 
-    var context: Context = .{
-        .engine = try initEngine(),
+    var engine_complete: xev.Completion = undefined;
+    var task_complete: xev.Completion = undefined;
+
+    // Initialize our context
+    var ctx = Context{
+        .engine = try initEngine(&args),
         .engine_event = &engine_event,
         .task_event = &task_event,
+        .mode = .scmr,
+        .tasks = .{
+            .count = 0,
+            .tasks = &.{},
+        },
     };
-    defer context.deinit();
+    defer ctx.deinit();
 
-    var engine_c: xev.Completion = undefined;
-    var task_c: xev.Completion = undefined;
+    // Setup the main callbacks
+    engine_event.wait(&loop, &engine_complete, Context, &ctx, engineCallback);
+    task_event.wait(&loop, &task_complete, Context, &ctx, taskScheduleCallback);
 
-    engine_event.wait(&loop, &engine_c, Context, &context, engineCallback);
-    task_event.wait(&loop, &task_c, Context, &context, taskScheduleCallback);
+    // Notify the task_even so that it triggers immediately and can start our setup.
     try task_event.notify();
 
-    const connection_settings: xquic.xqc_conn_settings_t = .{
-        .pacing_on = 0,
-    };
-    _ = connection_settings;
-
+    // Run the loop!
     try loop.run(.until_done);
 }
 
 fn engineCallback(
-    ctx: ?*Context,
+    maybe_ctx: ?*Context,
     _: *xev.Loop,
     _: *xev.Completion,
     result: xev.Async.WaitError!void,
 ) xev.CallbackAction {
+    const ctx: *Context = maybe_ctx orelse @panic("ctx null");
     _ = result catch @panic("callback paniced");
-    const engine = ctx.?.engine;
+
+    const engine = ctx.engine;
     xquic.xqc_engine_main_logic(engine);
     return .disarm;
 }
 
 fn taskScheduleCallback(
-    ctx: ?*Context,
+    maybe_ctx: ?*Context,
     _: *xev.Loop,
     _: *xev.Completion,
     result: xev.Async.WaitError!void,
 ) xev.CallbackAction {
+    const ctx: *Context = maybe_ctx orelse @panic("ctx null");
     _ = result catch @panic("callback paniced");
 
-    std.debug.print("taskScheduleCallback\n", .{});
+    // TODO: check task status, get first task we see as waiting.
 
-    ctx.?.task_event.notify() catch
+    // Re-notify and re-arm so the task scheduler can run again.
+    // TODO: do we need a forced delay here maybe? or is the logic enough of a slow down?
+    ctx.task_event.notify() catch
         @panic("failed to re-notify");
     return .rearm;
 }
-
-const EngineLayerCallbacks = struct {
-    fn writeLogFile(
-        level: xquic.xqc_log_level_t,
-        buf: ?*const anyopaque,
-        size: usize,
-        engine_user_data: ?*anyopaque,
-    ) callconv(.C) void {
-        _ = level;
-        _ = buf;
-        _ = size;
-        _ = engine_user_data;
-        std.debug.print("writeLogFile\n", .{});
-    }
-
-    fn writeQLogFile(
-        imp: xquic.qlog_event_importance_t,
-        buf: ?*const anyopaque,
-        size: usize,
-        engine_user_data: ?*anyopaque,
-    ) callconv(.C) void {
-        _ = imp;
-        _ = buf;
-        _ = size;
-        _ = engine_user_data;
-        std.debug.print("writeQLogFile\n", .{});
-    }
-
-    fn keyLogCb(
-        scid: ?*const xquic.xqc_cid_t,
-        line: ?[*]const u8,
-        engine_user_data: ?*anyopaque,
-    ) callconv(.C) void {
-        _ = scid;
-        _ = line;
-        _ = engine_user_data;
-        std.debug.print("keyLogCb\n", .{});
-    }
-
-    fn setEventTimer(wake_after: xquic.xqc_usec_t, engine_user_data: ?*anyopaque) callconv(.C) void {
-        _ = wake_after;
-        _ = engine_user_data;
-        std.debug.print("setEventTimer\n", .{});
-    }
-};
-
-const AlpnCallbacks = struct {};
-
-const TransportCallbacks = struct {
-    fn writeSocket(
-        buf: ?[*]const u8,
-        size: usize,
-        peer_address: ?*const xquic.struct_sockaddr,
-        addr_len: std.c.socklen_t,
-        user_data: ?*anyopaque,
-    ) callconv(.C) isize {
-        std.debug.print("writeSocket\n", .{});
-        return writeSocketEx(
-            0,
-            buf,
-            size,
-            peer_address,
-            addr_len,
-            user_data,
-        );
-    }
-    fn writeSocketEx(
-        path_id: u64,
-        buf: ?[*]const u8,
-        size: usize,
-        peer_address: ?*const xquic.struct_sockaddr,
-        addr_len: std.c.socklen_t,
-        user_data: ?*anyopaque,
-    ) callconv(.C) isize {
-        std.debug.print("writeSocketEx\n", .{});
-        _ = path_id;
-        _ = buf;
-        _ = size;
-        _ = peer_address;
-        _ = addr_len;
-        _ = user_data;
-        return -1;
-    }
-    fn saveToken(
-        token: ?[*]const u8,
-        token_len: u32,
-        user_data: ?*anyopaque,
-    ) callconv(.C) void {
-        _ = token;
-        _ = token_len;
-        _ = user_data;
-        std.debug.print("saveToken\n", .{});
-    }
-    fn saveSessionCb(
-        data: ?[*]const u8,
-        data_len: usize,
-        user_data: ?*anyopaque,
-    ) callconv(.C) void {
-        _ = data;
-        _ = data_len;
-        _ = user_data;
-        std.debug.print("saveSessionCb\n", .{});
-    }
-    fn saveTpCb(
-        data: ?[*]const u8,
-        data_len: usize,
-        user_data: ?*anyopaque,
-    ) callconv(.C) void {
-        _ = data;
-        _ = data_len;
-        _ = user_data;
-        std.debug.print("saveSessionCb\n", .{});
-    }
-    fn connUpdateCidNotify(
-        conn: ?*xquic.xqc_connection_t,
-        retire_cid: ?*const xquic.xqc_cid_t,
-        new_cid: ?*const xquic.xqc_cid_t,
-        user_data: ?*anyopaque,
-    ) callconv(.C) void {
-        _ = conn;
-        _ = retire_cid;
-        _ = new_cid;
-        _ = user_data;
-        std.debug.print("connUpdateCidNotify\n", .{});
-    }
-    fn readyToCreatePathNotify(
-        cid: ?*const xquic.xqc_cid_t,
-        conn_user_data: ?*anyopaque,
-    ) callconv(.C) void {
-        _ = cid;
-        _ = conn_user_data;
-        std.debug.print("connCreatePath\n", .{});
-    }
-    fn pathRemoved(
-        scid: ?*const xquic.xqc_cid_t,
-        path_id: u64,
-        user_data: ?*anyopaque,
-    ) callconv(.C) void {
-        _ = scid;
-        _ = path_id;
-        _ = user_data;
-        std.debug.print("pathRemoved\n", .{});
-    }
-};
-=======
-    // Initialize our Args
-    const args = Args{};
-
-    // Initialize our context
-    const ctx = Context{
-        .engine = try initEngine(&args),
-    };
-
-    _ = ctx;
-}
->>>>>>> Stashed changes
