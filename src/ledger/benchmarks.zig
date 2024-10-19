@@ -104,14 +104,15 @@ pub const BenchmarkLedger = struct {
 
         const total_shreds = shreds.len;
         _ = try ledger.insert_shred.insertShredsForTest(&inserter, shreds);
+        const num_reads = total_shreds / 15;
 
         const slot: u32 = 0;
 
         var rng = std.Random.DefaultPrng.init(100);
 
-        var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, total_shreds);
+        var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, num_reads);
         defer indices.deinit();
-        for (total_shreds) |_| {
+        for (num_reads) |_| {
             indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
         }
 
