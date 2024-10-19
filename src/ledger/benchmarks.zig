@@ -34,7 +34,7 @@ fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
     return rewards;
 }
 
-pub const BenchmarkLegder = struct {
+pub const BenchmarkLedger = struct {
     pub const min_iterations = 5;
     pub const max_iterations = 5;
 
