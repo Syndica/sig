@@ -139,6 +139,7 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
+    // Analogous to [bench_read_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L100)
     pub fn benchReadBincode() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try State.init(allocator, "bench read bincode", .noop);
