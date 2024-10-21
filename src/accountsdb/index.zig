@@ -378,7 +378,7 @@ pub const ShardedPubkeyRefMap = struct {
         self.allocator.free(self.shards);
     }
 
-    pub fn ensureTotalCapacity(self: *Self, shard_counts: []u64) !void {
+    pub fn ensureTotalCapacity(self: *Self, shard_counts: []const u64) !void {
         if (shard_counts.len != self.shards.len) {
             return error.ShardSizeMismatch;
         }
@@ -391,7 +391,7 @@ pub const ShardedPubkeyRefMap = struct {
         }
     }
 
-    pub fn ensureTotalAdditionalCapacity(self: *Self, shard_counts: []u64) !void {
+    pub fn ensureTotalAdditionalCapacity(self: *Self, shard_counts: []const u64) !void {
         if (shard_counts.len != self.shards.len) {
             return error.ShardSizeMismatch;
         }
