@@ -56,107 +56,33 @@ test "insert shreds and transaction statuses then get blocks" {
     const logger = test_logger.logger();
 
     var state = try State.init(std.testing.allocator, "insert shreds and transaction statuses then get blocks", logger);
+    const result = try insertDataForBlockTest(state);
+    const entries = result.entries;
+    const expected_transactions = result.expected_transactions;
+
+    defer {
+        for (expected_transactions.items) |etx| {
+            std.testing.allocator.free(etx.meta.pre_balances);
+            std.testing.allocator.free(etx.meta.post_balances);
+        }
+        expected_transactions.deinit();
+    }
+
+    defer {
+        for (entries) |e| e.deinit(std.testing.allocator);
+        std.testing.allocator.free(entries);
+    }
+
+    const blockhash = entries[entries.len - 1].hash;
+    const blockhash_string = blockhash.base58String();
+
     defer state.deinit();
     const allocator = state.allocator;
 
     var db = state.db;
-    var inserter = try state.shredInserter();
-    var writer = try state.writer();
     var reader = try state.reader();
 
     const slot = 10;
-
-    const prefix = "agave.blockstore.test_get_rooted_block.";
-    const entries = try loadEntriesFromFile(
-        allocator,
-        test_shreds_dir ++ "/" ++ prefix ++ "entries.bin",
-    );
-    defer {
-        for (entries) |e| e.deinit(allocator);
-        allocator.free(entries);
-    }
-    const blockhash = entries[entries.len - 1].hash;
-    const blockhash_string = blockhash.base58String();
-
-    const shreds = try testShreds(std.testing.allocator, prefix ++ "shreds.bin");
-    const more_shreds = try testShreds(std.testing.allocator, prefix ++ "more_shreds.bin");
-    const unrooted_shreds = try testShreds(std.testing.allocator, prefix ++ "unrooted_shreds.bin");
-    defer inline for (.{ shreds, more_shreds, unrooted_shreds }) |slice| {
-        deinitShreds(std.testing.allocator, slice);
-    };
-
-    _ = try ledger.insert_shred.insertShredsForTest(&inserter, shreds);
-    _ = try ledger.insert_shred.insertShredsForTest(&inserter, more_shreds);
-    _ = try ledger.insert_shred.insertShredsForTest(&inserter, unrooted_shreds);
-
-    try writer.setRoots(&.{ slot - 1, slot, slot + 1 });
-
-    const parent_meta = SlotMeta.init(allocator, 0, null);
-    try db.put(schema.slot_meta, slot - 1, parent_meta);
-
-    var expected_transactions = std.ArrayList(VersionedTransactionWithStatusMeta).init(allocator);
-    defer {
-        for (expected_transactions.items) |etx| {
-            allocator.free(etx.meta.pre_balances);
-            allocator.free(etx.meta.post_balances);
-        }
-        expected_transactions.deinit();
-    }
-    for (entries) |entry| {
-        for (entry.transactions.items) |transaction| {
-            var pre_balances = std.ArrayList(u64).init(allocator);
-            var post_balances = std.ArrayList(u64).init(allocator);
-            const num_accounts = transaction.message.accountKeys().len;
-            for (0..num_accounts) |i| {
-                try pre_balances.append(i * 10);
-                try post_balances.append(i * 11);
-            }
-            const compute_units_consumed = 12345;
-            const signature = transaction.signatures[0];
-
-            var pre_cloned = try pre_balances.clone();
-            const pre_owned = try pre_cloned.toOwnedSlice();
-            defer allocator.free(pre_owned);
-            var post_cloned = try post_balances.clone();
-            const post_owned = try post_cloned.toOwnedSlice();
-            defer allocator.free(post_owned);
-
-            const status = ledger.meta.TransactionStatusMeta{
-                .status = null,
-                .fee = 42,
-                .pre_balances = pre_owned,
-                .post_balances = post_owned,
-                .inner_instructions = &.{},
-                .log_messages = &.{},
-                .pre_token_balances = &.{},
-                .post_token_balances = &.{},
-                .rewards = &.{},
-                .loaded_addresses = .{},
-                .return_data = .{},
-                .compute_units_consumed = compute_units_consumed,
-            };
-            try db.put(schema.transaction_status, .{ signature, slot }, status);
-            try db.put(schema.transaction_status, .{ signature, slot + 1 }, status);
-            try db.put(schema.transaction_status, .{ signature, slot + 2 }, status);
-            try expected_transactions.append(VersionedTransactionWithStatusMeta{
-                .transaction = transaction,
-                .meta = ledger.meta.TransactionStatusMeta{
-                    .status = null,
-                    .fee = 42,
-                    .pre_balances = try pre_balances.toOwnedSlice(),
-                    .post_balances = try post_balances.toOwnedSlice(),
-                    .inner_instructions = &.{},
-                    .log_messages = &.{},
-                    .pre_token_balances = &.{},
-                    .post_token_balances = &.{},
-                    .rewards = &.{},
-                    .loaded_addresses = .{},
-                    .return_data = .{},
-                    .compute_units_consumed = compute_units_consumed,
-                },
-            });
-        }
-    }
 
     // Even if marked as root, a slot that is empty of entries should return an error
     try std.testing.expectError(error.SlotUnavailable, reader.getRootedBlock(slot - 1, true));
@@ -432,4 +358,104 @@ pub fn TestDB(scope: []const u8) type {
             return try BlockstoreDB.open(allocator, .noop, path);
         }
     };
+}
+
+const InsertDataForBlockResult = struct {
+    entries: []const Entry,
+    expected_transactions: std.ArrayList(VersionedTransactionWithStatusMeta),
+};
+
+pub fn insertDataForBlockTest(state: *State) !InsertDataForBlockResult {
+    const allocator = state.allocator;
+
+    var db = state.db;
+    var inserter = try state.shredInserter();
+    var writer = try state.writer();
+
+    const slot = 10;
+
+    const prefix = "agave.blockstore.test_get_rooted_block.";
+    const entries = try loadEntriesFromFile(
+        allocator,
+        test_shreds_dir ++ "/" ++ prefix ++ "entries.bin",
+    );
+    errdefer {
+        for (entries) |e| e.deinit(allocator);
+        allocator.free(entries);
+    }
+
+    const shreds = try testShreds(allocator, prefix ++ "shreds.bin");
+    const more_shreds = try testShreds(allocator, prefix ++ "more_shreds.bin");
+    const unrooted_shreds = try testShreds(allocator, prefix ++ "unrooted_shreds.bin");
+    defer inline for (.{ shreds, more_shreds, unrooted_shreds }) |slice| {
+        deinitShreds(allocator, slice);
+    };
+
+    _ = try ledger.insert_shred.insertShredsForTest(&inserter, shreds);
+    _ = try ledger.insert_shred.insertShredsForTest(&inserter, more_shreds);
+    _ = try ledger.insert_shred.insertShredsForTest(&inserter, unrooted_shreds);
+
+    try writer.setRoots(&.{ slot - 1, slot, slot + 1 });
+
+    const parent_meta = SlotMeta.init(allocator, 0, null);
+    try db.put(schema.slot_meta, slot - 1, parent_meta);
+
+    var expected_transactions = std.ArrayList(VersionedTransactionWithStatusMeta).init(allocator);
+    for (entries) |entry| {
+        for (entry.transactions.items) |transaction| {
+            var pre_balances = std.ArrayList(u64).init(allocator);
+            var post_balances = std.ArrayList(u64).init(allocator);
+            const num_accounts = transaction.message.accountKeys().len;
+            for (0..num_accounts) |i| {
+                try pre_balances.append(i * 10);
+                try post_balances.append(i * 11);
+            }
+            const compute_units_consumed = 12345;
+            const signature = transaction.signatures[0];
+
+            var pre_cloned = try pre_balances.clone();
+            const pre_owned = try pre_cloned.toOwnedSlice();
+            defer allocator.free(pre_owned);
+            var post_cloned = try post_balances.clone();
+            const post_owned = try post_cloned.toOwnedSlice();
+            defer allocator.free(post_owned);
+
+            const status = ledger.meta.TransactionStatusMeta{
+                .status = null,
+                .fee = 42,
+                .pre_balances = pre_owned,
+                .post_balances = post_owned,
+                .inner_instructions = &.{},
+                .log_messages = &.{},
+                .pre_token_balances = &.{},
+                .post_token_balances = &.{},
+                .rewards = &.{},
+                .loaded_addresses = .{},
+                .return_data = .{},
+                .compute_units_consumed = compute_units_consumed,
+            };
+            try db.put(schema.transaction_status, .{ signature, slot }, status);
+            try db.put(schema.transaction_status, .{ signature, slot + 1 }, status);
+            try db.put(schema.transaction_status, .{ signature, slot + 2 }, status);
+            try expected_transactions.append(VersionedTransactionWithStatusMeta{
+                .transaction = transaction,
+                .meta = ledger.meta.TransactionStatusMeta{
+                    .status = null,
+                    .fee = 42,
+                    .pre_balances = try pre_balances.toOwnedSlice(),
+                    .post_balances = try post_balances.toOwnedSlice(),
+                    .inner_instructions = &.{},
+                    .log_messages = &.{},
+                    .pre_token_balances = &.{},
+                    .post_token_balances = &.{},
+                    .rewards = &.{},
+                    .loaded_addresses = .{},
+                    .return_data = .{},
+                    .compute_units_consumed = compute_units_consumed,
+                },
+            });
+        }
+    }
+
+    return .{ .entries = entries, .expected_transactions = expected_transactions };
 }
