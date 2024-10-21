@@ -34,7 +34,7 @@ fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
     return rewards;
 }
 
-pub const BenchmarkLegder = struct {
+pub const BenchmarkLedger = struct {
     const Slot = sig.core.Slot;
     const SlotMeta = ledger.meta.SlotMeta;
     pub const min_iterations = 5;
