@@ -1,6 +1,8 @@
 const std = @import("std");
+const prometheus = @import("lib.zig");
 
-const Metric = @import("metric.zig").Metric;
+const Metric = prometheus.metric.Metric;
+const MetricType = prometheus.metric.MetricType;
 
 /// A gauge that stores the value it reports.
 /// Read and write operations are atomic and monotonic.
@@ -10,6 +12,9 @@ pub fn Gauge(comptime T: type) type {
         metric: Metric = .{ .getResultFn = getResult },
 
         const Self = @This();
+
+        pub const metric_type: MetricType = .gauge;
+        pub const Data = T;
 
         pub fn inc(self: *Self) void {
             self.value.fetchAdd(1, .monotonic);
@@ -24,11 +29,11 @@ pub fn Gauge(comptime T: type) type {
         }
 
         pub fn dec(self: *Self) void {
-            self.value.fetchSub(1, .monotonic);
+            _ = self.value.fetchSub(1, .monotonic);
         }
 
         pub fn sub(self: *Self, v: T) void {
-            self.value.fetchAdd(v, .monotonic);
+            _ = self.value.fetchAdd(v, .monotonic);
         }
 
         pub fn set(self: *Self, v: T) void {
@@ -37,6 +42,14 @@ pub fn Gauge(comptime T: type) type {
 
         pub fn get(self: *Self) T {
             return self.value.load(.monotonic);
+        }
+
+        pub fn max(self: *Self, v: T) void {
+            _ = self.value.fetchMax(v, .monotonic);
+        }
+
+        pub fn min(self: *Self, v: T) void {
+            _ = self.value.fetchMin(v, .monotonic);
         }
 
         fn getResult(metric: *Metric, allocator: std.mem.Allocator) Metric.Error!Metric.Result {

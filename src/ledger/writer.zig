@@ -7,7 +7,6 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
 // sig common
-const GetMetricError = sig.prometheus.GetMetricError;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
 const Logger = sig.trace.Logger;
@@ -15,7 +14,6 @@ const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
-const Registry = sig.prometheus.Registry;
 const Timer = sig.time.Timer;
 
 // ledger
@@ -53,7 +51,7 @@ pub const BlockstoreWriter = struct {
             .db = db,
             .lowest_cleanup_slot = lowest_cleanup_slot,
             .max_root = max_root,
-            .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+            .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
         };
     }
 
@@ -239,9 +237,9 @@ pub const BlockstoreWriter = struct {
         const fix_roots_us = fix_roots_timer.read().asMicros();
         const num_roots_fixed = roots_to_fix.items.len;
 
-        self.scan_and_fix_roots_metrics.fix_roots_us.observe(@floatFromInt(fix_roots_us));
-        self.scan_and_fix_roots_metrics.find_missing_roots_us.observe(@floatFromInt(find_missing_roots_us));
-        self.scan_and_fix_roots_metrics.num_roots_to_fix.observe(@floatFromInt(roots_to_fix.items.len));
+        self.scan_and_fix_roots_metrics.fix_roots_us.observe(fix_roots_us);
+        self.scan_and_fix_roots_metrics.find_missing_roots_us.observe(find_missing_roots_us);
+        self.scan_and_fix_roots_metrics.num_roots_to_fix.observe(roots_to_fix.items.len);
 
         return num_roots_fixed;
     }
@@ -310,22 +308,8 @@ pub const ScanAndFixRootsMetrics = struct {
     num_roots_to_fix: *Histogram,
     fix_roots_us: *Histogram,
 
-    pub fn init(registry: *Registry(.{})) GetMetricError!ScanAndFixRootsMetrics {
-        var self: ScanAndFixRootsMetrics = undefined;
-        inline for (@typeInfo(ScanAndFixRootsMetrics).Struct.fields) |field| {
-            const name = "scan_and_fix_roots_" ++ field.name;
-            @field(self, field.name) = try registry.getOrCreateHistogram(name, &buckets);
-        }
-        return self;
-    }
-
-    const buckets: [11]f64 = blk: {
-        var bs: [11]f64 = undefined;
-        for (0..11) |i| {
-            bs[i] = std.math.pow(f64, 5.0, @as(f64, @floatFromInt(i)) - 1.0);
-        }
-        break :blk bs;
-    };
+    pub const prefix = "scan_and_fix_roots";
+    pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(5, -1, 10);
 };
 
 const TestDB = sig.ledger.tests.TestDB("writer");
@@ -346,7 +330,7 @@ test "setRoots" {
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
-        .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
     };
 
     const roots: [5]Slot = .{ 1, 2, 3, 4, 5 };
@@ -374,7 +358,7 @@ test "scanAndFixRoots" {
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
-        .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
     };
 
     // slot = 2 is not a root, but should be!
@@ -416,7 +400,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
-        .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
     };
 
     // 1 is a root
@@ -488,7 +472,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
-        .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
     };
 
     // 1 is a root and full

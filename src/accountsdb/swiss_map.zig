@@ -504,11 +504,11 @@ test "swissmap resize" {
     try map.ensureTotalCapacity(100);
 
     const ref = accounts_db.index.AccountRef.default();
-    map.putAssumeCapacity(sig.core.Pubkey.default(), ref);
+    map.putAssumeCapacity(sig.core.Pubkey.ZEROES, ref);
 
     // this will resize the map with the key still in there
     try map.ensureTotalCapacity(200);
-    const get_ref = map.get(sig.core.Pubkey.default()) orelse return error.MissingAccount;
+    const get_ref = map.get(sig.core.Pubkey.ZEROES) orelse return error.MissingAccount;
     try std.testing.expect(std.meta.eql(get_ref, ref));
 }
 
@@ -600,17 +600,17 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
     []accounts_db.index.AccountRef,
     []sig.core.Pubkey,
 } {
-    var random = std.Random.DefaultPrng.init(0);
-    const rng = random.random();
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
 
     const accounts = try allocator.alloc(accounts_db.index.AccountRef, n_accounts);
     const pubkeys = try allocator.alloc(sig.core.Pubkey, n_accounts);
     for (0..n_accounts) |i| {
-        rng.bytes(&pubkeys[i].data);
+        random.bytes(&pubkeys[i].data);
         accounts[i] = accounts_db.index.AccountRef.default();
         accounts[i].pubkey = pubkeys[i];
     }
-    rng.shuffle(sig.core.Pubkey, pubkeys);
+    random.shuffle(sig.core.Pubkey, pubkeys);
 
     return .{ accounts, pubkeys };
 }

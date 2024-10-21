@@ -1,5 +1,6 @@
 pub const accounts_file = @import("accounts_file.zig");
 pub const bank = @import("bank.zig");
+pub const cache = @import("cache.zig");
 pub const db = @import("db.zig");
 pub const download = @import("download.zig");
 pub const genesis_config = @import("genesis_config.zig");

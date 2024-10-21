@@ -1,8 +1,11 @@
 const std = @import("std");
+const prometheus = @import("lib.zig");
+
 const mem = std.mem;
 const testing = std.testing;
 
-const Metric = @import("metric.zig").Metric;
+const Metric = prometheus.metric.Metric;
+const MetricType = prometheus.metric.MetricType;
 
 pub fn GaugeCallFnType(comptime StateType: type, comptime Return: type) type {
     const CallFnArgType = switch (@typeInfo(StateType)) {
@@ -16,14 +19,15 @@ pub fn GaugeCallFnType(comptime StateType: type, comptime Return: type) type {
 }
 
 pub fn GaugeFn(comptime StateType: type, comptime Return: type) type {
-    const CallFnType = GaugeCallFnType(StateType, Return);
-
     return struct {
-        const Self = @This();
-
         metric: Metric = .{ .getResultFn = getResult },
         callFn: CallFnType = undefined,
         state: StateType = undefined,
+
+        const Self = @This();
+
+        pub const CallFnType = GaugeCallFnType(StateType, Return);
+        pub const metric_type: MetricType = .gauge_fn;
 
         pub fn init(callFn: CallFnType, state: StateType) Self {
             return .{

@@ -705,7 +705,8 @@ fn retransmitterSignatureOffset(variant: ShredVariant) !usize {
     if (!variant.resigned) {
         return error.InvalidShredVariant;
     }
-    return try proofOffset(variant.constants(), variant) + variant.proof_size + merkle_proof_entry_size;
+    return try proofOffset(variant.constants(), variant) +
+        variant.proof_size * merkle_proof_entry_size;
 }
 
 fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
@@ -1236,14 +1237,14 @@ test "merkleProof" {
 
 test "merkle tree round trip" {
     const allocator = std.testing.allocator;
-    var rng = std.Random.DefaultPrng.init(123);
-    const random = rng.random();
+    var prng = std.Random.DefaultPrng.init(123);
+    const random = prng.random();
     const size = 100;
 
     var nodes = try std.ArrayList(Hash).initCapacity(allocator, size);
     defer nodes.deinit();
     for (0..size) |_| {
-        nodes.appendAssumeCapacity(Hash.random(random));
+        nodes.appendAssumeCapacity(Hash.initRandom(random));
     }
     var tree = try nodes.clone();
     defer tree.deinit();

@@ -3,37 +3,33 @@ const sig = @import("../sig.zig");
 const zstd = @import("zstd");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const Logger = sig.trace.Logger;
 const StandardErrLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
 const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 const BankFields = sig.accounts_db.snapshots.BankFields;
-const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
     slot: u64,
-    data: []u8,
+    data: [32]u8,
 
-    pub fn random(rand: std.rand.Random, slot: Slot, allocator: std.mem.Allocator) !TrackedAccount {
+    pub fn initRandom(random: std.rand.Random, slot: Slot) !TrackedAccount {
+        var data: [32]u8 = undefined;
+        random.bytes(&data);
         return .{
-            .pubkey = Pubkey.random(rand),
+            .pubkey = Pubkey.initRandom(random),
             .slot = slot,
-            .data = try allocator.alloc(u8, 32),
+            .data = data,
         };
-    }
-
-    pub fn deinit(self: *TrackedAccount, allocator: std.mem.Allocator) void {
-        allocator.free(self.data);
     }
 
     pub fn toAccount(self: *const TrackedAccount, allocator: std.mem.Allocator) !Account {
         return .{
             .lamports = 19,
-            .data = try allocator.dupe(u8, self.data),
-            .owner = Pubkey.default(),
+            .data = try allocator.dupe(u8, &self.data),
+            .owner = Pubkey.ZEROES,
             .executable = false,
             .rent_epoch = 0,
         };
@@ -51,22 +47,22 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     };
 
     var prng = std.Random.DefaultPrng.init(seed);
-    const rand = prng.random();
+    const random = prng.random();
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
 
-    var std_logger = StandardErrLogger.init(.{
+    var std_logger = try StandardErrLogger.init(.{
         .allocator = allocator,
         .max_level = Level.debug,
-        .max_buffer = 1 << 30,
-    }) catch @panic("Logger init failed");
+        .max_buffer = 1 << 20,
+    });
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
 
-    const use_disk = rand.boolean();
+    const use_disk = random.boolean();
 
     var test_data_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer test_data_dir.close();
@@ -116,6 +112,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .exit = exit,
         .slots_per_full_snapshot = 50_000,
         .slots_per_incremental_snapshot = 5_000,
+        .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
     } });
     errdefer {
         exit.store(true, .release);
@@ -124,15 +121,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var tracked_accounts = std.AutoArrayHashMap(Pubkey, TrackedAccount).init(allocator);
     defer tracked_accounts.deinit();
-    defer for (tracked_accounts.values()) |*value| {
-        value.deinit(allocator);
-    };
     try tracked_accounts.ensureTotalCapacity(10_000);
 
-    var random_bank_fields = try BankFields.random(allocator, rand, 1 << 8);
+    var random_bank_fields = try BankFields.initRandom(allocator, random, 1 << 8);
     defer random_bank_fields.deinit(allocator);
-
-    // const random_bank_hash_info = BankHashInfo.random(rand);
 
     const zstd_compressor = try zstd.Compressor.init(.{});
     defer zstd_compressor.deinit();
@@ -150,7 +142,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
         defer slot += 1;
 
-        const action = rand.enumValue(enum { put, get });
+        const action = random.enumValue(enum { put, get });
         switch (action) {
             .put => {
                 const N_ACCOUNTS_PER_SLOT = 10;
@@ -161,11 +153,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
                     errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
 
-                    var tracked_account = try TrackedAccount.random(rand, slot, allocator);
+                    var tracked_account = try TrackedAccount.initRandom(random, slot);
 
-                    const existing_pubkey = rand.boolean();
+                    const existing_pubkey = random.boolean();
                     if (existing_pubkey and tracked_accounts.count() > 0) {
-                        const index = rand.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
+                        const index = random.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
                         const key = tracked_accounts.keys()[index];
                         tracked_account.pubkey = key;
                     }
@@ -173,12 +165,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     account.* = try tracked_account.toAccount(allocator);
                     pubkey.* = tracked_account.pubkey;
 
-                    const r = try tracked_accounts.getOrPut(tracked_account.pubkey);
-                    if (r.found_existing) {
-                        r.value_ptr.deinit(allocator);
-                    }
                     // always overwrite the old slot
-                    r.value_ptr.* = tracked_account;
+                    try tracked_accounts.put(tracked_account.pubkey, tracked_account);
                 }
                 defer for (accounts) |account| account.deinit(allocator);
 
@@ -194,20 +182,20 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 if (n_keys == 0) {
                     continue;
                 }
-                const index = rand.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
+                const index = random.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
                 const key = tracked_accounts.keys()[index];
 
                 const tracked_account = tracked_accounts.get(key).?;
                 var account = try accounts_db.getAccount(&tracked_account.pubkey);
                 defer account.deinit(allocator);
 
-                if (!std.mem.eql(u8, tracked_account.data, account.data)) {
+                if (!std.mem.eql(u8, &tracked_account.data, account.data)) {
                     @panic("found accounts with different data");
                 }
             },
         }
 
-        const create_new_root = rand.boolean();
+        const create_new_root = random.boolean();
         if (create_new_root) {
             largest_rooted_slot = @min(slot, largest_rooted_slot + 2);
             accounts_db.largest_rooted_slot.store(largest_rooted_slot, .monotonic);

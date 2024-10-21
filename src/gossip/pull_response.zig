@@ -19,7 +19,7 @@ pub const GOSSIP_PULL_TIMEOUT_MS: u64 = 15000;
 pub fn filterSignedGossipDatas(
     /// It is advised to use a PRNG, and not a true RNG, otherwise
     /// the runtime of this function may be unbounded.
-    rng: std.Random,
+    random: std.Random,
     allocator: std.mem.Allocator,
     gossip_table: *const GossipTable,
     filter: *const GossipPullFilter,
@@ -30,7 +30,7 @@ pub fn filterSignedGossipDatas(
         return ArrayList(SignedGossipData).init(allocator);
     }
 
-    const jitter = rng.intRangeAtMost(u64, 0, GOSSIP_PULL_TIMEOUT_MS / 4);
+    const jitter = random.intRangeAtMost(u64, 0, GOSSIP_PULL_TIMEOUT_MS / 4);
     const caller_wallclock_with_jitter = caller_wallclock + jitter;
 
     var bloom = filter.filter;
@@ -83,13 +83,12 @@ test "gossip.pull_response: test filtering values works" {
     // insert a some value
     const kp = try KeyPair.create([_]u8{1} ** 32);
 
-    const seed: u64 = 18;
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
+    var prng = std.rand.DefaultPrng.init(18);
+    const random = prng.random();
 
     var lg = gossip_table_rw.write();
     for (0..100) |_| {
-        const gossip_value = try SignedGossipData.random(rng, &kp);
+        const gossip_value = try SignedGossipData.initRandom(random, &kp);
         _ = try lg.mut().insert(gossip_value, 0);
     }
     lg.unlock();
@@ -100,7 +99,7 @@ test "gossip.pull_response: test filtering values works" {
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
     var filters = try buildGossipPullFilters(
         std.testing.allocator,
-        rng,
+        random,
         &gossip_table_rw,
         &failed_pull_hashes,
         max_bytes,
@@ -123,7 +122,7 @@ test "gossip.pull_response: test filtering values works" {
     // insert more values which the filters should be missing
     lg = gossip_table_rw.write();
     for (0..64) |_| {
-        const v2 = try SignedGossipData.random(rng, &kp);
+        const v2 = try SignedGossipData.initRandom(random, &kp);
         _ = try lg.mut().insert(v2, 0);
     }
 

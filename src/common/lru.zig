@@ -32,18 +32,26 @@ pub fn LruCacheCustom(
     comptime deinitFn_: anytype,
 ) type {
     const deinitFn = switch (@TypeOf(deinitFn_)) {
-        fn (V, DeinitContext) void => deinitFn_,
         fn (*V, DeinitContext) void => deinitFn_,
-        fn (V) void => struct {
-            fn f(v: V, _: DeinitContext) void {
-                V.deinit(v);
+
+        fn (V, DeinitContext) void => struct {
+            fn f(v: *V, ctx: DeinitContext) void {
+                deinitFn_(v.*, ctx);
             }
         }.f,
+
+        fn (V) void => struct {
+            fn f(v: *V, _: DeinitContext) void {
+                V.deinit(v.*);
+            }
+        }.f,
+
         fn (*V) void => struct {
             fn f(v: *V, _: DeinitContext) void {
                 V.deinit(v);
             }
         }.f,
+
         else => @compileError("unsupported deinit function type"),
     };
     return struct {
@@ -263,6 +271,15 @@ pub fn LruCacheCustom(
 
             _ = self.internalInsert(key, value);
             return null;
+        }
+
+        pub fn putNoClobber(self: *Self, key: K, value: V) !void {
+            if (kind == .locking) self.mux.lock();
+            defer if (kind == .locking) self.mux.unlock();
+
+            if (self.hashmap.contains(key)) return error.EntryAlreadyExists;
+
+            _ = self.internalInsert(key, value);
         }
 
         /// Removes key from cache. Returns true if found, false if not.

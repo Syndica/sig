@@ -9,13 +9,13 @@ const Signature = sig.core.Signature;
 const indexOf = sig.utils.slice.indexOf;
 
 const peekableReader = sig.utils.io.peekableReader;
-const ShortVecConfig = sig.bincode.shortvec.ShortVecConfig;
+const shortVecConfig = sig.bincode.shortvec.sliceConfig;
 
 pub const VersionedTransaction = struct {
-    signatures: []Signature,
+    signatures: []const Signature,
     message: VersionedMessage,
 
-    pub const @"!bincode-config:signatures" = ShortVecConfig(Signature);
+    pub const @"!bincode-config:signatures" = shortVecConfig([]const Signature);
 
     pub fn deinit(self: VersionedTransaction, allocator: std.mem.Allocator) void {
         allocator.free(self.signatures);
@@ -100,7 +100,7 @@ pub const V0Message = struct {
     header: MessageHeader,
 
     /// List of accounts loaded by this transaction.
-    account_keys: []Pubkey,
+    account_keys: []const Pubkey,
 
     /// The blockhash of a recent block.
     recent_blockhash: Hash,
@@ -118,15 +118,15 @@ pub const V0Message = struct {
     ///   1) message `account_keys`
     ///   2) ordered list of keys loaded from `writable` lookup table indexes
     ///   3) ordered list of keys loaded from `readable` lookup table indexes
-    instructions: []CompiledInstruction,
+    instructions: []const CompiledInstruction,
 
     /// List of address table lookups used to load additional accounts
     /// for this transaction.
-    address_table_lookups: []MessageAddressTableLookup,
+    address_table_lookups: []const MessageAddressTableLookup,
 
-    pub const @"!bincode-config:account_keys" = ShortVecConfig(Pubkey);
-    pub const @"!bincode-config:instructions" = ShortVecConfig(CompiledInstruction);
-    pub const @"!bincode-config:address_table_lookups" = ShortVecConfig(MessageAddressTableLookup);
+    pub const @"!bincode-config:account_keys" = shortVecConfig([]const Pubkey);
+    pub const @"!bincode-config:instructions" = shortVecConfig([]const CompiledInstruction);
+    pub const @"!bincode-config:address_table_lookups" = shortVecConfig([]const MessageAddressTableLookup);
 
     pub fn deinit(self: V0Message, allocator: std.mem.Allocator) void {
         inline for (.{ self.instructions, self.address_table_lookups }) |slice| {
@@ -156,12 +156,12 @@ pub const MessageAddressTableLookup = struct {
     /// Address lookup table account key
     account_key: Pubkey,
     /// List of indexes used to load writable account addresses
-    writable_indexes: []u8,
+    writable_indexes: []const u8,
     /// List of indexes used to load readonly account addresses
-    readonly_indexes: []u8,
+    readonly_indexes: []const u8,
 
-    pub const @"!bincode-config:writable_indexes" = ShortVecConfig(u8);
-    pub const @"!bincode-config:readonly_indexes" = ShortVecConfig(u8);
+    pub const @"!bincode-config:writable_indexes" = shortVecConfig([]const u8);
+    pub const @"!bincode-config:readonly_indexes" = shortVecConfig([]const u8);
 
     pub fn deinit(self: MessageAddressTableLookup, allocator: std.mem.Allocator) void {
         allocator.free(self.writable_indexes);
@@ -170,19 +170,17 @@ pub const MessageAddressTableLookup = struct {
 };
 
 pub const Transaction = struct {
-    signatures: []Signature,
+    signatures: []const Signature,
     message: Message,
 
-    pub const @"!bincode-config:signatures" = ShortVecConfig(Signature);
+    pub const @"!bincode-config:signatures" = shortVecConfig([]const Signature);
 
     pub const MAX_BYTES: usize = 1232;
 
-    pub fn default() Transaction {
-        return Transaction{
-            .signatures = &[_]Signature{},
-            .message = Message.default(),
-        };
-    }
+    pub const EMPTY: Transaction = .{
+        .signatures = &.{},
+        .message = Message.EMPTY,
+    };
 
     pub fn newUnsigned(allocator: std.mem.Allocator, message: Message) error{OutOfMemory}!Transaction {
         return Transaction{
@@ -220,25 +218,26 @@ pub const Transaction = struct {
 
 pub const Message = struct {
     header: MessageHeader,
-    account_keys: []Pubkey,
+    account_keys: []const Pubkey,
     recent_blockhash: Hash,
-    instructions: []CompiledInstruction,
+    instructions: []const CompiledInstruction,
 
-    pub const @"!bincode-config:account_keys" = ShortVecConfig(Pubkey);
-    pub const @"!bincode-config:instructions" = ShortVecConfig(CompiledInstruction);
+    pub const @"!bincode-config:account_keys" = shortVecConfig([]const Pubkey);
+    pub const @"!bincode-config:instructions" = shortVecConfig([]const CompiledInstruction);
 
-    pub fn default() Message {
-        return Message{
-            .header = MessageHeader{
-                .num_required_signatures = 0,
-                .num_readonly_signed_accounts = 0,
-                .num_readonly_unsigned_accounts = 0,
-            },
-            .account_keys = &[_]Pubkey{},
-            .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-            .instructions = &[_]CompiledInstruction{},
-        };
-    }
+    pub const EMPTY: Message = .{
+        .header = .{
+            .num_required_signatures = 0,
+            .num_readonly_signed_accounts = 0,
+            .num_readonly_unsigned_accounts = 0,
+        },
+        .account_keys = &.{},
+        .recent_blockhash = blk: {
+            @setEvalBranchQuota(1962);
+            break :blk Hash.generateSha256Hash(&.{0});
+        },
+        .instructions = &.{},
+    };
 
     pub fn init(allocator: std.mem.Allocator, instructions: []const Instruction, payer: Pubkey, recent_blockhash: Hash) !Message {
         var compiled_keys = try CompiledKeys.init(allocator, instructions, payer);
@@ -254,11 +253,21 @@ pub const Message = struct {
     }
 
     pub fn clone(self: *const Message, allocator: std.mem.Allocator) error{OutOfMemory}!Message {
+        const account_keys = try allocator.dupe(Pubkey, self.account_keys);
+        errdefer allocator.free(account_keys);
+
         const instructions = try allocator.alloc(CompiledInstruction, self.instructions.len);
-        for (instructions, 0..) |*ci, i| ci.* = try self.instructions[i].clone(allocator);
+        errdefer allocator.free(instructions);
+
+        for (instructions, self.instructions, 0..) |*ci, original_ci, i| {
+            errdefer for (instructions[0..i]) |prev_ci| prev_ci.deinit(allocator);
+            ci.* = try original_ci.clone(allocator);
+        }
+        errdefer comptime unreachable; // otherwise we have to remember to free each instruction
+
         return .{
             .header = self.header,
-            .account_keys = try allocator.dupe(Pubkey, self.account_keys),
+            .account_keys = account_keys,
             .recent_blockhash = self.recent_blockhash,
             .instructions = instructions,
         };
@@ -344,12 +353,12 @@ pub const CompiledInstruction = struct {
     /// Index into the transaction keys array indicating the program account that executes this instruction.
     program_id_index: u8,
     /// Ordered indices into the transaction keys array indicating which accounts to pass to the program.
-    accounts: []u8,
+    accounts: []const u8,
     /// The program input data.
-    data: []u8,
+    data: []const u8,
 
-    pub const @"!bincode-config:accounts" = ShortVecConfig(u8);
-    pub const @"!bincode-config:data" = ShortVecConfig(u8);
+    pub const @"!bincode-config:accounts" = shortVecConfig([]const u8);
+    pub const @"!bincode-config:data" = shortVecConfig([]const u8);
 
     pub fn clone(self: *const CompiledInstruction, allocator: std.mem.Allocator) error{OutOfMemory}!CompiledInstruction {
         return .{
@@ -396,14 +405,14 @@ pub const CompiledKeys = struct {
         for (instructions) |instruction| {
             const instruction_meta_gopr = try key_meta_map.getOrPut(instruction.program_id);
             if (!instruction_meta_gopr.found_existing) {
-                instruction_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
+                instruction_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
             }
             instruction_meta_gopr.value_ptr.*.is_invoked = true;
 
             for (instruction.accounts) |account_meta| {
                 const account_meta_gopr = try key_meta_map.getOrPut(account_meta.pubkey);
                 if (!account_meta_gopr.found_existing) {
-                    account_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
+                    account_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
                 }
                 account_meta_gopr.value_ptr.*.is_signer = account_meta_gopr.value_ptr.*.is_signer or account_meta.is_signer;
                 account_meta_gopr.value_ptr.*.is_writable = account_meta_gopr.value_ptr.*.is_writable or account_meta.is_writable;
@@ -412,7 +421,7 @@ pub const CompiledKeys = struct {
             if (maybe_payer) |payer| {
                 const payer_meta_gopr = try key_meta_map.getOrPut(payer);
                 if (!payer_meta_gopr.found_existing) {
-                    payer_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
+                    payer_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
                 }
                 payer_meta_gopr.value_ptr.*.is_signer = true;
                 payer_meta_gopr.value_ptr.*.is_writable = true;
@@ -480,13 +489,11 @@ pub const CompiledKeyMeta = packed struct {
     is_writable: bool,
     is_invoked: bool,
 
-    pub fn default() CompiledKeyMeta {
-        return .{
-            .is_signer = false,
-            .is_writable = false,
-            .is_invoked = false,
-        };
-    }
+    pub const ALL_FALSE: CompiledKeyMeta = .{
+        .is_signer = false,
+        .is_writable = false,
+        .is_invoked = false,
+    };
 };
 
 pub const CompileError = error{
@@ -575,134 +582,111 @@ test "create transfer transaction" {
     try std.testing.expectEqualSlices(u8, &expected_bytes, actual_bytes);
 }
 
-test "tmp" {
-    const msg = Message.default();
-    try std.testing.expect(msg.account_keys.len == 0);
-}
-
 test "blank Message fails to sanitize" {
-    try std.testing.expect(error.MissingWritableFeePayer == Message.default().sanitize());
+    try std.testing.expectError(error.MissingWritableFeePayer, Message.EMPTY.sanitize());
 }
 
 test "minimal valid Message sanitizes" {
-    var pubkeys = [_]Pubkey{Pubkey.default()};
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectEqual({}, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &pubkeys,
-        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &[_]CompiledInstruction{},
-    };
-    try message.sanitize();
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.generateSha256Hash(&.{0}),
+        .instructions = &.{},
+    }));
 }
 
 test "Message sanitize fails if missing signers" {
-    var pubkeys = [_]Pubkey{Pubkey.default()};
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectError(error.NotEnoughAccounts, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 2,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &pubkeys,
-        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &[_]CompiledInstruction{},
-    };
-    try std.testing.expect(error.NotEnoughAccounts == message.sanitize());
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.generateSha256Hash(&.{0}),
+        .instructions = &.{},
+    }));
 }
 
 test "Message sanitize fails if missing unsigned" {
-    var pubkeys = [_]Pubkey{Pubkey.default()};
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectError(error.NotEnoughAccounts, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 1,
         },
-        .account_keys = &pubkeys,
-        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &[_]CompiledInstruction{},
-    };
-    try std.testing.expect(error.NotEnoughAccounts == message.sanitize());
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.generateSha256Hash(&.{0}),
+        .instructions = &.{},
+    }));
 }
 
 test "Message sanitize fails if no writable signed" {
-    var pubkeys = [_]Pubkey{ Pubkey.default(), Pubkey.default() };
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectError(error.MissingWritableFeePayer, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 1,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
         .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &[_]CompiledInstruction{},
-    };
-    try std.testing.expect(error.MissingWritableFeePayer == message.sanitize());
+        .instructions = &.{},
+    }));
 }
 
 test "Message sanitize fails if missing program id" {
-    var pubkeys = [_]Pubkey{Pubkey.default()};
-    var instructions = [_]CompiledInstruction{.{
-        .program_id_index = 1,
-        .accounts = &[_]u8{},
-        .data = &[_]u8{},
-    }};
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectError(error.ProgramIdAccountMissing, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{Pubkey.ZEROES},
         .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &instructions,
-    };
-    try std.testing.expect(error.ProgramIdAccountMissing == message.sanitize());
+        .instructions = &.{.{
+            .program_id_index = 1,
+            .accounts = &.{},
+            .data = &.{},
+        }},
+    }));
 }
 
 test "Message sanitize fails if program id has index 0" {
-    var pubkeys = [_]Pubkey{Pubkey.default()};
-    var instructions = [_]CompiledInstruction{.{
-        .program_id_index = 0,
-        .accounts = &[_]u8{},
-        .data = &[_]u8{},
-    }};
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectError(error.ProgramIdCannotBePayer, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 0,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{Pubkey.ZEROES},
         .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &instructions,
-    };
-    try std.testing.expect(error.ProgramIdCannotBePayer == message.sanitize());
+        .instructions = &.{.{
+            .program_id_index = 0,
+            .accounts = &.{},
+            .data = &.{},
+        }},
+    }));
 }
 
 test "Message sanitize fails if account index is out of bounds" {
-    var pubkeys = [_]Pubkey{ Pubkey.default(), Pubkey.default() };
-    var accounts = [_]u8{2};
-    var instructions = [_]CompiledInstruction{.{
-        .program_id_index = 1,
-        .accounts = &accounts,
-        .data = &[_]u8{},
-    }};
-    const message = Message{
-        .header = MessageHeader{
+    try std.testing.expectError(error.AccountIndexOutOfBounds, Message.sanitize(&.{
+        .header = .{
             .num_required_signatures = 1,
             .num_readonly_signed_accounts = 0,
             .num_readonly_unsigned_accounts = 1,
         },
-        .account_keys = &pubkeys,
+        .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
         .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &instructions,
-    };
-    try std.testing.expect(error.AccountIndexOutOfBounds == message.sanitize());
+        .instructions = &.{.{
+            .program_id_index = 1,
+            .accounts = &.{2},
+            .data = &.{},
+        }},
+    }));
 }
 
 test "V0Message serialization and deserialization" {
@@ -725,7 +709,7 @@ test "VersionedMessage v0 serialization and deserialization" {
 
 pub const test_v0_transaction = struct {
     pub fn asStruct(allocator: std.mem.Allocator) !VersionedTransaction {
-        return VersionedTransaction{
+        return .{
             .signatures = try allocator.dupe(Signature, &.{
                 try Signature.fromString("2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw"),
                 try Signature.fromString("4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj"),
@@ -777,8 +761,8 @@ pub const test_v0_versioned_message = struct {
 
 pub const test_v0_message = struct {
     pub fn asStruct(allocator: std.mem.Allocator) !V0Message {
-        return V0Message{
-            .header = MessageHeader{
+        return .{
+            .header = .{
                 .num_required_signatures = 39,
                 .num_readonly_signed_accounts = 12,
                 .num_readonly_unsigned_accounts = 102,
@@ -787,8 +771,7 @@ pub const test_v0_message = struct {
                 try Pubkey.fromString("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE"),
                 try Pubkey.fromString("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4"),
             }),
-            .recent_blockhash = try Hash
-                .parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW"),
+            .recent_blockhash = try Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW"),
             .instructions = try allocator.dupe(CompiledInstruction, &.{.{
                 .program_id_index = 100,
                 .accounts = try allocator.dupe(u8, &.{ 1, 3 }),
@@ -800,7 +783,7 @@ pub const test_v0_message = struct {
             .address_table_lookups = try allocator.dupe(MessageAddressTableLookup, &.{.{
                 .account_key = try Pubkey.fromString("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD"),
                 .writable_indexes = try allocator.dupe(u8, &.{ 1, 3, 5, 7, 90 }),
-                .readonly_indexes = try allocator.dupe(u8, &.{}),
+                .readonly_indexes = &.{},
             }}),
         };
     }

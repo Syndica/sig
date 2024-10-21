@@ -596,11 +596,11 @@ pub fn run() !void {
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    var std_logger = ChannelPrintLogger.init(.{
+    var std_logger = try ChannelPrintLogger.init(.{
         .allocator = gpa_allocator,
         .max_level = config.current.log_level,
-        .max_buffer = 1 << 30,
-    }) catch @panic("Logger init failed");
+        .max_buffer = 1 << 20,
+    });
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
@@ -728,13 +728,14 @@ fn validator() !void {
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
-    var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng = std.rand.DefaultPrng.init(91);
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
         ShredCollectorDependencies{
             .allocator = allocator,
             .logger = app_base.logger,
-            .random = rng.random(),
+            .registry = app_base.metrics_registry,
+            .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
             .exit = &app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
@@ -824,13 +825,14 @@ fn shredCollector() !void {
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
-    var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng = std.rand.DefaultPrng.init(91);
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
         .{
             .allocator = allocator,
             .logger = app_base.logger,
-            .random = rng.random(),
+            .registry = app_base.metrics_registry,
+            .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
             .exit = &app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
@@ -937,12 +939,15 @@ fn createSnapshot() !void {
     defer output_dir.close();
 
     app_base.logger.info().logf("accountsdb[manager]: generating full snapshot for slot {d}", .{slot});
-    try accounts_db.buildFullSnapshot(
-        slot,
-        output_dir,
-        &snapshot_result.snapshot_fields.full.bank_fields,
-        snapshot_result.status_cache,
-    );
+    _ = try accounts_db.generateFullSnapshot(.{
+        .target_slot = slot,
+        .bank_fields = &snapshot_result.snapshot_fields.full.bank_fields,
+        .lamports_per_signature = lps: {
+            var prng = std.Random.DefaultPrng.init(1234);
+            break :lps prng.random().int(u64);
+        },
+        .old_snapshot_action = .delete_old,
+    });
 }
 
 fn validateSnapshot() !void {
@@ -1338,11 +1343,11 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 }
 
 fn spawnLogger() !Logger {
-    var std_logger = ChannelPrintLogger.init(.{
+    var std_logger = try ChannelPrintLogger.init(.{
         .allocator = gpa_allocator,
         .max_level = config.current.log_level,
-        .max_buffer = 1 << 30,
-    }) catch @panic("Logger init failed");
+        .max_buffer = 1 << 20,
+    });
     return std_logger.logger();
 }
 
