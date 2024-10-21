@@ -251,12 +251,12 @@ pub fn run() !void {
         .value_name = "min_snapshot_download_speed_mb",
     };
 
-    var number_of_index_bins_option = cli.Option{
+    var number_of_index_shards_option = cli.Option{
         .long_name = "number-of-index-bins",
-        .help = "number of bins to shard the account index across",
-        .value_ref = cli.mkRef(&config.current.accounts_db.number_of_index_bins),
+        .help = "number of shards for the account index's pubkey_ref_map",
+        .value_ref = cli.mkRef(&config.current.accounts_db.number_of_index_shards),
         .required = false,
-        .value_name = "number_of_index_bins",
+        .value_name = "number_of_index_shards",
     };
 
     var accounts_per_file_estimate = cli.Option{
@@ -375,7 +375,7 @@ pub fn run() !void {
                             &min_snapshot_download_speed_mb_option,
                             &force_new_snapshot_download_option,
                             &trusted_validators_option,
-                            &number_of_index_bins_option,
+                            &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
                             // geyser
@@ -471,7 +471,7 @@ pub fn run() !void {
                             &n_threads_snapshot_load_option,
                             &n_threads_snapshot_unpack_option,
                             &force_unpack_snapshot_option,
-                            &number_of_index_bins_option,
+                            &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
                             // geyser
@@ -549,7 +549,7 @@ pub fn run() !void {
                             &min_snapshot_download_speed_mb_option,
                             &force_new_snapshot_download_option,
                             &trusted_validators_option,
-                            &number_of_index_bins_option,
+                            &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
                             // general
@@ -1425,7 +1425,7 @@ fn loadSnapshot(
         logger,
         snapshot_dir,
         .{
-            .number_of_index_bins = config.current.accounts_db.number_of_index_bins,
+            .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
             .use_disk_index = config.current.accounts_db.use_disk_index,
         },
         geyser_writer,

@@ -53,7 +53,7 @@ pub const DB_LOG_RATE = sig.time.Duration.fromSecs(5);
 pub const DB_MANAGER_LOOP_MIN = sig.time.Duration.fromSecs(5);
 
 pub const MERKLE_FANOUT: usize = 16;
-pub const ACCOUNT_INDEX_BINS: usize = 8192;
+pub const ACCOUNT_INDEX_SHARDS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
@@ -704,9 +704,7 @@ pub const AccountsDB = struct {
             // sum size across threads
             var shard_n_accounts: usize = 0;
             for (thread_dbs) |*thread_db| {
-                const shard_map, var lock = thread_db.account_index.pubkey_ref_map.getShardFromIndex(shard_index).readWithLock();
-                defer lock.unlock();
-                shard_n_accounts += shard_map.count();
+                shard_n_accounts += thread_db.account_index.pubkey_ref_map.getShardCount(shard_index);
             }
 
             // prealloc
@@ -724,6 +722,7 @@ pub const AccountsDB = struct {
                 var iter = shard_map.iterator();
                 while (iter.next()) |thread_entry| {
                     const thread_head_ref = thread_entry.value_ptr.*;
+
                     // NOTE: we dont have to check for duplicates because the duplicate
                     // slots have already been handled in the prev step
                     index.indexRefAssumeCapacity(thread_head_ref.ref_ptr);
@@ -775,16 +774,19 @@ pub const AccountsDB = struct {
     pub fn computeAccountHashesAndLamports(
         self: *Self,
         config: AccountHashesConfig,
-    ) ComputeAccountHashesAndLamportsError!struct { Hash, u64 } {
+    ) !struct { Hash, u64 } {
         var timer = try std.time.Timer.start();
+        // TODO: make cli arg
         const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
+        // const n_threads = 1;
 
         // alloc the result
         const hashes = try self.allocator.alloc(ArrayListUnmanaged(Hash), n_threads);
-        defer self.allocator.free(hashes);
-
+        defer { 
+            for (hashes) |*h| h.deinit(self.allocator);
+            self.allocator.free(hashes);
+        }
         @memset(hashes, .{});
-        defer for (hashes) |*h| h.deinit(self.allocator);
 
         const lamports = try self.allocator.alloc(u64, n_threads);
         defer self.allocator.free(lamports);
@@ -792,8 +794,17 @@ pub const AccountsDB = struct {
 
         // split processing the bins over muliple threads
         self.logger.info().logf("collecting hashes from accounts...", .{});
-
-        {
+        if (n_threads == 1) {
+            try getHashesFromIndex(
+                self,
+                config,
+                self.account_index.pubkey_ref_map.shards,
+                self.allocator,
+                &hashes[0],
+                &lamports[0],
+                true,
+            );
+        } else {
             var wg: std.Thread.WaitGroup = .{};
             defer wg.wait();
             try spawnThreadTasks(getHashesFromIndexMultiThread, .{
@@ -856,7 +867,7 @@ pub const AccountsDB = struct {
     pub fn validateLoadFromSnapshot(
         self: *Self,
         params: ValidateLoadFromSnapshotParams,
-    ) (ValidateLoadFromSnapshotError || ComputeAccountHashesAndLamportsError)!void {
+    ) !void {
         const p_first_full, var first_full_lg = self.account_hashes_and_lamports_cache.first_full.writeWithLock();
         defer first_full_lg.unlock();
 
@@ -1012,7 +1023,11 @@ pub const AccountsDB = struct {
                     .FullAccountHash => |full_config| slotListMaxWithinBounds(ref_ptr, full_config.min_slot, full_config.max_slot),
                     .IncrementalAccountHash => |inc_config| slotListMaxWithinBounds(ref_ptr, inc_config.min_slot, inc_config.max_slot),
                 } orelse continue;
+
+                // read the account state
                 var account_hash, const lamports = try self.getAccountHashAndLamportsFromRef(max_slot_ref.location);
+
+                // modify its hash, if needed
                 if (lamports == 0) {
                     switch (config) {
                         // for full snapshots, only include non-zero lamport accounts
@@ -1023,8 +1038,8 @@ pub const AccountsDB = struct {
                 } else {
                     // hashes arent always stored correctly in snapshots
                     if (account_hash.order(&Hash.ZEROES) == .eq) {
-                        const account, var lock_guard = try self.getAccountFromRefWithReadLock(max_slot_ref);
-                        defer lock_guard.unlock();
+                        const account, var lock = try self.getAccountFromRefWithReadLock(max_slot_ref);
+                        defer lock.unlock();
 
                         account_hash = switch (account) {
                             .file => |in_file_account| sig.core.account.hashAccount(
@@ -2121,7 +2136,7 @@ pub const AccountsDB = struct {
         }
 
         // allocate enough memory here
-        self.account_index.pubkey_ref_map.ensureTotalAdditionalCapacity(shard_counts);
+        try self.account_index.pubkey_ref_map.ensureTotalAdditionalCapacity(shard_counts);
 
         // compute how many account_references for each pubkey
         var accounts_dead_count: u64 = 0;
@@ -3077,7 +3092,7 @@ test "testWriteSnapshot" {
     }
 
     var accounts_db = try AccountsDB.init(allocator, .noop, tmp_snap_dir, .{
-        .number_of_index_shards = ACCOUNT_INDEX_BINS,
+        .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
         .use_disk_index = false,
     }, null);
     defer accounts_db.deinit();
@@ -3150,7 +3165,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     }, null);
     errdefer accounts_db.deinit();
 
-    _ = try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator, 1_500);
+    _ = try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator, 500);
 
     return .{ accounts_db, snapshots };
 }
@@ -3267,6 +3282,28 @@ test "write and read an account" {
     try std.testing.expect(accounts[0].equals(&account_2));
 }
 
+test "load and validate from test snapshot" {
+    const allocator = std.testing.allocator;
+
+    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
+    defer {
+        accounts_db.deinit();
+        snapshots.deinit(allocator);
+    }
+
+    try accounts_db.validateLoadFromSnapshot(.{
+        .full_slot = snapshots.full.bank_fields.slot,
+        .expected_full = .{
+            .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
+            .capitalization = snapshots.full.bank_fields.capitalization,
+        },
+        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+            .accounts_hash = inc_persistence.incremental_hash,
+            .capitalization = inc_persistence.incremental_capitalization,
+        } else null,
+    });
+}
+
 test "load and validate from test snapshot using disk index" {
     const allocator = std.testing.allocator;
 
@@ -3293,28 +3330,6 @@ test "load and validate from test snapshot parallel" {
     const allocator = std.testing.allocator;
 
     var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 2);
-    defer {
-        accounts_db.deinit();
-        snapshots.deinit(allocator);
-    }
-
-    try accounts_db.validateLoadFromSnapshot(.{
-        .full_slot = snapshots.full.bank_fields.slot,
-        .expected_full = .{
-            .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
-            .capitalization = snapshots.full.bank_fields.capitalization,
-        },
-        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
-            .accounts_hash = inc_persistence.incremental_hash,
-            .capitalization = inc_persistence.incremental_capitalization,
-        } else null,
-    });
-}
-
-test "load and validate from test snapshot" {
-    const allocator = std.testing.allocator;
-
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -4111,7 +4126,7 @@ pub const BenchmarkAccountsDB = struct {
 
         const logger = .noop;
         var accounts_db: AccountsDB = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-            .number_of_index_shards = ACCOUNT_INDEX_BINS,
+            .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
             .use_disk_index = bench_args.index == .disk,
         }, null);
         defer accounts_db.deinit();

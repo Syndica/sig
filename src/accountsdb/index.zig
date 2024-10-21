@@ -247,11 +247,11 @@ pub const AccountIndex = struct {
     /// returns if the reference was inserted.
     pub fn indexRefIfNotDuplicateSlotAssumeCapacity(self: *Self, account_ref: *AccountRef) bool {
         // NOTE: the lock on the shard also locks the reference map
-        const pubkey_ref_map, var lock = self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
+        const shard_map, var lock = self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
         defer lock.unlock();
 
         // init value if dne or append to end of the linked-list
-        const map_entry = pubkey_ref_map.getOrPutAssumeCapacity(account_ref.pubkey);
+        const map_entry = shard_map.getOrPutAssumeCapacity(account_ref.pubkey);
         if (!map_entry.found_existing) {
             map_entry.value_ptr.* = .{ .ref_ptr = account_ref };
             return true;
@@ -286,11 +286,19 @@ pub const AccountIndex = struct {
         const map_entry = pubkey_ref_map.getOrPutAssumeCapacity(account_ref.pubkey);
         if (!map_entry.found_existing) {
             map_entry.value_ptr.* = .{ .ref_ptr = account_ref };
+            return;
         }
 
         // traverse until you find the end
         var curr_ref = map_entry.value_ptr.ref_ptr;
-        while (curr_ref.next_ptr) |next_ref| {
+        if (@import("builtin").mode == .Debug and curr_ref.slot == account_ref.slot) { 
+            std.debug.panic("duplicate slot in index: {any} {any}", .{account_ref, curr_ref});
+        }
+        while (account_ref.next_ptr) |next_ref| {
+            // sanity check in debug mode
+            if (@import("builtin").mode == .Debug and next_ref.slot == account_ref.slot) { 
+                std.debug.panic("duplicate slot in index: {any} {any}", .{account_ref, next_ref});
+            }
             curr_ref = next_ref;
         }
         curr_ref.next_ptr = account_ref;
@@ -449,7 +457,7 @@ pub const ShardedPubkeyRefMap = struct {
         return self.getShardFromIndex(self.getShardIndex(pubkey));
     }
 
-    pub inline fn getShardCount(self: *Self, index: u64) u64 {
+    pub inline fn getShardCount(self: *const Self, index: u64) u64 {
         const shard, var lock = self.getShardFromIndex(index).readWithLock();
         defer lock.unlock();
         return shard.count();

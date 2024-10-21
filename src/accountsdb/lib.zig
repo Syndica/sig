@@ -22,4 +22,4 @@ pub const StatusCache = snapshots.StatusCache;
 pub const downloadSnapshotsFromGossip = download.downloadSnapshotsFromGossip;
 pub const parallelUnpackZstdTarBall = snapshots.parallelUnpackZstdTarBall;
 
-pub const ACCOUNT_INDEX_BINS = db.ACCOUNT_INDEX_BINS;
+pub const ACCOUNT_INDEX_SHARDS = db.ACCOUNT_INDEX_SHARDS;
