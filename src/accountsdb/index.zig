@@ -9,58 +9,6 @@ const RwMux = sig.sync.RwMux;
 const SwissMap = sig.accounts_db.swiss_map.SwissMap;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 
-pub const AccountReferenceHead = struct {
-    ref_ptr: *AccountRef,
-
-    const Self = @This();
-
-    pub fn highestRootedSlot(self: *const Self, rooted_slot_max: Slot) struct { usize, Slot } {
-        var ref_slot_max: usize = 0;
-        var rooted_ref_count: usize = 0;
-
-        var curr: ?*AccountRef = self.ref_ptr;
-        while (curr) |ref| : (curr = ref.next_ptr) {
-            // only track states less than the rooted slot (ie, they are also rooted)
-            const is_not_rooted = ref.slot > rooted_slot_max;
-            if (is_not_rooted) continue;
-
-            const is_larger_slot = ref.slot > ref_slot_max or rooted_ref_count == 0;
-            if (is_larger_slot) {
-                ref_slot_max = ref.slot;
-            }
-            rooted_ref_count += 1;
-        }
-
-        return .{ rooted_ref_count, ref_slot_max };
-    }
-
-    pub const PtrToAccountRefField = union(enum) {
-        null,
-        head,
-        parent: *AccountRef,
-    };
-    /// Returns a pointer to the account reference with a `next_ptr`
-    /// field which is a pointer to the account reference pointer with
-    /// a field `.slot` == `slot`.
-    /// Returns `.null` if no account reference has said slot value.
-    /// Returns `.head` if `head_ref.ref_ptr.slot == slot`.
-    /// Returns `.parent = parent` if `parent.next_ptr.?.slot == slot`.
-    pub inline fn getParentRefOf(
-        head_ref: *const AccountReferenceHead,
-        slot: Slot,
-    ) PtrToAccountRefField {
-        if (head_ref.ref_ptr.slot == slot) return .head;
-        var curr_parent: *AccountRef = head_ref.ref_ptr;
-        while (true) {
-            const curr_ref = curr_parent.next_ptr orelse return .null;
-            if (curr_ref.slot == slot) {
-                return .{ .parent = curr_parent };
-            }
-            curr_parent = curr_ref;
-        }
-    }
-};
-
 /// reference to an account (either in a file or in the unrooted_map)
 pub const AccountRef = struct {
     pubkey: Pubkey,
@@ -98,9 +46,7 @@ pub const AccountIndex = struct {
     pubkey_ref_map: ShardedPubkeyRefMap,
 
     /// things for managing the AccountRef memory
-    reference_allocator: std.mem.Allocator,
-    /// Used to AccountRef mmapped data on disk in ./index/bin (see see accountsdb/readme.md)
-    disk_allocator: ?*DiskMemoryAllocator,
+    reference_allocator: ReferenceAllocator,
     /// map from slot -> []AccountRef
     slot_reference_map: RwMux(SlotRefMap),
 
@@ -126,31 +72,28 @@ pub const AccountIndex = struct {
         number_of_shards: usize,
         max_account_references: u64,
     ) !Self {
-        var self: Self = undefined;
-        _ = max_account_references; // TODO(fastload): use this
-
-        switch (allocator_config) {
-            .Ram => |ram| {
-                self.disk_allocator = null;
-                self.reference_allocator = ram.allocator;
+        const reference_allocator: ReferenceAllocator = switch (allocator_config) {
+            .Ram => |ram| blk: {
                 logger.info().logf("using ram memory for account index", .{});
+                break :blk .{ .ram = ram.allocator };
             },
-            .Disk => |disk| {
+            .Disk => |disk| blk: {
                 var index_dir = try disk.accountsdb_dir.makeOpenPath("index", .{});
                 errdefer index_dir.close();
-                self.disk_allocator = try allocator.create(DiskMemoryAllocator);
-                self.disk_allocator.?.* = .{ .dir = index_dir, .logger = logger };
-                self.reference_allocator = self.disk_allocator.?.allocator();
-
+                const disk_allocator = try allocator.create(DiskMemoryAllocator);
+                disk_allocator.* = .{ .dir = index_dir, .logger = logger };
                 logger.info().logf("using disk memory (@{s}) for account index", .{sig.utils.fmt.tryRealPath(index_dir, ".")});
+                break :blk .{ .disk = .{ .dma = disk_allocator, .ptr_allocator = allocator } };
             },
-        }
+        };
+        _ = max_account_references; // TODO(fastload): use this
 
-        self.allocator = allocator;
-        self.slot_reference_map = RwMux(SlotRefMap).init(SlotRefMap.init(allocator));
-        self.pubkey_ref_map = try ShardedPubkeyRefMap.init(allocator, number_of_shards);
-
-        return self;
+        return .{
+            .allocator = allocator,
+            .reference_allocator = reference_allocator,
+            .pubkey_ref_map = try ShardedPubkeyRefMap.init(allocator, number_of_shards),
+            .slot_reference_map = RwMux(SlotRefMap).init(SlotRefMap.init(allocator)),
+        };
     }
 
     pub fn deinit(self: *Self, free_memory: bool) void {
@@ -169,10 +112,7 @@ pub const AccountIndex = struct {
             slot_reference_map.deinit();
         }
 
-        if (self.disk_allocator) |d_alloc| {
-            d_alloc.dir.close();
-            self.allocator.destroy(d_alloc);
-        }
+        self.reference_allocator.deinit();
     }
 
     pub fn putReferenceBlock(self: *Self, slot: Slot, references: std.ArrayList(AccountRef)) !void {
@@ -338,6 +278,58 @@ pub const AccountIndex = struct {
                 return;
             },
             .parent => |parent| parent.next_ptr = if (parent.next_ptr) |ref| ref.next_ptr else null,
+        }
+    }
+};
+
+pub const AccountReferenceHead = struct {
+    ref_ptr: *AccountRef,
+
+    const Self = @This();
+
+    pub fn highestRootedSlot(self: *const Self, rooted_slot_max: Slot) struct { usize, Slot } {
+        var ref_slot_max: usize = 0;
+        var rooted_ref_count: usize = 0;
+
+        var curr: ?*AccountRef = self.ref_ptr;
+        while (curr) |ref| : (curr = ref.next_ptr) {
+            // only track states less than the rooted slot (ie, they are also rooted)
+            const is_not_rooted = ref.slot > rooted_slot_max;
+            if (is_not_rooted) continue;
+
+            const is_larger_slot = ref.slot > ref_slot_max or rooted_ref_count == 0;
+            if (is_larger_slot) {
+                ref_slot_max = ref.slot;
+            }
+            rooted_ref_count += 1;
+        }
+
+        return .{ rooted_ref_count, ref_slot_max };
+    }
+
+    pub const PtrToAccountRefField = union(enum) {
+        null,
+        head,
+        parent: *AccountRef,
+    };
+    /// Returns a pointer to the account reference with a `next_ptr`
+    /// field which is a pointer to the account reference pointer with
+    /// a field `.slot` == `slot`.
+    /// Returns `.null` if no account reference has said slot value.
+    /// Returns `.head` if `head_ref.ref_ptr.slot == slot`.
+    /// Returns `.parent = parent` if `parent.next_ptr.?.slot == slot`.
+    pub inline fn getParentRefOf(
+        head_ref: *const AccountReferenceHead,
+        slot: Slot,
+    ) PtrToAccountRefField {
+        if (head_ref.ref_ptr.slot == slot) return .head;
+        var curr_parent: *AccountRef = head_ref.ref_ptr;
+        while (true) {
+            const curr_ref = curr_parent.next_ptr orelse return .null;
+            if (curr_ref.slot == slot) {
+                return .{ .parent = curr_parent };
+            }
+            curr_parent = curr_ref;
         }
     }
 };
@@ -510,6 +502,33 @@ pub const PubkeyShardCalculator = struct {
         return (@as(u64, data[0]) << 16 |
             @as(u64, data[1]) << 8 |
             @as(u64, data[2])) >> self.shift_bits;
+    }
+};
+
+pub const ReferenceAllocator = union(enum) {
+    /// Used to AccountRef mmapped data on disk in ./index/bin (see see accountsdb/readme.md)
+    disk: struct {
+        dma: *DiskMemoryAllocator,
+        // used for deinit() purposes
+        ptr_allocator: std.mem.Allocator,
+    },
+    ram: std.mem.Allocator,
+
+    pub fn get(self: ReferenceAllocator) std.mem.Allocator {
+        return switch (self) {
+            .disk => self.disk.dma.allocator(),
+            .ram => self.ram,
+        };
+    }
+
+    pub fn deinit(self: *ReferenceAllocator) void {
+        switch (self.*) {
+            .disk => {
+                self.disk.dma.dir.close();
+                self.disk.ptr_allocator.destroy(self.disk.dma);
+            },
+            .ram => {},
+        }
     }
 };
 

@@ -331,8 +331,7 @@ pub const AccountsDB = struct {
 
             // set the disk allocator after init() doesnt create a new one
             if (use_disk_index) {
-                thread_db.account_index.disk_allocator = self.account_index.disk_allocator;
-                thread_db.account_index.reference_allocator = thread_db.account_index.disk_allocator.?.allocator();
+                thread_db.account_index.reference_allocator = self.account_index.reference_allocator;
             }
         }
         defer {
@@ -352,7 +351,7 @@ pub const AccountsDB = struct {
                 file_map.deinit(per_thread_allocator);
 
                 // NOTE: important `false` (ie, 1)
-                loading_thread.account_index.disk_allocator = null; // dont destory the allocator (since its shared)
+                loading_thread.account_index.reference_allocator = .{ .ram = per_thread_allocator }; // dont destory the **disk** allocator (since its shared)
                 loading_thread.account_index.deinit(false);
 
                 const accounts_cache, var accounts_cache_lg = loading_thread.accounts_cache.writeWithLock();
@@ -442,7 +441,7 @@ pub const AccountsDB = struct {
         // without this large allocation, snapshot loading is very slow
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
         var references = try ArrayList(AccountRef).initCapacity(
-            self.account_index.reference_allocator,
+            self.account_index.reference_allocator.get(),
             n_accounts_estimate,
         );
 
@@ -1761,7 +1760,7 @@ pub const AccountsDB = struct {
 
             // update the references
             var new_reference_block = try ArrayList(AccountRef).initCapacity(
-                self.account_index.reference_allocator,
+                self.account_index.reference_allocator.get(),
                 accounts_alive_count,
             );
 
@@ -2100,7 +2099,7 @@ pub const AccountsDB = struct {
         @memset(shard_counts, 0);
 
         var references = try ArrayList(AccountRef).initCapacity(
-            self.account_index.reference_allocator,
+            self.account_index.reference_allocator.get(),
             n_accounts,
         );
 
@@ -2224,7 +2223,7 @@ pub const AccountsDB = struct {
         // update index
         var accounts_dead_count: u64 = 0;
         var references = try ArrayList(AccountRef).initCapacity(
-            self.account_index.reference_allocator,
+            self.account_index.reference_allocator.get(),
             accounts.len,
         );
         for (0..accounts.len) |i| {
