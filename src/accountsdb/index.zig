@@ -437,25 +437,25 @@ pub const ShardedPubkeyRefMap = struct {
         return .{ ref_head_ptr, lock };
     }
 
-    pub inline fn getShardIndex(self: *const Self, pubkey: *const Pubkey) usize {
+    pub fn getShardIndex(self: *const Self, pubkey: *const Pubkey) usize {
         return self.shard_calculator.index(pubkey);
     }
 
-    pub inline fn getShardFromIndex(self: *const Self, index: usize) *RwMux(PubkeyRefMap) {
+    pub fn getShardFromIndex(self: *const Self, index: usize) *RwMux(PubkeyRefMap) {
         return &self.shards[index];
     }
 
-    pub inline fn getShard(self: *const Self, pubkey: *const Pubkey) *RwMux(PubkeyRefMap) {
+    pub fn getShard(self: *const Self, pubkey: *const Pubkey) *RwMux(PubkeyRefMap) {
         return self.getShardFromIndex(self.getShardIndex(pubkey));
     }
 
-    pub inline fn getShardCount(self: *const Self, index: u64) u64 {
+    pub fn getShardCount(self: *const Self, index: u64) u64 {
         const shard, var lock = self.getShardFromIndex(index).readWithLock();
         defer lock.unlock();
         return shard.count();
     }
 
-    pub inline fn numberOfShards(self: *const Self) usize {
+    pub fn numberOfShards(self: *const Self) usize {
         return self.shards.len;
     }
 };
