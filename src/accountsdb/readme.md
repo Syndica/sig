@@ -152,9 +152,9 @@ with deletion. This allows us to *not* use a lock per-account-file.
 
 ## account index
 
-The account index shards pubkeys across multiple bins where each pubkey is associated with a specific bin based on the pubkey’s first N bits. 
+The account index shards pubkeys across multiple shards where each pubkey is associated with a specific shard based on the pubkey’s first N bits. 
 This allows for parallel read/write access to the database (locking only
-a single bin for each lookup vs the entire struct).
+a single shard for each lookup vs the entire struct).
 
 ![](imgs/2024-04-24-15-10-09.png)
 
@@ -279,14 +279,14 @@ across multiple threads (part1 of the diagram below) - this means each thread:
 - reads and mmaps every account file 
 - creates and populates an `ArrayList(AccountRef)` with every account it
 parses from the account files 
-- populates their own sharded index by binning the pubkeys and populating
+- populates their own sharded index by sharding the pubkeys and populating
 the hashmap with the `*AccountRef`s
 
 the result is N threads (`--n-threads-snapshot-load` decides the value for N) each with their own account index, which we now need
-to combine. to combine indexes we merge index bins in parallel across threads. 
+to comsharde. to combine indexes we merge index shards in parallel across threads. 
 
-for example, one thread will merge bins[0..10] another will merge bins [10..20],
-... etc for all the bins across all the threads.
+for example, one thread will merge shards[0..10] another will merge shards[10..20],
+... etc for all the shards across all the threads.
 
 this approach generates the index with zero locks
 
@@ -311,7 +311,7 @@ the goal of validating snapshots is to generate a merkle tree over all the accou
 is `validateLoadFromSnapshot`.
 
 we take the following approach:
-- account hashes are collected in parallel across bins using `getHashesFromIndexMultiThread` - similar to how the index is generated  
+- account hashes are collected in parallel across shards using `getHashesFromIndexMultiThread` - similar to how the index is generated  
 - each thread will have a slice of hashes, the root hash is computed against this nested slices using `NestedHashTree`
 
 note: pubkeys are also sorted so results are consistent
