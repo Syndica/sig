@@ -41,7 +41,7 @@ const StatusCache = sig.accounts_db.StatusCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
 const AccountsCache = sig.accounts_db.cache.AccountsCache;
-const PubkeyBinCalculator = sig.accounts_db.index.PubkeyBinCalculator;
+const PubkeyShardCalculator = sig.accounts_db.index.PubkeyShardCalculator;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
@@ -131,7 +131,7 @@ pub const AccountsDB = struct {
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
 
     pub const InitConfig = struct {
-        number_of_index_bins: usize,
+        number_of_index_shards: usize,
         use_disk_index: bool,
     };
 
@@ -151,7 +151,7 @@ pub const AccountsDB = struct {
             allocator,
             logger,
             index_config,
-            config.number_of_index_bins,
+            config.number_of_index_shards,
             0,
         );
         errdefer account_index.deinit(true);
@@ -432,9 +432,10 @@ pub const AccountsDB = struct {
         const n_account_files = file_map_end_index - file_map_start_index;
         try file_map.ensureTotalCapacity(self.allocator, n_account_files);
 
-        const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
-        defer self.allocator.free(bin_counts);
-        @memset(bin_counts, 0);
+        const n_shards = self.account_index.pubkey_ref_map.numberOfShards();
+        const shard_counts = try self.allocator.alloc(usize, n_shards);
+        defer self.allocator.free(shard_counts);
+        @memset(shard_counts, 0);
 
         // allocate all the references in one shot with a wrapper allocator
         // without this large allocation, snapshot loading is very slow
@@ -476,6 +477,7 @@ pub const AccountsDB = struct {
             }
         }
 
+        var total_n_accounts: u64 = 0;
         for (
             file_info_map.keys()[file_map_start_index..file_map_end_index],
             file_info_map.values()[file_map_start_index..file_map_end_index],
@@ -500,8 +502,8 @@ pub const AccountsDB = struct {
 
             indexAndValidateAccountFile(
                 &accounts_file,
-                self.account_index.pubkey_bin_calculator,
-                bin_counts,
+                self.account_index.pubkey_ref_map.shard_calculator,
+                shard_counts,
                 &references,
                 geyser_slot_storage,
             ) catch |err| {
@@ -549,6 +551,7 @@ pub const AccountsDB = struct {
                 counting_alloc.count += 1;
                 slot_reference_map.putAssumeCapacityNoClobber(slot, ref_list);
             }
+            total_n_accounts += accounts_file.number_of_accounts;
 
             const file_id = file_info.id;
 
@@ -570,32 +573,21 @@ pub const AccountsDB = struct {
             }
         }
 
-        // allocate enough memory for the bins
-        var total_accounts: usize = 0;
-        for (bin_counts, 0..) |count, bin_index| {
-            if (count > 0) {
-                const bin_rw = self.account_index.getBin(bin_index);
-                const bin, var bin_lg = bin_rw.writeWithLock();
-                defer bin_lg.unlock();
-
-                try bin.ensureTotalCapacity(count);
-                total_accounts += count;
-            }
-        }
-
         // NOTE: this is good for debugging what to set `accounts_per_file_est` to
         if (print_progress) {
             self.logger.info().logf("accounts_per_file: actual vs estimated: {d} vs {d}", .{
-                total_accounts / n_account_files,
+                total_n_accounts / n_account_files,
                 accounts_per_file_est,
             });
         }
 
+        // allocate enough memory
+        try self.account_index.pubkey_ref_map.ensureTotalCapacity(shard_counts);
+
         // PERF: can probs be faster if you sort the pubkeys first, and then you know
         // it will always be a search for a free spot, and not search for a match
-        var ref_count: usize = 0;
         timer.reset();
-
+        var ref_count: usize = 0;
         var slot_iter = slot_reference_map.keyIterator();
         while (slot_iter.next()) |slot| {
             const refs = slot_reference_map.get(slot.*).?;
@@ -608,7 +600,7 @@ pub const AccountsDB = struct {
                 printTimeEstimate(
                     self.logger,
                     &timer,
-                    total_accounts,
+                    total_n_accounts,
                     ref_count,
                     "building index",
                     "thread0",
@@ -629,7 +621,7 @@ pub const AccountsDB = struct {
         defer combine_indexes_wg.wait();
         try spawnThreadTasks(combineThreadIndexesMultiThread, .{
             .wg = &combine_indexes_wg,
-            .data_len = self.account_index.numberOfBins(),
+            .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
             .max_threads = n_threads,
             .params = .{
                 self.logger,
@@ -700,37 +692,36 @@ pub const AccountsDB = struct {
         thread_dbs: []const AccountsDB,
         task: sig.utils.thread.TaskParams,
     ) !void {
-        const bin_start_index = task.start_index;
-        const bin_end_index = task.end_index;
+        const shard_start_index = task.start_index;
+        const shard_end_index = task.end_index;
 
-        const total_bins = bin_end_index - bin_start_index;
+        const total_shards = shard_end_index - shard_start_index;
         var timer = try sig.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
         const print_progress = task.thread_id == 0;
 
-        for (bin_start_index..bin_end_index, 1..) |bin_index, iteration_count| {
+        for (shard_start_index..shard_end_index, 1..) |shard_index, iteration_count| {
             // sum size across threads
-            var bin_n_accounts: usize = 0;
+            var shard_n_accounts: usize = 0;
             for (thread_dbs) |*thread_db| {
-                const bin, var bin_lg = thread_db.account_index.getBin(bin_index).readWithLock();
-                defer bin_lg.unlock();
-
-                bin_n_accounts += bin.count();
+                const shard_map, var lock = thread_db.account_index.pubkey_ref_map.getShardFromIndex(shard_index).readWithLock();
+                defer lock.unlock();
+                shard_n_accounts += shard_map.count();
             }
+
             // prealloc
-            if (bin_n_accounts > 0) {
-                const index_bin, var index_bin_lg = index.getBin(bin_index).writeWithLock();
-                defer index_bin_lg.unlock();
-
-                try index_bin.ensureTotalCapacity(bin_n_accounts);
+            if (shard_n_accounts > 0) {
+                const shard_map, var lock = index.pubkey_ref_map.getShardFromIndex(shard_index).writeWithLock();
+                defer lock.unlock();
+                try shard_map.ensureTotalCapacity(shard_n_accounts);
             }
 
             for (thread_dbs) |*thread_db| {
-                const bin, var bin_lg = thread_db.account_index.getBin(bin_index).readWithLock();
-                defer bin_lg.unlock();
+                const shard_map, var lock = thread_db.account_index.pubkey_ref_map.getShardFromIndex(shard_index).readWithLock();
+                defer lock.unlock();
 
                 // insert all of the thread entries into the main index
-                var iter = bin.iterator();
+                var iter = shard_map.iterator();
                 while (iter.next()) |thread_entry| {
                     const thread_head_ref = thread_entry.value_ptr.*;
                     // NOTE: we dont have to check for duplicates because the duplicate
@@ -743,7 +734,7 @@ pub const AccountsDB = struct {
                 printTimeEstimate(
                     logger,
                     &timer,
-                    total_bins,
+                    total_shards,
                     iteration_count,
                     "combining thread indexes",
                     "thread0",
@@ -807,7 +798,7 @@ pub const AccountsDB = struct {
             defer wg.wait();
             try spawnThreadTasks(getHashesFromIndexMultiThread, .{
                 .wg = &wg,
-                .data_len = self.account_index.numberOfBins(),
+                .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
                 .max_threads = n_threads,
                 .params = .{
                     self,
@@ -951,7 +942,7 @@ pub const AccountsDB = struct {
         try getHashesFromIndex(
             self,
             config,
-            self.account_index.bins[task.start_index..task.end_index],
+            self.account_index.pubkey_ref_map.shards[task.start_index..task.end_index],
             hashes_allocator,
             &hashes[task.thread_id],
             &total_lamports[task.thread_id],
@@ -959,12 +950,11 @@ pub const AccountsDB = struct {
         );
     }
 
-    /// populates the account hashes and total lamports for a given bin range
-    /// from bin_start_index to bin_end_index.
+    /// populates the account hashes and total lamports across a given shard slice
     pub fn getHashesFromIndex(
         self: *AccountsDB,
         config: AccountsDB.AccountHashesConfig,
-        thread_bins: []RwMux(AccountIndex.PubkeyRefMap),
+        shards: []sig.accounts_db.index.ShardedPubkeyRefMap.RwPubkeyRefMap, // TODO(fastload)
         hashes_allocator: std.mem.Allocator,
         hashes: *ArrayListUnmanaged(Hash),
         total_lamports: *u64,
@@ -972,11 +962,11 @@ pub const AccountsDB = struct {
         print_progress: bool,
     ) !void {
         var total_n_pubkeys: usize = 0;
-        for (thread_bins) |*bin_rw| {
-            const bin, var bin_lg = bin_rw.readWithLock();
-            defer bin_lg.unlock();
+        for (shards) |*shard_rw| {
+            const shard, var shard_lg = shard_rw.readWithLock();
+            defer shard_lg.unlock();
 
-            total_n_pubkeys += bin.count();
+            total_n_pubkeys += shard.count();
         }
         try hashes.ensureTotalCapacity(hashes_allocator, total_n_pubkeys);
 
@@ -986,35 +976,35 @@ pub const AccountsDB = struct {
         var local_total_lamports: u64 = 0;
         var timer = try sig.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
-        for (thread_bins, 1..) |*bin_rw, count| {
-            // get and sort pubkeys in bin
+        for (shards, 1..) |*shard_rw, count| {
+            // get and sort pubkeys inshardn
             // PERF: may be holding this lock for too long
-            const bin, var bin_lg = bin_rw.readWithLock();
-            defer bin_lg.unlock();
+            const shard, var shard_lg = shard_rw.readWithLock();
+            defer shard_lg.unlock();
 
-            const n_pubkeys_in_bin = bin.count();
-            if (n_pubkeys_in_bin == 0) continue;
+            const n_pubkeys_in_shard = shard.count();
+            if (n_pubkeys_in_shard == 0) continue;
 
-            try keys_buf.ensureTotalCapacity(n_pubkeys_in_bin);
+            try keys_buf.ensureTotalCapacity(n_pubkeys_in_shard);
             keys_buf.clearRetainingCapacity();
 
-            const bin_pubkeys: []Pubkey = blk: {
-                var key_iter = bin.iterator();
+            const shard_pubkeys: []Pubkey = blk: {
+                var key_iter = shard.iterator();
                 while (key_iter.next()) |entry| {
                     keys_buf.appendAssumeCapacity(entry.key_ptr.*);
                 }
                 break :blk keys_buf.items;
             };
 
-            std.mem.sort(Pubkey, bin_pubkeys, {}, struct {
+            std.mem.sort(Pubkey, shard_pubkeys, {}, struct {
                 fn lessThan(_: void, lhs: Pubkey, rhs: Pubkey) bool {
                     return std.mem.lessThan(u8, &lhs.data, &rhs.data);
                 }
             }.lessThan);
 
             // get the hashes
-            for (bin_pubkeys) |key| {
-                const ref_head = bin.getPtr(key).?;
+            for (shard_pubkeys) |key| {
+                const ref_head = shard.getPtr(key).?;
 
                 // get the most recent state of the account
                 const ref_ptr = ref_head.ref_ptr;
@@ -1058,7 +1048,7 @@ pub const AccountsDB = struct {
                 printTimeEstimate(
                     self.logger,
                     &timer,
-                    thread_bins.len,
+                    shards.len,
                     count,
                     "gathering account hashes",
                     "thread0",
@@ -1345,7 +1335,9 @@ pub const AccountsDB = struct {
 
         // update the reference AFTER the data exists
         for (pubkeys, offsets) |pubkey, offset| {
-            const head_ref, var head_reference_lg = self.account_index.getReferenceHeadWrite(&pubkey) orelse return error.PubkeyNotFound;
+            const head_ref, var head_reference_lg = self.account_index.pubkey_ref_map.getWrite(&pubkey) orelse {
+                return error.PubkeyNotFound;
+            };
             defer head_reference_lg.unlock();
 
             // find the slot in the reference list
@@ -1444,7 +1436,7 @@ pub const AccountsDB = struct {
                 // check if already cleaned
                 if (try cleaned_pubkeys.fetchPut(pubkey, {}) != null) continue;
 
-                const head_ref, var head_ref_lg = self.account_index.getReferenceHeadRead(&pubkey).?; // SAFE: this should always succeed or something is wrong
+                const head_ref, var head_ref_lg = self.account_index.pubkey_ref_map.getRead(&pubkey).?; // SAFE: this should always succeed or something is wrong
                 defer head_ref_lg.unlock();
 
                 // get the highest slot <= highest_rooted_slot
@@ -2030,8 +2022,8 @@ pub const AccountsDB = struct {
 
     /// gets an account given an associated pubkey. mut ref is required for locks.
     pub fn getAccount(self: *Self, pubkey: *const Pubkey) !Account {
-        const head_ref, var head_ref_lg = self.account_index.getReferenceHeadRead(pubkey) orelse return error.PubkeyNotInIndex;
-        defer head_ref_lg.unlock();
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
+        defer lock.unlock();
 
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
@@ -2045,8 +2037,8 @@ pub const AccountsDB = struct {
         self: *Self,
         pubkey: *const Pubkey,
     ) GetAccountError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
-        const head_ref, var head_ref_lg = self.account_index.getReferenceHeadRead(pubkey) orelse return error.PubkeyNotInIndex;
-        defer head_ref_lg.unlock();
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
+        defer lock.unlock();
 
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
@@ -2087,9 +2079,9 @@ pub const AccountsDB = struct {
         account_file: *AccountFile,
         n_accounts: usize,
     ) !void {
-        const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
-        defer self.allocator.free(bin_counts);
-        @memset(bin_counts, 0);
+        const shard_counts = try self.allocator.alloc(usize, self.account_index.pubkey_ref_map.numberOfShards());
+        defer self.allocator.free(shard_counts);
+        @memset(shard_counts, 0);
 
         var references = try ArrayList(AccountRef).initCapacity(
             self.account_index.reference_allocator,
@@ -2098,8 +2090,8 @@ pub const AccountsDB = struct {
 
         try indexAndValidateAccountFile(
             account_file,
-            self.account_index.pubkey_bin_calculator,
-            bin_counts,
+            self.account_index.pubkey_ref_map.shard_calculator,
+            shard_counts,
             &references,
             // NOTE: this method should only be called in tests/benchmarks so we dont need
             // to support geyser
@@ -2129,17 +2121,7 @@ pub const AccountsDB = struct {
         }
 
         // allocate enough memory here
-        var total_accounts: usize = 0;
-        for (bin_counts, 0..) |count, bin_index| {
-            if (count > 0) {
-                const bin_rw = self.account_index.getBin(bin_index);
-                const bin, var bin_lg = bin_rw.writeWithLock();
-                defer bin_lg.unlock();
-
-                try bin.ensureTotalCapacity(bin.count() + count);
-                total_accounts += count;
-            }
-        }
+        self.account_index.pubkey_ref_map.ensureTotalAdditionalCapacity(shard_counts);
 
         // compute how many account_references for each pubkey
         var accounts_dead_count: u64 = 0;
@@ -2212,27 +2194,16 @@ pub const AccountsDB = struct {
             try unrooted_accounts.putNoClobber(slot, .{ pubkeys_duped, accounts_duped });
         }
 
-        // prealloc the bins
-        const n_bins = self.account_index.numberOfBins();
-        var bin_counts = try self.allocator.alloc(usize, n_bins);
-        defer self.allocator.free(bin_counts);
-        @memset(bin_counts, 0);
+        // prealloc the ref map space
+        var shard_counts = try self.allocator.alloc(usize, self.account_index.pubkey_ref_map.numberOfShards());
+        defer self.allocator.free(shard_counts);
+        @memset(shard_counts, 0);
 
+        const index_shard_calc = self.account_index.pubkey_ref_map.shard_calculator;
         for (pubkeys) |*pubkey| {
-            const bin_index = self.account_index.getBinIndex(pubkey);
-            bin_counts[bin_index] += 1;
+            shard_counts[index_shard_calc.index(pubkey)] += 1;
         }
-
-        for (0..n_bins) |bin_index| {
-            const bin_rw = self.account_index.getBin(bin_index);
-            const bin, var bin_lg = bin_rw.writeWithLock();
-            defer bin_lg.unlock();
-
-            const new_len = bin_counts[bin_index] + bin.count();
-            if (new_len > 0) {
-                try bin.ensureTotalCapacity(new_len);
-            }
-        }
+        try self.account_index.pubkey_ref_map.ensureTotalAdditionalCapacity(shard_counts);
 
         // update index
         var accounts_dead_count: u64 = 0;
@@ -2841,23 +2812,23 @@ pub const GeyserTmpStorage = struct {
 };
 
 pub const ValidateAccountFileError = error{
-    BinCountMismatch,
+    ShardCountMismatch,
     InvalidAccountFileLength,
     OutOfMemory,
 } || AccountInFile.ValidateError || GeyserTmpStorage.Error;
 
 pub fn indexAndValidateAccountFile(
     accounts_file: *AccountFile,
-    pubkey_bin_calculator: PubkeyBinCalculator,
-    bin_counts: []usize,
+    shard_calculator: PubkeyShardCalculator,
+    shard_counts: []usize,
     account_refs: *ArrayList(AccountRef),
     geyser_storage: ?*GeyserTmpStorage,
 ) ValidateAccountFileError!void {
     var offset: usize = 0;
     var number_of_accounts: usize = 0;
 
-    if (bin_counts.len != pubkey_bin_calculator.n_bins) {
-        return error.BinCountMismatch;
+    if (shard_counts.len != shard_calculator.n_shards) {
+        return error.ShardCountMismatch;
     }
 
     while (true) {
@@ -2880,9 +2851,7 @@ pub fn indexAndValidateAccountFile(
         });
 
         const pubkey = &account.store_info.pubkey;
-        const bin_index = pubkey_bin_calculator.binIndex(pubkey);
-        bin_counts[bin_index] += 1;
-
+        shard_counts[shard_calculator.index(pubkey)] += 1;
         offset = offset + account.len;
         number_of_accounts += 1;
     }
@@ -3108,7 +3077,7 @@ test "testWriteSnapshot" {
     }
 
     var accounts_db = try AccountsDB.init(allocator, .noop, tmp_snap_dir, .{
-        .number_of_index_bins = ACCOUNT_INDEX_BINS,
+        .number_of_index_shards = ACCOUNT_INDEX_BINS,
         .use_disk_index = false,
     }, null);
     defer accounts_db.deinit();
@@ -3176,7 +3145,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
 
     const snapshot = try snapshots.collapse();
     var accounts_db = try AccountsDB.init(allocator, logger, dir, .{
-        .number_of_index_bins = 4,
+        .number_of_index_shards = 4,
         .use_disk_index = use_disk,
     }, null);
     errdefer accounts_db.deinit();
@@ -3243,7 +3212,7 @@ test "geyser stream on load" {
         logger,
         dir,
         .{
-            .number_of_index_bins = 4,
+            .number_of_index_shards = 4,
             .use_disk_index = false,
         },
         geyser_writer,
@@ -3413,7 +3382,7 @@ test "flushing slots works" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-        .number_of_index_bins = 4,
+        .number_of_index_shards = 4,
         .use_disk_index = false,
     }, null);
     defer accounts_db.deinit();
@@ -3464,7 +3433,7 @@ test "purge accounts in cache works" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-        .number_of_index_bins = 4,
+        .number_of_index_shards = 4,
         .use_disk_index = false,
     }, null);
     defer accounts_db.deinit();
@@ -3489,7 +3458,7 @@ test "purge accounts in cache works" {
     try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     for (0..n_accounts) |i| {
-        _, var lg = accounts_db.account_index.getReferenceHeadRead(&pubkeys[i]) orelse return error.TestUnexpectedNull;
+        _, var lg = accounts_db.account_index.pubkey_ref_map.getRead(&pubkeys[i]) orelse return error.TestUnexpectedNull;
         lg.unlock();
     }
 
@@ -3511,7 +3480,7 @@ test "purge accounts in cache works" {
 
     // ref hashmap is cleared
     for (0..n_accounts) |i| {
-        try std.testing.expect(accounts_db.account_index.getReferenceHeadRead(&pubkey_copy[i]) == null);
+        try std.testing.expect(accounts_db.account_index.pubkey_ref_map.getRead(&pubkey_copy[i]) == null);
     }
 }
 
@@ -3521,7 +3490,7 @@ test "clean to shrink account file works with zero-lamports" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-        .number_of_index_bins = 4,
+        .number_of_index_shards = 4,
         .use_disk_index = false,
     }, null);
     defer accounts_db.deinit();
@@ -3597,7 +3566,7 @@ test "clean to shrink account file works" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-        .number_of_index_bins = 4,
+        .number_of_index_shards = 4,
         .use_disk_index = false,
     }, null);
     defer accounts_db.deinit();
@@ -3665,7 +3634,7 @@ test "full clean account file works" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-        .number_of_index_bins = 4,
+        .number_of_index_shards = 4,
         .use_disk_index = false,
     }, null);
     defer accounts_db.deinit();
@@ -3750,7 +3719,7 @@ test "shrink account file works" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-        .number_of_index_bins = 4,
+        .number_of_index_shards = 4,
         .use_disk_index = false,
     }, null);
     defer accounts_db.deinit();
@@ -3962,7 +3931,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         const snapshot = try snapshots.collapse();
 
         var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-            .number_of_index_bins = 32,
+            .number_of_index_shards = 32,
             .use_disk_index = bench_args.use_disk,
         }, null);
         defer accounts_db.deinit();
@@ -4142,7 +4111,7 @@ pub const BenchmarkAccountsDB = struct {
 
         const logger = .noop;
         var accounts_db: AccountsDB = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-            .number_of_index_bins = ACCOUNT_INDEX_BINS,
+            .number_of_index_shards = ACCOUNT_INDEX_BINS,
             .use_disk_index = bench_args.index == .disk,
         }, null);
         defer accounts_db.deinit();

@@ -927,10 +927,10 @@ fn createSnapshot() !void {
     const slot = snapshot_result.snapshot_fields.full.bank_fields.slot;
 
     var n_accounts_indexed: u64 = 0;
-    for (accounts_db.account_index.bins) |*bin_rw| {
-        const bin, var bin_lg = bin_rw.readWithLock();
-        defer bin_lg.unlock();
-        n_accounts_indexed += bin.count();
+    for (accounts_db.account_index.pubkey_ref_map.shards) |*shard_rw| {
+        const shard, var lock = shard_rw.readWithLock();
+        defer lock.unlock();
+        n_accounts_indexed += shard.count();
     }
     app_base.logger.info().logf("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
 

@@ -498,7 +498,12 @@ pub fn SwissMapUnmanaged(
 }
 
 test "swissmap resize" {
-    var map = SwissMap(sig.core.Pubkey, accounts_db.index.AccountRef, accounts_db.index.pubkey_hash, accounts_db.index.pubkey_eql).init(std.testing.allocator);
+    var map = SwissMap(
+        sig.core.Pubkey,
+        accounts_db.index.AccountRef,
+        accounts_db.index.ShardedPubkeyRefMap.hash,
+        accounts_db.index.ShardedPubkeyRefMap.eql,
+    ).init(std.testing.allocator);
     defer map.deinit();
 
     try map.ensureTotalCapacity(100);
@@ -525,8 +530,8 @@ test "swissmap read/write/delete" {
     var map = try SwissMap(
         sig.core.Pubkey,
         *accounts_db.index.AccountRef,
-        accounts_db.index.pubkey_hash,
-        accounts_db.index.pubkey_eql,
+        accounts_db.index.ShardedPubkeyRefMap.hash,
+        accounts_db.index.ShardedPubkeyRefMap.eql,
     ).initCapacity(allocator, n_accounts);
     defer map.deinit();
 
@@ -576,8 +581,8 @@ test "swissmap read/write" {
     var map = try SwissMap(
         sig.core.Pubkey,
         *accounts_db.index.AccountRef,
-        accounts_db.index.pubkey_hash,
-        accounts_db.index.pubkey_eql,
+        accounts_db.index.ShardedPubkeyRefMap.hash,
+        accounts_db.index.ShardedPubkeyRefMap.eql,
     ).initCapacity(allocator, n_accounts);
     defer map.deinit();
 
@@ -649,8 +654,8 @@ pub const BenchmarkSwissMap = struct {
             SwissMap(
                 sig.core.Pubkey,
                 *accounts_db.index.AccountRef,
-                accounts_db.index.pubkey_hash,
-                accounts_db.index.pubkey_eql,
+                accounts_db.index.ShardedPubkeyRefMap.hash,
+                accounts_db.index.ShardedPubkeyRefMap.eql,
             ),
             allocator,
             accounts,
@@ -663,11 +668,11 @@ pub const BenchmarkSwissMap = struct {
         const InnerT = std.HashMap(sig.core.Pubkey, *accounts_db.index.AccountRef, struct {
             pub fn hash(self: @This(), key: sig.core.Pubkey) u64 {
                 _ = self;
-                return accounts_db.index.pubkey_hash(key);
+                return accounts_db.index.ShardedPubkeyRefMap.hash(key);
             }
             pub fn eql(self: @This(), key1: sig.core.Pubkey, key2: sig.core.Pubkey) bool {
                 _ = self;
-                return accounts_db.index.pubkey_eql(key1, key2);
+                return accounts_db.index.ShardedPubkeyRefMap.eql(key1, key2);
             }
         }, std.hash_map.default_max_load_percentage);
 
