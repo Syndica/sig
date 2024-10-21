@@ -42,6 +42,7 @@ const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
 const AccountsCache = sig.accounts_db.cache.AccountsCache;
 const PubkeyShardCalculator = sig.accounts_db.index.PubkeyShardCalculator;
+const ShardedPubkeyRefMap = sig.accounts_db.index.ShardedPubkeyRefMap;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
@@ -965,7 +966,7 @@ pub const AccountsDB = struct {
     pub fn getHashesFromIndex(
         self: *AccountsDB,
         config: AccountsDB.AccountHashesConfig,
-        shards: []sig.accounts_db.index.ShardedPubkeyRefMap.RwPubkeyRefMap, // TODO(fastload)
+        shards: []ShardedPubkeyRefMap.RwPubkeyRefMap,
         hashes_allocator: std.mem.Allocator,
         hashes: *ArrayListUnmanaged(Hash),
         total_lamports: *u64,
