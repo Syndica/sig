@@ -38,7 +38,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
         try benchmark(
-            @import("accountsdb/index.zig").BenchmarkSwissMap,
+            @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
             max_time_per_bench,
             .microseconds,
         );

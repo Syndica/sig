@@ -128,7 +128,10 @@ pub const ChannelPrintLogger = struct {
     pub fn init(config: Config) !*Self {
         const max_buffer = config.max_buffer orelse return error.MaxBufferNotSet;
         const recycle_fba = try config.allocator.create(RecycleFBA(.{}));
-        recycle_fba.* = try RecycleFBA(.{}).init(config.allocator, max_buffer);
+        recycle_fba.* = try RecycleFBA(.{}).init(.{
+            .records_allocator = config.allocator,
+            .bytes_allocator = config.allocator,
+        }, max_buffer);
         const self = try config.allocator.create(Self);
         self.* = .{
             .allocator = config.allocator,

@@ -1,7 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const ACCOUNT_INDEX_BINS = sig.accounts_db.db.ACCOUNT_INDEX_BINS;
+const ACCOUNT_INDEX_SHARDS = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS;
 const ShredCollectorConfig = sig.shred_collector.ShredCollectorConfig;
 const IpAddr = sig.net.IpAddr;
 const LogLevel = sig.trace.Level;
@@ -110,7 +110,7 @@ pub const AccountsDBConfig = struct {
     /// number of threads to unpack snapshot from .tar.zstd
     num_threads_snapshot_unpack: u16 = 0,
     /// number of shards to use across the index
-    number_of_index_bins: u64 = ACCOUNT_INDEX_BINS,
+    number_of_index_shards: u64 = ACCOUNT_INDEX_SHARDS,
     /// use disk based index for accounts index
     use_disk_index: bool = false,
     /// force unpacking a fresh snapshot even if an accounts/ dir exists
