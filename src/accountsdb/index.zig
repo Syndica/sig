@@ -291,13 +291,13 @@ pub const AccountIndex = struct {
 
         // traverse until you find the end
         var curr_ref = map_entry.value_ptr.ref_ptr;
-        if (@import("builtin").mode == .Debug and curr_ref.slot == account_ref.slot) { 
-            std.debug.panic("duplicate slot in index: {any} {any}", .{account_ref, curr_ref});
+        if (@import("builtin").mode == .Debug and curr_ref.slot == account_ref.slot) {
+            std.debug.panic("duplicate slot in index: {any} {any}", .{ account_ref, curr_ref });
         }
         while (account_ref.next_ptr) |next_ref| {
             // sanity check in debug mode
-            if (@import("builtin").mode == .Debug and next_ref.slot == account_ref.slot) { 
-                std.debug.panic("duplicate slot in index: {any} {any}", .{account_ref, next_ref});
+            if (@import("builtin").mode == .Debug and next_ref.slot == account_ref.slot) {
+                std.debug.panic("duplicate slot in index: {any} {any}", .{ account_ref, next_ref });
             }
             curr_ref = next_ref;
         }
