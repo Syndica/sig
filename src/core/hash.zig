@@ -33,7 +33,9 @@ pub const Hash = extern struct {
     }
 
     pub fn eql(self: Hash, other: Hash) bool {
-        return self.order(&other) == .eq;
+        const xx: @Vector(size, u8) = self.data;
+        const yy: @Vector(size, u8) = other.data;
+        return @reduce(.And, xx == yy);
     }
 
     pub fn order(a: *const Hash, b: *const Hash) std.math.Order {

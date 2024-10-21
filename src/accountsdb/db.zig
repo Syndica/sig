@@ -782,7 +782,7 @@ pub const AccountsDB = struct {
 
         // alloc the result
         const hashes = try self.allocator.alloc(ArrayListUnmanaged(Hash), n_threads);
-        defer { 
+        defer {
             for (hashes) |*h| h.deinit(self.allocator);
             self.allocator.free(hashes);
         }
@@ -1037,7 +1037,7 @@ pub const AccountsDB = struct {
                     }
                 } else {
                     // hashes arent always stored correctly in snapshots
-                    if (account_hash.order(&Hash.ZEROES) == .eq) {
+                    if (account_hash.eql(Hash.ZEROES)) {
                         const account, var lock = try self.getAccountFromRefWithReadLock(max_slot_ref);
                         defer lock.unlock();
 
