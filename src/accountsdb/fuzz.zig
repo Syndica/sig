@@ -96,7 +96,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         logger,
         snapshot_dir,
         .{
-            .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_BINS,
+            .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
             .use_disk_index = use_disk,
             // TODO: other things we can fuzz (number of shards, ...)
         },
