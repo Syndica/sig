@@ -1408,7 +1408,7 @@ pub const ThreadSafeContactInfo = struct {
             .shred_version = contact_info.shred_version,
             .gossip_addr = contact_info.getSocket(.gossip),
             .rpc_addr = contact_info.getSocket(.rpc),
-            .tpu_addr = contact_info.getSocket(.tpu),
+            .tpu_addr = contact_info.getSocket(.tpu_quic),
         };
     }
 

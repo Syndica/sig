@@ -124,9 +124,9 @@ pub const LeaderInfo = struct {
         const cluster_nodes = try cluster_nodes_response.result();
         self.leader_addresses_cache_rpc.clearRetainingCapacity();
         for (cluster_nodes) |node| {
-            if (node.tpu == null) continue;
+            if (node.tpuQuic == null) continue;
             const pubkey = try Pubkey.fromString(node.pubkey);
-            const tpu_address = try SocketAddr.parse(node.tpu.?);
+            const tpu_address = try SocketAddr.parse(node.tpuQuic.?);
             try self.leader_addresses_cache_rpc.put(self.allocator, pubkey, tpu_address);
         }
     }

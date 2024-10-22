@@ -1090,7 +1090,7 @@ pub fn testTransactionSenderService() !void {
     defer transaction_channel.deinit();
 
     const transaction_sender_config = sig.transaction_sender.service.Config{
-        .cluster = .Devnet,
+        .cluster = .Testnet,
         .socket = SocketAddr.init(app_base.my_ip, 0),
     };
 

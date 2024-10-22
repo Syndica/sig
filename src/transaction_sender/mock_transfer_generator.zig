@@ -16,7 +16,7 @@ const Duration = sig.time.Duration;
 
 const TRANSFER_FEE: u64 = 5000;
 const TOTAL_TRANSFER_AMOUNT: u64 = 5e8;
-const NUMBER_OF_TRANSACTIONS: u64 = 2;
+const NUMBER_OF_TRANSACTIONS: u64 = 200;
 
 const MAX_RPC_RETRIES: u64 = 5;
 const MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION: Duration = Duration.fromSecs(30);
@@ -319,6 +319,38 @@ pub const MockTransferService = struct {
         return error.SigTransferFailedMaxRetries;
     }
 
+    /// Transfer lamports via sig from one account to another, retries transaction max
+    pub fn sigTransfer(self: *MockTransferService, random: std.Random, rpc_client: *RpcClient, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
+        const latest_blockhash, const last_valid_block_height = blk: {
+            const blockhash_response = try rpc_client.getLatestBlockhash(self.allocator, .{});
+            defer blockhash_response.deinit();
+            const blockhash = try blockhash_response.result();
+            break :blk .{
+                try Hash.parseBase58String(blockhash.value.blockhash),
+                blockhash.value.lastValidBlockHeight,
+            };
+        };
+
+        const transaction = try sig.core.transaction.buildTransferTansaction(
+            self.allocator,
+            random,
+            from_keypair,
+            to_pubkey,
+            lamports,
+            latest_blockhash,
+        );
+        defer transaction.deinit(self.allocator);
+
+        const transaction_info = try TransactionInfo.init(
+            transaction,
+            last_valid_block_height,
+            null,
+            null,
+        );
+
+        try self.sender.send(transaction_info);
+    }
+
     /// Run the mock transfer service
     pub fn run(self: *MockTransferService) !void {
         errdefer self.exit.store(true, .monotonic);
@@ -342,7 +374,9 @@ pub const MockTransferService = struct {
                 self.logger.info().logf("(transaction_sender.MockTransferService) executing mock transfer {} of {}", .{ i, NUMBER_OF_TRANSACTIONS });
                 try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) executing mock transfer from A to B");
                 // try self.rpcTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
-                try self.sigTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
+                try self.sigTransfer(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
+                // try self.sigTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
+                std.time.sleep(Duration.fromSecs(10).asNanos());
             }
         }
 

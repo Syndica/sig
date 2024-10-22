@@ -313,11 +313,12 @@ pub const Service = struct {
         for (leader_addresses) |leader_address| {
             for (transactions) |tx| {
                 self.logger.info().logf("(transaction_sender.Service) sending transaction {} to leader at {}", .{ tx.signature, leader_address });
-                try self.send_channel.send(Packet.init(
-                    leader_address.toEndpoint(),
-                    tx.wire_transaction,
-                    tx.wire_transaction_size,
-                ));
+                std.debug.print("cin: address={s} bytes_size={} bytes={any}\n", .{ leader_address, tx.wire_transaction_size, tx.wire_transaction[0..tx.wire_transaction_size] });
+                // try self.send_channel.send(Packet.init(
+                //     leader_address.toEndpoint(),
+                //     tx.wire_transaction,
+                //     tx.wire_transaction_size,
+                // ));
             }
         }
 
