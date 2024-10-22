@@ -1552,13 +1552,6 @@ pub const FullSnapshotFileInfo = struct {
     hash: Hash,
     comptime compression: CompressionMethod = .zstd,
 
-    const FULL_SNAPSHOT_NAME_FMT = "snapshot-{[slot]d}-{[hash]s}.tar.{[extension]s}";
-    const FULL_SNAPSHOT_NAME_MAX_LEN = sig.utils.fmt.boundedLenValue(FULL_SNAPSHOT_NAME_FMT, .{
-        .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
-        .extension = CompressionMethod.extension(.zstd),
-    });
-
     /// matches with the regex: r"^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
     pub fn fromString(filename: []const u8) !FullSnapshotFileInfo {
         var ext_parts = std.mem.splitSequence(u8, filename, ".");
@@ -1586,9 +1579,16 @@ pub const FullSnapshotFileInfo = struct {
         };
     }
 
-    pub fn snapshotNameStr(self: FullSnapshotFileInfo) std.BoundedArray(u8, FULL_SNAPSHOT_NAME_MAX_LEN) {
+    const SnapshotNameFmtSpec = sig.utils.fmt.BoundedSpec("snapshot-{[slot]d}-{[hash]s}.tar.{[extension]s}");
+    const SnapshotNameStr = SnapshotNameFmtSpec.BoundedArrayValue(.{
+        .slot = std.math.maxInt(Slot),
+        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .extension = CompressionMethod.extension(.zstd),
+    });
+
+    pub fn snapshotNameStr(self: FullSnapshotFileInfo) SnapshotNameStr {
         const b58_str = self.hash.base58String();
-        return sig.utils.fmt.boundedFmt(FULL_SNAPSHOT_NAME_FMT, .{
+        return SnapshotNameFmtSpec.fmt(.{
             .slot = self.slot,
             .hash = sig.utils.fmt.boundedString(&b58_str),
             .extension = self.compression.extension(),
@@ -1611,14 +1611,6 @@ pub const IncrementalSnapshotFileInfo = struct {
     slot: Slot,
     hash: Hash,
     comptime compression: CompressionMethod = .zstd,
-
-    const INCREMENTAL_SNAPSHOT_NAME_FMT = "incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.{[extension]s}";
-    const INCREMENTAL_SNAPSHOT_NAME_MAX_LEN = sig.utils.fmt.boundedLenValue(INCREMENTAL_SNAPSHOT_NAME_FMT, .{
-        .base_slot = std.math.maxInt(Slot),
-        .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
-        .extension = CompressionMethod.extension(.zstd),
-    });
 
     /// matches against regex: r"^incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
     pub fn fromString(filename: []const u8) !IncrementalSnapshotFileInfo {
@@ -1655,9 +1647,16 @@ pub const IncrementalSnapshotFileInfo = struct {
         };
     }
 
-    pub fn snapshotNameStr(self: IncrementalSnapshotFileInfo) std.BoundedArray(u8, INCREMENTAL_SNAPSHOT_NAME_MAX_LEN) {
+    const SnapshotNameFmtSpec = sig.utils.fmt.BoundedSpec("incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.{[extension]s}");
+    pub const SnapshotNameStr = SnapshotNameFmtSpec.BoundedArrayValue(.{
+        .base_slot = std.math.maxInt(Slot),
+        .slot = std.math.maxInt(Slot),
+        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .extension = CompressionMethod.extension(.zstd),
+    });
+    pub fn snapshotNameStr(self: IncrementalSnapshotFileInfo) SnapshotNameStr {
         const b58_str = self.hash.base58String();
-        return sig.utils.fmt.boundedFmt(INCREMENTAL_SNAPSHOT_NAME_FMT, .{
+        return SnapshotNameFmtSpec.fmt(.{
             .base_slot = self.base_slot,
             .slot = self.slot,
             .hash = sig.utils.fmt.boundedString(&b58_str),
