@@ -390,48 +390,22 @@ pub const GossipData = union(GossipDataTag) {
     // only used in tests
     pub fn setId(self: *GossipData, id: Pubkey) void {
         switch (self.*) {
-            .LegacyContactInfo => |*v| {
-                v.id = id;
-            },
-            .Vote => |*v| {
-                v[1].from = id;
-            },
-            .LowestSlot => |*v| {
-                v[1].from = id;
-            },
-            .LegacySnapshotHashes => |*v| {
-                v.from = id;
-            },
-            .AccountsHashes => |*v| {
-                v.from = id;
-            },
-            .EpochSlots => |*v| {
-                v[1].from = id;
-            },
-            .LegacyVersion => |*v| {
-                v.from = id;
-            },
-            .Version => |*v| {
-                v.from = id;
-            },
-            .NodeInstance => |*v| {
-                v.from = id;
-            },
-            .DuplicateShred => |*v| {
-                v[1].from = id;
-            },
-            .SnapshotHashes => |*v| {
-                v.from = id;
-            },
-            .ContactInfo => |*v| {
-                v.pubkey = id;
-            },
-            .RestartLastVotedForkSlots => |*v| {
-                v.from = id;
-            },
-            .RestartHeaviestFork => |*v| {
-                v.from = id;
-            },
+            // zig fmt: off
+            .LegacyContactInfo         => |*v| v.id = id,
+            .Vote                      => |*v| v[1].from = id,
+            .LowestSlot                => |*v| v[1].from = id,
+            .LegacySnapshotHashes      => |*v| v.from = id,
+            .AccountsHashes            => |*v| v.from = id,
+            .EpochSlots                => |*v| v[1].from = id,
+            .LegacyVersion             => |*v| v.from = id,
+            .Version                   => |*v| v.from = id,
+            .NodeInstance              => |*v| v.from = id,
+            .DuplicateShred            => |*v| v[1].from = id,
+            .SnapshotHashes            => |*v| v.from = id,
+            .ContactInfo               => |*v| v.pubkey = id,
+            .RestartLastVotedForkSlots => |*v| v.from = id,
+            .RestartHeaviestFork       => |*v| v.from = id,
+            // zig fmt: on
         }
     }
 
@@ -441,44 +415,20 @@ pub const GossipData = union(GossipDataTag) {
     }
 
     pub fn randomFromIndex(random: std.rand.Random, index: usize) GossipData {
-        switch (index) {
-            0 => {
-                return .{ .LegacyContactInfo = LegacyContactInfo.initRandom(random) };
-            },
-            1 => {
-                return .{ .Vote = .{ random.intRangeAtMost(u8, 0, MAX_VOTES - 1), Vote.initRandom(random) } };
-            },
-            2 => {
-                return .{ .EpochSlots = .{ random.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS - 1), EpochSlots.initRandom(random) } };
-            },
-            3 => {
-                return .{ .LowestSlot = .{ 0, LowestSlot.initRandom(random) } };
-            },
-            4 => {
-                return .{ .LegacySnapshotHashes = LegacySnapshotHashes.initRandom(random) };
-            },
-            5 => {
-                return .{ .AccountsHashes = AccountsHashes.initRandom(random) };
-            },
-            6 => {
-                return .{ .LegacyVersion = LegacyVersion.initRandom(random) };
-            },
-            7 => {
-                return .{ .Version = Version.initRandom(random) };
-            },
-            8 => {
-                return .{ .NodeInstance = NodeInstance.initRandom(random) };
-            },
-            9 => {
-                return .{ .SnapshotHashes = SnapshotHashes.initRandom(random) };
-            },
-            // 10 => {
-            //     return GossipData { .ContactInfo = ContactInfo.initRandom(rng) };
-            // },
-            else => {
-                return .{ .DuplicateShred = .{ random.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.initRandom(random) } };
-            },
-        }
+        return switch (index) {
+            0 => .{ .LegacyContactInfo = LegacyContactInfo.initRandom(random) },
+            1 => .{ .Vote = .{ random.intRangeAtMost(u8, 0, MAX_VOTES - 1), Vote.initRandom(random) } },
+            2 => .{ .EpochSlots = .{ random.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS - 1), EpochSlots.initRandom(random) } },
+            3 => .{ .LowestSlot = .{ 0, LowestSlot.initRandom(random) } },
+            4 => .{ .LegacySnapshotHashes = LegacySnapshotHashes.initRandom(random) },
+            5 => .{ .AccountsHashes = AccountsHashes.initRandom(random) },
+            6 => .{ .LegacyVersion = LegacyVersion.initRandom(random) },
+            7 => .{ .Version = Version.initRandom(random) },
+            8 => .{ .NodeInstance = NodeInstance.initRandom(random) },
+            9 => .{ .SnapshotHashes = SnapshotHashes.initRandom(random) },
+            // 10 => .{ .ContactInfo = ContactInfo.initRandom(random) },
+            else => .{ .DuplicateShred = .{ random.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.initRandom(random) } },
+        };
     }
 
     pub fn gossipAddr(self: *const @This()) ?SocketAddr {
@@ -1138,11 +1088,10 @@ pub const SnapshotHashes = struct {
     }
 
     pub fn initRandom(random: std.rand.Random) SnapshotHashes {
-        var slice: [0]SlotAndHash = .{};
-        return SnapshotHashes{
+        return .{
             .from = Pubkey.initRandom(random),
             .full = .{ .slot = random.int(u64), .hash = Hash.initRandom(random) },
-            .incremental = &slice,
+            .incremental = &.{},
             .wallclock = getWallclockMs(),
         };
     }
