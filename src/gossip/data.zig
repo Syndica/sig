@@ -1071,7 +1071,7 @@ pub const DuplicateShred = struct {
 pub const SnapshotHashes = struct {
     from: Pubkey,
     full: SlotAndHash,
-    incremental: []SlotAndHash,
+    incremental: []const SlotAndHash,
     wallclock: u64,
 
     pub fn clone(self: *const SnapshotHashes, allocator: std.mem.Allocator) error{OutOfMemory}!SnapshotHashes {

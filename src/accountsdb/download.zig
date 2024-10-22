@@ -5,6 +5,8 @@ const curl = @import("curl");
 const sig = @import("../sig.zig");
 
 const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
+const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
+const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
 const Pubkey = sig.core.Pubkey;
 const GossipTable = sig.gossip.GossipTable;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
@@ -16,8 +18,8 @@ const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
 /// Analogous to [PeerSnapshotHash](https://github.com/anza-xyz/agave/blob/f868aa38097094e4fb78a885b6fb27ce0e43f5c7/validator/src/bootstrap.rs#L342)
 const PeerSnapshotHash = struct {
     contact_info: ThreadSafeContactInfo,
-    full_snapshot: SlotAndHash,
-    inc_snapshot: ?SlotAndHash,
+    full_snapshot: FullSnapshotFileInfo,
+    inc_snapshot: ?IncrementalSnapshotFileInfo,
 };
 
 const PeerSearchResult = struct {
@@ -86,7 +88,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
     }
 
     var result = PeerSearchResult{};
-    search_loop: for (contact_infos) |*peer_contact_info| {
+    search_loop: for (contact_infos) |peer_contact_info| {
         const is_me = peer_contact_info.pubkey.equals(&my_pubkey);
         if (is_me) {
             result.is_me_count += 1;
@@ -108,10 +110,10 @@ pub fn findPeersToDownloadFromAssumeCapacity(
         };
         const snapshot_hashes = gossip_data.value.data.SnapshotHashes;
 
-        var max_inc_hash: ?SlotAndHash = null;
+        var maybe_max_inc_hash: ?SlotAndHash = null;
         for (snapshot_hashes.incremental) |inc_hash| {
-            if (max_inc_hash == null or inc_hash.slot > max_inc_hash.?.slot) {
-                max_inc_hash = inc_hash;
+            if (maybe_max_inc_hash == null or inc_hash.slot > maybe_max_inc_hash.?.slot) {
+                maybe_max_inc_hash = inc_hash;
             }
         }
 
@@ -128,7 +130,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             // full snapshot must be trusted
             if (trusted_snapshot_hashes.getEntry(snapshot_hashes.full)) |entry| {
                 // if we have an incremental snapshot
-                if (max_inc_hash) |inc_snapshot| {
+                if (maybe_max_inc_hash) |inc_snapshot| {
                     // it should be trusted too
                     if (!entry.value_ptr.contains(inc_snapshot)) {
                         result.untrusted_inc_snapshot_count += 1;
@@ -143,9 +145,16 @@ pub fn findPeersToDownloadFromAssumeCapacity(
         }
 
         valid_peers.appendAssumeCapacity(.{
-            .contact_info = peer_contact_info.*,
-            .full_snapshot = snapshot_hashes.full,
-            .inc_snapshot = max_inc_hash,
+            .contact_info = peer_contact_info,
+            .full_snapshot = .{
+                .slot = snapshot_hashes.full.slot,
+                .hash = snapshot_hashes.full.hash,
+            },
+            .inc_snapshot = if (maybe_max_inc_hash) |max_inc_hash| .{
+                .base_slot = snapshot_hashes.full.slot,
+                .slot = max_inc_hash.slot,
+                .hash = max_inc_hash.hash,
+            } else null,
         });
     }
     result.is_valid = valid_peers.items.len;
@@ -217,22 +226,19 @@ pub fn downloadSnapshotsFromGossip(
 
         for (available_snapshot_peers.items) |peer| {
             // download the full snapshot
-            const snapshot_filename = try std.fmt.allocPrint(allocator, "snapshot-{d}-{s}.{s}", .{
-                peer.full_snapshot.slot,
-                peer.full_snapshot.hash,
-                "tar.zst",
-            });
-            defer allocator.free(snapshot_filename);
+            const snapshot_filename_bounded = peer.full_snapshot.snapshotNameStr();
+            const snapshot_filename = snapshot_filename_bounded.constSlice();
 
             const rpc_socket = peer.contact_info.rpc_addr.?;
             const rpc_url_bounded = rpc_socket.toStringBounded();
             const rpc_url = rpc_url_bounded.constSlice();
 
-            const snapshot_url = try std.fmt.allocPrintZ(allocator, "http://{s}/{s}", .{
-                rpc_url,
-                snapshot_filename,
+            const bStr = sig.utils.fmt.boundedString;
+            const snapshot_url_bounded = sig.utils.fmt.boundedFmt("https://{s}/{s}\x00", .{
+                bStr(&rpc_url_bounded),
+                bStr(&snapshot_filename_bounded),
             });
-            defer allocator.free(snapshot_url);
+            const snapshot_url = snapshot_url_bounded.constSlice()[0.. :0];
 
             logger
                 .info()
