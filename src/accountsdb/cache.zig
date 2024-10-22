@@ -13,6 +13,8 @@ const Slot = sig.core.Slot;
 pub const AccountsCache = struct {
     lru: LRU,
     allocator: std.mem.Allocator,
+    cache_hits: usize = 0,
+    cache_misses: usize = 0,
 
     /// Atomically refcounted account
     pub const CachedAccount = struct {
@@ -83,10 +85,15 @@ pub const AccountsCache = struct {
 
     /// User is expected to release the returned CachedAccount.
     pub fn get(self: *Self, pubkey: Pubkey, slot: Slot) ?*CachedAccount {
-        const account: *CachedAccount = self.lru.get(pubkey) orelse return null;
+        const account: *CachedAccount = self.lru.get(pubkey) orelse {
+            self.cache_misses += 1;
+            return null;
+        };
         if (account.slot == slot) {
+            self.cache_hits += 1;
             return account.copyRef();
         } else {
+            self.cache_misses += 1;
             return null;
         }
     }
