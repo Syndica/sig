@@ -1,7 +1,8 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
+const ledger = @import("../lib.zig");
+const shred_inserter = @import("lib.zig");
 
-const ledger = sig.ledger;
 const schema = ledger.schema.schema;
 
 const Allocator = std.mem.Allocator;
@@ -11,11 +12,11 @@ const Slot = sig.core.Slot;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const SlotMeta = ledger.meta.SlotMeta;
-const SlotMetaWorkingSetEntry = ledger.insert_shreds_working_state.SlotMetaWorkingSetEntry;
+const SlotMetaWorkingSetEntry = shred_inserter.working_state.SlotMetaWorkingSetEntry;
 const WriteBatch = BlockstoreDB.WriteBatch;
 
-const deinitMapRecursive = ledger.insert_shreds_working_state.deinitMapRecursive;
-const isNewlyCompletedSlot = ledger.insert_shreds_working_state.isNewlyCompletedSlot;
+const deinitMapRecursive = shred_inserter.working_state.deinitMapRecursive;
+const isNewlyCompletedSlot = shred_inserter.working_state.isNewlyCompletedSlot;
 
 /// agave: handle_chaining
 pub fn handleChaining(

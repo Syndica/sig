@@ -1,7 +1,8 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
+const ledger = @import("../lib.zig");
+const lib = @import("lib.zig");
 
-const ledger = sig.ledger;
 const meta = ledger.meta;
 const schema = ledger.schema.schema;
 
@@ -14,25 +15,25 @@ const Mutex = std.Thread.Mutex;
 const PointerClosure = sig.utils.closure.PointerClosure;
 
 const Counter = sig.prometheus.Counter;
-const ErasureSetId = sig.ledger.shred.ErasureSetId;
+const ErasureSetId = ledger.shred.ErasureSetId;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const Shred = sig.ledger.shred.Shred;
-const CodeShred = sig.ledger.shred.CodeShred;
-const DataShred = sig.ledger.shred.DataShred;
-const ReedSolomonCache = ledger.recovery.ReedSolomonCache;
-const ShredId = sig.ledger.shred.ShredId;
+const Shred = ledger.shred.Shred;
+const CodeShred = ledger.shred.CodeShred;
+const DataShred = ledger.shred.DataShred;
+const ReedSolomonCache = lib.recovery.ReedSolomonCache;
+const ShredId = ledger.shred.ShredId;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 const SortedSet = sig.utils.collections.SortedSet;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
-const IndexMetaWorkingSetEntry = ledger.insert_shreds_working_state.IndexMetaWorkingSetEntry;
-const PendingInsertShredsState = ledger.insert_shreds_working_state.PendingInsertShredsState;
-const PossibleDuplicateShred = ledger.insert_shreds_working_state.PossibleDuplicateShred;
-const WorkingEntry = ledger.insert_shreds_working_state.WorkingEntry;
-const WorkingShredStore = ledger.insert_shreds_working_state.WorkingShredStore;
+const IndexMetaWorkingSetEntry = lib.working_state.IndexMetaWorkingSetEntry;
+const PendingInsertShredsState = lib.working_state.PendingInsertShredsState;
+const PossibleDuplicateShred = lib.working_state.PossibleDuplicateShred;
+const WorkingEntry = lib.working_state.WorkingEntry;
+const WorkingShredStore = lib.working_state.WorkingShredStore;
 const WriteBatch = BlockstoreDB.WriteBatch;
 
 const ErasureMeta = meta.ErasureMeta;
@@ -41,7 +42,13 @@ const MerkleRootMeta = meta.MerkleRootMeta;
 const ShredIndex = meta.ShredIndex;
 const SlotMeta = meta.SlotMeta;
 
-const recover = ledger.recovery.recover;
+const checkForwardChainedMerkleRootConsistency =
+    lib.merkle_root_checks.checkForwardChainedMerkleRootConsistency;
+const checkBackwardsChainedMerkleRootConsistency =
+    lib.merkle_root_checks.checkBackwardsChainedMerkleRootConsistency;
+const checkMerkleRootConsistency = lib.merkle_root_checks.checkMerkleRootConsistency;
+const handleChaining = lib.slot_chaining.handleChaining;
+const recover = lib.recovery.recover;
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
@@ -301,7 +308,7 @@ pub const ShredInserter = struct {
         // Handle chaining for the members of the slot_meta_working_set that were inserted into,
         // drop the others
         var chaining_timer = try Timer.start();
-        try ledger.slot_chaining.handleChaining(
+        try handleChaining(
             allocator,
             &self.db,
             &write_batch,
@@ -330,7 +337,7 @@ pub const ShredInserter = struct {
             // unreachable: Erasure meta was just created, initial shred must exist
             const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
             // TODO: agave discards the result here. should we also?
-            _ = try ledger.merkle_root_checks.checkForwardChainedMerkleRootConsistency(
+            _ = try checkForwardChainedMerkleRootConsistency(
                 allocator,
                 self.logger,
                 &self.db,
@@ -364,7 +371,7 @@ pub const ShredInserter = struct {
             // unreachable: Merkle root meta was just created, initial shred must exist
             const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
             // TODO: agave discards the result here. should we also?
-            _ = try ledger.merkle_root_checks.checkBackwardsChainedMerkleRootConsistency(
+            _ = try checkBackwardsChainedMerkleRootConsistency(
                 allocator,
                 self.logger,
                 &self.db,
@@ -472,7 +479,7 @@ pub const ShredInserter = struct {
                 // A previous shred has been inserted in this batch or in blockstore
                 // Compare our current shred against the previous shred for potential
                 // conflicts
-                if (!try ledger.merkle_root_checks.checkMerkleRootConsistency(
+                if (!try checkMerkleRootConsistency(
                     self.logger,
                     &self.db,
                     state.shredStore(),
@@ -645,7 +652,7 @@ pub const ShredInserter = struct {
                 // A previous shred has been inserted in this batch or in blockstore
                 // Compare our current shred against the previous shred for potential
                 // conflicts
-                if (!try ledger.merkle_root_checks.checkMerkleRootConsistency(
+                if (!try checkMerkleRootConsistency(
                     self.logger,
                     &self.db,
                     state.shredStore(),
@@ -926,7 +933,7 @@ pub const ShredInserter = struct {
     // agave: get_recovery_data_shreds and get_recovery_coding_shreds
     fn getRecoveryShreds(
         allocator: Allocator,
-        comptime shred_type: sig.ledger.shred.ShredType,
+        comptime shred_type: ledger.shred.ShredType,
         index: *const ShredIndex,
         slot: Slot,
         shred_indices: [2]u64,
@@ -1113,11 +1120,11 @@ pub const BlockstoreInsertionMetrics = struct {
 //////////
 // Tests
 
-const test_shreds = @import("test_shreds.zig");
+const test_shreds = @import("../test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
 const TestState = ledger.tests.TestState("insert_shred");
-const DirectPrintLogger = @import("../trace/log.zig").DirectPrintLogger;
-const Logger = @import("../trace/log.zig").Logger;
+const DirectPrintLogger = sig.trace.DirectPrintLogger;
+const Logger = sig.trace.Logger;
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
@@ -1209,7 +1216,7 @@ test "insertShreds single shred" {
     var state = try ShredInserterTestState.init(std.testing.allocator, "insertShreds single shred");
     defer state.deinit();
     const allocator = std.testing.allocator;
-    const shred = try Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    const shred = try Shred.fromPayload(allocator, &ledger.shred.test_data_shred);
     defer shred.deinit();
     _ = try state.inserter.insertShreds(&.{shred}, &.{false}, null, false, null);
     const stored_shred = try state.db.getBytes(
@@ -1513,5 +1520,5 @@ const OneSlotLeaderProvider = struct {
     }
 };
 
-const loadShredsFromFile = sig.ledger.tests.loadShredsFromFile;
+const loadShredsFromFile = ledger.tests.loadShredsFromFile;
 const deinitShreds = ledger.tests.deinitShreds;
