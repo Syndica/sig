@@ -112,7 +112,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .exit = exit,
         .slots_per_full_snapshot = 50_000,
         .slots_per_incremental_snapshot = 5_000,
-        .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
+        .zstd_nb_workers = 0,
+        // .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0), // TODO: breaks ?? 
     } });
     errdefer {
         exit.store(true, .release);
@@ -190,7 +191,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 defer account.deinit(allocator);
 
                 if (!std.mem.eql(u8, &tracked_account.data, account.data)) {
-                    @panic("found accounts with different data");
+                    std.debug.panic("found accounts with different data: {any} vs {any}\n", .{tracked_account.data, account.data});
                 }
             },
         }
