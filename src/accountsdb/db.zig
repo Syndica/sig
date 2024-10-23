@@ -1893,6 +1893,7 @@ pub const AccountsDB = struct {
                 };
 
                 if (account_in_cache) |account| {
+                    std.debug.print("reading account from cache: {any}\n", .{account}); // TODO: remove
                     return account;
                 } else {
                     const account = try self.getAccountInFile(
