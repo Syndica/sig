@@ -1,86 +1,94 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-/// Returns the maximum length applicable for the format string and `Args` tuple,
-/// such that it would be the equivalent to the length of the bounded array returned
-/// by `boundedFmt`.
-/// ```zig
-/// try expectEqual("255-1".len, boundedLen("{d}-{d}", struct { u8, u1 }));
-/// // comptime field values in the struct/tuple are reflected appropriately
-/// try expectEqual("foo-255".len, boundedLen("{[a]s}-{[b]d}", struct { comptime a: []const u8 = "foo", b: u8 }));
-/// ```
-pub inline fn boundedLen(
-    comptime fmt_str: []const u8,
-    comptime Args: type,
-) usize {
-    comptime return std.fmt.count(fmt_str, maxArgs(Args));
-}
-
-/// Same as `boundedLen`, but takes a value instead of a type.
-/// The values should posses the maximum values applicable for each
-/// element type, in order to match the actual bounded length.
-/// For example:
-/// ```zig
-/// try expectEqual("255-255".len, boundedLenValue("{d}-{d}", .{ std.math.maxInt(u8), std.math.maxInt(u8) }));
-/// // comptime field values in the struct/tuple are reflected appropriately
-/// try expectEqual("foo-255".len, boundedLenValue("{[a]s}-{[b]d}", .{ .a = "foo", .b = 255 }));
-/// ```
-pub inline fn boundedLenValue(
-    comptime fmt_str: []const u8,
-    comptime value: anytype,
-) usize {
-    comptime return boundedLen(fmt_str, @TypeOf(value));
-}
-
-/// Returns a bounded array string, guaranteed to be able to represent the formatted result.
-/// For example:
-/// ```zig
-/// try expectEqualStrings("fizz.buzz", boundedFmt("{s}.{s}", .{ "foo", "buzz" }).constSlice());
-/// ```
-pub inline fn boundedFmt(
+/// Wrapper for `BoundedSpec(fmt_str).fmt(args)`.
+pub fn boundedFmt(
     comptime fmt_str: []const u8,
     args: anytype,
-) std.BoundedArray(u8, boundedLen(fmt_str, @TypeOf(args))) {
-    var result: std.BoundedArray(u8, boundedLen(fmt_str, @TypeOf(args))) = .{};
-    result.writer().print(fmt_str, args) catch unreachable;
-    return result;
+) BoundedSpec(fmt_str).BoundedArray(@TypeOf(args)) {
+    return BoundedSpec(fmt_str).fmt(args);
 }
 
-/// Returns an instance of the tuple of type `Args`, wherein each
-/// element of the tuple possesses the maximum value applicable
-/// to the type of the element.
-/// For example:
-/// ```zig
-/// try expectEqual();
-/// ```
-pub inline fn maxArgs(comptime Args: type) Args {
-    comptime {
-        var max_args: Args = undefined;
-        for (@typeInfo(Args).Struct.fields) |field| {
-            if (field.is_comptime) continue;
-            const ptr = &@field(max_args, field.name);
-            ptr.* = maxArg(field.type);
+/// Returns a namespace with functions for formatting bounded-length data.
+pub fn BoundedSpec(comptime spec: []const u8) type {
+    return struct {
+        pub const fmt_str = spec;
+
+        /// Returns the maximum length applicable for the format string and `Args` tuple,
+        /// such that it would be the equivalent to the length of the bounded array returned
+        /// by `fmt`.
+        /// ```zig
+        /// try expectEqual("255-1".len, BoundedSpec("{d}-{d}").fmtLen(struct { u8, u1 }));
+        /// // comptime field values in the struct/tuple are reflected appropriately
+        /// try expectEqual("foo-255".len, BoundedSpec("{[a]s}-{[b]d}").fmtLen(struct { comptime a: []const u8 = "foo", b: u8 }));
+        /// ```
+        pub inline fn fmtLen(comptime Args: type) usize {
+            comptime return std.fmt.count(fmt_str, maxArgs(Args));
         }
-        return max_args;
-    }
+
+        /// Same as `fmtLen`, but takes a value instead of a type.
+        /// The values should posses the maximum values applicable for each
+        /// element type, in order to match the actual bounded length.
+        /// For example:
+        /// ```zig
+        /// try expectEqual("255-255".len, boundedLenValue("{d}-{d}", .{ std.math.maxInt(u8), std.math.maxInt(u8) }));
+        /// // comptime field values in the struct/tuple are reflected appropriately
+        /// try expectEqual("foo-255".len, boundedLenValue("{[a]s}-{[b]d}", .{ .a = "foo", .b = 255 }));
+        /// ```
+        pub inline fn fmtLenValue(comptime args_value: anytype) usize {
+            comptime return fmtLen(fmt_str, @TypeOf(args_value));
+        }
+
+        pub fn BoundedArray(comptime Args: type) type {
+            return std.BoundedArray(u8, fmtLen(Args));
+        }
+
+        pub fn BoundedArrayValue(comptime args_value: anytype) type {
+            return BoundedArray(@TypeOf(args_value));
+        }
+
+        /// Returns a bounded array string, guaranteed to be able to represent the formatted result.
+        /// For example:
+        /// ```zig
+        /// try expectEqualStrings("fizz.buzz", BoundedFmtSpec("{s}.{s}").fmt(.{ "foo", "buzz" }).constSlice());
+        /// ```
+        pub inline fn fmt(args: anytype) BoundedArray(@TypeOf(args)) {
+            var out: std.BoundedArray(u8, fmtLen(@TypeOf(args))) = .{};
+            _ = fmtInto(args, &out);
+            return out;
+        }
+
+        /// Clears `out`, and writes the equivalent of `fmt` to it, returning the slice (also accessible as `out.slice()`).
+        /// For example:
+        /// ```zig
+        /// const Spec = BoundedFmtSpec("{s}.{s}");
+        /// var str: Spec.BoundedArrayValue(.{ "foo", "buzz" }) = .{};
+        /// try expectEqualStrings("fizz.buzz", Spec.fmtInto(.{ "foo", "buzz" }, &str));
+        /// ```
+        pub inline fn fmtInto(args: anytype, out: *BoundedArray(@TypeOf(args))) []u8 {
+            out.* = .{};
+            std.fmt.format(out.writer(), fmt_str, args) catch unreachable;
+            return out.slice();
+        }
+    };
 }
 
 /// Returns a wrapper around the bounded array which will be usable as an argument
-/// to `boundedFmt` and `boundedLenValue`.
+/// to `BoundedSpec(spec)` functions.
 pub inline fn boundedString(
     /// `*const std.BoundedArray(u8, capacity)`
     bounded: anytype,
 ) if (sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*))) |ba_info| BoundedString(ba_info.capacity) else noreturn {
     const lazy = struct {
-        const compile_err: noreturn = @compileError("Expected `std.BoundedArray(u8, capacity)`, got " ++ @typeName(@TypeOf(bounded.*)));
+        const compile_err = "Expected `std.BoundedArray(u8, capacity)`, got " ++ @typeName(@TypeOf(bounded.*));
     };
-    const ba_info = sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*)) orelse lazy.compile_err;
-    if (ba_info.Elem != u8) lazy.compile_err;
+    const ba_info = sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*)) orelse @compileError(lazy.compile_err);
+    if (ba_info.Elem != u8) @compileError(lazy.compile_err);
     return .{ .bounded = bounded };
 }
 
-/// A wrapper around a `*const std.BoundedArray(u8, capacity)`, which is
-/// usable as an argument type by `boundedLen`.
+/// A wrapper around a `*const std.BoundedArray(u8, capacity)` which is
+/// usable as an argument type by `BoundedSpec(spec)` functions.
 pub fn BoundedString(comptime capacity: usize) type {
     return struct {
         bounded: *const std.BoundedArray(u8, capacity),
@@ -96,6 +104,21 @@ pub fn BoundedString(comptime capacity: usize) type {
             try writer.writeAll(str.bounded.constSlice());
         }
     };
+}
+
+/// Returns an instance of the tuple of type `Args`, wherein each
+/// element of the tuple possesses the maximum value applicable
+/// to the type of the element.
+inline fn maxArgs(comptime Args: type) Args {
+    comptime {
+        var max_args: Args = undefined;
+        for (@typeInfo(Args).Struct.fields) |field| {
+            if (field.is_comptime) continue;
+            const ptr = &@field(max_args, field.name);
+            ptr.* = maxArg(field.type);
+        }
+        return max_args;
+    }
 }
 
 inline fn maxArg(comptime T: type) T {

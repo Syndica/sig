@@ -954,7 +954,7 @@ pub const GossipService = struct {
         // send pings to peers
         var pings_to_send_out = ping_cache_result.pings;
         defer pings_to_send_out.deinit();
-        try self.sendPings(pings_to_send_out);
+        try self.sendPings(pings_to_send_out.items);
 
         // reset push active set
         var active_set_lock = self.active_set_rw.write();
@@ -1108,11 +1108,9 @@ pub const GossipService = struct {
 
         // filter out peers who have responded to pings
         const ping_cache_result = blk: {
-            var ping_cache, var ping_cache_lg = self.ping_cache_rw.writeWithLock();
+            const ping_cache, var ping_cache_lg = self.ping_cache_rw.writeWithLock();
             defer ping_cache_lg.unlock();
-
-            const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers);
-            break :blk result;
+            break :blk try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers);
         };
         var valid_gossip_peer_indexs = ping_cache_result.valid_peers;
         defer valid_gossip_peer_indexs.deinit();
@@ -1120,7 +1118,7 @@ pub const GossipService = struct {
         // send pings to peers
         var pings_to_send_out = ping_cache_result.pings;
         defer pings_to_send_out.deinit();
-        try self.sendPings(pings_to_send_out);
+        try self.sendPings(pings_to_send_out.items);
 
         const should_send_to_entrypoint = entrypoint_index != -1;
         const num_peers = valid_gossip_peer_indexs.items.len;
@@ -1293,6 +1291,7 @@ pub const GossipService = struct {
 
             var peers = try ArrayList(ThreadSafeContactInfo).initCapacity(self.allocator, pull_requests.items.len);
             defer peers.deinit();
+
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
 
@@ -1308,7 +1307,7 @@ pub const GossipService = struct {
             const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers.items);
             defer result.pings.deinit();
 
-            try self.sendPings(result.pings);
+            try self.sendPings(result.pings.items);
 
             break :blk result.valid_peers;
         };
@@ -1820,12 +1819,9 @@ pub const GossipService = struct {
     /// serializes a list of ping messages into Packets and sends them out
     pub fn sendPings(
         self: *Self,
-        pings: ArrayList(PingAndSocketAddr),
+        pings: []const PingAndSocketAddr,
     ) error{ OutOfMemory, ChannelClosed, SerializationError }!void {
-        const n_pings = pings.items.len;
-        if (n_pings == 0) return;
-
-        for (pings.items) |ping_and_addr| {
+        for (pings) |ping_and_addr| {
             const message = GossipMessage{ .PingMessage = ping_and_addr.ping };
 
             var packet = Packet.default();

@@ -377,9 +377,9 @@ pub const DiskMemoryAllocator = struct {
         });
     }
 
-    const file_name_max_len = sig.utils.fmt.boundedLenValue("bin_{d}", .{std.math.maxInt(u32)});
-    inline fn fileNameBounded(file_index: u32) std.BoundedArray(u8, file_name_max_len) {
-        return sig.utils.fmt.boundedFmt("bin_{d}", .{file_index});
+    const FileNameFmtSpec = sig.utils.fmt.BoundedSpec("bin_{d}");
+    inline fn fileNameBounded(file_index: u32) FileNameFmtSpec.BoundedArray(struct { u32 }) {
+        return FileNameFmtSpec.fmt(.{file_index});
     }
 };
 
