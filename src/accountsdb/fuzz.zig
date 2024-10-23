@@ -56,7 +56,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var std_logger = try StandardErrLogger.init(.{
         .allocator = allocator,
         .max_level = Level.debug,
-        .max_buffer = 1 << 20,
+        .max_buffer = 1 << 30, // we have a lot of logs
     });
     defer std_logger.deinit();
 
@@ -113,8 +113,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             .exit = exit,
             .slots_per_full_snapshot = 50_000,
             .slots_per_incremental_snapshot = 5_000,
-            .zstd_nb_workers = 0,
-            // .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0), // TODO: breaks ??
+            // .zstd_nb_workers = 0,
+            .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0), // TODO: breaks ??
         },
     });
     errdefer {
@@ -177,7 +177,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     try tracked_accounts.put(tracked_account.pubkey, tracked_account);
                     try pubkeys_this_slot.put(pubkey.*, {});
 
-                    std.debug.print("put account @ slot {d}: {any}\n", .{ slot, tracked_account });
+                    // // NOTE: useful for debugging
+                    // std.debug.print("put account @ slot {d}: {any}\n", .{ slot, tracked_account });
                 }
                 defer for (accounts) |account| account.deinit(allocator);
 

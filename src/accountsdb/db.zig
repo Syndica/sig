@@ -1213,8 +1213,7 @@ pub const AccountsDB = struct {
                     const unclean_file_id = self.flushSlot(flush_slot) catch |err| {
                         // flush fail = loss of account data on slot -- should never happen
                         self.logger.err().logf("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
-                        return err;
-                        // continue;
+                        continue;
                     };
                     unclean_account_files.appendAssumeCapacity(unclean_file_id);
                     largest_flushed_slot = @max(largest_flushed_slot, flush_slot);
@@ -2047,7 +2046,6 @@ pub const AccountsDB = struct {
 
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
-        std.debug.print("get_account ref {any}: {any}\n", .{ pubkey.*, max_ref });
         const account = try self.getAccountFromRef(max_ref);
 
         return account;
