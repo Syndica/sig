@@ -163,6 +163,12 @@ pub const AccountsDB = struct {
 
         const metrics = try AccountsDBMetrics.init();
 
+        // NOTE: we need the accounts directory to exist to create new account files correctly
+        snapshot_dir.makePath("accounts") catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
+
         return .{
             .allocator = allocator,
             .account_index = account_index,
@@ -273,11 +279,6 @@ pub const AccountsDB = struct {
         // used to merge thread results
         const n_combine_threads = n_threads;
 
-        // ensure accounts/ exists
-        self.snapshot_dir.makePath("accounts") catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => |e| return e,
-        };
         var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
         defer accounts_dir.close();
 
@@ -1212,7 +1213,8 @@ pub const AccountsDB = struct {
                     const unclean_file_id = self.flushSlot(flush_slot) catch |err| {
                         // flush fail = loss of account data on slot -- should never happen
                         self.logger.err().logf("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
-                        continue;
+                        return err;
+                        // continue;
                     };
                     unclean_account_files.appendAssumeCapacity(unclean_file_id);
                     largest_flushed_slot = @max(largest_flushed_slot, flush_slot);
@@ -1370,7 +1372,8 @@ pub const AccountsDB = struct {
             std.debug.assert(did_update);
         }
 
-        self.logger.debug().logf("flushed {} accounts, totalling size {}", .{ account_file.number_of_accounts, size });
+        // TODO: prom metrics
+        // self.logger.debug().logf("flushed {} accounts, totalling size {}", .{ account_file.number_of_accounts, size });
 
         // remove old references
         {
@@ -2042,9 +2045,21 @@ pub const AccountsDB = struct {
 
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
+        std.debug.print("get_account ref {any}: {any}\n", .{pubkey.*, max_ref});
         const account = try self.getAccountFromRef(max_ref);
 
         return account;
+    }
+
+    pub fn getAccountAndReference(self: *Self, pubkey: *const Pubkey) !struct{ Account, AccountRef } {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
+        defer lock.unlock();
+
+        // NOTE: this will always be a safe unwrap since both bounds are null
+        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
+        const account = try self.getAccountFromRef(max_ref);
+
+        return .{ account, max_ref.* };
     }
 
     pub const GetAccountError = GetAccountFromRefError || error{PubkeyNotInIndex};
