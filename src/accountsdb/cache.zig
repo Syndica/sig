@@ -114,6 +114,7 @@ pub const AccountsCache = struct {
             if (existing_entry.slot < slot) {
                 existing_entry.releaseOrDestroy(self.allocator);
 
+                // TODO: this could be turned into one allocation
                 const new_entry = try self.allocator.create(CachedAccount);
                 new_entry.* = try CachedAccount.init(self.allocator, account, slot);
                 _ = self.lru.put(pubkey, new_entry);

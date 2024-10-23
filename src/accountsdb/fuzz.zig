@@ -98,6 +98,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .{
             .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
             .use_disk_index = use_disk,
+            .lru_size = 10_000,
             // TODO: other things we can fuzz (number of shards, ...)
         },
         null,

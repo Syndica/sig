@@ -3997,8 +3997,8 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 };
 
 pub const BenchmarkAccountsDB = struct {
-    pub const min_iterations = 10;
-    pub const max_iterations = 10;
+    pub const min_iterations = 1;
+    pub const max_iterations = 1;
 
     pub const MemoryType = enum {
         ram,
@@ -4024,27 +4024,27 @@ pub const BenchmarkAccountsDB = struct {
     };
 
     pub const args = [_]BenchArgs{
-        // BenchArgs{
-        //     .n_accounts = 100_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .ram,
-        //     .index = .ram,
-        //     .name = "100k accounts (1_slot - ram index - ram accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 100_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .ram,
-        //     .index = .disk,
-        //     .name = "100k accounts (1_slot - disk index - ram accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 100_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .disk,
-        //     .name = "100k accounts (1_slot - disk index - disk accounts)",
-        // },
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .ram,
+            .index = .ram,
+            .name = "100k accounts (1_slot - ram index - ram accounts - lru disabled)",
+        },
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .ram,
+            .index = .disk,
+            .name = "100k accounts (1_slot - disk index - ram accounts - lru disabled)",
+        },
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .disk,
+            .name = "100k accounts (1_slot - disk index - disk accounts - lru disabled)",
+        },
 
         BenchArgs{
             .n_accounts = 100_000,
@@ -4307,27 +4307,40 @@ pub const BenchmarkAccountsDB = struct {
             std.debug.print("WRITE: {d}\n", .{elapsed});
         }
 
-        // Read every account a random number of times, SD = 1, mean = 5
-        // TODO: a more realistic access distribution would be an improvement
-        const pubkey_reads_remaining = try allocator.alloc(u8, n_accounts);
-        for (pubkey_reads_remaining) |*reads_remaining| reads_remaining.* = @intFromFloat(random.floatNorm(f32) + 5);
+        // set up a WeightedIndexer to give our accounts normally distributed access probabilities.
+        // this models how some accounts are far more commonly read than others.
+        // TODO: is this distribution accurate? Probably not, but I don't have the data.
+        const pubkeys_read_weighting = try allocator.alloc(f32, n_accounts);
+        for (pubkeys_read_weighting) |*read_probability| read_probability.* = random.floatNorm(f32);
+        var indexer = try WeightedIndexer.init(allocator, pubkeys_read_weighting);
+
+        // "warm up" accounts cache
+        {
+            var i: usize = 0;
+            while (i < n_accounts) : (i += 1) {
+                const pubkey_idx = indexer.nextIndex(random);
+                _ = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
+            }
+        }
+
+        // reset cache hits/misses
+        if (accounts_db.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+            const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+            defer accounts_cache_lg.unlock();
+            accounts_cache.cache_hits = 0;
+            accounts_cache.cache_misses = 0;
+        }
 
         var timer = try sig.time.Timer.start();
 
-        var nonzero_reads_remaining = true;
-        while (nonzero_reads_remaining) {
-            nonzero_reads_remaining = false;
-            for (pubkeys, pubkey_reads_remaining, 0..n_accounts) |*pubkey, reads_remaining, i| {
-                if (reads_remaining < 1) continue;
-                if (reads_remaining >= 2) nonzero_reads_remaining = true;
-
-                const account = try accounts_db.getAccount(pubkey);
-                if (account.data.len != (i % 1_000)) {
-                    std.debug.panic("account data len dnm {}: {} != {}", .{ i, account.data.len, (i % 1_000) });
-                }
+        const do_read_count = n_accounts;
+        var i: usize = 0;
+        while (i < do_read_count) : (i += 1) {
+            const pubkey_idx = indexer.nextIndex(random);
+            const account = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
+            if (account.data.len != (pubkey_idx % 1_000)) {
+                std.debug.panic("account data len dnm {}: {} != {}", .{ pubkey_idx, account.data.len, (pubkey_idx % 1_000) });
             }
-
-            for (pubkey_reads_remaining) |*reads_remaining| reads_remaining.* -|= 1;
         }
 
         const elapsed = timer.read();
@@ -4340,11 +4353,83 @@ pub const BenchmarkAccountsDB = struct {
             const cache_misses = accounts_cache.cache_misses;
 
             std.debug.print(
-                "cache hits/misses : {}/{} ({d:.2}%)\n",
-                .{ cache_hits, cache_misses, @as(f32, @floatFromInt(cache_hits * 100)) / @as(f32, @floatFromInt(cache_hits + cache_misses)) },
+                "cache hits/misses : {: >7}/{: <7} ({d:.2}%) - total cache accesses: {}\n",
+                .{
+                    cache_hits,
+                    cache_misses,
+                    @as(f32, @floatFromInt(cache_hits * 100)) / @as(f32, @floatFromInt(cache_hits + cache_misses)),
+                    cache_hits + cache_misses,
+                },
             );
         }
 
         return elapsed;
+    }
+};
+
+/// Implementation of Alastair J. Walker's "Alias method".
+/// Once constructed, this allows for efficiently getting pseudorandom indeces
+/// that fit the given probabilities.
+const WeightedIndexer = struct {
+    probability: []const f32,
+    alias: []const usize,
+    fn init(allocator: std.mem.Allocator, probabilities: []f32) !WeightedIndexer {
+        const n = probabilities.len;
+        const average: f32 = 1.0 / @as(f32, @floatFromInt(n));
+
+        const probability = try allocator.alloc(f32, n);
+        errdefer allocator.free(probability);
+        @memset(probability, 0);
+
+        const alias = try allocator.alloc(usize, n);
+        errdefer allocator.free(alias);
+        @memset(alias, 0);
+
+        var small = std.ArrayList(usize).init(allocator);
+        errdefer small.deinit();
+        var large = std.ArrayList(usize).init(allocator);
+        errdefer large.deinit();
+
+        for (probabilities, 0..) |p, i| {
+            if (p >= average) {
+                try large.append(i);
+            } else {
+                try small.append(i);
+            }
+        }
+
+        while (small.items.len > 0 and large.items.len > 0) {
+            const less = small.pop();
+            const more = large.pop();
+
+            probability[less] = probabilities[less] * @as(f32, @floatFromInt(n));
+            alias[less] = more;
+
+            if (probabilities[more] >= average) {
+                try large.append(more);
+            } else {
+                try small.append(more);
+            }
+        }
+
+        while (small.popOrNull()) |less| probability[less] = 1.0;
+        while (large.popOrNull()) |more| probability[more] = 1.0;
+        small.deinit();
+        large.deinit();
+
+        return .{
+            .probability = probability,
+            .alias = alias,
+        };
+    }
+
+    fn nextIndex(self: WeightedIndexer, random: std.Random) usize {
+        const column = random.intRangeLessThan(usize, 0, self.probability.len);
+
+        if (random.float(f32) < self.probability[column]) {
+            return column;
+        } else {
+            return self.alias[column];
+        }
     }
 };
