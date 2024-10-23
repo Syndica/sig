@@ -91,9 +91,7 @@ pub const SocketAddr = union(enum(u8)) {
             }
         }
 
-        if (!colon_found) {
-            return error.MissingPort;
-        }
+        if (!colon_found) return error.MissingPort;
 
         for (bytes) |byte| {
             switch (byte) {
@@ -132,9 +130,7 @@ pub const SocketAddr = union(enum(u8)) {
                 },
             }
         }
-        if (!parsed_ip) {
-            return error.InvalidIpv4;
-        }
+        if (!parsed_ip) return error.InvalidIpv4;
 
         return Self{ .V4 = .{
             .ip = Ipv4Addr.init(octs[0], octs[1], octs[2], octs[3]),
