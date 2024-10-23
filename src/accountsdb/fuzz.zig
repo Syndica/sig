@@ -56,7 +56,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var std_logger = try StandardErrLogger.init(.{
         .allocator = allocator,
         .max_level = Level.debug,
-        .max_buffer = 1 << 30, // we have a lot of logs
+        .max_buffer = 1 << 20,
     });
     defer std_logger.deinit();
 
@@ -64,10 +64,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const use_disk = random.boolean();
 
-    var test_data_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
+    var test_data_dir = try std.fs.cwd().makeOpenPath(sig.FUZZ_DATA_DIR, .{});
     defer test_data_dir.close();
 
-    const snapshot_dir_name = "accountsdb_fuzz";
+    const snapshot_dir_name = "accountsdb";
     var snapshot_dir = try test_data_dir.makeOpenPath(snapshot_dir_name, .{});
     defer snapshot_dir.close();
     defer {
@@ -113,8 +113,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             .exit = exit,
             .slots_per_full_snapshot = 50_000,
             .slots_per_incremental_snapshot = 5_000,
-            // .zstd_nb_workers = 0,
-            .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0), // TODO: breaks ??
+            .zstd_nb_workers = 0,
+            // .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0), // TODO: breaks ??
         },
     });
     errdefer {

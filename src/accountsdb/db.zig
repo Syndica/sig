@@ -1415,8 +1415,8 @@ pub const AccountsDB = struct {
     } {
         var timer = try sig.time.Timer.start();
 
+        const number_of_files = unclean_account_files.len;
         defer {
-            const number_of_files = unclean_account_files.len;
             self.metrics.number_files_cleaned.add(number_of_files);
         }
 
@@ -1541,9 +1541,12 @@ pub const AccountsDB = struct {
             }
             references_to_delete.clearRetainingCapacity();
             self.metrics.clean_references_deleted.set(references_to_delete.items.len);
+        }
+
+        if (number_of_files > 0) {
             self.logger.debug().logf(
-                "cleaned slot {} - old_state: {}, zero_lamports: {}",
-                .{ account_file.slot, num_old_states, num_zero_lamports },
+                "cleaned {} slots - old_state: {}, zero_lamports: {}",
+                .{ number_of_files, num_old_states, num_zero_lamports },
             );
         }
 
@@ -1651,8 +1654,8 @@ pub const AccountsDB = struct {
     ) !struct { num_accounts_deleted: usize } {
         var timer = try sig.time.Timer.start();
 
+        const number_of_files = shrink_account_files.len;
         defer {
-            const number_of_files = shrink_account_files.len;
             self.metrics.number_files_shrunk.add(number_of_files);
         }
 
@@ -1661,6 +1664,7 @@ pub const AccountsDB = struct {
 
         try delete_account_files.ensureUnusedCapacity(shrink_account_files.len);
 
+        var total_accounts_deleted_size: u64 = 0;
         var total_accounts_deleted: u64 = 0;
         for (shrink_account_files) |shrink_file_id| {
             self.file_map_fd_rw.lockShared();
@@ -1673,7 +1677,6 @@ pub const AccountsDB = struct {
             };
 
             const slot = shrink_account_file.slot;
-            self.logger.debug().logf("shrinking slot: {}...", .{slot});
 
             // compute size of alive accounts (read)
             var is_alive_flags = try std.ArrayList(bool).initCapacity(
@@ -1714,14 +1717,11 @@ pub const AccountsDB = struct {
             // if there are no dead accounts, it should have not been queued for shrink
             std.debug.assert(accounts_dead_count > 0);
             total_accounts_deleted += accounts_dead_count;
+            total_accounts_deleted_size += accounts_dead_size;
 
             self.metrics.shrink_alive_accounts.observe(accounts_alive_count);
             self.metrics.shrink_dead_accounts.observe(accounts_dead_count);
             self.metrics.shrink_file_shrunk_by.observe(accounts_dead_size);
-
-            self.logger.debug().logf("n alive accounts: {}", .{accounts_alive_count});
-            self.logger.debug().logf("n dead accounts: {}", .{accounts_dead_count});
-            self.logger.debug().logf("shrunk by: {}", .{accounts_dead_size});
 
             // alloc account file for accounts
             const new_file, const new_file_id, const new_memory = try self.createAccountFile(
@@ -1828,6 +1828,9 @@ pub const AccountsDB = struct {
             }
         }
 
+        if (number_of_files > 0) {
+            self.logger.info().logf("shrinked {} account files, total accounts deleted: {} ({} bytes)", .{ number_of_files, total_accounts_deleted, total_accounts_deleted_size });
+        }
         self.metrics.time_shrink.observe(timer.read().asNanos());
 
         return .{
