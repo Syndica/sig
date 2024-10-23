@@ -1893,8 +1893,9 @@ pub const AccountsDB = struct {
                 };
 
                 if (maybe_cached_account) |cached_account| {
-                    std.debug.print("reading account from cache: {any}\n", .{cached_account.account}); // TODO: remove
-                    return try cached_account.account.clone(self.allocator);
+                    const account = try cached_account.account.clone(self.allocator);
+                    cached_account.releaseOrDestroy(self.allocator);
+                    return account;
                 } else {
                     const account = try self.getAccountInFile(
                         self.allocator,
