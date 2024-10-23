@@ -72,7 +72,7 @@ pub const AccountsDB = struct {
     unrooted_accounts: RwMux(SlotPubkeyAccounts),
 
     // pubkey->account LRU maps
-    accounts_cache: RwMux(AccountsCache),
+    maybe_accounts_cache_mux: ?RwMux(AccountsCache),
 
     /// NOTE: see accountsdb/readme.md for more details on how these are used
     file_map: RwMux(FileMap) = RwMux(FileMap).init(.{}),
@@ -134,6 +134,8 @@ pub const AccountsDB = struct {
     pub const InitConfig = struct {
         number_of_index_shards: usize,
         use_disk_index: bool,
+        /// Limit of cached accounts. Use null to disable accounts caching.
+        lru_size: ?usize,
     };
 
     pub fn init(
@@ -157,9 +159,17 @@ pub const AccountsDB = struct {
         );
         errdefer account_index.deinit(true);
 
-        // init cache
-        var accounts_cache = try AccountsCache.init(allocator, 1_000); // TODO: make configurable
-        errdefer accounts_cache.deinit();
+        // init accounts cache
+        var maybe_accounts_cache = if (config.lru_size) |lru_size|
+            try AccountsCache.init(allocator, lru_size)
+        else
+            null;
+        errdefer if (maybe_accounts_cache) |*accounts_cache| accounts_cache.deinit();
+
+        const maybe_accounts_cache_mux = if (maybe_accounts_cache) |accounts_cache|
+            RwMux(AccountsCache).init(accounts_cache)
+        else
+            null;
 
         const metrics = try AccountsDBMetrics.init();
 
@@ -169,7 +179,7 @@ pub const AccountsDB = struct {
             .logger = logger,
             .config = config,
             .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(allocator)),
-            .accounts_cache = RwMux(AccountsCache).init(accounts_cache),
+            .maybe_accounts_cache_mux = maybe_accounts_cache_mux,
             .snapshot_dir = snapshot_dir,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .metrics = metrics,
@@ -180,8 +190,8 @@ pub const AccountsDB = struct {
     pub fn deinit(self: *Self) void {
         self.account_index.deinit(true);
 
-        {
-            const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
+        if (self.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+            const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
             defer accounts_cache_lg.unlock();
             accounts_cache.deinit();
         }
@@ -343,7 +353,7 @@ pub const AccountsDB = struct {
             // what happens:
             // 2) and 3) will be copied into the main index thread and so we can deinit them
             // 1) will continue to exist on the heap and its ownership is given
-            // the the main accounts-db index
+            // the main accounts-db index
             for (loading_threads.items) |*loading_thread| {
                 // NOTE: deinit hashmap, dont close the files
                 const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
@@ -354,9 +364,11 @@ pub const AccountsDB = struct {
                 loading_thread.account_index.reference_allocator = .{ .ram = per_thread_allocator }; // dont destory the **disk** allocator (since its shared)
                 loading_thread.account_index.deinit(false);
 
-                const accounts_cache, var accounts_cache_lg = loading_thread.accounts_cache.writeWithLock();
-                defer accounts_cache_lg.unlock();
-                accounts_cache.deinit();
+                if (loading_thread.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+                    const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+                    defer accounts_cache_lg.unlock();
+                    accounts_cache.deinit();
+                }
             }
             loading_threads.deinit();
         }
@@ -1882,7 +1894,9 @@ pub const AccountsDB = struct {
         switch (account_ref.location) {
             .File => |ref_info| {
                 const account_in_cache = blk: {
-                    const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
+                    const accounts_cache_mux = &(self.maybe_accounts_cache_mux orelse break :blk null);
+
+                    const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
                     defer accounts_cache_lg.unlock();
 
                     const cached_account = accounts_cache.get(account_ref.pubkey, account_ref.slot) orelse break :blk null;
@@ -1898,9 +1912,11 @@ pub const AccountsDB = struct {
                         ref_info.offset,
                     );
 
-                    const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
-                    defer accounts_cache_lg.unlock();
-                    try accounts_cache.put(account_ref.pubkey, account_ref.slot, account);
+                    if (self.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+                        const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+                        defer accounts_cache_lg.unlock();
+                        try accounts_cache.put(account_ref.pubkey, account_ref.slot, account);
+                    }
 
                     return account;
                 }
@@ -3094,6 +3110,7 @@ test "testWriteSnapshot" {
     var accounts_db = try AccountsDB.init(allocator, .noop, tmp_snap_dir, .{
         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
         .use_disk_index = false,
+        .lru_size = 10_000,
     }, null);
     defer accounts_db.deinit();
 
@@ -3162,6 +3179,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     var accounts_db = try AccountsDB.init(allocator, logger, dir, .{
         .number_of_index_shards = 4,
         .use_disk_index = use_disk,
+        .lru_size = null,
     }, null);
     errdefer accounts_db.deinit();
 
@@ -3229,6 +3247,7 @@ test "geyser stream on load" {
         .{
             .number_of_index_shards = 4,
             .use_disk_index = false,
+            .lru_size = null,
         },
         geyser_writer,
     );
@@ -3399,6 +3418,7 @@ test "flushing slots works" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_shards = 4,
         .use_disk_index = false,
+        .lru_size = null,
     }, null);
     defer accounts_db.deinit();
 
@@ -3450,6 +3470,7 @@ test "purge accounts in cache works" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_shards = 4,
         .use_disk_index = false,
+        .lru_size = null,
     }, null);
     defer accounts_db.deinit();
 
@@ -3507,6 +3528,7 @@ test "clean to shrink account file works with zero-lamports" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_shards = 4,
         .use_disk_index = false,
+        .lru_size = null,
     }, null);
     defer accounts_db.deinit();
 
@@ -3583,6 +3605,7 @@ test "clean to shrink account file works" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_shards = 4,
         .use_disk_index = false,
+        .lru_size = null,
     }, null);
     defer accounts_db.deinit();
 
@@ -3651,6 +3674,7 @@ test "full clean account file works" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_shards = 4,
         .use_disk_index = false,
+        .lru_size = null,
     }, null);
     defer accounts_db.deinit();
 
@@ -3736,6 +3760,7 @@ test "shrink account file works" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_shards = 4,
         .use_disk_index = false,
+        .lru_size = null,
     }, null);
     defer accounts_db.deinit();
 
@@ -3948,6 +3973,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
             .number_of_index_shards = 32,
             .use_disk_index = bench_args.use_disk,
+            .lru_size = 10_000,
         }, null);
         defer accounts_db.deinit();
 
@@ -3991,6 +4017,8 @@ pub const BenchmarkAccountsDB = struct {
         /// the number of accounts to prepopulate the index with as a multiple of n_accounts
         /// ie, if n_accounts = 100 and n_accounts_multiple = 10, then the index will have 10x100=1000 accounts prepopulated
         n_accounts_multiple: usize = 0,
+        /// how many accounts the accounts_cache can hold. Null to disable cache.
+        lru_size: ?usize = null,
         /// the name of the benchmark
         name: []const u8 = "",
     };
@@ -4001,28 +4029,55 @@ pub const BenchmarkAccountsDB = struct {
             .slot_list_len = 1,
             .accounts = .ram,
             .index = .ram,
-            .name = "100k accounts (1_slot - ram index - ram accounts)",
+            .name = "100k accounts (1_slot - ram index - ram accounts - lru disabled)",
         },
         BenchArgs{
             .n_accounts = 100_000,
             .slot_list_len = 1,
             .accounts = .ram,
             .index = .disk,
-            .name = "100k accounts (1_slot - disk index - ram accounts)",
-        },
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .ram,
-            .name = "100k accounts (1_slot - ram index - disk accounts)",
+            .name = "100k accounts (1_slot - disk index - ram accounts - lru disabled)",
         },
         BenchArgs{
             .n_accounts = 100_000,
             .slot_list_len = 1,
             .accounts = .disk,
             .index = .disk,
-            .name = "100k accounts (1_slot - disk index - disk accounts)",
+            .name = "100k accounts (1_slot - disk index - disk accounts - lru disabled)",
+        },
+
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "100k accounts (1_slot - ram index - disk accounts - lru disabled)",
+        },
+
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .lru_size = 1_000,
+            .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=1_000)",
+        },
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .lru_size = 10_000,
+            .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=10_000)",
+        },
+
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .lru_size = 100_000,
+            .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=100_000)",
         },
 
         // // test accounts in ram
@@ -4128,6 +4183,7 @@ pub const BenchmarkAccountsDB = struct {
         var accounts_db: AccountsDB = try AccountsDB.init(allocator, logger, snapshot_dir, .{
             .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
             .use_disk_index = bench_args.index == .disk,
+            .lru_size = bench_args.lru_size,
         }, null);
         defer accounts_db.deinit();
 
@@ -4251,15 +4307,129 @@ pub const BenchmarkAccountsDB = struct {
             std.debug.print("WRITE: {d}\n", .{elapsed});
         }
 
-        var timer = try sig.time.Timer.start();
-        for (0..n_accounts) |i| {
-            const pubkey = &pubkeys[i];
-            const account = try accounts_db.getAccount(pubkey);
-            if (account.data.len != (i % 1_000)) {
-                std.debug.panic("account data len dnm {}: {} != {}", .{ i, account.data.len, (i % 1_000) });
+        // set up a WeightedIndexer to give our accounts normally distributed access probabilities.
+        // this models how some accounts are far more commonly read than others.
+        // TODO: is this distribution accurate? Probably not, but I don't have the data.
+        const pubkeys_read_weighting = try allocator.alloc(f32, n_accounts);
+        for (pubkeys_read_weighting) |*read_probability| read_probability.* = random.floatNorm(f32);
+        var indexer = try WeightedIndexer.init(allocator, pubkeys_read_weighting);
+
+        // "warm up" accounts cache
+        {
+            var i: usize = 0;
+            while (i < n_accounts) : (i += 1) {
+                const pubkey_idx = indexer.nextIndex(random);
+                _ = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
             }
         }
+
+        // reset cache hits/misses
+        if (accounts_db.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+            const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+            defer accounts_cache_lg.unlock();
+            accounts_cache.cache_hits = 0;
+            accounts_cache.cache_misses = 0;
+        }
+
+        var timer = try sig.time.Timer.start();
+
+        const do_read_count = n_accounts;
+        var i: usize = 0;
+        while (i < do_read_count) : (i += 1) {
+            const pubkey_idx = indexer.nextIndex(random);
+            const account = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
+            if (account.data.len != (pubkey_idx % 1_000)) {
+                std.debug.panic("account data len dnm {}: {} != {}", .{ pubkey_idx, account.data.len, (pubkey_idx % 1_000) });
+            }
+        }
+
         const elapsed = timer.read();
+
+        if (accounts_db.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+            const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+            defer accounts_cache_lg.unlock();
+
+            const cache_hits = accounts_cache.cache_hits;
+            const cache_misses = accounts_cache.cache_misses;
+
+            std.debug.print(
+                "cache hits/misses : {: >7}/{: <7} ({d:.2}%) - total cache accesses: {}\n",
+                .{
+                    cache_hits,
+                    cache_misses,
+                    @as(f32, @floatFromInt(cache_hits * 100)) / @as(f32, @floatFromInt(cache_hits + cache_misses)),
+                    cache_hits + cache_misses,
+                },
+            );
+        }
+
         return elapsed;
+    }
+};
+
+/// Implementation of Alastair J. Walker's "Alias method".
+/// Once constructed, this allows for efficiently getting pseudorandom indeces
+/// that fit the given probabilities.
+const WeightedIndexer = struct {
+    probability: []const f32,
+    alias: []const usize,
+    fn init(allocator: std.mem.Allocator, probabilities: []f32) !WeightedIndexer {
+        const n = probabilities.len;
+        const average: f32 = 1.0 / @as(f32, @floatFromInt(n));
+
+        const probability = try allocator.alloc(f32, n);
+        errdefer allocator.free(probability);
+        @memset(probability, 0);
+
+        const alias = try allocator.alloc(usize, n);
+        errdefer allocator.free(alias);
+        @memset(alias, 0);
+
+        var small = std.ArrayList(usize).init(allocator);
+        errdefer small.deinit();
+        var large = std.ArrayList(usize).init(allocator);
+        errdefer large.deinit();
+
+        for (probabilities, 0..) |p, i| {
+            if (p >= average) {
+                try large.append(i);
+            } else {
+                try small.append(i);
+            }
+        }
+
+        while (small.items.len > 0 and large.items.len > 0) {
+            const less = small.pop();
+            const more = large.pop();
+
+            probability[less] = probabilities[less] * @as(f32, @floatFromInt(n));
+            alias[less] = more;
+
+            if (probabilities[more] >= average) {
+                try large.append(more);
+            } else {
+                try small.append(more);
+            }
+        }
+
+        while (small.popOrNull()) |less| probability[less] = 1.0;
+        while (large.popOrNull()) |more| probability[more] = 1.0;
+        small.deinit();
+        large.deinit();
+
+        return .{
+            .probability = probability,
+            .alias = alias,
+        };
+    }
+
+    fn nextIndex(self: WeightedIndexer, random: std.Random) usize {
+        const column = random.intRangeLessThan(usize, 0, self.probability.len);
+
+        if (random.float(f32) < self.probability[column]) {
+            return column;
+        } else {
+            return self.alias[column];
+        }
     }
 };

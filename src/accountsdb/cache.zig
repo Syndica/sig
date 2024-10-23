@@ -13,6 +13,8 @@ const Slot = sig.core.Slot;
 pub const AccountsCache = struct {
     lru: LRU,
     allocator: std.mem.Allocator,
+    cache_hits: usize = 0,
+    cache_misses: usize = 0,
 
     /// Atomically refcounted account
     pub const CachedAccount = struct {
@@ -21,23 +23,42 @@ pub const AccountsCache = struct {
         /// the slot that this version of the account originates from
         slot: Slot,
 
-        pub fn init(allocator: std.mem.Allocator, account: Account, slot: Slot) error{OutOfMemory}!CachedAccount {
-            return .{
-                .account = try account.clone(allocator),
+        /// Makes use of the fact that CachedAccount needs to live on the heap & shares its lifetime
+        /// with .ref_count in order to allocate once instead of twice.
+        pub fn initCreate(allocator: std.mem.Allocator, account: Account, slot: Slot) error{OutOfMemory}!*CachedAccount {
+            const buf = try allocator.alignedAlloc(
+                u8,
+                @alignOf(CachedAccount),
+                @sizeOf(CachedAccount) + account.data.len,
+            );
+            const new_entry = @as(*CachedAccount, @ptrCast(buf.ptr));
+            const account_data = buf[@sizeOf(CachedAccount)..];
+
+            var new_account = account;
+            new_account.data = account_data;
+            @memcpy(new_account.data, account.data);
+
+            new_entry.* = .{
+                .account = new_account,
                 .ref_count = .{},
                 .slot = slot,
             };
+
+            return new_entry;
         }
 
-        pub fn deinit(self: *CachedAccount, allocator: std.mem.Allocator) void {
-            self.account.deinit(allocator);
-            self.* = undefined;
+        pub fn deinitDestroy(self: *CachedAccount, allocator: std.mem.Allocator) void {
+            const buf: []align(8) u8 = @as(
+                [*]align(8) u8,
+                @ptrCast(self),
+            )[0 .. @sizeOf(CachedAccount) + self.account.data.len];
+            @memset(buf, undefined);
+            allocator.free(buf);
         }
 
         pub fn releaseOrDestroy(self: *CachedAccount, allocator: std.mem.Allocator) void {
             if (self.ref_count.release()) {
-                self.deinit(allocator);
-                allocator.destroy(self);
+                self.deinitDestroy(allocator);
             }
         }
 
@@ -83,10 +104,15 @@ pub const AccountsCache = struct {
 
     /// User is expected to release the returned CachedAccount.
     pub fn get(self: *Self, pubkey: Pubkey, slot: Slot) ?*CachedAccount {
-        const account: *CachedAccount = self.lru.get(pubkey) orelse return null;
+        const account: *CachedAccount = self.lru.get(pubkey) orelse {
+            self.cache_misses += 1;
+            return null;
+        };
         if (account.slot == slot) {
+            self.cache_hits += 1;
             return account.copyRef();
         } else {
+            self.cache_misses += 1;
             return null;
         }
     }
@@ -107,15 +133,13 @@ pub const AccountsCache = struct {
             if (existing_entry.slot < slot) {
                 existing_entry.releaseOrDestroy(self.allocator);
 
-                const new_entry = try self.allocator.create(CachedAccount);
-                new_entry.* = try CachedAccount.init(self.allocator, account, slot);
+                const new_entry = try CachedAccount.initCreate(self.allocator, account, slot);
                 _ = self.lru.put(pubkey, new_entry);
             } else {
                 // do nothing, prefer newer slots in cache
             }
         } else {
-            const new_entry = try self.allocator.create(CachedAccount);
-            new_entry.* = try CachedAccount.init(self.allocator, account, slot);
+            const new_entry = try CachedAccount.initCreate(self.allocator, account, slot);
             _ = self.lru.put(pubkey, new_entry);
         }
     }
@@ -133,8 +157,7 @@ test "CachedAccount ref_count" {
     const account = try Account.initRandom(allocator, random, 1);
     defer account.deinit(allocator);
 
-    const cached_account = try allocator.create(AccountsCache.CachedAccount);
-    cached_account.* = try AccountsCache.CachedAccount.init(allocator, account, 1);
+    const cached_account = try AccountsCache.CachedAccount.initCreate(allocator, account, 1);
     defer cached_account.releaseOrDestroy(allocator);
 
     try std.testing.expectEqual(cached_account.ref_count.state.raw, 1);
@@ -167,6 +190,7 @@ test "AccountsCache put and get account" {
     defer if (cached_account) |cached| cached.releaseOrDestroy(allocator);
 
     try std.testing.expect(cached_account != null);
+    try std.testing.expectEqualSlices(u8, account.data, cached_account.?.account.data);
 }
 
 test "AccountsCache returns null when account is missing" {
