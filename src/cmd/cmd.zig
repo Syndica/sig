@@ -268,6 +268,14 @@ pub fn run() !void {
         .value_name = "accounts_per_file_estimate",
     };
 
+    var max_number_of_accounts_option = cli.Option{
+        .long_name = "max-number-of-accounts",
+        .help = "maximum number of accounts to store in the accounts db",
+        .value_ref = cli.mkRef(&config.current.accounts_db.max_number_of_accounts),
+        .required = false,
+        .value_name = "max_number_of_accounts",
+    };
+
     // geyser options
     var enable_geyser_option = cli.Option{
         .long_name = "enable-geyser",
@@ -378,6 +386,7 @@ pub fn run() !void {
                             &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
+                            &max_number_of_accounts_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -474,6 +483,7 @@ pub fn run() !void {
                             &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
+                            &max_number_of_accounts_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -1427,6 +1437,7 @@ fn loadSnapshot(
         .{
             .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
             .use_disk_index = config.current.accounts_db.use_disk_index,
+            .max_number_of_accounts = config.current.accounts_db.max_number_of_accounts,
         },
         geyser_writer,
     );
