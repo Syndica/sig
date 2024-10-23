@@ -1,7 +1,6 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
-const blockstore = @import("lib.zig");
-const log = @import("../trace/log.zig");
+const sig = @import("../../sig.zig");
+const ledger = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -300,7 +299,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     return struct {
         pub fn basic() !void {
             const path = test_dir ++ @src().fn_name;
-            try blockstore.tests.freshDir(path);
+            try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
             defer db.deinit();
 
@@ -321,7 +320,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
 
         pub fn @"write batch"() !void {
             const path = test_dir ++ @src().fn_name;
-            try blockstore.tests.freshDir(path);
+            try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
             defer db.deinit();
 
@@ -352,7 +351,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
 
         pub fn @"iterator forward"() !void {
             const path = test_dir ++ @src().fn_name;
-            try blockstore.tests.freshDir(path);
+            try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
             defer db.deinit();
 
@@ -382,7 +381,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
 
         pub fn @"iterator forward start exact"() !void {
             const path = test_dir ++ @src().fn_name;
-            try blockstore.tests.freshDir(path);
+            try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
             defer db.deinit();
 
@@ -409,7 +408,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
 
         pub fn @"iterator forward start between"() !void {
             const path = test_dir ++ @src().fn_name;
-            try blockstore.tests.freshDir(path);
+            try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
             defer db.deinit();
 
@@ -436,7 +435,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
 
         pub fn @"iterator reverse"() !void {
             const path = test_dir ++ @src().fn_name;
-            try blockstore.tests.freshDir(path);
+            try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
             defer db.deinit();
 
@@ -466,7 +465,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
 
         pub fn @"iterator reverse start at end"() !void {
             const path = test_dir ++ @src().fn_name;
-            try blockstore.tests.freshDir(path);
+            try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
             defer db.deinit();
 
@@ -496,7 +495,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
 
         pub fn @"iterator reverse start exact"() !void {
             const path = test_dir ++ @src().fn_name;
-            try blockstore.tests.freshDir(path);
+            try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
             defer db.deinit();
 
@@ -523,7 +522,7 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
 
         pub fn @"iterator reverse start between"() !void {
             const path = test_dir ++ @src().fn_name;
-            try blockstore.tests.freshDir(path);
+            try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
             defer db.deinit();
 

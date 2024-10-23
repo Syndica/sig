@@ -1,17 +1,18 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
+const database = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
-const BytesRef = sig.ledger.database.BytesRef;
-const ColumnFamily = sig.ledger.database.ColumnFamily;
-const IteratorDirection = sig.ledger.database.IteratorDirection;
+const BytesRef = database.interface.BytesRef;
+const ColumnFamily = database.interface.ColumnFamily;
+const IteratorDirection = database.interface.IteratorDirection;
 const Logger = sig.trace.Logger;
 const SortedMap = sig.utils.collections.SortedMap;
 
-const key_serializer = sig.ledger.database.key_serializer;
-const value_serializer = sig.ledger.database.value_serializer;
+const key_serializer = database.interface.key_serializer;
+const value_serializer = database.interface.value_serializer;
 
 pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
     return struct {
@@ -441,5 +442,5 @@ const SharedHashMap = struct {
 };
 
 test "hashmap database" {
-    try sig.ledger.database.testDatabase(SharedHashMapDB);
+    try database.interface.testDatabase(SharedHashMapDB);
 }
