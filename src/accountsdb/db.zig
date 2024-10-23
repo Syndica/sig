@@ -1884,17 +1884,17 @@ pub const AccountsDB = struct {
     pub fn getAccountFromRef(self: *Self, account_ref: *const AccountRef) !Account {
         switch (account_ref.location) {
             .File => |ref_info| {
-                const account_in_cache = blk: {
+                const maybe_cached_account = blk: {
                     const accounts_cache, var accounts_cache_lg = self.accounts_cache.writeWithLock();
                     defer accounts_cache_lg.unlock();
 
                     const cached_account = accounts_cache.get(account_ref.pubkey, account_ref.slot) orelse break :blk null;
-                    break :blk cached_account.account;
+                    break :blk cached_account;
                 };
 
-                if (account_in_cache) |account| {
-                    std.debug.print("reading account from cache: {any}\n", .{account}); // TODO: remove
-                    return account;
+                if (maybe_cached_account) |cached_account| {
+                    std.debug.print("reading account from cache: {any}\n", .{cached_account.account}); // TODO: remove
+                    return try cached_account.account.clone(self.allocator);
                 } else {
                     const account = try self.getAccountInFile(
                         self.allocator,
@@ -2046,13 +2046,13 @@ pub const AccountsDB = struct {
 
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
-        std.debug.print("get_account ref {any}: {any}\n", .{pubkey.*, max_ref});
+        std.debug.print("get_account ref {any}: {any}\n", .{ pubkey.*, max_ref });
         const account = try self.getAccountFromRef(max_ref);
 
         return account;
     }
 
-    pub fn getAccountAndReference(self: *Self, pubkey: *const Pubkey) !struct{ Account, AccountRef } {
+    pub fn getAccountAndReference(self: *Self, pubkey: *const Pubkey) !struct { Account, AccountRef } {
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
         defer lock.unlock();
 
