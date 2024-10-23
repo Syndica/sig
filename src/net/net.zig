@@ -27,9 +27,19 @@ pub const SocketAddr = union(enum(u8)) {
         };
     }
 
-    pub const ParseIpError = error{InvalidIp};
+    pub const ParseIpError = error{ InvalidIp, MissingPort };
     pub fn parse(bytes: []const u8) ParseIpError!Self {
-        return parseIpv4(bytes) catch parseIpv6(bytes) catch error.InvalidIp;
+        return parseIpv4(bytes) catch |err| switch (err) {
+            error.MissingPort => ParseIpError.MissingPort,
+            error.InvalidIpv4 => {
+                const result = parseIpv6(bytes);
+                if (result) |ipv6| {
+                    return ipv6;
+                } else |ipv6Err| switch (ipv6Err) {
+                    error.InvalidIpv6 => return ParseIpError.InvalidIp,
+                }
+            },
+        };
     }
 
     pub const ParseIpv6Error = error{InvalidIpv6};
@@ -63,7 +73,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub const ParseIpv4Error = error{InvalidIpv4};
+    pub const ParseIpv4Error = error{ InvalidIpv4, MissingPort };
     pub fn parseIpv4(bytes: []const u8) ParseIpv4Error!Self {
         // parse v4
         var octs: [4]u8 = [_]u8{0} ** 4;
@@ -71,6 +81,19 @@ pub const SocketAddr = union(enum(u8)) {
         var octets_index: usize = 0;
         var parsed_digit: bool = false;
         var parsed_ip = false;
+
+        // Check if the string contains ':', indicating the presence of a port
+        var colon_found = false;
+        for (bytes) |byte| {
+            if (byte == ':') {
+                colon_found = true;
+                break;
+            }
+        }
+
+        if (!colon_found) {
+            return error.MissingPort;
+        }
 
         for (bytes) |byte| {
             switch (byte) {
@@ -109,7 +132,9 @@ pub const SocketAddr = union(enum(u8)) {
                 },
             }
         }
-        if (!parsed_ip) return error.InvalidIpv4;
+        if (!parsed_ip) {
+            return error.InvalidIpv4;
+        }
 
         return Self{ .V4 = .{
             .ip = Ipv4Addr.init(octs[0], octs[1], octs[2], octs[3]),
@@ -510,14 +535,19 @@ pub fn enablePortReuse(self: *network.Socket, enabled: bool) !void {
 
 test "invalid ipv4 socket parsing" {
     {
-        const addr = "127.0.0.11234";
+        const addr = "127.0.0.11234:8001";
         const result = SocketAddr.parseIpv4(addr);
         try std.testing.expectError(error.InvalidIpv4, result);
     }
     {
-        const addr = "127.0.0:1123";
+        const addr = "127.0.0:1123:8001";
         const result = SocketAddr.parseIpv4(addr);
         try std.testing.expectError(error.InvalidIpv4, result);
+    }
+    {
+        const addr = "127.0.0.112";
+        const result = SocketAddr.parseIpv4(addr);
+        try std.testing.expectError(error.MissingPort, result);
     }
 }
 
