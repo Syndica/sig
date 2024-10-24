@@ -3431,6 +3431,7 @@ fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
     return contact_info;
 }
 
+// // TODO: re-enable these tests when leaks are fixed
 // test "benchmarkPullRequests" {
 //     _ = try BenchmarkGossipServicePullRequests.benchmarkPullRequests(.{
 //         .name = "1k_data_1k_pull_reqs",

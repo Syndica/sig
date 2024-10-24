@@ -694,10 +694,9 @@ pub const BenchmarkSwissMap = struct {
             null,
         );
 
+        // NOTE: if (speed_up < 1.0) "swissmap is slower" else "swissmap is faster";
         const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos())) / @as(f32, @floatFromInt(write_time.asNanos()));
-        // const write_faster_or_slower = if (write_speedup < 1.0) "slower" else "faster";
         const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
-        // const read_faster_or_slower = if (read_speedup < 1.0) "slower" else "faster";
 
         return .{
             .read_time = read_time.asNanos(),

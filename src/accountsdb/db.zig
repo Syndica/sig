@@ -3947,10 +3947,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         validate_time: u64,
     } {
         const allocator = std.heap.c_allocator;
-
-        const logger = Logger{ .noop = {} };
-        // defer logger.deinit();
-        // logger.spawn();
+        const logger = .noop;
 
         // unpack the snapshot
         // NOTE: usually this will be an incremental snapshot
