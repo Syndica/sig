@@ -46,14 +46,9 @@ pub const ClusterNode = struct {
     pubkey: []const u8,
     pubsub: ?[]const u8,
     rpc: ?[]const u8,
-    serveRepair: ?[]const u8,
     shredVersion: ?u16,
     tpu: ?[]const u8,
-    tpuForwards: ?[]const u8,
-    tpuForwardsQuic: ?[]const u8,
     tpuQuic: ?[]const u8,
-    tpuVote: ?[]const u8,
-    tvu: ?[]const u8,
     version: ?[]const u8,
 };
 

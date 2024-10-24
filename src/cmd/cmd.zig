@@ -1074,10 +1074,7 @@ pub fn testTransactionSenderService() !void {
     const allocator = gpa_allocator;
 
     var app_base = try AppBase.init(allocator);
-    defer {
-        app_base.shutdown();
-        app_base.deinit();
-    }
+    defer app_base.deinit();
 
     const genesis_file_path = try config.current.genesisFilePath() orelse
         return error.GenesisPathNotProvided;

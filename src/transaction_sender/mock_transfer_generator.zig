@@ -362,28 +362,13 @@ pub const MockTransferService = struct {
         var rpc_client = RpcClient.init(self.allocator, self.network, .{});
         defer rpc_client.deinit();
 
-        try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) resetting mock transfer accounts");
-        try self.openBank(&rpc_client);
-        try self.closeAccount(random, &rpc_client, account_a_keypair);
-        try self.closeAccount(random, &rpc_client, account_b_keypair);
-
-        try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) initialising mock transfer accounts");
-        try self.rpcTransferAndWait(random, &rpc_client, bank_keypair, account_a_pubkey, TOTAL_TRANSFER_AMOUNT + TRANSFER_FEE * NUMBER_OF_TRANSACTIONS);
-
-        { // CORE TRANSFER LOGIC
-            for (0..NUMBER_OF_TRANSACTIONS) |i| {
-                self.logger.info().logf("(transaction_sender.MockTransferService) executing mock transfer {} of {}", .{ i, NUMBER_OF_TRANSACTIONS });
-                try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) executing mock transfer from A to B");
-                // try self.rpcTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
-                try self.sigTransfer(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
-                // try self.sigTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
-                std.time.sleep(Duration.fromSecs(10).asNanos());
-            }
-        }
-
-        try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) resetting mock transfer accounts");
-        try self.closeAccount(random, &rpc_client, account_a_keypair);
-        try self.closeAccount(random, &rpc_client, account_b_keypair);
+        try self.sigTransferAndWait(
+            random,
+            &rpc_client,
+            bank_keypair,
+            account_a_pubkey,
+            1000,
+        );
 
         try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) exiting mock transfer service");
         self.exit.store(false, .monotonic);
