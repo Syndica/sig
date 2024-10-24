@@ -133,7 +133,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var largest_rooted_slot: Slot = 0;
     var slot: Slot = 0;
+
     var pubkeys_this_slot = std.AutoHashMap(Pubkey, void).init(allocator);
+    defer pubkeys_this_slot.deinit();
 
     // get/put a bunch of accounts
     while (true) {
