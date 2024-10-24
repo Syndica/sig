@@ -67,7 +67,7 @@ pub const BenchmarkLedger = struct {
     /// Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
     pub fn @"BlockstoreReader.getDataShred - Sequential"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-        var state = try State.init(allocator, "bentch read sequential", .noop);
+        var state = try State.init(allocator, "bench read sequential", .noop);
         defer state.deinit();
         var inserter = try state.shredInserter();
         var reader = try state.reader();
