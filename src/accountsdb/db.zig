@@ -296,8 +296,6 @@ pub const AccountsDB = struct {
         self.logger.info().logf("found {d} account files", .{n_account_files});
         std.debug.assert(n_account_files > 0);
 
-        var timer = try sig.time.Timer.start();
-
         {
             const bhs, var bhs_lg = try self.getOrInitBankHashStats(snapshot_manifest.slot);
             defer bhs_lg.unlock();
@@ -1052,7 +1050,7 @@ pub const AccountsDB = struct {
                     }
                 } else {
                     // hashes aren't always stored correctly in snapshots
-                    if (account_hash.order(&Hash.default()) == .eq) {
+                    if (account_hash.eql(Hash.ZEROES)) {
                         const account, var lock_guard = try self.getAccountFromRefWithReadLock(max_slot_ref);
                         defer lock_guard.unlock();
 
@@ -3992,7 +3990,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         const snapshot = try snapshots.collapse();
 
         var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-            .number_of_index_bins = 32,
+            .number_of_index_shards = 32,
             .use_disk_index = bench_args.use_disk,
         }, null);
         defer accounts_db.deinit();
