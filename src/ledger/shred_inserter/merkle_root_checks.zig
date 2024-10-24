@@ -112,8 +112,8 @@ pub fn checkForwardChainedMerkleRootConsistency(
     duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
 ) !bool {
     std.debug.assert(erasure_meta.checkCodeShred(shred));
-    const slot = shred.fields.common.slot;
-    const erasure_set_id = shred.fields.common.erasureSetId();
+    const slot = shred.common.slot;
+    const erasure_set_id = shred.common.erasureSetId();
 
     // If a shred from the next fec set has already been inserted, check the chaining
     const next_fec_set_index = if (erasure_meta.nextFecSetIndex()) |n| n else {
@@ -148,7 +148,7 @@ pub fn checkForwardChainedMerkleRootConsistency(
         ), .{ next_shred_id, next_merkle_root_meta });
         return true;
     };
-    const merkle_root = shred.fields.merkleRoot() catch null;
+    const merkle_root = shred.merkleRoot() catch null;
     const chained_merkle_root = shred_mod.layout.getChainedMerkleRoot(next_shred);
 
     if (!checkChaining(merkle_root, chained_merkle_root)) {
@@ -160,7 +160,7 @@ pub fn checkForwardChainedMerkleRootConsistency(
         ), .{
             slot,
             erasure_set_id,
-            shred.fields.common.variant.shred_type,
+            shred.common.variant.shred_type,
             merkle_root,
             next_erasure_set,
             next_merkle_root_meta.first_received_shred_type,

@@ -147,11 +147,11 @@ fn getRecoveryMetadata(shreds: []const Shred) !RecoveryMetadata {
     const meta: RecoveryMetadata = for (shreds) |shred| {
         if (shred == .code) {
             const code_shred = shred.code;
-            const chained_merkle_root = code_shred.fields.chainedMerkleRoot() catch null;
-            const retransmitter_signature = code_shred.fields.retransmitterSignature() catch null;
-            const position = code_shred.fields.custom.position;
-            var common_header = code_shred.fields.common;
-            var code_header = code_shred.fields.custom;
+            const chained_merkle_root = code_shred.chainedMerkleRoot() catch null;
+            const retransmitter_signature = code_shred.retransmitterSignature() catch null;
+            const position = code_shred.custom.position;
+            var common_header = code_shred.common;
+            var code_header = code_shred.custom;
             common_header.index = try checkedSub(common_header.index, position);
             code_header.position = 0;
             break .{
@@ -261,7 +261,7 @@ fn reconstructShred(
             meta.retransmitter_signature,
             shard,
         );
-        const this = data_shred.fields.common;
+        const this = data_shred.common;
         const set = meta.common_header;
         if (this.variant.proof_size != set.variant.proof_size or
             this.variant.chained != set.variant.chained or
@@ -353,8 +353,8 @@ fn verifyErasureBatch(
             expect.variant.chained == actual.variant.chained and
             expect.variant.resigned == actual.variant.resigned and
             (shred == .data or
-            code.num_data_shreds == shred.code.fields.custom.num_data_shreds and
-            code.num_code_shreds == shred.code.fields.custom.num_code_shreds)))
+            code.num_data_shreds == shred.code.custom.num_data_shreds and
+            code.num_code_shreds == shred.code.custom.num_code_shreds)))
         {
             return false;
         }
@@ -443,12 +443,12 @@ test "recover mainnet shreds - construct shreds from shards" {
         defer expected_shred.deinit();
         switch (expected_shred) {
             inline .code => |c| {
-                try std.testing.expectEqual(c.fields.common, recovered_shred.code.fields.common);
-                try std.testing.expectEqual(c.fields.custom, recovered_shred.code.fields.custom);
+                try std.testing.expectEqual(c.common, recovered_shred.code.common);
+                try std.testing.expectEqual(c.custom, recovered_shred.code.custom);
             },
             inline .data => |c| {
-                try std.testing.expectEqual(c.fields.common, recovered_shred.data.fields.common);
-                try std.testing.expectEqual(c.fields.custom, recovered_shred.data.fields.custom);
+                try std.testing.expectEqual(c.common, recovered_shred.data.common);
+                try std.testing.expectEqual(c.custom, recovered_shred.data.custom);
             },
         }
         try std.testing.expect(sig.utils.types.eql(expected_shred, recovered_shred));

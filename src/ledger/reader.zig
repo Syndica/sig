@@ -1970,11 +1970,11 @@ test "lowestSlot" {
     const shred_slot = 10;
     const shred_index = 10;
 
-    var shred = Shred{ .data = try DataShred.default(allocator) };
+    var shred = Shred{ .data = try DataShred.zeroedForTest(allocator) };
     defer shred.deinit();
 
-    shred.data.fields.common.slot = shred_slot;
-    shred.data.fields.common.index = shred_index;
+    shred.data.common.slot = shred_slot;
+    shred.data.common.index = shred_index;
 
     // insert a shred
     var slot_meta = SlotMeta.init(allocator, shred_slot, null);
@@ -2020,11 +2020,11 @@ test "isShredDuplicate" {
     const shred_payload = try allocator.alloc(u8, size);
     defer allocator.free(shred_payload);
 
-    var shred = Shred{ .data = try DataShred.default(allocator) };
+    var shred = Shred{ .data = try DataShred.zeroedForTest(allocator) };
     defer shred.deinit();
-    shred.data.fields.common.slot = shred_slot;
-    shred.data.fields.common.index = shred_index;
-    @memset(shred.data.fields.payload, 0);
+    shred.data.common.slot = shred_slot;
+    shred.data.common.index = shred_index;
+    @memset(shred.data.payload, 0);
 
     // no duplicate
     try std.testing.expectEqual(null, try reader.isShredDuplicate(shred));
@@ -2068,10 +2068,10 @@ test "findMissingDataIndexes" {
     const shred_slot = 10;
     const shred_index = 2;
 
-    var shred = Shred{ .data = try DataShred.default(allocator) };
+    var shred = Shred{ .data = try DataShred.zeroedForTest(allocator) };
     defer shred.deinit();
-    shred.data.fields.common.slot = shred_slot;
-    shred.data.fields.common.index = shred_index;
+    shred.data.common.slot = shred_slot;
+    shred.data.common.index = shred_index;
 
     // set the variant
     const variant = sig.ledger.shred.ShredVariant{
@@ -2080,8 +2080,8 @@ test "findMissingDataIndexes" {
         .chained = false,
         .resigned = false,
     };
-    shred.data.fields.common.variant = variant;
-    try shred.data.fields.writePayload(&(.{2} ** 100));
+    shred.data.common.variant = variant;
+    try shred.data.writePayload(&(.{2} ** 100));
 
     var slot_meta = SlotMeta.init(allocator, shred_slot, null);
     slot_meta.last_index = 4;
@@ -2133,10 +2133,10 @@ test "getCodeShred" {
         &max_root,
     );
 
-    var shred = Shred{ .code = try CodeShred.default(allocator) };
+    var shred = Shred{ .code = try CodeShred.zeroedForTest(allocator) };
     defer shred.deinit();
-    shred.code.fields.common.slot = 10;
-    shred.code.fields.common.index = 10;
+    shred.code.common.slot = 10;
+    shred.code.common.index = 10;
 
     try std.testing.expect(shred == .code);
 
@@ -2147,8 +2147,10 @@ test "getCodeShred" {
         .chained = false,
         .resigned = false,
     };
-    shred.code.fields.common.variant = variant;
-    try shred.code.fields.writePayload(&(.{2} ** 100));
+    shred.code.common.variant = variant;
+    shred.code.custom.num_data_shreds = 1;
+    shred.code.custom.num_code_shreds = 1;
+    try shred.code.writePayload(&(.{2} ** 100));
 
     const shred_slot = shred.commonHeader().slot;
     const shred_index = shred.commonHeader().index;

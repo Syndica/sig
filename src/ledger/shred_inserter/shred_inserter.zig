@@ -408,12 +408,12 @@ pub const ShredInserter = struct {
         is_trusted: bool,
         shred_source: ShredSource,
     ) !bool {
-        const slot = shred.fields.common.slot;
+        const slot = shred.common.slot;
 
         const index_meta_working_set_entry = try state.getIndexMetaEntry(slot);
         const index_meta = &index_meta_working_set_entry.index;
 
-        const erasure_set_id = shred.fields.common.erasureSetId();
+        const erasure_set_id = shred.common.erasureSetId();
         try state.loadMerkleRootMeta(erasure_set_id);
 
         if (!try self.shouldInsertCodeShred(state, shred, index_meta, is_trusted)) {
@@ -437,7 +437,7 @@ pub const ShredInserter = struct {
         // but it is added to just_inserted_shreds regardless because it would be nice to have
         // access to these shreds later on, for example when recovery is attempted. also, this is
         // the same approach used in agave.
-        const shred_entry = try state.just_inserted_shreds.getOrPut(shred.fields.id());
+        const shred_entry = try state.just_inserted_shreds.getOrPut(shred.id());
         if (!shred_entry.found_existing) {
             self.metrics.num_code_shreds_inserted.inc();
             shred_entry.value_ptr.* = .{ .code = shred }; // TODO lifetime
@@ -453,13 +453,13 @@ pub const ShredInserter = struct {
         index_meta: *const Index,
         is_trusted: bool,
     ) !bool {
-        const erasure_set_id = shred.fields.common.erasureSetId();
+        const erasure_set_id = shred.common.erasureSetId();
 
         // This gives the index of first code shred in this FEC block
         // So, all code shreds in a given FEC block will have the same set index
         if (!is_trusted) {
             // dupes
-            if (index_meta.code_index.contains(shred.fields.common.index)) {
+            if (index_meta.code_index.contains(shred.common.index)) {
                 self.metrics.num_code_shreds_exists.inc();
                 try state.duplicate_shreds.append(.{ .Exists = .{ .code = shred } });
                 return false;
@@ -468,7 +468,7 @@ pub const ShredInserter = struct {
             assertOk(shred.sanitize());
 
             // too old
-            if (shred.fields.common.slot <= self.max_root.load(.monotonic)) {
+            if (shred.common.slot <= self.max_root.load(.monotonic)) {
                 self.metrics.num_code_shreds_invalid.inc();
                 return false;
             }
@@ -483,7 +483,7 @@ pub const ShredInserter = struct {
                     self.logger,
                     &self.db,
                     state.shredStore(),
-                    shred.fields.common.slot,
+                    shred.common.slot,
                     merkle_root_meta.asRef(),
                     &.{ .code = shred },
                     &state.duplicate_shreds,
@@ -517,8 +517,8 @@ pub const ShredInserter = struct {
         shred: CodeShred,
         erasure_meta: *const ErasureMeta,
     ) !void {
-        const slot = shred.fields.common.slot;
-        const erasure_set_id = shred.fields.common.erasureSetId();
+        const slot = shred.common.slot;
+        const erasure_set_id = shred.common.erasureSetId();
         // TODO question: there may be a conflicting shred already saved for a totally different
         // erasure set, but not this one. is it worth persisting this one as well?
         if (!try self.hasDuplicateShredsInSlot(slot)) {
@@ -531,7 +531,7 @@ pub const ShredInserter = struct {
                 // found the duplicate
                 self.db.put(schema.duplicate_slots, slot, .{
                     .shred1 = conflicting_shred,
-                    .shred2 = shred.fields.payload,
+                    .shred2 = shred.payload,
                 }) catch |e| {
                     // TODO: only log a database error?
                     self.logger.err().logf(
@@ -561,7 +561,7 @@ pub const ShredInserter = struct {
             \\stored config: {any}, new shred: {any}
         ), .{
             slot,
-            shred.fields.common.index,
+            shred.common.index,
             erasure_set_id,
             try self.hasDuplicateShredsInSlot(slot), // TODO perf redundant (careful, state has changed)
             erasure_meta.config,
@@ -599,8 +599,8 @@ pub const ShredInserter = struct {
         leader_schedule: ?SlotLeaderProvider,
         shred_source: ShredSource,
     ) !ArrayList(CompletedDataSetInfo) {
-        const slot = shred.fields.common.slot;
-        const shred_index: u64 = @intCast(shred.fields.common.index);
+        const slot = shred.common.slot;
+        const shred_index: u64 = @intCast(shred.common.index);
         const shred_union = Shred{ .data = shred };
 
         const index_meta_working_set_entry = try state.getIndexMetaEntry(slot);
@@ -608,7 +608,7 @@ pub const ShredInserter = struct {
         const slot_meta_entry = try state.getSlotMetaEntry(slot, try shred.parent());
         const slot_meta = &slot_meta_entry.new_slot_meta;
 
-        const erasure_set_id = shred.fields.common.erasureSetId();
+        const erasure_set_id = shred.common.erasureSetId();
         try state.loadMerkleRootMeta(erasure_set_id);
 
         if (!is_trusted) {
@@ -674,7 +674,7 @@ pub const ShredInserter = struct {
             shred_source,
         );
         try state.initMerkleRootMetaIfMissing(erasure_set_id, shred);
-        try state.just_inserted_shreds.put(shred.fields.id(), shred_union); // TODO check first?
+        try state.just_inserted_shreds.put(shred.id(), shred_union); // TODO check first?
         index_meta_working_set_entry.did_insert_occur = true;
         slot_meta_entry.did_insert_occur = true;
 
@@ -689,12 +689,12 @@ pub const ShredInserter = struct {
         shred: CodeShred,
         write_batch: *WriteBatch,
     ) !void {
-        const slot = shred.fields.common.slot;
-        const shred_index: u64 = @intCast(shred.fields.common.index);
+        const slot = shred.common.slot;
+        const shred_index: u64 = @intCast(shred.common.index);
 
         assertOk(shred.sanitize());
 
-        try write_batch.put(schema.code_shred, .{ slot, shred_index }, shred.fields.payload);
+        try write_batch.put(schema.code_shred, .{ slot, shred_index }, shred.payload);
         try index_meta.code_index.put(shred_index);
     }
 
@@ -705,7 +705,7 @@ pub const ShredInserter = struct {
         slot_meta: *const SlotMeta,
         data_index: *meta.ShredIndex,
     ) bool {
-        const shred_index: u64 = @intCast(shred.fields.common.index);
+        const shred_index: u64 = @intCast(shred.common.index);
         return shred_index < slot_meta.consecutive_received_from_0 or
             data_index.contains(shred_index);
     }
@@ -721,8 +721,8 @@ pub const ShredInserter = struct {
         shred_source: ShredSource,
         duplicate_shreds: *ArrayList(PossibleDuplicateShred),
     ) !bool {
-        const slot = shred.fields.common.slot;
-        const shred_index_u32 = shred.fields.common.index;
+        const slot = shred.common.slot;
+        const shred_index_u32 = shred.common.index;
         const shred_index_u64: u64 = @intCast(shred_index_u32);
         const is_last_in_slot = shred.isLastInSlot();
         assertOk(shred.sanitize());
@@ -752,7 +752,7 @@ pub const ShredInserter = struct {
                 };
                 const dupe = meta.DuplicateSlotProof{
                     .shred1 = ending_shred,
-                    .shred2 = shred.fields.payload,
+                    .shred2 = shred.payload,
                 };
                 self.db.put(schema.duplicate_slots, slot, dupe) catch |e| {
                     // TODO: only log a database error?
@@ -795,8 +795,8 @@ pub const ShredInserter = struct {
         write_batch: *WriteBatch,
         _: ShredSource,
     ) !ArrayList(CompletedDataSetInfo) {
-        const slot = shred.fields.common.slot;
-        const index_u32 = shred.fields.common.index;
+        const slot = shred.common.slot;
+        const index_u32 = shred.common.index;
         const index: u64 = @intCast(index_u32);
 
         const new_consecutive = if (slot_meta.consecutive_received_from_0 == index) blk: {
@@ -807,7 +807,7 @@ pub const ShredInserter = struct {
             break :blk current_index;
         } else slot_meta.consecutive_received_from_0;
 
-        try write_batch.put(schema.data_shred, .{ slot, index }, shred.fields.payload);
+        try write_batch.put(schema.data_shred, .{ slot, index }, shred.payload);
         try data_index.put(index);
 
         var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(self.allocator);
@@ -1499,7 +1499,7 @@ test "recovery" {
     );
 
     for (data_shreds) |data_shred| {
-        const key = .{ data_shred.data.fields.common.slot, data_shred.data.fields.common.index };
+        const key = .{ data_shred.data.common.slot, data_shred.data.common.index };
         const actual_shred = try state.db.getBytes(schema.data_shred, key);
         defer actual_shred.?.deinit();
         try std.testing.expectEqualSlices(u8, data_shred.payload(), actual_shred.?.data);
