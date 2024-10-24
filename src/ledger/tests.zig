@@ -391,9 +391,9 @@ pub fn insertDataForBlockTest(state: *State) !InsertDataForBlockResult {
         deinitShreds(allocator, slice);
     };
 
-    _ = try ledger.insert_shred.insertShredsForTest(&inserter, shreds);
-    _ = try ledger.insert_shred.insertShredsForTest(&inserter, more_shreds);
-    _ = try ledger.insert_shred.insertShredsForTest(&inserter, unrooted_shreds);
+    _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
+    _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, more_shreds);
+    _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, unrooted_shreds);
 
     try writer.setRoots(&.{ slot - 1, slot, slot + 1 });
 

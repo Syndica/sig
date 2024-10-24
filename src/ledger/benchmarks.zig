@@ -171,7 +171,7 @@ pub const BenchmarkLedger = struct {
         defer deinitShreds(allocator, shreds);
 
         const total_shreds = shreds.len;
-        _ = try ledger.insert_shred.insertShredsForTest(&inserter, shreds);
+        _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
 
         const slot: u32 = 0;
 
