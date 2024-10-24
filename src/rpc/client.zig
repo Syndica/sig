@@ -12,6 +12,7 @@ const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Transaction = sig.core.transaction.Transaction;
+const ClusterType = sig.accounts_db.ClusterType;
 
 pub const Client = struct {
     http_endpoint: []const u8,
@@ -24,7 +25,7 @@ pub const Client = struct {
         logger: Logger = .noop,
     };
 
-    pub fn init(allocator: std.mem.Allocator, cluster_type: types.ClusterType, options: Options) Client {
+    pub fn init(allocator: std.mem.Allocator, cluster_type: ClusterType, options: Options) Client {
         const http_endpoint = switch (cluster_type) {
             .MainnetBeta => "https://api.mainnet-beta.solana.com",
             .Testnet => "https://api.testnet.solana.com",
@@ -317,7 +318,13 @@ pub const Client = struct {
     /// Sends a JSON-RPC request to the HTTP endpoint and parses the response.
     /// If the request fails, it will be retried up to `max_retries` times, restarting the HTTP client
     /// if necessary. If the response fails to parse, an error will be returned.
-    fn sendFetchRequest(self: *Client, allocator: std.mem.Allocator, comptime T: type, request: Request, response_parse_options: std.json.ParseOptions) !Response(T) {
+    fn sendFetchRequest(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        comptime T: type,
+        request: Request,
+        response_parse_options: std.json.ParseOptions,
+    ) !Response(T) {
         var response = try Response(T).init(allocator, response_parse_options);
         errdefer response.deinit();
 

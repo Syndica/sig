@@ -594,6 +594,7 @@ pub fn run() !void {
                             &gossip_entrypoints_option,
                             &gossip_spy_node_option,
                             &gossip_dump_option,
+                            &genesis_file_path,
                         },
                         .target = .{
                             .action = .{
@@ -1073,7 +1074,10 @@ pub fn testTransactionSenderService() !void {
     const allocator = gpa_allocator;
 
     var app_base = try AppBase.init(allocator);
-    defer app_base.deinit();
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
     const genesis_file_path = try config.current.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
@@ -1090,7 +1094,7 @@ pub fn testTransactionSenderService() !void {
     defer transaction_channel.deinit();
 
     const transaction_sender_config = sig.transaction_sender.service.Config{
-        .cluster = .Testnet,
+        .cluster = .LocalHost,
         .socket = SocketAddr.init(app_base.my_ip, 0),
     };
 

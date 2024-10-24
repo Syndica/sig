@@ -7,6 +7,7 @@ const AtomicBool = std.atomic.Value(bool);
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Channel = sig.sync.Channel;
 
+const ClusterType = sig.accounts_db.ClusterType;
 const Signature = sig.core.Signature;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
@@ -26,14 +27,14 @@ const MAX_SIG_WAIT_FOR_SIGNATURE_CONFIRMATION: Duration = Duration.fromSecs(300)
 
 pub const MockTransferService = struct {
     allocator: std.mem.Allocator,
-    network: types.ClusterType,
+    network: ClusterType,
     sender: *Channel(TransactionInfo),
     exit: *AtomicBool,
     logger: Logger,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        network: types.ClusterType,
+        network: ClusterType,
         sender: *Channel(TransactionInfo),
         exit: *AtomicBool,
         logger: Logger,

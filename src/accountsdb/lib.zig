@@ -17,6 +17,7 @@ pub const GenesisConfig = genesis_config.GenesisConfig;
 pub const SnapshotFields = snapshots.SnapshotFields;
 pub const SnapshotFiles = snapshots.SnapshotFiles;
 pub const StatusCache = snapshots.StatusCache;
+pub const ClusterType = genesis_config.ClusterType;
 
 pub const downloadSnapshotsFromGossip = download.downloadSnapshotsFromGossip;
 pub const parallelUnpackZstdTarBall = snapshots.parallelUnpackZstdTarBall;

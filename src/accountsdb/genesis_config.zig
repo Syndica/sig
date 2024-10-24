@@ -124,12 +124,14 @@ pub const Inflation = struct {
     }
 };
 
-/// Analogous to [ClusterType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L46)
-pub const ClusterType = enum(u8) {
-    Testnet,
+pub const ClusterType = union(enum) {
     MainnetBeta,
+    Testnet,
     Devnet,
-    Development,
+    LocalHost,
+    Custom: struct {
+        url: []const u8,
+    },
 };
 
 /// Analogous to [GenesisConfig](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L93)
@@ -182,7 +184,7 @@ test "genesis_config deserialize development config" {
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
-    try std.testing.expect(config.cluster_type == ClusterType.Development);
+    try std.testing.expect(config.cluster_type == ClusterType.Devnet);
 }
 
 test "genesis_config deserialize testnet config" {
