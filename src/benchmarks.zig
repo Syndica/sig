@@ -107,7 +107,7 @@ pub fn main() !void {
         try benchmark(
             @import("ledger/benchmarks.zig").BenchmarkLedger,
             max_time_per_bench,
-            .microseconds,
+            .nanoseconds,
         );
     }
 }
