@@ -1,7 +1,8 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
+const ledger = @import("../lib.zig");
+const shred_inserter = @import("lib.zig");
 
-const ledger = sig.ledger;
 const schema = ledger.schema.schema;
 const shred_mod = sig.ledger.shred;
 
@@ -18,14 +19,14 @@ const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const CodeShred = ledger.shred.CodeShred;
 const ErasureMeta = ledger.meta.ErasureMeta;
 const MerkleRootMeta = ledger.meta.MerkleRootMeta;
-const PossibleDuplicateShred = ledger.insert_shreds_working_state.PossibleDuplicateShred;
+const PossibleDuplicateShred = shred_inserter.working_state.PossibleDuplicateShred;
 const Shred = ledger.shred.Shred;
 const ShredId = ledger.shred.ShredId;
-const WorkingEntry = ledger.insert_shreds_working_state.WorkingEntry;
-const WorkingShredStore = ledger.insert_shreds_working_state.WorkingShredStore;
+const WorkingEntry = shred_inserter.working_state.WorkingEntry;
+const WorkingShredStore = shred_inserter.working_state.WorkingShredStore;
 
-const key_serializer = sig.ledger.database.key_serializer;
-const value_serializer = sig.ledger.database.value_serializer;
+const key_serializer = ledger.database.key_serializer;
+const value_serializer = ledger.database.value_serializer;
 
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
