@@ -35,8 +35,8 @@ fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
 }
 
 pub const BenchmarkLedger = struct {
-    pub const min_iterations = 5;
-    pub const max_iterations = 5;
+    pub const min_iterations = 1000;
+    pub const max_iterations = 5000;
 
     // Analogous to [bench_write_small](https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L59)
     pub fn benchWriteSmall() !sig.time.Duration {
