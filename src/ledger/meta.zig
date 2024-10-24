@@ -187,13 +187,13 @@ pub const ErasureMeta = struct {
 
     pub fn fromCodeShred(shred: CodeShred) ?Self {
         return .{
-            .fec_set_index = shred.fields.common.fec_set_index,
+            .fec_set_index = shred.common.fec_set_index,
             .config = ErasureConfig{
-                .num_data = shred.fields.custom.num_data_shreds,
-                .num_code = shred.fields.custom.num_code_shreds,
+                .num_data = shred.custom.num_data_shreds,
+                .num_code = shred.custom.num_code_shreds,
             },
             .first_code_index = shred.firstCodeIndex() catch return null,
-            .first_received_code_index = shred.fields.common.index,
+            .first_received_code_index = shred.common.index,
         };
     }
 
@@ -358,9 +358,9 @@ pub const MerkleRootMeta = struct {
             // `None` for those cases in blockstore, as a later
             // shred that contains a proper merkle root would constitute
             // a valid duplicate shred proof.
-            .merkle_root = shred.fields.merkleRoot() catch null,
-            .first_received_shred_index = shred.fields.common.index,
-            .first_received_shred_type = shred.fields.common.variant.shred_type,
+            .merkle_root = shred.merkleRoot() catch null,
+            .first_received_shred_index = shred.common.index,
+            .first_received_shred_type = shred.common.variant.shred_type,
         };
     }
 };

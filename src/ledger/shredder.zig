@@ -11,9 +11,9 @@ const DataShred = sig.ledger.shred.DataShred;
 pub fn deshred(allocator: Allocator, shreds: []const DataShred) !std.ArrayList(u8) {
     // sanitize inputs
     if (shreds.len == 0) return error.TooFewDataShards;
-    const index = shreds[0].fields.common.index;
+    const index = shreds[0].common.index;
     for (shreds, index..) |shred, i| {
-        if (shred.fields.common.index != i) {
+        if (shred.common.index != i) {
             return error.TooFewDataShards;
         }
     }
