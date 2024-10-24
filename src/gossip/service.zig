@@ -3336,10 +3336,6 @@ pub const BenchmarkGossipServicePullRequests = struct {
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
         try contact_info.setSocket(.gossip, address);
 
-        // const logger = Logger.init(allocator, .debug);
-        // defer logger.deinit();
-        // logger.spawn();
-
         const logger = .noop;
 
         // process incoming packets/messsages

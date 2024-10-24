@@ -3,6 +3,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const ledger = @import("lib.zig");
+const transaction_status = @import("./transaction_status.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -77,9 +78,9 @@ test "insert shreds and transaction statuses then get blocks" {
     const blockhash = entries[entries.len - 1].hash;
     const blockhash_string = blockhash.base58String();
 
-    const shreds = try testShreds(prefix ++ "shreds.bin");
-    const more_shreds = try testShreds(prefix ++ "more_shreds.bin");
-    const unrooted_shreds = try testShreds(prefix ++ "unrooted_shreds.bin");
+    const shreds = try testShreds(std.testing.allocator, prefix ++ "shreds.bin");
+    const more_shreds = try testShreds(std.testing.allocator, prefix ++ "more_shreds.bin");
+    const unrooted_shreds = try testShreds(std.testing.allocator, prefix ++ "unrooted_shreds.bin");
     defer inline for (.{ shreds, more_shreds, unrooted_shreds }) |slice| {
         deinitShreds(std.testing.allocator, slice);
     };
@@ -255,9 +256,9 @@ pub fn freshDir(path: []const u8) !void {
 
 const test_shreds_dir = sig.TEST_DATA_DIR ++ "/shreds";
 
-fn testShreds(comptime filename: []const u8) ![]const Shred {
+pub fn testShreds(allocator: std.mem.Allocator, comptime filename: []const u8) ![]const Shred {
     const path = comptimePrint("{s}/{s}", .{ test_shreds_dir, filename });
-    return loadShredsFromFile(std.testing.allocator, path);
+    return loadShredsFromFile(allocator, path);
 }
 
 /// Read shreds from binary file structured like this:
@@ -329,6 +330,18 @@ pub fn deinitShreds(allocator: Allocator, shreds: []const Shred) void {
 
 /// Read entries from binary file structured like this:
 /// [entry0_len: u64(little endian)][entry0_bincode][entry1_len...
+///
+/// loadEntriesFromFile can read entries produced by this rust function:
+/// ```rust
+/// fn save_entries_to_file(shreds: &[Entry], path: &str) {
+///     let mut file = std::fs::File::create(path).unwrap();
+///    for entry in &entries {
+///        let payload = bincode::serialize(&entry).unwrap();
+///        file.write(&payload.len().to_le_bytes()).unwrap();
+///        file.write(&*payload).unwrap();
+///    }
+/// }
+/// ```
 pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entry {
     const file = try std.fs.cwd().openFile(path, .{});
     const reader = file.reader();
