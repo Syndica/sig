@@ -35,18 +35,22 @@ fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
 }
 
 pub const BenchmarkLedger = struct {
-    pub const min_iterations = 5;
-    pub const max_iterations = 5;
+    pub const min_iterations = 25;
+    pub const max_iterations = 25;
 
-    // Analogous to [bench_write_small](https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L59)
-    pub fn benchWriteSmall() !sig.time.Duration {
+    /// Analogous to [bench_write_small](https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L59)
+    ///
+    /// There is a notable difference from agave: This does not measure the
+    /// creation of shreds from entries. But even if you remove that from
+    /// the agave benchmark, the benchmark result is the same.
+    pub fn @"ShredInserter.insertShreds - 1751 shreds"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try State.init(allocator, "bench write small", .noop);
         defer state.deinit();
         var inserter = try state.shredInserter();
 
-        const prefix = "agave.blockstore.bench_write_small.";
-        const shreds = try testShreds(std.heap.c_allocator, prefix ++ "shreds.bin");
+        const shreds_path = "agave.blockstore.bench_write_small.shreds.bin";
+        const shreds = try testShreds(std.heap.c_allocator, shreds_path);
         defer deinitShreds(allocator, shreds);
 
         const is_repairs = try inserter.allocator.alloc(bool, shreds.len);
@@ -60,16 +64,16 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    // Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
-    pub fn benchReadSequential() !sig.time.Duration {
+    /// Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
+    pub fn @"BlockstoreReader.getDataShred - Sequential"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try State.init(allocator, "bentch read sequential", .noop);
         defer state.deinit();
         var inserter = try state.shredInserter();
         var reader = try state.reader();
 
-        const prefix = "agave.blockstore.bench_read.";
-        const shreds = try testShreds(std.heap.c_allocator, prefix ++ "shreds.bin");
+        const shreds_path = "agave.blockstore.bench_read.shreds.bin";
+        const shreds = try testShreds(std.heap.c_allocator, shreds_path);
         defer deinitShreds(allocator, shreds);
 
         const total_shreds = shreds.len;
@@ -90,16 +94,16 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    // Analogous to [bench_read_random]https://github.com/anza-xyz/agave/blob/92eca1192b055d896558a78759d4e79ab4721ff1/ledger/benches/blockstore.rs#L103
-    pub fn benchReadRandom() !sig.time.Duration {
+    /// Analogous to [bench_read_random]https://github.com/anza-xyz/agave/blob/92eca1192b055d896558a78759d4e79ab4721ff1/ledger/benches/blockstore.rs#L103
+    pub fn @"BlockstoreReader.getDataShred - Random"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try State.init(allocator, "bench read randmom", .noop);
         defer state.deinit();
         var inserter = try state.shredInserter();
         var reader = try state.reader();
 
-        const prefix = "agave.blockstore.bench_read.";
-        const shreds = try testShreds(std.heap.c_allocator, prefix ++ "shreds.bin");
+        const shreds_path = "agave.blockstore.bench_read.shreds.bin";
+        const shreds = try testShreds(std.heap.c_allocator, shreds_path);
         defer deinitShreds(allocator, shreds);
 
         const total_shreds = shreds.len;
@@ -123,24 +127,25 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    // Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
-    pub fn benchSerializeWriteBincode() !sig.time.Duration {
+    /// Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
+    pub fn @"Database.put Rewards"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try State.init(allocator, "bench serialize write bincode", .noop);
         defer state.deinit();
         const slot: u32 = 0;
 
         var rewards: Rewards = try createRewards(allocator, 100);
+        const rewards_slice = try rewards.toOwnedSlice();
         var timer = try sig.time.Timer.start();
         try state.db.put(schema.rewards, slot, .{
-            .rewards = try rewards.toOwnedSlice(),
+            .rewards = rewards_slice,
             .num_partitions = null,
         });
         return timer.read();
     }
 
-    // Analogous to [bench_read_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L100)
-    pub fn benchReadBincode() !sig.time.Duration {
+    /// Analogous to [bench_read_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L100)
+    pub fn @"Database.get Rewards"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try State.init(allocator, "bench read bincode", .noop);
         defer state.deinit();
@@ -152,7 +157,7 @@ pub const BenchmarkLedger = struct {
             .num_partitions = null,
         });
         var timer = try sig.time.Timer.start();
-        _ = try state.db.getBytes(schema.rewards, slot);
+        _ = try state.db.get(allocator, schema.rewards, slot);
         return timer.read();
     }
 };
