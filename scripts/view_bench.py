@@ -17,8 +17,8 @@ def view_results(paths, units):
     for i, path in enumerate(paths):
         # NOTE: make sure format() has been run
         df = pd.read_csv(path, sep=",", header=None)
-        # remove first row 
-        df = df.iloc[1:]
+        # [2:] so we remove the format header and the benchmark header
+        df = df.iloc[2:].reset_index()
         if i == 0: 
             benchmark_names = df[0]
         else: 
@@ -28,12 +28,18 @@ def view_results(paths, units):
         dfs.append(df)
     
     colors = [random_color_generator() for _ in range(len(paths))]
-    for i in range(1, len(benchmark_names)+1):
+    for i in range(len(benchmark_names)):
         plt.clf()
         plt.title(benchmark_names[i] + f"{units}", wrap=True)
 
         for df_i, df in enumerate(dfs):
-            benchmark_runtimes = df.T[1:][i]
+            # remove the header and the benchmark name
+            benchmark_runtimes = df.T[2:][i]
+            benchmark_runtimes.replace('', np.nan, inplace=True)
+            benchmark_runtimes.replace(' ', np.nan, inplace=True)
+            benchmark_runtimes.dropna(inplace=True)
+            benchmark_runtimes = benchmark_runtimes.to_numpy().astype(int)
+
             # convert to milliseconds 
             if units == 'ms':
                 benchmark_runtimes = benchmark_runtimes / 1_000_000
@@ -64,6 +70,14 @@ def format(paths):
         # if already formatted, skip
         if lines[0].startswith("formatted"):
             continue
+
+        i = 0
+        for _ in range(len(lines)): 
+            # remove log lines
+            if "time=" in lines[i]:
+                lines.remove(lines[i])
+            else: 
+                i += 1
 
         max_separators = 0
         for line in lines: 
