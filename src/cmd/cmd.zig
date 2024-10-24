@@ -1107,6 +1107,7 @@ const AppBase = struct {
     entrypoints: std.ArrayList(SocketAddr),
     shred_version: u16,
     my_ip: IpAddr,
+    my_port: u16,
 
     fn init(allocator: Allocator) !AppBase {
         const logger = try spawnLogger();
@@ -1123,6 +1124,8 @@ const AppBase = struct {
         errdefer entrypoints.deinit();
 
         const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
+        // Try to extract the port from the given host. If no port is found, fall back to the configured default port.
+        const my_port = (config.current.gossip.getPortFromHost() orelse config.current.gossip.port) catch config.current.gossip.port;
 
         return .{
             .closed = false,
@@ -1133,6 +1136,7 @@ const AppBase = struct {
             .entrypoints = entrypoints,
             .shred_version = ip_echo_data.shred_version,
             .my_ip = ip_echo_data.ip,
+            .my_port = my_port,
         };
     }
 
@@ -1191,14 +1195,13 @@ fn startGossip(
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
 ) !struct { *GossipService, sig.utils.service_manager.ServiceManager } {
-    const gossip_port = config.current.gossip.port;
     app_base.logger.info().logf("gossip host: {any}", .{app_base.my_ip});
-    app_base.logger.info().logf("gossip port: {d}", .{gossip_port});
+    app_base.logger.info().logf("gossip port: {d}", .{app_base.my_port});
 
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
     var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
-    try contact_info.setSocket(.gossip, SocketAddr.init(app_base.my_ip, gossip_port));
+    try contact_info.setSocket(.gossip, SocketAddr.init(app_base.my_ip, app_base.my_port));
     for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));
     contact_info.shred_version = app_base.shred_version;
 
