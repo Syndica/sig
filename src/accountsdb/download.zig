@@ -86,7 +86,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
     }
 
     var result = PeerSearchResult{};
-    search_loop: for (contact_infos) |*peer_contact_info| {
+    search_loop: for (contact_infos) |peer_contact_info| {
         const is_me = peer_contact_info.pubkey.equals(&my_pubkey);
         if (is_me) {
             result.is_me_count += 1;
@@ -143,7 +143,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
         }
 
         valid_peers.appendAssumeCapacity(.{
-            .contact_info = peer_contact_info.*,
+            .contact_info = peer_contact_info,
             .full_snapshot = snapshot_hashes.full,
             .inc_snapshot = max_inc_hash,
         });
@@ -217,22 +217,22 @@ pub fn downloadSnapshotsFromGossip(
 
         for (available_snapshot_peers.items) |peer| {
             // download the full snapshot
-            const snapshot_filename = try std.fmt.allocPrint(allocator, "snapshot-{d}-{s}.{s}", .{
-                peer.full_snapshot.slot,
-                peer.full_snapshot.hash,
-                "tar.zst",
+            const snapshot_filename_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+                .slot = peer.full_snapshot.slot,
+                .hash = peer.full_snapshot.hash,
             });
-            defer allocator.free(snapshot_filename);
+            const snapshot_filename = snapshot_filename_bounded.constSlice();
 
             const rpc_socket = peer.contact_info.rpc_addr.?;
             const rpc_url_bounded = rpc_socket.toStringBounded();
             const rpc_url = rpc_url_bounded.constSlice();
 
-            const snapshot_url = try std.fmt.allocPrintZ(allocator, "http://{s}/{s}", .{
-                rpc_url,
-                snapshot_filename,
+            const bStr = sig.utils.fmt.boundedString;
+            const snapshot_url_bounded = sig.utils.fmt.boundedFmt("https://{s}/{s}\x00", .{
+                bStr(&rpc_url_bounded),
+                bStr(&snapshot_filename_bounded),
             });
-            defer allocator.free(snapshot_url);
+            const snapshot_url = snapshot_url_bounded.constSlice()[0.. :0];
 
             logger
                 .info()

@@ -9,32 +9,37 @@ pub fn RecycleFBA(config: struct {
     return struct {
         // this allocates the underlying memory + dynamic expansions
         // (only used on init/deinit + arraylist expansion)
-        backing_allocator: std.mem.Allocator,
+        bytes_allocator: std.mem.Allocator,
         // this does the data allocations (data is returned from alloc)
         fba_allocator: std.heap.FixedBufferAllocator,
         // recycling depot
         records: std.ArrayList(Record),
-
         // for thread safety
         mux: std.Thread.Mutex = .{},
 
         const Record = struct { is_free: bool, buf: [*]u8, len: u64 };
+        const AllocatorConfig = struct {
+            // used for the records array
+            records_allocator: std.mem.Allocator,
+            // used for the underlying memory for the allocations
+            bytes_allocator: std.mem.Allocator,
+        };
         const Self = @This();
 
-        pub fn init(backing_allocator: std.mem.Allocator, n_bytes: u64) !Self {
-            const buf = try backing_allocator.alloc(u8, n_bytes);
+        pub fn init(allocator_config: AllocatorConfig, n_bytes: u64) !Self {
+            const buf = try allocator_config.bytes_allocator.alloc(u8, n_bytes);
             const fba_allocator = std.heap.FixedBufferAllocator.init(buf);
-            const records = std.ArrayList(Record).init(backing_allocator);
+            const records = std.ArrayList(Record).init(allocator_config.records_allocator);
 
             return .{
-                .backing_allocator = backing_allocator,
+                .bytes_allocator = allocator_config.bytes_allocator,
                 .fba_allocator = fba_allocator,
                 .records = records,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.backing_allocator.free(self.fba_allocator.buffer);
+            self.bytes_allocator.free(self.fba_allocator.buffer);
             self.records.deinit();
         }
 
@@ -172,7 +177,7 @@ pub fn RecycleFBA(config: struct {
 
         /// collapses adjacent free records into a single record
         pub fn tryCollapse(self: *Self) void {
-            var new_records = std.ArrayList(Record).init(self.backing_allocator);
+            var new_records = std.ArrayList(Record).init(self.bytes_allocator);
             var last_was_free = false;
 
             for (self.records.items) |record| {
@@ -372,9 +377,9 @@ pub const DiskMemoryAllocator = struct {
         });
     }
 
-    const file_name_max_len = sig.utils.fmt.boundedLenValue("bin_{d}", .{std.math.maxInt(u32)});
-    inline fn fileNameBounded(file_index: u32) std.BoundedArray(u8, file_name_max_len) {
-        return sig.utils.fmt.boundedFmt("bin_{d}", .{file_index});
+    const FileNameFmtSpec = sig.utils.fmt.BoundedSpec("bin_{d}");
+    inline fn fileNameBounded(file_index: u32) FileNameFmtSpec.BoundedArray(struct { u32 }) {
+        return FileNameFmtSpec.fmt(.{file_index});
     }
 };
 
@@ -441,8 +446,11 @@ pub const failing = struct {
 };
 
 test "recycle allocator: tryCollapse" {
-    const backing_allocator = std.testing.allocator;
-    var allocator = try RecycleFBA(.{}).init(backing_allocator, 200);
+    const bytes_allocator = std.testing.allocator;
+    var allocator = try RecycleFBA(.{}).init(.{
+        .records_allocator = bytes_allocator,
+        .bytes_allocator = bytes_allocator,
+    }, 200);
     defer allocator.deinit();
 
     // alloc a slice of 100 bytes
@@ -461,8 +469,11 @@ test "recycle allocator: tryCollapse" {
 }
 
 test "recycle allocator" {
-    const backing_allocator = std.testing.allocator;
-    var allocator = try RecycleFBA(.{}).init(backing_allocator, 1024);
+    const bytes_allocator = std.testing.allocator;
+    var allocator = try RecycleFBA(.{}).init(.{
+        .records_allocator = bytes_allocator,
+        .bytes_allocator = bytes_allocator,
+    }, 1024);
     defer allocator.deinit();
 
     // alloc a slice of 100 bytes

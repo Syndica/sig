@@ -118,7 +118,10 @@ pub const GeyserWriter = struct {
         const file = try openPipe(pipe_path);
         const io_channel = try sig.sync.Channel([]u8).create(allocator);
         const io_allocator_state = try allocator.create(RecycleFBA(.{}));
-        io_allocator_state.* = try RecycleFBA(.{}).init(allocator, io_fba_bytes);
+        io_allocator_state.* = try RecycleFBA(.{}).init(.{
+            .records_allocator = allocator,
+            .bytes_allocator = allocator,
+        }, io_fba_bytes);
         const metrics = try GeyserWriterMetrics.init();
 
         return .{

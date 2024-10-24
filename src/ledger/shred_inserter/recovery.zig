@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
-const ledger = @import("lib.zig");
+const sig = @import("../../sig.zig");
+const ledger = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -365,7 +365,7 @@ fn verifyErasureBatch(
 ///////////
 // Tests
 
-const test_shreds = @import("test_shreds.zig");
+const test_shreds = @import("../test_shreds.zig");
 
 const CodeHeader = ledger.shred.CodeHeader;
 const deinitShreds = ledger.tests.deinitShreds;

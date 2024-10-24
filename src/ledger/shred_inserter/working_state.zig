@@ -1,7 +1,8 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
+const ledger = @import("../lib.zig");
+const shred_inserter = @import("lib.zig");
 
-const ledger = sig.ledger;
 const meta = ledger.meta;
 const schema = ledger.schema.schema;
 
@@ -14,7 +15,7 @@ const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
-const BlockstoreInsertionMetrics = ledger.insert_shred.BlockstoreInsertionMetrics;
+const BlockstoreInsertionMetrics = shred_inserter.shred_inserter.BlockstoreInsertionMetrics;
 const CodeShred = ledger.shred.CodeShred;
 const ColumnFamily = ledger.database.ColumnFamily;
 const ErasureSetId = ledger.shred.ErasureSetId;
