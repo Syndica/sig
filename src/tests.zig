@@ -6,6 +6,7 @@ const sig = @import("sig.zig");
 test {
     std.testing.log_level = std.log.Level.err;
     refAllDeclsRecursive(sig, 2);
+    refAllDeclsRecursive(sig.ledger, 2);
 }
 
 /// Like std.testing.refAllDeclsRecursive, except:
