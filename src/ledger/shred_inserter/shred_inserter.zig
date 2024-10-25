@@ -1131,8 +1131,6 @@ fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
 }
 
-const test_dir = comptimePrint(sig.TEST_DATA_DIR ++ "blockstore/insert_shred", .{});
-
 const ShredInserterTestState = struct {
     state: *TestState,
     db: BlockstoreDB,

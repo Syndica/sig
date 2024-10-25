@@ -1594,7 +1594,7 @@ test "getFirstDuplicateProof" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_DATA_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
+    const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_STATE_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
     try sig.ledger.tests.freshDir(path);
     var db = try BlockstoreDB.open(allocator, logger, path);
     defer db.deinit();

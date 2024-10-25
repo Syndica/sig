@@ -330,7 +330,7 @@ pub const TestState = struct {
 };
 
 pub const TestDB = struct {
-    const dir = sig.TEST_DATA_DIR ++ "/blockstore";
+    const dir = sig.TEST_STATE_DIR ++ "/blockstore";
 
     pub fn init(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
         return try initCustom(std.testing.allocator, test_src);
