@@ -453,24 +453,24 @@ pub const IpAddr = union(enum(u32)) {
 
     const Self = @This();
 
-    pub const ParseIpError = error{InvalidIpAddr, UnexpectedPort};
+    pub const ParseIpError = error{ InvalidIpAddr, UnexpectedPort };
     pub fn parse(bytes: []const u8) ParseIpError!Self {
         if (std.mem.indexOfScalar(u8, bytes, '.')) |_| {
             // Probably IPv4.
-            return parseIpv4(bytes) catch |err| switch(err) {
+            return parseIpv4(bytes) catch |err| switch (err) {
                 error.InvalidIpv4 => return error.InvalidIpAddr,
-                error.UnexpectedPort => return error.UnexpectedPort
+                error.UnexpectedPort => return error.UnexpectedPort,
             };
         } else {
             // Probably IPv6.
-            return parseIpv6(bytes) catch |err| switch(err) {
+            return parseIpv6(bytes) catch |err| switch (err) {
                 error.InvalidIpv6 => return error.InvalidIpAddr,
-                error.UnexpectedPort => return error.UnexpectedPort
+                error.UnexpectedPort => return error.UnexpectedPort,
             };
         }
     }
 
-    pub const ParseIpv4Error = error{InvalidIpv4, UnexpectedPort};
+    pub const ParseIpv4Error = error{ InvalidIpv4, UnexpectedPort };
     pub fn parseIpv4(bytes: []const u8) ParseIpv4Error!Self {
         var octs: [4]u8 = [_]u8{0} ** 4;
         var octets_index: usize = 0;
@@ -504,7 +504,7 @@ pub const IpAddr = union(enum(u32)) {
         return Self{ .ipv4 = Ipv4Addr.init(octs[0], octs[1], octs[2], octs[3]) };
     }
 
-    pub const ParseIpv6Error = error{InvalidIpv6, UnexpectedPort};
+    pub const ParseIpv6Error = error{ InvalidIpv6, UnexpectedPort };
     pub fn parseIpv6(bytes: []const u8) ParseIpv6Error!Self {
         var maybe_address: ?std.net.Ip6Address = null;
         const maybe_right_bracket_index = std.mem.indexOf(u8, bytes, &[_]u8{']'});
