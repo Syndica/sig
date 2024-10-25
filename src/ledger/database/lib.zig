@@ -1,5 +1,6 @@
-pub const interface = @import("interface.zig");
 pub const hashmap = @import("hashmap.zig");
+pub const interface = @import("interface.zig");
+pub const lmdb = @import("lmdb.zig");
 pub const rocksdb = @import("rocksdb.zig");
 
 pub const BytesRef = interface.BytesRef;
