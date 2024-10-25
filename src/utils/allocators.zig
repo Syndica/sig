@@ -445,6 +445,10 @@ pub const failing = struct {
     }
 };
 
+pub fn noAlloc(_: *anyopaque, _: usize, _: u8, _: usize) ?[*]u8 {
+    return null;
+}
+
 test "recycle allocator: tryCollapse" {
     const bytes_allocator = std.testing.allocator;
     var allocator = try RecycleFBA(.{}).init(.{
