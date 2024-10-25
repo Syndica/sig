@@ -123,7 +123,7 @@ pub const BenchmarkLedger = struct {
         const start_index = rng.random().intRangeAtMost(u32, 0, @intCast(total_shreds));
         for (start_index..start_index + num_reads) |i| {
             const shred_index = i % total_shreds;
-            _ = try reader.getDataShred(slot, shred_index);
+            _ = try reader.getDataShred(slot, shred_index) orelse return error.MissingShred;
         }
         return timer.read();
     }
@@ -156,7 +156,7 @@ pub const BenchmarkLedger = struct {
 
         var timer = try sig.time.Timer.start();
         for (indices.items) |shred_index| {
-            _ = try reader.getDataShred(slot, shred_index);
+            _ = try reader.getDataShred(slot, shred_index) orelse return error.MissingShred;
         }
         return timer.read();
     }
@@ -188,7 +188,7 @@ pub const BenchmarkLedger = struct {
         var timer = try sig.time.Timer.start();
         for (indices.items) |shred_index| {
             // TODO confirm if getCodeShred can be rightly used with same input data
-            _ = try reader.getCodeShred(slot, shred_index);
+            _ = try reader.getCodeShred(slot, shred_index) orelse return error.MissingShred;
         }
         return timer.read();
     }
@@ -213,8 +213,10 @@ pub const BenchmarkLedger = struct {
         defer result.deinit();
 
         var timer = try sig.time.Timer.start();
-        _ = try reader.getDataShredsForSlot(result.slot + 2, 0);
-        return timer.read();
+        const shreds = try reader.getDataShredsForSlot(result.slot + 2, 0);
+        const duration = timer.read();
+        try std.testing.expect(shreds.items.len > 0);
+        return duration;
     }
 
     pub fn @"BlockstoreReader.getCodeShredsForSlot"() !sig.time.Duration {
@@ -225,8 +227,10 @@ pub const BenchmarkLedger = struct {
         defer result.deinit();
 
         var timer = try sig.time.Timer.start();
-        _ = try reader.getCodeShredsForSlot(result.slot + 2, 0);
-        return timer.read();
+        const shreds = try reader.getCodeShredsForSlot(result.slot + 2, 0);
+        const duration = timer.read();
+        try std.testing.expect(shreds.items.len > 0);
+        return duration;
     }
 
     pub fn @"BlockstoreReader.getSlotEntriesWithShredInfo"() !sig.time.Duration {
@@ -237,8 +241,10 @@ pub const BenchmarkLedger = struct {
         defer result.deinit();
 
         var timer = try sig.time.Timer.start();
-        _ = try reader.getSlotEntriesWithShredInfo(result.slot + 2, 0, true);
-        return timer.read();
+        const items = try reader.getSlotEntriesWithShredInfo(result.slot + 2, 0, true);
+        const duration = timer.read();
+        try std.testing.expect(items[0].items.len > 0);
+        return duration;
     }
 };
 
