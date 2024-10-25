@@ -23,7 +23,7 @@ test "put/get data consistency for merkle root" {
     var prng = std.Random.DefaultPrng.init(100);
     const random = prng.random();
 
-    var db = try DB.init("bsdbMerkleRootDatabaseConsistency");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     const id = sig.ledger.shred.ErasureSetId{
@@ -55,7 +55,7 @@ test "insert shreds and transaction statuses then get blocks" {
 
     const logger = test_logger.logger();
 
-    var state = try State.init(std.testing.allocator, "insert shreds and transaction statuses then get blocks", logger);
+    var state = try TestState.init(std.testing.allocator, @src(), logger);
     const result = try insertDataForBlockTest(state);
     defer result.deinit();
 
@@ -269,82 +269,82 @@ pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entr
     return entries.toOwnedSlice();
 }
 
-const State = TestState("tests.zig");
-const DB = TestDB("tests.zig");
+pub const TestState = struct {
+    db: BlockstoreDB,
+    registry: sig.prometheus.Registry(.{}),
+    lowest_cleanup_slot: sig.sync.RwMux(Slot),
+    max_root: std.atomic.Value(Slot),
+    allocator: std.mem.Allocator,
+    logger: sig.trace.Logger,
 
-pub fn TestState(scope: []const u8) type {
-    return struct {
-        db: BlockstoreDB,
-        registry: sig.prometheus.Registry(.{}),
-        lowest_cleanup_slot: sig.sync.RwMux(Slot),
-        max_root: std.atomic.Value(Slot),
+    const Self = @This();
+
+    pub fn init(
         allocator: std.mem.Allocator,
+        comptime test_src: std.builtin.SourceLocation,
         logger: sig.trace.Logger,
+    ) !*Self {
+        const self = try allocator.create(Self);
+        self.* = .{
+            .allocator = allocator,
+            .db = try TestDB.initCustom(allocator, test_src),
+            .registry = sig.prometheus.Registry(.{}).init(allocator),
+            .lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0),
+            .max_root = std.atomic.Value(Slot).init(0),
+            .logger = logger,
+        };
+        return self;
+    }
 
-        const Self = @This();
+    pub fn shredInserter(self: *Self) !ledger.ShredInserter {
+        return ledger.ShredInserter.init(self.allocator, self.logger, &self.registry, self.db);
+    }
 
-        pub fn init(allocator: std.mem.Allocator, comptime test_name: []const u8, logger: sig.trace.Logger) !*Self {
-            const self = try allocator.create(Self);
-            self.* = .{
-                .allocator = allocator,
-                .db = try TestDB(scope).initCustom(allocator, test_name),
-                .registry = sig.prometheus.Registry(.{}).init(allocator),
-                .lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0),
-                .max_root = std.atomic.Value(Slot).init(0),
-                .logger = logger,
-            };
-            return self;
-        }
+    pub fn writer(self: *Self) !ledger.BlockstoreWriter {
+        return try ledger.BlockstoreWriter.init(
+            self.allocator,
+            self.logger,
+            self.db,
+            &self.registry,
+            &self.lowest_cleanup_slot,
+            &self.max_root,
+        );
+    }
 
-        pub fn shredInserter(self: *Self) !ledger.ShredInserter {
-            return ledger.ShredInserter.init(self.allocator, self.logger, &self.registry, self.db);
-        }
+    pub fn reader(self: *Self) !ledger.BlockstoreReader {
+        return try ledger.BlockstoreReader.init(
+            self.allocator,
+            self.logger,
+            self.db,
+            &self.registry,
+            &self.lowest_cleanup_slot,
+            &self.max_root,
+        );
+    }
 
-        pub fn writer(self: *Self) !ledger.BlockstoreWriter {
-            return try ledger.BlockstoreWriter.init(
-                self.allocator,
-                self.logger,
-                self.db,
-                &self.registry,
-                &self.lowest_cleanup_slot,
-                &self.max_root,
-            );
-        }
+    pub fn deinit(self: *Self) void {
+        self.db.deinit();
+        self.registry.deinit();
+        self.allocator.destroy(self);
+    }
+};
 
-        pub fn reader(self: *Self) !ledger.BlockstoreReader {
-            return try ledger.BlockstoreReader.init(
-                self.allocator,
-                self.logger,
-                self.db,
-                &self.registry,
-                &self.lowest_cleanup_slot,
-                &self.max_root,
-            );
-        }
+pub const TestDB = struct {
+    const dir = sig.TEST_DATA_DIR ++ "/blockstore";
 
-        pub fn deinit(self: *Self) void {
-            self.db.deinit();
-            self.registry.deinit();
-            self.allocator.destroy(self);
-        }
-    };
-}
+    pub fn init(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
+        return try initCustom(std.testing.allocator, test_src);
+    }
 
-pub fn TestDB(scope: []const u8) type {
-    const dir = sig.TEST_DATA_DIR ++ "blockstore";
-
-    return struct {
-        pub fn init(comptime test_name: []const u8) !BlockstoreDB {
-            return try initCustom(std.testing.allocator, test_name);
-        }
-
-        pub fn initCustom(allocator: Allocator, comptime test_name: []const u8) !BlockstoreDB {
-            const path = comptimePrint("{s}/{s}/{s}", .{ dir, scope, test_name });
-            try sig.ledger.tests.freshDir(path);
-            return try BlockstoreDB.open(allocator, .noop, path);
-        }
-    };
-}
+    pub fn initCustom(
+        allocator: Allocator,
+        comptime test_src: std.builtin.SourceLocation,
+    ) !BlockstoreDB {
+        const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
+        try sig.ledger.tests.freshDir(path);
+        return try BlockstoreDB.open(allocator, .noop, path);
+    }
+};
 
 const InsertDataForBlockResult = struct {
     allocator: Allocator,
@@ -363,7 +363,7 @@ const InsertDataForBlockResult = struct {
     }
 };
 
-pub fn insertDataForBlockTest(state: *State) !InsertDataForBlockResult {
+pub fn insertDataForBlockTest(state: *TestState) !InsertDataForBlockResult {
     const allocator = state.allocator;
 
     var db = state.db;

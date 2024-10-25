@@ -312,14 +312,14 @@ pub const ScanAndFixRootsMetrics = struct {
     pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(5, -1, 10);
 };
 
-const TestDB = sig.ledger.tests.TestDB("writer");
+const TestDB = sig.ledger.tests.TestDB;
 
 test "setRoots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("setRoots");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -347,7 +347,7 @@ test "scanAndFixRoots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("scanAndFixRoots");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -389,7 +389,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("setAndChainConnectedOnRootAndNextSlots");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -461,7 +461,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("setAndChainConnectedOnRootAndNextSlots");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);

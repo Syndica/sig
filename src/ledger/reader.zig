@@ -1509,7 +1509,7 @@ pub const AncestorIterator = struct {
 const bincode = sig.bincode;
 const Blockstore = ledger.BlockstoreDB;
 const CodeShred = ledger.shred.CodeShred;
-const TestDB = ledger.tests.TestDB("BlockstoreReader");
+const TestDB = ledger.tests.TestDB;
 
 const test_shreds = @import("test_shreds.zig");
 
@@ -1523,7 +1523,7 @@ test "getLatestOptimisticSlots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("getLatestOptimisticSlots");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1634,7 +1634,7 @@ test "isDead" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("isDead");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1670,7 +1670,7 @@ test "getBlockHeight" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("getBlockHeight");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1699,7 +1699,7 @@ test "getRootedBlockTime" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("getRootedBlockTime");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1738,7 +1738,7 @@ test "slotMetaIterator" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("slotMetaIterator");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1800,7 +1800,7 @@ test "rootedSlotIterator" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("rootedSlotIterator");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1836,7 +1836,7 @@ test "slotRangeConnected" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("slotRangeConnected");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1894,7 +1894,7 @@ test "highestSlot" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("highestSlot");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1953,7 +1953,7 @@ test "lowestSlot" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("lowestSlot");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1999,7 +1999,7 @@ test "isShredDuplicate" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("isShredDuplicate");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -2051,7 +2051,7 @@ test "findMissingDataIndexes" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("findMissingDataIndexes");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -2119,7 +2119,7 @@ test "getCodeShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("getCodeShred");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -2201,7 +2201,7 @@ test "getDataShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("getDataShred");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
