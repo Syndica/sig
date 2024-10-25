@@ -453,6 +453,11 @@ pub const IpAddr = union(enum(u32)) {
 
     const Self = @This();
 
+    pub const ParseIpError = error{InvalidIpAddr};
+    pub fn parse(bytes: []const u8) ParseIpError!Self {
+        return parseIpv4(bytes) catch parseIpv6(bytes) catch error.InvalidIpAddr;
+    }
+
     pub const ParseIpv4Error = error{InvalidIpv4};
     pub fn parseIpv4(bytes: []const u8) ParseIpv4Error!Self {
         var octs: [4]u8 = [_]u8{0} ** 4;
@@ -677,4 +682,44 @@ test "invalid ipv6 address with port parsing" {
 
 test "invalid ipv6 address without port parsing" {
     try std.testing.expectError(error.InvalidIpv6, IpAddr.parseIpv6("[FE38:DCEq:124C:C1A2:BA03:6745:EF1C:683D]"));
+}
+
+test "parse IPv6 addreess if IPv4 address fails" {
+    {
+        const addr = try IpAddr.parse("127.0.0.1:1234");
+        const expected = IpAddr{ .ipv4 = Ipv4Addr.init(127, 0, 0, 1) };
+        try std.testing.expectEqual(addr.ipv4, expected.ipv4);
+    }
+
+    {
+        const addr = try IpAddr.parse("127.0.0.1");
+        const expected = IpAddr{ .ipv4 = Ipv4Addr.init(127, 0, 0, 1) };
+        try std.testing.expectEqual(addr.ipv4, expected.ipv4);
+    }
+
+    {
+        const addr = try IpAddr.parse("[FE38:DCE3:124C:C1A2:BA03:6745:EF1C:683D]:8000");
+        const expected = IpAddr{ .ipv6 = Ipv6Addr.init([16]u8{ '\xFE', '\x38', '\xDC', '\xE3', '\x12', '\x4C', '\xC1', '\xA2', '\xBA', '\x03', '\x67', '\x45', '\xEF', '\x1C', '\x68', '\x3D' }) };
+
+        try std.testing.expectEqual(addr.ipv6, expected.ipv6);
+    }
+
+    {
+        const addr = try IpAddr.parse("[::1]:1234");
+        const expected = IpAddr{ .ipv6 = Ipv6Addr.init([16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '\x01' }) };
+
+        try std.testing.expectEqual(addr.ipv6, expected.ipv6);
+    }
+
+    {
+        const addr = try IpAddr.parse("[2001:0df8:00f2::06ee:0:0f11]:6500");
+        const expected = IpAddr{ .ipv6 = Ipv6Addr.init([16]u8{ '\x20', '\x01', '\x0D', '\xF8', 0, '\xF2', 0, 0, 0, 0, '\x06', '\xEE', 0, 0, '\x0F', '\x11' }) };
+        try std.testing.expectEqual(addr.ipv6, expected.ipv6);
+    }
+
+    {
+        const addr = try IpAddr.parse("2001:0df8:00f2::06ee:0:0f11");
+        const expected = IpAddr{ .ipv6 = Ipv6Addr.init([16]u8{ '\x20', '\x01', '\x0D', '\xF8', 0, '\xF2', 0, 0, 0, 0, '\x06', '\xEE', 0, 0, '\x0F', '\x11' }) };
+        try std.testing.expectEqual(addr.ipv6, expected.ipv6);
+    }
 }
