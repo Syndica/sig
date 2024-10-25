@@ -67,6 +67,42 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
+    /// Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
+    pub fn @"Database.put Rewards"() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try State.init(allocator, "bench serialize write bincode", .noop);
+        defer state.deinit();
+        const slot: u32 = 0;
+
+        var rewards: Rewards = try createRewards(allocator, 100);
+        const rewards_slice = try rewards.toOwnedSlice();
+        var timer = try sig.time.Timer.start();
+        try state.db.put(schema.rewards, slot, .{
+            .rewards = rewards_slice,
+            .num_partitions = null,
+        });
+        return timer.read();
+    }
+
+    /// Analogous to [bench_read_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L100)
+    pub fn @"Database.get Rewards"() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try State.init(allocator, "bench read bincode", .noop);
+        defer state.deinit();
+        const slot: u32 = 1;
+
+        var rewards: Rewards = try createRewards(allocator, 100);
+        try state.db.put(schema.rewards, slot, .{
+            .rewards = try rewards.toOwnedSlice(),
+            .num_partitions = null,
+        });
+        var timer = try sig.time.Timer.start();
+        _ = try state.db.get(allocator, schema.rewards, slot);
+        return timer.read();
+    }
+
+    /// Benchmarks for BlockstoreReader.
+    ///
     /// Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
     pub fn @"BlockstoreReader.getDataShred - Sequential"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
@@ -130,10 +166,9 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    /// Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
-    pub fn @"Database.put Rewards"() !sig.time.Duration {
+    pub fn @"BlockstoreReader.getCodeShred"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-        var state = try State.init(allocator, "bench serialize write bincode", .noop);
+        var state = try State.init(allocator, "bench read randmom", .noop);
         defer state.deinit();
         var inserter = try state.shredInserter();
         var reader = try state.reader();
@@ -147,30 +182,53 @@ pub const BenchmarkLedger = struct {
 
         const slot: u32 = 0;
 
-        var rewards: Rewards = try createRewards(allocator, 100);
-        const rewards_slice = try rewards.toOwnedSlice();
+        var rng = std.Random.DefaultPrng.init(100);
+
+        var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, total_shreds);
+        defer indices.deinit();
+        for (total_shreds) |_| {
+            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
+        }
+
         var timer = try sig.time.Timer.start();
-        try state.db.put(schema.rewards, slot, .{
-            .rewards = rewards_slice,
-            .num_partitions = null,
-        });
+        for (indices.items) |shred_index| {
+            // TODO confirm if getCodeShred can be rightly used with same input data
+            _ = try reader.getCodeShred(slot, shred_index);
+        }
         return timer.read();
     }
 
-    /// Analogous to [bench_read_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L100)
-    pub fn @"Database.get Rewards"() !sig.time.Duration {
+    pub fn @"BlockstoreReader.slotRangeConnected"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-        var state = try State.init(allocator, "bench read bincode", .noop);
+        var state = try State.init(allocator, "slotRangeConnected", .noop);
         defer state.deinit();
-        const slot: u32 = 1;
+        var reader = try state.reader();
+        var db = state.db;
 
-        var rewards: Rewards = try createRewards(allocator, 100);
-        try state.db.put(schema.rewards, slot, .{
-            .rewards = try rewards.toOwnedSlice(),
-            .num_partitions = null,
-        });
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+
+        // TODO this is essentially slots with little or no data consturcted manually
+        // Will it be more realistic to not manually construct the benchmarking data?
+        const slot_per_epoch = 432_000;
+        var parent_slot: ?Slot = null;
+        for (1..(slot_per_epoch + 1)) |slot| {
+            var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
+            defer slot_meta.deinit();
+            // ensure isFull() is true
+            slot_meta.last_index = 1;
+            slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
+            // update next slots
+            if (slot < (slot_per_epoch + 1)) {
+                try slot_meta.next_slots.append(slot + 1);
+            }
+            try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
+            // connect the chain
+            parent_slot = slot;
+        }
+        try db.commit(write_batch);
+
         var timer = try sig.time.Timer.start();
-        _ = try state.db.get(allocator, schema.rewards, slot);
         const is_connected = try reader.slotRangeConnected(1, slot_per_epoch);
         const duration = timer.read();
 
@@ -179,7 +237,7 @@ pub const BenchmarkLedger = struct {
         return duration;
     }
 
-    pub fn benchGetCompleteBlock() !sig.time.Duration {
+    pub fn @"BlockstoreReader.getCompleteBlock"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         const state = try State.init(allocator, "bentch read sequential", .noop);
         const result = try ledger_tests.insertDataForBlockTest(state);
@@ -205,7 +263,7 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    pub fn benchGetDataShredsForSlot() !sig.time.Duration {
+    pub fn @"BlockstoreReader.getDataShredsForSlot"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         const state = try State.init(allocator, "bentch read sequential", .noop);
         const result = try ledger_tests.insertDataForBlockTest(state);
@@ -231,7 +289,7 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    pub fn benchGetCodeShredsForSlot() !sig.time.Duration {
+    pub fn @"BlockstoreReader.getCodeShredsForSlot"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         const state = try State.init(allocator, "bentch read sequential", .noop);
         const result = try ledger_tests.insertDataForBlockTest(state);
@@ -257,7 +315,7 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    pub fn benchGetSlotEntriesWithShredInfo() !sig.time.Duration {
+    pub fn @"BlockstoreReader.getSlotEntriesWithShredInfo"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         const state = try State.init(allocator, "bentch read sequential", .noop);
         const result = try ledger_tests.insertDataForBlockTest(state);
