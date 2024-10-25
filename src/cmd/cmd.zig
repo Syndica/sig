@@ -1124,8 +1124,7 @@ const AppBase = struct {
         errdefer entrypoints.deinit();
 
         const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
-        // Try to extract the port from the given host. If no port is found, fall back to the configured default port.
-        const my_port = (config.current.gossip.getPortFromHost() orelse config.current.gossip.port) catch config.current.gossip.port;
+        const my_port = config.current.gossip.port;
 
         return .{
             .closed = false,
