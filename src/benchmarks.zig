@@ -109,6 +109,11 @@ pub fn main() !void {
             max_time_per_bench,
             .microseconds,
         );
+        try benchmark(
+            @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
+            max_time_per_bench,
+            .milliseconds,
+        );
     }
 }
 

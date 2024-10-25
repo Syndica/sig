@@ -193,45 +193,6 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    pub fn @"BlockstoreReader.slotRangeConnected"() !sig.time.Duration {
-        const allocator = std.heap.c_allocator;
-        var state = try TestState.init(allocator, @src(), .noop);
-        defer state.deinit();
-        var reader = try state.reader();
-        var db = state.db;
-
-        var write_batch = try db.initWriteBatch();
-        defer write_batch.deinit();
-
-        // TODO this is essentially slots with little or no data consturcted manually
-        // Will it be more realistic to not manually construct the benchmarking data?
-        const slot_per_epoch = 432_000;
-        var parent_slot: ?Slot = null;
-        for (1..(slot_per_epoch + 1)) |slot| {
-            var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
-            defer slot_meta.deinit();
-            // ensure isFull() is true
-            slot_meta.last_index = 1;
-            slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
-            // update next slots
-            if (slot < (slot_per_epoch + 1)) {
-                try slot_meta.next_slots.append(slot + 1);
-            }
-            try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
-            // connect the chain
-            parent_slot = slot;
-        }
-        try db.commit(write_batch);
-
-        var timer = try sig.time.Timer.start();
-        const is_connected = try reader.slotRangeConnected(1, slot_per_epoch);
-        const duration = timer.read();
-
-        try std.testing.expectEqual(true, is_connected);
-
-        return duration;
-    }
-
     pub fn @"BlockstoreReader.getCompleteBlock"() !sig.time.Duration {
         const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
@@ -278,5 +239,52 @@ pub const BenchmarkLedger = struct {
         var timer = try sig.time.Timer.start();
         _ = try reader.getSlotEntriesWithShredInfo(result.slot + 2, 0, true);
         return timer.read();
+    }
+};
+
+pub const BenchmarkLedgerSlow = struct {
+    const Slot = sig.core.Slot;
+    const SlotMeta = ledger.meta.SlotMeta;
+
+    pub const min_iterations = 5;
+    pub const max_iterations = 5;
+
+    pub fn @"BlockstoreReader.slotRangeConnected"() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try TestState.init(allocator, @src(), .noop);
+        defer state.deinit();
+        var reader = try state.reader();
+        var db = state.db;
+
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+
+        // TODO this is essentially slots with little or no data consturcted manually
+        // Will it be more realistic to not manually construct the benchmarking data?
+        const slot_per_epoch = 432_000;
+        var parent_slot: ?Slot = null;
+        for (1..(slot_per_epoch + 1)) |slot| {
+            var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
+            defer slot_meta.deinit();
+            // ensure isFull() is true
+            slot_meta.last_index = 1;
+            slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
+            // update next slots
+            if (slot < (slot_per_epoch + 1)) {
+                try slot_meta.next_slots.append(slot + 1);
+            }
+            try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
+            // connect the chain
+            parent_slot = slot;
+        }
+        try db.commit(write_batch);
+
+        var timer = try sig.time.Timer.start();
+        const is_connected = try reader.slotRangeConnected(1, slot_per_epoch);
+        const duration = timer.read();
+
+        try std.testing.expectEqual(true, is_connected);
+
+        return duration;
     }
 };
