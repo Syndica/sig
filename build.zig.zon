@@ -35,5 +35,9 @@
             .url = "https://github.com/Syndica/rocksdb-zig/archive/9c09659a5e41f226b6b8f3fa21149247eb26dfae.tar.gz",
             .hash = "1220aeb80b2f8bb48c131ef306fe48ddfcb537210c5f77742e921cbf40fc4c19b41e",
         },
+        .lmdb = .{
+            .url = "https://github.com/Syndica/lmdb-zig/archive/ffa8d332cbe85f05b0e6d20db8764801bc16d1e1.tar.gz",
+            .hash = "1220e27a4e98d4f93b1f29c7c38985a4818e6cd135525379e23087c20c8de4a3034b",
+        },
     },
 }
