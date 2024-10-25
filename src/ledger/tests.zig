@@ -57,23 +57,9 @@ test "insert shreds and transaction statuses then get blocks" {
 
     var state = try State.init(std.testing.allocator, "insert shreds and transaction statuses then get blocks", logger);
     const result = try insertDataForBlockTest(state);
-    const entries = result.entries;
-    const expected_transactions = result.expected_transactions;
+    defer result.deinit();
 
-    defer {
-        for (expected_transactions.items) |etx| {
-            std.testing.allocator.free(etx.meta.pre_balances);
-            std.testing.allocator.free(etx.meta.post_balances);
-        }
-        expected_transactions.deinit();
-    }
-
-    defer {
-        for (entries) |e| e.deinit(std.testing.allocator);
-        std.testing.allocator.free(entries);
-    }
-
-    const blockhash = entries[entries.len - 1].hash;
+    const blockhash = result.entries[result.entries.len - 1].hash;
     const blockhash_string = blockhash.base58String();
 
     defer state.deinit();
@@ -82,7 +68,7 @@ test "insert shreds and transaction statuses then get blocks" {
     var db = state.db;
     var reader = try state.reader();
 
-    const slot = 10;
+    const slot = result.slot;
 
     // Even if marked as root, a slot that is empty of entries should return an error
     try std.testing.expectError(error.SlotUnavailable, reader.getRootedBlock(slot - 1, true));
@@ -98,7 +84,7 @@ test "insert shreds and transaction statuses then get blocks" {
         try std.testing.expectEqual(100, confirmed_block.transactions.len);
         const expected_block = ledger.reader.VersionedConfirmedBlock{
             .allocator = allocator,
-            .transactions = expected_transactions.items,
+            .transactions = result.expected_transactions,
             .parent_slot = slot - 1,
             .blockhash = blockhash_string.slice(),
             .previous_blockhash = sig.core.Hash.ZEROES.base58String().slice(),
@@ -115,7 +101,7 @@ test "insert shreds and transaction statuses then get blocks" {
     try std.testing.expectEqual(100, confirmed_block.transactions.len);
     var expected_block = ledger.reader.VersionedConfirmedBlock{
         .allocator = allocator,
-        .transactions = expected_transactions.items,
+        .transactions = result.expected_transactions,
         .parent_slot = slot,
         .blockhash = blockhash_string.slice(),
         .previous_blockhash = blockhash_string.slice(),
@@ -133,7 +119,7 @@ test "insert shreds and transaction statuses then get blocks" {
     try std.testing.expectEqual(100, complete_block.transactions.len);
     var expected_complete_block = ledger.reader.VersionedConfirmedBlock{
         .allocator = allocator,
-        .transactions = expected_transactions.items,
+        .transactions = result.expected_transactions,
         .parent_slot = slot + 1,
         .blockhash = blockhash_string.slice(),
         .previous_blockhash = blockhash_string.slice(),
@@ -180,7 +166,7 @@ pub fn freshDir(path: []const u8) !void {
     try std.fs.cwd().makePath(path);
 }
 
-const test_shreds_dir = sig.TEST_DATA_DIR ++ "/shreds";
+pub const test_shreds_dir = sig.TEST_DATA_DIR ++ "/shreds";
 
 pub fn testShreds(allocator: std.mem.Allocator, comptime filename: []const u8) ![]const Shred {
     const path = comptimePrint("{s}/{s}", .{ test_shreds_dir, filename });
@@ -283,8 +269,8 @@ pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entr
     return entries.toOwnedSlice();
 }
 
-const State = TestState("global");
-const DB = TestDB("global");
+const State = TestState("tests.zig");
+const DB = TestDB("tests.zig");
 
 pub fn TestState(scope: []const u8) type {
     return struct {
@@ -361,8 +347,20 @@ pub fn TestDB(scope: []const u8) type {
 }
 
 const InsertDataForBlockResult = struct {
+    allocator: Allocator,
+    slot: Slot,
     entries: []const Entry,
-    expected_transactions: std.ArrayList(VersionedTransactionWithStatusMeta),
+    expected_transactions: []const VersionedTransactionWithStatusMeta,
+
+    pub fn deinit(self: InsertDataForBlockResult) void {
+        for (self.entries) |e| e.deinit(self.allocator);
+        for (self.expected_transactions) |etx| {
+            self.allocator.free(etx.meta.pre_balances);
+            self.allocator.free(etx.meta.post_balances);
+        }
+        self.allocator.free(self.entries);
+        self.allocator.free(self.expected_transactions);
+    }
 };
 
 pub fn insertDataForBlockTest(state: *State) !InsertDataForBlockResult {
@@ -457,5 +455,10 @@ pub fn insertDataForBlockTest(state: *State) !InsertDataForBlockResult {
         }
     }
 
-    return .{ .entries = entries, .expected_transactions = expected_transactions };
+    return .{
+        .allocator = allocator,
+        .slot = slot,
+        .entries = entries,
+        .expected_transactions = try expected_transactions.toOwnedSlice(),
+    };
 }
