@@ -20,7 +20,9 @@ pub const geyser = @import("geyser/lib.zig");
 pub const transaction_sender = @import("transaction_sender/lib.zig");
 
 pub const VALIDATOR_DIR = "validator/";
+/// persistent data used as test inputs
 pub const TEST_DATA_DIR = "data/test-data/";
+/// ephemeral state produced by tests
 pub const TEST_STATE_DIR = "data/test-state/";
 pub const FUZZ_DATA_DIR = "data/fuzz-data/";
 pub const GENESIS_DIR = "data/genesis-files/";
