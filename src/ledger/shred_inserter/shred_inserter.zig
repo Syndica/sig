@@ -1122,7 +1122,6 @@ pub const BlockstoreInsertionMetrics = struct {
 // Tests
 
 const test_shreds = @import("../test_shreds.zig");
-const comptimePrint = std.fmt.comptimePrint;
 const TestState = ledger.tests.TestState;
 const DirectPrintLogger = sig.trace.DirectPrintLogger;
 const Logger = sig.trace.Logger;

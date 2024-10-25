@@ -8,7 +8,6 @@ const Rewards = ledger.transaction_status.Rewards;
 const RewardType = ledger.transaction_status.RewardType;
 const Pubkey = sig.core.Pubkey;
 const TestState = ledger_tests.TestState;
-const TestDB = ledger_tests.TestDB;
 
 const schema = ledger.schema.schema;
 const deinitShreds = ledger_tests.deinitShreds;
