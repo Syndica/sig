@@ -453,12 +453,24 @@ pub const IpAddr = union(enum(u32)) {
 
     const Self = @This();
 
-    pub const ParseIpError = error{InvalidIpAddr};
+    pub const ParseIpError = error{InvalidIpAddr, UnexpectedPort};
     pub fn parse(bytes: []const u8) ParseIpError!Self {
-        return parseIpv4(bytes) catch parseIpv6(bytes) catch error.InvalidIpAddr;
+        if (std.mem.indexOfScalar(u8, bytes, '.')) |_| {
+            // Probably IPv4.
+            return parseIpv4(bytes) catch |err| switch(err) {
+                error.InvalidIpv4 => return error.InvalidIpAddr,
+                error.UnexpectedPort => return error.UnexpectedPort
+            };
+        } else {
+            // Probably IPv6.
+            return parseIpv6(bytes) catch |err| switch(err) {
+                error.InvalidIpv6 => return error.InvalidIpAddr,
+                error.UnexpectedPort => return error.UnexpectedPort
+            };
+        }
     }
 
-    pub const ParseIpv4Error = error{InvalidIpv4};
+    pub const ParseIpv4Error = error{InvalidIpv4, UnexpectedPort};
     pub fn parseIpv4(bytes: []const u8) ParseIpv4Error!Self {
         var octs: [4]u8 = [_]u8{0} ** 4;
         var octets_index: usize = 0;
@@ -482,7 +494,7 @@ pub const IpAddr = union(enum(u32)) {
                     octs[octets_index] = add_result[0];
                     parsed_digit = true;
                 },
-                ':' => break, // Ignore anything after the ':' (port section)
+                ':' => return error.UnexpectedPort,
                 else => return error.InvalidIpv4,
             }
         }
@@ -492,7 +504,7 @@ pub const IpAddr = union(enum(u32)) {
         return Self{ .ipv4 = Ipv4Addr.init(octs[0], octs[1], octs[2], octs[3]) };
     }
 
-    pub const ParseIpv6Error = error{InvalidIpv6};
+    pub const ParseIpv6Error = error{InvalidIpv6, UnexpectedPort};
     pub fn parseIpv6(bytes: []const u8) ParseIpv6Error!Self {
         var maybe_address: ?std.net.Ip6Address = null;
         const maybe_right_bracket_index = std.mem.indexOf(u8, bytes, &[_]u8{']'});
@@ -636,13 +648,6 @@ test "parse IPv6 if IPv4 fails" {
     }
 }
 
-test "valid ipv4 address with port parsing" {
-    const addr = "127.0.0.1:1234";
-    const expected_addr = IpAddr{ .ipv4 = Ipv4Addr.init(127, 0, 0, 1) };
-    const actual_addr = try IpAddr.parseIpv4(addr);
-    try std.testing.expectEqual(expected_addr, actual_addr);
-}
-
 test "valid ipv4 address without port parsing" {
     const addr = "127.0.0.1";
     const expected_addr = IpAddr{ .ipv4 = Ipv4Addr.init(127, 0, 0, 1) };
@@ -654,6 +659,12 @@ test "invalid ipv4 address with port parsing" {
     const addr = "127.0.01:1234";
     const result = IpAddr.parseIpv4(addr);
     try std.testing.expectError(error.InvalidIpv4, result);
+}
+
+test "valid ipv4 address with invalid port parsing" {
+    const addr = "127.0.0.1:1234";
+    const result = IpAddr.parseIpv4(addr);
+    try std.testing.expectError(error.UnexpectedPort, result);
 }
 
 test "invalid ipv4 address without port parsing" {
