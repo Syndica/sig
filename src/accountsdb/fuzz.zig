@@ -64,10 +64,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const use_disk = random.boolean();
 
-    var test_data_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
+    var test_data_dir = try std.fs.cwd().makeOpenPath(sig.FUZZ_DATA_DIR, .{});
     defer test_data_dir.close();
 
-    const snapshot_dir_name = "accountsdb_fuzz";
+    const snapshot_dir_name = "accountsdb";
     var snapshot_dir = try test_data_dir.makeOpenPath(snapshot_dir_name, .{});
     defer snapshot_dir.close();
     defer {
@@ -108,12 +108,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer allocator.destroy(exit);
     exit.* = std.atomic.Value(bool).init(false);
 
-    const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{ &accounts_db, AccountsDB.ManagerLoopConfig{
-        .exit = exit,
-        .slots_per_full_snapshot = 50_000,
-        .slots_per_incremental_snapshot = 5_000,
-        .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
-    } });
+    const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{
+        &accounts_db, AccountsDB.ManagerLoopConfig{
+            .exit = exit,
+            .slots_per_full_snapshot = 50_000,
+            .slots_per_incremental_snapshot = 5_000,
+            .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
+        },
+    });
     errdefer {
         exit.store(true, .release);
         manager_handle.join();
@@ -132,6 +134,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var largest_rooted_slot: Slot = 0;
     var slot: Slot = 0;
 
+    var pubkeys_this_slot = std.AutoHashMap(Pubkey, void).init(allocator);
+    defer pubkeys_this_slot.deinit();
+
     // get/put a bunch of accounts
     while (true) {
         if (maybe_max_actions) |max_actions| {
@@ -149,6 +154,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 var accounts: [N_ACCOUNTS_PER_SLOT]Account = undefined;
                 var pubkeys: [N_ACCOUNTS_PER_SLOT]Pubkey = undefined;
+                pubkeys_this_slot.clearRetainingCapacity();
 
                 for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
                     errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
@@ -159,7 +165,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     if (existing_pubkey and tracked_accounts.count() > 0) {
                         const index = random.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
                         const key = tracked_accounts.keys()[index];
-                        tracked_account.pubkey = key;
+                        // only if the pubkey is not already in this slot
+                        if (!pubkeys_this_slot.contains(key)) {
+                            tracked_account.pubkey = key;
+                        }
                     }
 
                     account.* = try tracked_account.toAccount(allocator);
@@ -167,6 +176,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                     // always overwrite the old slot
                     try tracked_accounts.put(tracked_account.pubkey, tracked_account);
+                    try pubkeys_this_slot.put(pubkey.*, {});
+
+                    // // NOTE: useful for debugging
+                    // std.debug.print("put account @ slot {d}: {any}\n", .{ slot, tracked_account });
                 }
                 defer for (accounts) |account| account.deinit(allocator);
 
@@ -186,11 +199,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 const key = tracked_accounts.keys()[index];
 
                 const tracked_account = tracked_accounts.get(key).?;
-                var account = try accounts_db.getAccount(&tracked_account.pubkey);
+                var account, const ref = try accounts_db.getAccountAndReference(&tracked_account.pubkey);
                 defer account.deinit(allocator);
 
                 if (!std.mem.eql(u8, &tracked_account.data, account.data)) {
-                    @panic("found accounts with different data");
+                    std.debug.panic("found account {any} with different data: tracked: {any} vs found: {any} ({any})\n", .{ key, tracked_account.data, account.data, ref });
                 }
             },
         }

@@ -54,6 +54,15 @@ const GossipConfig = struct {
         };
     }
 
+    pub fn getPortFromHost(config: GossipConfig) ?sig.net.SocketAddr.ParseIpError!u16 {
+        const host_str = config.host orelse return null;
+        const socket = try sig.net.SocketAddr.parse(host_str);
+        return switch (socket) {
+            .V4 => |v4| v4.port,
+            .V6 => |v6| v6.port,
+        };
+    }
+
     pub fn getNetwork(self: GossipConfig) error{UnknownNetwork}!?Network {
         return if (self.network) |network_str|
             std.meta.stringToEnum(Network, network_str) orelse
