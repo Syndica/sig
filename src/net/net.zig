@@ -487,6 +487,29 @@ pub const IpAddr = union(enum(u32)) {
         return Self{ .ipv4 = Ipv4Addr.init(octs[0], octs[1], octs[2], octs[3]) };
     }
 
+    pub const ParseIpv6Error = error{InvalidIpv6};
+    pub fn parseIpv6(bytes: []const u8) ParseIpv6Error!Self {
+        var maybe_address: ?std.net.Ip6Address = null;
+        const maybe_right_bracket_index = std.mem.indexOf(u8, bytes, &[_]u8{']'});
+        const maybe_left_bracket_index = std.mem.indexOf(u8, bytes, &[_]u8{'['});
+        // right_bracket_index + 2 should be less than the total length of bytes in order to proceed. Why?
+        // Because if the string is [2001::1]:8000, then right_bracket_index would be 8, and 10 would be the start of the port
+        //                          ~~~~~~~^++ <-- this is index + 2
+        if (maybe_right_bracket_index) |right_bracket_index| {
+            if (maybe_left_bracket_index) |left_bracket_index| {
+                maybe_address = std.net.Ip6Address.parse(bytes[left_bracket_index + 1 .. right_bracket_index], 0) catch return error.InvalidIpv6;
+            }
+        } else {
+            maybe_address = std.net.Ip6Address.parse(bytes, 0) catch return error.InvalidIpv6;
+        }
+
+        if (maybe_address) |address| {
+            return Self{ .ipv6 = Ipv6Addr.init(address.sa.addr) };
+        } else {
+            return error.InvalidIpv6;
+        }
+    }
+
     pub fn newIpv4(a: u8, b: u8, c: u8, d: u8) IpAddr {
         return .{
             .ipv4 = Ipv4Addr{
@@ -632,4 +655,26 @@ test "invalid ipv4 address without port parsing" {
     const addr = "127.0.01";
     const result = IpAddr.parseIpv4(addr);
     try std.testing.expectError(error.InvalidIpv4, result);
+}
+
+test "valid ipv6 address with port parsing" {
+    const addr = try IpAddr.parseIpv6("[FE38:DCE3:124C:C1A2:BA03:6745:EF1C:683D]:8000");
+    const expected = IpAddr{ .ipv6 = Ipv6Addr.init([16]u8{ '\xFE', '\x38', '\xDC', '\xE3', '\x12', '\x4C', '\xC1', '\xA2', '\xBA', '\x03', '\x67', '\x45', '\xEF', '\x1C', '\x68', '\x3D' }) };
+
+    try std.testing.expectEqual(addr, expected);
+}
+
+test "valid ipv6 address without port parsing" {
+    const addr = try IpAddr.parseIpv6("[FE38:DCE3:124C:C1A2:BA03:6745:EF1C:683D]");
+    const expected = IpAddr{ .ipv6 = Ipv6Addr.init([16]u8{ '\xFE', '\x38', '\xDC', '\xE3', '\x12', '\x4C', '\xC1', '\xA2', '\xBA', '\x03', '\x67', '\x45', '\xEF', '\x1C', '\x68', '\x3D' }) };
+
+    try std.testing.expectEqual(addr, expected);
+}
+
+test "invalid ipv6 address with port parsing" {
+    try std.testing.expectError(error.InvalidIpv6, IpAddr.parseIpv6("[FE38:DCEq:124C:C1A2:BA03:6745:EF1C:683D]:8000"));
+}
+
+test "invalid ipv6 address without port parsing" {
+    try std.testing.expectError(error.InvalidIpv6, IpAddr.parseIpv6("[FE38:DCEq:124C:C1A2:BA03:6745:EF1C:683D]"));
 }
