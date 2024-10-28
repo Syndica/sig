@@ -4343,6 +4343,7 @@ pub const BenchmarkAccountsDB = struct {
         // this models how some accounts are far more commonly read than others.
         // TODO: is this distribution accurate? Probably not, but I don't have the data.
         const pubkeys_read_weighting = try allocator.alloc(f32, n_accounts);
+        defer allocator.free(pubkeys_read_weighting);
         for (pubkeys_read_weighting) |*read_probability| read_probability.* = random.floatNorm(f32);
         var indexer = try WeightedAliasSampler.init(allocator, random, pubkeys_read_weighting);
         defer indexer.deinit(allocator);
