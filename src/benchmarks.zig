@@ -303,7 +303,7 @@ pub fn benchmarkCSV(
                 Duration => {
                     // print column headers
                     if (arg_i == 0) {
-                        try writer_average.print("{s}, min, max, mean, variance\n", .{benchmark_name});
+                        try writer_average.print("{s}, min, max, mean, variance\n", .{def.name});
                     }
                     const mean = sum / iter_count;
                     var variance: u64 = 0;
@@ -314,12 +314,12 @@ pub fn benchmarkCSV(
                     }
                     variance /= iter_count;
                     // print column results
-                    try writer_average.print("{s}({s}), {d}, {d}, {d}, {d}\n", .{ def.name, arg.name, min, max, mean, variance });
+                    try writer_average.print("{s}, {d}, {d}, {d}, {d}\n", .{ arg.name, min, max, mean, variance });
                 },
                 inline else => {
                     // print column headers
                     if (arg_i == 0) {
-                        try writer_average.print("{s}, ", .{benchmark_name});
+                        try writer_average.print("{s}, ", .{def.name});
                         inline for (U.fields) |field| {
                             try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
                         }
@@ -327,7 +327,7 @@ pub fn benchmarkCSV(
                     }
 
                     // print results
-                    try writer_average.print("{s}({s}), ", .{ def.name, arg.name });
+                    try writer_average.print("{s}, ", .{arg.name});
                     inline for (U.fields, 0..) |field, j| {
                         const f_max = @field(max_s, field.name);
                         const f_min = @field(min_s, field.name);
