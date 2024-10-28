@@ -3992,6 +3992,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
             .number_of_index_shards = 32,
             .use_disk_index = bench_args.use_disk,
+            .lru_size = null,
         }, null);
         defer accounts_db.deinit();
 
