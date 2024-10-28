@@ -4332,12 +4332,13 @@ pub const BenchmarkAccountsDB = struct {
         const pubkeys_read_weighting = try allocator.alloc(f32, n_accounts);
         for (pubkeys_read_weighting) |*read_probability| read_probability.* = random.floatNorm(f32);
         var indexer = try WeightedAliasSampler.init(allocator, pubkeys_read_weighting);
+        defer indexer.deinit(allocator);
 
         // "warm up" accounts cache
         {
             var i: usize = 0;
             while (i < n_accounts) : (i += 1) {
-                const pubkey_idx = indexer.nextIndex(random);
+                const pubkey_idx = indexer.sample(random);
                 _ = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
             }
         }
@@ -4355,7 +4356,7 @@ pub const BenchmarkAccountsDB = struct {
         const do_read_count = n_accounts;
         var i: usize = 0;
         while (i < do_read_count) : (i += 1) {
-            const pubkey_idx = indexer.nextIndex(random);
+            const pubkey_idx = indexer.sample(random);
             const account = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
             if (account.data.len != (pubkey_idx % 1_000)) {
                 std.debug.panic("account data len dnm {}: {} != {}", .{ pubkey_idx, account.data.len, (pubkey_idx % 1_000) });

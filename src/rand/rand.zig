@@ -433,7 +433,7 @@ const rust_expected_weights: [1000]u64 = .{
 pub const WeightedAliasSampler = struct {
     probability: []const f32,
     alias: []const usize,
-    pub fn init(allocator: std.mem.Allocator, probabilities: []f32) !WeightedAliasSampler {
+    pub fn init(allocator: std.mem.Allocator, probabilities: []const f32) !WeightedAliasSampler {
         const n = probabilities.len;
         const average: f32 = 1.0 / @as(f32, @floatFromInt(n));
 
@@ -483,7 +483,12 @@ pub const WeightedAliasSampler = struct {
         };
     }
 
-    pub fn nextIndex(self: WeightedAliasSampler, random: std.Random) usize {
+    pub fn deinit(self: WeightedAliasSampler, allocator: std.mem.Allocator) void {
+        allocator.free(self.probability);
+        allocator.free(self.alias);
+    }
+
+    pub fn sample(self: WeightedAliasSampler, random: std.Random) usize {
         const column = random.intRangeLessThan(usize, 0, self.probability.len);
 
         if (random.float(f32) < self.probability[column]) {
