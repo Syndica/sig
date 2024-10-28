@@ -194,6 +194,7 @@ pub const ChannelPrintLogger = struct {
             std.debug.print("allocBuff failed with err: {any}", .{err});
             return;
         };
+
         var stream = std.io.fixedBufferStream(msg_buf);
         logfmt.writeLog(stream.writer(), scope, level, fields, fmt, args) catch |err| {
             std.debug.print("writeLog failed with err: {any}", .{err});
