@@ -4352,7 +4352,8 @@ pub const BenchmarkAccountsDB = struct {
             var i: usize = 0;
             while (i < n_accounts) : (i += 1) {
                 const pubkey_idx = indexer.sample();
-                _ = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
+                const account = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
+                account.deinit(allocator);
             }
         }
 
