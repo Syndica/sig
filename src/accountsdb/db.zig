@@ -4346,8 +4346,8 @@ pub const BenchmarkAccountsDB = struct {
         if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_mux| {
             const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
             defer accounts_cache_lg.unlock();
-            accounts_cache.cache_hits = 0;
-            accounts_cache.cache_misses = 0;
+            accounts_cache.maybe_metrics.?.cache_hits.reset();
+            accounts_cache.maybe_metrics.?.cache_misses.reset();
         }
 
         var timer = try sig.time.Timer.start();
@@ -4368,8 +4368,8 @@ pub const BenchmarkAccountsDB = struct {
             const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
             defer accounts_cache_lg.unlock();
 
-            const cache_hits = accounts_cache.cache_hits;
-            const cache_misses = accounts_cache.cache_misses;
+            const cache_hits = accounts_cache.maybe_metrics.?.cache_hits.get();
+            const cache_misses = accounts_cache.maybe_metrics.?.cache_misses.get();
 
             std.debug.print(
                 "cache hits/misses : {: >7}/{: <7} ({d:.2}%) - total cache accesses: {}\n",
