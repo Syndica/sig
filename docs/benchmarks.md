@@ -25,7 +25,7 @@ readWriteAccounts(100k accounts (1_slot - ram index - ram accounts)) (write_time
 ```bash
 ./zig-out/bin/benchmark accounts_db_readwrite
 # NOTE: need to format doc to below
-python scripts/view_bench.py python scripts/view_bench.py results/BenchmarkAccountsDB/readWriteAccounts_runtimes.csv # view runtimes as a charts with one file source
+python scripts/view_bench.py results/BenchmarkAccountsDB/readWriteAccounts_runtimes.csv # view runtimes as a charts with one file source
 python scripts/view_bench.py readWriteAccounts_runtimes.csv readWriteAccounts_runtimes_2.csv # compare runtimes against two *equivalent* files
 ```
 

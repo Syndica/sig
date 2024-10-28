@@ -140,7 +140,8 @@ pub fn benchmarkCSV(
     comptime B: type,
     max_time_per_benchmark: Duration,
 ) !void {
-    const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
+    const has_args = if (@hasDecl(B, "args")) true else false;
+    const args = if (has_args) B.args else [_]void{{}};
     const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10_000;
     const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100_000;
 
@@ -194,7 +195,8 @@ pub fn benchmarkCSV(
         const writer_runtimes = file_runtimes.writer();
 
         inline for (args, 0..) |arg, arg_i| {
-            logger.debug().logf("benchmarking arg: {d}/{d}: {s}", .{ arg_i + 1, args.len, arg.name });
+            const arg_name = if (has_args) arg.name else "_";
+            logger.debug().logf("benchmarking arg: {d}/{d}: {s}", .{ arg_i + 1, args.len, arg_name });
 
             const benchFunction = @field(B, def.name);
             const arguments = switch (@TypeOf(arg)) {
@@ -274,7 +276,7 @@ pub fn benchmarkCSV(
             // read_write (100k) (write), 1, 2, 3, 4,
             switch (result_type) {
                 Duration => {
-                    try writer_runtimes.print("{s}({s}), results", .{ def.name, arg.name });
+                    try writer_runtimes.print("{s}({s}), results", .{ def.name, arg_name });
                     for (runtimes.items(.result), 0..) |runtime, i| {
                         if (i != 0) try writer_runtimes.print(", ", .{});
                         try writer_runtimes.print("{d}", .{runtime});
@@ -283,7 +285,7 @@ pub fn benchmarkCSV(
                 },
                 else => {
                     inline for (U.fields, 0..) |field, j| {
-                        try writer_runtimes.print("{s}({s}) ({s}), ", .{ def.name, arg.name, field.name });
+                        try writer_runtimes.print("{s}({s}) ({s}), ", .{ def.name, arg_name, field.name });
                         const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
                         for (runtimes.items(x), 0..) |runtime, i| {
                             if (i != 0) try writer_runtimes.print(", ", .{});
@@ -314,7 +316,7 @@ pub fn benchmarkCSV(
                     }
                     variance /= iter_count;
                     // print column results
-                    try writer_average.print("{s}, {d}, {d}, {d}, {d}\n", .{ arg.name, min, max, mean, variance });
+                    try writer_average.print("{s}, {d}, {d}, {d}, {d}\n", .{ arg_name, min, max, mean, variance });
                 },
                 inline else => {
                     // print column headers
@@ -327,7 +329,7 @@ pub fn benchmarkCSV(
                     }
 
                     // print results
-                    try writer_average.print("{s}, ", .{arg.name});
+                    try writer_average.print("{s}, ", .{arg_name});
                     inline for (U.fields, 0..) |field, j| {
                         const f_max = @field(max_s, field.name);
                         const f_min = @field(min_s, field.name);
