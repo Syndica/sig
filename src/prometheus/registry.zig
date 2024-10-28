@@ -76,10 +76,32 @@ pub fn Registry(comptime options: RegistryOptions) type {
 
         /// Initialize a struct full of metrics.
         /// Every field must be a supported metric type.
+        /// 
+        /// Use this when you expect every instance of the struct to modify
+        /// a unified set of prometheus metrics.
         pub fn initStruct(self: *Self, comptime Struct: type) GetMetricError!Struct {
             var metrics_struct: Struct = undefined;
             inline for (@typeInfo(Struct).Struct.fields) |field| {
                 try self.initMetric(Struct, &@field(metrics_struct, field.name), field.name);
+            }
+            return metrics_struct;
+        }
+
+        /// Initialize a struct full of metrics.
+        /// Every field must be a supported metric type.
+        /// 
+        /// Use this when the same metrics struct will be initialized multiple times,
+        /// and you need every instance to have its own separately tracked metrics
+        /// with different names.
+        pub fn initStructScoped(
+            self: *Self,
+            comptime Struct: type,
+            scope: []const u8,
+        ) GetMetricError!Struct {
+            var metrics_struct: Struct = undefined;
+            inline for (@typeInfo(Struct).Struct.fields) |field| {
+                const name = sig.utils.fmt.boundedFmt("{}_{}", .{ scope, field.name });
+                try self.initMetric(Struct, &@field(metrics_struct, field.name), name);
             }
             return metrics_struct;
         }

@@ -2,9 +2,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
+const Duration = sig.time.Duration;
+
 pub fn RecycleFBA(config: struct {
     /// If enabled, all operations will require an exclusive lock.
     thread_safe: bool = !builtin.single_threaded,
+    /// The number of times to try again after the first attempt to allocate fails.
+    num_alloc_retries: usize = 0,
+    /// The amount of time to wait between allocation retries.
+    alloc_retry_wait: Duration = Duration.fromSecs(0),
 }) type {
     return struct {
         // this allocates the underlying memory + dynamic expansions
@@ -23,10 +29,29 @@ pub fn RecycleFBA(config: struct {
             records_allocator: std.mem.Allocator,
             // used for the underlying memory for the allocations
             bytes_allocator: std.mem.Allocator,
+            num_backing_bytes: usize,
+            metrics: ?Metrics = null,
         };
         const Self = @This();
 
+        pub const Metrics = struct {
+            retries_per_alloc: *sig.prometheus.Histogram,
+            failure_count: *sig.prometheus.Counter,
+        };
+
         pub fn init(allocator_config: AllocatorConfig, n_bytes: u64) !Self {
+            const buf = try allocator_config.bytes_allocator.alloc(u8, n_bytes);
+            const fba_allocator = std.heap.FixedBufferAllocator.init(buf);
+            const records = std.ArrayList(Record).init(allocator_config.records_allocator);
+
+            return .{
+                .bytes_allocator = allocator_config.bytes_allocator,
+                .fba_allocator = fba_allocator,
+                .records = records,
+            };
+        }
+
+        pub fn initWithMetrics(allocator_config: AllocatorConfig, n_bytes: u64) !Self {
             const buf = try allocator_config.bytes_allocator.alloc(u8, n_bytes);
             const fba_allocator = std.heap.FixedBufferAllocator.init(buf);
             const records = std.ArrayList(Record).init(allocator_config.records_allocator);
@@ -47,17 +72,36 @@ pub fn RecycleFBA(config: struct {
             return std.mem.Allocator{
                 .ptr = self,
                 .vtable = &.{
-                    .alloc = alloc,
+                    .alloc = allocWithRetries,
                     .resize = resize,
                     .free = free,
                 },
             };
         }
 
-        /// creates a new file with size aligned to page_size and returns a pointer to it
-        pub fn alloc(ctx: *anyopaque, n: usize, log2_align: u8, return_address: usize) ?[*]u8 {
+        /// attempt to allocate num_alloc_retries times
+        pub fn allocWithRetries(
+            ctx: *anyopaque,
+            n: usize,
+            log2_align: u8,
+            return_address: usize,
+        ) ?[*]u8 {
             const self: *Self = @ptrCast(@alignCast(ctx));
+            for (1..config.num_alloc_retries + 1) |i| {
+                if (self.tryAllocOnce(n, log2_align, return_address)) |mem| {
+                    if (self.metrics) |m| m.retries_per_alloc.observe(i - 1);
+                    return mem;
+                }
+                if (i != config.num_alloc_retries) {
+                    std.time.sleep(config.alloc_retry_wait.asNanos());
+                }
+            }
+            if (self.metrics) |m| m.failure_count.inc();
+            return null;
+        }
 
+        /// attempts once to allocate from available memory, otherwise returns null
+        pub fn tryAllocOnce(self: *Self, n: usize, log2_align: u8, return_address: usize) ?[*]u8 {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
@@ -95,7 +139,7 @@ pub fn RecycleFBA(config: struct {
                     // try again : TODO(x19): remove the extra lock/unlock
                     if (config.thread_safe) self.mux.unlock(); // no deadlock
                     defer if (config.thread_safe) self.mux.lock();
-                    return alloc(ctx, n, log2_align, return_address);
+                    return self.tryAlloc(n, log2_align, return_address);
                 }
                 return null;
             };
