@@ -12,8 +12,7 @@ pub fn main() !void {
     const allocator = std.heap.c_allocator;
     var std_logger = try sig.trace.ChannelPrintLogger.init(.{
         .allocator = allocator,
-        // NOTE: run with .info for proper CSV output, otherwise use .debug
-        .max_level = .info,
+        .max_level = .debug,
         .max_buffer = 1 << 15,
     });
     defer std_logger.deinit();
@@ -25,18 +24,8 @@ pub fn main() !void {
     defer cli_args.deinit();
 
     _ = cli_args.skip();
-    const next_cli_arg = cli_args.next();
-    const output_runtimes = blk: {
-        if (next_cli_arg != null and std.mem.eql(u8, "-r", next_cli_arg.?)) {
-            logger.info().log("outputting runtimes");
-            break :blk true;
-        } else {
-            logger.info().log("outputting aggregated results");
-            break :blk false;
-        }
-    };
 
-    const maybe_filter = if (output_runtimes) cli_args.next() else next_cli_arg;
+    const maybe_filter = cli_args.next();
     const filter = blk: {
         if (maybe_filter) |filter| {
             logger.info().logf("filtering benchmarks with prefix: {s}", .{filter});
@@ -56,7 +45,6 @@ pub fn main() !void {
             logger,
             @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
             max_time_per_bench,
-            output_runtimes,
         );
     }
 
@@ -72,7 +60,6 @@ pub fn main() !void {
                 logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
-                output_runtimes,
             );
         }
 
@@ -91,7 +78,6 @@ pub fn main() !void {
                 logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
-                output_runtimes,
             );
         }
     }
@@ -102,7 +88,6 @@ pub fn main() !void {
             logger,
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
-            output_runtimes,
         );
     }
 
@@ -112,14 +97,12 @@ pub fn main() !void {
             logger,
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
-            output_runtimes,
         );
         try benchmarkCSV(
             allocator,
             logger,
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
-            output_runtimes,
         );
     }
 
@@ -129,7 +112,6 @@ pub fn main() !void {
             logger,
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
-            output_runtimes,
         );
     }
 
@@ -156,11 +138,10 @@ pub fn benchmarkCSV(
     logger: sig.trace.Logger,
     comptime B: type,
     max_time_per_benchmark: Duration,
-    output_runtimes: bool,
 ) !void {
     const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
-    const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10000;
-    const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100000;
+    const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10_000;
+    const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100_000;
 
     const functions = comptime blk: {
         var res: []const Decl = &[_]Decl{};
@@ -177,10 +158,42 @@ pub fn benchmarkCSV(
         @compileError("No benchmarks to run.");
     }
 
+    const results_dir = try std.fs.cwd().makeOpenPath(sig.BENCHMARK_RESULTS_DIR, .{});
+    var raw_benchmark_name = @typeName(B);
+
+    // find the last dot in the benchmark name (since imports are usually x.a.b.YBenchmark, this
+    // gets us to YBenchmark)
+    var index: u64 = 0;
+    while (true) {
+        const maybe_index = std.mem.indexOf(u8, raw_benchmark_name[index + 1 ..], ".");
+        index += 1;
+        index += maybe_index orelse break;
+    }
+    const benchmark_name = raw_benchmark_name[index..];
+    results_dir.makeDir(benchmark_name) catch |err| {
+        if (err == std.fs.Dir.MakeError.PathAlreadyExists) {} else {
+            return err;
+        }
+    };
+    var buf: [512]u8 = undefined;
+
     inline for (functions, 0..) |def, fcni| {
         _ = fcni;
 
+        const file_name_average = try std.fmt.bufPrint(&buf, "{s}/{s}.csv", .{ benchmark_name, def.name });
+        const file_average = try results_dir.createFile(file_name_average, .{ .read = true });
+        defer file_average.close();
+        const writer_average = file_average.writer();
+        logger.info().logf("writing benchmark results to {s}", .{file_name_average});
+
+        const file_name_runtimes = try std.fmt.bufPrint(&buf, "{s}/{s}_runtimes.csv", .{ benchmark_name, def.name });
+        const file_runtimes = try results_dir.createFile(file_name_runtimes, .{ .read = true });
+        defer file_runtimes.close();
+        const writer_runtimes = file_runtimes.writer();
+
         inline for (args, 0..) |arg, arg_i| {
+            logger.info().logf("benchmarking arg: {d}/{d}: {s}", .{ arg_i + 1, args.len, arg.name });
+
             const benchFunction = @field(B, def.name);
             const arguments = switch (@TypeOf(arg)) {
                 void => .{},
@@ -249,98 +262,96 @@ pub fn benchmarkCSV(
             }
 
             if (ran_out_of_time) {
-                logger.debug().logf("Benchmark {s} ran out of time", .{def.name});
+                logger.debug().log("ran out of time...");
             }
 
-            if (output_runtimes) {
-                // print all results, eg:
-                //
-                // benchmark, result
-                // read_write (100k) (read), [1, 2, 3, 4],
-                // read_write (100k) (write), [1, 2, 3, 4],
-                switch (result_type) {
-                    Duration => {
-                        std.debug.print("{s}({s}), ", .{ def.name, arg.name });
-                        for (runtimes.items(.result), 0..) |runtime, i| {
-                            if (i != 0) std.debug.print(", ", .{});
-                            std.debug.print("{d}", .{runtime});
+            // print all runtimes, eg:
+            //
+            // benchmark, result
+            // read_write (100k) (read), 1, 2, 3, 4,
+            // read_write (100k) (write), 1, 2, 3, 4,
+            switch (result_type) {
+                Duration => {
+                    try writer_runtimes.print("{s}({s}), ", .{ def.name, arg.name });
+                    for (runtimes.items(.result), 0..) |runtime, i| {
+                        if (i != 0) try writer_runtimes.print(", ", .{});
+                        try writer_runtimes.print("{d}", .{runtime});
+                    }
+                    try writer_runtimes.print("\n", .{});
+                },
+                else => {
+                    inline for (U.fields, 0..) |field, j| {
+                        try writer_runtimes.print("{s}({s}) ({s}), ", .{ def.name, arg.name, field.name });
+                        const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
+                        for (runtimes.items(x), 0..) |runtime, i| {
+                            if (i != 0) try writer_runtimes.print(", ", .{});
+                            try writer_runtimes.print("{d}", .{runtime});
                         }
-                        std.debug.print("\n", .{});
-                    },
-                    else => {
-                        inline for (U.fields, 0..) |field, j| {
-                            std.debug.print("{s}({s}) ({s}), ", .{ def.name, arg.name, field.name });
-                            const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
-                            for (runtimes.items(x), 0..) |runtime, i| {
-                                if (i != 0) std.debug.print(", ", .{});
-                                std.debug.print("{d}", .{runtime});
-                            }
-                            std.debug.print("\n", .{});
-                        }
-                    },
-                }
-            } else {
-                // print aggregated results, eg:
-                //
-                // benchmark, read_min, read_max, read_mean, read_variance, write_min, write_max, write_mean, write_variance
-                // read_write (100k), 1, 2, 3, 4, 1, 2, 3, 4
-                // read_write (200k), 1, 2, 3, 4, 1, 2, 3, 4
-                switch (result_type) {
-                    Duration => {
-                        // print column headers
-                        if (arg_i == 0) {
-                            std.debug.print("benchmark, min, max, mean, variance\n", .{});
-                        }
-                        const mean = sum / iter_count;
-                        var variance: u64 = 0;
-                        for (runtimes.items(.result)) |runtime| {
-                            const d = if (runtime > mean) runtime - mean else mean - runtime;
-                            const d_sq = d *| d;
-                            variance +|= d_sq;
-                        }
-                        variance /= iter_count;
-                        // print column results
-                        std.debug.print("{s}({s}), {d}, {d}, {d}, {d}\n", .{ def.name, arg.name, min, max, mean, variance });
-                    },
-                    inline else => {
-                        // print column headers
-                        if (arg_i == 0) {
-                            std.debug.print("benchmark, ", .{});
-                            inline for (U.fields) |field| {
-                                std.debug.print("{s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
-                            }
-                            std.debug.print("\n", .{});
-                        }
+                        try writer_runtimes.print("\n", .{});
+                    }
+                },
+            }
 
-                        // print results
-                        std.debug.print("{s}({s}), ", .{ def.name, arg.name });
-                        inline for (U.fields, 0..) |field, j| {
-                            const f_max = @field(max_s, field.name);
-                            const f_min = @field(min_s, field.name);
-                            const f_sum = @field(sum_s, field.name);
-                            const T = @TypeOf(f_sum);
-                            const n_iters = switch (@typeInfo(T)) {
-                                .Float => @as(T, @floatFromInt(iter_count)),
-                                else => iter_count,
-                            };
-                            const f_mean = f_sum / n_iters;
-
-                            var f_variance: T = 0;
-                            const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
-                            for (runtimes.items(x)) |f_runtime| {
-                                const d = if (f_runtime > f_mean) f_runtime - f_mean else f_mean - f_runtime;
-                                switch (@typeInfo(T)) {
-                                    .Float => f_variance = d * d,
-                                    else => f_variance +|= d *| d,
-                                }
-                            }
-                            f_variance /= n_iters;
-
-                            std.debug.print("{d}, {d}, {any}, {any}, ", .{ f_max, f_min, f_mean, f_variance });
+            // print aggregated results, eg:
+            //
+            // benchmark, read_min, read_max, read_mean, read_variance, write_min, write_max, write_mean, write_variance
+            // read_write (100k), 1, 2, 3, 4, 1, 2, 3, 4
+            // read_write (200k), 1, 2, 3, 4, 1, 2, 3, 4
+            switch (result_type) {
+                Duration => {
+                    // print column headers
+                    if (arg_i == 0) {
+                        try writer_average.print("benchmark, min, max, mean, variance\n", .{});
+                    }
+                    const mean = sum / iter_count;
+                    var variance: u64 = 0;
+                    for (runtimes.items(.result)) |runtime| {
+                        const d = if (runtime > mean) runtime - mean else mean - runtime;
+                        const d_sq = d *| d;
+                        variance +|= d_sq;
+                    }
+                    variance /= iter_count;
+                    // print column results
+                    try writer_average.print("{s}({s}), {d}, {d}, {d}, {d}\n", .{ def.name, arg.name, min, max, mean, variance });
+                },
+                inline else => {
+                    // print column headers
+                    if (arg_i == 0) {
+                        try writer_average.print("benchmark, ", .{});
+                        inline for (U.fields) |field| {
+                            try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
                         }
-                        std.debug.print("\n", .{});
-                    },
-                }
+                        try writer_average.print("\n", .{});
+                    }
+
+                    // print results
+                    try writer_average.print("{s}({s}), ", .{ def.name, arg.name });
+                    inline for (U.fields, 0..) |field, j| {
+                        const f_max = @field(max_s, field.name);
+                        const f_min = @field(min_s, field.name);
+                        const f_sum = @field(sum_s, field.name);
+                        const T = @TypeOf(f_sum);
+                        const n_iters = switch (@typeInfo(T)) {
+                            .Float => @as(T, @floatFromInt(iter_count)),
+                            else => iter_count,
+                        };
+                        const f_mean = f_sum / n_iters;
+
+                        var f_variance: T = 0;
+                        const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
+                        for (runtimes.items(x)) |f_runtime| {
+                            const d = if (f_runtime > f_mean) f_runtime - f_mean else f_mean - f_runtime;
+                            switch (@typeInfo(T)) {
+                                .Float => f_variance = d * d,
+                                else => f_variance +|= d *| d,
+                            }
+                        }
+                        f_variance /= n_iters;
+
+                        try writer_average.print("{d}, {d}, {any}, {any}, ", .{ f_max, f_min, f_mean, f_variance });
+                    }
+                    try writer_average.print("\n", .{});
+                },
             }
         }
     }

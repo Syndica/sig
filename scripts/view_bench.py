@@ -12,6 +12,15 @@ def random_color_generator():
     return (r / 255, g / 255, b / 255)
 
 def view_results(paths, units):
+    path = paths[0]
+    # split the path and filename
+    output_path_dir = path.split('/')
+    if len(output_path_dir) == 1:
+        output_path_dir = '.'
+    else:
+        output_path_dir = '/'.join(output_path_dir[:-1])
+    print("outputing to", path)
+
     dfs = []
     benchmark_names = []
     for i, path in enumerate(paths):
@@ -54,7 +63,7 @@ def view_results(paths, units):
             plt.errorbar(mean, 1, xerr=np.sqrt(var), fmt='o', color=color) # mean
 
         plt.legend()
-        output_path = f"results/{benchmark_names[i]}.png"
+        output_path = f"{output_path_dir}/{benchmark_names[i]}.png"
         plt.savefig(output_path)
         print("Saved to", output_path)
 
