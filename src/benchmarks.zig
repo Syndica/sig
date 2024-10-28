@@ -37,7 +37,7 @@ pub fn main() !void {
         }
     };
 
-    const max_time_per_bench = Duration.fromSecs(20); // !!
+    const max_time_per_bench = Duration.fromSecs(5); // !!
     const run_all_benchmarks = filter.len == 0;
 
     if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
@@ -118,7 +118,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, filter, "ledger") or run_all_benchmarks) {
         try benchmarkCSV(
-            allocator, 
+            allocator,
             logger,
             @import("ledger/benchmarks.zig").BenchmarkLedger,
             max_time_per_bench,
@@ -322,8 +322,13 @@ pub fn benchmarkCSV(
                     // print column headers
                     if (arg_i == 0) {
                         try writer_average.print("{s}, ", .{def.name});
-                        inline for (U.fields) |field| {
-                            try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
+                        inline for (U.fields, 0..) |field, i| {
+                            if (i == U.fields.len - 1) {
+                                // dont print trailing comma
+                                try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_variance", .{ field.name, field.name, field.name, field.name });
+                            } else {
+                                try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
+                            }
                         }
                         try writer_average.print("\n", .{});
                     }
@@ -352,7 +357,12 @@ pub fn benchmarkCSV(
                         }
                         f_variance /= n_iters;
 
-                        try writer_average.print("{d}, {d}, {any}, {any}, ", .{ f_max, f_min, f_mean, f_variance });
+                        if (j == U.fields.len - 1) {
+                            // dont print trailing comma
+                            try writer_average.print("{d}, {d}, {any}, {any}", .{ f_max, f_min, f_mean, f_variance });
+                        } else {
+                            try writer_average.print("{d}, {d}, {any}, {any}, ", .{ f_max, f_min, f_mean, f_variance });
+                        }
                     }
                     try writer_average.print("\n", .{});
                 },
@@ -360,6 +370,7 @@ pub fn benchmarkCSV(
         }
     }
 
+    // print the results in a formatted table
     inline for (functions, 0..) |def, fcni| {
         _ = fcni;
 
