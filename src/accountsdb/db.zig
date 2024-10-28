@@ -198,8 +198,8 @@ pub const AccountsDB = struct {
     pub fn deinit(self: *Self) void {
         self.account_index.deinit(true);
 
-        if (self.maybe_accounts_cache_rw) |*accounts_cache_mux| {
-            const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+        if (self.maybe_accounts_cache_rw) |*accounts_cache_rw| {
+            const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
             defer accounts_cache_lg.unlock();
             accounts_cache.deinit();
         }
@@ -367,8 +367,8 @@ pub const AccountsDB = struct {
                 loading_thread.account_index.reference_allocator = .{ .ram = per_thread_allocator }; // dont destory the **disk** allocator (since its shared)
                 loading_thread.account_index.deinit(false);
 
-                if (loading_thread.maybe_accounts_cache_rw) |*accounts_cache_mux| {
-                    const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+                if (loading_thread.maybe_accounts_cache_rw) |*accounts_cache_rw| {
+                    const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
                     defer accounts_cache_lg.unlock();
                     accounts_cache.deinit();
                 }
@@ -1901,9 +1901,9 @@ pub const AccountsDB = struct {
         switch (account_ref.location) {
             .File => |ref_info| {
                 const maybe_cached_account = blk: {
-                    const accounts_cache_mux = &(self.maybe_accounts_cache_rw orelse break :blk null);
+                    const accounts_cache_rw = &(self.maybe_accounts_cache_rw orelse break :blk null);
 
-                    const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+                    const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
                     defer accounts_cache_lg.unlock();
 
                     break :blk accounts_cache.get(account_ref.pubkey, account_ref.slot);
@@ -1920,8 +1920,8 @@ pub const AccountsDB = struct {
                         ref_info.offset,
                     );
 
-                    if (self.maybe_accounts_cache_rw) |*accounts_cache_mux| {
-                        const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+                    if (self.maybe_accounts_cache_rw) |*accounts_cache_rw| {
+                        const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
                         defer accounts_cache_lg.unlock();
                         try accounts_cache.put(account_ref.pubkey, account_ref.slot, account);
                     }
@@ -4344,8 +4344,8 @@ pub const BenchmarkAccountsDB = struct {
         }
 
         // reset cache hits/misses
-        if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_mux| {
-            const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+        if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_rw| {
+            const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
             defer accounts_cache_lg.unlock();
             accounts_cache.maybe_metrics.?.cache_hits.reset();
             accounts_cache.maybe_metrics.?.cache_misses.reset();
@@ -4365,8 +4365,8 @@ pub const BenchmarkAccountsDB = struct {
 
         const elapsed = timer.read();
 
-        if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_mux| {
-            const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
+        if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_rw| {
+            const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
             defer accounts_cache_lg.unlock();
 
             const cache_hits = accounts_cache.maybe_metrics.?.cache_hits.get();
