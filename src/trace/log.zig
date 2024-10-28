@@ -171,6 +171,7 @@ pub const ChannelPrintLogger = struct {
     pub fn run(self: *Self) void {
         while (!self.exit.load(.acquire)) {
             while (self.channel.receive()) |message| {
+                defer self.log_allocator.free(message);
                 const writer = std.io.getStdErr().writer();
                 std.debug.lockStdErr();
                 defer std.debug.unlockStdErr();
