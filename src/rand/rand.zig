@@ -434,9 +434,13 @@ pub const WeightedAliasSampler = struct {
     probability: []const f32,
     alias: []const usize,
     random: Random,
-    pub fn init(allocator: std.mem.Allocator, random: Random, probabilities: []const f32) !WeightedAliasSampler {
-        const n = probabilities.len;
-        const average: f32 = 1.0 / @as(f32, @floatFromInt(n));
+    pub fn init(allocator: std.mem.Allocator, random: Random, weights: []const f32) !WeightedAliasSampler {
+        const n = weights.len;
+
+        var sum: f32 = 0;
+        for (weights) |w| sum += w;
+
+        const average: f32 = sum / @as(f32, @floatFromInt(n));
 
         const probability = try allocator.alloc(f32, n);
         errdefer allocator.free(probability);
@@ -451,8 +455,8 @@ pub const WeightedAliasSampler = struct {
         var large = std.ArrayList(usize).init(allocator);
         errdefer large.deinit();
 
-        for (probabilities, 0..) |p, i| {
-            if (p >= average) {
+        for (weights, 0..) |w, i| {
+            if (w >= average) {
                 try large.append(i);
             } else {
                 try small.append(i);
@@ -463,10 +467,10 @@ pub const WeightedAliasSampler = struct {
             const less = small.pop();
             const more = large.pop();
 
-            probability[less] = probabilities[less] * @as(f32, @floatFromInt(n));
+            probability[less] = weights[less] * @as(f32, @floatFromInt(n));
             alias[less] = more;
 
-            if (probabilities[more] >= average) {
+            if (weights[more] >= average) {
                 try large.append(more);
             } else {
                 try small.append(more);
