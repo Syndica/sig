@@ -45,6 +45,8 @@ const PubkeyShardCalculator = sig.accounts_db.index.PubkeyShardCalculator;
 const ShardedPubkeyRefMap = sig.accounts_db.index.ShardedPubkeyRefMap;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
+const WeightedAliasSampler = sig.rand.WeightedAliasSampler;
+
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
@@ -72,7 +74,7 @@ pub const AccountsDB = struct {
     unrooted_accounts: RwMux(SlotPubkeyAccounts),
 
     // pubkey->account LRU maps
-    maybe_accounts_cache_mux: ?RwMux(AccountsCache),
+    maybe_accounts_cache_rw: ?RwMux(AccountsCache),
 
     /// NOTE: see accountsdb/readme.md for more details on how these are used
     file_map: RwMux(FileMap) = RwMux(FileMap).init(.{}),
@@ -161,12 +163,12 @@ pub const AccountsDB = struct {
 
         // init accounts cache
         var maybe_accounts_cache = if (config.lru_size) |lru_size|
-            try AccountsCache.init(allocator, lru_size)
+            try AccountsCache.init(allocator, globalRegistry(), lru_size)
         else
             null;
         errdefer if (maybe_accounts_cache) |*accounts_cache| accounts_cache.deinit();
 
-        const maybe_accounts_cache_mux = if (maybe_accounts_cache) |accounts_cache|
+        const maybe_accounts_cache_rw = if (maybe_accounts_cache) |accounts_cache|
             RwMux(AccountsCache).init(accounts_cache)
         else
             null;
@@ -185,7 +187,7 @@ pub const AccountsDB = struct {
             .logger = logger,
             .config = config,
             .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(allocator)),
-            .maybe_accounts_cache_mux = maybe_accounts_cache_mux,
+            .maybe_accounts_cache_rw = maybe_accounts_cache_rw,
             .snapshot_dir = snapshot_dir,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .metrics = metrics,
@@ -196,7 +198,7 @@ pub const AccountsDB = struct {
     pub fn deinit(self: *Self) void {
         self.account_index.deinit(true);
 
-        if (self.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+        if (self.maybe_accounts_cache_rw) |*accounts_cache_mux| {
             const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
             defer accounts_cache_lg.unlock();
             accounts_cache.deinit();
@@ -365,7 +367,7 @@ pub const AccountsDB = struct {
                 loading_thread.account_index.reference_allocator = .{ .ram = per_thread_allocator }; // dont destory the **disk** allocator (since its shared)
                 loading_thread.account_index.deinit(false);
 
-                if (loading_thread.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+                if (loading_thread.maybe_accounts_cache_rw) |*accounts_cache_mux| {
                     const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
                     defer accounts_cache_lg.unlock();
                     accounts_cache.deinit();
@@ -1899,7 +1901,7 @@ pub const AccountsDB = struct {
         switch (account_ref.location) {
             .File => |ref_info| {
                 const maybe_cached_account = blk: {
-                    const accounts_cache_mux = &(self.maybe_accounts_cache_mux orelse break :blk null);
+                    const accounts_cache_mux = &(self.maybe_accounts_cache_rw orelse break :blk null);
 
                     const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
                     defer accounts_cache_lg.unlock();
@@ -1918,7 +1920,7 @@ pub const AccountsDB = struct {
                         ref_info.offset,
                     );
 
-                    if (self.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+                    if (self.maybe_accounts_cache_rw) |*accounts_cache_mux| {
                         const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
                         defer accounts_cache_lg.unlock();
                         try accounts_cache.put(account_ref.pubkey, account_ref.slot, account);
@@ -4324,12 +4326,12 @@ pub const BenchmarkAccountsDB = struct {
             std.debug.print("WRITE: {d}\n", .{elapsed});
         }
 
-        // set up a WeightedIndexer to give our accounts normally distributed access probabilities.
+        // set up a WeightedAliasSampler to give our accounts normally distributed access probabilities.
         // this models how some accounts are far more commonly read than others.
         // TODO: is this distribution accurate? Probably not, but I don't have the data.
         const pubkeys_read_weighting = try allocator.alloc(f32, n_accounts);
         for (pubkeys_read_weighting) |*read_probability| read_probability.* = random.floatNorm(f32);
-        var indexer = try WeightedIndexer.init(allocator, pubkeys_read_weighting);
+        var indexer = try WeightedAliasSampler.init(allocator, pubkeys_read_weighting);
 
         // "warm up" accounts cache
         {
@@ -4341,7 +4343,7 @@ pub const BenchmarkAccountsDB = struct {
         }
 
         // reset cache hits/misses
-        if (accounts_db.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+        if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_mux| {
             const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
             defer accounts_cache_lg.unlock();
             accounts_cache.cache_hits = 0;
@@ -4362,7 +4364,7 @@ pub const BenchmarkAccountsDB = struct {
 
         const elapsed = timer.read();
 
-        if (accounts_db.maybe_accounts_cache_mux) |*accounts_cache_mux| {
+        if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_mux| {
             const accounts_cache, var accounts_cache_lg = accounts_cache_mux.writeWithLock();
             defer accounts_cache_lg.unlock();
 
@@ -4381,72 +4383,5 @@ pub const BenchmarkAccountsDB = struct {
         }
 
         return elapsed;
-    }
-};
-
-/// Implementation of Alastair J. Walker's "Alias method".
-/// Once constructed, this allows for efficiently getting pseudorandom indeces
-/// that fit the given probabilities.
-const WeightedIndexer = struct {
-    probability: []const f32,
-    alias: []const usize,
-    fn init(allocator: std.mem.Allocator, probabilities: []f32) !WeightedIndexer {
-        const n = probabilities.len;
-        const average: f32 = 1.0 / @as(f32, @floatFromInt(n));
-
-        const probability = try allocator.alloc(f32, n);
-        errdefer allocator.free(probability);
-        @memset(probability, 0);
-
-        const alias = try allocator.alloc(usize, n);
-        errdefer allocator.free(alias);
-        @memset(alias, 0);
-
-        var small = std.ArrayList(usize).init(allocator);
-        errdefer small.deinit();
-        var large = std.ArrayList(usize).init(allocator);
-        errdefer large.deinit();
-
-        for (probabilities, 0..) |p, i| {
-            if (p >= average) {
-                try large.append(i);
-            } else {
-                try small.append(i);
-            }
-        }
-
-        while (small.items.len > 0 and large.items.len > 0) {
-            const less = small.pop();
-            const more = large.pop();
-
-            probability[less] = probabilities[less] * @as(f32, @floatFromInt(n));
-            alias[less] = more;
-
-            if (probabilities[more] >= average) {
-                try large.append(more);
-            } else {
-                try small.append(more);
-            }
-        }
-
-        while (small.popOrNull()) |less| probability[less] = 1.0;
-        while (large.popOrNull()) |more| probability[more] = 1.0;
-        small.deinit();
-        large.deinit();
-
-        return .{
-            .probability = probability,
-            .alias = alias,
-        };
-    }
-
-    fn nextIndex(self: WeightedIndexer, random: std.Random) usize {
-        const column = random.intRangeLessThan(usize, 0, self.probability.len);
-
-        if (random.float(f32) < self.probability[column]) {
-            return column;
-        } else {
-            return self.alias[column];
-        }
     }
 };

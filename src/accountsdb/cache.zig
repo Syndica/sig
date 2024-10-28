@@ -8,13 +8,13 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const LruCacheCustom = sig.common.lru.LruCacheCustom;
 const ReferenceCounter = sig.sync.reference_counter.ReferenceCounter;
 const Slot = sig.core.Slot;
+const Counter = sig.prometheus.counter.Counter;
 
 /// Stores read-only in-memory copies of commonly used *rooted* accounts
 pub const AccountsCache = struct {
     lru: LRU,
     allocator: std.mem.Allocator,
-    cache_hits: usize = 0,
-    cache_misses: usize = 0,
+    maybe_metrics: ?AccountsCacheMetrics,
 
     /// Atomically refcounted account
     pub const CachedAccount = struct {
@@ -94,25 +94,32 @@ pub const AccountsCache = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        maybe_registry: ?*sig.prometheus.Registry(.{}),
         max_items: usize,
-    ) error{OutOfMemory}!AccountsCache {
+    ) !AccountsCache {
+        const maybe_metrics = if (maybe_registry) |registry|
+            try registry.initStruct(AccountsCacheMetrics)
+        else
+            null;
+
         return .{
             .lru = try LRU.initWithContext(allocator, max_items, allocator),
             .allocator = allocator,
+            .maybe_metrics = maybe_metrics,
         };
     }
 
     /// User is expected to release the returned CachedAccount.
     pub fn get(self: *Self, pubkey: Pubkey, slot: Slot) ?*CachedAccount {
         const account: *CachedAccount = self.lru.get(pubkey) orelse {
-            self.cache_misses += 1;
+            if (self.maybe_metrics) |metrics| metrics.cache_misses.inc();
             return null;
         };
         if (account.slot == slot) {
-            self.cache_hits += 1;
+            if (self.maybe_metrics) |metrics| metrics.cache_hits.inc();
             return account.copyRef();
         } else {
-            self.cache_misses += 1;
+            if (self.maybe_metrics) |metrics| metrics.cache_misses.inc();
             return null;
         }
     }
@@ -149,6 +156,11 @@ pub const AccountsCache = struct {
     }
 };
 
+pub const AccountsCacheMetrics = struct {
+    cache_hits: *Counter,
+    cache_misses: *Counter,
+};
+
 test "CachedAccount ref_count" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(19);
@@ -176,7 +188,7 @@ test "AccountsCache put and get account" {
     var prng = std.rand.DefaultPrng.init(19);
     const random = prng.random();
 
-    var accounts_cache = try AccountsCache.init(allocator, 10);
+    var accounts_cache = try AccountsCache.init(allocator, null, 10);
     defer accounts_cache.deinit();
 
     const account = try Account.initRandom(allocator, random, 1);
@@ -198,7 +210,7 @@ test "AccountsCache returns null when account is missing" {
     var prng = std.rand.DefaultPrng.init(19);
     const random = prng.random();
 
-    var accounts_cache = try AccountsCache.init(allocator, 10);
+    var accounts_cache = try AccountsCache.init(allocator, null, 10);
     defer accounts_cache.deinit();
 
     const pubkey = Pubkey.initRandom(random);
@@ -214,7 +226,7 @@ test "AccountsCache put ref counting" {
     var prng = std.rand.DefaultPrng.init(19);
     const random = prng.random();
 
-    var accounts_cache = try AccountsCache.init(allocator, 10);
+    var accounts_cache = try AccountsCache.init(allocator, null, 10);
     defer accounts_cache.deinit();
 
     const account = try Account.initRandom(allocator, random, 1);

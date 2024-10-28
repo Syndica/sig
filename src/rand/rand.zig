@@ -426,3 +426,70 @@ const rust_expected_weights: [1000]u64 = .{
     40566523540155677,  171562338978082216, 151758301674069632, 173398251098334249, 63757156897079302,
     81032160488073578,  173298561206951917, 154421360720272045, 15981567533895039,  88393403508710277,
 };
+
+/// Implementation of Alastair J. Walker's "Alias method".
+/// Once constructed, this allows for efficiently getting pseudorandom indeces
+/// that fit the given probabilities.
+pub const WeightedAliasSampler = struct {
+    probability: []const f32,
+    alias: []const usize,
+    pub fn init(allocator: std.mem.Allocator, probabilities: []f32) !WeightedAliasSampler {
+        const n = probabilities.len;
+        const average: f32 = 1.0 / @as(f32, @floatFromInt(n));
+
+        const probability = try allocator.alloc(f32, n);
+        errdefer allocator.free(probability);
+        @memset(probability, 0);
+
+        const alias = try allocator.alloc(usize, n);
+        errdefer allocator.free(alias);
+        @memset(alias, 0);
+
+        var small = std.ArrayList(usize).init(allocator);
+        errdefer small.deinit();
+        var large = std.ArrayList(usize).init(allocator);
+        errdefer large.deinit();
+
+        for (probabilities, 0..) |p, i| {
+            if (p >= average) {
+                try large.append(i);
+            } else {
+                try small.append(i);
+            }
+        }
+
+        while (small.items.len > 0 and large.items.len > 0) {
+            const less = small.pop();
+            const more = large.pop();
+
+            probability[less] = probabilities[less] * @as(f32, @floatFromInt(n));
+            alias[less] = more;
+
+            if (probabilities[more] >= average) {
+                try large.append(more);
+            } else {
+                try small.append(more);
+            }
+        }
+
+        while (small.popOrNull()) |less| probability[less] = 1.0;
+        while (large.popOrNull()) |more| probability[more] = 1.0;
+        small.deinit();
+        large.deinit();
+
+        return .{
+            .probability = probability,
+            .alias = alias,
+        };
+    }
+
+    pub fn nextIndex(self: WeightedAliasSampler, random: std.Random) usize {
+        const column = random.intRangeLessThan(usize, 0, self.probability.len);
+
+        if (random.float(f32) < self.probability[column]) {
+            return column;
+        } else {
+            return self.alias[column];
+        }
+    }
+};
