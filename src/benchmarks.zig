@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("sig.zig");
+const pt = @import("prettytable");
 
 const Decl = std.builtin.Type.Declaration;
 const math = std.math;
@@ -12,7 +13,7 @@ pub fn main() !void {
     const allocator = std.heap.c_allocator;
     var std_logger = try sig.trace.ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = .debug,
+        .max_level = .info, // NOTE: change to debug to see all logs
         .max_buffer = 1 << 15,
     });
     defer std_logger.deinit();
@@ -36,7 +37,7 @@ pub fn main() !void {
         }
     };
 
-    const max_time_per_bench = Duration.fromSecs(30); // !!
+    const max_time_per_bench = Duration.fromSecs(20); // !!
     const run_all_benchmarks = filter.len == 0;
 
     if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
@@ -175,24 +176,25 @@ pub fn benchmarkCSV(
             return err;
         }
     };
-    var buf: [512]u8 = undefined;
 
     inline for (functions, 0..) |def, fcni| {
         _ = fcni;
 
-        const file_name_average = try std.fmt.bufPrint(&buf, "{s}/{s}.csv", .{ benchmark_name, def.name });
+        var fmt_buf: [512]u8 = undefined;
+        const file_name_average = try std.fmt.bufPrint(&fmt_buf, "{s}/{s}.csv", .{ benchmark_name, def.name });
         const file_average = try results_dir.createFile(file_name_average, .{ .read = true });
         defer file_average.close();
         const writer_average = file_average.writer();
-        logger.info().logf("writing benchmark results to {s}", .{file_name_average});
+        logger.debug().logf("writing benchmark results to {s}", .{file_name_average});
 
-        const file_name_runtimes = try std.fmt.bufPrint(&buf, "{s}/{s}_runtimes.csv", .{ benchmark_name, def.name });
+        var fmt_buf2: [512]u8 = undefined;
+        const file_name_runtimes = try std.fmt.bufPrint(&fmt_buf2, "{s}/{s}_runtimes.csv", .{ benchmark_name, def.name });
         const file_runtimes = try results_dir.createFile(file_name_runtimes, .{ .read = true });
         defer file_runtimes.close();
         const writer_runtimes = file_runtimes.writer();
 
         inline for (args, 0..) |arg, arg_i| {
-            logger.info().logf("benchmarking arg: {d}/{d}: {s}", .{ arg_i + 1, args.len, arg.name });
+            logger.debug().logf("benchmarking arg: {d}/{d}: {s}", .{ arg_i + 1, args.len, arg.name });
 
             const benchFunction = @field(B, def.name);
             const arguments = switch (@TypeOf(arg)) {
@@ -272,7 +274,7 @@ pub fn benchmarkCSV(
             // read_write (100k) (write), 1, 2, 3, 4,
             switch (result_type) {
                 Duration => {
-                    try writer_runtimes.print("{s}({s}), ", .{ def.name, arg.name });
+                    try writer_runtimes.print("{s}({s}), results", .{ def.name, arg.name });
                     for (runtimes.items(.result), 0..) |runtime, i| {
                         if (i != 0) try writer_runtimes.print(", ", .{});
                         try writer_runtimes.print("{d}", .{runtime});
@@ -301,7 +303,7 @@ pub fn benchmarkCSV(
                 Duration => {
                     // print column headers
                     if (arg_i == 0) {
-                        try writer_average.print("benchmark, min, max, mean, variance\n", .{});
+                        try writer_average.print("{s}, min, max, mean, variance\n", .{benchmark_name});
                     }
                     const mean = sum / iter_count;
                     var variance: u64 = 0;
@@ -317,7 +319,7 @@ pub fn benchmarkCSV(
                 inline else => {
                     // print column headers
                     if (arg_i == 0) {
-                        try writer_average.print("benchmark, ", .{});
+                        try writer_average.print("{s}, ", .{benchmark_name});
                         inline for (U.fields) |field| {
                             try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
                         }
@@ -354,5 +356,20 @@ pub fn benchmarkCSV(
                 },
             }
         }
+    }
+
+    inline for (functions, 0..) |def, fcni| {
+        _ = fcni;
+
+        var fmt_buf: [512]u8 = undefined;
+        const file_name_average = try std.fmt.bufPrint(&fmt_buf, "{s}/{s}.csv", .{ benchmark_name, def.name });
+        const file_average = try results_dir.openFile(file_name_average, .{});
+        defer file_average.close();
+
+        var table = pt.Table.init(allocator);
+        defer table.deinit();
+        var read_buf: [1024 * 1024]u8 = undefined;
+        try table.readFrom(file_average.reader(), &read_buf, ",", true);
+        try table.printstd();
     }
 }

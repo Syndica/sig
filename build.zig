@@ -42,6 +42,9 @@ pub fn build(b: *Build) void {
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
 
+    const pretty_table_dep = b.dependency("prettytable", dep_opts);
+    const pretty_table_mod = pretty_table_dep.module("prettytable");
+
     // expose Sig as a module
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/sig.zig"),
@@ -148,6 +151,7 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
     benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod);
+    benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
     benchmark_exe.linkLibC();
 
     const benchmark_exe_run = b.addRunArtifact(benchmark_exe);
