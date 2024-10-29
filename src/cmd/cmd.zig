@@ -1467,17 +1467,15 @@ fn loadSnapshot(
     };
     logger.info().logf("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
-    result.accounts_db = try AccountsDB.init(
-        allocator,
-        logger,
-        snapshot_dir,
-        .{
-            .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
-            .use_disk_index = config.current.accounts_db.use_disk_index,
-            .lru_size = 10_000,
-        },
-        geyser_writer,
-    );
+    result.accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = geyser_writer,
+        .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
+        .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
+        .lru_size = 10_000,
+    });
     errdefer result.accounts_db.deinit();
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(

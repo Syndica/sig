@@ -93,18 +93,15 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var last_full_snapshot_validated_slot: Slot = 0;
     var last_inc_snapshot_validated_slot: Slot = 0;
 
-    var accounts_db = try AccountsDB.init(
-        allocator,
-        logger,
-        snapshot_dir,
-        .{
-            .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
-            .use_disk_index = use_disk,
-            .lru_size = 10_000,
-            // TODO: other things we can fuzz (number of shards, ...)
-        },
-        null,
-    );
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .index_allocation = if (use_disk) .disk else .ram,
+        .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
+        .lru_size = 10_000,
+    });
     defer accounts_db.deinit();
 
     const exit = try allocator.create(std.atomic.Value(bool));
@@ -304,7 +301,15 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
             defer snapshot_fields.deinit(allocator);
 
-            var alt_accounts_db = try AccountsDB.init(allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
+            var alt_accounts_db = try AccountsDB.init(.{
+                .allocator = allocator,
+                .logger = .noop,
+                .snapshot_dir = alternative_snapshot_dir,
+                .geyser_writer = null,
+                .index_allocation = accounts_db.account_index.reference_allocator,
+                .number_of_index_shards = accounts_db.number_of_index_shards,
+                .lru_size = accounts_db.lru_size,
+            });
             defer alt_accounts_db.deinit();
 
             _ = try alt_accounts_db.loadWithDefaults(allocator, &snapshot_fields, 1, true, 1_500);

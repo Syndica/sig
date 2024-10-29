@@ -63,7 +63,23 @@ pub const DELETE_ACCOUNT_FILES_MIN = 100;
 ///
 /// Analogous to [AccountsDb](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1363)
 pub const AccountsDB = struct {
+
+    // injected dependencies
+
     allocator: std.mem.Allocator,
+    metrics: AccountsDBMetrics,
+    logger: Logger,
+    geyser_writer: ?*GeyserWriter,
+
+    /// Not closed by the `AccountsDB`, but must live at least as long as it.
+    snapshot_dir: std.fs.Dir,
+
+    // some initialization data
+
+    number_of_index_shards: usize,
+    lru_size: ?usize,
+
+    // internal structures & data
 
     /// maps pubkeys to account locations
     account_index: AccountIndex,
@@ -72,16 +88,14 @@ pub const AccountsDB = struct {
     /// This is tracked per-slot for purge/flush
     unrooted_accounts: RwMux(SlotPubkeyAccounts),
 
-    // pubkey->account LRU maps
+    /// pubkey->account LRU maps
     maybe_accounts_cache_rw: ?RwMux(AccountsCache),
 
     /// NOTE: see accountsdb/readme.md for more details on how these are used
-    file_map: RwMux(FileMap) = RwMux(FileMap).init(.{}),
+    file_map: RwMux(FileMap),
     /// `file_map_fd_rw` is used to ensure files in the file_map are not closed while its held as a read-lock.
     /// NOTE: see accountsdb/readme.md for more details on how these are used
-    file_map_fd_rw: std.Thread.RwLock = .{},
-
-    geyser_writer: ?*GeyserWriter,
+    file_map_fd_rw: std.Thread.RwLock,
 
     /// Tracks how many accounts (which we have stored) are dead for a specific slot.
     /// Used during clean to queue an AccountFile for shrink if it contains
@@ -96,29 +110,22 @@ pub const AccountsDB = struct {
     /// Used for filenames when flushing accounts to disk.
     // TODO: do we need this? since flushed slots will be unique
     largest_file_id: FileId = FileId.fromInt(0),
-
     // TODO: integrate these values into consensus
     /// Used for flushing/cleaning/purging/shrinking.
     largest_rooted_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
     /// Represents the largest slot for which all account data has been flushed to disk.
     /// Always `<= largest_rooted_slot`.
     largest_flushed_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
-    /// Represents the largest slot info used to generate a full snapshot, and optionally an incremental snapshot relative to it, which currently exists.
-    latest_snapshot_info: RwMux(?SnapshotGenerationInfo) = RwMux(?SnapshotGenerationInfo).init(null),
+
     /// The snapshot info from which this instance was loaded from and validated against (null if that didn't happen).
     /// Used to potentially skip the first `computeAccountHashesAndLamports`.
     first_snapshot_load_info: RwMux(?SnapshotGenerationInfo) = RwMux(?SnapshotGenerationInfo).init(null),
-
-    /// Not closed by the `AccountsDB`, but must live at least as long as it.
-    snapshot_dir: std.fs.Dir,
+    /// Represents the largest slot info used to generate a full snapshot, and optionally an incremental snapshot relative to it, which currently exists.
+    latest_snapshot_info: RwMux(?SnapshotGenerationInfo) = RwMux(?SnapshotGenerationInfo).init(null),
 
     // TODO: populate this during snapshot load
     // TODO: move to Bank struct
     bank_hash_stats: RwMux(BankHashStatsMap) = RwMux(BankHashStatsMap).init(.{}),
-
-    metrics: AccountsDBMetrics,
-    logger: Logger,
-    config: InitConfig,
 
     const Self = @This();
 
@@ -128,65 +135,72 @@ pub const AccountsDB = struct {
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
 
-    pub const InitConfig = struct {
+    pub const InitParams = struct {
+        allocator: std.mem.Allocator,
+        logger: Logger,
+        snapshot_dir: std.fs.Dir,
+        geyser_writer: ?*GeyserWriter,
+        index_allocation: AccountIndex.AllocatorConfig.Tag,
         number_of_index_shards: usize,
-        use_disk_index: bool,
         /// Limit of cached accounts. Use null to disable accounts caching.
         lru_size: ?usize,
     };
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        logger: Logger,
-        snapshot_dir: std.fs.Dir,
-        config: InitConfig,
-        geyser_writer: ?*GeyserWriter,
-    ) !Self {
+    pub fn init(params: InitParams) !Self {
         // init index
-        const index_config: AccountIndex.AllocatorConfig = if (config.use_disk_index)
-            .{ .Disk = .{ .accountsdb_dir = snapshot_dir } }
-        else
-            .{ .Ram = .{ .allocator = allocator } };
+        const index_config: AccountIndex.AllocatorConfig = switch (params.index_allocation) {
+            .disk => .{ .disk = .{ .accountsdb_dir = params.snapshot_dir } },
+            .ram => .{ .ram = .{ .allocator = params.allocator } },
+        };
         var account_index = try AccountIndex.init(
-            allocator,
-            logger,
+            params.allocator,
+            params.logger,
             index_config,
-            config.number_of_index_shards,
+            params.number_of_index_shards,
             0,
         );
         errdefer account_index.deinit(true);
 
         // init accounts cache
-        var maybe_accounts_cache = if (config.lru_size) |lru_size|
-            try AccountsCache.init(allocator, globalRegistry(), lru_size)
-        else
-            null;
+        var maybe_accounts_cache = blk: {
+            const lru_size = params.lru_size orelse break :blk null;
+            break :blk try AccountsCache.init(params.allocator, globalRegistry(), lru_size);
+        };
         errdefer if (maybe_accounts_cache) |*accounts_cache| accounts_cache.deinit();
-
-        const maybe_accounts_cache_rw = if (maybe_accounts_cache) |accounts_cache|
-            RwMux(AccountsCache).init(accounts_cache)
-        else
-            null;
 
         const metrics = try AccountsDBMetrics.init();
 
         // NOTE: we need the accounts directory to exist to create new account files correctly
-        snapshot_dir.makePath("accounts") catch |err| switch (err) {
+        params.snapshot_dir.makePath("accounts") catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => |e| return e,
         };
 
         return .{
-            .allocator = allocator,
-            .account_index = account_index,
-            .logger = logger,
-            .config = config,
-            .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(allocator)),
-            .maybe_accounts_cache_rw = maybe_accounts_cache_rw,
-            .snapshot_dir = snapshot_dir,
-            .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
+            .allocator = params.allocator,
             .metrics = metrics,
-            .geyser_writer = geyser_writer,
+            .logger = params.logger,
+            .geyser_writer = params.geyser_writer,
+            .snapshot_dir = params.snapshot_dir,
+
+            .number_of_index_shards = params.number_of_index_shards,
+            .lru_size = params.lru_size,
+
+            .account_index = account_index,
+            .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(params.allocator)),
+            .maybe_accounts_cache_rw = if (maybe_accounts_cache) |cache| RwMux(AccountsCache).init(cache) else null,
+            .file_map = RwMux(FileMap).init(.{}),
+            .file_map_fd_rw = .{},
+            .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(params.allocator)),
+
+            .largest_file_id = FileId.fromInt(0),
+            .largest_rooted_slot = std.atomic.Value(Slot).init(0),
+            .largest_flushed_slot = std.atomic.Value(Slot).init(0),
+
+            .first_snapshot_load_info = RwMux(?SnapshotGenerationInfo).init(null),
+            .latest_snapshot_info = RwMux(?SnapshotGenerationInfo).init(null),
+
+            .bank_hash_stats = RwMux(BankHashStatsMap).init(.{}),
         };
     }
 
@@ -321,25 +335,11 @@ pub const AccountsDB = struct {
         }
 
         // setup the parallel indexing
-        const use_disk_index = self.config.use_disk_index;
-
-        const loading_threads = try self.allocator.alloc(AccountsDB, n_parse_threads);
-        defer self.allocator.free(loading_threads);
-        for (loading_threads) |*thread_db| {
-            thread_db.* = try AccountsDB.init(
-                per_thread_allocator,
-                .noop, // dont spam the logs with init information (we set it after)
-                self.snapshot_dir,
-                self.config,
-                self.geyser_writer,
-            );
-            thread_db.logger = self.logger;
-
-            // set the disk allocator after init() doesnt create a new one
-            if (use_disk_index) {
-                thread_db.account_index.reference_allocator = self.account_index.reference_allocator;
-            }
-        }
+        var loading_threads = try ArrayList(AccountsDB).initCapacity(
+            self.allocator,
+            n_parse_threads,
+        );
+        defer loading_threads.deinit();
         defer {
             // at this defer point, there are three memory components we care about
             // 1) the account references (AccountRef)
@@ -351,7 +351,7 @@ pub const AccountsDB = struct {
             // 2) and 3) will be copied into the main index thread and so we can deinit them
             // 1) will continue to exist on the heap and its ownership is given
             // the main accounts-db index
-            for (loading_threads) |*loading_thread| {
+            for (loading_threads.items) |*loading_thread| {
                 // NOTE: deinit hashmap, dont close the files
                 const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
                 defer file_map_lg.unlock();
@@ -369,6 +369,23 @@ pub const AccountsDB = struct {
             }
         }
 
+        for (0..n_parse_threads) |_| {
+            const thread_db = loading_threads.addOneAssumeCapacity();
+            thread_db.* = try AccountsDB.init(.{
+                .allocator = per_thread_allocator,
+                .snapshot_dir = self.snapshot_dir,
+                .geyser_writer = self.geyser_writer,
+                .number_of_index_shards = self.number_of_index_shards,
+                .lru_size = self.lru_size,
+
+                .logger = .noop, // dont spam the logs with init information (we set it after)
+                .index_allocation = .ram, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
+            });
+            thread_db.logger = self.logger;
+            // set the disk allocator after init() doesnt create a new one
+            thread_db.account_index.reference_allocator = self.account_index.reference_allocator;
+        }
+
         self.logger.info().logf("[{d} threads]: reading and indexing accounts...", .{n_parse_threads});
         {
             var wg: std.Thread.WaitGroup = .{};
@@ -378,7 +395,7 @@ pub const AccountsDB = struct {
                 .data_len = n_account_files,
                 .max_threads = n_parse_threads,
                 .params = .{
-                    loading_threads,
+                    loading_threads.items,
                     accounts_dir,
                     snapshot_manifest.file_map,
                     accounts_per_file_estimate,
@@ -394,7 +411,7 @@ pub const AccountsDB = struct {
 
         self.logger.info().logf("[{d} threads]: merging thread indexes...", .{n_combine_threads});
         var merge_timer = try sig.time.Timer.start();
-        try self.mergeMultipleDBs(loading_threads, n_combine_threads);
+        try self.mergeMultipleDBs(loading_threads.items, n_combine_threads);
         self.logger.debug().logf("merging thread indexes took: {}", .{merge_timer.read()});
 
         self.logger.debug().logf("total time: {s}", .{timer.read()});
@@ -3163,11 +3180,15 @@ test "testWriteSnapshot" {
         try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, false);
     }
 
-    var accounts_db = try AccountsDB.init(allocator, .noop, tmp_snap_dir, .{
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .noop,
+        .snapshot_dir = tmp_snap_dir,
+        .geyser_writer = null,
+        .index_allocation = .ram,
         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
-        .use_disk_index = false,
         .lru_size = 10_000,
-    }, null);
+    });
     defer accounts_db.deinit();
 
     try testWriteSnapshotFull(
@@ -3232,11 +3253,15 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     errdefer snapshots.deinit(allocator);
 
     const snapshot = try snapshots.collapse();
-    var accounts_db = try AccountsDB.init(allocator, logger, dir, .{
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = dir,
+        .geyser_writer = null,
+        .index_allocation = if (use_disk) .disk else .ram,
         .number_of_index_shards = 4,
-        .use_disk_index = use_disk,
         .lru_size = null,
-    }, null);
+    });
     errdefer accounts_db.deinit();
 
     _ = try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator, 500);
@@ -3297,21 +3322,18 @@ test "geyser stream on load" {
     }
 
     const snapshot = try snapshots.collapse();
-    var accounts_db = try AccountsDB.init(
-        allocator,
-        logger,
-        dir,
-        .{
-            .number_of_index_shards = 4,
-            .use_disk_index = false,
-            .lru_size = null,
-        },
-        geyser_writer,
-    );
-    defer {
-        accounts_db.deinit();
-        snapshots.deinit(allocator);
-    }
+    defer snapshots.deinit(allocator);
+
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = dir,
+        .geyser_writer = geyser_writer,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+        .lru_size = null,
+    });
+    defer accounts_db.deinit();
 
     _ = try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields,
@@ -3469,14 +3491,20 @@ test "load other sysvars" {
 
 test "flushing slots works" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    const logger: Logger = .noop;
+
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
-    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
+
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .use_disk_index = false,
         .lru_size = null,
-    }, null);
+    });
     defer accounts_db.deinit();
 
     var prng = std.rand.DefaultPrng.init(19);
@@ -3521,14 +3549,20 @@ test "flushing slots works" {
 
 test "purge accounts in cache works" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    const logger: Logger = .noop;
+
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
-    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
+
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .use_disk_index = false,
         .lru_size = null,
-    }, null);
+    });
     defer accounts_db.deinit();
 
     var prng = std.rand.DefaultPrng.init(19);
@@ -3582,11 +3616,15 @@ test "clean to shrink account file works with zero-lamports" {
     const logger = .noop;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
-    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .use_disk_index = false,
         .lru_size = null,
-    }, null);
+    });
     defer accounts_db.deinit();
 
     var prng = std.rand.DefaultPrng.init(19);
@@ -3656,14 +3694,20 @@ test "clean to shrink account file works with zero-lamports" {
 
 test "clean to shrink account file works" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    const logger: Logger = .noop;
+
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
-    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
+
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .use_disk_index = false,
         .lru_size = null,
-    }, null);
+    });
     defer accounts_db.deinit();
 
     var prng = std.rand.DefaultPrng.init(19);
@@ -3725,14 +3769,20 @@ test "clean to shrink account file works" {
 
 test "full clean account file works" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    const logger: Logger = .noop;
+
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
-    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
+
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .use_disk_index = false,
         .lru_size = null,
-    }, null);
+    });
     defer accounts_db.deinit();
 
     var prng = std.rand.DefaultPrng.init(19);
@@ -3811,14 +3861,20 @@ test "full clean account file works" {
 
 test "shrink account file works" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
+    const logger: Logger = .noop;
+
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
-    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
+
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .use_disk_index = false,
         .lru_size = null,
-    }, null);
+    });
     defer accounts_db.deinit();
 
     var prng = std.rand.DefaultPrng.init(19);
@@ -4026,11 +4082,15 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         defer snapshots.deinit(allocator);
         const snapshot = try snapshots.collapse();
 
-        var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
+        var accounts_db = try AccountsDB.init(.{
+            .allocator = allocator,
+            .logger = logger,
+            .snapshot_dir = snapshot_dir,
+            .geyser_writer = null,
+            .index_allocation = if (bench_args.use_disk) .disk else .ram,
             .number_of_index_shards = 32,
-            .use_disk_index = bench_args.use_disk,
             .lru_size = null,
-        }, null);
+        });
         defer accounts_db.deinit();
 
         const loading_duration = try accounts_db.loadFromSnapshot(
@@ -4066,10 +4126,7 @@ pub const BenchmarkAccountsDB = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 5;
 
-    pub const MemoryType = enum {
-        ram,
-        disk,
-    };
+    pub const MemoryType = AccountIndex.AllocatorConfig.Tag;
 
     pub const BenchArgs = struct {
         /// the number of accounts to store in the database (for each slot)
@@ -4246,11 +4303,15 @@ pub const BenchmarkAccountsDB = struct {
         defer snapshot_dir.close();
 
         const logger = .noop;
-        var accounts_db: AccountsDB = try AccountsDB.init(allocator, logger, snapshot_dir, .{
+        var accounts_db: AccountsDB = try AccountsDB.init(.{
+            .allocator = allocator,
+            .logger = logger,
+            .snapshot_dir = snapshot_dir,
+            .geyser_writer = null,
+            .index_allocation = bench_args.index,
             .number_of_index_shards = 32,
-            .use_disk_index = bench_args.index == .disk,
             .lru_size = bench_args.lru_size,
-        }, null);
+        });
         defer accounts_db.deinit();
 
         var prng = std.Random.DefaultPrng.init(19);
