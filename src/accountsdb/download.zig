@@ -79,7 +79,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             if (!r.found_existing) {
                 inc_map_ptr.* = std.AutoHashMap(SlotAndHash, void).init(allocator);
             }
-            for (trusted_hashes.incremental) |inc_hash| {
+            for (trusted_hashes.incremental.getSlice()) |inc_hash| {
                 try inc_map_ptr.put(inc_hash, {});
             }
         }
@@ -109,7 +109,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
         const snapshot_hashes = gossip_data.value.data.SnapshotHashes;
 
         var max_inc_hash: ?SlotAndHash = null;
-        for (snapshot_hashes.incremental) |inc_hash| {
+        for (snapshot_hashes.incremental.getSlice()) |inc_hash| {
             if (max_inc_hash == null or inc_hash.slot > max_inc_hash.?.slot) {
                 max_inc_hash = inc_hash;
             }

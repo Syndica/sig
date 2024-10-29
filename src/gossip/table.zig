@@ -140,6 +140,23 @@ pub const GossipTable = struct {
         pub fn wasInserted(self: InsertResult) bool {
             return self == .InsertedNewEntry or self == .OverwroteExistingEntry;
         }
+
+        pub fn equals(self: InsertResult, other: InsertResult) bool {
+            if (self != std.meta.activeTag(other)) return false;
+            return switch (self) {
+                .InsertedNewEntry,
+                .IgnoredOldValue,
+                .IgnoredDuplicateValue,
+                .IgnoredTimeout,
+                .GossipTableFull,
+                => |_| true,
+
+                .OverwroteExistingEntry => |*a| blk: {
+                    const b = &other.OverwroteExistingEntry;
+                    break :blk a.equals(b);
+                },
+            };
+        }
     };
 
     pub fn insert(self: *Self, value: SignedGossipData, now: u64) !InsertResult {
@@ -198,6 +215,7 @@ pub const GossipTable = struct {
                 try node_entry.value_ptr.put(entry_index, {});
             } else {
                 var indexs = AutoArrayHashSet(usize).init(self.allocator);
+                errdefer indexs.deinit();
                 try indexs.put(entry_index, {});
                 try self.pubkey_to_values.put(origin, indexs);
             }
@@ -867,8 +885,8 @@ test "remove old values" {
 
     for (0..5) |_| {
         const value = try SignedGossipData.initSigned(
-            GossipData.initRandom(prng.random()),
             &keypair,
+            GossipData.initRandom(prng.random()),
         );
         // TS = 100
         _ = try table.insert(value, 100);
@@ -900,8 +918,8 @@ test "insert and remove value" {
     }
 
     const value = try SignedGossipData.initSigned(
-        GossipData.randomFromIndex(prng.random(), 0),
         &keypair,
+        GossipData.randomFromIndex(prng.random(), 0),
     );
     _ = try table.insert(value, 100);
 
@@ -930,8 +948,8 @@ test "trim pruned values" {
 
     for (0..N_VALUES) |_| {
         const value = try SignedGossipData.initSigned(
-            GossipData.initRandom(prng.random()),
             &keypair,
+            GossipData.initRandom(prng.random()),
         );
         _ = try table.insert(value, 100);
         try values.append(value);
@@ -985,7 +1003,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     const data = GossipData{
         .LegacyContactInfo = LegacyContactInfo.initRandom(random),
     };
-    var value = try SignedGossipData.initSigned(data, &keypair);
+    var value = try SignedGossipData.initSigned(&keypair, data);
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
@@ -1005,7 +1023,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     new_data.LegacyContactInfo.id = data.LegacyContactInfo.id;
     // older wallclock
     new_data.LegacyContactInfo.wallclock += data.LegacyContactInfo.wallclock;
-    value = try SignedGossipData.initSigned(new_data, &keypair);
+    value = try SignedGossipData.initSigned(&keypair, new_data);
     _ = try table.insert(value, 120);
 
     try std.testing.expectEqual(table.purged.len(), 1);
@@ -1043,9 +1061,9 @@ test "insert and get contact_info" {
     var id = Pubkey.fromPublicKey(&kp.public_key);
 
     const legacy_contact_info = LegacyContactInfo.default(id);
-    var gossip_value = try SignedGossipData.initSigned(GossipData{
+    var gossip_value = try SignedGossipData.initSigned(&kp, .{
         .LegacyContactInfo = legacy_contact_info,
-    }, &kp);
+    });
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
@@ -1057,7 +1075,7 @@ test "insert and get contact_info" {
 
     // test insertion
     const result = try table.insert(gossip_value, 0);
-    try std.testing.expectEqual(.InsertedNewEntry, result);
+    try std.testing.expect(result.equals(.InsertedNewEntry));
 
     // test retrieval
     var buf: [100]ContactInfo = undefined;
@@ -1067,7 +1085,7 @@ test "insert and get contact_info" {
 
     // test re-insertion
     const result2 = try table.insert(gossip_value, 0);
-    try std.testing.expectEqual(.IgnoredDuplicateValue, result2);
+    try std.testing.expect(result2.equals(.IgnoredDuplicateValue));
 
     // test re-insertion with greater wallclock
     gossip_value.data.LegacyContactInfo.wallclock += 2;

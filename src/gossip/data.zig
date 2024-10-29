@@ -7,6 +7,7 @@ const bincode = sig.bincode;
 
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const KeyPairSigner = std.crypto.sign.Ed25519.Signer;
 const UdpSocket = network.Socket;
 const TcpListener = network.Socket;
 const SocketAddr = sig.net.SocketAddr;
@@ -18,6 +19,7 @@ const Pubkey = sig.core.Pubkey;
 const IpAddr = sig.net.IpAddr;
 const ClientVersion = sig.version.ClientVersion;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
+const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
 
 const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
@@ -75,23 +77,18 @@ pub const GossipVersionedData = struct {
 pub const SignedGossipData = struct {
     signature: Signature,
     data: GossipData,
-
     const Self = @This();
 
-    pub fn init(data: GossipData) Self {
-        return Self{
-            .signature = Signature{},
-            .data = data,
-        };
-    }
+    pub fn initSigned(keypair: *const KeyPair, data: GossipData) !Self {
+        // should always be enough space or is invalid msg
+        var buf: [PACKET_DATA_SIZE]u8 = undefined;
+        const bytes = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        const signature = try keypair.sign(bytes, null);
 
-    pub fn initSigned(data: GossipData, keypair: *const KeyPair) !Self {
-        var self = Self{
-            .signature = Signature{},
+        return .{
+            .signature = Signature.init(signature.toBytes()),
             .data = data,
         };
-        try self.sign(keypair);
-        return self;
     }
 
     pub fn clone(self: *const Self, allocator: std.mem.Allocator) error{OutOfMemory}!Self {
@@ -107,7 +104,7 @@ pub const SignedGossipData = struct {
 
     /// only used in tests
     pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Self {
-        return try initSigned(GossipData.initRandom(random), keypair);
+        return try initSigned(keypair, GossipData.initRandom(random));
     }
 
     /// only used in tests
@@ -115,7 +112,7 @@ pub const SignedGossipData = struct {
         var data = GossipData.randomFromIndex(random, index);
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         data.setId(pubkey);
-        return try initSigned(data, keypair);
+        return try initSigned(keypair, data);
     }
 
     pub fn sign(self: *Self, keypair: *const KeyPair) !void {
@@ -135,106 +132,92 @@ pub const SignedGossipData = struct {
 
     pub fn id(self: *const Self) Pubkey {
         return switch (self.data) {
-            .LegacyContactInfo => |*v| v.id,
-            .Vote => |*v| v[1].from,
-            .LowestSlot => |*v| v[1].from,
-            .LegacySnapshotHashes => |*v| v.from,
-            .AccountsHashes => |*v| v.from,
-            .EpochSlots => |*v| v[1].from,
-            .LegacyVersion => |*v| v.from,
-            .Version => |*v| v.from,
-            .NodeInstance => |*v| v.from,
-            .DuplicateShred => |*v| v[1].from,
-            .SnapshotHashes => |*v| v.from,
-            .ContactInfo => |*v| v.pubkey,
-            .RestartLastVotedForkSlots => |*v| v.from,
-            .RestartHeaviestFork => |*v| v.from,
+            // zig fmt: off
+            .LegacyContactInfo         => |v| v.id,
+            .Vote                      => |v| v[1].from,
+            .LowestSlot                => |v| v[1].from,
+            .LegacySnapshotHashes      => |v| v.from,
+            .AccountsHashes            => |v| v.from,
+            .EpochSlots                => |v| v[1].from,
+            .LegacyVersion             => |v| v.from,
+            .Version                   => |v| v.from,
+            .NodeInstance              => |v| v.from,
+            .DuplicateShred            => |v| v[1].from,
+            .SnapshotHashes            => |v| v.from,
+            .ContactInfo               => |v| v.pubkey,
+            .RestartLastVotedForkSlots => |v| v.from,
+            .RestartHeaviestFork       => |v| v.from,
+            // zig fmt: on
+        };
+    }
+
+    pub fn label(self: *const Self) GossipKey {
+        return switch (self.data) {
+            // zig fmt: off
+            .LegacyContactInfo         => |v|.{ .LegacyContactInfo        = v.id },
+            .Vote                      => |v|.{ .Vote                     = .{ v[0], v[1].from } },
+            .LowestSlot                => |v|.{ .LowestSlot               = v[1].from },
+            .LegacySnapshotHashes      => |v|.{ .LegacySnapshotHashes     = v.from },
+            .AccountsHashes            => |v|.{ .AccountsHashes           = v.from },
+            .EpochSlots                => |v|.{ .EpochSlots               = .{ v[0], v[1].from } },
+            .LegacyVersion             => |v|.{ .LegacyVersion            = v.from },
+            .Version                   => |v|.{ .Version                  = v.from },
+            .NodeInstance              => |v|.{ .NodeInstance             = v.from },
+            .DuplicateShred            => |v|.{ .DuplicateShred           = .{ v[0], v[1].from } },
+            .SnapshotHashes            => |v|.{ .SnapshotHashes           = v.from },
+            .ContactInfo               => |v|.{ .ContactInfo              = v.pubkey },
+            .RestartLastVotedForkSlots => |v|.{ .RestartLastVotedForkSlots= v.from },
+            .RestartHeaviestFork       => |v|.{ .RestartHeaviestFork      = v.from },
+            // zig fmt: on
         };
     }
 
     pub fn wallclockPtr(self: *Self) *u64 {
         return switch (self.data) {
-            .LegacyContactInfo => |*v| &v.wallclock,
-            .Vote => |*v| &v[1].wallclock,
-            .LowestSlot => |*v| &v[1].wallclock,
-            .LegacySnapshotHashes => |*v| &v.wallclock,
-            .AccountsHashes => |*v| &v.wallclock,
-            .EpochSlots => |*v| &v[1].wallclock,
-            .LegacyVersion => |*v| &v.wallclock,
-            .Version => |*v| &v.wallclock,
-            .NodeInstance => |*v| &v.wallclock,
-            .DuplicateShred => |*v| &v[1].wallclock,
-            .SnapshotHashes => |*v| &v.wallclock,
-            .ContactInfo => |*v| &v.wallclock,
+            // zig fmt: off
+            .LegacyContactInfo         => |*v| &v.wallclock,
+            .Vote                      => |*v| &v[1].wallclock,
+            .LowestSlot                => |*v| &v[1].wallclock,
+            .LegacySnapshotHashes      => |*v| &v.wallclock,
+            .AccountsHashes            => |*v| &v.wallclock,
+            .EpochSlots                => |*v| &v[1].wallclock,
+            .LegacyVersion             => |*v| &v.wallclock,
+            .Version                   => |*v| &v.wallclock,
+            .NodeInstance              => |*v| &v.wallclock,
+            .DuplicateShred            => |*v| &v[1].wallclock,
+            .SnapshotHashes            => |*v| &v.wallclock,
+            .ContactInfo               => |*v| &v.wallclock,
             .RestartLastVotedForkSlots => |*v| &v.wallclock,
-            .RestartHeaviestFork => |*v| &v.wallclock,
+            .RestartHeaviestFork       => |*v| &v.wallclock,
+            // zig fmt: on
         };
     }
 
     pub fn wallclock(self: *const Self) u64 {
         return switch (self.data) {
-            .LegacyContactInfo => |*v| v.wallclock,
-            .Vote => |*v| v[1].wallclock,
-            .LowestSlot => |*v| v[1].wallclock,
-            .LegacySnapshotHashes => |*v| v.wallclock,
-            .AccountsHashes => |*v| v.wallclock,
-            .EpochSlots => |*v| v[1].wallclock,
-            .LegacyVersion => |*v| v.wallclock,
-            .Version => |*v| v.wallclock,
-            .NodeInstance => |*v| v.wallclock,
-            .DuplicateShred => |*v| v[1].wallclock,
-            .SnapshotHashes => |*v| v.wallclock,
-            .ContactInfo => |*v| v.wallclock,
-            .RestartLastVotedForkSlots => |*v| v.wallclock,
-            .RestartHeaviestFork => |*v| v.wallclock,
+            // zig fmt: off
+            .LegacyContactInfo         => |v| v.wallclock,
+            .Vote                      => |v| v[1].wallclock,
+            .LowestSlot                => |v| v[1].wallclock,
+            .LegacySnapshotHashes      => |v| v.wallclock,
+            .AccountsHashes            => |v| v.wallclock,
+            .EpochSlots                => |v| v[1].wallclock,
+            .LegacyVersion             => |v| v.wallclock,
+            .Version                   => |v| v.wallclock,
+            .NodeInstance              => |v| v.wallclock,
+            .DuplicateShred            => |v| v[1].wallclock,
+            .SnapshotHashes            => |v| v.wallclock,
+            .ContactInfo               => |v| v.wallclock,
+            .RestartLastVotedForkSlots => |v| v.wallclock,
+            .RestartHeaviestFork       => |v| v.wallclock,
+            // zig fmt: on
         };
     }
 
-    pub fn label(self: *const Self) GossipKey {
-        switch (self.data) {
-            .LegacyContactInfo => {
-                return .{ .LegacyContactInfo = self.id() };
-            },
-            .Vote => |*v| {
-                return .{ .Vote = .{ v[0], self.id() } };
-            },
-            .LowestSlot => {
-                return .{ .LowestSlot = self.id() };
-            },
-            .LegacySnapshotHashes => {
-                return .{ .LegacySnapshotHashes = self.id() };
-            },
-            .AccountsHashes => {
-                return .{ .AccountsHashes = self.id() };
-            },
-            .EpochSlots => |*v| {
-                return .{ .EpochSlots = .{ v[0], self.id() } };
-            },
-            .LegacyVersion => {
-                return .{ .LegacyVersion = self.id() };
-            },
-            .Version => {
-                return .{ .Version = self.id() };
-            },
-            .NodeInstance => {
-                return .{ .NodeInstance = self.id() };
-            },
-            .DuplicateShred => |*v| {
-                return .{ .DuplicateShred = .{ v[0], self.id() } };
-            },
-            .SnapshotHashes => {
-                return .{ .SnapshotHashes = self.id() };
-            },
-            .ContactInfo => {
-                return .{ .ContactInfo = self.id() };
-            },
-            .RestartLastVotedForkSlots => {
-                return .{ .RestartLastVotedForkSlots = self.id() };
-            },
-            .RestartHeaviestFork => {
-                return .{ .RestartHeaviestFork = self.id() };
-            },
-        }
+    pub fn equals(self: *const Self, other: *const Self) bool {
+        if (!self.signature.eql(&other.signature)) return false;
+        if (!self.data.equals(&other.data)) return false;
+        return true;
     }
 };
 
@@ -444,6 +427,30 @@ pub const GossipData = union(GossipDataTag) {
             .LegacyContactInfo => |*v| v.shred_version,
             .ContactInfo => |*v| v.shred_version,
             else => null,
+        };
+    }
+
+    pub fn equals(self: *const GossipData, other: *const GossipData) bool {
+        if (self.* != std.meta.activeTag(other.*)) return false;
+        return switch (self.*) {
+            inline //
+            .LegacyContactInfo,
+            .Vote,
+            .LowestSlot,
+            .LegacySnapshotHashes,
+            .AccountsHashes,
+            .EpochSlots,
+            .LegacyVersion,
+            .Version,
+            .NodeInstance,
+            .DuplicateShred,
+            .ContactInfo,
+            .RestartLastVotedForkSlots,
+            .RestartHeaviestFork,
+            => |self_payload, tag| std.meta.eql(self_payload, @field(other, @tagName(tag))),
+
+            .SnapshotHashes,
+            => |*snap_hashes| snap_hashes.equals(&other.SnapshotHashes),
         };
     }
 };
@@ -675,11 +682,9 @@ pub const CompressionType = enum {
 
 pub const LegacySnapshotHashes = AccountsHashes;
 
-const SlotAndHash = @import("../accountsdb/snapshots.zig").SlotAndHash;
-
 pub const AccountsHashes = struct {
     from: Pubkey,
-    hashes: []SlotAndHash,
+    hashes: []const SlotAndHash,
     wallclock: u64,
 
     pub fn clone(self: *const AccountsHashes, allocator: std.mem.Allocator) error{OutOfMemory}!AccountsHashes {
@@ -695,10 +700,9 @@ pub const AccountsHashes = struct {
     }
 
     pub fn initRandom(random: std.rand.Random) AccountsHashes {
-        var slice: [0]SlotAndHash = .{};
-        return AccountsHashes{
+        return .{
             .from = Pubkey.initRandom(random),
-            .hashes = &slice,
+            .hashes = &.{},
             .wallclock = getWallclockMs(),
         };
     }
@@ -1071,27 +1075,27 @@ pub const DuplicateShred = struct {
 pub const SnapshotHashes = struct {
     from: Pubkey,
     full: SlotAndHash,
-    incremental: []const SlotAndHash,
+    incremental: IncrementalSnapshotsList,
     wallclock: u64,
 
     pub fn clone(self: *const SnapshotHashes, allocator: std.mem.Allocator) error{OutOfMemory}!SnapshotHashes {
         return .{
             .from = self.from,
             .full = self.full,
-            .incremental = try allocator.dupe(SlotAndHash, self.incremental),
+            .incremental = try self.incremental.clone(allocator),
             .wallclock = self.wallclock,
         };
     }
 
     pub fn deinit(self: *const SnapshotHashes, allocator: std.mem.Allocator) void {
-        allocator.free(self.incremental);
+        self.incremental.deinit(allocator);
     }
 
     pub fn initRandom(random: std.rand.Random) SnapshotHashes {
         return .{
             .from = Pubkey.initRandom(random),
             .full = .{ .slot = random.int(u64), .hash = Hash.initRandom(random) },
-            .incremental = &.{},
+            .incremental = IncrementalSnapshotsList.EMPTY,
             .wallclock = getWallclockMs(),
         };
     }
@@ -1101,7 +1105,7 @@ pub const SnapshotHashes = struct {
         if (self.full.slot >= MAX_SLOT) {
             return error.ValueOutOfBounds;
         }
-        for (self.incremental) |inc| {
+        for (self.incremental.getSlice()) |inc| {
             if (inc.slot >= MAX_SLOT) {
                 return error.ValueOutOfBounds;
             }
@@ -1110,6 +1114,138 @@ pub const SnapshotHashes = struct {
             }
         }
     }
+
+    pub fn equals(
+        self: *const SnapshotHashes,
+        other: *const SnapshotHashes,
+    ) bool {
+        if (self.wallclock != other.wallclock) return false;
+        if (self.from.equals(&other.from)) return false;
+        if (self.full.equals(&other.full)) return false;
+        if (!self.incremental.equals(&other.incremental)) return false;
+        return true;
+    }
+
+    /// List of incremental `SlotAndHash`es.
+    /// Can be thought of as a tagged union, where the tag is a boolean derived from `.len == 1`.
+    /// When the tag is `true`, the single item is represented inline in the `items` union.
+    /// When the tag is `false`, the list of items is pointed to by the `items` union.
+    ///
+    /// This optimizes the case where we only have a single incremental snapshot.
+    pub const IncrementalSnapshotsList = struct {
+        len: usize,
+        items: SingleOrList,
+
+        pub const @"!bincode-config": bincode.FieldConfig(IncrementalSnapshotsList) = .{
+            .serializer = bincode_impl.serializeFn,
+            .deserializer = bincode_impl.deserializeFn,
+            .free = bincode_impl.freeFn,
+            .skip = false,
+            .post_deserialize_fn = null,
+        };
+
+        pub const SingleOrList = union {
+            /// Active when `.len == 1`.
+            single: SlotAndHash,
+            /// Active when `.len != 1`.
+            list: [*]const SlotAndHash,
+        };
+
+        pub fn getSlice(inc: *const IncrementalSnapshotsList) []const SlotAndHash {
+            if (inc.len == 1) {
+                return (&inc.items.single)[0..1];
+            } else {
+                return inc.items.list[0..inc.len];
+            }
+        }
+
+        pub fn deinit(self: *const IncrementalSnapshotsList, allocator: std.mem.Allocator) void {
+            if (self.len == 1) {
+                _ = &self.items.single; // safety check
+            } else {
+                allocator.free(self.items.list[0..self.len]);
+            }
+        }
+
+        pub const EMPTY: IncrementalSnapshotsList = .{
+            .len = 0,
+            .items = .{ .list = &[_]SlotAndHash{} },
+        };
+
+        /// The returned snapshot collection can optionally and safely have `.deinit` called.
+        pub fn initSingle(single: SlotAndHash) IncrementalSnapshotsList {
+            return .{
+                .len = 1,
+                .items = .{ .single = single },
+            };
+        }
+
+        /// Responsibility to `.deinit` the returned snapshot collection falls to the caller in order to free `list`, if `list` was allocated.
+        /// Asserts `list.len != 1`.
+        pub fn initList(list: []const SlotAndHash) IncrementalSnapshotsList {
+            std.debug.assert(list.len != 1);
+            return .{
+                .len = list.len,
+                .items = .{ .list = list.ptr },
+            };
+        }
+
+        /// Responsibility to `.deinit` the returned snapshot collection with the specified allocator falls to the caller.
+        /// Accepts any `list.len`.
+        pub fn initListCloned(allocator: std.mem.Allocator, list: []const SlotAndHash) !IncrementalSnapshotsList {
+            if (list.len == 1) return initSingle(list[0]);
+            const uncloned = initList(list);
+            return uncloned.clone(allocator);
+        }
+
+        pub fn clone(inc: *const IncrementalSnapshotsList, allocator: std.mem.Allocator) !IncrementalSnapshotsList {
+            return .{
+                .len = inc.len,
+                .items = if (inc.len == 1)
+                    .{ .single = inc.items.single }
+                else
+                    .{ .list = (try allocator.dupe(SlotAndHash, inc.items.list[0..inc.len])).ptr },
+            };
+        }
+
+        pub fn equals(
+            self: *const IncrementalSnapshotsList,
+            other: *const IncrementalSnapshotsList,
+        ) bool {
+            if (self.len != other.len) return false;
+            for (self.getSlice(), other.getSlice()) |*a, *b| {
+                if (!a.equals(b)) return false;
+            }
+            return true;
+        }
+
+        const bincode_impl = struct {
+            fn serializeFn(writer: anytype, inc_list: anytype, params: bincode.Params) !void {
+                try bincode.write(writer, inc_list.getSlice(), params);
+            }
+
+            fn deserializeFn(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !IncrementalSnapshotsList {
+                const faililng_allocator = sig.utils.allocators.failing.allocator(.{});
+
+                const maybe_len = try bincode.readIntAsLength(usize, reader, params);
+                const len = maybe_len orelse return error.IncrementalListTooBig;
+                switch (len) {
+                    0 => return EMPTY,
+                    1 => return initSingle(try bincode.read(faililng_allocator, SlotAndHash, reader, params)),
+                    else => {
+                        const list = try allocator.alloc(SlotAndHash, len);
+                        errdefer allocator.free(list);
+                        for (list) |*sah| sah.* = try bincode.read(faililng_allocator, SlotAndHash, reader, params);
+                        return initList(list);
+                    },
+                }
+            }
+
+            fn freeFn(allocator: std.mem.Allocator, inc_list: anytype) void {
+                IncrementalSnapshotsList.deinit(&inc_list, allocator);
+            }
+        };
+    };
 };
 
 pub const SocketTag = enum(u8) {
@@ -1718,7 +1854,7 @@ test "sig verify duplicateShreds" {
     var data = DuplicateShred.initRandom(prng.random());
     data.from = pubkey;
 
-    var value = try SignedGossipData.initSigned(GossipData{ .DuplicateShred = .{ 0, data } }, &keypair);
+    var value = try SignedGossipData.initSigned(&keypair, .{ .DuplicateShred = .{ 0, data } });
 
     try std.testing.expect(try value.verify(pubkey));
 }
@@ -1742,9 +1878,9 @@ test "SignedGossipData label() and id() methods" {
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.wallclock = 0;
 
-    var value = try SignedGossipData.initSigned(GossipData{
+    var value = try SignedGossipData.initSigned(&kp, .{
         .LegacyContactInfo = legacy_contact_info,
-    }, &kp);
+    });
 
     try std.testing.expect(value.id().equals(&id));
     try std.testing.expect(value.label().LegacyContactInfo.equals(&id));
@@ -1974,9 +2110,8 @@ test "sanitize invalid SnapshotHashes full slot has error" {
 test "sanitize invalid SnapshotHashes incremental slot has error" {
     var prng = std.rand.DefaultPrng.init(524145234);
     const random = prng.random();
-    var incremental: [1]SlotAndHash = .{.{ .slot = 1_000_000_000_487_283, .hash = Hash.ZEROES }};
     var instance = SnapshotHashes.initRandom(random);
-    instance.incremental = &incremental;
+    instance.incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{ .slot = 1_000_000_000_487_283, .hash = Hash.ZEROES });
     const data = GossipData{ .SnapshotHashes = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }
@@ -1984,10 +2119,9 @@ test "sanitize invalid SnapshotHashes incremental slot has error" {
 test "sanitize SnapshotHashes full > incremental has error" {
     var prng = std.rand.DefaultPrng.init(524145234);
     const random = prng.random();
-    var incremental: [1]SlotAndHash = .{.{ .slot = 1, .hash = Hash.ZEROES }};
     var instance = SnapshotHashes.initRandom(random);
     instance.full.slot = 2;
-    instance.incremental = &incremental;
+    instance.incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{ .slot = 1, .hash = Hash.ZEROES });
     const data = GossipData{ .SnapshotHashes = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }

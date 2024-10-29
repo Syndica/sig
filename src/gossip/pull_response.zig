@@ -115,9 +115,9 @@ test "gossip.pull_response: test filtering values works" {
     legacy_contact_info.id = id;
     // TODO: make this consistent across tests
     legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());
-    var gossip_value = try SignedGossipData.initSigned(.{
+    var gossip_value = try SignedGossipData.initSigned(&kp, .{
         .LegacyContactInfo = legacy_contact_info,
-    }, &kp);
+    });
 
     // insert more values which the filters should be missing
     lg = gossip_table_rw.write();

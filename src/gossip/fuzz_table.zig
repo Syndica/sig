@@ -120,7 +120,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
                     data.setId(pubkey);
-                    var signed_data = try SignedGossipData.initSigned(data, &keypair);
+                    var signed_data = try SignedGossipData.initSigned(&keypair, data);
                     signed_data.wallclockPtr().* = now;
 
                     // !
@@ -143,7 +143,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     const pubkey = pubkeys.items[index];
 
                     data.setId(pubkey);
-                    var signed_data = try SignedGossipData.initSigned(data, &keypair);
+                    var signed_data = try SignedGossipData.initSigned(&keypair, data);
                     signed_data.wallclockPtr().* = now;
 
                     const should_overwrite = random.boolean();

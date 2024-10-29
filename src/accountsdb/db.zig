@@ -2033,7 +2033,7 @@ pub const AccountsDB = struct {
     pub fn getAccountHashAndLamportsFromRef(
         self: *Self,
         location: AccountRef.AccountLocation,
-    ) (GetAccountInFileError)!struct { Hash, u64 } {
+    ) GetAccountInFileError!struct { Hash, u64 } {
         switch (location) {
             .File => |ref_info| {
                 self.file_map_fd_rw.lockShared();
@@ -2332,14 +2332,20 @@ pub const AccountsDB = struct {
         inc: ?Incremental,
 
         pub const Full = struct {
+            /// The full slot.
             slot: Slot,
+            /// The full accounts hash.
             hash: Hash,
+            /// The total lamports at the full slot.
             capitalization: u64,
         };
 
         pub const Incremental = struct {
+            /// The incremental slot relative to the base slot (.full.slot).
             slot: Slot,
+            /// The incremental accounts delta hash, including zero-lamport accounts.
             hash: Hash,
+            /// The capitalization from the base slot to the incremental slot.
             capitalization: u64,
         };
     };
@@ -2489,7 +2495,7 @@ pub const AccountsDB = struct {
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
             sig.version.CURRENT_CLIENT_VERSION,
-            StatusCache.default(),
+            StatusCache.EMPTY,
             &snapshot_fields,
             file_map,
         );
@@ -2705,7 +2711,7 @@ pub const AccountsDB = struct {
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
             sig.version.CURRENT_CLIENT_VERSION,
-            StatusCache.default(),
+            StatusCache.EMPTY,
             &snapshot_fields,
             file_map,
         );

@@ -518,7 +518,7 @@ test "RepairService sends repair request to gossip peer" {
     var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.acquire));
     try peer_contact_info.setSocket(.serve_repair, SocketAddr.fromEndpoint(&peer_endpoint));
     try peer_contact_info.setSocket(.turbine_recv, SocketAddr.fromEndpoint(&peer_endpoint));
-    _ = try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
+    _ = try gossip.insert(try SignedGossipData.initSigned(&peer_keypair, .{ .ContactInfo = peer_contact_info }), wallclock);
 
     // init service
     var exit = Atomic(bool).init(false);
@@ -666,7 +666,7 @@ const TestPeerGenerator = struct {
         if (peer_type != .MissingTvuPort) {
             try contact_info.setSocket(.turbine_recv, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
         }
-        _ = try self.gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = contact_info }, &keypair), wallclock);
+        _ = try self.gossip.insert(try SignedGossipData.initSigned(&keypair, .{ .ContactInfo = contact_info }), wallclock);
         switch (peer_type) {
             inline .HasSlot, .MissingSlot => {
                 var lowest_slot = sig.gossip.LowestSlot.initRandom(self.random);
@@ -675,7 +675,7 @@ const TestPeerGenerator = struct {
                     .MissingSlot => self.slot + 1,
                     else => self.slot,
                 };
-                _ = try self.gossip.insert(try SignedGossipData.initSigned(.{ .LowestSlot = .{ 0, lowest_slot } }, &keypair), wallclock);
+                _ = try self.gossip.insert(try SignedGossipData.initSigned(&keypair, .{ .LowestSlot = .{ 0, lowest_slot } }), wallclock);
             },
             else => {},
         }

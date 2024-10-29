@@ -274,9 +274,9 @@ test "building pull filters" {
         const id = Pubkey.initRandom(random);
         var legacy_contact_info = LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
-        const gossip_value = try SignedGossipData.initSigned(.{
+        const gossip_value = try SignedGossipData.initSigned(&kp, .{
             .LegacyContactInfo = legacy_contact_info,
-        }, &kp);
+        });
 
         _ = try gossip_table.insert(gossip_value, 0);
     }

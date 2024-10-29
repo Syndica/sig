@@ -146,9 +146,9 @@ test "init/denit" {
         try gossip_peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(data));
 
         var keypair = try KeyPair.create(null);
-        const value = try SignedGossipData.initSigned(.{
+        const value = try SignedGossipData.initSigned(&keypair, .{
             .LegacyContactInfo = data,
-        }, &keypair);
+        });
         _ = try table.insert(value, getWallclockMs());
     }
 

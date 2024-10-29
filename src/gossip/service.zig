@@ -875,12 +875,12 @@ pub const GossipService = struct {
 
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
-                const my_contact_info_value = try SignedGossipData.initSigned(GossipData{
+                const my_contact_info_value = try SignedGossipData.initSigned(&self.my_keypair, .{
                     .ContactInfo = try self.my_contact_info.clone(),
-                }, &self.my_keypair);
-                const my_legacy_contact_info_value = try SignedGossipData.initSigned(GossipData{
+                });
+                const my_legacy_contact_info_value = try SignedGossipData.initSigned(&self.my_keypair, .{
                     .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
-                }, &self.my_keypair);
+                });
 
                 // push contact info
                 {
@@ -1158,9 +1158,9 @@ pub const GossipService = struct {
 
         // update wallclock and sign
         self.my_contact_info.wallclock = now;
-        const my_contact_info_value = try SignedGossipData.initSigned(GossipData{
+        const my_contact_info_value = try SignedGossipData.initSigned(&self.my_keypair, .{
             .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
-        }, &self.my_keypair);
+        });
 
         const my_shred_version = self.my_contact_info.shred_version;
         if (num_peers != 0) {
@@ -2499,19 +2499,19 @@ test "handle old prune & pull request message" {
     var bloom = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
-    const filter = GossipPullFilter{
+    const filter: GossipPullFilter = .{
         .filter = bloom,
         // this is why we wanted atleast one hash_bit == 1
         .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
         .mask_bits = N_FILTER_BITS,
     };
-    var rando_keypair = try KeyPair.create([_]u8{22} ** 32);
+    const rando_keypair = try KeyPair.create([_]u8{22} ** 32);
 
-    var ci = try SignedGossipData.randomWithIndex(random, &rando_keypair, 0);
-    const addr = SocketAddr.initRandom(random);
-    ci.data.LegacyContactInfo.gossip = addr;
-    ci.data.LegacyContactInfo.shred_version = 100; // DIFFERENT SHRED VERSION
-    try ci.sign(&rando_keypair);
+    const ci = try SignedGossipData.initSigned(&rando_keypair, ci: {
+        var ci = LegacyContactInfo.initRandom(random);
+        ci.shred_version = 100;
+        break :ci .{ .LegacyContactInfo = ci };
+    });
 
     try gossip_service.verified_incoming_channel.send(.{
         .from_endpoint = try EndPoint.parse("127.0.0.1:8000"),
@@ -2593,27 +2593,36 @@ test "handle pull request" {
     }
 
     // make sure we get a response by setting a valid pong response
-    var rando_keypair = try KeyPair.create([_]u8{22} ** 32);
+    const rando_keypair = try KeyPair.create([_]u8{22} ** 32);
     const rando_pubkey = Pubkey.fromPublicKey(&rando_keypair.public_key);
 
     const addr = SocketAddr.initRandom(prng.random());
-    var ci = try SignedGossipData.randomWithIndex(prng.random(), &rando_keypair, 0);
-    ci.data.LegacyContactInfo.gossip = addr;
-    ci.data.LegacyContactInfo.shred_version = 99;
-    try ci.sign(&rando_keypair);
+
+    const ci = blk: {
+        const pubkey = Pubkey.fromPublicKey(&rando_keypair.public_key);
+
+        var lci = LegacyContactInfo.initRandom(prng.random());
+        lci.id = pubkey;
+        lci.gossip = addr;
+        lci.shred_version = 99;
+
+        const unsigned_ci: GossipData = .{ .LegacyContactInfo = lci };
+        break :blk try SignedGossipData.initSigned(&rando_keypair, unsigned_ci);
+    };
 
     {
         var ping_lock = gossip_service.ping_cache_rw.write();
-        var ping_cache: *PingCache = ping_lock.mut();
+        defer ping_lock.unlock();
+
+        const ping_cache: *PingCache = ping_lock.mut();
         ping_cache._setPong(rando_pubkey, addr);
-        ping_lock.unlock();
     }
 
     // only consider the first bit so we know well get matches
     var bloom = try Bloom.initRandom(allocator, prng.random(), 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
-    const filter = GossipPullFilter{
+    const filter: GossipPullFilter = .{
         .filter = bloom,
         // this is why we wanted atleast one hash_bit == 1
         .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
@@ -2690,9 +2699,9 @@ test "test build prune messages and handle push messages" {
     var gossip_socket = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 20);
     send_contact_info.gossip = gossip_socket;
 
-    const ci_value = try SignedGossipData.initSigned(GossipData{
+    const ci_value = try SignedGossipData.initSigned(&my_keypair, .{
         .LegacyContactInfo = send_contact_info,
-    }, &my_keypair);
+    });
     var lg = gossip_service.gossip_table_rw.write();
     _ = try lg.mut().insert(ci_value, getWallclockMs());
     lg.unlock();
@@ -2958,7 +2967,7 @@ test "test packet verification" {
     var data = GossipData.randomFromIndex(prng.random(), 0);
     data.LegacyContactInfo.id = id;
     data.LegacyContactInfo.wallclock = 0;
-    var value = try SignedGossipData.initSigned(data, &keypair);
+    var value = try SignedGossipData.initSigned(&keypair, data);
 
     try std.testing.expect(try value.verify(id));
 
@@ -2978,7 +2987,7 @@ test "test packet verification" {
     }
 
     // send one which fails sanitization
-    var value_v2 = try SignedGossipData.initSigned(GossipData.randomFromIndex(prng.random(), 2), &keypair);
+    var value_v2 = try SignedGossipData.initSigned(&keypair, GossipData.randomFromIndex(prng.random(), 2));
     value_v2.data.EpochSlots[0] = sig.gossip.data.MAX_EPOCH_SLOTS;
     var values_v2 = [_]SignedGossipData{value_v2};
     const message_v2 = GossipMessage{
@@ -2991,7 +3000,7 @@ test "test packet verification" {
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
-    const value2 = try SignedGossipData.initSigned(GossipData.randomFromIndex(prng.random(), 0), &rand_keypair);
+    const value2 = try SignedGossipData.initSigned(&rand_keypair, GossipData.randomFromIndex(prng.random(), 0));
     var values2 = [_]SignedGossipData{value2};
     const message2 = GossipMessage{
         .PushMessage = .{ id, &values2 },
@@ -3017,7 +3026,7 @@ test "test packet verification" {
         const dshred_data = GossipData{
             .DuplicateShred = .{ 1, dshred },
         };
-        const dshred_value = try SignedGossipData.initSigned(dshred_data, &rand_keypair);
+        const dshred_value = try SignedGossipData.initSigned(&rand_keypair, dshred_data);
         var values3 = [_]SignedGossipData{dshred_value};
         const message3 = GossipMessage{
             .PushMessage = .{ id, &values3 },
@@ -3076,7 +3085,7 @@ test "process contact info push packet" {
     // new contact info
     const legacy_contact_info = LegacyContactInfo.default(id);
     const gossip_data: GossipData = .{ .LegacyContactInfo = legacy_contact_info };
-    const gossip_value = try SignedGossipData.initSigned(gossip_data, &kp);
+    const gossip_value = try SignedGossipData.initSigned(&kp, gossip_data);
     const heap_values = try allocator.dupe(SignedGossipData, &.{gossip_value});
     defer allocator.free(heap_values);
 
@@ -3101,9 +3110,9 @@ test "process contact info push packet" {
         .message = .{
             .PullRequest = .{
                 GossipPullFilter.init(allocator),
-                try SignedGossipData.initSigned(.{
+                try SignedGossipData.initSigned(&my_keypair, .{
                     .ContactInfo = try localhostTestContactInfo(my_pubkey), // whoops
-                }, &my_keypair),
+                }),
             },
         },
         .from_endpoint = peer,
@@ -3364,9 +3373,9 @@ pub const BenchmarkGossipServicePullRequests = struct {
 
         var contact_info_recv = ContactInfo.init(allocator, recv_pubkey, 0, 19);
         try contact_info_recv.setSocket(.gossip, recv_address);
-        const signed_contact_info_recv = try SignedGossipData.initSigned(.{
+        const signed_contact_info_recv = try SignedGossipData.initSigned(&recv_keypair, .{
             .ContactInfo = contact_info_recv,
-        }, &recv_keypair);
+        });
 
         const now = getWallclockMs();
         var prng = std.rand.DefaultPrng.init(19);
