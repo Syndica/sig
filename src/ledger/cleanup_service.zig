@@ -11,7 +11,7 @@ const Slot = sig.core.Slot;
 
 const BlockstoreDB = ledger.BlockstoreDB;
 const BlockstoreReader = ledger.reader.BlockstoreReader;
-const BlockstoreWriter = ledger.writer.BlockstoreWriter;
+const LedgerResultWriter = ledger.result_writer.LedgerResultWriter;
 
 const schema = ledger.schema.schema;
 
@@ -391,13 +391,14 @@ test "purgeSlots" {
 
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = BlockstoreWriter{
+    var writer = LedgerResultWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
-        .scan_and_fix_roots_metrics = try registry.initStruct(ledger.writer.ScanAndFixRootsMetrics),
+        .scan_and_fix_roots_metrics = try registry
+            .initStruct(ledger.result_writer.ScanAndFixRootsMetrics),
     };
 
     // write some roots

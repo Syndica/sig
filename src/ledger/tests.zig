@@ -300,8 +300,8 @@ pub const TestState = struct {
         return ledger.ShredInserter.init(self.allocator, self.logger, &self.registry, self.db);
     }
 
-    pub fn writer(self: *Self) !ledger.BlockstoreWriter {
-        return try ledger.BlockstoreWriter.init(
+    pub fn writer(self: *Self) !ledger.LedgerResultWriter {
+        return try ledger.LedgerResultWriter.init(
             self.allocator,
             self.logger,
             self.db,

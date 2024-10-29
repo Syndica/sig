@@ -26,7 +26,9 @@ const TransactionStatusMeta = ledger.transaction_status.TransactionStatusMeta;
 
 const schema = ledger.schema.schema;
 
-pub const BlockstoreWriter = struct {
+/// Persist the results of executing a transaction, executing a block,
+/// or reaching consensus on a block.
+pub const LedgerResultWriter = struct {
     allocator: Allocator,
     logger: Logger,
     db: BlockstoreDB,
@@ -44,7 +46,7 @@ pub const BlockstoreWriter = struct {
         registry: *sig.prometheus.Registry(.{}),
         lowest_cleanup_slot: *RwMux(Slot),
         max_root: *std.atomic.Value(Slot),
-    ) !BlockstoreWriter {
+    ) !LedgerResultWriter {
         return .{
             .allocator = allocator,
             .logger = logger,
@@ -323,7 +325,7 @@ test "setRoots" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = BlockstoreWriter{
+    var writer = LedgerResultWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
@@ -351,7 +353,7 @@ test "scanAndFixRoots" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = BlockstoreWriter{
+    var writer = LedgerResultWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
@@ -393,7 +395,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = BlockstoreWriter{
+    var writer = LedgerResultWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
@@ -465,7 +467,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = BlockstoreWriter{
+    var writer = LedgerResultWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
