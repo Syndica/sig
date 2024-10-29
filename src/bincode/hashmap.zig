@@ -50,6 +50,8 @@ pub fn hashMapFieldConfig(
                 .managed => HashMapType.init(allocator),
                 .unmanaged => .{},
             };
+            errdefer free(allocator, data);
+
             switch (hm_info.management) {
                 .managed => try data.ensureTotalCapacity(len),
                 .unmanaged => try data.ensureTotalCapacity(allocator, len),
@@ -74,10 +76,14 @@ pub fn hashMapFieldConfig(
 
         fn free(allocator: std.mem.Allocator, data: anytype) void {
             var copy = data;
-            if (hm_info.management == .managed) {
-                copy.deinit();
-            } else {
-                copy.deinit(allocator);
+            var iter = copy.iterator();
+            while (iter.next()) |entry| {
+                bincode.free(allocator, entry.key_ptr.*);
+                bincode.free(allocator, entry.value_ptr.*);
+            }
+            switch (hm_info.management) {
+                .managed => copy.deinit(),
+                .unmanaged => copy.deinit(allocator),
             }
         }
     };
