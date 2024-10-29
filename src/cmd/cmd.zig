@@ -1075,7 +1075,7 @@ pub fn testTransactionSenderService() !void {
     const allocator = gpa_allocator;
 
     var app_base = try AppBase.init(allocator);
-    defer app_base.deinit();
+    // defer app_base.deinit();
 
     const genesis_file_path = try config.current.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
@@ -1091,18 +1091,20 @@ pub fn testTransactionSenderService() !void {
     const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
     defer transaction_channel.deinit();
 
-    const cluster_network = try config.current.gossip.getNetwork() orelse
-        return error.NetworkNotProvided;
+    // const cluster_network = try config.current.gossip.getNetwork() orelse
+    //     return error.NetworkNotProvided;
 
-    const cluster: ClusterType = switch (cluster_network) {
-        .mainnet => .MainnetBeta,
-        .testnet => .Testnet,
-        .devnet => .Devnet,
-        .localnet => .LocalHost,
-    };
+    // const cluster: ClusterType = switch (cluster_network) {
+    //     .mainnet => .MainnetBeta,
+    //     .testnet => .Testnet,
+    //     .devnet => .Devnet,
+    //     .localnet => .LocalHost,
+    // };
+
+    // std.debug.print("cluster: {any}\n", .{cluster});
 
     const transaction_sender_config = sig.transaction_sender.service.Config{
-        .cluster = cluster,
+        .cluster = .LocalHost,
         .socket = SocketAddr.init(app_base.my_ip, 0),
     };
 
