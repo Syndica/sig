@@ -336,14 +336,14 @@ fn purgeFileRangeWithCount(
 }
 
 const Blockstore = ledger.BlockstoreDB;
-const TestDB = ledger.tests.TestDB("cleanup_service");
+const TestDB = ledger.tests.TestDB;
 
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("findSlotsToClean");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
@@ -386,7 +386,7 @@ test "purgeSlots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("setRoots");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);

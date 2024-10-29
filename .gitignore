@@ -14,3 +14,5 @@ kcov-output/
 /gossip-dumps
 
 **/.DS_Store
+
+/data/test-state
