@@ -192,7 +192,7 @@ fn validateShred(
     // https://github.com/solana-labs/solana/pull/34916
     // https://github.com/solana-labs/solana/pull/35076
 
-    _ = layout.getSignature(shred) orelse return error.signature_missing;
+    _ = layout.getLeaderSignature(shred) orelse return error.signature_missing;
     _ = layout.getSignedData(shred) orelse return error.signed_data_missing;
 }
 

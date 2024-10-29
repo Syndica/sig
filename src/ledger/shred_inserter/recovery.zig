@@ -256,7 +256,7 @@ fn reconstructShred(
     if (index < meta.code_header.num_data_shreds) {
         const data_shred = try DataShred.fromRecoveredShard(
             allocator,
-            meta.common_header.signature,
+            meta.common_header.leader_signature,
             meta.chained_merkle_root,
             meta.retransmitter_signature,
             shard,
@@ -345,7 +345,7 @@ fn verifyErasureBatch(
 ) bool {
     for (shreds) |shred| {
         const actual = shred.commonHeader();
-        if (!(expect.signature.eql(&actual.signature) and
+        if (!(expect.leader_signature.eql(&actual.leader_signature) and
             expect.slot == actual.slot and
             expect.version == actual.version and
             expect.fec_set_index == actual.fec_set_index and
@@ -460,7 +460,7 @@ const expected_metadata = blk: {
     @setEvalBranchQuota(10_000);
     break :blk RecoveryMetadata{
         .common_header = CommonHeader{
-            .signature = Signature.fromString(
+            .leader_signature = Signature.fromString(
                 "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2sAmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m",
             ) catch unreachable,
             .variant = .{

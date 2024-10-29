@@ -289,7 +289,7 @@ pub const DataShred = struct {
     /// agave: ShredData::from_recovered_shard
     pub fn fromRecoveredShard(
         allocator: Allocator,
-        signature: Signature,
+        leader_signature: Signature,
         chained_merkle_root: ?Hash,
         retransmitter_signature: ?Signature,
         shard: []const u8,
@@ -300,7 +300,7 @@ pub const DataShred = struct {
         }
         const payload = try allocator.alloc(u8, constants.payload_size);
         errdefer allocator.free(payload);
-        @memcpy(payload[0..Signature.size], &signature.data);
+        @memcpy(payload[0..Signature.size], &leader_signature.data);
         @memcpy(payload[Signature.size..][0..shard_size], shard);
         @memset(payload[Signature.size + shard_size ..], 0);
         var shred = try generic.fromPayloadOwned(allocator, payload);
@@ -496,10 +496,10 @@ fn generic_shred(shred_type: ShredType) type {
             return self.payload[start..end];
         }
 
-        fn verify(self: Self, signer: sig.core.Pubkey) bool {
+        fn verify(self: Self, leader: sig.core.Pubkey) bool {
             const signed_data = self.merkleRoot() catch return false;
-            const signature = layout.getSignature(self.payload) orelse return false;
-            return signature.verify(signer, &signed_data.data);
+            const signature = layout.getLeaderSignature(self.payload) orelse return false;
+            return signature.verify(leader, &signed_data.data);
         }
 
         /// this is the data that is signed by the signature
@@ -835,7 +835,7 @@ pub const MerkleProofEntryList = struct {
 };
 
 pub const CommonHeader = struct {
-    signature: Signature,
+    leader_signature: Signature,
     variant: ShredVariant,
     slot: Slot,
     index: u32,
@@ -847,7 +847,7 @@ pub const CommonHeader = struct {
     const Self = @This();
 
     const ZEROED_FOR_TEST = Self{
-        .signature = Signature{ .data = .{0} ** Signature.size },
+        .leader_signature = Signature{ .data = .{0} ** Signature.size },
         .variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
         .slot = 0,
         .index = 0,
@@ -1081,7 +1081,7 @@ pub const layout = struct {
         return getInt(u32, shred, OFFSET_OF_SHRED_INDEX);
     }
 
-    pub fn getSignature(shred: []const u8) ?Signature {
+    pub fn getLeaderSignature(shred: []const u8) ?Signature {
         if (shred.len < Signature.size) {
             return null;
         }
@@ -1194,8 +1194,8 @@ test "getMerkleRoot" {
     try std.testing.expect(std.mem.eql(u8, &expected_signed_data, &merkle_root.data));
 }
 
-test "getSignature" {
-    const signature = layout.getSignature(&test_data_shred).?;
+test "getLeaderSignature" {
+    const signature = layout.getLeaderSignature(&test_data_shred).?;
     const expected_signature = [_]u8{
         102, 205, 108, 67,  218, 3,   214, 186, 28,  110, 167, 22,  75,  135, 233, 156, 45,  215, 209, 1,
         253, 53,  142, 52,  6,   98,  158, 51,  157, 207, 190, 22,  96,  106, 68,  248, 244, 162, 13,  205,
