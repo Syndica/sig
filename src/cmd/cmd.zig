@@ -1264,14 +1264,16 @@ fn getMyDataFromIpEcho(
         logger.warn().log("could not get a shred version from an entrypoint");
         break :loop 0;
     };
-    const my_ip = (config.current.gossip.getHost() orelse (my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1))) catch |err| switch (err) {
+    const my_ip = (config.current.gossip.getHost() orelse
+        (my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1))) catch |err| switch (err) {
         error.UnexpectedPort => {
-            logger.err().logf("Invalid value for --gossip-host. Unexpected port in {?s}", .{config.current.gossip.host});
+            logger.err().logf(
+                "Invalid value for --gossip-host. Unexpected port in {?s}",
+                .{config.current.gossip.host},
+            );
             return err;
         },
-        else => {
-            return err;
-        },
+        else => return err,
     };
     logger.info().logf("my ip: {}", .{my_ip});
     return .{
