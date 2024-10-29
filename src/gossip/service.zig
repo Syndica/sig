@@ -720,7 +720,7 @@ pub const GossipService = struct {
 
             if (pull_requests.items.len > 0) {
                 var x_timer = try sig.time.Timer.start();
-                self.handleBatchPullRequest(pull_requests, seed + msg_count) catch |err| {
+                self.handleBatchPullRequest(seed + msg_count, pull_requests.items) catch |err| {
                     self.logger.err().logf("handleBatchPullRequest failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
@@ -1204,7 +1204,7 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         my_pubkey: *const Pubkey,
         from_endpoint: *const EndPoint,
-        filter: *GossipPullFilter,
+        filter: *const GossipPullFilter,
         gossip_table: *const GossipTable,
         output: ArrayList(Packet),
         output_limit: *Atomic(i64),
@@ -1267,8 +1267,8 @@ pub const GossipService = struct {
     ///     - PullRequestMessage.filter is freed in process messages
     fn handleBatchPullRequest(
         self: *Self,
-        pull_requests: ArrayList(PullRequestMessage),
         seed: u64,
+        pull_requests: []const PullRequestMessage,
     ) !void {
         // update the callers
         // TODO: parallelize this?
@@ -1278,7 +1278,7 @@ pub const GossipService = struct {
             defer gossip_table_lock.unlock();
             var gossip_table: *GossipTable = gossip_table_lock.mut();
 
-            for (pull_requests.items) |*req| {
+            for (pull_requests) |*req| {
                 _ = gossip_table.insert(req.value, now) catch {};
                 gossip_table.updateRecordTimestamp(req.value.id(), now);
             }
@@ -1289,13 +1289,13 @@ pub const GossipService = struct {
             defer ping_cache_lock.unlock();
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
-            var peers = try ArrayList(ThreadSafeContactInfo).initCapacity(self.allocator, pull_requests.items.len);
+            var peers = try ArrayList(ThreadSafeContactInfo).initCapacity(self.allocator, pull_requests.len);
             defer peers.deinit();
 
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
 
-            for (pull_requests.items) |*req| {
+            for (pull_requests) |*req| {
                 const threads_safe_contact_info = switch (req.value.data) {
                     .ContactInfo => |ci| ThreadSafeContactInfo.fromContactInfo(ci),
                     .LegacyContactInfo => |legacy| ThreadSafeContactInfo.fromLegacyContactInfo(legacy),
@@ -1337,8 +1337,8 @@ pub const GossipService = struct {
                 tasks[task_index] = PullRequestTask{
                     .task = .{ .callback = PullRequestTask.callback },
                     .my_pubkey = &self.my_pubkey,
-                    .from_endpoint = &pull_requests.items[i].from_endpoint,
-                    .filter = &pull_requests.items[i].filter,
+                    .from_endpoint = &pull_requests[i].from_endpoint,
+                    .filter = &pull_requests[i].filter,
                     .gossip_table = gossip_table,
                     .output = ArrayList(Packet).init(self.allocator),
                     .allocator = self.allocator,
@@ -2629,16 +2629,11 @@ test "handle pull request" {
         .mask_bits = N_FILTER_BITS,
     };
 
-    var pull_requests = ArrayList(GossipService.PullRequestMessage).init(allocator);
-    defer pull_requests.deinit();
-
-    try pull_requests.append(.{
+    try gossip_service.handleBatchPullRequest(19, &.{.{
         .filter = filter,
         .from_endpoint = addr.toEndpoint(),
         .value = ci,
-    });
-
-    try gossip_service.handleBatchPullRequest(pull_requests, 19);
+    }});
 
     {
         const outgoing_packets = gossip_service.packet_outgoing_channel;
