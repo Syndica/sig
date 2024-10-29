@@ -1124,8 +1124,7 @@ const AppBase = struct {
         errdefer entrypoints.deinit();
 
         const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
-        // Try to extract the port from the given host. If no port is found, fall back to the configured default port.
-        const my_port = (config.current.gossip.getPortFromHost() orelse config.current.gossip.port) catch config.current.gossip.port;
+        const my_port = config.current.gossip.port;
 
         return .{
             .closed = false,
@@ -1265,7 +1264,14 @@ fn getMyDataFromIpEcho(
         logger.warn().log("could not get a shred version from an entrypoint");
         break :loop 0;
     };
-    const my_ip = try (config.current.gossip.getHost() orelse (my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1)));
+    const my_ip = (config.current.gossip.getHost() orelse
+        (my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1))) catch |err| {
+        logger.err().logf(
+            "Failed to parse IP in '--gossip-host {?s}' - {}",
+            .{ config.current.gossip.host, err },
+        );
+        return err;
+    };
     logger.info().logf("my ip: {}", .{my_ip});
     return .{
         .shred_version = my_shred_version,

@@ -45,12 +45,12 @@ const GossipConfig = struct {
     dump: bool = false,
     trusted_validators: [][]const u8 = &.{},
 
-    pub fn getHost(config: GossipConfig) ?sig.net.SocketAddr.ParseIpError!IpAddr {
+    pub fn getHost(config: GossipConfig) ?sig.net.IpAddr.ParseIpError!IpAddr {
         const host_str = config.host orelse return null;
-        const socket = try sig.net.SocketAddr.parse(host_str);
+        const socket = try sig.net.IpAddr.parse(host_str);
         return switch (socket) {
-            .V4 => |v4| .{ .ipv4 = v4.ip },
-            .V6 => |v6| .{ .ipv6 = v6.ip },
+            .ipv4 => |v4| .{ .ipv4 = v4 },
+            .ipv6 => |v6| .{ .ipv6 = v6 },
         };
     }
 
