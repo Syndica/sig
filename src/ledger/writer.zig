@@ -274,15 +274,14 @@ pub const BlockstoreWriter = struct {
         root_slot_meta.setConnected();
         try write_batch.put(schema.slot_meta, root_slot_meta.slot, root_slot_meta);
 
-        // var next_slots = VecDeque::from(root_meta.next_slots);
-        var next_slots = try ArrayList(Slot)
-            .initCapacity(self.allocator, root_slot_meta.next_slots.items.len);
-        defer next_slots.deinit();
+        var child_slots = try ArrayList(Slot)
+            .initCapacity(self.allocator, root_slot_meta.child_slots.items.len);
+        defer child_slots.deinit();
 
-        next_slots.appendSliceAssumeCapacity(root_slot_meta.next_slots.items);
+        child_slots.appendSliceAssumeCapacity(root_slot_meta.child_slots.items);
         var i: usize = 0;
-        while (i < next_slots.items.len) : (i += 1) {
-            const slot = next_slots.items[i];
+        while (i < child_slots.items.len) : (i += 1) {
+            const slot = child_slots.items[i];
             var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
                 self.logger.err().logf("Slot {} is a child but has no SlotMeta in blockstore", .{slot});
                 return error.CorruptedBlockstore;
@@ -290,7 +289,7 @@ pub const BlockstoreWriter = struct {
             defer slot_meta.deinit();
 
             if (slot_meta.setParentConnected()) {
-                try next_slots.appendSlice(slot_meta.next_slots.items);
+                try child_slots.appendSlice(slot_meta.child_slots.items);
             }
             try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
         }
@@ -437,7 +436,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
         slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < other_roots.len) {
-            try slot_meta.next_slots.append(other_roots[i + 1]);
+            try slot_meta.child_slots.append(other_roots[i + 1]);
         }
 
         try write_batch2.put(schema.slot_meta, slot_meta.slot, slot_meta);
@@ -485,7 +484,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     defer slot_meta_1.deinit();
     slot_meta_1.last_index = 1;
     slot_meta_1.consecutive_received_from_0 = 1 + 1;
-    try slot_meta_1.next_slots.append(2);
+    try slot_meta_1.child_slots.append(2);
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
 
     // 2 is not full
@@ -493,7 +492,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     defer slot_meta_2.deinit();
     slot_meta_2.last_index = 1;
     slot_meta_2.consecutive_received_from_0 = 0; // ! NOT FULL
-    try slot_meta_2.next_slots.append(3);
+    try slot_meta_2.child_slots.append(3);
     try write_batch.put(schema.slot_meta, slot_meta_2.slot, slot_meta_2);
 
     // 3 is full

@@ -31,7 +31,7 @@ pub const SlotMeta = struct {
     parent_slot: ?Slot,
     /// The list of slots, each of which contains a block that derives
     /// from this one.
-    next_slots: std.ArrayList(Slot),
+    child_slots: std.ArrayList(Slot),
     /// Connected status flags of this slot
     connected_flags: ConnectedFlags,
     /// Shreds indices which are marked data complete.  That is, those that have the
@@ -55,19 +55,19 @@ pub const SlotMeta = struct {
             .received = 0,
             .first_shred_timestamp_milli = 0,
             .last_index = null,
-            .next_slots = std.ArrayList(Slot).init(allocator),
+            .child_slots = std.ArrayList(Slot).init(allocator),
             .completed_data_indexes = SortedSet(u32).init(allocator),
         };
     }
 
     pub fn deinit(self: Self) void {
-        self.next_slots.deinit();
+        self.child_slots.deinit();
         self.completed_data_indexes.deinit();
     }
 
     pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
-        var next_slots = try std.ArrayList(Slot).initCapacity(allocator, self.next_slots.items.len);
-        next_slots.appendSliceAssumeCapacity(self.next_slots.items);
+        var child_slots = try std.ArrayList(Slot).initCapacity(allocator, self.child_slots.items.len);
+        child_slots.appendSliceAssumeCapacity(self.child_slots.items);
         return .{
             .slot = self.slot,
             .parent_slot = self.parent_slot,
@@ -76,7 +76,7 @@ pub const SlotMeta = struct {
             .received = self.received,
             .first_shred_timestamp_milli = self.first_shred_timestamp_milli,
             .last_index = self.last_index,
-            .next_slots = next_slots,
+            .child_slots = child_slots,
             .completed_data_indexes = try self.completed_data_indexes.clone(),
         };
     }
@@ -88,7 +88,7 @@ pub const SlotMeta = struct {
             self.first_shred_timestamp_milli == other.first_shred_timestamp_milli and
             self.last_index == other.last_index and
             self.parent_slot == other.parent_slot and
-            std.mem.eql(Slot, self.next_slots.items, other.next_slots.items) and
+            std.mem.eql(Slot, self.child_slots.items, other.child_slots.items) and
             self.connected_flags.state == other.connected_flags.state and
             self.completed_data_indexes.eql(&other.completed_data_indexes);
     }
