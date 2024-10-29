@@ -161,38 +161,6 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    pub fn @"BlockstoreReader.getCodeShred"() !sig.time.Duration {
-        const allocator = std.heap.c_allocator;
-        var state = try TestState.init(allocator, @src(), .noop);
-        defer state.deinit();
-        var inserter = try state.shredInserter();
-        var reader = try state.reader();
-
-        const shreds_path = "agave.blockstore.bench_read.shreds.bin";
-        const shreds = try testShreds(std.heap.c_allocator, shreds_path);
-        defer deinitShreds(allocator, shreds);
-
-        const total_shreds = shreds.len;
-        _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
-
-        const slot: u32 = 0;
-
-        var rng = std.Random.DefaultPrng.init(100);
-
-        var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, total_shreds);
-        defer indices.deinit();
-        for (total_shreds) |_| {
-            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
-        }
-
-        var timer = try sig.time.Timer.start();
-        for (indices.items) |shred_index| {
-            // TODO confirm if getCodeShred can be rightly used with same input data
-            _ = try reader.getCodeShred(slot, shred_index) orelse return error.MissingShred;
-        }
-        return timer.read();
-    }
-
     pub fn @"BlockstoreReader.getCompleteBlock"() !sig.time.Duration {
         const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
@@ -214,20 +182,6 @@ pub const BenchmarkLedger = struct {
 
         var timer = try sig.time.Timer.start();
         const shreds = try reader.getDataShredsForSlot(result.slot + 2, 0);
-        const duration = timer.read();
-        try std.testing.expect(shreds.items.len > 0);
-        return duration;
-    }
-
-    pub fn @"BlockstoreReader.getCodeShredsForSlot"() !sig.time.Duration {
-        const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
-        defer state.deinit();
-        var reader = try state.reader();
-        const result = try ledger_tests.insertDataForBlockTest(state);
-        defer result.deinit();
-
-        var timer = try sig.time.Timer.start();
-        const shreds = try reader.getCodeShredsForSlot(result.slot + 2, 0);
         const duration = timer.read();
         try std.testing.expect(shreds.items.len > 0);
         return duration;
