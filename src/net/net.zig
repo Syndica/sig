@@ -484,11 +484,7 @@ pub const IpAddr = union(enum(u32)) {
     }
 
     pub fn newIpv4(a: u8, b: u8, c: u8, d: u8) IpAddr {
-        return .{
-            .ipv4 = Ipv4Addr{
-                .octets = [4]u8{ a, b, c, d },
-            },
-        };
+        return .{ .ipv4 = Ipv4Addr.init(.{ a, b, c, d }) };
     }
 
     pub fn asV4(self: *const Self) [4]u8 {

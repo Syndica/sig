@@ -1265,15 +1265,12 @@ fn getMyDataFromIpEcho(
         break :loop 0;
     };
     const my_ip = (config.current.gossip.getHost() orelse
-        (my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1))) catch |err| switch (err) {
-        error.UnexpectedPort => {
-            logger.err().logf(
-                "Invalid value for --gossip-host. Unexpected port in {?s}",
-                .{config.current.gossip.host},
-            );
-            return err;
-        },
-        else => return err,
+        (my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1))) catch |err| {
+        logger.err().logf(
+            "Failed to parse IP in '--gossip-host {?s}' - {}",
+            .{ config.current.gossip.host, err },
+        );
+        return err;
     };
     logger.info().logf("my ip: {}", .{my_ip});
     return .{
