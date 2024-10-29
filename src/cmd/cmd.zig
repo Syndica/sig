@@ -30,6 +30,7 @@ const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
 const EpochSchedule = sig.core.EpochSchedule;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getOrInitIdentity = helpers.getOrInitIdentity;
@@ -1090,8 +1091,18 @@ pub fn testTransactionSenderService() !void {
     const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
     defer transaction_channel.deinit();
 
+    const cluster_network = try config.current.gossip.getNetwork() orelse
+        return error.NetworkNotProvided;
+
+    const cluster: ClusterType = switch (cluster_network) {
+        .mainnet => .MainnetBeta,
+        .testnet => .Testnet,
+        .devnet => .Devnet,
+        .localnet => .LocalHost,
+    };
+
     const transaction_sender_config = sig.transaction_sender.service.Config{
-        .cluster = .LocalHost,
+        .cluster = cluster,
         .socket = SocketAddr.init(app_base.my_ip, 0),
     };
 

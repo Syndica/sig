@@ -20,13 +20,14 @@ pub const Config = struct {
     log_level: LogLevel = .debug,
     metrics_port: u16 = 12345,
 
-    pub fn genesisFilePath(self: Config) error{UnknownNetwork}!?[]const u8 {
+    pub fn genesisFilePath(self: Config) !?[]const u8 {
         return if (self.genesis_file_path) |provided_path|
             provided_path
         else if (try self.gossip.getNetwork()) |n| switch (n) {
             .mainnet => "data/genesis-files/mainnet_genesis.bin",
             .devnet => "data/genesis-files/devnet_genesis.bin",
             .testnet => "data/genesis-files/testnet_genesis.bin",
+            .localnet => return error.NotProvided,
         } else null;
     }
 };
@@ -67,6 +68,7 @@ pub const Network = enum {
     mainnet,
     devnet,
     testnet,
+    localnet,
 
     const Self = @This();
 
@@ -90,6 +92,9 @@ pub const Network = enum {
                 "entrypoint3.devnet.solana.com:8001",
                 "entrypoint4.devnet.solana.com:8001",
                 "entrypoint5.devnet.solana.com:8001",
+            },
+            .localnet => &.{
+                "127.0.0.1:8001",
             },
         };
     }
