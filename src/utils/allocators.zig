@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
+const Counter = sig.prometheus.counter.Counter;
+const Gauge = sig.prometheus.gauge.Gauge;
 
 pub fn RecycleFBA(config: struct {
     /// If enabled, all operations will require an exclusive lock.
@@ -16,6 +18,8 @@ pub fn RecycleFBA(config: struct {
         records: std.ArrayList(Record),
         // for thread safety
         mux: std.Thread.Mutex = .{},
+        // for tracking metrics.
+        maybe_metrics: ?RecycleFBAMetrics = null,
 
         const Record = struct { is_free: bool, buf: [*]u8, len: u64 };
         const AllocatorConfig = struct {
@@ -23,6 +27,7 @@ pub fn RecycleFBA(config: struct {
             records_allocator: std.mem.Allocator,
             // used for the underlying memory for the allocations
             bytes_allocator: std.mem.Allocator,
+            maybe_metrics: ?RecycleFBAMetrics = null,
         };
         const Self = @This();
 
@@ -35,6 +40,7 @@ pub fn RecycleFBA(config: struct {
                 .bytes_allocator = allocator_config.bytes_allocator,
                 .fba_allocator = fba_allocator,
                 .records = records,
+                .maybe_metrics = allocator_config.maybe_metrics,
             };
         }
 
@@ -203,6 +209,17 @@ pub fn RecycleFBA(config: struct {
         }
     };
 }
+
+pub const RecycleFBAMetrics = struct {
+    /// Amount of time RecycleFBA was able to recycle memory.
+    recycled_count: *Counter,
+    /// Amount of time RecycleFBA resized memory.
+    resize_count: *Counter,
+    /// Amount of actual free memory that RecycleFBA can handout
+    free_record_mem: *Gauge(u64),
+    /// Amount of free memory in the underlying FBA
+    free_mem: *Gauge(u64),
+};
 
 /// thread safe disk memory allocator
 pub const DiskMemoryAllocator = struct {
