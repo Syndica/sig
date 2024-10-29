@@ -7,7 +7,6 @@ const bincode = sig.bincode;
 
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const KeyPairSigner = std.crypto.sign.Ed25519.Signer;
 const UdpSocket = network.Socket;
 const TcpListener = network.Socket;
 const SocketAddr = sig.net.SocketAddr;
