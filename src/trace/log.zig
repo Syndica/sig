@@ -171,6 +171,7 @@ pub const ChannelPrintLogger = struct {
     pub fn run(self: *Self) void {
         while (!self.exit.load(.acquire)) {
             while (self.channel.receive()) |message| {
+                defer self.log_allocator.free(message);
                 const writer = std.io.getStdErr().writer();
                 std.debug.lockStdErr();
                 defer std.debug.unlockStdErr();
@@ -193,6 +194,7 @@ pub const ChannelPrintLogger = struct {
             std.debug.print("allocBuff failed with err: {any}", .{err});
             return;
         };
+
         var stream = std.io.fixedBufferStream(msg_buf);
         logfmt.writeLog(stream.writer(), scope, level, fields, fmt, args) catch |err| {
             std.debug.print("writeLog failed with err: {any}", .{err});
