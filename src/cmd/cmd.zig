@@ -1436,6 +1436,7 @@ fn loadSnapshot(
         .{
             .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
             .use_disk_index = config.current.accounts_db.use_disk_index,
+            .lru_size = 10_000,
         },
         geyser_writer,
     );

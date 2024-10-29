@@ -35,9 +35,10 @@ pub fn main() !void {
     // if we have more benchmarks we can make this more efficient
     const max_time_per_bench = 2 * std.time.ms_per_s; // !!
     const run_all_benchmarks = filter.len == 0;
+    var num_errors: usize = 0;
 
     if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
-        try benchmark(
+        num_errors += try benchmark(
             @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
             max_time_per_bench,
             .microseconds,
@@ -56,7 +57,7 @@ pub fn main() !void {
         }
 
         if (std.mem.eql(u8, "accounts_db_readwrite", filter) or run_all) {
-            try benchmark(
+            num_errors += try benchmark(
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
                 .milliseconds,
@@ -66,7 +67,7 @@ pub fn main() !void {
         if (std.mem.eql(u8, "accounts_db_snapshot", filter) or run_all) {
             // NOTE: for this benchmark you need to setup a snapshot in test-data/snapshot_bench
             // and run as a binary ./zig-out/bin/... so the open file limits are ok
-            try benchmark(
+            num_errors += try benchmark(
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
                 .milliseconds,
@@ -75,7 +76,7 @@ pub fn main() !void {
     }
 
     if (std.mem.startsWith(u8, filter, "socket_utils") or run_all_benchmarks) {
-        try benchmark(
+        num_errors += try benchmark(
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
             .milliseconds,
@@ -83,12 +84,12 @@ pub fn main() !void {
     }
 
     if (std.mem.startsWith(u8, filter, "gossip") or run_all_benchmarks) {
-        try benchmark(
+        num_errors += try benchmark(
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
             .milliseconds,
         );
-        try benchmark(
+        num_errors += try benchmark(
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
             .milliseconds,
@@ -96,7 +97,7 @@ pub fn main() !void {
     }
 
     if (std.mem.startsWith(u8, filter, "sync") or run_all_benchmarks) {
-        try benchmark(
+        num_errors += try benchmark(
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
             .microseconds,
@@ -104,11 +105,19 @@ pub fn main() !void {
     }
 
     if (std.mem.startsWith(u8, filter, "ledger") or run_all_benchmarks) {
-        try benchmark(
+        num_errors += try benchmark(
             @import("ledger/benchmarks.zig").BenchmarkLedger,
             max_time_per_bench,
             .microseconds,
         );
+        num_errors += try benchmark(
+            @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
+            max_time_per_bench,
+            .milliseconds,
+        );
+    }
+    if (num_errors != 0) {
+        return error.CompletedWithErrors;
     }
 }
 
@@ -141,7 +150,7 @@ pub fn benchmark(
     comptime B: type,
     max_time: u128,
     time_unit: TimeUnits,
-) !void {
+) !usize {
     const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
     const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10000;
     const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100000;
@@ -207,6 +216,7 @@ pub fn benchmark(
     try stderr.writeAll("\n");
     try stderr.context.flush();
 
+    var num_errors: usize = 0;
     inline for (functions, 0..) |def, fcni| {
         if (fcni > 0)
             std.debug.print("---\n", .{});
@@ -222,9 +232,13 @@ pub fn benchmark(
                 (i < max_iterations and runtime_sum < max_time)) : (i += 1)
             {
                 const benchFunction = @field(B, def.name);
-                const ns_duration: sig.time.Duration = try switch (@TypeOf(arg)) {
+                const ns_duration: sig.time.Duration = switch (@TypeOf(arg)) {
                     void => benchFunction(),
                     else => benchFunction(arg),
+                } catch |e| blk: {
+                    std.debug.print("{s} failed with error: {}\n", .{ def.name, e });
+                    num_errors += 1;
+                    break :blk .{ .ns = std.math.maxInt(u64) };
                 };
 
                 const runtime = try time_unit.unitsfromNanoseconds(ns_duration.asNanos());
@@ -258,6 +272,7 @@ pub fn benchmark(
             try stderr.context.flush();
         }
     }
+    return num_errors;
 }
 
 fn printBenchmark(
