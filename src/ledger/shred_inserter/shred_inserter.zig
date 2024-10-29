@@ -422,7 +422,7 @@ pub const ShredInserter = struct {
 
         // TODO self.metrics
         // self.slots_stats
-        //     .record_shred(shred.slot(), shred.fec_set_index(), shred_source, None);
+        //     .record_shred(shred.slot(), shred.erasure_set_index(), shred_source, None);
         _ = shred_source;
 
         const was_inserted = !std.meta.isError(insertCodeShred(index_meta, shred, write_batch));

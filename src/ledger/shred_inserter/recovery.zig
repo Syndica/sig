@@ -268,7 +268,7 @@ fn reconstructShred(
             this.variant.resigned != set.variant.resigned or
             this.slot != set.slot or
             this.version != set.version or
-            this.fec_set_index != set.fec_set_index)
+            this.erasure_set_index != set.erasure_set_index)
         {
             return error.InvalidRecoveredShred;
         }
@@ -348,7 +348,7 @@ fn verifyErasureBatch(
         if (!(expect.leader_signature.eql(&actual.leader_signature) and
             expect.slot == actual.slot and
             expect.version == actual.version and
-            expect.fec_set_index == actual.fec_set_index and
+            expect.erasure_set_index == actual.erasure_set_index and
             expect.variant.proof_size == actual.variant.proof_size and
             expect.variant.chained == actual.variant.chained and
             expect.variant.resigned == actual.variant.resigned and
@@ -472,7 +472,7 @@ const expected_metadata = blk: {
             .slot = 284737905,
             .index = 483,
             .version = 50093,
-            .fec_set_index = 483,
+            .erasure_set_index = 483,
         },
         .code_header = CodeHeader{
             .num_data_shreds = 7,

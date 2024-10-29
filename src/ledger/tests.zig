@@ -28,7 +28,7 @@ test "put/get data consistency for merkle root" {
 
     const id = sig.ledger.shred.ErasureSetId{
         .slot = 1234127498,
-        .fec_set_index = 4932874234,
+        .erasure_set_index = 4932874234,
     };
     const root = sig.core.Hash.initRandom(random);
 

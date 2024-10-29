@@ -227,7 +227,7 @@ pub const CodeShred = struct {
         // Assert that the last shred index in the erasure set does not
         // overshoot MAX_{DATA,CODE}_SHREDS_PER_SLOT.
         if (try checkedAdd(
-            self.common.fec_set_index,
+            self.common.erasure_set_index,
             try checkedSub(@as(u32, @intCast(self.custom.num_data_shreds)), 1),
         ) >= data_shred_constants.max_per_slot) {
             return error.InvalidErasureShardIndex;
@@ -350,7 +350,7 @@ pub const DataShred = struct {
     }
 
     pub fn erasureShardIndex(self: *const Self) !usize {
-        return @intCast(try checkedSub(self.common.index, self.common.fec_set_index));
+        return @intCast(try checkedSub(self.common.index, self.common.erasure_set_index));
     }
 
     pub fn dataComplete(self: Self) bool {
@@ -574,14 +574,17 @@ pub const ShredId = struct {
 
 pub const ErasureSetId = struct {
     slot: Slot,
-    fec_set_index: u64,
+    /// The number that identifies the erasure set within a slot.
+    /// This is shred index for the first data shred in the erasure set.
+    /// aka "fec_set_index"
+    erasure_set_index: u64,
 
     pub fn order(a: ErasureSetId, b: ErasureSetId) std.math.Order {
-        if (a.slot == b.slot and a.fec_set_index == b.fec_set_index) {
+        if (a.slot == b.slot and a.erasure_set_index == b.erasure_set_index) {
             return .eq;
-        } else if (a.slot < b.slot or a.slot == b.slot and a.fec_set_index < b.fec_set_index) {
+        } else if (a.slot < b.slot or a.slot == b.slot and a.erasure_set_index < b.erasure_set_index) {
             return .lt;
-        } else if (a.slot > b.slot or a.slot == b.slot and a.fec_set_index > b.fec_set_index) {
+        } else if (a.slot > b.slot or a.slot == b.slot and a.erasure_set_index > b.erasure_set_index) {
             return .gt;
         } else {
             unreachable;
@@ -771,9 +774,9 @@ fn codeIndex(shred: []const u8) ?usize {
 /// Shred index in the erasure batch
 /// This only works for data shreds.
 fn dataIndex(shred: []const u8) ?usize {
-    const fec_set_index = getInt(u32, shred, 79) orelse return null;
+    const erasure_set_index = getInt(u32, shred, 79) orelse return null;
     const layout_index = layout.getIndex(shred) orelse return null;
-    const index = checkedSub(layout_index, fec_set_index) catch return null;
+    const index = checkedSub(layout_index, erasure_set_index) catch return null;
     return @intCast(index);
 }
 
@@ -840,7 +843,10 @@ pub const CommonHeader = struct {
     slot: Slot,
     index: u32,
     version: u16,
-    fec_set_index: u32,
+    /// The number that identifies the erasure set within a slot.
+    /// This is shred index for the first data shred in the erasure set.
+    /// aka "fec_set_index"
+    erasure_set_index: u32,
 
     pub const @"!bincode-config:variant" = ShredVariantConfig;
 
@@ -852,14 +858,14 @@ pub const CommonHeader = struct {
         .slot = 0,
         .index = 0,
         .version = 0,
-        .fec_set_index = 0,
+        .erasure_set_index = 0,
     };
 
     // Identifier for the erasure code set that the shred belongs to.
     pub fn erasureSetId(self: @This()) ErasureSetId {
         return ErasureSetId{
             .slot = self.slot,
-            .fec_set_index = self.fec_set_index,
+            .erasure_set_index = self.erasure_set_index,
         };
     }
 };
@@ -1248,7 +1254,7 @@ test "mainnet shreds look like agave" {
         const actual_fields = test_data.ParsedFields{
             .slot = shred.commonHeader().slot,
             .index = shred.commonHeader().index,
-            .fec_set_index = shred.commonHeader().fec_set_index,
+            .erasure_set_index = shred.commonHeader().erasure_set_index,
             .merkle_root = (shred.merkleRoot() catch unreachable).data,
         };
         try std.testing.expectEqual(test_data.expected_data[i], actual_fields);
