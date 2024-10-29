@@ -374,8 +374,8 @@ pub const MockTransferService = struct {
             for (0..NUMBER_OF_TRANSACTIONS) |i| {
                 self.logger.info().logf("(transaction_sender.MockTransferService) executing mock transfer {} of {}", .{ i, NUMBER_OF_TRANSACTIONS });
                 try self.logBalances(&rpc_client, "(transaction_sender.MockTransferService) executing mock transfer from A to B");
-                try self.rpcTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
-                // try self.sigTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
+                // try self.rpcTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
+                try self.sigTransferAndWait(random, &rpc_client, account_a_keypair, account_b_pubkey, @divExact(TOTAL_TRANSFER_AMOUNT, NUMBER_OF_TRANSACTIONS));
             }
         }
 
