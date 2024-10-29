@@ -341,12 +341,12 @@ pub const DataShred = struct {
         return self.payload[constants.headers_size..size];
     }
 
-    pub fn parent(self: *const Self) error{InvalidParentOffset}!Slot {
+    pub fn parent(self: *const Self) error{InvalidParentSlotOffset}!Slot {
         const slot = self.common.slot;
-        if (self.custom.parent_offset == 0 and slot != 0) {
-            return error.InvalidParentOffset;
+        if (self.custom.parent_slot_offset == 0 and slot != 0) {
+            return error.InvalidParentSlotOffset;
         }
-        return checkedSub(slot, self.custom.parent_offset) catch error.InvalidParentOffset;
+        return checkedSub(slot, self.custom.parent_slot_offset) catch error.InvalidParentSlotOffset;
     }
 
     pub fn erasureShardIndex(self: *const Self) !usize {
@@ -865,14 +865,15 @@ pub const CommonHeader = struct {
 };
 
 pub const DataHeader = struct {
-    parent_offset: u16,
+    /// Number of slots since this slot's parent: parent_slot = slot - parent_slot_offset
+    parent_slot_offset: u16,
     flags: ShredFlags,
     size: u16, // common shred header + data shred header + data
 
     const Self = @This();
 
     const ZEROED_FOR_TEST = Self{
-        .parent_offset = 0,
+        .parent_slot_offset = 0,
         .flags = .{},
         .size = 0,
     };
@@ -1097,7 +1098,7 @@ pub const layout = struct {
     }
 
     /// must be a data shred, otherwise the return value will be corrupted and meaningless
-    pub fn getParentOffset(shred: []const u8) ?u16 {
+    pub fn getParentSlotOffset(shred: []const u8) ?u16 {
         std.debug.assert(getShredVariant(shred).?.shred_type == .data);
         return getInt(u16, shred, 83);
     }

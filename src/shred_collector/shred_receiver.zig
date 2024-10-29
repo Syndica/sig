@@ -179,10 +179,10 @@ fn validateShred(
             if (index >= sig.ledger.shred.data_shred_constants.max_per_slot) {
                 return error.data_index_too_high;
             }
-            const parent_offset = layout.getParentOffset(shred) orelse {
-                return error.parent_offset_missing;
+            const parent_slot_offset = layout.getParentSlotOffset(shred) orelse {
+                return error.parent_slot_offset_missing;
             };
-            const parent = slot -| @as(Slot, @intCast(parent_offset));
+            const parent = slot -| @as(Slot, @intCast(parent_slot_offset));
             if (!verifyShredSlots(slot, parent, root)) return error.slot_verification_failed;
         },
     }
@@ -237,7 +237,7 @@ pub const ShredValidationError = error{
     code_index_too_high,
     rooted_slot,
     data_index_too_high,
-    parent_offset_missing,
+    parent_slot_offset_missing,
     slot_verification_failed,
     signature_missing,
     signed_data_missing,
