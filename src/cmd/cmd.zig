@@ -1420,7 +1420,7 @@ fn loadSnapshot(
     allocator: Allocator,
     logger: Logger,
     /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
-    gossip_service: ?*GossipService,
+    maybe_gossip_service: ?*GossipService,
     /// whether to validate the snapshot account data against the metadata
     validate_snapshot: bool,
     /// optional geyser to write snapshot data to
@@ -1437,7 +1437,7 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{
+    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, maybe_gossip_service, .{
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
@@ -1471,6 +1471,7 @@ fn loadSnapshot(
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
+        .gossip = if (maybe_gossip_service) |gossip_service| AccountsDB.Gossip.fromService(gossip_service) else null,
         .geyser_writer = geyser_writer,
         .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
         .number_of_index_shards = config.current.accounts_db.number_of_index_shards,

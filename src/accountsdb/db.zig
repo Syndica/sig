@@ -12,6 +12,7 @@ const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Blake3 = std.crypto.hash.Blake3;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const Account = sig.core.Account;
 const Hash = sig.core.hash.Hash;
@@ -27,6 +28,8 @@ const SnapshotFields = sig.accounts_db.snapshots.SnapshotFields;
 const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
 const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
+const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
+const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const RwMux = sig.sync.RwMux;
@@ -73,6 +76,9 @@ pub const AccountsDB = struct {
 
     /// Not closed by the `AccountsDB`, but must live at least as long as it.
     snapshot_dir: std.fs.Dir,
+
+    /// Reference to the relevant parts of the gossip service, used to push updates to snapshot info.
+    gossip: ?Gossip,
 
     // some initialization data
 
@@ -135,10 +141,25 @@ pub const AccountsDB = struct {
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
 
+    pub const Gossip = struct {
+        my_pubkey: *const Pubkey,
+        my_keypair: *const KeyPair,
+        push_msg_queue_mux: *sig.sync.Mux(std.ArrayList(sig.gossip.SignedGossipData)),
+
+        pub fn fromService(gossip_service: *sig.gossip.GossipService) Gossip {
+            return .{
+                .my_pubkey = &gossip_service.my_pubkey,
+                .my_keypair = &gossip_service.my_keypair,
+                .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
+            };
+        }
+    };
+
     pub const InitParams = struct {
         allocator: std.mem.Allocator,
         logger: Logger,
         snapshot_dir: std.fs.Dir,
+        gossip: ?Gossip,
         geyser_writer: ?*GeyserWriter,
         index_allocation: AccountIndex.AllocatorConfig.Tag,
         number_of_index_shards: usize,
@@ -182,6 +203,7 @@ pub const AccountsDB = struct {
             .logger = params.logger,
             .geyser_writer = params.geyser_writer,
             .snapshot_dir = params.snapshot_dir,
+            .gossip = params.gossip,
 
             .number_of_index_shards = params.number_of_index_shards,
             .lru_size = params.lru_size,
@@ -374,6 +396,7 @@ pub const AccountsDB = struct {
             thread_db.* = try AccountsDB.init(.{
                 .allocator = per_thread_allocator,
                 .snapshot_dir = self.snapshot_dir,
+                .gossip = self.gossip,
                 .geyser_writer = self.geyser_writer,
                 .number_of_index_shards = self.number_of_index_shards,
                 .lru_size = self.lru_size,
@@ -2446,11 +2469,11 @@ pub const AccountsDB = struct {
         const delta_hash = Hash.ZEROES;
 
         const archive_file = blk: {
-            const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+            const archive_info: FullSnapshotFileInfo = .{
                 .slot = params.target_slot,
                 .hash = full_hash,
-                .compression = .zstd,
-            });
+            };
+            const archive_file_name_bounded = archive_info.snapshotNameStr();
             const archive_file_name = archive_file_name_bounded.constSlice();
             self.logger.info().logf("Generating full snapshot '{s}' (full path: {s}).", .{
                 archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, archive_file_name),
@@ -2517,6 +2540,23 @@ pub const AccountsDB = struct {
             file_map,
         );
         try zstd_write_ctx.finish();
+
+        if (self.gossip) |gossip| { // advertise new snapshot via gossip
+            const push_msg_queue, var push_msg_queue_lg = gossip.push_msg_queue_mux.writeWithLock();
+            defer push_msg_queue_lg.unlock();
+            try push_msg_queue.ensureUnusedCapacity(1);
+
+            const now_ts = sig.time.getWallclockMs();
+            const signed_gossip_data = try sig.gossip.SignedGossipData.initSigned(gossip.my_keypair, .{
+                .SnapshotHashes = .{
+                    .from = gossip.my_pubkey.*,
+                    .full = .{ .slot = params.target_slot, .hash = full_hash },
+                    .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.EMPTY,
+                    .wallclock = now_ts,
+                },
+            });
+            push_msg_queue.appendAssumeCapacity(signed_gossip_data);
+        }
 
         // update tracking for new snapshot
 
@@ -2615,7 +2655,7 @@ pub const AccountsDB = struct {
         };
         defer latest_snapshot_info_lg.unlock();
 
-        const full_snapshot_info = latest_snapshot_info.full;
+        const full_snapshot_info: SnapshotGenerationInfo.Full = latest_snapshot_info.full;
 
         const incremental_hash, //
         const incremental_capitalization //
@@ -2644,12 +2684,12 @@ pub const AccountsDB = struct {
         const delta_hash = Hash.ZEROES;
 
         const archive_file = blk: {
-            const archive_file_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
+            const archive_info: IncrementalSnapshotFileInfo = .{
                 .base_slot = full_snapshot_info.slot,
                 .slot = params.target_slot,
                 .hash = incremental_hash,
-                .compression = .zstd,
-            });
+            };
+            const archive_file_name_bounded = archive_info.snapshotNameStr();
             const archive_file_name = archive_file_name_bounded.constSlice();
             self.logger.info().logf("Generating incremental snapshot '{s}' (full path: {s}).", .{
                 archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, archive_file_name),
@@ -2733,6 +2773,26 @@ pub const AccountsDB = struct {
             file_map,
         );
         try zstd_write_ctx.finish();
+
+        if (self.gossip) |gossip| { // advertise new snapshot via gossip
+            const push_msg_queue, var push_msg_queue_lg = gossip.push_msg_queue_mux.writeWithLock();
+            defer push_msg_queue_lg.unlock();
+            try push_msg_queue.ensureUnusedCapacity(1);
+
+            const now_ts = sig.time.getWallclockMs();
+            const signed_gossip_data = try sig.gossip.SignedGossipData.initSigned(gossip.my_keypair, .{
+                .SnapshotHashes = .{
+                    .from = gossip.my_pubkey.*,
+                    .full = .{ .slot = full_snapshot_info.slot, .hash = full_snapshot_info.hash },
+                    .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.initSingle(.{
+                        .slot = params.target_slot,
+                        .hash = incremental_hash,
+                    }),
+                    .wallclock = now_ts,
+                },
+            });
+            push_msg_queue.appendAssumeCapacity(signed_gossip_data);
+        }
 
         // update tracking for new snapshot
 
@@ -3184,6 +3244,7 @@ test "testWriteSnapshot" {
         .allocator = allocator,
         .logger = .noop,
         .snapshot_dir = tmp_snap_dir,
+        .gossip = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
@@ -3257,6 +3318,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = dir,
+        .gossip = null,
         .geyser_writer = null,
         .index_allocation = if (use_disk) .disk else .ram,
         .number_of_index_shards = 4,
@@ -3328,6 +3390,7 @@ test "geyser stream on load" {
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = dir,
+        .gossip = null,
         .geyser_writer = geyser_writer,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3500,6 +3563,7 @@ test "flushing slots works" {
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
+        .gossip = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3558,6 +3622,7 @@ test "purge accounts in cache works" {
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
+        .gossip = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3620,6 +3685,7 @@ test "clean to shrink account file works with zero-lamports" {
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
+        .gossip = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3703,6 +3769,7 @@ test "clean to shrink account file works" {
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
+        .gossip = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3778,6 +3845,7 @@ test "full clean account file works" {
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
+        .gossip = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3870,6 +3938,7 @@ test "shrink account file works" {
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
+        .gossip = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -4086,6 +4155,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             .allocator = allocator,
             .logger = logger,
             .snapshot_dir = snapshot_dir,
+            .gossip = null,
             .geyser_writer = null,
             .index_allocation = if (bench_args.use_disk) .disk else .ram,
             .number_of_index_shards = 32,
@@ -4307,6 +4377,7 @@ pub const BenchmarkAccountsDB = struct {
             .allocator = allocator,
             .logger = logger,
             .snapshot_dir = snapshot_dir,
+            .gossip = null,
             .geyser_writer = null,
             .index_allocation = bench_args.index,
             .number_of_index_shards = 32,

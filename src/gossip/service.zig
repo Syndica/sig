@@ -846,7 +846,7 @@ pub const GossipService = struct {
             }
 
             // new push msgs
-            self.drainPushQueueToGossipTable(getWallclockMs());
+            try self.drainPushQueueToGossipTable(getWallclockMs());
             const maybe_push_packets = self.buildPushMessages(&push_cursor) catch |e| blk: {
                 self.logger.err().logf("failed to generate push messages: {any}", .{e});
                 break :blk null;
@@ -1804,16 +1804,37 @@ pub const GossipService = struct {
         self: *Self,
         /// the current time to insert the values with
         now: u64,
-    ) void {
-        var push_msg_queue, var push_msg_queue_lock = self.push_msg_queue_mux.writeWithLock();
+    ) !void {
+        const push_msg_queue, var push_msg_queue_lock = self.push_msg_queue_mux.writeWithLock();
         defer push_msg_queue_lock.unlock();
 
-        var gossip_table, var gossip_table_lock = self.gossip_table_rw.writeWithLock();
+        const gossip_table, var gossip_table_lock = self.gossip_table_rw.writeWithLock();
         defer gossip_table_lock.unlock();
 
-        while (push_msg_queue.popOrNull()) |gossip_value| {
-            _ = gossip_table.insert(gossip_value, now) catch {};
-        }
+        // number of items consumed, starting from the beginning of the queue
+        const consumed_item_count, const maybe_err = for (push_msg_queue.items, 0..) |gossip_value, i| {
+            const result = gossip_table.insert(gossip_value, now) catch |err| break .{ i, err };
+            switch (result) {
+                // good and expected
+                .InsertedNewEntry => {},
+                .OverwroteExistingEntry => {},
+
+                // concerning
+                .IgnoredOldValue => self.logger.warn().logf("Ignored old value: {}", .{gossip_value}), // TODO: should this be a warning, or just info?
+                .IgnoredDuplicateValue => self.logger.warn().logf("Ignored old value: {}", .{gossip_value}), // TODO: should this be a warning, or just info?
+
+                // not possible to reach from `insert`.
+                .IgnoredTimeout => unreachable,
+
+                // retry this value
+                .GossipTableFull => break .{ i, {} },
+            }
+        } else .{ push_msg_queue.items.len, {} };
+
+        // remove the gossip values which were inserted
+        push_msg_queue.replaceRangeAssumeCapacity(0, consumed_item_count, &.{});
+
+        return maybe_err;
     }
 
     /// serializes a list of ping messages into Packets and sends them out
@@ -2848,7 +2869,7 @@ test "test build push messages" {
         try push_queue.append(value);
         pqlg.unlock();
     }
-    gossip_service.drainPushQueueToGossipTable(getWallclockMs());
+    try gossip_service.drainPushQueueToGossipTable(getWallclockMs());
 
     var clg = gossip_service.gossip_table_rw.read();
     try std.testing.expect(clg.get().len() == 11);
