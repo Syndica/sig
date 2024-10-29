@@ -240,7 +240,7 @@ pub const CodeShred = struct {
         }
         const num_data_shreds: usize = @intCast(self.custom.num_data_shreds);
         const num_code_shreds: usize = @intCast(self.custom.num_code_shreds);
-        const position: usize = @intCast(self.custom.position);
+        const position: usize = @intCast(self.custom.erasure_code_index);
         const fec_set_size = try checkedAdd(num_data_shreds, num_code_shreds);
         const index = try checkedAdd(position, num_data_shreds);
         return if (index < fec_set_size) index else error.InvalidErasureShardIndex;
@@ -249,7 +249,7 @@ pub const CodeShred = struct {
     pub fn firstCodeIndex(self: *const Self) !u32 {
         return sig.utils.math.checkedSub(
             self.common.index,
-            @as(u32, @intCast(self.custom.position)),
+            @as(u32, @intCast(self.custom.erasure_code_index)),
         );
     }
 
@@ -882,14 +882,16 @@ pub const DataHeader = struct {
 pub const CodeHeader = struct {
     num_data_shreds: u16,
     num_code_shreds: u16,
-    position: u16, // [0..num_code_shreds)
+    /// Within an erasure set, every code shred is numbered from 0 to the number of code
+    /// shreds in the set. This index is the code shred's position within that sequence.
+    erasure_code_index: u16,
 
     const Self = @This();
 
     const ZEROED_FOR_TEST = Self{
         .num_data_shreds = 0,
         .num_code_shreds = 0,
-        .position = 0,
+        .erasure_code_index = 0,
     };
 };
 

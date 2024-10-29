@@ -149,11 +149,11 @@ fn getRecoveryMetadata(shreds: []const Shred) !RecoveryMetadata {
             const code_shred = shred.code;
             const chained_merkle_root = code_shred.chainedMerkleRoot() catch null;
             const retransmitter_signature = code_shred.retransmitterSignature() catch null;
-            const position = code_shred.custom.position;
+            const position = code_shred.custom.erasure_code_index;
             var common_header = code_shred.common;
             var code_header = code_shred.custom;
             common_header.index = try checkedSub(common_header.index, position);
-            code_header.position = 0;
+            code_header.erasure_code_index = 0;
             break .{
                 .common_header = common_header,
                 .code_header = code_header,
@@ -278,7 +278,7 @@ fn reconstructShred(
         var this_common_header = meta.common_header;
         var this_code_header = meta.code_header;
         this_common_header.index += @intCast(offset);
-        this_code_header.position = @intCast(offset);
+        this_code_header.erasure_code_index = @intCast(offset);
         const code_shred = try CodeShred.fromRecoveredShard(
             allocator,
             this_common_header,
@@ -477,7 +477,7 @@ const expected_metadata = blk: {
         .code_header = CodeHeader{
             .num_data_shreds = 7,
             .num_code_shreds = 21,
-            .position = 0,
+            .erasure_code_index = 0,
         },
         .retransmitter_signature = null,
         .chained_merkle_root = null,
