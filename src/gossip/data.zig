@@ -1123,15 +1123,16 @@ pub const SocketTag = enum(u8) {
     tpu_forwards_quic = 7,
     tpu_quic = 8,
     tpu_vote = 9,
-    /// Analogous to [SOCKET_TAG_TVU](https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/gossip/src/contact_info.rs#L36)
+    tpu_vote_quic = 12,
+    /// Analogous to [SOCKET_TAG_TVU](https://github.com/anza-xyz/agave/blob/d9683093ec5ce3138ab94332e248c524a2e60454/gossip/src/contact_info.rs#L38)
     turbine_recv = 10,
-    /// Analogous to [SOCKET_TAG_TVU_QUIC](https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/gossip/src/contact_info.rs#L37)
+    /// Analogous to [SOCKET_TAG_TVU_QUIC](https://github.com/anza-xyz/agave/blob/d9683093ec5ce3138ab94332e248c524a2e60454/gossip/src/contact_info.rs#L39)
     turbine_recv_quic = 11,
     _,
 
     pub const BincodeSize = u8;
 };
-pub const SOCKET_CACHE_SIZE: usize = @intFromEnum(SocketTag.turbine_recv_quic) + 1;
+pub const SOCKET_CACHE_SIZE: usize = @intFromEnum(SocketTag.tpu_vote_quic) + 1;
 
 pub const ContactInfo = struct {
     pubkey: Pubkey,
