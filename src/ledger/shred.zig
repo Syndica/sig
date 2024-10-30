@@ -241,9 +241,9 @@ pub const CodeShred = struct {
         const num_data_shreds: usize = @intCast(self.custom.num_data_shreds);
         const num_code_shreds: usize = @intCast(self.custom.num_code_shreds);
         const position: usize = @intCast(self.custom.erasure_code_index);
-        const fec_set_size = try checkedAdd(num_data_shreds, num_code_shreds);
+        const erasure_set_size = try checkedAdd(num_data_shreds, num_code_shreds);
         const index = try checkedAdd(position, num_data_shreds);
-        return if (index < fec_set_size) index else error.InvalidErasureShardIndex;
+        return if (index < erasure_set_size) index else error.InvalidErasureShardIndex;
     }
 
     pub fn firstCodeIndex(self: *const Self) !u32 {
