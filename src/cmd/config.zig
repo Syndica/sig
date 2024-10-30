@@ -13,6 +13,8 @@ pub const Config = struct {
     accounts_db: AccountsDBConfig = .{},
     geyser: GeyserConfig = .{},
 
+    test_transaction_sender: TestTransactionSenderConfig = .{},
+
     max_shreds: u64 = 1_000,
     leader_schedule_path: ?[]const u8 = null,
     genesis_file_path: ?[]const u8 = null,
@@ -145,3 +147,8 @@ pub const GeyserConfig = struct {
 };
 
 const LogConfig = struct {};
+
+const TestTransactionSenderConfig = struct {
+    n_transactions: u64 = 1,
+    n_lamports_per_transaction: u64 = 1e9,
+};

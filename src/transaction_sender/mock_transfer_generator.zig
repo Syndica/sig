@@ -24,11 +24,11 @@ const MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION: Duration = Duration.fromSecs(30);
 const MAX_SIG_RETRIES: u64 = 5;
 const MAX_SIG_WAIT_FOR_SIGNATURE_CONFIRMATION: Duration = Duration.fromSecs(300);
 
-pub const KeypairWrapper = struct {
+pub const KeypairAndPubkey = struct {
     keypair: KeyPair,
     pubkey: Pubkey,
 
-    pub fn init(keypair: KeyPair) KeypairWrapper {
+    pub fn init(keypair: KeyPair) KeypairAndPubkey {
         return .{
             .keypair = keypair,
             .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
@@ -37,15 +37,15 @@ pub const KeypairWrapper = struct {
 };
 
 pub const MockAccounts = struct {
-    bank: KeypairWrapper,
-    alice: KeypairWrapper,
+    bank: KeypairAndPubkey,
+    alice: KeypairAndPubkey,
 
     pub const DEFAULT: MockAccounts = .{
-        .bank = KeypairWrapper.init(.{
+        .bank = KeypairAndPubkey.init(.{
             .public_key = .{ .bytes = .{ 239, 10, 4, 236, 219, 237, 69, 197, 199, 60, 117, 184, 223, 215, 132, 73, 93, 248, 200, 254, 212, 239, 251, 120, 223, 25, 201, 196, 20, 58, 163, 62 } },
             .secret_key = .{ .bytes = .{ 208, 26, 255, 64, 164, 52, 99, 120, 92, 227, 25, 240, 222, 245, 70, 77, 171, 89, 129, 64, 110, 73, 159, 230, 38, 212, 150, 202, 57, 157, 151, 175, 239, 10, 4, 236, 219, 237, 69, 197, 199, 60, 117, 184, 223, 215, 132, 73, 93, 248, 200, 254, 212, 239, 251, 120, 223, 25, 201, 196, 20, 58, 163, 62 } },
         }),
-        .alice = KeypairWrapper.init(.{
+        .alice = KeypairAndPubkey.init(.{
             .public_key = .{ .bytes = .{ 3, 140, 214, 34, 176, 145, 149, 13, 169, 145, 117, 3, 98, 140, 206, 183, 20, 52, 35, 97, 89, 82, 55, 162, 13, 26, 172, 9, 77, 242, 217, 211 } },
             .secret_key = .{ .bytes = .{ 28, 57, 92, 177, 192, 198, 0, 137, 66, 122, 128, 0, 112, 193, 184, 209, 72, 187, 109, 65, 115, 173, 181, 139, 194, 185, 253, 182, 173, 110, 184, 124, 3, 140, 214, 34, 176, 145, 149, 13, 169, 145, 117, 3, 98, 140, 206, 183, 20, 52, 35, 97, 89, 82, 55, 162, 13, 26, 172, 9, 77, 242, 217, 211 } },
         }),
@@ -77,7 +77,7 @@ pub const MockTransferService = struct {
     }
 
     /// Run the mock transfer service
-    pub fn run(self: *MockTransferService) !void {
+    pub fn run(self: *MockTransferService, n_transactions: u64, n_lamports_per_tx: u64) !void {
         errdefer self.exit.store(true, .monotonic);
 
         var prng = std.Random.DefaultPrng.init(19);
@@ -88,10 +88,12 @@ pub const MockTransferService = struct {
             self.accounts.alice.pubkey,
         });
 
-        const balances = try self.logBalances("(transaction_sender.MockTransferService) starting mock transfer service");
-        if (balances.bank < 1e9) {
+        const total_bank_balance = n_transactions * n_lamports_per_tx;
+        self.logger.info().logf("(transaction_sender.MockTransferService): : {} txs each transfers {} lamports", .{ n_transactions, n_lamports_per_tx });
+        const balances = try self.logBalances("(transaction_sender.MockTransferService) starting");
+        if (balances.bank < total_bank_balance) {
             self.logger.info().log("(transaction_sender.MockTransferService) airdropping to bank");
-            try self.airdrop(self.accounts.bank.pubkey);
+            try self.airdrop(self.accounts.bank.pubkey, total_bank_balance);
         }
 
         if (balances.alice > 0) {
@@ -100,14 +102,18 @@ pub const MockTransferService = struct {
         }
 
         // !!
-        try self.sigTransferAndWait(
-            random,
-            self.accounts.bank.keypair,
-            self.accounts.alice.pubkey,
-            TOTAL_TRANSFER_AMOUNT,
-        );
+        for (0..n_transactions) |tx_i| {
+            self.logger.info().logf("(transaction_sender.MockTransferService) (tx {}/{}) transferring {} lamports to alice", .{ tx_i, n_transactions, n_lamports_per_tx });
+            try self.sigTransferAndWait(
+                random,
+                self.accounts.bank.keypair,
+                self.accounts.alice.pubkey,
+                n_lamports_per_tx,
+            );
+            self.logger.info().logf("(transaction_sender.MockTransferService) - SUCCESS - transferred {} lamports to alice", .{n_lamports_per_tx});
+        }
 
-        _ = try self.logBalances("(transaction_sender.MockTransferService) exiting mock transfer service");
+        _ = try self.logBalances("(transaction_sender.MockTransferService) exiting");
 
         // close alice account
         try self.closeAccount(random, self.accounts.alice.keypair);
@@ -324,26 +330,33 @@ pub const MockTransferService = struct {
         return .{ .bank = bank_balance, .alice = alice_balance };
     }
 
-    /// airdrops 1 SOL to the given pubkey (using rpc methods)
+    /// airdrops SOL to the given pubkey (using rpc methods)
+    /// to ensure its balance is at least total_lamports
     pub fn airdrop(
         self: *MockTransferService,
         pubkey: Pubkey,
+        total_lamports: u64,
     ) !void {
         const balance = try self.getBalance(pubkey);
-        if (balance < 1e9) {
+        if (balance < total_lamports) {
+            const amount_required = total_lamports - balance;
             for (0..5) |_| {
                 const signature = blk: {
-                    const response = try self.rpc_client.requestAirDrop(self.allocator, pubkey, 5e9, .{});
+                    const response = try self.rpc_client.requestAirDrop(self.allocator, pubkey, amount_required, .{});
                     defer response.deinit();
                     const signature_string = try response.result();
                     break :blk try Signature.fromString(signature_string);
                 };
-                if (try self.waitForSignatureConfirmation(signature, MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION)) return;
+                const signature_confirmed = try self.waitForSignatureConfirmation(
+                    signature,
+                    MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION,
+                );
+                if (signature_confirmed) return;
             }
             return error.AirdropFailed;
         }
 
         const new_balance = try self.getBalance(pubkey);
-        if (new_balance < 1e9) return error.AirdropFailed;
+        if (new_balance < total_lamports) return error.AirdropFailed;
     }
 };

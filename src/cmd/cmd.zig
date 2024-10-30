@@ -292,6 +292,25 @@ pub fn run() !void {
         .value_name = "geyser_writer_fba_bytes",
     };
 
+    // test-transaction sender options
+    var n_transactions_option = cli.Option{
+        .long_name = "n-transactions",
+        .short_alias = 't',
+        .help = "number of transactions to send",
+        .value_ref = cli.mkRef(&config.current.test_transaction_sender.n_transactions),
+        .required = false,
+        .value_name = "n_transactions",
+    };
+
+    var n_lamports_per_tx_option = cli.Option{
+        .long_name = "n-lamports-per-tx",
+        .short_alias = 'l',
+        .help = "number of lamports to send per transaction",
+        .value_ref = cli.mkRef(&config.current.test_transaction_sender.n_lamports_per_transaction),
+        .required = false,
+        .value_name = "n_lamports_per_tx",
+    };
+
     const app = cli.App{
         .version = "0.2.0",
         .author = "Syndica & Contributors",
@@ -581,6 +600,9 @@ pub fn run() !void {
                             &gossip_dump_option,
                             &network_option,
                             &genesis_file_path,
+                            // command specific
+                            &n_transactions_option,
+                            &n_lamports_per_tx_option,
                         },
                         .target = .{
                             .action = .{
@@ -1099,7 +1121,10 @@ pub fn testTransactionSenderService() !void {
         app_base.logger,
     );
     // send and confirm mock transactions
-    try mock_transfer_service.run();
+    try mock_transfer_service.run(
+        config.current.test_transaction_sender.n_transactions,
+        config.current.test_transaction_sender.n_lamports_per_transaction,
+    );
 
     app_base.shutdown();
     transaction_sender_handle.join();
