@@ -212,13 +212,18 @@ pub const BenchmarkLedger = struct {
 
         var signatures: std.ArrayList(Signature) = try std.ArrayList(Signature).initCapacity(state.allocator, 64);
         defer signatures.deinit();
-        var writable_keys = try std.ArrayList([2]Pubkey).initCapacity(state.allocator, 64);
+        var writable_keys = try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
         defer writable_keys.deinit();
         var readonly_keys = try std.ArrayList([2]Pubkey).initCapacity(state.allocator, 64);
         defer readonly_keys.deinit();
 
         for (0..64) |_| {
-            writable_keys.appendAssumeCapacity([2]Pubkey{ Pubkey.initRandom(rng.random()), Pubkey.initRandom(rng.random()) });
+            var w_keys = try std.ArrayList(Pubkey).initCapacity(state.allocator, 2);
+            defer w_keys.deinit();
+            // Two writable keys
+            try w_keys.append(Pubkey.initRandom(rng.random()));
+            try w_keys.append(Pubkey.initRandom(rng.random()));
+            writable_keys.appendAssumeCapacity(w_keys);
             readonly_keys.appendAssumeCapacity([2]Pubkey{ Pubkey.initRandom(rng.random()), Pubkey.initRandom(rng.random()) });
             var random_bytes: [64]u8 = undefined;
             for (random_bytes[0..]) |*byte| {
@@ -233,7 +238,7 @@ pub const BenchmarkLedger = struct {
         for (signatures.items, 0..) |signature, tx_idx| {
             const status = TransactionStatusMeta.default();
             defer status.deinit(state.allocator);
-            const w_keys = std.ArrayList(Pubkey).fromOwnedSlice(state.allocator, &writable_keys.items[tx_idx]);
+            const w_keys = writable_keys.items[tx_idx];
             const r_keys = std.ArrayList(Pubkey).fromOwnedSlice(state.allocator, &readonly_keys.items[tx_idx]);
             _ = try writer.writeTransactionStatus(slot, signature, w_keys, r_keys, status, tx_idx);
         }
