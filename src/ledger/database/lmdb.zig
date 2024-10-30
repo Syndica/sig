@@ -155,11 +155,13 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         ) anyerror!void {
             const start_bytes = try key_serializer.serializeToRef(self.allocator, start);
             defer start_bytes.deinit();
-
             const end_bytes = try key_serializer.serializeToRef(self.allocator, end);
             defer end_bytes.deinit();
 
-            @panic("TODO"); // TODO
+            var batch = try self.initWriteBatch();
+            errdefer batch.deinit();
+            try batch.deleteRange(start, end);
+            try self.commit(batch);
         }
 
         pub fn initWriteBatch(self: *Self) LmdbError!WriteBatch {
@@ -186,11 +188,11 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         /// - this name avoids confusion with solana transactions
         pub const WriteBatch = struct {
             allocator: Allocator,
-            inner: *c.MDB_txn,
+            txn: *c.MDB_txn,
             cf_handles: []const c.MDB_dbi,
 
             pub fn deinit(self: *WriteBatch) void {
-                self.inner.deinit();
+                c.mdb_txn_reset(self.txn);
             }
 
             pub fn put(
@@ -216,7 +218,9 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             ) anyerror!void {
                 const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
                 defer key_bytes.deinit();
-                self.inner.delete(self.cf_handles[cf.find(column_families)], key_bytes.data);
+
+                const key_val = toVal(key_bytes.data);
+                try result(c.mdb_del(self.txn, cf.find(column_families), &key_val, 0));
             }
 
             pub fn deleteRange(
@@ -227,15 +231,25 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             ) anyerror!void {
                 const start_bytes = try key_serializer.serializeToRef(self.allocator, start);
                 defer start_bytes.deinit();
-
                 const end_bytes = try key_serializer.serializeToRef(self.allocator, end);
                 defer end_bytes.deinit();
 
-                self.inner.deleteRange(
-                    self.cf_handles[cf.find(column_families)],
-                    start_bytes.data,
-                    end_bytes.data,
-                );
+                const cursor = try ret(c.mdb_cursor_open(self.txn, cf.find(column_families)));
+                defer result(c.mdb_cursor_close(cursor));
+
+                var key_val = toVal(start_bytes);
+                var val_val: c.MDB_val = undefined;
+                try result(c.mdb_cursor_get(cursor, &key_val, &val_val, cursorOp(.SET)));
+
+                while (std.mem.lessThan(u8, fromVal(key_val), end_bytes.data)) {
+                    try result(c.mdb_cursor_del(cursor, 0));
+                    try result(c.mdb_cursor_get(
+                        cursor,
+                        &key_val,
+                        &val_val,
+                        cursorOp(.GET_CURRENT),
+                    ));
+                }
             }
         };
 
@@ -245,27 +259,46 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             comptime direction: IteratorDirection,
             start: ?cf.Key,
         ) anyerror!Iterator(cf, direction) {
-            const start_bytes = if (start) |s| try key_serializer.serializeToRef(self.allocator, s) else null;
-            defer if (start_bytes) |sb| sb.deinit();
+            const maybe_start_bytes = if (start) |s|
+                try key_serializer.serializeToRef(self.allocator, s)
+            else
+                null;
+            defer if (maybe_start_bytes) |sb| sb.deinit();
+
+            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
+            errdefer c.mdb_txn_reset(txn);
+
+            const cursor = try ret(c.mdb_cursor_open(self.txn, cf.find(column_families)));
+            errdefer result(c.mdb_cursor_close(cursor));
+
+            var key_val: c.MDB_val = undefined;
+            var val_val: c.MDB_val = undefined;
+            if (maybe_start_bytes) |start_bytes| {
+                key_val = toVal(start_bytes);
+                try result(c.mdb_cursor_get(cursor, &key_val, &val_val, cursorOp(.SET)));
+            } else {
+                const operation = switch (direction) {
+                    .forward => cursorOp(.FIRST),
+                    .reverse => cursorOp(.LAST),
+                };
+                try result(c.mdb_cursor_get(cursor, &key_val, &val_val, operation));
+            }
+
             return .{
                 .allocator = self.allocator,
                 .logger = self.logger,
-                .inner = self.db.iterator(
-                    self.cf_handles[cf.find(column_families)],
-                    switch (direction) {
-                        .forward => .forward,
-                        .reverse => .reverse,
-                    },
-                    if (start_bytes) |s| s.data else null,
-                ),
+                .txn = txn,
+                .cursot = cursor,
+                .direction = direction,
             };
         }
 
         pub fn Iterator(cf: ColumnFamily, _: IteratorDirection) type {
             return struct {
                 allocator: Allocator,
-                inner: rocks.Iterator,
-                logger: Logger,
+                txn: c.MDB_txn,
+                cursor: c.MDB_cursor,
+                direction: IteratorDirection,
 
                 /// Calling this will free all slices returned by the iterator
                 pub fn deinit(self: *@This()) void {
@@ -365,6 +398,58 @@ fn IntermediateType(function: anytype) type {
     const params = @typeInfo(@TypeOf(function)).Fn.params;
     return @typeInfo(params[params.len - 1].type.?).Pointer.child;
 }
+
+fn cursorOp(operation: CursorOperation) c_int {
+    return @intFromEnum(operation);
+}
+
+/// Cursor Get operations.
+///
+/// This is the set of all operations for retrieving data
+/// using a cursor.
+const CursorOperation = enum(c_int) {
+    /// Position at first key/data item
+    FIRST,
+    /// Position at first data item of current key. Only for #MDB_DUPSORT
+    FIRST_DUP,
+    /// Position at key/data pair. Only for #MDB_DUPSORT
+    GET_BOTH,
+    /// position at key, nearest data. Only for #MDB_DUPSORT
+    GET_BOTH_RANGE,
+    /// Return key/data at current cursor position
+    GET_CURRENT,
+    /// Return up to a page of duplicate data items from current cursor position.
+    /// Move cursor to prepare for #MDB_NEXT_MULTIPLE. Only for #MDB_DUPFIXED
+    GET_MULTIPLE,
+    /// Position at last key/data item
+    LAST,
+    /// Position at last data item of current key. Only for #MDB_DUPSORT
+    LAST_DUP,
+    /// Position at next data item
+    NEXT,
+    /// Position at next data item of current key. Only for #MDB_DUPSORT
+    NEXT_DUP,
+    /// Return up to a page of duplicate data items from next cursor position.
+    /// Move cursor to prepare for #MDB_NEXT_MULTIPLE. Only for #MDB_DUPFIXED
+    NEXT_MULTIPLE,
+    /// Position at first data item of next key
+    NEXT_NODUP,
+    /// Position at previous data item
+    PREV,
+    /// Position at previous data item of current key. Only for #MDB_DUPSORT
+    PREV_DUP,
+    /// Position at last data item of previous key
+    PREV_NODUP,
+    /// Position at specified key
+    SET,
+    /// Position at specified key, return key + data
+    SET_KEY,
+    /// Position at first key greater than or equal to specified key.
+    SET_RANGE,
+    /// Position at previous page and return up to a page of duplicate data items.
+    /// Only for #MDB_DUPFIXED
+    PREV_MULTIPLE,
+};
 
 fn result(int: isize) LmdbError!void {
     return switch (int) {
