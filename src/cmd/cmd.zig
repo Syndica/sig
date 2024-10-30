@@ -1034,8 +1034,8 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?struct { Slot, LeaderSchedul
 
 pub fn testTransactionSenderService() !void {
     var app_base = try AppBase.init(gpa_allocator);
-    defer { 
-        if (!app_base.closed) app_base.shutdown(); // we have this incase an error occurs 
+    defer {
+        if (!app_base.closed) app_base.shutdown(); // we have this incase an error occurs
         app_base.deinit();
     }
 
