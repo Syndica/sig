@@ -1359,10 +1359,10 @@ pub const ThreadSafeContactInfo = struct {
         return .{
             .pubkey = pubkey,
             .shred_version = shred_version,
-            .gossip_addr = SocketAddr.random(random),
-            .rpc_addr = SocketAddr.random(random),
-            .tpu_addr = SocketAddr.random(random),
-            .tvu_addr = SocketAddr.random(random),
+            .gossip_addr = SocketAddr.initRandom(random),
+            .rpc_addr = SocketAddr.initRandom(random),
+            .tpu_addr = SocketAddr.initRandom(random),
+            .tvu_addr = SocketAddr.initRandom(random),
         };
     }
 
