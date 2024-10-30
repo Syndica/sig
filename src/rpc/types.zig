@@ -115,4 +115,9 @@ pub const ClusterType = union(enum(u8)) {
     },
 };
 
+pub const RpcVersionInfo = struct {
+    solana_core: []const u8,
+    feature_set: ?u32,
+};
+
 pub const Signature = []const u8;

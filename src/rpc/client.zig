@@ -32,16 +32,30 @@ pub const Client = struct {
             .LocalHost => "http://localhost:8899",
             .Custom => |cluster| cluster.url,
         };
-        return .{
+
+        var self: Client = .{
             .http_endpoint = http_endpoint,
             .http_client = std.http.Client{ .allocator = allocator },
             .max_retries = options.max_retries,
             .logger = options.logger,
         };
+
+        self.logVersion(allocator) catch |err| {
+            self.logger.err().logf("Failed to log RPC version: error={any}", .{err});
+        };
+        return self;
     }
 
     pub fn deinit(self: *Client) void {
         self.http_client.deinit();
+    }
+
+    /// Log the RPC version were connected to
+    pub fn logVersion(self: *Client, allocator: std.mem.Allocator) !void {
+        const response = try self.getVersion(allocator);
+        defer response.deinit();
+        const version = try response.result();
+        self.logger.info().logf("RPC version: {s}", .{version.solana_core});
     }
 
     pub const GetAccountInfoConfig = struct {
@@ -265,7 +279,6 @@ pub const Client = struct {
     // TODO: getTokenSupply()
     // TODO: getTransaction()
     // TODO: getTransactionCount()
-    // TODO: getVersion()
     // TODO: getVoteAccounts()
     // TODO: isBlockhashValid()
     // TODO: minimumLedgerSlot()
@@ -316,6 +329,12 @@ pub const Client = struct {
         return self.sendFetchRequest(allocator, types.Signature, request, .{});
     }
 
+    pub fn getVersion(self: *Client, allocator: std.mem.Allocator) !Response(types.RpcVersionInfo) {
+        var request = try Request.init(allocator, "getVersion");
+        defer request.deinit();
+        return self.sendFetchRequest(allocator, types.RpcVersionInfo, request, .{});
+    }
+
     /// Sends a JSON-RPC request to the HTTP endpoint and parses the response.
     /// If the request fails, it will be retried up to `max_retries` times, restarting the HTTP client
     /// if necessary. If the response fails to parse, an error will be returned.
@@ -351,6 +370,9 @@ pub const Client = struct {
             break;
         }
 
+        // sometimes the response is "x-y" where our fields follow "x_y" format, so this
+        // replaces "-" with "_" so we can properly parse the response
+        _ = std.mem.replace(u8, response.bytes.items, "-", "_", response.bytes.items);
         response.parse() catch |err| {
             self.logger.err().logf("Failed to parse response: error={} request_payload={s} response={s}", .{ err, payload, response.bytes.items });
             return err;
@@ -394,7 +416,8 @@ test "getAccountInfo" {
     const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
     const response = try client.getAccountInfo(allocator, pubkey, .{});
     defer response.deinit();
-    _ = try response.result();
+    const x = try response.result();
+    std.debug.print("{}\n", .{x});
 }
 
 test "getBalance" {
@@ -514,10 +537,19 @@ test "getSlot" {
 // TODO: test getTokenSupply()
 // TODO: test getTransaction()
 // TODO: test getTransactionCount()
-// TODO: test getVersion()
 // TODO: test getVoteAccounts()
 // TODO: test isBlockhashValid()
 // TODO: test minimumLedgerSlot()
 // TODO: test requestAirdrop()
 // TODO: test sendTransaction()
 // TODO: test simulateTransaction()
+
+test "getVersion" {
+    const allocator = std.testing.allocator;
+    var dpl = sig.trace.DirectPrintLogger.init(allocator, .debug);
+    var client = Client.init(allocator, .Testnet, .{ .logger = dpl.logger() });
+    defer client.deinit();
+    const response = try client.getVersion(allocator);
+    defer response.deinit();
+    _ = try response.result();
+}
