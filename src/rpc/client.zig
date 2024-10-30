@@ -33,17 +33,17 @@ pub const Client = struct {
             .Custom => |cluster| cluster.url,
         };
 
-        var self: Client = .{
+        var client: Client = .{
             .http_endpoint = http_endpoint,
             .http_client = std.http.Client{ .allocator = allocator },
             .max_retries = options.max_retries,
             .logger = options.logger,
         };
 
-        self.logVersion(allocator) catch |err| {
-            self.logger.err().logf("Failed to log RPC version: error={any}", .{err});
+        client.logVersion(allocator) catch |err| {
+            client.logger.err().logf("Failed to log RPC version: error={any}", .{err});
         };
-        return self;
+        return client;
     }
 
     pub fn deinit(self: *Client) void {
@@ -409,6 +409,19 @@ pub const Client = struct {
     }
 };
 
+test "getAccountInfo: null value" {
+    const allocator = std.testing.allocator;
+    var client = Client.init(allocator, .Testnet, .{});
+    defer client.deinit();
+    // random pubkey that should not exist
+    const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWn");
+    const response = try client.getAccountInfo(allocator, pubkey, .{});
+    defer response.deinit();
+    const x = try response.result();
+
+    try std.testing.expectEqual(null, x.value);
+}
+
 test "getAccountInfo" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
@@ -416,8 +429,7 @@ test "getAccountInfo" {
     const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
     const response = try client.getAccountInfo(allocator, pubkey, .{});
     defer response.deinit();
-    const x = try response.result();
-    std.debug.print("{}\n", .{x});
+    _ = try response.result();
 }
 
 test "getBalance" {

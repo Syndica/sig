@@ -13,7 +13,7 @@ pub const Context = struct {
 
 pub const AccountInfo = struct {
     context: Context,
-    value: Value,
+    value: ?Value,
 
     pub const Value = struct {
         data: []const u8,
