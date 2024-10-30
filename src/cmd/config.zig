@@ -27,6 +27,7 @@ pub const Config = struct {
             .mainnet => "data/genesis-files/mainnet_genesis.bin",
             .devnet => "data/genesis-files/devnet_genesis.bin",
             .testnet => "data/genesis-files/testnet_genesis.bin",
+            .localnet => null, // no default genesis file for localhost
         } else null;
     }
 };
@@ -76,6 +77,7 @@ pub const Network = enum {
     mainnet,
     devnet,
     testnet,
+    localnet,
 
     const Self = @This();
 
@@ -99,6 +101,10 @@ pub const Network = enum {
                 "entrypoint3.devnet.solana.com:8001",
                 "entrypoint4.devnet.solana.com:8001",
                 "entrypoint5.devnet.solana.com:8001",
+            },
+            .localnet => &.{
+                "127.0.0.1:1024", // agave test-validator default
+                "127.0.0.1:8001", // sig validator default
             },
         };
     }

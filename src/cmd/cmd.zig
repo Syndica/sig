@@ -579,6 +579,8 @@ pub fn run() !void {
                             &gossip_entrypoints_option,
                             &gossip_spy_node_option,
                             &gossip_dump_option,
+                            &network_option,
+                            &genesis_file_path,
                         },
                         .target = .{
                             .action = .{
@@ -1042,7 +1044,7 @@ pub fn testTransactionSenderService() !void {
     const allocator = gpa_allocator;
 
     // read genesis (used for leader schedule)
-    const genesis_file_path = try config.current.genesisFilePath() orelse @panic("No genesis file path found");
+    const genesis_file_path = try config.current.genesisFilePath() orelse @panic("No genesis file path found: use -g or -n");
     const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
@@ -1053,12 +1055,20 @@ pub fn testTransactionSenderService() !void {
         gossip_manager.deinit();
     }
 
+    // define cluster of where to land transactions
+    const cluster: sig.rpc.ClusterType = if (try config.current.gossip.getNetwork()) |n| switch (n) {
+        .mainnet => .MainnetBeta,
+        .devnet => .Devnet,
+        .testnet => .Testnet,
+        .localnet => .LocalHost,
+    } else {
+        @panic("network option (-n) not provided");
+    };
+    app_base.logger.warn().logf("Starting transaction sender service on {s}...", .{@tagName(cluster)});
+
+    // setup channel for communication to the tx-sender service
     const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
     defer transaction_channel.deinit();
-
-    // const cluster: sig.rpc.ClusterType = .LocalHost; // ! TODO: make this configurable
-    const cluster: sig.rpc.ClusterType = .Testnet; // ! TODO: make this configurable
-    app_base.logger.warn().logf("Starting transaction sender service on {s}...", .{@tagName(cluster)});
 
     // this handles transactions and forwards them to leaders TPU ports
     var transaction_sender_service = try sig.transaction_sender.Service.init(
