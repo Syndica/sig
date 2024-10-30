@@ -35,9 +35,9 @@
             .url = "https://github.com/Syndica/rocksdb-zig/archive/9c09659a5e41f226b6b8f3fa21149247eb26dfae.tar.gz",
             .hash = "1220aeb80b2f8bb48c131ef306fe48ddfcb537210c5f77742e921cbf40fc4c19b41e",
         },
-        .xquic = .{
-            .url = "https://github.com/Syndica/xquic/archive/d682e910241342de8ea6a6ed2d5a8507a7d3a2f5.tar.gz",
-            .hash = "1220460fe3a47fb60de64a78bc384d0231c49c3f2b9133d3678b5d24150bb1d8badd",
+        .lsquic = .{
+            .url = "https://github.com/Syndica/lsquic/archive/79c2be29c4039ce7c377ea2393bb77be9f5f9b1b.tar.gz",
+            .hash = "12206e81bf07032f51f006b01e5c05d0a087cb25bb2a09479d452b3afc923dd61a4a",
         },
         .xev = .{
             .url = "https://github.com/mitchellh/libxev/archive/b8d1d93e5c899b27abbaa7df23b496c3e6a178c7.tar.gz",

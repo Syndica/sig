@@ -459,15 +459,15 @@ pub fn run() !void {
                     },
 
                     &cli.Command{
-                        .name = "xquic-client",
+                        .name = "quic-client",
                         .description = .{
-                            .one_line = "Runs XQuic demo client",
+                            .one_line = "Runs Quic demo client",
                             .detailed = "",
                         },
                         .options = &.{},
                         .target = .{
                             .action = .{
-                                .exec = sig.quic.client.runClient,
+                                .exec = sig.net.quic.runClient,
                             },
                         },
                     },
