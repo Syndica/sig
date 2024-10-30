@@ -19,7 +19,7 @@ pub const TransactionInfo = struct {
     retries: usize,
     last_sent_time: ?Instant,
 
-    pub fn new(
+    pub fn init(
         transaction: Transaction,
         last_valid_block_height: u64,
         durable_nonce_info: ?struct { Pubkey, Hash },

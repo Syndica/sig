@@ -755,6 +755,9 @@ fn shredCollector() !void {
     var app_base = try AppBase.init(allocator);
     defer app_base.deinit();
 
+    const genesis_file_path = try config.current.genesisFilePath() orelse return error.GenesisPathNotProvided;
+    const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
+
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
 
@@ -770,7 +773,7 @@ fn shredCollector() !void {
 
     // leader schedule
     // NOTE: leader schedule is needed for the shred collector because we skip accounts-db setup
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, try EpochSchedule.default());
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, genesis_config.epoch_schedule);
 
     // This is a sort of hack to get the epoch of the leader schedule and then insert into the cache
     const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
@@ -1034,54 +1037,58 @@ pub fn testTransactionSenderService() !void {
     var app_base = try AppBase.init(gpa_allocator);
     defer app_base.deinit();
 
-    if (config.current.gossip.network) |net| {
-        if (!std.mem.eql(u8, net, "testnet")) {
-            @panic("Can only run transaction sender service on testnet!");
-        }
-    }
+    const allocator = gpa_allocator;
 
-    for (config.current.gossip.entrypoints) |entrypoint| {
-        if (std.mem.indexOf(u8, entrypoint, "testnet") == null) {
-            @panic("Can only run transaction sender service on testnet!");
-        }
-    }
+    // read genesis (used for leader schedule)
+    const genesis_file_path = try config.current.genesisFilePath() orelse @panic("No genesis file path found");
+    const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
 
-    const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
+    // start gossip (used to get TPU ports of leaders)
+    const gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
     defer {
-        app_base.shutdown();
+        if (!app_base.closed) app_base.shutdown(); // we call this here to set exit to true
         gossip_service.shutdown();
         gossip_manager.deinit();
     }
 
-    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(gpa_allocator);
+    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
     defer transaction_channel.deinit();
 
-    const transaction_sender_config = sig.transaction_sender.service.Config{
-        .cluster = .Testnet,
-        .socket = SocketAddr.init(app_base.my_ip, 0),
-    };
+    // const cluster: sig.rpc.ClusterType = .LocalHost; // ! TODO: make this configurable
+    const cluster: sig.rpc.ClusterType = .Testnet; // ! TODO: make this configurable
+    app_base.logger.warn().logf("Starting transaction sender service on {s}...", .{@tagName(cluster)});
 
+    // rpc is used to get blockhashes and other balance information
+    var rpc_client = sig.rpc.Client.init(allocator, cluster, .{ .logger = app_base.logger });
+    defer rpc_client.deinit();
+
+    // this sends mock txs to the transaction sender
     var mock_transfer_service = try sig.transaction_sender.MockTransferService.init(
-        gpa_allocator,
+        allocator,
         transaction_channel,
-        &app_base.exit,
-    );
-
-    var transaction_sender_service = try sig.transaction_sender.Service.init(
-        gpa_allocator,
-        transaction_sender_config,
-        transaction_channel,
-        &gossip_service.gossip_table_rw,
+        rpc_client,
         &app_base.exit,
         app_base.logger,
     );
-
     const mock_transfer_generator_handle = try std.Thread.spawn(
         .{},
         sig.transaction_sender.MockTransferService.run,
         .{&mock_transfer_service},
     );
 
+    // this handles transactions and forwards them to leaders TPU ports
+    var transaction_sender_service = try sig.transaction_sender.Service.init(
+        allocator,
+        app_base.logger,
+        .{
+            .cluster = cluster,
+            .socket = SocketAddr.init(app_base.my_ip, 0),
+        },
+        transaction_channel,
+        &gossip_service.gossip_table_rw,
+        genesis_config.epoch_schedule,
+        &app_base.exit,
+    );
     const transaction_sender_handle = try std.Thread.spawn(
         .{},
         sig.transaction_sender.Service.run,
@@ -1089,6 +1096,8 @@ pub fn testTransactionSenderService() !void {
     );
 
     mock_transfer_generator_handle.join();
+    app_base.shutdown();
+
     transaction_sender_handle.join();
     gossip_manager.join();
 }
