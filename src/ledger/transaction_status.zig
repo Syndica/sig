@@ -29,6 +29,23 @@ pub const TransactionStatusMeta = struct {
     /// The amount of BPF instructions that were executed in order to complete this transaction.
     compute_units_consumed: ?u64,
 
+    pub fn default() TransactionStatusMeta {
+        return TransactionStatusMeta{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = null,
+            .log_messages = null,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = null,
+            .loaded_addresses = LoadedAddresses{},
+            .return_data = null,
+            .compute_units_consumed = null,
+        };
+    }
+
     pub fn deinit(self: @This(), allocator: Allocator) void {
         allocator.free(self.pre_balances);
         allocator.free(self.post_balances);

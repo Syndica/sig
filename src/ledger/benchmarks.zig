@@ -200,6 +200,48 @@ pub const BenchmarkLedger = struct {
         try std.testing.expect(items[0].items.len > 0);
         return duration;
     }
+
+    pub fn @"BlockstoreWriter.writeTransactionStatus"() !sig.time.Duration {
+        const Signature = sig.core.Signature;
+        const TransactionStatusMeta = ledger.transaction_status.TransactionStatusMeta;
+
+        const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
+        defer state.deinit();
+        var writer = try state.writer();
+        var rng = std.rand.DefaultPrng.init(0);
+        var random_bytes: [64][64]u8 = undefined;
+
+        for (0..64) |i| {
+            for (0..64) |j| {
+                random_bytes[i][j] = rng.random().int(u8);
+            }
+        }
+
+        var signatures: std.ArrayList(Signature) = try std.ArrayList(Signature).initCapacity(state.allocator, 64);
+        defer signatures.deinit();
+        var writable_keys = try std.ArrayList([2]Pubkey).initCapacity(state.allocator, 64);
+        defer writable_keys.deinit();
+        var readonly_keys = try std.ArrayList([2]Pubkey).initCapacity(state.allocator, 64);
+        defer readonly_keys.deinit();
+
+        for (0..64) |index| {
+            writable_keys.appendAssumeCapacity([2]Pubkey{ Pubkey.initRandom(rng.random()), Pubkey.initRandom(rng.random()) });
+            readonly_keys.appendAssumeCapacity([2]Pubkey{ Pubkey.initRandom(rng.random()), Pubkey.initRandom(rng.random()) });
+            signatures.appendAssumeCapacity(Signature.init(random_bytes[index]));
+        }
+
+        const slot = 5;
+
+        var timer = try sig.time.Timer.start();
+        for (signatures.items, 0..) |signature, tx_idx| {
+            const status = TransactionStatusMeta.default();
+            defer status.deinit(state.allocator);
+            const w_keys = std.ArrayList(Pubkey).fromOwnedSlice(state.allocator, &writable_keys.items[tx_idx]);
+            const r_keys = std.ArrayList(Pubkey).fromOwnedSlice(state.allocator, &readonly_keys.items[tx_idx]);
+            _ = try writer.writeTransactionStatus(slot, signature, w_keys, r_keys, status, tx_idx);
+        }
+        return timer.read();
+    }
 };
 
 pub const BenchmarkLedgerSlow = struct {
