@@ -200,6 +200,51 @@ pub const BenchmarkLedger = struct {
         try std.testing.expect(items[0].items.len > 0);
         return duration;
     }
+
+    pub fn @"BlockstoreReader.getCodeShred"() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try TestState.init(allocator, @src(), .noop);
+        defer state.deinit();
+        var inserter = try state.shredInserter();
+        var reader = try state.reader();
+
+        const shreds_path = "code.bin";
+        const shreds = try testShreds(std.heap.c_allocator, shreds_path);
+        defer deinitShreds(allocator, shreds);
+
+        const total_shreds = shreds.len;
+        var count: usize = 0;
+        // Print the slot, index and shred type for the firtst 5 entries to confirm it loading from file is fine.
+        for (shreds) |shred| {
+            std.debug.print("slot={}, index={}, type={}\n", .{shred.commonHeader().slot, shred.commonHeader().index, shred.commonHeader().variant.shred_type});
+            count += 1;
+            if (count == 5) {
+                break;
+            }
+        }
+        const result = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
+        // completed_data_set_infos.items.len prints 0, which I believe should not be the case.
+        std.debug.print("{d}\n", .{result.completed_data_set_infos.items.len});
+        std.debug.print("{d}\n", .{result.duplicate_shreds.items.len});
+
+
+        const slot: u32 = 0;
+
+        var rng = std.Random.DefaultPrng.init(100);
+
+        var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, total_shreds);
+        defer indices.deinit();
+        for (total_shreds) |_| {
+            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
+        }
+
+        var timer = try sig.time.Timer.start();
+        for (indices.items) |shred_index| {
+            // TODO confirm if getCodeShred can be rightly used with same input data
+            _ = try reader.getCodeShred(slot, shred_index) orelse return error.MissingShred;
+        }
+        return timer.read();
+    }
 };
 
 pub const BenchmarkLedgerSlow = struct {
