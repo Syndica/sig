@@ -4,50 +4,59 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const zstd = @import("zstd");
-const bincode = sig.bincode;
+
 const sysvars = sig.accounts_db.sysvars;
 const snapgen = sig.accounts_db.snapshots.generate;
 
 const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
 const ArrayList = std.ArrayList;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Blake3 = std.crypto.hash.Blake3;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const Account = sig.core.Account;
-const Hash = sig.core.hash.Hash;
-const Slot = sig.core.time.Slot;
-const Pubkey = sig.core.pubkey.Pubkey;
-
-const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
-const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
-const AccountFile = sig.accounts_db.accounts_file.AccountFile;
-const FileId = sig.accounts_db.accounts_file.FileId;
-const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
-const SnapshotFields = sig.accounts_db.snapshots.SnapshotFields;
-const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
-const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
-const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
-const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
-const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
-const AccountIndex = sig.accounts_db.index.AccountIndex;
-const AccountRef = sig.accounts_db.index.AccountRef;
-const RwMux = sig.sync.RwMux;
-const Logger = sig.trace.log.Logger;
-const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
-const GetMetricError = sig.prometheus.registry.GetMetricError;
-const Counter = sig.prometheus.counter.Counter;
-const Gauge = sig.prometheus.Gauge;
-const Histogram = sig.prometheus.histogram.Histogram;
+const AccountsCache = sig.accounts_db.cache.AccountsCache;
 const StatusCache = sig.accounts_db.StatusCache;
+
+const AccountFile = sig.accounts_db.accounts_file.AccountFile;
+const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
+const FileId = sig.accounts_db.accounts_file.FileId;
+
+const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
+const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
+const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
-const AccountsCache = sig.accounts_db.cache.AccountsCache;
+const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
+const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
+const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
+const SnapshotFields = sig.accounts_db.snapshots.SnapshotFields;
+const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
+
+const AccountIndex = sig.accounts_db.index.AccountIndex;
+const AccountRef = sig.accounts_db.index.AccountRef;
 const PubkeyShardCalculator = sig.accounts_db.index.PubkeyShardCalculator;
 const ShardedPubkeyRefMap = sig.accounts_db.index.ShardedPubkeyRefMap;
+
+const Account = sig.core.Account;
+const Hash = sig.core.Hash;
+const Pubkey = sig.core.Pubkey;
+const Slot = sig.core.Slot;
+
+const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
+
 const GeyserWriter = sig.geyser.GeyserWriter;
 
+const Counter = sig.prometheus.counter.Counter;
+const Gauge = sig.prometheus.Gauge;
+const GetMetricError = sig.prometheus.registry.GetMetricError;
+const Histogram = sig.prometheus.histogram.Histogram;
+
 const WeightedAliasSampler = sig.rand.WeightedAliasSampler;
+
+const RwMux = sig.sync.RwMux;
+
+const Level = sig.trace.level.Level;
+const Logger = sig.trace.log.Logger;
+const StandardErrLogger = sig.trace.log.ChannelPrintLogger;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
@@ -832,7 +841,8 @@ pub const AccountsDB = struct {
         const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
         // const n_threads = 1;
 
-        const hashes = try self.allocator.alloc(ArrayListUnmanaged(Hash), n_threads);
+        // alloc the result
+        const hashes = try self.allocator.alloc(std.ArrayListUnmanaged(Hash), n_threads);
         defer {
             for (hashes) |*h| h.deinit(self.allocator);
             self.allocator.free(hashes);
@@ -1002,7 +1012,7 @@ pub const AccountsDB = struct {
         config: AccountsDB.AccountHashesConfig,
         /// Allocator shared by all the arraylists in `hashes`.
         hashes_allocator: std.mem.Allocator,
-        hashes: []ArrayListUnmanaged(Hash),
+        hashes: []std.ArrayListUnmanaged(Hash),
         total_lamports: []u64,
         task: sig.utils.thread.TaskParams,
     ) !void {
@@ -1023,7 +1033,7 @@ pub const AccountsDB = struct {
         config: AccountsDB.AccountHashesConfig,
         shards: []ShardedPubkeyRefMap.RwPubkeyRefMap,
         hashes_allocator: std.mem.Allocator,
-        hashes: *ArrayListUnmanaged(Hash),
+        hashes: *std.ArrayListUnmanaged(Hash),
         total_lamports: *u64,
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
@@ -2149,7 +2159,7 @@ pub const AccountsDB = struct {
             .file => |in_file_account| in_file_account.data,
             .unrooted_map => |unrooted_map_account| unrooted_map_account.data,
         };
-        const t = bincode.readFromSlice(self.allocator, T, file_data, .{}) catch {
+        const t = sig.bincode.readFromSlice(self.allocator, T, file_data, .{}) catch {
             return error.DeserializationError;
         };
         return t;
@@ -3545,7 +3555,7 @@ test "load other sysvars" {
     _ = try accounts_db.getTypeFromAccount(sysvars.StakeHistory, &sysvars.IDS.stake_history);
 
     const slot_history = try accounts_db.getTypeFromAccount(sysvars.SlotHistory, &sysvars.IDS.slot_history);
-    defer bincode.free(allocator, slot_history);
+    defer sig.bincode.free(allocator, slot_history);
 
     // // not always included in local snapshot
     // _ = try accounts_db.getTypeFromAccount(sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
