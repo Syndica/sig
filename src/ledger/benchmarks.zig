@@ -214,17 +214,24 @@ pub const BenchmarkLedger = struct {
         defer signatures.deinit();
         var writable_keys = try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
         defer writable_keys.deinit();
-        var readonly_keys = try std.ArrayList([2]Pubkey).initCapacity(state.allocator, 64);
+        var readonly_keys = try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
         defer readonly_keys.deinit();
 
         for (0..64) |_| {
+            // Two writable keys
             var w_keys = try std.ArrayList(Pubkey).initCapacity(state.allocator, 2);
             defer w_keys.deinit();
-            // Two writable keys
             try w_keys.append(Pubkey.initRandom(rng.random()));
             try w_keys.append(Pubkey.initRandom(rng.random()));
             writable_keys.appendAssumeCapacity(w_keys);
-            readonly_keys.appendAssumeCapacity([2]Pubkey{ Pubkey.initRandom(rng.random()), Pubkey.initRandom(rng.random()) });
+
+            // Two readonly keys
+            var r_keys = try std.ArrayList(Pubkey).initCapacity(state.allocator, 2);
+            defer r_keys.deinit();
+            try r_keys.append(Pubkey.initRandom(rng.random()));
+            try r_keys.append(Pubkey.initRandom(rng.random()));
+            readonly_keys.appendAssumeCapacity(r_keys);
+
             var random_bytes: [64]u8 = undefined;
             for (random_bytes[0..]) |*byte| {
                 byte.* = rng.random().int(u8);
@@ -239,7 +246,7 @@ pub const BenchmarkLedger = struct {
             const status = TransactionStatusMeta.default();
             defer status.deinit(state.allocator);
             const w_keys = writable_keys.items[tx_idx];
-            const r_keys = std.ArrayList(Pubkey).fromOwnedSlice(state.allocator, &readonly_keys.items[tx_idx]);
+            const r_keys = readonly_keys.items[tx_idx];
             _ = try writer.writeTransactionStatus(slot, signature, w_keys, r_keys, status, tx_idx);
         }
         return timer.read();
