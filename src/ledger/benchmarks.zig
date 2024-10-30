@@ -208,14 +208,7 @@ pub const BenchmarkLedger = struct {
         const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
         var writer = try state.writer();
-        var rng = std.rand.DefaultPrng.init(0);
-        var random_bytes: [64][64]u8 = undefined;
-
-        for (0..64) |i| {
-            for (0..64) |j| {
-                random_bytes[i][j] = rng.random().int(u8);
-            }
-        }
+        var rng = std.rand.DefaultPrng.init(100);
 
         var signatures: std.ArrayList(Signature) = try std.ArrayList(Signature).initCapacity(state.allocator, 64);
         defer signatures.deinit();
@@ -224,10 +217,14 @@ pub const BenchmarkLedger = struct {
         var readonly_keys = try std.ArrayList([2]Pubkey).initCapacity(state.allocator, 64);
         defer readonly_keys.deinit();
 
-        for (0..64) |index| {
+        for (0..64) |_| {
             writable_keys.appendAssumeCapacity([2]Pubkey{ Pubkey.initRandom(rng.random()), Pubkey.initRandom(rng.random()) });
             readonly_keys.appendAssumeCapacity([2]Pubkey{ Pubkey.initRandom(rng.random()), Pubkey.initRandom(rng.random()) });
-            signatures.appendAssumeCapacity(Signature.init(random_bytes[index]));
+            var random_bytes: [64]u8 = undefined;
+            for (random_bytes[0..]) |*byte| {
+                byte.* = rng.random().int(u8);
+            }
+            signatures.appendAssumeCapacity(Signature.init(random_bytes));
         }
 
         const slot = 5;
