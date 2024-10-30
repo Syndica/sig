@@ -202,7 +202,7 @@ pub const BenchmarkLedger = struct {
     }
 
     /// Analogous to [bench_write_transaction_status]https://github.com/anza-xyz/agave/blob/ff1b22007c34669768c5b676cac491f580b39e0b/ledger/benches/blockstore.rs#L206
-    pub fn @"BlockstoreWriter.writeTransactionStatus"() !sig.time.Duration {
+    pub fn @"LedgerResultWriter.writeTransactionStatus"() !sig.time.Duration {
         const Signature = sig.core.Signature;
         const TransactionStatusMeta = ledger.transaction_status.TransactionStatusMeta;
 
