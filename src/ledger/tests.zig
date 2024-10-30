@@ -28,7 +28,7 @@ test "put/get data consistency for merkle root" {
 
     const id = sig.ledger.shred.ErasureSetId{
         .slot = 1234127498,
-        .fec_set_index = 4932874234,
+        .erasure_set_index = 4932874234,
     };
     const root = sig.core.Hash.initRandom(random);
 
@@ -300,8 +300,8 @@ pub const TestState = struct {
         return ledger.ShredInserter.init(self.allocator, self.logger, &self.registry, self.db);
     }
 
-    pub fn writer(self: *Self) !ledger.BlockstoreWriter {
-        return try ledger.BlockstoreWriter.init(
+    pub fn writer(self: *Self) !ledger.LedgerResultWriter {
+        return try ledger.LedgerResultWriter.init(
             self.allocator,
             self.logger,
             self.db,
