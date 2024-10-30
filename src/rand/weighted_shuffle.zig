@@ -12,13 +12,14 @@ const ChaChaRng = sig.rand.ChaChaRng(20);
 ///     non-zero weighted indices.
 pub fn WeightedShuffle(comptime T: type) type {
     return struct {
+        allocator: std.mem.Allocator,
         // Underlying array implementing the tree.
         // tree[i][j] is the sum of all weights in the j'th sub-tree of node i.
-        tree: std.ArrayList([FANOUT - 1]T),
+        tree: std.ArrayListUnmanaged([FANOUT - 1]T),
         // Current sum of all weights, excluding already sampled ones.
         weight: T,
         // Indices of zero weighted entries.
-        zeros: std.ArrayList(usize),
+        zeros: std.ArrayListUnmanaged(usize),
 
         // Each tree node has FANOUT many child nodes with indices:
         //     (index << BIT_SHIFT) + 1, (index << BIT_SHIFT) + 2, ..., (index << BIT_SHIFT) + FANOUT
@@ -32,26 +33,29 @@ pub fn WeightedShuffle(comptime T: type) type {
 
         /// If weights are negative or overflow the total sum they are treated as zero.
         pub fn init(allocator: std.mem.Allocator, weights: []const T) !Self {
-            var tree = try std.ArrayList([FANOUT - 1]T).initCapacity(
+            var tree = try std.ArrayListUnmanaged([FANOUT - 1]T).initCapacity(
                 allocator,
                 getTreeSize(weights.len),
             );
             for (0..tree.capacity) |_| tree.appendAssumeCapacity([_]T{0} ** (FANOUT - 1));
             var sum: T = 0;
-            var zeros = std.ArrayList(usize).init(allocator);
+            var zeros = try std.ArrayListUnmanaged(usize).initCapacity(
+                allocator,
+                0,
+            );
 
             var num_negative: usize = 0;
             var num_overflow: usize = 0;
             for (weights, 0..) |weight, k| {
                 if (weight < 0) {
-                    try zeros.append(k);
+                    try zeros.append(allocator, k);
                     num_negative += 1;
                     continue;
                 } else if (weight == 0) {
-                    try zeros.append(k);
+                    try zeros.append(allocator, k);
                     continue;
                 } else if (std.math.maxInt(T) - sum < weight) {
-                    try zeros.append(k);
+                    try zeros.append(allocator, k);
                     num_overflow += 1;
                     continue;
                 }
@@ -72,6 +76,7 @@ pub fn WeightedShuffle(comptime T: type) type {
             // std.debug.assert(num_overflow == 0);
 
             return .{
+                .allocator = allocator,
                 .tree = tree,
                 .weight = sum,
                 .zeros = zeros,
@@ -79,15 +84,16 @@ pub fn WeightedShuffle(comptime T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.tree.deinit();
-            self.zeros.deinit();
+            self.tree.deinit(self.allocator);
+            self.zeros.deinit(self.allocator);
         }
 
         pub fn clone(self: *const Self) !Self {
             return .{
-                .tree = try self.tree.clone(),
+                .allocator = self.allocator,
+                .tree = try self.tree.clone(self.allocator),
                 .weight = self.weight,
-                .zeros = try self.zeros.clone(),
+                .zeros = try self.zeros.clone(self.allocator),
             };
         }
 
@@ -121,19 +127,17 @@ pub fn WeightedShuffle(comptime T: type) type {
             var index: usize = 0;
             var weight = self.weight;
             while (index < self.tree.items.len) {
-                var continue_to_next_iter = false;
-                for (self.tree.items[index], 0..) |node, j| {
+                const continue_to_next_iter = for (self.tree.items[index], 0..) |node, j| {
                     if (val < node) {
                         // Traverse to the j+1 subtree of self.tree[index].
                         weight = node;
                         index = (index << BIT_SHIFT) + j + 1;
-                        continue_to_next_iter = true;
-                        break;
+                        break true;
                     }
                     std.debug.assert(weight >= node);
                     weight -= node;
                     val -= node;
-                }
+                } else false;
                 if (continue_to_next_iter) continue;
                 // Traverse to the right-most subtree of self.tree[index].
                 index = (index << BIT_SHIFT) + FANOUT;
