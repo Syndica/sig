@@ -240,7 +240,7 @@ pub const ErasureMeta = struct {
     }
 
     /// Analogous to [next_erasure_set_index](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L437)
-    pub fn nextFecSetIndex(self: Self) ?u32 {
+    pub fn nextErasureSetIndex(self: Self) ?u32 {
         const num_data: u32 = @intCast(self.config.num_data);
         return sig.utils.math.checkedAdd(
             @as(u32, @intCast(self.erasure_set_index)),

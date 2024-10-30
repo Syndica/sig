@@ -116,7 +116,7 @@ pub fn checkForwardChainedMerkleRootConsistency(
     const erasure_set_id = shred.common.erasureSetId();
 
     // If a shred from the next fec set has already been inserted, check the chaining
-    const next_erasure_set_index = if (erasure_meta.nextFecSetIndex()) |n| n else {
+    const next_erasure_set_index = if (erasure_meta.nextErasureSetIndex()) |n| n else {
         logger.err().logf(
             "Invalid erasure meta, unable to compute next fec set index {any}",
             .{erasure_meta},
@@ -286,7 +286,7 @@ fn previousErasureSet(
     if (id_range.len != 0) {
         const i = id_range.len - 1;
         const last_meta = meta_range[i].asRef();
-        if (@as(u32, @intCast(erasure_set_index)) == last_meta.nextFecSetIndex()) {
+        if (@as(u32, @intCast(erasure_set_index)) == last_meta.nextErasureSetIndex()) {
             return .{ id_range[i], last_meta.* };
         }
     }
@@ -307,7 +307,7 @@ fn previousErasureSet(
     } else return null;
 
     // Check if this is actually the consecutive erasure set
-    const next = if (candidate.nextFecSetIndex()) |n| n else return error.InvalidErasureConfig;
+    const next = if (candidate.nextErasureSetIndex()) |n| n else return error.InvalidErasureConfig;
     return if (next == erasure_set_index)
         .{ candidate_set, candidate }
     else
