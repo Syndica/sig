@@ -10,7 +10,6 @@ const Signature = sig.core.Signature;
 const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Transaction = sig.core.transaction.Transaction;
 const ClusterType = sig.rpc.ClusterType;
 
