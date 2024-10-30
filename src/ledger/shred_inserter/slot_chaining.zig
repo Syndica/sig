@@ -123,7 +123,7 @@ fn handleChainingForSlot(
         try traverseChildrenMut(
             allocator,
             db,
-            slot_meta.next_slots.items,
+            slot_meta.child_slots.items,
             working_set,
             new_chained_slots,
         );
@@ -200,7 +200,7 @@ fn traverseChildrenMut(
                 slot,
             );
             if (slot_meta.setParentConnected()) {
-                try slot_lists.append(slot_meta.next_slots.items);
+                try slot_lists.append(slot_meta.child_slots.items);
             }
         }
         i += 1;
@@ -213,7 +213,7 @@ fn chainNewSlotToPrevSlot(
     current_slot: Slot,
     current_slot_meta: *SlotMeta,
 ) !void {
-    try prev_slot_meta.next_slots.append(current_slot);
+    try prev_slot_meta.child_slots.append(current_slot);
     if (prev_slot_meta.isConnected()) {
         _ = current_slot_meta.setParentConnected();
     }

@@ -4,17 +4,29 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 
 pub const TransactionStatusMeta = struct {
+    /// Indicates whether the transaction succeeded, or exactly what error caused it to fail
     status: ?TransactionError,
+    /// Transaction fee that was paid by the fee payer.
     fee: u64,
+    /// Lamport balances of every account in this transaction before it was executed.
     pre_balances: []const u64,
+    /// Lamport balances of every account in this transaction after it was executed.
     post_balances: []const u64,
+    /// Instructions that were executed as part of this transaction.
     inner_instructions: ?[]const InnerInstructions,
+    /// Messages that were printed by the programs as they executed the instructions.
     log_messages: ?[]const []const u8,
+    /// SPL Token account balances of every account in this transaction before it was executed.
     pre_token_balances: ?[]const TransactionTokenBalance,
+    /// SPL Token account balances of every account in this transaction after it was executed.
     post_token_balances: ?[]const TransactionTokenBalance,
+    /// Block rewards issued to the leader for executing this transaction.
     rewards: ?[]const Reward,
+    /// Addresses for any accounts that were used in the transaction.
     loaded_addresses: LoadedAddresses,
+    /// The return value that was provided by the last instruction to have a return value.
     return_data: ?TransactionReturnData,
+    /// The amount of BPF instructions that were executed in order to complete this transaction.
     compute_units_consumed: ?u64,
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
