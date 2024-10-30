@@ -39,7 +39,18 @@ pub const BlockCommitment = struct {
 // TODO: BlockTime
 // TODO: Blocks
 // TODO: BlocksWithLimit
-// TODO: ClusterNodes
+
+pub const ClusterNode = struct {
+    featureSet: ?u32,
+    gossip: ?[]const u8,
+    pubkey: []const u8,
+    pubsub: ?[]const u8,
+    rpc: ?[]const u8,
+    shredVersion: ?u16,
+    tpu: ?[]const u8,
+    tpuQuic: ?[]const u8,
+    version: ?[]const u8,
+};
 
 pub const EpochInfo = struct {
     absoluteSlot: u64,
@@ -103,3 +114,5 @@ pub const ClusterType = union(enum(u8)) {
         url: []const u8,
     },
 };
+
+pub const Signature = []const u8;

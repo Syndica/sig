@@ -28,7 +28,6 @@ const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
-const EpochSchedule = sig.core.EpochSchedule;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
@@ -1058,6 +1057,22 @@ pub fn testTransactionSenderService() !void {
     const cluster: sig.rpc.ClusterType = .Testnet; // ! TODO: make this configurable
     app_base.logger.warn().logf("Starting transaction sender service on {s}...", .{@tagName(cluster)});
 
+    // this handles transactions and forwards them to leaders TPU ports
+    var transaction_sender_service = try sig.transaction_sender.Service.init(
+        allocator,
+        app_base.logger,
+        .{ .cluster = cluster, .socket = SocketAddr.init(app_base.my_ip, 0) },
+        transaction_channel,
+        &gossip_service.gossip_table_rw,
+        genesis_config.epoch_schedule,
+        &app_base.exit,
+    );
+    const transaction_sender_handle = try std.Thread.spawn(
+        .{},
+        sig.transaction_sender.Service.run,
+        .{&transaction_sender_service},
+    );
+
     // rpc is used to get blockhashes and other balance information
     var rpc_client = sig.rpc.Client.init(allocator, cluster, .{ .logger = app_base.logger });
     defer rpc_client.deinit();
@@ -1070,34 +1085,10 @@ pub fn testTransactionSenderService() !void {
         &app_base.exit,
         app_base.logger,
     );
-    const mock_transfer_generator_handle = try std.Thread.spawn(
-        .{},
-        sig.transaction_sender.MockTransferService.run,
-        .{&mock_transfer_service},
-    );
+    // send and confirm mock transactions
+    try mock_transfer_service.run();
 
-    // this handles transactions and forwards them to leaders TPU ports
-    var transaction_sender_service = try sig.transaction_sender.Service.init(
-        allocator,
-        app_base.logger,
-        .{
-            .cluster = cluster,
-            .socket = SocketAddr.init(app_base.my_ip, 0),
-        },
-        transaction_channel,
-        &gossip_service.gossip_table_rw,
-        genesis_config.epoch_schedule,
-        &app_base.exit,
-    );
-    const transaction_sender_handle = try std.Thread.spawn(
-        .{},
-        sig.transaction_sender.Service.run,
-        .{&transaction_sender_service},
-    );
-
-    mock_transfer_generator_handle.join();
     app_base.shutdown();
-
     transaction_sender_handle.join();
     gossip_manager.join();
 }
