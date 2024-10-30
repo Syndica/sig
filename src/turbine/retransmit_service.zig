@@ -237,15 +237,15 @@ fn dedupAndGroupShredsBySlot(
         const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
 
         switch (deduper.dedup(&shred_id, &shred_packet.data, DEDUPER_MAX_DUPLICATE_COUNT)) {
-            .ByteDuplicate => {
+            .byte_duplicate => {
                 stats.retransmit_shred_byte_filtered_count.inc();
                 continue;
             },
-            .ShredIdDuplicate => {
+            .shred_id_duplicate => {
                 stats.retransmit_shred_id_filtered_count.inc();
                 continue;
             },
-            .NotDuplicate => {},
+            .not_duplicate => {},
         }
 
         if (result.getEntry(shred_id.slot)) |entry| {

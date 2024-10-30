@@ -488,15 +488,15 @@ const TestEnvironment = struct {
         // Add known nodes to the gossip table
         var my_contact_info: ThreadSafeContactInfo = undefined;
         for (0..num_known_nodes) |i| {
-            var contact_info = try ContactInfo.random(
+            var contact_info = try ContactInfo.initRandom(
                 allocator,
                 random,
-                Pubkey.random(random),
+                Pubkey.initRandom(random),
                 0,
                 0,
                 0,
             );
-            try contact_info.setSocket(.turbine_recv, SocketAddr.random(random));
+            try contact_info.setSocket(.turbine_recv, SocketAddr.initRandom(random));
             _ = try gossip_table.insert(
                 SignedGossipData.init(.{ .ContactInfo = contact_info }),
                 0,
@@ -519,7 +519,7 @@ const TestEnvironment = struct {
 
         // Add unknown nodes with non-zero stakes
         for (0..num_unknown_staked_nodes) |_| {
-            try staked_nodes.put(Pubkey.random(random), random.intRangeLessThan(u64, 0, 20));
+            try staked_nodes.put(Pubkey.initRandom(random), random.intRangeLessThan(u64, 0, 20));
         }
 
         return .{
@@ -558,7 +558,7 @@ const TestEnvironment = struct {
 fn testGetRandomNodes(n: comptime_int, rng: std.rand.Random) [n]TurbineTree.Node {
     var nodes: [n]TurbineTree.Node = undefined;
     for (0..n) |i| nodes[i] = .{
-        .id = .{ .pubkey = Pubkey.random(rng) },
+        .id = .{ .pubkey = Pubkey.initRandom(rng) },
         .stake = 0,
     };
     return nodes;
@@ -823,14 +823,14 @@ pub fn makeTestCluster(
 
     for (0..num_staked_nodes - @intFromBool(my_stake > 0)) |_| {
         try stakes.put(
-            Pubkey.random(random),
+            Pubkey.initRandom(random),
             intRangeLessThanRust(u64, random, min_stake, max_stake),
         );
     }
 
     var stakes_iter = stakes.iterator();
     for (0..num_staked_nodes_in_gossip_table + num_unstaked_nodes_in_gossip_table) |i| {
-        const pubkey = if (i < num_staked_nodes_in_gossip_table) stakes_iter.next().?.key_ptr.* else Pubkey.random(random);
+        const pubkey = if (i < num_staked_nodes_in_gossip_table) stakes_iter.next().?.key_ptr.* else Pubkey.initRandom(random);
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 0);
         try contact_info.setSocket(.turbine_recv, SocketAddr.init(
             IpAddr.newIpv4(intRangeLessThanRust(u8, random, 128, 200), random.int(u8), random.int(u8), random.int(u8)),
