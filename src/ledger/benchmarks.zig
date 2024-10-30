@@ -214,21 +214,25 @@ pub const BenchmarkLedger = struct {
         var signatures: std.ArrayList(Signature) = try std.ArrayList(Signature).initCapacity(state.allocator, 64);
         defer signatures.deinit();
         var writable_keys = try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
-        defer writable_keys.deinit();
+        defer {
+            for (writable_keys.items) |l| l.deinit();
+            writable_keys.deinit();
+        }
         var readonly_keys = try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
-        defer readonly_keys.deinit();
+        defer {
+            for (readonly_keys.items) |l| l.deinit();
+            readonly_keys.deinit();
+        }
 
         for (0..64) |_| {
             // Two writable keys
             var w_keys = try std.ArrayList(Pubkey).initCapacity(state.allocator, 2);
-            defer w_keys.deinit();
             try w_keys.append(Pubkey.initRandom(rng.random()));
             try w_keys.append(Pubkey.initRandom(rng.random()));
             writable_keys.appendAssumeCapacity(w_keys);
 
             // Two readonly keys
             var r_keys = try std.ArrayList(Pubkey).initCapacity(state.allocator, 2);
-            defer r_keys.deinit();
             try r_keys.append(Pubkey.initRandom(rng.random()));
             try r_keys.append(Pubkey.initRandom(rng.random()));
             readonly_keys.appendAssumeCapacity(r_keys);
@@ -244,8 +248,7 @@ pub const BenchmarkLedger = struct {
 
         var timer = try sig.time.Timer.start();
         for (signatures.items, 0..) |signature, tx_idx| {
-            const status = TransactionStatusMeta.default();
-            defer status.deinit(state.allocator);
+            const status = TransactionStatusMeta.EMPTY_FOR_TEST;
             const w_keys = writable_keys.items[tx_idx];
             const r_keys = readonly_keys.items[tx_idx];
             _ = try writer.writeTransactionStatus(slot, signature, w_keys, r_keys, status, tx_idx);
