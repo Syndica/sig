@@ -732,8 +732,7 @@ fn tickCallback(
 
     lsquic.lsquic_engine_process_conns(ctx.engine);
 
-    if (!ctx.exit.load(.acquire))
-        ctx.tick_event.run(l, c, 500, Context, ctx, tickCallback);
+    ctx.tick_event.run(l, c, 500, Context, ctx, tickCallback);
     return .disarm;
 }
 
@@ -764,8 +763,12 @@ fn channelCallback(
         try conn_ctx.transactions.push(packet);
     }
 
-    if (!ctx.exit.load(.acquire))
+    if (ctx.exit.load(.acquire)) {
+        l.stop();
+    } else {
         ctx.channel_event.run(l, c, 500, Context, ctx, channelCallback);
+    }
+
     return .disarm;
 }
 
@@ -804,10 +807,7 @@ fn packetsCallback(
         @panic("lsquic_engine_packet_in failed");
     }
 
-    return if (ctx.exit.load(.acquire))
-        .disarm
-    else
-        .rearm;
+    return .rearm;
 }
 // helper functions
 
