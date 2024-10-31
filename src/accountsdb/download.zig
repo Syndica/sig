@@ -10,6 +10,7 @@ const GossipTable = sig.gossip.GossipTable;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipService = sig.gossip.GossipService;
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 
 const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
 
@@ -305,7 +306,7 @@ const DownloadProgress = struct {
     mmap: []align(std.mem.page_size) u8,
     download_size: usize,
     min_mb_per_second: ?usize,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(@This())),
 
     mb_timer: std.time.Timer,
     bytes_read: usize = 0,
@@ -339,7 +340,7 @@ const DownloadProgress = struct {
         );
 
         return .{
-            .logger = logger,
+            .logger = logger.withScope(@typeName(@This())),
             .mmap = file_memory,
             .download_size = download_size,
             .min_mb_per_second = min_mb_per_second,
