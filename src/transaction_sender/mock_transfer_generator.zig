@@ -14,9 +14,8 @@ const RpcClient = sig.rpc.Client;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const Duration = sig.time.Duration;
 
-const TRANSFER_FEE: u64 = 5000;
-const AIRDROP_AMOUNT: u64 = 5e9;
-const MIN_BANK_BALANCE: u64 = 1e9;
+const TRANSFER_FEE_LAMPORTS: u64 = 5000;
+const MAX_AIRDROP_LAMPORTS: u64 = 5e9;
 
 const MAX_RPC_RETRIES: u64 = 5;
 const MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION: Duration = Duration.fromSecs(30);
@@ -88,16 +87,16 @@ pub const MockTransferService = struct {
             self.accounts.alice.pubkey,
         });
 
-        const required_bank_balance = n_transactions * (n_lamports_per_tx + TRANSFER_FEE);
-        if (required_bank_balance > MIN_BANK_BALANCE) {
-            @panic("requested transfer amount exceeds MIN_BANK_BALANCE");
+        const required_bank_balance = n_transactions * (n_lamports_per_tx + TRANSFER_FEE_LAMPORTS);
+        if (required_bank_balance > MAX_AIRDROP_LAMPORTS) {
+            @panic("requested transfer amount exceeds MAX_AIRDROP_LAMPORTS");
         }
 
         self.logger.info().logf("(transaction_sender.MockTransferService): : {} txs each transfers {} lamports", .{ n_transactions, n_lamports_per_tx });
         const balances = try self.logBalances("(transaction_sender.MockTransferService) starting");
-        if (balances.bank < MIN_BANK_BALANCE) {
+        if (balances.bank < required_bank_balance) {
             self.logger.info().log("(transaction_sender.MockTransferService) airdropping to bank");
-            try self.airdrop(self.accounts.bank.pubkey, AIRDROP_AMOUNT);
+            try self.airdrop(self.accounts.bank.pubkey, MAX_AIRDROP_LAMPORTS);
         }
 
         if (balances.alice > 0) {
@@ -302,13 +301,13 @@ pub const MockTransferService = struct {
 
         self.logger.info().logf(
             "(transaction_sender.MockTransferService) closing account: transfering {} from {s} to {s}",
-            .{ balance - TRANSFER_FEE, pubkey, self.accounts.bank.pubkey },
+            .{ balance - TRANSFER_FEE_LAMPORTS, pubkey, self.accounts.bank.pubkey },
         );
         try self.rpcTransferAndWait(
             random,
             keypair,
             self.accounts.bank.pubkey,
-            balance - TRANSFER_FEE,
+            balance - TRANSFER_FEE_LAMPORTS,
         );
 
         const new_balance = try self.getBalance(pubkey);
@@ -335,32 +334,26 @@ pub const MockTransferService = struct {
     }
 
     /// airdrops SOL to the given pubkey (using rpc methods)
-    /// to ensure its balance is at least total_lamports
     pub fn airdrop(
         self: *MockTransferService,
         pubkey: Pubkey,
-        total_lamports: u64,
+        lamports: u64,
     ) !void {
-        const balance = try self.getBalance(pubkey);
-        if (balance < total_lamports) {
-            const amount_required = total_lamports - balance;
-            for (0..5) |_| {
-                const signature = blk: {
-                    const response = try self.rpc_client.requestAirDrop(self.allocator, pubkey, amount_required, .{});
-                    defer response.deinit();
-                    const signature_string = try response.result();
-                    break :blk try Signature.fromString(signature_string);
-                };
-                const signature_confirmed = try self.waitForSignatureConfirmation(
-                    signature,
-                    MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION,
-                );
-                if (signature_confirmed) return;
+        for (0..MAX_RPC_RETRIES) |_| {
+            const signature = blk: {
+                const response = try self.rpc_client.requestAirDrop(self.allocator, pubkey, lamports, .{});
+                defer response.deinit();
+                const signature_string = try response.result();
+                break :blk try Signature.fromString(signature_string);
+            };
+            const signature_confirmed = try self.waitForSignatureConfirmation(
+                signature,
+                MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION,
+            );
+            if (signature_confirmed) {
+                return;
             }
-            return error.AirdropFailed;
         }
-
-        const new_balance = try self.getBalance(pubkey);
-        if (new_balance < total_lamports) return error.AirdropFailed;
+        return error.AirdropFailed;
     }
 };
