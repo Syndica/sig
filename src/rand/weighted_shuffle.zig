@@ -240,9 +240,6 @@ pub fn WeightedShuffle(comptime T: type) type {
                 return self.shuffle.zeros.swapRemove(index);
             }
 
-            pub fn consume(self: *Iterator) void {
-                while (self.next() != null) {}
-            }
             pub fn intoArrayList(self: *Iterator, allocator: std.mem.Allocator) !std.ArrayList(usize) {
                 var list = std.ArrayList(usize).init(allocator);
                 while (self.next()) |k| {
@@ -445,7 +442,7 @@ test "agave: sanity check" {
         defer shuffle.deinit();
         var shuffled = shuffle.shuffle(random);
         counts[shuffled.next().?] += 1;
-        shuffled.consume();
+        while (shuffled.next() != null) {}
     }
 
     try std.testing.expectEqualSlices(
@@ -463,7 +460,7 @@ test "agave: sanity check" {
         shuffle.removeIndex(1);
         var shuffled = shuffle.shuffle(random);
         counts[shuffled.next().?] += 1;
-        shuffled.consume();
+        while (shuffled.next() != null) {}
     }
 
     try std.testing.expectEqualSlices(
