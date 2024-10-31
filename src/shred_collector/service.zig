@@ -11,7 +11,6 @@ const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
 const GossipTable = sig.gossip.GossipTable;
-const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
