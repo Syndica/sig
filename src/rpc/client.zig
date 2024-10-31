@@ -9,12 +9,13 @@ const Signature = sig.core.Signature;
 const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
+const ScopedLogger = sig.trace.log.ScopedLogger;
 
 pub const Client = struct {
     http_endpoint: []const u8,
     http_client: std.http.Client,
     max_retries: usize,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(@This())),
 
     pub const Options = struct {
         max_retries: usize = 0,
@@ -33,7 +34,7 @@ pub const Client = struct {
             .http_endpoint = http_endpoint,
             .http_client = std.http.Client{ .allocator = allocator },
             .max_retries = options.max_retries,
-            .logger = options.logger,
+            .logger = options.logger.withScope(@typeName(@This())),
         };
     }
 
