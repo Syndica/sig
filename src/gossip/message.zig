@@ -296,9 +296,7 @@ test "gossip.message: pull request serializes and deserializes" {
     try testing.expectEqualSlices(u8, rust_bytes[0..], serialized);
 
     const deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
-    try std.testing.expectEqual(std.meta.activeTag(pull), std.meta.activeTag(deserialized));
-    try std.testing.expectEqual(pull.PullRequest[0], deserialized.PullRequest[0]);
-    try std.testing.expect(pull.PullRequest[1].equals(&deserialized.PullRequest[1]));
+    try std.testing.expectEqualDeep(pull, deserialized);
 }
 
 test "gossip.message: push message serializes and deserializes correctly" {

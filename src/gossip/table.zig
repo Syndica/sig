@@ -140,23 +140,6 @@ pub const GossipTable = struct {
         pub fn wasInserted(self: InsertResult) bool {
             return self == .InsertedNewEntry or self == .OverwroteExistingEntry;
         }
-
-        pub fn equals(self: InsertResult, other: InsertResult) bool {
-            if (self != std.meta.activeTag(other)) return false;
-            return switch (self) {
-                .InsertedNewEntry,
-                .IgnoredOldValue,
-                .IgnoredDuplicateValue,
-                .IgnoredTimeout,
-                .GossipTableFull,
-                => |_| true,
-
-                .OverwroteExistingEntry => |*a| blk: {
-                    const b = &other.OverwroteExistingEntry;
-                    break :blk a.equals(b);
-                },
-            };
-        }
     };
 
     pub fn insert(self: *Self, value: SignedGossipData, now: u64) !InsertResult {
@@ -1075,7 +1058,7 @@ test "insert and get contact_info" {
 
     // test insertion
     const result = try table.insert(gossip_value, 0);
-    try std.testing.expect(result.equals(.InsertedNewEntry));
+    try std.testing.expectEqual(.InsertedNewEntry, result);
 
     // test retrieval
     var buf: [100]ContactInfo = undefined;
@@ -1085,7 +1068,7 @@ test "insert and get contact_info" {
 
     // test re-insertion
     const result2 = try table.insert(gossip_value, 0);
-    try std.testing.expect(result2.equals(.IgnoredDuplicateValue));
+    try std.testing.expectEqual(.IgnoredDuplicateValue, result2);
 
     // test re-insertion with greater wallclock
     gossip_value.data.LegacyContactInfo.wallclock += 2;

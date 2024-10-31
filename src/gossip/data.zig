@@ -212,12 +212,6 @@ pub const SignedGossipData = struct {
             // zig fmt: on
         };
     }
-
-    pub fn equals(self: *const Self, other: *const Self) bool {
-        if (!self.signature.eql(&other.signature)) return false;
-        if (!self.data.equals(&other.data)) return false;
-        return true;
-    }
 };
 
 /// Analogous to [CrdsValueLabel](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L500)
@@ -426,30 +420,6 @@ pub const GossipData = union(GossipDataTag) {
             .LegacyContactInfo => |*v| v.shred_version,
             .ContactInfo => |*v| v.shred_version,
             else => null,
-        };
-    }
-
-    pub fn equals(self: *const GossipData, other: *const GossipData) bool {
-        if (self.* != std.meta.activeTag(other.*)) return false;
-        return switch (self.*) {
-            inline //
-            .LegacyContactInfo,
-            .Vote,
-            .LowestSlot,
-            .LegacySnapshotHashes,
-            .AccountsHashes,
-            .EpochSlots,
-            .LegacyVersion,
-            .Version,
-            .NodeInstance,
-            .DuplicateShred,
-            .ContactInfo,
-            .RestartLastVotedForkSlots,
-            .RestartHeaviestFork,
-            => |self_payload, tag| std.meta.eql(self_payload, @field(other, @tagName(tag))),
-
-            .SnapshotHashes,
-            => |*snap_hashes| snap_hashes.equals(&other.SnapshotHashes),
         };
     }
 };
@@ -1114,116 +1084,51 @@ pub const SnapshotHashes = struct {
         }
     }
 
-    pub fn equals(
-        self: *const SnapshotHashes,
-        other: *const SnapshotHashes,
-    ) bool {
-        if (self.wallclock != other.wallclock) return false;
-        if (self.from.equals(&other.from)) return false;
-        if (self.full.equals(&other.full)) return false;
-        if (!self.incremental.equals(&other.incremental)) return false;
-        return true;
-    }
-
-    pub const Comparable = struct {
-        from: Pubkey,
-        full: SlotAndHash,
-        incremental: []const SlotAndHash,
-        wallclock: ?u64,
-
-        pub fn expectEqual(actual: Comparable, expected: Comparable) !void {
-            try std.testing.expectEqual(expected.from, actual.from);
-            try std.testing.expectEqual(expected.full, actual.full);
-
-            wallclock: {
-                const actual_wallclock = actual.wallclock orelse break :wallclock;
-                const expected_wallclock = expected.wallclock orelse break :wallclock;
-                try std.testing.expectEqual(expected_wallclock, actual_wallclock);
-            }
-
-            try std.testing.expectEqualSlices(SlotAndHash, expected.incremental, actual.incremental);
-        }
-    };
-    pub fn asComparable(
-        self: *const SnapshotHashes,
-        wallclock_compare: enum {
-            compare_wallclock,
-            ignore_wallclock,
-        },
-    ) Comparable {
-        return .{
-            .from = self.from,
-            .full = self.full,
-            .incremental = self.incremental.getSlice(),
-            .wallclock = switch (wallclock_compare) {
-                .compare_wallclock => self.wallclock,
-                .ignore_wallclock => null,
-            },
-        };
-    }
-
     /// List of incremental `SlotAndHash`es.
     /// Can be thought of as a tagged union, where the tag is a boolean derived from `.len == 1`.
     /// When the tag is `true`, the single item is represented inline in the `items` union.
     /// When the tag is `false`, the list of items is pointed to by the `items` union.
     ///
     /// This optimizes the case where we only have a single incremental snapshot.
-    pub const IncrementalSnapshotsList = struct {
-        len: usize,
-        items: SingleOrList,
+    pub const IncrementalSnapshotsList = union(enum) {
+        single: SlotAndHash,
+        list: []const SlotAndHash,
 
         pub const @"!bincode-config": bincode.FieldConfig(IncrementalSnapshotsList) = .{
-            .serializer = bincode_impl.serializeFn,
-            .deserializer = bincode_impl.deserializeFn,
-            .free = bincode_impl.freeFn,
+            .serializer = bincodeSerializeFn,
+            .deserializer = bincodeDeserializeFn,
+            .free = bincodeFreeFn,
             .skip = false,
             .post_deserialize_fn = null,
         };
 
-        pub const SingleOrList = union {
-            /// Active when `.len == 1`.
-            single: SlotAndHash,
-            /// Active when `.len != 1`.
-            list: [*]const SlotAndHash,
-        };
-
         pub fn getSlice(inc: *const IncrementalSnapshotsList) []const SlotAndHash {
-            if (inc.len == 1) {
-                return (&inc.items.single)[0..1];
-            } else {
-                return inc.items.list[0..inc.len];
-            }
+            return switch (inc.*) {
+                .single => |*single| single[0..1],
+                .list => |list| list,
+            };
         }
 
         pub fn deinit(self: *const IncrementalSnapshotsList, allocator: std.mem.Allocator) void {
-            if (self.len == 1) {
-                _ = &self.items.single; // safety check
-            } else {
-                allocator.free(self.items.list[0..self.len]);
+            switch (self.*) {
+                .single => {},
+                .list => |list| allocator.free(list),
             }
         }
 
-        pub const EMPTY: IncrementalSnapshotsList = .{
-            .len = 0,
-            .items = .{ .list = &[_]SlotAndHash{} },
-        };
+        /// Can optionally and safely have `.deinit` called.
+        pub const EMPTY: IncrementalSnapshotsList = .{ .list = &.{} };
 
         /// The returned snapshot collection can optionally and safely have `.deinit` called.
         pub fn initSingle(single: SlotAndHash) IncrementalSnapshotsList {
-            return .{
-                .len = 1,
-                .items = .{ .single = single },
-            };
+            return .{ .single = single };
         }
 
-        /// Responsibility to `.deinit` the returned snapshot collection falls to the caller in order to free `list`, if `list` was allocated.
+        /// Responsibility to `.deinit` the returned snapshot list falls to the caller in order to free `list`, if `list` was allocated.
         /// Asserts `list.len != 1`.
         pub fn initList(list: []const SlotAndHash) IncrementalSnapshotsList {
             std.debug.assert(list.len != 1);
-            return .{
-                .len = list.len,
-                .items = .{ .list = list.ptr },
-            };
+            return .{ .list = list };
         }
 
         /// Responsibility to `.deinit` the returned snapshot collection with the specified allocator falls to the caller.
@@ -1235,52 +1140,36 @@ pub const SnapshotHashes = struct {
         }
 
         pub fn clone(inc: *const IncrementalSnapshotsList, allocator: std.mem.Allocator) !IncrementalSnapshotsList {
-            return .{
-                .len = inc.len,
-                .items = if (inc.len == 1)
-                    .{ .single = inc.items.single }
-                else
-                    .{ .list = (try allocator.dupe(SlotAndHash, inc.items.list[0..inc.len])).ptr },
+            return switch (inc.*) {
+                .single => |single| .{ .single = single },
+                .list => |list| .{ .list = try allocator.dupe(SlotAndHash, list) },
             };
         }
 
-        pub fn equals(
-            self: *const IncrementalSnapshotsList,
-            other: *const IncrementalSnapshotsList,
-        ) bool {
-            if (self.len != other.len) return false;
-            for (self.getSlice(), other.getSlice()) |*a, *b| {
-                if (!a.equals(b)) return false;
-            }
-            return true;
+        fn bincodeSerializeFn(writer: anytype, inc_list: anytype, params: bincode.Params) !void {
+            try bincode.write(writer, inc_list.getSlice(), params);
         }
 
-        const bincode_impl = struct {
-            fn serializeFn(writer: anytype, inc_list: anytype, params: bincode.Params) !void {
-                try bincode.write(writer, inc_list.getSlice(), params);
-            }
+        fn bincodeDeserializeFn(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !IncrementalSnapshotsList {
+            const faililng_allocator = sig.utils.allocators.failing.allocator(.{});
 
-            fn deserializeFn(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !IncrementalSnapshotsList {
-                const faililng_allocator = sig.utils.allocators.failing.allocator(.{});
-
-                const maybe_len = try bincode.readIntAsLength(usize, reader, params);
-                const len = maybe_len orelse return error.IncrementalListTooBig;
-                switch (len) {
-                    0 => return EMPTY,
-                    1 => return initSingle(try bincode.read(faililng_allocator, SlotAndHash, reader, params)),
-                    else => {
-                        const list = try allocator.alloc(SlotAndHash, len);
-                        errdefer allocator.free(list);
-                        for (list) |*sah| sah.* = try bincode.read(faililng_allocator, SlotAndHash, reader, params);
-                        return initList(list);
-                    },
-                }
+            const maybe_len = try bincode.readIntAsLength(usize, reader, params);
+            const len = maybe_len orelse return error.IncrementalListTooBig;
+            switch (len) {
+                0 => return EMPTY,
+                1 => return initSingle(try bincode.read(faililng_allocator, SlotAndHash, reader, params)),
+                else => {
+                    const list = try allocator.alloc(SlotAndHash, len);
+                    errdefer allocator.free(list);
+                    for (list) |*sah| sah.* = try bincode.read(faililng_allocator, SlotAndHash, reader, params);
+                    return initList(list);
+                },
             }
+        }
 
-            fn freeFn(allocator: std.mem.Allocator, inc_list: anytype) void {
-                IncrementalSnapshotsList.deinit(&inc_list, allocator);
-            }
-        };
+        fn bincodeFreeFn(allocator: std.mem.Allocator, inc_list: anytype) void {
+            IncrementalSnapshotsList.deinit(&inc_list, allocator);
+        }
     };
 };
 

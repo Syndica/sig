@@ -4191,18 +4191,26 @@ test "generate snapshot & update gossip snapshot hashes" {
     try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_0.data));
     try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_1.data));
 
-    try queue_item_0.data.SnapshotHashes.asComparable(.ignore_wallclock).expectEqual(.{
-        .from = Pubkey.fromPublicKey(&my_keypair.public_key),
-        .full = .{ .slot = full_slot, .hash = full_hash },
-        .incremental = &.{},
-        .wallclock = null,
-    });
-    try queue_item_1.data.SnapshotHashes.asComparable(.ignore_wallclock).expectEqual(.{
-        .from = Pubkey.fromPublicKey(&my_keypair.public_key),
-        .full = .{ .slot = full_slot, .hash = full_hash },
-        .incremental = &.{.{ .slot = inc_slot, .hash = inc_hash }},
-        .wallclock = null,
-    });
+    const SnapshotHashes = sig.gossip.data.SnapshotHashes;
+
+    try std.testing.expectEqualDeep(
+        SnapshotHashes{
+            .from = Pubkey.fromPublicKey(&my_keypair.public_key),
+            .full = .{ .slot = full_slot, .hash = full_hash },
+            .incremental = SnapshotHashes.IncrementalSnapshotsList.EMPTY,
+            .wallclock = queue_item_0.data.SnapshotHashes.wallclock,
+        },
+        queue_item_0.data.SnapshotHashes,
+    );
+    try std.testing.expectEqualDeep(
+        SnapshotHashes{
+            .from = Pubkey.fromPublicKey(&my_keypair.public_key),
+            .full = .{ .slot = full_slot, .hash = full_hash },
+            .incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{ .slot = inc_slot, .hash = inc_hash }),
+            .wallclock = queue_item_1.data.SnapshotHashes.wallclock,
+        },
+        queue_item_1.data.SnapshotHashes,
+    );
 }
 
 pub const BenchmarkAccountsDBSnapshotLoad = struct {
