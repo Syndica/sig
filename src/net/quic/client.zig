@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const lsquic = @import("lsquic");
 const xev = @import("xev");
 const ssl = @import("ssl");
@@ -611,16 +612,16 @@ const Callbacks = struct {
     }
 };
 
-// copied out of zig stdlib because its definition is wrong.
-const msghdr_const = extern struct {
+// zig stdlib does not define the msghdr{_const} for macos.
+const msghdr_const = if (builtin.target.os.tag == .macos) extern struct {
     name: ?*const std.posix.sockaddr,
-    namelen: u32,
+    namelen: std.posix.socklen_t,
     iov: [*]const std.posix.iovec_const,
     iovlen: usize,
     control: ?*const anyopaque,
     controllen: usize,
     flags: i32,
-};
+} else std.posix.msghdr_const;
 pub extern "c" fn sendmsg(sockfd: std.posix.fd_t, msg: *const msghdr_const, flags: u32) isize;
 
 pub fn sendmsgPosix(
