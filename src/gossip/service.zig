@@ -400,7 +400,7 @@ pub const GossipService = struct {
         if (params.dump) {
             try manager.spawn("GossipDumpService", GossipDumpService.run, .{.{
                 .allocator = self.allocator,
-                .logger = self.logger.unscoped(),
+                .logger = self.logger.withScope(@typeName(GossipDumpService)),
                 .gossip_table_rw = &self.gossip_table_rw,
                 .counter = self.counter,
             }}, true);
