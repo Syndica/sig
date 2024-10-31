@@ -32,16 +32,30 @@ pub const Client = struct {
             .LocalHost => "http://localhost:8899",
             .Custom => |cluster| cluster.url,
         };
-        return .{
+
+        var client: Client = .{
             .http_endpoint = http_endpoint,
             .http_client = std.http.Client{ .allocator = allocator },
             .max_retries = options.max_retries,
             .logger = options.logger,
         };
+
+        client.logVersion(allocator) catch |err| {
+            client.logger.err().logf("Failed to log RPC version: error={any}", .{err});
+        };
+        return client;
     }
 
     pub fn deinit(self: *Client) void {
         self.http_client.deinit();
+    }
+
+    /// Log the RPC version were connected to
+    pub fn logVersion(self: *Client, allocator: std.mem.Allocator) !void {
+        const response = try self.getVersion(allocator);
+        defer response.deinit();
+        const version = try response.result();
+        self.logger.info().logf("RPC version: {s}", .{version.@"solana-core"});
     }
 
     pub const GetAccountInfoConfig = struct {
@@ -109,10 +123,10 @@ pub const Client = struct {
     // TODO: getBlocks()
     // TODO: getBlocksWithLimit()
 
-    pub fn getClusterNodes(self: *Client, allocator: std.mem.Allocator) !Response([]const types.ClusterNode) {
+    pub fn getClusterNodes(self: *Client, allocator: std.mem.Allocator) !Response([]const types.RpcContactInfo) {
         var request = try Request.init(allocator, "getClusterNodes");
         defer request.deinit();
-        return self.sendFetchRequest(allocator, []const types.ClusterNode, request, .{
+        return self.sendFetchRequest(allocator, []const types.RpcContactInfo, request, .{
             .ignore_unknown_fields = true,
         });
     }
@@ -265,7 +279,6 @@ pub const Client = struct {
     // TODO: getTokenSupply()
     // TODO: getTransaction()
     // TODO: getTransactionCount()
-    // TODO: getVersion()
     // TODO: getVoteAccounts()
     // TODO: isBlockhashValid()
     // TODO: minimumLedgerSlot()
@@ -314,6 +327,12 @@ pub const Client = struct {
         try request.addConfig(config);
 
         return self.sendFetchRequest(allocator, types.Signature, request, .{});
+    }
+
+    pub fn getVersion(self: *Client, allocator: std.mem.Allocator) !Response(types.RpcVersionInfo) {
+        var request = try Request.init(allocator, "getVersion");
+        defer request.deinit();
+        return self.sendFetchRequest(allocator, types.RpcVersionInfo, request, .{});
     }
 
     /// Sends a JSON-RPC request to the HTTP endpoint and parses the response.
@@ -386,6 +405,19 @@ pub const Client = struct {
         self.http_client = std.http.Client{ .allocator = self.http_client.allocator };
     }
 };
+
+test "getAccountInfo: null value" {
+    const allocator = std.testing.allocator;
+    var client = Client.init(allocator, .Testnet, .{});
+    defer client.deinit();
+    // random pubkey that should not exist
+    const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWn");
+    const response = try client.getAccountInfo(allocator, pubkey, .{});
+    defer response.deinit();
+    const x = try response.result();
+
+    try std.testing.expectEqual(null, x.value);
+}
 
 test "getAccountInfo" {
     const allocator = std.testing.allocator;
@@ -514,10 +546,18 @@ test "getSlot" {
 // TODO: test getTokenSupply()
 // TODO: test getTransaction()
 // TODO: test getTransactionCount()
-// TODO: test getVersion()
 // TODO: test getVoteAccounts()
 // TODO: test isBlockhashValid()
 // TODO: test minimumLedgerSlot()
 // TODO: test requestAirdrop()
 // TODO: test sendTransaction()
 // TODO: test simulateTransaction()
+
+test "getVersion" {
+    const allocator = std.testing.allocator;
+    var client = Client.init(allocator, .Testnet, .{});
+    defer client.deinit();
+    const response = try client.getVersion(allocator);
+    defer response.deinit();
+    _ = try response.result();
+}
