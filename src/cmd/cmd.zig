@@ -30,6 +30,7 @@ const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getOrInitIdentity = helpers.getOrInitIdentity;
@@ -63,7 +64,7 @@ const LOG_SCOPE = "cmd";
 pub fn run() !void {
     defer {
         // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
-        _ = gossip_value_gpa.deinit();
+        // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
     }
 
     var gossip_host_option = cli.Option{
@@ -532,6 +533,20 @@ pub fn run() !void {
                         .target = .{
                             .action = .{
                                 .exec = downloadSnapshot,
+                            },
+                        },
+                    },
+
+                    &cli.Command{
+                        .name = "quic-client",
+                        .description = .{
+                            .one_line = "Runs Quic demo client",
+                            .detailed = "",
+                        },
+                        .options = &.{},
+                        .target = .{
+                            .action = .{
+                                .exec = sig.net.quic.runTestClient,
                             },
                         },
                     },
@@ -1173,6 +1188,26 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?struct { Slot, LeaderSchedul
         null;
 }
 
+const bank_kp: KeyPair = .{
+    .public_key = .{ .bytes = .{
+        239, 10,  4,   236, 219, 237, 69,
+        197, 199, 60,  117, 184, 223, 215,
+        132, 73,  93,  248, 200, 254, 212,
+        239, 251, 120, 223, 25,  201, 196,
+        20,  58,  163, 62,
+    } },
+    .secret_key = .{ .bytes = .{
+        208, 26,  255, 64,  164, 52,  99,  120, 92,
+        227, 25,  240, 222, 245, 70,  77,  171, 89,
+        129, 64,  110, 73,  159, 230, 38,  212, 150,
+        202, 57,  157, 151, 175, 239, 10,  4,   236,
+        219, 237, 69,  197, 199, 60,  117, 184, 223,
+        215, 132, 73,  93,  248, 200, 254, 212, 239,
+        251, 120, 223, 25,  201, 196, 20,  58,  163,
+        62,
+    } },
+};
+
 pub fn testTransactionSenderService() !void {
     var app_base = try AppBase.init(gpa_allocator);
     defer {
@@ -1196,7 +1231,7 @@ pub fn testTransactionSenderService() !void {
     }
 
     // define cluster of where to land transactions
-    const cluster: sig.rpc.ClusterType = if (try config.current.gossip.getNetwork()) |n| switch (n) {
+    const cluster: ClusterType = if (try config.current.gossip.getNetwork()) |n| switch (n) {
         .mainnet => .MainnetBeta,
         .devnet => .Devnet,
         .testnet => .Testnet,
@@ -1324,7 +1359,7 @@ fn startGossip(
     app_base.logger.info().logf("gossip port: {d}", .{app_base.my_port});
 
     // setup contact info
-    const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
+    const my_pubkey = try Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
     var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
     try contact_info.setSocket(.gossip, SocketAddr.init(app_base.my_ip, app_base.my_port));
     for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));

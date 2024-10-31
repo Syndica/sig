@@ -1064,7 +1064,7 @@ test "insert and get" {
 
 test "insert and get contact_info" {
     const kp = try KeyPair.create([_]u8{1} ** 32);
-    var id = Pubkey.fromPublicKey(&kp.public_key);
+    var id = try Pubkey.fromPublicKey(&kp.public_key);
 
     const legacy_contact_info = LegacyContactInfo.default(id);
     var gossip_value = SignedGossipData.initSigned(&kp, .{

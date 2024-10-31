@@ -143,16 +143,6 @@ pub const SignatureStatuses = struct {
     };
 };
 
-pub const ClusterType = union(enum(u8)) {
-    MainnetBeta,
-    Testnet,
-    Devnet,
-    LocalHost,
-    Custom: struct {
-        url: []const u8,
-    },
-};
-
 pub const RpcVersionInfo = struct {
     // TODO: figure out how to support "solana_core" and "feature_set"
     // rn to correctly parse the json response we need to have '-' in the field name

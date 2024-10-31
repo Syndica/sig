@@ -149,7 +149,7 @@ pub fn start(
         deps.random,
         deps.registry,
         deps.gossip_table_rw,
-        Pubkey.fromPublicKey(&deps.my_keypair.public_key),
+        try Pubkey.fromPublicKey(&deps.my_keypair.public_key),
         deps.my_shred_version,
     );
     const repair_requester = try RepairRequester.init(

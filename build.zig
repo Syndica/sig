@@ -47,6 +47,15 @@ pub fn build(b: *Build) void {
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
 
+    const lsquic_dep = b.dependency("lsquic", dep_opts);
+    const lsquic_mod = lsquic_dep.module("lsquic");
+
+    const ssl_dep = lsquic_dep.builder.dependency("boringssl", dep_opts);
+    const ssl_mod = ssl_dep.module("ssl");
+
+    const xev_dep = b.dependency("xev", dep_opts);
+    const xev_mod = xev_dep.module("xev");
+
     const pretty_table_dep = b.dependency("prettytable", dep_opts);
     const pretty_table_mod = pretty_table_dep.module("prettytable");
 
@@ -81,6 +90,9 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("zig-cli", zig_cli_module);
     sig_exe.root_module.addImport("zig-network", zig_network_module);
     sig_exe.root_module.addImport("zstd", zstd_mod);
+    sig_exe.root_module.addImport("lsquic", lsquic_mod);
+    sig_exe.root_module.addImport("ssl", ssl_mod);
+    sig_exe.root_module.addImport("xev", xev_mod);
     switch (blockstore_db) {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},

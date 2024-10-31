@@ -14,6 +14,7 @@ const Pubkey = sig.core.Pubkey;
 const RpcClient = sig.rpc.Client;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const Duration = sig.time.Duration;
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 const TRANSFER_FEE_LAMPORTS: u64 = 5000;
 const MAX_AIRDROP_LAMPORTS: u64 = 5e9;
@@ -31,7 +32,7 @@ pub const KeypairAndPubkey = struct {
     pub fn init(keypair: KeyPair) KeypairAndPubkey {
         return .{
             .keypair = keypair,
-            .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+            .pubkey = try Pubkey.fromPublicKey(&keypair.public_key),
         };
     }
 };
@@ -158,7 +159,7 @@ pub const MockTransferService = struct {
 
     /// Transfer lamports via rpc from one account to another, retries transaction 5 times
     pub fn rpcTransferAndWait(self: *MockTransferService, random: std.Random, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
-        const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
+        const from_pubkey = try Pubkey.fromPublicKey(&from_keypair.public_key);
         for (0..MAX_RPC_RETRIES) |_| {
             self.logger.info().logf("(transaction_sender.MockTransferService) attempting transfer: from_pubkey={s} to_pubkey={s} amount={}", .{
                 from_pubkey.string().slice(),
@@ -298,7 +299,7 @@ pub const MockTransferService = struct {
 
     /// Closes an account by transferring all SOL to the bank (using rpc methods)
     pub fn closeAccount(self: *MockTransferService, random: std.Random, keypair: KeyPair) !void {
-        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+        const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
         const balance = try self.getBalance(pubkey);
         if (balance == 0) return;
 

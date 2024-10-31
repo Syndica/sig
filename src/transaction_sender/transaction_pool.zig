@@ -36,7 +36,8 @@ pub const TransactionPool = struct {
     }
 
     pub fn deinit(self: *TransactionPool) void {
-        const pending_transactions: *PendingTransactions, var pending_transactions_lg = self.pending_transactions_rw.writeWithLock();
+        const pending_transactions: *PendingTransactions, var pending_transactions_lg =
+            self.pending_transactions_rw.writeWithLock();
         defer pending_transactions_lg.unlock();
         pending_transactions.deinit();
         self.retry_signatures.deinit();
@@ -44,13 +45,15 @@ pub const TransactionPool = struct {
     }
 
     pub fn count(self: *TransactionPool) usize {
-        const pending_transactions: *const PendingTransactions, var pending_transactions_lg = self.pending_transactions_rw.readWithLock();
+        const pending_transactions: *const PendingTransactions, var pending_transactions_lg =
+            self.pending_transactions_rw.readWithLock();
         defer pending_transactions_lg.unlock();
         return pending_transactions.count();
     }
 
     pub fn contains(self: *TransactionPool, signature: Signature) bool {
-        const pending_transactions: *const PendingTransactions, var pending_transactions_lg = self.pending_transactions_rw.readWithLock();
+        const pending_transactions: *const PendingTransactions, var pending_transactions_lg =
+            self.pending_transactions_rw.readWithLock();
         defer pending_transactions_lg.unlock();
         return pending_transactions.contains(signature);
     }
@@ -75,8 +78,9 @@ pub const TransactionPool = struct {
         return self.retry_signatures.items.len > 0;
     }
 
-    pub fn addTransactions(self: *TransactionPool, transactions: []TransactionInfo) !void {
-        const pending_transactions: *PendingTransactions, var pending_transactions_lg = self.pending_transactions_rw.writeWithLock();
+    pub fn addTransactions(self: *TransactionPool, transactions: []const TransactionInfo) !void {
+        const pending_transactions: *PendingTransactions, var pending_transactions_lg =
+            self.pending_transactions_rw.writeWithLock();
         defer pending_transactions_lg.unlock();
         for (transactions) |transaction| {
             if (pending_transactions.count() >= self.max_transactions) {
