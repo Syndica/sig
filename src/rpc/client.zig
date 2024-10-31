@@ -55,7 +55,7 @@ pub const Client = struct {
         const response = try self.getVersion(allocator);
         defer response.deinit();
         const version = try response.result();
-        self.logger.info().logf("RPC version: {s}", .{version.solana_core});
+        self.logger.info().logf("RPC version: {s}", .{version.@"solana-core"});
     }
 
     pub const GetAccountInfoConfig = struct {
@@ -370,9 +370,6 @@ pub const Client = struct {
             break;
         }
 
-        // sometimes the response is "x-y" where our fields follow "x_y" format, so this
-        // replaces "-" with "_" so we can properly parse the response
-        _ = std.mem.replace(u8, response.bytes.items, "-", "_", response.bytes.items);
         response.parse() catch |err| {
             self.logger.err().logf("Failed to parse response: error={} request_payload={s} response={s}", .{ err, payload, response.bytes.items });
             return err;
@@ -558,8 +555,7 @@ test "getSlot" {
 
 test "getVersion" {
     const allocator = std.testing.allocator;
-    var dpl = sig.trace.DirectPrintLogger.init(allocator, .debug);
-    var client = Client.init(allocator, .Testnet, .{ .logger = dpl.logger() });
+    var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
     const response = try client.getVersion(allocator);
     defer response.deinit();

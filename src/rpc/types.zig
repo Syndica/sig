@@ -116,8 +116,10 @@ pub const ClusterType = union(enum(u8)) {
 };
 
 pub const RpcVersionInfo = struct {
-    solana_core: []const u8,
-    feature_set: ?u32,
+    // TODO: figure out how to support "solana_core" and "feature_set"
+    // rn to correctly parse the json response we need to have '-' in the field name
+    @"solana-core": []const u8,
+    @"feature-set": ?u32,
 };
 
 pub const Signature = []const u8;
