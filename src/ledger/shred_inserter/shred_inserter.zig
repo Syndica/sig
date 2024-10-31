@@ -422,7 +422,7 @@ pub const ShredInserter = struct {
 
         // TODO self.metrics
         // self.slots_stats
-        //     .record_shred(shred.slot(), shred.fec_set_index(), shred_source, None);
+        //     .record_shred(shred.slot(), shred.erasure_set_index(), shred_source, None);
         _ = shred_source;
 
         const was_inserted = !std.meta.isError(insertCodeShred(index_meta, shred, write_batch));
@@ -1276,7 +1276,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1287,7 +1287,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1295,7 +1295,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 2)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
         try std.testing.expectEqual(1, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1306,7 +1306,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 0)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{1}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{1}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1314,7 +1314,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1322,7 +1322,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 2)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(1, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
