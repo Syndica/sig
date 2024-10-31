@@ -1184,7 +1184,7 @@ fn initGossip(
         my_keypair,
         entrypoints,
         exit,
-        logger,
+        logger.withScope(@typeName(GossipService)),
     );
 }
 
@@ -1221,7 +1221,7 @@ fn startGossip(
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints.items,
         &app_base.counter,
-        app_base.logger,
+        app_base.logger.withScope(@typeName(GossipService)),
     );
     try manager.defers.deferCall(GossipService.deinit, .{service});
 

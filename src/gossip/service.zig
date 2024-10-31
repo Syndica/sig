@@ -18,6 +18,7 @@ const UdpSocket = network.Socket;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Logger = sig.trace.log.Logger;
+const ScopedLogger = sig.trace.log.ScopedLogger;
 const Packet = sig.net.Packet;
 const EchoServer = sig.net.echo.Server;
 const SocketAddr = sig.net.SocketAddr;
@@ -163,7 +164,7 @@ pub const GossipService = struct {
     /// only be read by that thread, or it needs a synchronization mechanism.
     entrypoints: ArrayList(Entrypoint),
     ping_cache_rw: RwMux(*PingCache),
-    logger: Logger,
+    logger: ScopedLogger(@typeName(GossipService)),
     thread_pool: *ThreadPool,
     echo_server: EchoServer,
 
@@ -183,7 +184,7 @@ pub const GossipService = struct {
         my_keypair: KeyPair,
         entrypoints: ?[]const SocketAddr,
         counter: *Atomic(usize),
-        logger: Logger,
+        logger: ScopedLogger(@typeName(GossipService)),
     ) !Self {
         var packet_incoming_channel = try Channel(Packet).create(allocator);
         errdefer packet_incoming_channel.deinit();
@@ -226,7 +227,7 @@ pub const GossipService = struct {
             for (eps) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
         }
 
-        const metrics = try GossipMetrics.init(logger);
+        const metrics = try GossipMetrics.init(logger.unscoped());
 
         const ping_cache_ptr = try allocator.create(PingCache);
         ping_cache_ptr.* = try PingCache.init(
@@ -342,7 +343,7 @@ pub const GossipService = struct {
     pub fn run(self: *Self, params: RunThreadsParams) !void {
         var manager = ServiceManager.init(
             self.allocator,
-            self.logger,
+            self.logger.unscoped(),
             &self.service_exit,
             "gossip",
             .{},
@@ -375,7 +376,7 @@ pub const GossipService = struct {
         try manager.spawn("gossip readSocket", socket_utils.readSocket, .{
             self.gossip_socket,
             self.packet_incoming_channel,
-            self.logger,
+            self.logger.unscoped(),
             true,
             self.counter,
         }, true);
@@ -390,7 +391,7 @@ pub const GossipService = struct {
         try manager.spawn("gossip sendSocket", socket_utils.sendSocket, .{
             self.gossip_socket,
             self.packet_outgoing_channel,
-            self.logger,
+            self.logger.unscoped(),
             true,
             self.counter,
         }, true);
@@ -398,7 +399,7 @@ pub const GossipService = struct {
         if (params.dump) {
             try manager.spawn("GossipDumpService", GossipDumpService.run, .{.{
                 .allocator = self.allocator,
-                .logger = self.logger,
+                .logger = self.logger.unscoped(),
                 .gossip_table_rw = &self.gossip_table_rw,
                 .counter = self.counter,
             }}, true);
@@ -466,7 +467,7 @@ pub const GossipService = struct {
                 .gossip_value_allocator = self.gossip_value_allocator,
                 .verified_incoming_channel = self.verified_incoming_channel,
                 .packet = undefined,
-                .logger = self.logger,
+                .logger = self.logger.unscoped(),
             };
         }
 
@@ -2271,7 +2272,7 @@ test "build messages startup and shutdown" {
         Logger.TEST_DEFAULT_LEVEL,
     );
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger().withScope(@typeName(GossipService));
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2330,7 +2331,7 @@ test "handling prune messages" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger().withScope(@typeName(GossipService));
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2405,7 +2406,7 @@ test "handling pull responses" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger().withScope(@typeName(GossipService));
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2552,7 +2553,7 @@ test "handle pull request" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger().withScope(@typeName(GossipService));
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
         allocator,
@@ -2660,7 +2661,7 @@ test "test build prune messages and handle push messages" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger().withScope(@typeName(GossipService));
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2739,7 +2740,7 @@ test "build pull requests" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger().withScope(@typeName(GossipService));
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2797,7 +2798,7 @@ test "test build push messages" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger().withScope(@typeName(GossipService));
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -2873,7 +2874,7 @@ test "test large push messages" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger().withScope(@typeName(GossipService));
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -3047,7 +3048,7 @@ test "process contact info push packet" {
 
     var test_logger = TestingLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger().withScope(@typeName(GossipService));
 
     var counter = Atomic(usize).init(0);
     var gossip_service = try GossipService.init(
@@ -3142,7 +3143,7 @@ test "init, exit, and deinit" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger().withScope(@typeName(GossipService));
 
     var gossip_service = try GossipService.init(
         std.testing.allocator,
