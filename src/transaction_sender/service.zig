@@ -24,6 +24,7 @@ const Duration = sig.time.Duration;
 const Instant = sig.time.Instant;
 const Timer = sig.time.Timer;
 const Logger = sig.trace.log.Logger;
+const ScopedLogger = sig.trace.log.ScopedLogger;
 const LeaderInfo = sig.transaction_sender.LeaderInfo;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const TransactionPool = sig.transaction_sender.TransactionPool;
@@ -48,7 +49,7 @@ pub const Service = struct {
     send_channel: *Channel(Packet),
     receive_channel: *Channel(TransactionInfo),
     exit: *AtomicBool,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(@This())),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -78,7 +79,7 @@ pub const Service = struct {
             ),
             .send_channel = try Channel(Packet).create(allocator),
             .receive_channel = receive_channel,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(@This())),
             .exit = exit,
         };
     }
@@ -90,7 +91,7 @@ pub const Service = struct {
             .{
                 self.send_socket,
                 self.send_channel,
-                self.logger,
+                self.logger.unscoped(),
                 false,
                 self.exit,
                 {},
@@ -159,7 +160,7 @@ pub const Service = struct {
         var rpc_client = RpcClient.init(
             self.allocator,
             self.config.cluster,
-            .{ .max_retries = self.config.rpc_retries, .logger = self.logger },
+            .{ .max_retries = self.config.rpc_retries, .logger = self.logger.unscoped() },
         );
         defer rpc_client.deinit();
 
@@ -177,7 +178,7 @@ pub const Service = struct {
             self.transaction_pool.purge();
             self.metrics.transactions_pending.set(self.transaction_pool.count());
 
-            self.metrics.log(self.logger);
+            self.metrics.log(self.logger.unscoped());
         }
     }
 
