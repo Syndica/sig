@@ -1125,6 +1125,43 @@ pub const SnapshotHashes = struct {
         return true;
     }
 
+    pub const Comparable = struct {
+        from: Pubkey,
+        full: SlotAndHash,
+        incremental: []const SlotAndHash,
+        wallclock: ?u64,
+
+        pub fn expectEqual(actual: Comparable, expected: Comparable) !void {
+            try std.testing.expectEqual(expected.from, actual.from);
+            try std.testing.expectEqual(expected.full, actual.full);
+
+            wallclock: {
+                const actual_wallclock = actual.wallclock orelse break :wallclock;
+                const expected_wallclock = expected.wallclock orelse break :wallclock;
+                try std.testing.expectEqual(expected_wallclock, actual_wallclock);
+            }
+
+            try std.testing.expectEqualSlices(SlotAndHash, expected.incremental, actual.incremental);
+        }
+    };
+    pub fn asComparable(
+        self: *const SnapshotHashes,
+        wallclock_compare: enum {
+            compare_wallclock,
+            ignore_wallclock,
+        },
+    ) Comparable {
+        return .{
+            .from = self.from,
+            .full = self.full,
+            .incremental = self.incremental.getSlice(),
+            .wallclock = switch (wallclock_compare) {
+                .compare_wallclock => self.wallclock,
+                .ignore_wallclock => null,
+            },
+        };
+    }
+
     /// List of incremental `SlotAndHash`es.
     /// Can be thought of as a tagged union, where the tag is a boolean derived from `.len == 1`.
     /// When the tag is `true`, the single item is represented inline in the `items` union.

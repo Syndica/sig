@@ -151,13 +151,11 @@ pub const AccountsDB = struct {
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
 
     pub const Gossip = struct {
-        my_pubkey: *const Pubkey,
         my_keypair: *const KeyPair,
         push_msg_queue_mux: *sig.sync.Mux(std.ArrayList(sig.gossip.SignedGossipData)),
 
         pub fn fromService(gossip_service: *sig.gossip.GossipService) Gossip {
             return .{
-                .my_pubkey = &gossip_service.my_pubkey,
                 .my_keypair = &gossip_service.my_keypair,
                 .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
             };
@@ -2559,7 +2557,7 @@ pub const AccountsDB = struct {
             const now_ts = sig.time.getWallclockMs();
             const signed_gossip_data = try sig.gossip.SignedGossipData.initSigned(gossip.my_keypair, .{
                 .SnapshotHashes = .{
-                    .from = gossip.my_pubkey.*,
+                    .from = Pubkey.fromPublicKey(&gossip.my_keypair.public_key),
                     .full = .{ .slot = params.target_slot, .hash = full_hash },
                     .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.EMPTY,
                     .wallclock = now_ts,
@@ -2792,7 +2790,7 @@ pub const AccountsDB = struct {
             const now_ts = sig.time.getWallclockMs();
             const signed_gossip_data = try sig.gossip.SignedGossipData.initSigned(gossip.my_keypair, .{
                 .SnapshotHashes = .{
-                    .from = gossip.my_pubkey.*,
+                    .from = Pubkey.fromPublicKey(&gossip.my_keypair.public_key),
                     .full = .{ .slot = full_snapshot_info.slot, .hash = full_snapshot_info.hash },
                     .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.initSingle(.{
                         .slot = params.target_slot,
@@ -3315,11 +3313,16 @@ fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
     }
 }
 
-fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u32) !struct { AccountsDB, AllSnapshotFields } {
-    std.debug.assert(builtin.is_test); // should only be used in tests
+fn loadTestAccountsDB(
+    allocator: std.mem.Allocator,
+    use_disk: bool,
+    n_threads: u32,
+    gossip: ?AccountsDB.Gossip,
+) !struct { AccountsDB, AllSnapshotFields, std.fs.Dir } {
+    comptime std.debug.assert(builtin.is_test); // should only be used in tests
 
     var dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
-    defer dir.close();
+    errdefer dir.close();
 
     try unpackTestSnapshot(allocator, n_threads);
 
@@ -3335,7 +3338,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = dir,
-        .gossip = null,
+        .gossip = gossip,
         .geyser_writer = null,
         .index_allocation = if (use_disk) .disk else .ram,
         .number_of_index_shards = 4,
@@ -3345,7 +3348,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
 
     _ = try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator, 500);
 
-    return .{ accounts_db, snapshots };
+    return .{ accounts_db, snapshots, dir };
 }
 
 // NOTE: this is a memory leak test - geyser correctness is tested in the geyser tests
@@ -3426,10 +3429,11 @@ test "geyser stream on load" {
 test "write and read an account" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1, null);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
+        snapdir.close();
     }
 
     var prng = std.rand.DefaultPrng.init(0);
@@ -3463,10 +3467,11 @@ test "write and read an account" {
 test "load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1, null);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
+        snapdir.close();
     }
 
     try accounts_db.validateLoadFromSnapshot(.{
@@ -3485,10 +3490,11 @@ test "load and validate from test snapshot" {
 test "load and validate from test snapshot using disk index" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1, null);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
+        snapdir.close();
     }
 
     try accounts_db.validateLoadFromSnapshot(.{
@@ -3507,10 +3513,11 @@ test "load and validate from test snapshot using disk index" {
 test "load and validate from test snapshot parallel" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 2);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 2, null);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
+        snapdir.close();
     }
 
     try accounts_db.validateLoadFromSnapshot(.{
@@ -3529,10 +3536,11 @@ test "load and validate from test snapshot parallel" {
 test "load clock sysvar" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1, null);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
+        snapdir.close();
     }
 
     const clock = try accounts_db.getTypeFromAccount(sysvars.Clock, &sysvars.IDS.clock);
@@ -3549,10 +3557,11 @@ test "load clock sysvar" {
 test "load other sysvars" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1, null);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
+        snapdir.close();
     }
 
     const SlotAndHash = @import("./snapshots.zig").SlotAndHash;
@@ -4094,6 +4103,106 @@ test "shrink account file works" {
     // last account ref should still be accessible
     const account = try accounts_db.getAccount(&pubkey_remain);
     account.deinit(allocator);
+}
+
+test "generate snapshot & update gossip snapshot hashes" {
+    // TODO: this overwrites the snapshots in the testdata folder as is, we need a mechanism
+    // to load from a snapshot outside of accountsdb's working snapshot directory.
+    if (true) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(123); // TODO: use `std.testing.random_seed` when we update
+    const random = prng.random();
+
+    // mock gossip service
+    const Queue = std.ArrayList(sig.gossip.SignedGossipData);
+    var push_msg_queue_mux = sig.sync.Mux(Queue).init(Queue.init(allocator));
+    defer push_msg_queue_mux.private.v.deinit();
+    const my_keypair = try KeyPair.create(null);
+
+    var accounts_db, var all_snapshot_fields, var snapdir = try loadTestAccountsDB(allocator, false, 1, .{
+        .my_keypair = &my_keypair,
+        .push_msg_queue_mux = &push_msg_queue_mux,
+    });
+    defer {
+        accounts_db.deinit();
+        all_snapshot_fields.deinit(allocator);
+        snapdir.close();
+    }
+
+    try accounts_db.validateLoadFromSnapshot(.{
+        .full_slot = all_snapshot_fields.full.accounts_db_fields.slot,
+        .expected_full = .{
+            .accounts_hash = all_snapshot_fields.full.accounts_db_fields.bank_hash_info.accounts_hash,
+            .capitalization = all_snapshot_fields.full.bank_fields.capitalization,
+        },
+        .expected_incremental = .{
+            .accounts_hash = all_snapshot_fields.incremental.?.bank_fields_inc.snapshot_persistence.?.incremental_hash,
+            .capitalization = all_snapshot_fields.incremental.?.bank_fields_inc.snapshot_persistence.?.incremental_capitalization,
+        },
+    });
+
+    var bank_fields = try BankFields.initRandom(allocator, random, 128);
+    defer bank_fields.deinit(allocator);
+
+    const full_slot = all_snapshot_fields.full.accounts_db_fields.slot;
+    const inc_slot = all_snapshot_fields.incremental.?.accounts_db_fields.slot;
+
+    const full_gen_result = try accounts_db.generateFullSnapshot(.{
+        .target_slot = full_slot,
+        .bank_fields = &bank_fields,
+        .lamports_per_signature = random.int(u64),
+        .old_snapshot_action = .ignore_old, // make sure we don't delete anything in `sig.TEST_DATA_DIR`
+        .deprecated_stored_meta_write_version = all_snapshot_fields.full.accounts_db_fields.stored_meta_write_version,
+    });
+
+    const inc_gen_result = try accounts_db.generateIncrementalSnapshot(.{
+        .target_slot = inc_slot,
+        .bank_fields = &bank_fields,
+        .lamports_per_signature = random.int(u64),
+        .old_snapshot_action = .ignore_old, // make sure we don't delete anything in `sig.TEST_DATA_DIR`
+        .deprecated_stored_meta_write_version = all_snapshot_fields.incremental.?.accounts_db_fields.stored_meta_write_version,
+    });
+
+    try std.testing.expectEqual(all_snapshot_fields.full.accounts_db_fields.bank_hash_info.accounts_hash, full_gen_result.hash);
+    try std.testing.expectEqual(all_snapshot_fields.full.bank_fields.capitalization, full_gen_result.capitalization);
+
+    try std.testing.expectEqual(all_snapshot_fields.incremental.?.bank_fields_inc.snapshot_persistence.?, inc_gen_result);
+
+    try std.testing.expectEqual(full_slot, inc_gen_result.full_slot);
+    try std.testing.expectEqual(full_gen_result.hash, inc_gen_result.full_hash);
+    try std.testing.expectEqual(full_gen_result.capitalization, inc_gen_result.full_capitalization);
+
+    const full_hash = full_gen_result.hash;
+    const inc_hash = inc_gen_result.incremental_hash;
+
+    const queue, var queue_lg = push_msg_queue_mux.readWithLock();
+    defer queue_lg.unlock();
+
+    try std.testing.expectEqual(2, queue.items.len);
+
+    const queue_item_0 = queue.items[0]; // should be from the full generation
+    const queue_item_1 = queue.items[1]; // should be from the incremental generation
+
+    try std.testing.expect(try queue_item_0.verify(Pubkey.fromPublicKey(&my_keypair.public_key)));
+    try std.testing.expect(try queue_item_1.verify(Pubkey.fromPublicKey(&my_keypair.public_key)));
+
+    try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_0.data));
+    try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_1.data));
+
+    try queue_item_0.data.SnapshotHashes.asComparable(.ignore_wallclock).expectEqual(.{
+        .from = Pubkey.fromPublicKey(&my_keypair.public_key),
+        .full = .{ .slot = full_slot, .hash = full_hash },
+        .incremental = &.{},
+        .wallclock = null,
+    });
+    try queue_item_1.data.SnapshotHashes.asComparable(.ignore_wallclock).expectEqual(.{
+        .from = Pubkey.fromPublicKey(&my_keypair.public_key),
+        .full = .{ .slot = full_slot, .hash = full_hash },
+        .incremental = &.{.{ .slot = inc_slot, .hash = inc_hash }},
+        .wallclock = null,
+    });
 }
 
 pub const BenchmarkAccountsDBSnapshotLoad = struct {
