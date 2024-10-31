@@ -248,7 +248,7 @@ pub const RepairService = struct {
 /// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
     allocator: Allocator,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(@This())),
     random: Random,
     keypair: *const KeyPair,
     sender: SocketThread,
@@ -275,7 +275,7 @@ pub const RepairRequester = struct {
         const sndr = try SocketThread.initSender(allocator, logger, udp_send_socket, exit);
         return .{
             .allocator = allocator,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(@This())),
             .random = random,
             .keypair = keypair,
             .sender = sndr,
