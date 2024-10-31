@@ -81,6 +81,7 @@ pub fn runClient(
         &tick_event,
         send_channel,
         &socket,
+        exit,
     );
 
     // Setup the event loop.
@@ -108,12 +109,7 @@ pub fn runClient(
     );
 
     // Run the loop!
-    // We don't need to check loop.done() since packetsCallback will never disarm.
-    while (!exit.load(.acquire) or
-        send_channel.len() != 0)
-    {
-        try loop.tick(1);
-    }
+    try loop.run(.until_done);
 }
 
 pub const Context = struct {
@@ -133,6 +129,8 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     send_channel: *Channel(Packet),
     conns: std.BoundedArray(*Connection, MAX_NUM_CONNECTIONS),
+
+    exit: *Atomic(bool),
 
     pub fn TransactionBuffer(comptime N: usize) type {
         return struct {
@@ -233,6 +231,7 @@ pub const Context = struct {
         tick_event: *xev.Timer,
         send_channel: *Channel(Packet),
         socket: *network.Socket,
+        exit: *Atomic(bool),
     ) !void {
         ctx.* = .{
             .allocator = allocator,
@@ -254,6 +253,7 @@ pub const Context = struct {
             .engine = undefined,
             .ssl_ctx = initSSL(),
             .socket = socket,
+            .exit = exit,
         };
 
         // setup the default configs for client
@@ -732,7 +732,8 @@ fn tickCallback(
 
     lsquic.lsquic_engine_process_conns(ctx.engine);
 
-    ctx.tick_event.run(l, c, 500, Context, ctx, tickCallback);
+    if (!ctx.exit.load(.acquire))
+        ctx.tick_event.run(l, c, 500, Context, ctx, tickCallback);
     return .disarm;
 }
 
@@ -763,7 +764,8 @@ fn channelCallback(
         try conn_ctx.transactions.push(packet);
     }
 
-    ctx.channel_event.run(l, c, 500, Context, ctx, channelCallback);
+    if (!ctx.exit.load(.acquire))
+        ctx.channel_event.run(l, c, 500, Context, ctx, channelCallback);
     return .disarm;
 }
 
@@ -802,7 +804,10 @@ fn packetsCallback(
         @panic("lsquic_engine_packet_in failed");
     }
 
-    return .rearm;
+    return if (ctx.exit.load(.acquire))
+        .disarm
+    else
+        .rearm;
 }
 // helper functions
 

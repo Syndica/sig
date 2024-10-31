@@ -2,11 +2,8 @@ const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../sig.zig");
 
-const socket_utils = sig.net.socket_utils;
-
 const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
-const UdpSocket = network.Socket;
 
 const Slot = sig.core.Slot;
 const Signature = sig.core.Signature;
