@@ -123,10 +123,10 @@ pub const Client = struct {
     // TODO: getBlocks()
     // TODO: getBlocksWithLimit()
 
-    pub fn getClusterNodes(self: *Client, allocator: std.mem.Allocator) !Response([]const types.ClusterNode) {
+    pub fn getClusterNodes(self: *Client, allocator: std.mem.Allocator) !Response([]const types.RpcContactInfo) {
         var request = try Request.init(allocator, "getClusterNodes");
         defer request.deinit();
-        return self.sendFetchRequest(allocator, []const types.ClusterNode, request, .{
+        return self.sendFetchRequest(allocator, []const types.RpcContactInfo, request, .{
             .ignore_unknown_fields = true,
         });
     }
