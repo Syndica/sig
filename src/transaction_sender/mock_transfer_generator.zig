@@ -13,7 +13,6 @@ const Pubkey = sig.core.Pubkey;
 const RpcClient = sig.rpc.Client;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const Duration = sig.time.Duration;
-const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 const TRANSFER_FEE_LAMPORTS: u64 = 5000;
 const MAX_AIRDROP_LAMPORTS: u64 = 5e9;
