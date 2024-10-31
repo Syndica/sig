@@ -3282,7 +3282,7 @@ test "testWriteSnapshot" {
 }
 
 fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
-    std.debug.assert(builtin.is_test); // should only be used in tests
+    comptime std.debug.assert(builtin.is_test); // should only be used in tests
 
     var dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer dir.close();
@@ -3317,7 +3317,6 @@ fn loadTestAccountsDB(
     allocator: std.mem.Allocator,
     use_disk: bool,
     n_threads: u32,
-    gossip: ?AccountsDB.Gossip,
 ) !struct { AccountsDB, AllSnapshotFields, std.fs.Dir } {
     comptime std.debug.assert(builtin.is_test); // should only be used in tests
 
@@ -3338,7 +3337,7 @@ fn loadTestAccountsDB(
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = dir,
-        .gossip = gossip,
+        .gossip = null,
         .geyser_writer = null,
         .index_allocation = if (use_disk) .disk else .ram,
         .number_of_index_shards = 4,
@@ -3429,7 +3428,7 @@ test "geyser stream on load" {
 test "write and read an account" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1, null);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -3467,7 +3466,7 @@ test "write and read an account" {
 test "load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1, null);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -3490,7 +3489,7 @@ test "load and validate from test snapshot" {
 test "load and validate from test snapshot using disk index" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1, null);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -3513,7 +3512,7 @@ test "load and validate from test snapshot using disk index" {
 test "load and validate from test snapshot parallel" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 2, null);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 2);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -3536,7 +3535,7 @@ test "load and validate from test snapshot parallel" {
 test "load clock sysvar" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1, null);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -3557,7 +3556,7 @@ test "load clock sysvar" {
 test "load other sysvars" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1, null);
+    var accounts_db, var snapshots, var snapdir = try loadTestAccountsDB(allocator, false, 1);
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -4106,14 +4105,33 @@ test "shrink account file works" {
 }
 
 test "generate snapshot & update gossip snapshot hashes" {
-    // TODO: this overwrites the snapshots in the testdata folder as is, we need a mechanism
-    // to load from a snapshot outside of accountsdb's working snapshot directory.
-    if (true) return error.SkipZigTest;
-
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(123); // TODO: use `std.testing.random_seed` when we update
     const random = prng.random();
+
+    var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
+    defer test_data_dir.close();
+
+    const snap_files = try SnapshotFiles.find(allocator, test_data_dir);
+    var all_snapshot_fields = try AllSnapshotFields.fromFiles(allocator, .noop, test_data_dir, snap_files);
+    defer all_snapshot_fields.deinit(allocator);
+
+    var tmp_snap_dir_root = std.testing.tmpDir(.{});
+    defer tmp_snap_dir_root.cleanup();
+    const tmp_snap_dir = tmp_snap_dir_root.dir;
+
+    {
+        const archive_file = try test_data_dir.openFile(snap_files.full_snapshot.snapshotNameStr().constSlice(), .{});
+        defer archive_file.close();
+        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, true);
+    }
+
+    if (snap_files.incremental_snapshot) |inc_snap| {
+        const archive_file = try test_data_dir.openFile(inc_snap.snapshotNameStr().constSlice(), .{});
+        defer archive_file.close();
+        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, false);
+    }
 
     // mock gossip service
     const Queue = std.ArrayList(sig.gossip.SignedGossipData);
@@ -4121,27 +4139,24 @@ test "generate snapshot & update gossip snapshot hashes" {
     defer push_msg_queue_mux.private.v.deinit();
     const my_keypair = try KeyPair.create(null);
 
-    var accounts_db, var all_snapshot_fields, var snapdir = try loadTestAccountsDB(allocator, false, 1, .{
-        .my_keypair = &my_keypair,
-        .push_msg_queue_mux = &push_msg_queue_mux,
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .noop,
+        .snapshot_dir = tmp_snap_dir,
+        .gossip = .{
+            .my_keypair = &my_keypair,
+            .push_msg_queue_mux = &push_msg_queue_mux,
+        },
+        .geyser_writer = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
+        .lru_size = null,
     });
-    defer {
-        accounts_db.deinit();
-        all_snapshot_fields.deinit(allocator);
-        snapdir.close();
-    }
+    defer accounts_db.deinit();
 
-    try accounts_db.validateLoadFromSnapshot(.{
-        .full_slot = all_snapshot_fields.full.accounts_db_fields.slot,
-        .expected_full = .{
-            .accounts_hash = all_snapshot_fields.full.accounts_db_fields.bank_hash_info.accounts_hash,
-            .capitalization = all_snapshot_fields.full.bank_fields.capitalization,
-        },
-        .expected_incremental = .{
-            .accounts_hash = all_snapshot_fields.incremental.?.bank_fields_inc.snapshot_persistence.?.incremental_hash,
-            .capitalization = all_snapshot_fields.incremental.?.bank_fields_inc.snapshot_persistence.?.incremental_capitalization,
-        },
-    });
+    // pretend `all_snapshot_fields`/`snap_files` refers to `tmp_snap_dir`, even though the archive file isn't actually in there, just the unpacked contents.
+    // TODO: this is not nice, make sure the API for loading from archives outside of the snapshot dir is improved.
+    _ = try accounts_db.loadWithDefaults(allocator, &all_snapshot_fields, 1, true, 1500);
 
     var bank_fields = try BankFields.initRandom(allocator, random, 128);
     defer bank_fields.deinit(allocator);
