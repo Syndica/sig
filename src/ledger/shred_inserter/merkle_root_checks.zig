@@ -113,7 +113,6 @@ pub fn checkForwardChainedMerkleRootConsistency(
 ) !bool {
     std.debug.assert(erasure_meta.checkCodeShred(shred));
     const slot = shred.common.slot;
-    const erasure_set_id = shred.common.erasureSetId();
 
     // If a shred from the next fec set has already been inserted, check the chaining
     const next_erasure_set_index = if (erasure_meta.nextErasureSetIndex()) |n| n else {
@@ -137,46 +136,16 @@ pub fn checkForwardChainedMerkleRootConsistency(
         .index = next_merkle_root_meta.first_received_shred_index,
         .shred_type = next_merkle_root_meta.first_received_shred_type,
     };
-    const next_shred = if (try shred_store.get(next_shred_id)) |ns|
-        ns
-    else {
-        logger.err().logf(&newlinesToSpaces(
-            \\Shred {any} indicated by merkle root meta {any} \
-            \\is missing from blockstore. This should only happen in extreme cases where \
-            \\blockstore cleanup has caught up to the root. Skipping the forward chained \
-            \\merkle root consistency check
-        ), .{ next_shred_id, next_merkle_root_meta });
-        return true;
-    };
-    const merkle_root = shred.merkleRoot() catch null;
-    const chained_merkle_root = shred_mod.layout.getChainedMerkleRoot(next_shred);
 
-    if (!checkChaining(merkle_root, chained_merkle_root)) {
-        logger.warn().logf(&newlinesToSpaces(
-            \\Received conflicting chained merkle roots for slot: {}, shred \
-            \\{any} type {any} has merkle root {any}, however next fec set \
-            \\shred {any} type {any} chains to merkle root \
-            \\{any}. Reporting as duplicate
-        ), .{
-            slot,
-            erasure_set_id,
-            shred.common.variant.shred_type,
-            merkle_root,
-            next_erasure_set,
-            next_merkle_root_meta.first_received_shred_type,
-            chained_merkle_root,
-        });
-        if (!try db.contains(schema.duplicate_slots, slot)) {
-            // TODO lifetime
-            try duplicate_shreds.append(.{ .ChainedMerkleRootConflict = .{
-                .original = .{ .code = shred },
-                .conflict = next_shred,
-            } });
-        }
-        return false;
-    }
-
-    return true;
+    return checkAndReportMerkleRootConsistency(
+        .forward,
+        logger,
+        db,
+        shred_store,
+        duplicate_shreds,
+        .{ .code = shred },
+        next_shred_id,
+    );
 }
 
 /// Returns true if there is no chaining conflict between
@@ -190,7 +159,7 @@ pub fn checkForwardChainedMerkleRootConsistency(
 /// has been created for the first time.
 ///
 /// agave: check_backwards_chained_merkle_root_consistency
-pub fn checkBackwardsChainedMerkleRootConsistency(
+pub fn checkBackwardChainedMerkleRootConsistency(
     allocator: Allocator,
     logger: Logger,
     db: *BlockstoreDB,
@@ -214,7 +183,7 @@ pub fn checkBackwardsChainedMerkleRootConsistency(
     // If a shred from the previous fec set has already been inserted, check the chaining.
     // Since we cannot compute the previous fec set index, we check the in memory map, otherwise
     // check the previous key from blockstore to see if it is consecutive with our current set.
-    const prev_erasure_set, const prev_erasure_meta =
+    _, const prev_erasure_meta =
         if (try previousErasureSet(allocator, db, erasure_set_id, erasure_metas)) |pes|
         pes
     else
@@ -228,43 +197,86 @@ pub fn checkBackwardsChainedMerkleRootConsistency(
         .index = @intCast(prev_erasure_meta.first_received_code_index),
         .shred_type = .code,
     };
-    const prev_shred =
-        if (try shred_store.get(prev_shred_id)) |ps| ps else {
-        logger.warn().logf(&newlinesToSpaces(
-            \\Shred {any} indicated by the erasure meta {any} \
-            \\is missing from blockstore. This can happen if you have recently upgraded \
-            \\from a version < v1.18.13, or if blockstore cleanup has caught up to the root. \
-            \\Skipping the backwards chained merkle root consistency check
-        ), .{ prev_shred_id, prev_erasure_meta });
+
+    return checkAndReportMerkleRootConsistency(
+        .backward,
+        logger,
+        db,
+        shred_store,
+        duplicate_shreds,
+        shred,
+        prev_shred_id,
+    );
+}
+
+/// The input shreds must be from adjacent erasure sets in the same slot,
+/// or this function will not work correctly.
+fn checkAndReportMerkleRootConsistency(
+    direction: enum { forward, backward },
+    logger: Logger,
+    db: *BlockstoreDB,
+    shred_store: WorkingShredStore,
+    duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
+    shred: Shred,
+    other_shred_id: ShredId,
+) !bool {
+    const other_shred = if (try shred_store.get(other_shred_id)) |other_shred|
+        other_shred
+    else {
+        logger.warn().logf(
+            "Shred {any} is missing from blockstore. " ++
+                "This can happen if blockstore cleanup has caught up to the root. " ++
+                "Skipping the {} chained merkle root consistency check.",
+            .{ other_shred_id, direction },
+        );
         return true;
     };
-    const merkle_root = shred_mod.layout.getChainedMerkleRoot(prev_shred);
-    const chained_merkle_root = shred.chainedMerkleRoot() catch null;
 
-    if (!checkChaining(merkle_root, chained_merkle_root)) {
-        logger.warn().logf(&newlinesToSpaces(
-            \\Received conflicting chained merkle roots for slot: {}, shred {any} type {any} \
-            \\chains to merkle root {any}, however previous fec set code \
-            \\shred {any} has merkle root {any}. Reporting as duplicate
-        ), .{
-            slot,
-            shred.commonHeader().erasureSetId(),
-            shred.commonHeader().variant.shred_type,
-            chained_merkle_root,
-            prev_erasure_set,
-            merkle_root,
-        });
+    const early_shred, const late_shred = switch (direction) {
+        .forward => .{ shred.payload(), other_shred },
+        .backward => .{ other_shred, shred.payload() },
+    };
+
+    const chained_merkle_root = shred_mod.layout.getChainedMerkleRoot(late_shred);
+    const early_merkle_root = shred_mod.layout.merkleRoot(early_shred) orelse {
+        return error.NoMerkleRoot;
+    };
+
+    if (chainedMerkleRootIsConsistent(early_merkle_root, chained_merkle_root)) {
+        return true;
     }
+
+    const slot = other_shred_id.slot;
+
+    logger.warn().logf(
+        "Received conflicting chained merkle roots for slot: {}. Reporting as duplicate. " ++
+            "Conflicting shreds:\n" ++
+            "    erasure set: {?}, type: {?}, index: {?}, merkle root: {any}\n" ++
+            "    erasure set: {?}, type: {?}, index: {?}, chained merkle root: {any}",
+        .{
+            slot,
+            // early shred
+            shred_mod.layout.getErasureSetIndex(early_shred),
+            if (shred_mod.layout.getShredVariant(early_shred)) |v| v.shred_type else null,
+            shred_mod.layout.getIndex(early_shred),
+            early_merkle_root,
+            // late shred
+            shred_mod.layout.getErasureSetIndex(late_shred),
+            if (shred_mod.layout.getShredVariant(late_shred)) |v| v.shred_type else null,
+            shred_mod.layout.getIndex(late_shred),
+            chained_merkle_root,
+        },
+    );
 
     if (!try db.contains(schema.duplicate_slots, slot)) {
         // TODO lifetime
         try duplicate_shreds.append(.{ .ChainedMerkleRootConflict = .{
             .original = shred,
-            .conflict = prev_shred,
+            .conflict = other_shred,
         } });
     }
 
-    return true;
+    return false;
 }
 
 /// agave: previous_erasure_set
@@ -315,10 +327,7 @@ fn previousErasureSet(
 }
 
 /// agave: check_chaining
-fn checkChaining(
-    merkle_root: ?Hash,
-    chained_merkle_root: ?Hash,
-) bool {
+fn chainedMerkleRootIsConsistent(merkle_root: Hash, chained_merkle_root: ?Hash) bool {
     return chained_merkle_root == null or // Chained merkle roots have not been enabled yet
         sig.utils.types.eql(chained_merkle_root, merkle_root);
 }

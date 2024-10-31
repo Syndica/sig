@@ -45,7 +45,7 @@ const SlotMeta = meta.SlotMeta;
 const checkForwardChainedMerkleRootConsistency =
     lib.merkle_root_checks.checkForwardChainedMerkleRootConsistency;
 const checkBackwardsChainedMerkleRootConsistency =
-    lib.merkle_root_checks.checkBackwardsChainedMerkleRootConsistency;
+    lib.merkle_root_checks.checkBackwardChainedMerkleRootConsistency;
 const checkMerkleRootConsistency = lib.merkle_root_checks.checkMerkleRootConsistency;
 const handleChaining = lib.slot_chaining.handleChaining;
 const recover = lib.recovery.recover;
