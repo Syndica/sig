@@ -3,23 +3,17 @@ const sig = @import("../../sig.zig");
 const ledger = @import("../lib.zig");
 const shred_inserter = @import("lib.zig");
 
-const schema = ledger.schema.schema;
 const shred_mod = sig.ledger.shred;
 
 const Allocator = std.mem.Allocator;
-const AutoHashMap = std.AutoHashMap;
 
 const ErasureSetId = sig.ledger.shred.ErasureSetId;
 const Hash = sig.core.Hash;
 const Logger = sig.trace.Logger;
 const Slot = sig.core.Slot;
-const SortedMap = sig.utils.collections.SortedMap;
 
-const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const CodeShred = ledger.shred.CodeShred;
 const ErasureMeta = ledger.meta.ErasureMeta;
-const MerkleRootMeta = ledger.meta.MerkleRootMeta;
-const PossibleDuplicateShred = shred_inserter.working_state.PossibleDuplicateShred;
 const Shred = ledger.shred.Shred;
 const ShredId = ledger.shred.ShredId;
 
@@ -28,10 +22,6 @@ const ErasureMetaWorkingStore = shred_inserter.working_state.ErasureMetaWorkingS
 const MerkleRootMetaWorkingStore = shred_inserter.working_state.MerkleRootMetaWorkingStore;
 const PendingInsertShredsState = shred_inserter.working_state.PendingInsertShredsState;
 const ShredWorkingStore = shred_inserter.working_state.ShredWorkingStore;
-const WorkingEntry = shred_inserter.working_state.WorkingEntry;
-
-const key_serializer = ledger.database.key_serializer;
-const value_serializer = ledger.database.value_serializer;
 
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
@@ -221,13 +211,13 @@ pub const MerkleRootValidator = struct {
             return true;
         };
 
-        const early_shred, const late_shred = switch (direction) {
+        const older_shred, const newer_shred = switch (direction) {
             .forward => .{ shred.payload(), other_shred },
             .backward => .{ other_shred, shred.payload() },
         };
 
-        const chained_merkle_root = shred_mod.layout.getChainedMerkleRoot(late_shred);
-        const early_merkle_root = shred_mod.layout.merkleRoot(early_shred) orelse {
+        const chained_merkle_root = shred_mod.layout.getChainedMerkleRoot(newer_shred);
+        const early_merkle_root = shred_mod.layout.merkleRoot(older_shred) orelse {
             return error.NoMerkleRoot;
         };
 
@@ -242,19 +232,18 @@ pub const MerkleRootValidator = struct {
                 \\Conflicting shreds:
                 \\    erasure set: {?}, type: {?}, index: {?}, merkle root: {any}
                 \\    erasure set: {?}, type: {?}, index: {?}, chained merkle root: {any}
-                \\
             ,
             .{
                 slot,
                 // early shred
-                shred_mod.layout.getErasureSetIndex(early_shred),
-                if (shred_mod.layout.getShredVariant(early_shred)) |v| v.shred_type else null,
-                shred_mod.layout.getIndex(early_shred),
+                shred_mod.layout.getErasureSetIndex(older_shred),
+                if (shred_mod.layout.getShredVariant(older_shred)) |v| v.shred_type else null,
+                shred_mod.layout.getIndex(older_shred),
                 early_merkle_root,
                 // late shred
-                shred_mod.layout.getErasureSetIndex(late_shred),
-                if (shred_mod.layout.getShredVariant(late_shred)) |v| v.shred_type else null,
-                shred_mod.layout.getIndex(late_shred),
+                shred_mod.layout.getErasureSetIndex(newer_shred),
+                if (shred_mod.layout.getShredVariant(newer_shred)) |v| v.shred_type else null,
+                shred_mod.layout.getIndex(newer_shred),
                 chained_merkle_root,
             },
         );
