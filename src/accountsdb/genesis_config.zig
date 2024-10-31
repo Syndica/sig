@@ -125,11 +125,16 @@ pub const Inflation = struct {
 };
 
 /// Analogous to [ClusterType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L46)
-pub const ClusterType = enum(u8) {
-    Testnet,
-    MainnetBeta,
-    Devnet,
-    Development,
+/// Explicit numbers are added to ensure we don't mess up the order of the fields and break bincode reading.
+pub const ClusterType = union(enum(u8)) {
+    Testnet = 0,
+    MainnetBeta = 1,
+    Devnet = 2,
+    Development = 3,
+    LocalHost,
+    Custom: struct {
+        url: []const u8,
+    },
 };
 
 /// Analogous to [GenesisConfig](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L93)
@@ -182,7 +187,7 @@ test "genesis_config deserialize development config" {
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
-    try std.testing.expect(config.cluster_type == ClusterType.Development);
+    try std.testing.expectEqual(ClusterType.Development, config.cluster_type);
 }
 
 test "genesis_config deserialize testnet config" {
@@ -192,7 +197,7 @@ test "genesis_config deserialize testnet config" {
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
-    try std.testing.expect(config.cluster_type == ClusterType.Testnet);
+    try std.testing.expectEqual(ClusterType.Testnet, config.cluster_type);
 }
 
 test "genesis_config deserialize devnet config" {
@@ -202,7 +207,7 @@ test "genesis_config deserialize devnet config" {
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
-    try std.testing.expect(config.cluster_type == ClusterType.Devnet);
+    try std.testing.expectEqual(ClusterType.Devnet, config.cluster_type);
 }
 
 test "genesis_config deserialize mainnet config" {
@@ -212,5 +217,5 @@ test "genesis_config deserialize mainnet config" {
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
-    try std.testing.expect(config.cluster_type == ClusterType.MainnetBeta);
+    try std.testing.expectEqual(ClusterType.MainnetBeta, config.cluster_type);
 }

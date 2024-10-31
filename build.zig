@@ -50,6 +50,15 @@ pub fn build(b: *Build) void {
     const pretty_table_dep = b.dependency("prettytable", dep_opts);
     const pretty_table_mod = pretty_table_dep.module("prettytable");
 
+    const lsquic_dep = b.dependency("lsquic", dep_opts);
+    const lsquic_mod = lsquic_dep.module("lsquic");
+
+    const ssl_dep = lsquic_dep.builder.dependency("boringssl", dep_opts);
+    const ssl_mod = ssl_dep.module("ssl");
+
+    const xev_dep = b.dependency("xev", dep_opts);
+    const xev_mod = xev_dep.module("xev");
+
     // expose Sig as a module
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/sig.zig"),
@@ -86,6 +95,9 @@ pub fn build(b: *Build) void {
         .hashmap => {},
     }
     sig_exe.root_module.addOptions("build-options", build_options);
+    sig_exe.root_module.addImport("lsquic", lsquic_mod);
+    sig_exe.root_module.addImport("ssl", ssl_mod);
+    sig_exe.root_module.addImport("xev", xev_mod);
     sig_exe.linkLibC();
 
     const main_exe_run = b.addRunArtifact(sig_exe);

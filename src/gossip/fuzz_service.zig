@@ -63,11 +63,22 @@ pub fn randomPongPacket(random: std.rand.Random, keypair: *const KeyPair, to_add
     return packet;
 }
 
-pub fn randomSignedGossipData(random: std.rand.Random, must_pass_sign_verification: bool) !SignedGossipData {
-    const keypair = try KeyPair.create(null);
-    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-    const lci = LegacyContactInfo.default(if (must_pass_sign_verification) pubkey else Pubkey.initRandom(random));
-    return SignedGossipData.initSigned(&keypair, .{ .LegacyContactInfo = lci });
+pub fn randomSignedGossipData(random: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !SignedGossipData {
+    var keypair = try KeyPair.create(null);
+    const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
+
+    // will have random id
+    var value = try SignedGossipData.randomWithIndex(random, &keypair, 0);
+    value.data.LegacyContactInfo = LegacyContactInfo.default(try Pubkey.fromPublicKey(&keypair.public_key));
+    try value.sign(&keypair);
+
+    const should_pass_sig_verification = maybe_should_pass_sig_verification orelse random.boolean();
+    if (should_pass_sig_verification) {
+        value.data.setId(pubkey);
+        try value.sign(&keypair);
+    }
+
+    return value;
 }
 
 pub fn randomPushMessage(
@@ -86,7 +97,7 @@ pub fn randomPushMessage(
 
     const packets = try gossipDataToPackets(
         allocator,
-        &Pubkey.fromPublicKey(&keypair.public_key),
+        &try Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
         ChunkType.PushMessage,
@@ -106,7 +117,7 @@ pub fn randomPullResponse(random: std.rand.Random, keypair: *const KeyPair, to_a
     const allocator = std.heap.c_allocator;
     const packets = try gossipDataToPackets(
         allocator,
-        &Pubkey.fromPublicKey(&keypair.public_key),
+        &try Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
         ChunkType.PullResponse,
@@ -235,7 +246,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // setup sending socket
     var fuzz_keypair = try KeyPair.create(null);
     const fuzz_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
-    const fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key);
+    const fuzz_pubkey = try Pubkey.fromPublicKey(&fuzz_keypair.public_key);
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
     try fuzz_contact_info.setSocket(.gossip, fuzz_address);
 
@@ -246,7 +257,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             // this is who we blast messages at
             var client_keypair = try KeyPair.create(null);
             const client_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9988);
-            const client_pubkey = Pubkey.fromPublicKey(&client_keypair.public_key);
+            const client_pubkey = try Pubkey.fromPublicKey(&client_keypair.public_key);
             var client_contact_info = ContactInfo.init(allocator, client_pubkey, 0, 19);
             try client_contact_info.setSocket(.gossip, client_address);
             var gossip_service_client = try GossipService.init(

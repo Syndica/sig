@@ -72,14 +72,6 @@ pub const EpochSchedule = extern struct {
             self.slots_per_epoch;
     }
 
-    pub fn default() !EpochSchedule {
-        return EpochSchedule.custom(
-            DEFAULT_SLOTS_PER_EPOCH,
-            DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
-            true,
-        );
-    }
-
     pub fn custom(slots_per_epoch: u64, leader_schedule_slot_offset: u64, warmup: bool) !EpochSchedule {
         std.debug.assert(slots_per_epoch > MINIMUM_SLOTS_PER_EPOCH);
         var first_normal_epoch: Epoch = 0;

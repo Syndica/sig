@@ -30,7 +30,7 @@ pub const Ping = struct {
     pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: *const KeyPair) !Self {
         const signature = try keypair.sign(&token, null);
         const self = Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key),
+            .from = try Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
             .signature = Signature.init(signature.toBytes()),
         };
@@ -43,7 +43,7 @@ pub const Ping = struct {
         var signature = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
 
         return Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key),
+            .from = try Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
             .signature = Signature.init(signature.toBytes()),
         };
@@ -63,13 +63,13 @@ pub const Pong = struct {
 
     const Self = @This();
 
-    pub fn init(ping: *const Ping, keypair: *const KeyPair) error{SignatureError}!Self {
+    pub fn init(ping: *const Ping, keypair: *const KeyPair) !Self {
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
         const signature = keypair.sign(&hash.data, null) catch return error.SignatureError;
 
         return Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key),
+            .from = try Pubkey.fromPublicKey(&keypair.public_key),
             .hash = hash,
             .signature = Signature.init(signature.toBytes()),
         };

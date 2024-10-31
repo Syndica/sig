@@ -117,7 +117,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     var seed_buf: [32]u8 = undefined;
                     random.bytes(&seed_buf);
                     const keypair = try KeyPair.create(seed_buf);
-                    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+                    const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
 
                     data.setId(pubkey);
                     data.wallclockPtr().* = now;

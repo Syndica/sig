@@ -39,5 +39,13 @@
             .url = "https://github.com/dying-will-bullet/prettytable-zig/archive/46b6ad9b5970def35fa43c9613cd244f28862fa9.tar.gz",
             .hash = "122098d444c9c7112c66481e7655bb5389829c67e04b280a029200545e1971187443",
         },
+        .lsquic = .{
+            .url = "https://github.com/Syndica/lsquic/archive/6c83493289c177c8b9df704f41453ce32b95916e.tar.gz",
+            .hash = "122037a4044585d60188ca792fc20afff627e5f3ebb2c2fb9b829364f39c4decc0bb",
+        },
+        .xev = .{
+            .url = "https://github.com/mitchellh/libxev/archive/b8d1d93e5c899b27abbaa7df23b496c3e6a178c7.tar.gz",
+            .hash = "1220612bc023c21d75234882ec9a8c6a1cbd9d642da3dfb899297f14bb5bd7b6cd78",
+        },
     },
 }

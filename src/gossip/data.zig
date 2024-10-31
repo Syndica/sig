@@ -116,6 +116,27 @@ pub const SignedGossipData = struct {
         self.data.deinit(allocator);
     }
 
+    /// only used in tests
+    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Self {
+        return try initSigned(GossipData.initRandom(random), keypair);
+    }
+
+    /// only used in tests
+    pub fn randomWithIndex(random: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
+        var data = GossipData.randomFromIndex(random, index);
+        const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
+        data.setId(pubkey);
+        return try initSigned(data, keypair);
+    }
+
+    pub fn sign(self: *Self, keypair: *const KeyPair) !void {
+        // should always be enough space or is invalid msg
+        var buf: [PACKET_DATA_SIZE]u8 = undefined;
+        const bytes = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
+        var signature = try keypair.sign(bytes, null);
+        self.signature.data = signature.toBytes();
+    }
+
     pub fn verify(self: *const Self, pubkey: Pubkey) !bool {
         // should always be enough space or is invalid msg
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -133,28 +154,6 @@ pub const SignedGossipData = struct {
 
     pub fn wallclock(self: *const Self) u64 {
         return self.data.wallclock();
-    }
-
-    /// only used in tests.
-    pub fn initRandom(
-        random: std.rand.Random,
-        /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
-        keypair: *const KeyPair,
-    ) Self {
-        return initSigned(keypair, GossipData.initRandom(random));
-    }
-
-    /// only used in tests
-    pub fn randomWithIndex(
-        random: std.rand.Random,
-        /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
-        keypair: *const KeyPair,
-        index: usize,
-    ) Self {
-        var data = GossipData.randomFromIndex(random, index);
-        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-        data.setId(pubkey);
-        return initSigned(keypair, data);
     }
 };
 
@@ -1446,7 +1445,7 @@ pub const ThreadSafeContactInfo = struct {
             .shred_version = contact_info.shred_version,
             .gossip_addr = contact_info.getSocket(.gossip),
             .rpc_addr = contact_info.getSocket(.rpc),
-            .tpu_addr = contact_info.getSocket(.tpu),
+            .tpu_addr = contact_info.getSocket(.tpu_quic),
         };
     }
 
@@ -1803,7 +1802,7 @@ test "SocketEntry serializer works" {
 
 test "sig verify duplicateShreds" {
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
     var prng = std.rand.DefaultPrng.init(0);
     var data = DuplicateShred.initRandom(prng.random());
     data.from = pubkey;
@@ -1826,7 +1825,7 @@ test "SignedGossipData label() and id() methods" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk);
+    var id = try Pubkey.fromPublicKey(&pk);
 
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.wallclock = 0;
@@ -1843,7 +1842,7 @@ test "pubkey matches rust" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk);
+    const id = try Pubkey.fromPublicKey(&pk);
 
     const rust_bytes = [_]u8{
         138, 136, 227, 221, 116, 9,   241, 149, 253, 82,  219, 45, 60,  186, 93,  114,
@@ -1861,7 +1860,7 @@ test "contact info serialization matches rust" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk);
+    const id = try Pubkey.fromPublicKey(&pk);
 
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
 
@@ -1934,7 +1933,7 @@ test "gossip data serialization matches rust" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk);
+    const id = try Pubkey.fromPublicKey(&pk);
 
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
 
