@@ -733,7 +733,7 @@ fn validator() !void {
         shred_col_conf,
         ShredCollectorDependencies{
             .allocator = allocator,
-            .logger = app_base.logger,
+            .logger = app_base.logger.withScope(@typeName(ShredCollectorDependencies)),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
@@ -830,7 +830,7 @@ fn shredCollector() !void {
         shred_col_conf,
         .{
             .allocator = allocator,
-            .logger = app_base.logger,
+            .logger = app_base.logger.withScope(@typeName(ShredCollectorDependencies)),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
