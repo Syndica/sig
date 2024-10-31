@@ -10,6 +10,7 @@ const ArrayList = std.ArrayList;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const Signature = sig.core.Signature;
@@ -28,7 +29,7 @@ const schema = ledger.schema.schema;
 
 pub const BlockstoreWriter = struct {
     allocator: Allocator,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(@This())),
     db: BlockstoreDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
@@ -47,7 +48,7 @@ pub const BlockstoreWriter = struct {
     ) !BlockstoreWriter {
         return .{
             .allocator = allocator,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(@This())),
             .db = db,
             .lowest_cleanup_slot = lowest_cleanup_slot,
             .max_root = max_root,
