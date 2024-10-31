@@ -250,11 +250,11 @@ fn checkAndReportMerkleRootConsistency(
 
     logger.warn().logf(
         "Received conflicting chained merkle roots for slot: {}. Reporting as duplicate. " ++
-        \\Conflicting shreds:
-        \\    erasure set: {?}, type: {?}, index: {?}, merkle root: {any}
-        \\    erasure set: {?}, type: {?}, index: {?}, chained merkle root: {any}
-        \\
-    ,
+            \\Conflicting shreds:
+            \\    erasure set: {?}, type: {?}, index: {?}, merkle root: {any}
+            \\    erasure set: {?}, type: {?}, index: {?}, chained merkle root: {any}
+            \\
+        ,
         .{
             slot,
             // early shred
