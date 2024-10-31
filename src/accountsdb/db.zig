@@ -4027,7 +4027,7 @@ test "shrink account file works" {
             const account_file = file_map.get(file_id).?;
             if (account_file.slot == slot) break file_id;
         } else return error.NoSlotFile;
-        break :blk file_map.get(slot_file_id).?.file_size;
+        break :blk file_map.get(slot_file_id).?.memory.len;
     };
 
     // full memory block
@@ -4071,7 +4071,7 @@ test "shrink account file works" {
         };
 
         const new_account_file = file_map2.get(new_slot_file_id).?;
-        const post_shrink_size = new_account_file.file_size;
+        const post_shrink_size = new_account_file.memory.len;
         try std.testing.expect(post_shrink_size < pre_shrink_size);
     }
 
