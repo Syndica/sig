@@ -719,33 +719,32 @@ test "Message sanitize fails if account index is out of bounds" {
 }
 
 test "V0Message serialization and deserialization" {
-    const message = try test_v0_message.asStruct(std.testing.allocator);
-    defer message.deinit(std.testing.allocator);
+    const message = test_v0_message.as_struct;
     try sig.bincode.testRoundTrip(message, &test_v0_message.bincode_serialized_bytes);
 }
 
 test "VersionedTransaction v0 serialization and deserialization" {
-    const transaction = try test_v0_transaction.asStruct(std.testing.allocator);
-    defer transaction.deinit(std.testing.allocator);
+    const transaction = test_v0_transaction.as_struct;
     try sig.bincode.testRoundTrip(transaction, &test_v0_transaction.bincode_serialized_bytes);
 }
 
 test "VersionedMessage v0 serialization and deserialization" {
-    const versioned_message = try test_v0_versioned_message.asStruct(std.testing.allocator);
-    defer versioned_message.deinit(std.testing.allocator);
+    const versioned_message = test_v0_versioned_message.as_struct;
     try sig.bincode.testRoundTrip(versioned_message, &test_v0_versioned_message.bincode_serialized_bytes);
 }
 
 pub const test_v0_transaction = struct {
-    pub fn asStruct(allocator: std.mem.Allocator) !VersionedTransaction {
-        return .{
-            .signatures = try allocator.dupe(Signature, &.{
-                try Signature.fromString("2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw"),
-                try Signature.fromString("4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj"),
-            }),
-            .message = .{ .v0 = try test_v0_message.asStruct(allocator) },
-        };
-    }
+    pub const as_struct = VersionedTransaction{
+        .signatures = &.{
+            Signature.fromString(
+                "2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw",
+            ) catch unreachable,
+            Signature.fromString(
+                "4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj",
+            ) catch unreachable,
+        },
+        .message = .{ .v0 = test_v0_message.as_struct },
+    };
 
     pub const bincode_serialized_bytes = [_]u8{
         2,   81,  7,   106, 50,  99,  54,  99,  92,  187, 47,  10,  170, 102, 132, 42,  25,  4,
@@ -770,9 +769,7 @@ pub const test_v0_transaction = struct {
 };
 
 pub const test_v0_versioned_message = struct {
-    pub fn asStruct(allocator: std.mem.Allocator) !VersionedMessage {
-        return .{ .v0 = try test_v0_message.asStruct(allocator) };
-    }
+    pub const as_struct = VersionedMessage{ .v0 = test_v0_message.as_struct };
 
     pub const bincode_serialized_bytes = [_]u8{
         128, 39,  12,  102, 2,   236, 88,  117, 221, 34,  125, 55,  183, 193, 174, 21,  99,  70,
@@ -789,33 +786,31 @@ pub const test_v0_versioned_message = struct {
 };
 
 pub const test_v0_message = struct {
-    pub fn asStruct(allocator: std.mem.Allocator) !V0Message {
-        return .{
-            .header = .{
-                .num_required_signatures = 39,
-                .num_readonly_signed_accounts = 12,
-                .num_readonly_unsigned_accounts = 102,
+    pub const as_struct = V0Message{
+        .header = .{
+            .num_required_signatures = 39,
+            .num_readonly_signed_accounts = 12,
+            .num_readonly_unsigned_accounts = 102,
+        },
+        .account_keys = &.{
+            Pubkey.fromString("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE") catch unreachable,
+            Pubkey.fromString("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4") catch unreachable,
+        },
+        .recent_blockhash = Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW") catch unreachable,
+        .instructions = &.{.{
+            .program_id_index = 100,
+            .accounts = &.{ 1, 3 },
+            .data = &.{
+                104, 232, 42,  254, 46, 48, 104, 89,  101, 211, 253, 161, 65, 155, 204, 89,
+                126, 187, 180, 191, 60, 59, 88,  119, 106, 20,  194, 80,  11, 200, 76,  0,
             },
-            .account_keys = try allocator.dupe(Pubkey, &.{
-                try Pubkey.fromString("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE"),
-                try Pubkey.fromString("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4"),
-            }),
-            .recent_blockhash = try Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW"),
-            .instructions = try allocator.dupe(CompiledInstruction, &.{.{
-                .program_id_index = 100,
-                .accounts = try allocator.dupe(u8, &.{ 1, 3 }),
-                .data = try allocator.dupe(u8, &.{
-                    104, 232, 42,  254, 46, 48, 104, 89,  101, 211, 253, 161, 65, 155, 204, 89,
-                    126, 187, 180, 191, 60, 59, 88,  119, 106, 20,  194, 80,  11, 200, 76,  0,
-                }),
-            }}),
-            .address_table_lookups = try allocator.dupe(MessageAddressTableLookup, &.{.{
-                .account_key = try Pubkey.fromString("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD"),
-                .writable_indexes = try allocator.dupe(u8, &.{ 1, 3, 5, 7, 90 }),
-                .readonly_indexes = &.{},
-            }}),
-        };
-    }
+        }},
+        .address_table_lookups = &.{.{
+            .account_key = Pubkey.fromString("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD") catch unreachable,
+            .writable_indexes = &.{ 1, 3, 5, 7, 90 },
+            .readonly_indexes = &.{},
+        }},
+    };
 
     pub const bincode_serialized_bytes = [_]u8{
         39,  12,  102, 2,   236, 88,  117, 221, 34,  125, 55,  183, 193, 174, 21,  99,  70,  167,

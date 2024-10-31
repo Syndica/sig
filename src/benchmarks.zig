@@ -116,6 +116,14 @@ pub fn main() !void {
             .milliseconds,
         );
     }
+
+    if (std.mem.startsWith(u8, filter, "bincode") or run_all_benchmarks) {
+        num_errors += try benchmark(
+            @import("bincode/benchmarks.zig").BenchmarkEntry,
+            max_time_per_bench,
+            .nanoseconds,
+        );
+    }
     if (num_errors != 0) {
         return error.CompletedWithErrors;
     }
