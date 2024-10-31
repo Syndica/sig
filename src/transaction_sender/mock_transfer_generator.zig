@@ -15,8 +15,8 @@ const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const Duration = sig.time.Duration;
 
 const TRANSFER_FEE: u64 = 5000;
-const TOTAL_TRANSFER_AMOUNT: u64 = 5e8;
-const NUMBER_OF_TRANSACTIONS: u64 = 200;
+const AIRDROP_AMOUNT: u64 = 5e9;
+const MIN_BANK_BALANCE: u64 = 1e9;
 
 const MAX_RPC_RETRIES: u64 = 5;
 const MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION: Duration = Duration.fromSecs(30);
@@ -88,12 +88,16 @@ pub const MockTransferService = struct {
             self.accounts.alice.pubkey,
         });
 
-        const total_bank_balance = n_transactions * n_lamports_per_tx;
+        const required_bank_balance = n_transactions * (n_lamports_per_tx + TRANSFER_FEE);
+        if (required_bank_balance > MIN_BANK_BALANCE) {
+            @panic("requested transfer amount exceeds MIN_BANK_BALANCE");
+        }
+
         self.logger.info().logf("(transaction_sender.MockTransferService): : {} txs each transfers {} lamports", .{ n_transactions, n_lamports_per_tx });
         const balances = try self.logBalances("(transaction_sender.MockTransferService) starting");
-        if (balances.bank < total_bank_balance) {
+        if (balances.bank < MIN_BANK_BALANCE) {
             self.logger.info().log("(transaction_sender.MockTransferService) airdropping to bank");
-            try self.airdrop(self.accounts.bank.pubkey, total_bank_balance);
+            try self.airdrop(self.accounts.bank.pubkey, AIRDROP_AMOUNT);
         }
 
         if (balances.alice > 0) {
