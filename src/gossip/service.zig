@@ -2585,6 +2585,7 @@ test "handle pull request" {
         logger,
     );
     defer gossip_service.deinit();
+    defer gossip_service.shutdown();
 
     // insert random values
     const N_FILTER_BITS = 1;
@@ -2672,8 +2673,6 @@ test "handle pull request" {
             try std.testing.expect(values.len > 0);
         }
     }
-
-    gossip_service.shutdown();
 }
 
 test "test build prune messages and handle push messages" {
