@@ -13,6 +13,8 @@ pub const Config = struct {
     accounts_db: AccountsDBConfig = .{},
     geyser: GeyserConfig = .{},
 
+    test_transaction_sender: TestTransactionSenderConfig = .{},
+
     max_shreds: u64 = 1_000,
     leader_schedule_path: ?[]const u8 = null,
     genesis_file_path: ?[]const u8 = null,
@@ -27,6 +29,7 @@ pub const Config = struct {
             .mainnet => "data/genesis-files/mainnet_genesis.bin",
             .devnet => "data/genesis-files/devnet_genesis.bin",
             .testnet => "data/genesis-files/testnet_genesis.bin",
+            .localnet => null, // no default genesis file for localhost
         } else null;
     }
 };
@@ -76,6 +79,7 @@ pub const Network = enum {
     mainnet,
     devnet,
     testnet,
+    localnet,
 
     const Self = @This();
 
@@ -99,6 +103,10 @@ pub const Network = enum {
                 "entrypoint3.devnet.solana.com:8001",
                 "entrypoint4.devnet.solana.com:8001",
                 "entrypoint5.devnet.solana.com:8001",
+            },
+            .localnet => &.{
+                "127.0.0.1:1024", // agave test-validator default
+                "127.0.0.1:8001", // sig validator default
             },
         };
     }
@@ -139,3 +147,8 @@ pub const GeyserConfig = struct {
 };
 
 const LogConfig = struct {};
+
+const TestTransactionSenderConfig = struct {
+    n_transactions: u64 = 1,
+    n_lamports_per_transaction: u64 = 1e9,
+};

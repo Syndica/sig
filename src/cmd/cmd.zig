@@ -28,7 +28,6 @@ const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
-const EpochSchedule = sig.core.EpochSchedule;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
@@ -291,6 +290,25 @@ pub fn run() !void {
         .value_ref = cli.mkRef(&config.current.geyser.writer_fba_bytes),
         .required = false,
         .value_name = "geyser_writer_fba_bytes",
+    };
+
+    // test-transaction sender options
+    var n_transactions_option = cli.Option{
+        .long_name = "n-transactions",
+        .short_alias = 't',
+        .help = "number of transactions to send",
+        .value_ref = cli.mkRef(&config.current.test_transaction_sender.n_transactions),
+        .required = false,
+        .value_name = "n_transactions",
+    };
+
+    var n_lamports_per_tx_option = cli.Option{
+        .long_name = "n-lamports-per-tx",
+        .short_alias = 'l',
+        .help = "number of lamports to send per transaction",
+        .value_ref = cli.mkRef(&config.current.test_transaction_sender.n_lamports_per_transaction),
+        .required = false,
+        .value_name = "n_lamports_per_tx",
     };
 
     const app = cli.App{
@@ -580,6 +598,11 @@ pub fn run() !void {
                             &gossip_entrypoints_option,
                             &gossip_spy_node_option,
                             &gossip_dump_option,
+                            &network_option,
+                            &genesis_file_path,
+                            // command specific
+                            &n_transactions_option,
+                            &n_lamports_per_tx_option,
                         },
                         .target = .{
                             .action = .{
@@ -755,6 +778,9 @@ fn shredCollector() !void {
     var app_base = try AppBase.init(allocator);
     defer app_base.deinit();
 
+    const genesis_file_path = try config.current.genesisFilePath() orelse return error.GenesisPathNotProvided;
+    const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
+
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
 
@@ -770,7 +796,7 @@ fn shredCollector() !void {
 
     // leader schedule
     // NOTE: leader schedule is needed for the shred collector because we skip accounts-db setup
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, try EpochSchedule.default());
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, genesis_config.epoch_schedule);
 
     // This is a sort of hack to get the epoch of the leader schedule and then insert into the cache
     const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
@@ -1032,63 +1058,75 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?struct { Slot, LeaderSchedul
 
 pub fn testTransactionSenderService() !void {
     var app_base = try AppBase.init(gpa_allocator);
-    defer app_base.deinit();
-
-    if (config.current.gossip.network) |net| {
-        if (!std.mem.eql(u8, net, "testnet")) {
-            @panic("Can only run transaction sender service on testnet!");
-        }
-    }
-
-    for (config.current.gossip.entrypoints) |entrypoint| {
-        if (std.mem.indexOf(u8, entrypoint, "testnet") == null) {
-            @panic("Can only run transaction sender service on testnet!");
-        }
-    }
-
-    const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
     defer {
-        app_base.shutdown();
+        if (!app_base.closed) app_base.shutdown(); // we have this incase an error occurs
+        app_base.deinit();
+    }
+
+    const allocator = gpa_allocator;
+
+    // read genesis (used for leader schedule)
+    const genesis_file_path = try config.current.genesisFilePath() orelse @panic("No genesis file path found: use -g or -n");
+    const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
+
+    // start gossip (used to get TPU ports of leaders)
+    const gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
+    defer {
+        if (!app_base.closed) app_base.shutdown(); // we call this here to set exit to true
         gossip_service.shutdown();
         gossip_manager.deinit();
     }
 
-    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(gpa_allocator);
+    // define cluster of where to land transactions
+    const cluster: sig.rpc.ClusterType = if (try config.current.gossip.getNetwork()) |n| switch (n) {
+        .mainnet => .MainnetBeta,
+        .devnet => .Devnet,
+        .testnet => .Testnet,
+        .localnet => .LocalHost,
+    } else {
+        @panic("network option (-n) not provided");
+    };
+    app_base.logger.warn().logf("Starting transaction sender service on {s}...", .{@tagName(cluster)});
+
+    // setup channel for communication to the tx-sender service
+    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
     defer transaction_channel.deinit();
 
-    const transaction_sender_config = sig.transaction_sender.service.Config{
-        .cluster = .Testnet,
-        .socket = SocketAddr.init(app_base.my_ip, 0),
-    };
-
-    var mock_transfer_service = try sig.transaction_sender.MockTransferService.init(
-        gpa_allocator,
-        transaction_channel,
-        &app_base.exit,
-    );
-
+    // this handles transactions and forwards them to leaders TPU ports
     var transaction_sender_service = try sig.transaction_sender.Service.init(
-        gpa_allocator,
-        transaction_sender_config,
+        allocator,
+        app_base.logger,
+        .{ .cluster = cluster, .socket = SocketAddr.init(app_base.my_ip, 0) },
         transaction_channel,
         &gossip_service.gossip_table_rw,
+        genesis_config.epoch_schedule,
         &app_base.exit,
-        app_base.logger,
     );
-
-    const mock_transfer_generator_handle = try std.Thread.spawn(
-        .{},
-        sig.transaction_sender.MockTransferService.run,
-        .{&mock_transfer_service},
-    );
-
     const transaction_sender_handle = try std.Thread.spawn(
         .{},
         sig.transaction_sender.Service.run,
         .{&transaction_sender_service},
     );
 
-    mock_transfer_generator_handle.join();
+    // rpc is used to get blockhashes and other balance information
+    var rpc_client = sig.rpc.Client.init(allocator, cluster, .{ .logger = app_base.logger });
+    defer rpc_client.deinit();
+
+    // this sends mock txs to the transaction sender
+    var mock_transfer_service = try sig.transaction_sender.MockTransferService.init(
+        allocator,
+        transaction_channel,
+        rpc_client,
+        &app_base.exit,
+        app_base.logger,
+    );
+    // send and confirm mock transactions
+    try mock_transfer_service.run(
+        config.current.test_transaction_sender.n_transactions,
+        config.current.test_transaction_sender.n_lamports_per_transaction,
+    );
+
+    app_base.shutdown();
     transaction_sender_handle.join();
     gossip_manager.join();
 }
