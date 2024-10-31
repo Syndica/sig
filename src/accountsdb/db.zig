@@ -3130,20 +3130,27 @@ pub fn writeSnapshotTarWithFields(
     manifest: *const SnapshotFields,
     file_map: *const AccountsDB.FileMap,
 ) !void {
-    try snapgen.writeMetadataFiles(archive_writer, version, status_cache, manifest);
+    var counting_state = if (std.debug.runtime_safety) std.io.countingWriter(archive_writer);
+    const archive_writer_counted = if (std.debug.runtime_safety) counting_state.writer() else archive_writer;
 
-    try snapgen.writeAccountsDirHeader(archive_writer);
+    try snapgen.writeMetadataFiles(archive_writer_counted, version, status_cache, manifest);
+
+    try snapgen.writeAccountsDirHeader(archive_writer_counted);
     const file_info_map = manifest.accounts_db_fields.file_map;
     for (file_info_map.keys(), file_info_map.values()) |file_slot, file_info| {
         const account_file = file_map.getPtr(file_info.id) orelse unreachable;
         std.debug.assert(account_file.id == file_info.id);
+        std.debug.assert(account_file.length == file_info.length);
 
-        try snapgen.writeAccountFileHeader(archive_writer, file_slot, file_info);
-        try archive_writer.writeAll(account_file.memory);
-        try snapgen.writeAccountFilePadding(archive_writer, file_info.length);
+        try snapgen.writeAccountFileHeader(archive_writer_counted, file_slot, file_info);
+        try archive_writer_counted.writeAll(account_file.memory);
+        try snapgen.writeAccountFilePadding(archive_writer_counted, account_file.memory.len);
     }
 
-    try archive_writer.writeAll(&sig.utils.tar.sentinel_blocks);
+    try archive_writer_counted.writeAll(&sig.utils.tar.sentinel_blocks);
+    if (std.debug.runtime_safety) {
+        std.debug.assert(counting_state.bytes_written % 512 == 0);
+    }
 }
 
 fn testWriteSnapshotFull(
