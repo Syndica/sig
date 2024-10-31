@@ -409,13 +409,11 @@ pub const Stats = struct {
         const registry = globalRegistry();
         const stats_struct_info = @typeInfo(Stats).Struct;
         inline for (stats_struct_info.fields) |field| {
-            if (field.name[0] != '_') {
-                @field(self, field.name) = switch (field.type) {
-                    *Counter => try registry.getOrCreateCounter(field.name),
-                    *Gauge(u64) => try registry.getOrCreateGauge(field.name, u64),
-                    else => @compileError("Unhandled field type: " ++ field.name ++ ": " ++ @typeName(field.type)),
-                };
-            }
+            @field(self, field.name) = switch (field.type) {
+                *Counter => try registry.getOrCreateCounter(field.name),
+                *Gauge(u64) => try registry.getOrCreateGauge(field.name, u64),
+                else => @compileError("Unhandled field type: " ++ field.name ++ ": " ++ @typeName(field.type)),
+            };
         }
         return self;
     }
