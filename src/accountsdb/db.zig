@@ -30,6 +30,7 @@ const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
+const ScopedLogger = sig.trace.log.ScopedLogger;
 const StandardErrLogger = sig.trace.log.ChannelPrintLogger;
 const Level = sig.trace.level.Level;
 const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
@@ -122,7 +123,7 @@ pub const AccountsDB = struct {
     bank_hash_stats: RwMux(BankHashStatsMap) = RwMux(BankHashStatsMap).init(.{}),
 
     metrics: AccountsDBMetrics,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(@This())),
     config: InitConfig,
 
     const Self = @This();
@@ -184,7 +185,7 @@ pub const AccountsDB = struct {
         return .{
             .allocator = allocator,
             .account_index = account_index,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(@This())),
             .config = config,
             .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(allocator)),
             .maybe_accounts_cache_rw = maybe_accounts_cache_rw,
@@ -577,7 +578,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger,
+                    self.logger.unscoped(),
                     &timer,
                     n_account_files,
                     file_count,
@@ -613,7 +614,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger,
+                    self.logger.unscoped(),
                     &timer,
                     total_n_accounts,
                     ref_count,
@@ -639,7 +640,7 @@ pub const AccountsDB = struct {
             .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
             .max_threads = n_threads,
             .params = .{
-                self.logger,
+                self.logger.unscoped(),
                 &self.account_index,
                 thread_dbs,
             },
@@ -1076,7 +1077,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger,
+                    self.logger.unscoped(),
                     &timer,
                     shards.len,
                     count,
