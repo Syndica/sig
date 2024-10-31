@@ -55,7 +55,7 @@ const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 pub const ShredInserter = struct {
     allocator: Allocator,
-    logger: sig.trace.Logger,
+    logger: sig.trace.ScopedLogger(@typeName(Self)),
     db: BlockstoreDB,
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
@@ -71,7 +71,7 @@ pub const ShredInserter = struct {
     ) GetMetricError!Self {
         return .{
             .allocator = allocator,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(Self)),
             .db = db,
             .lock = .{},
             .max_root = Atomic(u64).init(0), // TODO read this from the database
@@ -169,7 +169,7 @@ pub const ShredInserter = struct {
         var total_timer = try Timer.start();
         var state = try PendingInsertShredsState.init(
             self.allocator,
-            self.logger,
+            self.logger.unscoped(),
             &self.db,
             self.metrics,
         );
@@ -339,7 +339,7 @@ pub const ShredInserter = struct {
             // TODO: agave discards the result here. should we also?
             _ = try checkForwardChainedMerkleRootConsistency(
                 allocator,
-                self.logger,
+                self.logger.unscoped(),
                 &self.db,
                 shred.code,
                 erasure_meta,
@@ -373,7 +373,7 @@ pub const ShredInserter = struct {
             // TODO: agave discards the result here. should we also?
             _ = try checkBackwardsChainedMerkleRootConsistency(
                 allocator,
-                self.logger,
+                self.logger.unscoped(),
                 &self.db,
                 shred,
                 state.shredStore(),
@@ -480,7 +480,7 @@ pub const ShredInserter = struct {
                 // Compare our current shred against the previous shred for potential
                 // conflicts
                 if (!try checkMerkleRootConsistency(
-                    self.logger,
+                    self.logger.unscoped(),
                     &self.db,
                     state.shredStore(),
                     shred.common.slot,
@@ -654,7 +654,7 @@ pub const ShredInserter = struct {
                 // Compare our current shred against the previous shred for potential
                 // conflicts
                 if (!try checkMerkleRootConsistency(
-                    self.logger,
+                    self.logger.unscoped(),
                     &self.db,
                     state.shredStore(),
                     slot,
