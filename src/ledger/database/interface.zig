@@ -547,5 +547,169 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
 
             try std.testing.expectEqual(null, try iter.next());
         }
+
+        pub fn @"iterator forward start before all"() !void {
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db = try DB.open(allocator, logger, path);
+            defer db.deinit();
+
+            try db.put(cf1, 40, .{ .hello = 44 });
+            try db.put(cf1, 10, .{ .hello = 111 });
+            try db.put(cf1, 30, .{ .hello = 33 });
+            try db.put(cf1, 20, .{ .hello = 222 });
+
+            var iter = try db.iterator(cf1, .forward, 5);
+            defer iter.deinit();
+
+            var next = (try iter.next()).?;
+            try std.testing.expectEqual(10, next[0]);
+            try std.testing.expectEqual(Value1{ .hello = 111 }, next[1]);
+            next = (try iter.next()).?;
+            try std.testing.expectEqual(20, next[0]);
+            try std.testing.expectEqual(Value1{ .hello = 222 }, next[1]);
+            next = (try iter.next()).?;
+            try std.testing.expectEqual(30, next[0]);
+            try std.testing.expectEqual(Value1{ .hello = 33 }, next[1]);
+            next = (try iter.next()).?;
+            try std.testing.expectEqual(40, next[0]);
+            try std.testing.expectEqual(Value1{ .hello = 44 }, next[1]);
+
+            try std.testing.expectEqual(null, try iter.next());
+        }
+
+        pub fn @"iterator forward start after all"() !void {
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db = try DB.open(allocator, logger, path);
+            defer db.deinit();
+
+            try db.put(cf1, 40, .{ .hello = 44 });
+            try db.put(cf1, 10, .{ .hello = 111 });
+            try db.put(cf1, 30, .{ .hello = 33 });
+            try db.put(cf1, 20, .{ .hello = 222 });
+
+            var iter = try db.iterator(cf1, .forward, 50);
+            defer iter.deinit();
+
+            try std.testing.expectEqual(null, try iter.next());
+        }
+
+        pub fn @"iterator reverse start before all"() !void {
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db = try DB.open(allocator, logger, path);
+            defer db.deinit();
+
+            try db.put(cf1, 40, .{ .hello = 44 });
+            try db.put(cf1, 10, .{ .hello = 111 });
+            try db.put(cf1, 30, .{ .hello = 33 });
+            try db.put(cf1, 20, .{ .hello = 222 });
+
+            var iter = try db.iterator(cf1, .reverse, 50);
+            defer iter.deinit();
+
+            var next = (try iter.next()).?;
+            try std.testing.expectEqual(40, next[0]);
+            try std.testing.expectEqual(Value1{ .hello = 44 }, next[1]);
+            next = (try iter.next()).?;
+            try std.testing.expectEqual(30, next[0]);
+            try std.testing.expectEqual(Value1{ .hello = 33 }, next[1]);
+            next = (try iter.next()).?;
+            try std.testing.expectEqual(20, next[0]);
+            try std.testing.expectEqual(Value1{ .hello = 222 }, next[1]);
+            next = (try iter.next()).?;
+            try std.testing.expectEqual(10, next[0]);
+            try std.testing.expectEqual(Value1{ .hello = 111 }, next[1]);
+
+            try std.testing.expectEqual(null, try iter.next());
+        }
+
+        pub fn @"iterator reverse start after all"() !void {
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db = try DB.open(allocator, logger, path);
+            defer db.deinit();
+
+            try db.put(cf1, 40, .{ .hello = 44 });
+            try db.put(cf1, 10, .{ .hello = 111 });
+            try db.put(cf1, 30, .{ .hello = 33 });
+            try db.put(cf1, 20, .{ .hello = 222 });
+
+            var iter = try db.iterator(cf1, .reverse, 5);
+            defer iter.deinit();
+
+            try std.testing.expectEqual(null, try iter.next());
+        }
+
+        pub fn @"iterator forward empty"() !void {
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db = try DB.open(allocator, logger, path);
+            defer db.deinit();
+
+            var iter = try db.iterator(cf1, .forward, 1);
+            defer iter.deinit();
+
+            try std.testing.expectEqual(null, try iter.next());
+        }
+
+        pub fn @"iterator reverse empty"() !void {
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db = try DB.open(allocator, logger, path);
+            defer db.deinit();
+
+            var iter = try db.iterator(cf1, .reverse, 1);
+            defer iter.deinit();
+
+            try std.testing.expectEqual(null, try iter.next());
+        }
+
+        pub fn @"iterator forward empty with null start"() !void {
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db = try DB.open(allocator, logger, path);
+            defer db.deinit();
+
+            var iter = try db.iterator(cf1, .forward, null);
+            defer iter.deinit();
+
+            try std.testing.expectEqual(null, try iter.next());
+        }
+
+        pub fn @"iterator reverse empty with null start"() !void {
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db = try DB.open(allocator, logger, path);
+            defer db.deinit();
+
+            var iter = try db.iterator(cf1, .reverse, null);
+            defer iter.deinit();
+
+            try std.testing.expectEqual(null, try iter.next());
+        }
+
+        pub fn @"WriteBatch.deleteRange"() !void {
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db = try DB.open(allocator, logger, path);
+            defer db.deinit();
+
+            try db.put(cf1, 40, .{ .hello = 44 });
+            try db.put(cf1, 10, .{ .hello = 111 });
+            try db.put(cf1, 30, .{ .hello = 33 });
+            try db.put(cf1, 20, .{ .hello = 222 });
+
+            var batch = try db.initWriteBatch();
+            defer batch.deinit();
+            try batch.deleteRange(cf1, 0, 100);
+            try db.commit(batch);
+
+            try std.testing.expectEqual(null, try db.get(allocator, cf1, 10));
+            try std.testing.expectEqual(null, try db.get(allocator, cf1, 20));
+            try std.testing.expectEqual(null, try db.get(allocator, cf1, 30));
+            try std.testing.expectEqual(null, try db.get(allocator, cf1, 40));
+        }
     };
 }
