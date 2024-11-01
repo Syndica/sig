@@ -1,5 +1,4 @@
 const sig = @import("../sig.zig");
-const bincode = sig.bincode;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
