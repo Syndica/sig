@@ -634,9 +634,7 @@ pub fn sendmsgPosix(
     flags: u32,
 ) std.posix.SendMsgError!usize {
     while (true) {
-        std.debug.print("message={any}\n", .{msg});
         const rc = sendmsg(sockfd, msg, flags);
-        std.debug.print("posix errno: {}\n", .{rc});
         switch (std.posix.errno(rc)) {
             .SUCCESS => return @intCast(rc),
 
