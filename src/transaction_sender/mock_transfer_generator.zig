@@ -17,6 +17,7 @@ const Duration = sig.time.Duration;
 
 const TRANSFER_FEE_LAMPORTS: u64 = 5000;
 const MAX_AIRDROP_LAMPORTS: u64 = 5e9;
+const MIN_LAMPORTS_FOR_RENT: u64 = 5e6; // This is a nonsense number but works
 
 const MAX_RPC_RETRIES: u64 = 5;
 const MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION: Duration = Duration.fromSecs(30);
@@ -90,7 +91,11 @@ pub const MockTransferService = struct {
             self.accounts.alice.pubkey,
         });
 
-        const required_bank_balance = n_transactions * (n_lamports_per_tx + TRANSFER_FEE_LAMPORTS);
+        const required_bank_balance = if (n_lamports_per_tx > MIN_LAMPORTS_FOR_RENT)
+            n_transactions * (n_lamports_per_tx + TRANSFER_FEE_LAMPORTS)
+        else
+            n_transactions * (n_lamports_per_tx + TRANSFER_FEE_LAMPORTS) + MIN_LAMPORTS_FOR_RENT; // Add minumum rent for alice account
+
         if (required_bank_balance > MAX_AIRDROP_LAMPORTS) {
             @panic("requested transfer amount exceeds MAX_AIRDROP_LAMPORTS");
         }
@@ -107,7 +112,17 @@ pub const MockTransferService = struct {
             try self.closeAccount(random, self.accounts.alice.keypair);
         }
 
-        // !!
+        if (n_lamports_per_tx < MIN_LAMPORTS_FOR_RENT) {
+            self.logger.info().logf("(transaction_sender.MockTransferService) transferring minimum rent ({} lamports) to alice", .{MIN_LAMPORTS_FOR_RENT});
+            try self.sigTransferAndWait(
+                random,
+                self.accounts.bank.keypair,
+                self.accounts.alice.pubkey,
+                MIN_LAMPORTS_FOR_RENT,
+            );
+            self.logger.info().logf("(transaction_sender.MockTransferService) - SUCCESS - transferred {} lamports to alice", .{MIN_LAMPORTS_FOR_RENT});
+        }
+
         for (0..n_transactions) |tx_i| {
             self.logger.info().logf("(transaction_sender.MockTransferService) (tx {}/{}) transferring {} lamports to alice", .{ tx_i, n_transactions, n_lamports_per_tx });
             try self.sigTransferAndWait(
