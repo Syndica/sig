@@ -734,7 +734,7 @@ fn tickCallback(
 
     lsquic.lsquic_engine_process_conns(ctx.engine);
 
-    ctx.tick_event.run(l, c, 500, Context, ctx, tickCallback);
+    ctx.tick_event.run(l, c, 100, Context, ctx, tickCallback);
     return .disarm;
 }
 
@@ -768,7 +768,7 @@ fn channelCallback(
     if (ctx.exit.load(.acquire)) {
         l.stop();
     } else {
-        ctx.channel_event.run(l, c, 500, Context, ctx, channelCallback);
+        ctx.channel_event.run(l, c, 100, Context, ctx, channelCallback);
     }
 
     return .disarm;
