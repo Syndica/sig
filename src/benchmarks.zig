@@ -2,10 +2,24 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("sig.zig");
 const pt = @import("prettytable");
+const math = std.math;
 
 const Decl = std.builtin.Type.Declaration;
-const math = std.math;
 const Duration = sig.time.Duration;
+
+pub const BenchTimeUnit = enum {
+    Nanos,
+    Millis,
+    Seconds,
+
+    pub fn convertDuration(self: BenchTimeUnit, duration: Duration) u64 {
+        return switch (self) {
+            .Nanos => duration.asNanos(),
+            .Millis => duration.asMillis(),
+            .Seconds => duration.asSecs(),
+        };
+    }
+};
 
 /// to run gossip benchmarks:
 /// zig build benchmark -- gossip
@@ -46,6 +60,7 @@ pub fn main() !void {
             logger,
             @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
             max_time_per_bench,
+            .Nanos,
         );
     }
 
@@ -61,6 +76,7 @@ pub fn main() !void {
                 logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
+                .Millis,
             );
         }
 
@@ -79,6 +95,7 @@ pub fn main() !void {
                 logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
+                .Millis,
             );
         }
     }
@@ -89,6 +106,7 @@ pub fn main() !void {
             logger,
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
+            .Millis,
         );
     }
 
@@ -98,12 +116,14 @@ pub fn main() !void {
             logger,
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
+            .Millis,
         );
         try benchmarkCSV(
             allocator,
             logger,
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
+            .Millis,
         );
     }
 
@@ -113,6 +133,7 @@ pub fn main() !void {
             logger,
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
+            .Nanos,
         );
     }
 
@@ -122,6 +143,7 @@ pub fn main() !void {
             logger,
             @import("ledger/benchmarks.zig").BenchmarkLedger,
             max_time_per_bench,
+            .Nanos,
         );
     }
 
@@ -139,6 +161,7 @@ pub fn benchmarkCSV(
     logger: sig.trace.Logger,
     comptime B: type,
     max_time_per_benchmark: Duration,
+    time_unit: BenchTimeUnit,
 ) !void {
     const has_args = if (@hasDecl(B, "args")) true else false;
     const args = if (has_args) B.args else [_]void{{}};
@@ -199,14 +222,32 @@ pub fn benchmarkCSV(
             logger.debug().logf("benchmarking arg: {d}/{d}: {s}", .{ arg_i + 1, args.len, arg_name });
 
             const benchFunction = @field(B, def.name);
-            const arguments = switch (@TypeOf(arg)) {
-                void => .{},
-                else => .{arg},
-            };
 
             // NOTE: @TypeOf guarantees no runtime side-effects of argument expressions.
             // this means the function will *not* be called, this is just computing the return
             // type.
+            const arguments = blk: {
+                switch (@typeInfo(@TypeOf(benchFunction))) {
+                    .Fn => |info| {
+                        // NOTE: to know if we should pass in the time unit we
+                        // check the input params of the function, so any multi-return
+                        // function NEEDS to have the time unit as the first parameter
+                        if (info.params.len > 0 and info.params[0].type.? == BenchTimeUnit) {
+                            break :blk switch (@TypeOf(arg)) {
+                                void => .{time_unit},
+                                else => .{ time_unit, arg },
+                            };
+                        } else {
+                            // single return type
+                            break :blk switch (@TypeOf(arg)) {
+                                void => .{},
+                                else => .{arg},
+                            };
+                        }
+                    },
+                    else => unreachable,
+                }
+            };
             const result_type: type = @TypeOf(try @call(.auto, benchFunction, arguments));
             const runtime_type = switch (result_type) {
                 // single value
@@ -238,10 +279,11 @@ pub fn benchmarkCSV(
                 switch (result_type) {
                     Duration => {
                         const duration = try @call(.auto, benchFunction, arguments);
-                        try runtimes.append(allocator, .{ .result = duration.asNanos() });
-                        min = @min(runtimes.items(.result)[iter_count], min);
-                        max = @max(runtimes.items(.result)[iter_count], max);
-                        sum += duration.asNanos();
+                        const runtime = time_unit.convertDuration(duration);
+                        min = @min(runtime, min);
+                        max = @max(runtime, max);
+                        sum += runtime;
+                        try runtimes.append(allocator, .{ .result = runtime });
                     },
                     inline else => {
                         const result = try @call(.auto, benchFunction, arguments);

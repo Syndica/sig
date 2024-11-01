@@ -11,7 +11,7 @@ def random_color_generator():
     # https://matplotlib.org/stable/users/explain/colors/colormaps.html#qualitative
     return plt.colormaps["Dark2"](random.random())[:3] 
 
-def view_results(paths, units):
+def view_results(paths):
     path = paths[0]
     # split the path and filename
     output_path_dir = path.split('/')
@@ -39,7 +39,7 @@ def view_results(paths, units):
     colors = [random_color_generator() for _ in range(len(paths))]
     for i in range(len(benchmark_names)):
         plt.clf()
-        plt.title(benchmark_names[i] + f"{units}", wrap=True)
+        plt.title(benchmark_names[i], wrap=True)
 
         for df_i, df in enumerate(dfs):
             # remove the header and the benchmark name
@@ -48,12 +48,6 @@ def view_results(paths, units):
             benchmark_runtimes.replace(' ', np.nan, inplace=True)
             benchmark_runtimes.dropna(inplace=True)
             benchmark_runtimes = benchmark_runtimes.to_numpy().astype(int)
-
-            # convert to milliseconds 
-            if units == 'ms':
-                benchmark_runtimes = benchmark_runtimes / 1_000_000
-            if units == 's':
-                benchmark_runtimes = benchmark_runtimes / 1_000_000_000
 
             color = colors[df_i]
             mean = np.mean(benchmark_runtimes) 
@@ -112,8 +106,6 @@ if __name__ == "__main__":
     # benchmark2, 1, 2, 3, 4, 5
     parser = argparse.ArgumentParser(description='View benchmark results.')
     parser.add_argument('files', metavar='f', type=str, nargs='+', help='an input file to process')
-    # support either seconds or milliseconds
-    parser.add_argument('--unit', type=str, choices=['s', 'ms'], default='ms', help='unit of time (seconds or milliseconds)')
     args = parser.parse_args()
 
     print("Viewing", args.files)
@@ -124,4 +116,4 @@ if __name__ == "__main__":
         os.makedirs("results")
 
     format(args.files)
-    view_results(args.files, args.unit)
+    view_results(args.files)

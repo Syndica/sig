@@ -5,6 +5,11 @@
 - benchmark results are written to csv in `results/`
     - this includes the average stats and the raw runtimes
 
+### dev note
+
+if you want to support multiple return values, you need to include BenchTimeUnits as the first parameter 
+to know what time unit we are expecting.
+
 ### example output
 
 #### average stats

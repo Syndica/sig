@@ -8,6 +8,7 @@ const bincode = sig.bincode;
 const sysvars = sig.accounts_db.sysvars;
 const snapgen = sig.accounts_db.snapshots.generate;
 
+const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Blake3 = std.crypto.hash.Blake3;
@@ -3940,7 +3941,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         // },
     };
 
-    pub fn loadAndVerifySnapshot(bench_args: BenchArgs) !struct {
+    pub fn loadAndVerifySnapshot(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
         load_time: u64,
         validate_time: u64,
     } {
@@ -4019,8 +4020,8 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         const validate_duration = validate_timer.read();
 
         return .{
-            .load_time = loading_duration.asNanos(),
-            .validate_time = validate_duration.asNanos(),
+            .load_time = units.convertDuration(loading_duration),
+            .validate_time = units.convertDuration(validate_duration),
         };
     }
 };
@@ -4195,7 +4196,7 @@ pub const BenchmarkAccountsDB = struct {
         // },
     };
 
-    pub fn readWriteAccounts(bench_args: BenchArgs) !struct { read_time: u64, write_time: u64 } {
+    pub fn readWriteAccounts(units: BenchTimeUnit, bench_args: BenchArgs) !struct { read_time: u64, write_time: u64 } {
         const n_accounts = bench_args.n_accounts;
         const slot_list_len = bench_args.slot_list_len;
         const total_n_accounts = n_accounts * slot_list_len;
@@ -4399,14 +4400,14 @@ pub const BenchmarkAccountsDB = struct {
         }
 
         return .{
-            .read_time = read_time.asNanos(),
-            .write_time = write_time.asNanos(),
+            .read_time = units.convertDuration(read_time),
+            .write_time = units.convertDuration(write_time),
         };
     }
 };
 
 test "read/write benchmark ram" {
-    _ = try BenchmarkAccountsDB.readWriteAccounts(.{
+    _ = try BenchmarkAccountsDB.readWriteAccounts(.Nanos, .{
         .n_accounts = 10,
         .slot_list_len = 1,
         .accounts = .ram,
@@ -4415,7 +4416,7 @@ test "read/write benchmark ram" {
 }
 
 test "read/write benchmark disk" {
-    _ = try BenchmarkAccountsDB.readWriteAccounts(.{
+    _ = try BenchmarkAccountsDB.readWriteAccounts(.Nanos, .{
         .n_accounts = 10,
         .slot_list_len = 1,
         .accounts = .disk,

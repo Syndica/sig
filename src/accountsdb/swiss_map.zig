@@ -4,6 +4,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
+const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
 const accounts_db = sig.accounts_db;
 
 pub fn SwissMap(
@@ -645,7 +646,7 @@ pub const BenchmarkSwissMap = struct {
         },
     };
 
-    pub fn swissmapReadWriteBenchmark(bench_args: BenchArgs) !struct {
+    pub fn swissmapReadWriteBenchmark(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
         read_time: u64,
         write_time: u64,
         read_speedup_vs_std: f32,
@@ -699,8 +700,8 @@ pub const BenchmarkSwissMap = struct {
         const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
 
         return .{
-            .read_time = read_time.asNanos(),
-            .write_time = write_time.asNanos(),
+            .read_time = units.convertDuration(read_time),
+            .write_time = units.convertDuration(write_time),
             .read_speedup_vs_std = read_speedup,
             .write_speedup_vs_std = write_speedup,
         };
@@ -798,7 +799,7 @@ pub fn BenchHashMap(T: type) type {
 }
 
 test "bench swissmap read/write" {
-    _ = try BenchmarkSwissMap.swissmapReadWriteBenchmark(.{
+    _ = try BenchmarkSwissMap.swissmapReadWriteBenchmark(.Nanos, .{
         .n_accounts = 1_000_000,
     });
 }
