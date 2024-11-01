@@ -38,9 +38,10 @@ pub const LeaderInfo = struct {
 
     pub fn init(
         allocator: Allocator,
+        logger: Logger,
         config: Config,
         gossip_table_rw: *RwMux(GossipTable),
-        logger: Logger,
+        epoch_schedule: EpochSchedule,
     ) !LeaderInfo {
         return .{
             .allocator = allocator,
@@ -51,7 +52,7 @@ pub const LeaderInfo = struct {
                 config.cluster,
                 .{ .max_retries = config.rpc_retries, .logger = logger },
             ),
-            .leader_schedule_cache = LeaderScheduleCache.init(allocator, try EpochSchedule.default()),
+            .leader_schedule_cache = LeaderScheduleCache.init(allocator, epoch_schedule),
             .leader_addresses_cache = .{},
             .gossip_table_rw = gossip_table_rw,
         };

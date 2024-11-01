@@ -449,7 +449,7 @@ pub const InstructionError = union(enum) {
     /// Borsh versions. Only programs can use this error because they are
     /// consistent across Solana software versions.
     ///
-    BorshIoError: std.ArrayList(u8),
+    BorshIoError: []u8,
     /// An account does not have enough lamports to be rent-exempt
     AccountNotRentExempt,
 
@@ -479,9 +479,9 @@ pub const InstructionError = union(enum) {
     // Note: For any new error added here an equivalent ProgramError and its
     // conversions must also be added
 
-    pub fn deinit(self: @This(), _: Allocator) void {
+    pub fn deinit(self: @This(), allocator: Allocator) void {
         switch (self) {
-            .BorshIoError => |it| it.deinit(),
+            .BorshIoError => |it| allocator.free(it),
             else => {},
         }
     }

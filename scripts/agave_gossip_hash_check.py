@@ -20,7 +20,7 @@ def get_frozen_abi_base(url_base):
     abi = re.search(match_str, r.text).groups()[0]
     return abi
 
-last_stable_commit = "09241ae9c341b4434d63371d8696ccba837ef3c1"
+last_stable_commit = "af03b1d2de1602e9ede20fdf1d497ad96f475461"
 stable_abi = get_frozen_abi_commit(last_stable_commit)
 # watch master 
 latest_abi = get_frozen_abi_tag("master")

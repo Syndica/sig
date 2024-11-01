@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const base58 = @import("base58-zig");
 
 const types = sig.rpc.types;
 
@@ -10,6 +11,8 @@ const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
 const ScopedLogger = sig.trace.log.ScopedLogger;
+const Transaction = sig.core.transaction.Transaction;
+const ClusterType = sig.rpc.ClusterType;
 
 pub const Client = struct {
     http_endpoint: []const u8,
@@ -22,7 +25,7 @@ pub const Client = struct {
         logger: Logger = .noop,
     };
 
-    pub fn init(allocator: std.mem.Allocator, cluster_type: types.ClusterType, options: Options) Client {
+    pub fn init(allocator: std.mem.Allocator, cluster_type: ClusterType, options: Options) Client {
         const http_endpoint = switch (cluster_type) {
             .MainnetBeta => "https://api.mainnet-beta.solana.com",
             .Testnet => "https://api.testnet.solana.com",
@@ -30,16 +33,30 @@ pub const Client = struct {
             .LocalHost => "http://localhost:8899",
             .Custom => |cluster| cluster.url,
         };
-        return .{
+
+        var client: Client = .{
             .http_endpoint = http_endpoint,
             .http_client = std.http.Client{ .allocator = allocator },
             .max_retries = options.max_retries,
             .logger = options.logger.withScope(@typeName(@This())),
         };
+
+        client.logVersion(allocator) catch |err| {
+            client.logger.err().logf("Failed to log RPC version: error={any}", .{err});
+        };
+        return client;
     }
 
     pub fn deinit(self: *Client) void {
         self.http_client.deinit();
+    }
+
+    /// Log the RPC version were connected to
+    pub fn logVersion(self: *Client, allocator: std.mem.Allocator) !void {
+        const response = try self.getVersion(allocator);
+        defer response.deinit();
+        const version = try response.result();
+        self.logger.info().logf("RPC version: {s}", .{version.@"solana-core"});
     }
 
     pub const GetAccountInfoConfig = struct {
@@ -106,7 +123,14 @@ pub const Client = struct {
     // TODO: getBlockTime()
     // TODO: getBlocks()
     // TODO: getBlocksWithLimit()
-    // TODO: getClusterNodes()
+
+    pub fn getClusterNodes(self: *Client, allocator: std.mem.Allocator) !Response([]const types.RpcContactInfo) {
+        var request = try Request.init(allocator, "getClusterNodes");
+        defer request.deinit();
+        return self.sendFetchRequest(allocator, []const types.RpcContactInfo, request, .{
+            .ignore_unknown_fields = true,
+        });
+    }
 
     pub const GetEpochInfoConfig = struct {
         commitment: ?types.Commitment = null,
@@ -159,7 +183,12 @@ pub const Client = struct {
     /// }
     /// however, this introduces another layer of indirection.
     /// Not a big deal here but I am curious if there is a way to do this.
-    pub fn getLeaderSchedule(self: *Client, allocator: std.mem.Allocator, maybe_slot: ?Slot, config: GetLeaderScheduleConfig) !Response(types.LeaderSchedule) {
+    pub fn getLeaderSchedule(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        maybe_slot: ?Slot,
+        config: GetLeaderScheduleConfig,
+    ) !Response(types.LeaderSchedule) {
         var request = try Request.init(allocator, "getLeaderSchedule");
         defer request.deinit();
         try request.addParameter(maybe_slot);
@@ -212,7 +241,12 @@ pub const Client = struct {
         searchTransactionHistory: ?bool = null,
     };
 
-    pub fn getSignatureStatuses(self: *Client, allocator: std.mem.Allocator, signatures: []const Signature, config: GetSignatureStatusesConfig) !Response(types.SignatureStatuses) {
+    pub fn getSignatureStatuses(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        signatures: []const Signature,
+        config: GetSignatureStatusesConfig,
+    ) !Response(types.SignatureStatuses) {
         var request = try Request.init(allocator, "getSignatureStatuses");
         defer request.deinit();
         try request.addParameter(signatures);
@@ -246,18 +280,72 @@ pub const Client = struct {
     // TODO: getTokenSupply()
     // TODO: getTransaction()
     // TODO: getTransactionCount()
-    // TODO: getVersion()
     // TODO: getVoteAccounts()
     // TODO: isBlockhashValid()
     // TODO: minimumLedgerSlot()
-    // TODO: requestAirdrop()
-    // TODO: sendTransaction()
     // TODO: simulateTransaction()
+
+    pub const RequestAirdropOptions = struct {
+        commitment: ?types.Commitment = null,
+    };
+
+    pub fn requestAirDrop(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        pubkey: Pubkey,
+        lamports: u64,
+        config: RequestAirdropOptions,
+    ) !Response(types.Signature) {
+        var request = try Request.init(allocator, "requestAirdrop");
+        defer request.deinit();
+        try request.addParameter(pubkey.string().slice());
+        try request.addParameter(lamports);
+        try request.addConfig(config);
+        return self.sendFetchRequest(allocator, types.Signature, request, .{});
+    }
+
+    const SendTransactionConfig = struct {};
+
+    pub fn sendTransaction(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        transaction: Transaction,
+        config: SendTransactionConfig,
+    ) !Response(types.Signature) {
+        var request = try Request.init(allocator, "sendTransaction");
+        defer request.deinit();
+
+        var buffer: [sig.net.PACKET_DATA_SIZE]u8 = undefined;
+        const written = try sig.bincode.writeToSlice(&buffer, transaction, .{});
+
+        const sized = sig.crypto.base58.Base58Sized(sig.net.PACKET_DATA_SIZE);
+        var encode_buffer: [sized.max_encoded_size]u8 = undefined;
+
+        var encoder = base58.Encoder.init(.{});
+        const length = try encoder.encode(written, &encode_buffer);
+
+        try request.addParameter(encode_buffer[0..length]);
+        try request.addConfig(config);
+
+        return self.sendFetchRequest(allocator, types.Signature, request, .{});
+    }
+
+    pub fn getVersion(self: *Client, allocator: std.mem.Allocator) !Response(types.RpcVersionInfo) {
+        var request = try Request.init(allocator, "getVersion");
+        defer request.deinit();
+        return self.sendFetchRequest(allocator, types.RpcVersionInfo, request, .{});
+    }
 
     /// Sends a JSON-RPC request to the HTTP endpoint and parses the response.
     /// If the request fails, it will be retried up to `max_retries` times, restarting the HTTP client
     /// if necessary. If the response fails to parse, an error will be returned.
-    fn sendFetchRequest(self: *Client, allocator: std.mem.Allocator, comptime T: type, request: Request, response_parse_options: std.json.ParseOptions) !Response(T) {
+    fn sendFetchRequest(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        comptime T: type,
+        request: Request,
+        response_parse_options: std.json.ParseOptions,
+    ) !Response(T) {
         var response = try Response(T).init(allocator, response_parse_options);
         errdefer response.deinit();
 
@@ -273,7 +361,7 @@ pub const Client = struct {
                 continue;
             };
 
-            if (result.status != std.http.Status.ok) {
+            if (result.status != .ok) {
                 self.logger.warn().logf("HTTP request failed ({d}/{d}): {}", .{ curr_retries, self.max_retries, result.status });
                 if (curr_retries == self.max_retries) return error.HttpRequestFailed;
                 response.bytes.clearRetainingCapacity();
@@ -291,11 +379,13 @@ pub const Client = struct {
         return response;
     }
 
-    fn fetchRequest(self: *Client, request_payload: []const u8, response_payload: *std.ArrayList(u8)) !std.http.Client.FetchResult {
+    fn fetchRequest(
+        self: *Client,
+        request_payload: []const u8,
+        response_payload: *std.ArrayList(u8),
+    ) !std.http.Client.FetchResult {
         return self.http_client.fetch(.{
-            .location = .{
-                .url = self.http_endpoint,
-            },
+            .location = .{ .url = self.http_endpoint },
             .method = .POST,
             .headers = .{
                 .content_type = .{
@@ -306,9 +396,7 @@ pub const Client = struct {
                 },
             },
             .payload = request_payload,
-            .response_storage = .{
-                .dynamic = response_payload,
-            },
+            .response_storage = .{ .dynamic = response_payload },
             .max_append_size = 100 * 1024 * 1024,
         });
     }
@@ -318,6 +406,19 @@ pub const Client = struct {
         self.http_client = std.http.Client{ .allocator = self.http_client.allocator };
     }
 };
+
+test "getAccountInfo: null value" {
+    const allocator = std.testing.allocator;
+    var client = Client.init(allocator, .Testnet, .{});
+    defer client.deinit();
+    // random pubkey that should not exist
+    const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWn");
+    const response = try client.getAccountInfo(allocator, pubkey, .{});
+    defer response.deinit();
+    const x = try response.result();
+
+    try std.testing.expectEqual(null, x.value);
+}
 
 test "getAccountInfo" {
     const allocator = std.testing.allocator;
@@ -446,10 +547,18 @@ test "getSlot" {
 // TODO: test getTokenSupply()
 // TODO: test getTransaction()
 // TODO: test getTransactionCount()
-// TODO: test getVersion()
 // TODO: test getVoteAccounts()
 // TODO: test isBlockhashValid()
 // TODO: test minimumLedgerSlot()
 // TODO: test requestAirdrop()
 // TODO: test sendTransaction()
 // TODO: test simulateTransaction()
+
+test "getVersion" {
+    const allocator = std.testing.allocator;
+    var client = Client.init(allocator, .Testnet, .{});
+    defer client.deinit();
+    const response = try client.getVersion(allocator);
+    defer response.deinit();
+    _ = try response.result();
+}

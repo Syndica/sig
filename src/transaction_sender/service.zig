@@ -28,6 +28,7 @@ const ScopedLogger = sig.trace.log.ScopedLogger;
 const LeaderInfo = sig.transaction_sender.LeaderInfo;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const TransactionPool = sig.transaction_sender.TransactionPool;
+const EpochSchedule = sig.core.epoch_schedule.EpochSchedule;
 
 const globalRegistry = sig.prometheus.globalRegistry;
 
@@ -53,11 +54,12 @@ pub const Service = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        logger: Logger,
         config: Config,
         receive_channel: *Channel(TransactionInfo),
         gossip_table_rw: *RwMux(GossipTable),
+        epoch_schedule: EpochSchedule,
         exit: *AtomicBool,
-        logger: Logger,
     ) !Service {
         return .{
             .allocator = allocator,
@@ -69,9 +71,10 @@ pub const Service = struct {
             ),
             .leader_info_rw = RwMux(LeaderInfo).init(try LeaderInfo.init(
                 allocator,
+                logger,
                 config,
                 gossip_table_rw,
-                logger,
+                epoch_schedule,
             )),
             .send_socket = try UdpSocket.create(
                 .ipv4,

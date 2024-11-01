@@ -1,4 +1,6 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
+const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 pub const Commitment = enum {
     finalized,
@@ -13,7 +15,7 @@ pub const Context = struct {
 
 pub const AccountInfo = struct {
     context: Context,
-    value: Value,
+    value: ?Value,
 
     pub const Value = struct {
         data: []const u8,
@@ -39,7 +41,37 @@ pub const BlockCommitment = struct {
 // TODO: BlockTime
 // TODO: Blocks
 // TODO: BlocksWithLimit
-// TODO: ClusterNodes
+
+pub const RpcContactInfo = struct {
+    /// Pubkey of the node as a base-58 string
+    pubkey: []const u8,
+    /// Gossip port
+    gossip: ?[]const u8,
+    /// Tvu UDP port
+    tvu: ?[]const u8,
+    /// Tpu UDP port
+    tpu: ?[]const u8,
+    /// Tpu QUIC port
+    tpuQuic: ?[]const u8,
+    /// Tpu UDP forwards port
+    tpuForwards: ?[]const u8,
+    /// Tpu QUIC forwards port
+    tpuForwardsQuic: ?[]const u8,
+    /// Tpu UDP vote port
+    tpuVote: ?[]const u8,
+    /// Server repair UDP port
+    serveRepair: ?[]const u8,
+    /// JSON RPC port
+    rpc: ?[]const u8,
+    /// WebSocket PubSub port
+    pubsub: ?[]const u8,
+    /// Software version
+    version: ?[]const u8,
+    /// First 4 bytes of the FeatureSet identifier
+    featureSet: ?u32,
+    /// Shred version
+    shredVersion: ?u16,
+};
 
 pub const EpochInfo = struct {
     absoluteSlot: u64,
@@ -84,12 +116,12 @@ pub const LeaderSchedule = std.StringArrayHashMap([]const u64);
 
 pub const SignatureStatuses = struct {
     context: Context,
-    value: []const ?Status,
+    value: []const ?TransactionStatus,
 
-    pub const Status = struct {
+    pub const TransactionStatus = struct {
         slot: u64,
         confirmations: ?usize,
-        err: ?[]const u8,
+        err: ?TransactionError,
         confirmationStatus: ?[]const u8,
     };
 };
@@ -103,3 +135,12 @@ pub const ClusterType = union(enum(u8)) {
         url: []const u8,
     },
 };
+
+pub const RpcVersionInfo = struct {
+    // TODO: figure out how to support "solana_core" and "feature_set"
+    // rn to correctly parse the json response we need to have '-' in the field name
+    @"solana-core": []const u8,
+    @"feature-set": ?u32,
+};
+
+pub const Signature = []const u8;
