@@ -201,9 +201,10 @@ pub fn benchmarkCSV(
         }
     };
 
-    inline for (functions, 0..) |def, fcni| {
-        _ = fcni;
+    var is_multi_return = try std.ArrayList(bool).initCapacity(allocator, functions.len);
+    defer is_multi_return.deinit();
 
+    inline for (functions) |def| {
         var fmt_buf: [512]u8 = undefined;
         const file_name_average = try std.fmt.bufPrint(&fmt_buf, "{s}/{s}.csv", .{ benchmark_name, def.name });
         const file_average = try results_dir.createFile(file_name_average, .{ .read = true });
@@ -222,7 +223,6 @@ pub fn benchmarkCSV(
             logger.debug().logf("benchmarking arg: {d}/{d}: {s}", .{ arg_i + 1, args.len, arg_name });
 
             const benchFunction = @field(B, def.name);
-
             // NOTE: @TypeOf guarantees no runtime side-effects of argument expressions.
             // this means the function will *not* be called, this is just computing the return
             // type.
@@ -249,11 +249,19 @@ pub fn benchmarkCSV(
                 }
             };
             const result_type: type = @TypeOf(try @call(.auto, benchFunction, arguments));
-            const runtime_type = switch (result_type) {
-                // single value
-                Duration => struct { result: u64 },
-                // multiple values
-                else => result_type,
+            const runtime_type = blk: {
+                switch (result_type) {
+                    // single value
+                    Duration => {
+                        try is_multi_return.append(false);
+                        break :blk struct { result: u64 };
+                    },
+                    // multiple values
+                    else => {
+                        try is_multi_return.append(true);
+                        break :blk result_type;
+                    },
+                }
             };
             var runtimes: std.MultiArrayList(runtime_type) = .{};
             defer runtimes.deinit(allocator);
@@ -417,8 +425,6 @@ pub fn benchmarkCSV(
 
     // print the results in a formatted table
     inline for (functions, 0..) |def, fcni| {
-        _ = fcni;
-
         var fmt_buf: [512]u8 = undefined;
         const file_name_average = try std.fmt.bufPrint(&fmt_buf, "{s}/{s}.csv", .{ benchmark_name, def.name });
         const file_average = try results_dir.openFile(file_name_average, .{});
@@ -428,6 +434,88 @@ pub fn benchmarkCSV(
         defer table.deinit();
         var read_buf: [1024 * 1024]u8 = undefined;
         try table.readFrom(file_average.reader(), &read_buf, ",", true);
-        try table.printstd();
+
+        if (!is_multi_return.items[fcni]) {
+            // direct print works ok in this case
+            try table.printstd();
+        } else {
+            // re-parse the return type
+            const benchFunction = @field(B, def.name);
+            const arguments = blk: {
+                switch (@typeInfo(@TypeOf(benchFunction))) {
+                    .Fn => |info| {
+                        // NOTE: to know if we should pass in the time unit we
+                        // check the input params of the function, so any multi-return
+                        // function NEEDS to have the time unit as the first parameter
+                        if (info.params.len > 0 and info.params[0].type.? == BenchTimeUnit) {
+                            break :blk switch (@TypeOf(args[0])) {
+                                void => .{time_unit},
+                                else => .{ time_unit, args[0] },
+                            };
+                        } else {
+                            // single return type
+                            break :blk switch (@TypeOf(args[0])) {
+                                void => .{},
+                                else => .{args[0]},
+                            };
+                        }
+                    },
+                    else => unreachable,
+                }
+            };
+            const result_type: type = @TypeOf(try @call(.auto, benchFunction, arguments));
+            const runtime_type = blk: {
+                switch (result_type) {
+                    // single value
+                    Duration => {
+                        break :blk struct { result: u64 };
+                    },
+                    // multiple values
+                    else => {
+                        break :blk result_type;
+                    },
+                }
+            };
+            const U = @typeInfo(runtime_type).Struct;
+
+            // organize the data into a table:
+            // field_name,              field_name2
+            // min, max, mean, std_dev  min, max, mean, std_dev
+            const stat_titles: [4][]const u8 = .{ "min", "max", "mean", "std_dev" };
+            const per_field_column_count = stat_titles.len;
+            // first column is the field names
+            const field_name_data = try allocator.alloc([]const u8, 1 + per_field_column_count * U.fields.len);
+            field_name_data[0] = ""; // benchmark name is blank
+            const stat_data_row = try allocator.alloc([]const u8, 1 + per_field_column_count * U.fields.len);
+            stat_data_row[0] = def.name;
+            var i: u64 = 1;
+            var k: u64 = 1;
+
+            inline for (U.fields) |field| {
+                field_name_data[i] = field.name;
+                i += 1;
+                for (0..per_field_column_count - 1) |_| {
+                    field_name_data[i] = "";
+                    i += 1;
+                }
+                for (0..per_field_column_count) |j| {
+                    stat_data_row[k] = stat_titles[j];
+                    k += 1;
+                }
+            }
+
+            var field_names_cells = std.ArrayList(pt.Cell).init(allocator);
+            var stats_cells = std.ArrayList(pt.Cell).init(allocator);
+            for (0..i) |cell_i| {
+                try field_names_cells.append(try pt.Cell.init(allocator, field_name_data[cell_i]));
+                try stats_cells.append(try pt.Cell.init(allocator, stat_data_row[cell_i]));
+            }
+            const field_name_row = pt.Row.init(allocator, field_names_cells);
+            const stats_row = pt.Row.init(allocator, stats_cells);
+
+            table.titles = field_name_row;
+            try table.rows.insert(0, stats_row);
+            try table.printstd();
+        }
     }
 }
