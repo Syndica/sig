@@ -360,12 +360,12 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
                 pub fn nextKey(self: *@This()) anyerror!?cf.Key {
                     const index = self.nextIndex() orelse return null;
-                    return key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]);
+                    return try key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]);
                 }
 
                 pub fn nextValue(self: *@This()) anyerror!?cf.Value {
                     const index = self.nextIndex() orelse return null;
-                    return value_serializer.deserialize(cf.Value, self.allocator, self.vals[index]);
+                    return try value_serializer.deserialize(cf.Value, self.allocator, self.vals[index]);
                 }
 
                 pub fn nextBytes(self: *@This()) error{}!?[2]BytesRef {
