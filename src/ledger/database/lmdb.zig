@@ -22,7 +22,8 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
 
         const Self = @This();
 
-        pub fn open(allocator: Allocator, _: Logger, path: []const u8) anyerror!Self {
+        pub fn open(allocator: Allocator, logger: Logger, path: []const u8) anyerror!Self {
+            logger.info().log("Initializing LMDB");
             const owned_path = try allocator.dupe(u8, path);
 
             // create and open the database

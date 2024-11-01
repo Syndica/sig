@@ -25,6 +25,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         const Self = @This();
 
         pub fn open(allocator: Allocator, logger: Logger, path: []const u8) Error!Self {
+            logger.info().log("Initializing RocksDB");
             const owned_path = try allocator.dupe(u8, path);
 
             // allocate cf descriptions

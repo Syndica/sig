@@ -6,8 +6,9 @@ pub const rocksdb = @import("rocksdb.zig");
 pub const BytesRef = interface.BytesRef;
 pub const ColumnFamily = interface.ColumnFamily;
 pub const Database = interface.Database;
-pub const SharedHashMapDB = hashmap.SharedHashMapDB;
+pub const LMDB = lmdb.LMDB;
 pub const RocksDB = rocksdb.RocksDB;
+pub const SharedHashMapDB = hashmap.SharedHashMapDB;
 
 pub const assertIsDatabase = interface.assertIsDatabase;
 

@@ -26,9 +26,10 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
         pub fn open(
             allocator: Allocator,
-            _: Logger,
+            logger: Logger,
             _: []const u8,
         ) Allocator.Error!Self {
+            logger.info().log("Initializing SharedHashMapDB");
             var maps = try allocator.alloc(SharedHashMap, column_families.len);
             errdefer {
                 for (maps) |*m| m.deinit();

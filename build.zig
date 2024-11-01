@@ -10,6 +10,11 @@ pub fn build(b: *Build) void {
     const filters = b.option([]const []const u8, "filter", "List of filters, used for example to filter unit tests by name"); // specified as a series like `-Dfilter="filter1" -Dfilter="filter2"`
     const enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite");
     const no_run = b.option(bool, "no-run", "Do not run the selected step and install it") orelse false;
+    const blockstore_db = b.option(BlockstoreDB, "blockstore-db", "Blockstore database backend") orelse .rocksdb;
+
+    // Build options
+    const build_options = b.addOptions();
+    build_options.addOption(BlockstoreDB, "blockstore_db", blockstore_db);
 
     // CLI build steps
     const sig_step = b.step("run", "Run the sig executable");
@@ -58,8 +63,9 @@ pub fn build(b: *Build) void {
     sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
     sig_mod.addImport("curl", curl_mod);
-    sig_mod.addImport("rocksdb", rocksdb_mod);
-    sig_mod.addImport("lmdb", lmdb_mod);
+    if (blockstore_db == .rocksdb) sig_mod.addImport("rocksdb", rocksdb_mod);
+    if (blockstore_db == .lmdb) sig_mod.addImport("lmdb", lmdb_mod);
+    sig_mod.addOptions("build-options", build_options);
 
     // main executable
     const sig_exe = b.addExecutable(.{
@@ -76,8 +82,9 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("zig-cli", zig_cli_module);
     sig_exe.root_module.addImport("zig-network", zig_network_module);
     sig_exe.root_module.addImport("zstd", zstd_mod);
-    sig_exe.root_module.addImport("rocksdb", rocksdb_mod);
-    sig_exe.root_module.addImport("lmdb", lmdb_mod);
+    if (blockstore_db == .rocksdb) sig_exe.root_module.addImport("rocksdb", rocksdb_mod);
+    if (blockstore_db == .lmdb) sig_exe.root_module.addImport("lmdb", lmdb_mod);
+    sig_exe.root_module.addOptions("build-options", build_options);
     sig_exe.linkLibC();
 
     const main_exe_run = b.addRunArtifact(sig_exe);
@@ -117,6 +124,7 @@ pub fn build(b: *Build) void {
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
     unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod);
     unit_tests_exe.root_module.addImport("lmdb", lmdb_mod);
+    unit_tests_exe.root_module.addOptions("build-options", build_options);
     unit_tests_exe.linkLibC();
 
     const unit_tests_exe_run = b.addRunArtifact(unit_tests_exe);
@@ -159,6 +167,9 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod);
     benchmark_exe.root_module.addImport("lmdb", lmdb_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
+    if (blockstore_db == .rocksdb) sig_exe.root_module.addImport("rocksdb", rocksdb_mod);
+    if (blockstore_db == .lmdb) sig_exe.root_module.addImport("lmdb", lmdb_mod);
+    benchmark_exe.root_module.addOptions("build-options", build_options);
     benchmark_exe.linkLibC();
 
     const benchmark_exe_run = b.addRunArtifact(benchmark_exe);
@@ -202,3 +213,9 @@ fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
         artifact.generated_bin = null;
     }
 }
+
+const BlockstoreDB = enum {
+    rocksdb,
+    lmdb,
+    hashmap,
+};
