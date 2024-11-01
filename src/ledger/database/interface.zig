@@ -276,7 +276,7 @@ pub const BytesRef = struct {
 fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     @setEvalBranchQuota(10_000);
     const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
-    const test_dir = sig.TEST_DATA_DIR ++ "blockstore/database/" ++ impl_id.buffer ++ "/";
+    const test_dir = sig.TEST_STATE_DIR ++ "blockstore/database/" ++ impl_id.buffer ++ "/";
 
     const allocator = std.testing.allocator;
 

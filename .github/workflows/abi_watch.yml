@@ -22,4 +22,4 @@ jobs:
         python -m pip install requests
     - name: run
       run: |
-        python scripts/rust_hash_check.py
+        python scripts/agave_gossip_hash_check.py

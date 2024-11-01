@@ -31,7 +31,7 @@ pub const SlotMeta = struct {
     parent_slot: ?Slot,
     /// The list of slots, each of which contains a block that derives
     /// from this one.
-    next_slots: std.ArrayList(Slot),
+    child_slots: std.ArrayList(Slot),
     /// Connected status flags of this slot
     connected_flags: ConnectedFlags,
     /// Shreds indices which are marked data complete.  That is, those that have the
@@ -55,19 +55,19 @@ pub const SlotMeta = struct {
             .received = 0,
             .first_shred_timestamp_milli = 0,
             .last_index = null,
-            .next_slots = std.ArrayList(Slot).init(allocator),
+            .child_slots = std.ArrayList(Slot).init(allocator),
             .completed_data_indexes = SortedSet(u32).init(allocator),
         };
     }
 
     pub fn deinit(self: Self) void {
-        self.next_slots.deinit();
+        self.child_slots.deinit();
         self.completed_data_indexes.deinit();
     }
 
     pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
-        var next_slots = try std.ArrayList(Slot).initCapacity(allocator, self.next_slots.items.len);
-        next_slots.appendSliceAssumeCapacity(self.next_slots.items);
+        var child_slots = try std.ArrayList(Slot).initCapacity(allocator, self.child_slots.items.len);
+        child_slots.appendSliceAssumeCapacity(self.child_slots.items);
         return .{
             .slot = self.slot,
             .parent_slot = self.parent_slot,
@@ -76,7 +76,7 @@ pub const SlotMeta = struct {
             .received = self.received,
             .first_shred_timestamp_milli = self.first_shred_timestamp_milli,
             .last_index = self.last_index,
-            .next_slots = next_slots,
+            .child_slots = child_slots,
             .completed_data_indexes = try self.completed_data_indexes.clone(),
         };
     }
@@ -88,7 +88,7 @@ pub const SlotMeta = struct {
             self.first_shred_timestamp_milli == other.first_shred_timestamp_milli and
             self.last_index == other.last_index and
             self.parent_slot == other.parent_slot and
-            std.mem.eql(Slot, self.next_slots.items, other.next_slots.items) and
+            std.mem.eql(Slot, self.child_slots.items, other.child_slots.items) and
             self.connected_flags.state == other.connected_flags.state and
             self.completed_data_indexes.eql(&other.completed_data_indexes);
     }
@@ -175,7 +175,7 @@ pub const DuplicateSlotProof = struct {
 /// TODO: why does this need such large integer types?
 pub const ErasureMeta = struct {
     /// Which erasure set in the slot this is
-    fec_set_index: u64,
+    erasure_set_index: u64,
     /// First code index in the FEC set
     first_code_index: u64,
     /// Index of the first received code shred in the FEC set
@@ -187,7 +187,7 @@ pub const ErasureMeta = struct {
 
     pub fn fromCodeShred(shred: CodeShred) ?Self {
         return .{
-            .fec_set_index = shred.common.fec_set_index,
+            .erasure_set_index = shred.common.erasure_set_index,
             .config = ErasureConfig{
                 .num_data = shred.custom.num_data_shreds,
                 .num_code = shred.custom.num_code_shreds,
@@ -230,7 +230,7 @@ pub const ErasureMeta = struct {
     /// Analogous to [data_shreds_indices](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L422)
     pub fn dataShredsIndices(self: Self) [2]u64 {
         const num_data = self.config.num_data;
-        return .{ self.fec_set_index, self.fec_set_index + num_data };
+        return .{ self.erasure_set_index, self.erasure_set_index + num_data };
     }
 
     /// Analogous to [code_shreds_indices](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L428)
@@ -239,11 +239,11 @@ pub const ErasureMeta = struct {
         return .{ self.first_code_index, self.first_code_index + num_code };
     }
 
-    /// Analogous to [next_fec_set_index](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L437)
-    pub fn nextFecSetIndex(self: Self) ?u32 {
+    /// Analogous to [next_erasure_set_index](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L437)
+    pub fn nextErasureSetIndex(self: Self) ?u32 {
         const num_data: u32 = @intCast(self.config.num_data);
         return sig.utils.math.checkedAdd(
-            @as(u32, @intCast(self.fec_set_index)),
+            @as(u32, @intCast(self.erasure_set_index)),
             num_data,
         ) catch null;
     }

@@ -149,11 +149,11 @@ fn getRecoveryMetadata(shreds: []const Shred) !RecoveryMetadata {
             const code_shred = shred.code;
             const chained_merkle_root = code_shred.chainedMerkleRoot() catch null;
             const retransmitter_signature = code_shred.retransmitterSignature() catch null;
-            const position = code_shred.custom.position;
+            const position = code_shred.custom.erasure_code_index;
             var common_header = code_shred.common;
             var code_header = code_shred.custom;
             common_header.index = try checkedSub(common_header.index, position);
-            code_header.position = 0;
+            code_header.erasure_code_index = 0;
             break .{
                 .common_header = common_header,
                 .code_header = code_header,
@@ -256,7 +256,7 @@ fn reconstructShred(
     if (index < meta.code_header.num_data_shreds) {
         const data_shred = try DataShred.fromRecoveredShard(
             allocator,
-            meta.common_header.signature,
+            meta.common_header.leader_signature,
             meta.chained_merkle_root,
             meta.retransmitter_signature,
             shard,
@@ -268,7 +268,7 @@ fn reconstructShred(
             this.variant.resigned != set.variant.resigned or
             this.slot != set.slot or
             this.version != set.version or
-            this.fec_set_index != set.fec_set_index)
+            this.erasure_set_index != set.erasure_set_index)
         {
             return error.InvalidRecoveredShred;
         }
@@ -278,7 +278,7 @@ fn reconstructShred(
         var this_common_header = meta.common_header;
         var this_code_header = meta.code_header;
         this_common_header.index += @intCast(offset);
-        this_code_header.position = @intCast(offset);
+        this_code_header.erasure_code_index = @intCast(offset);
         const code_shred = try CodeShred.fromRecoveredShard(
             allocator,
             this_common_header,
@@ -345,10 +345,10 @@ fn verifyErasureBatch(
 ) bool {
     for (shreds) |shred| {
         const actual = shred.commonHeader();
-        if (!(expect.signature.eql(&actual.signature) and
+        if (!(expect.leader_signature.eql(&actual.leader_signature) and
             expect.slot == actual.slot and
             expect.version == actual.version and
-            expect.fec_set_index == actual.fec_set_index and
+            expect.erasure_set_index == actual.erasure_set_index and
             expect.variant.proof_size == actual.variant.proof_size and
             expect.variant.chained == actual.variant.chained and
             expect.variant.resigned == actual.variant.resigned and
@@ -460,7 +460,7 @@ const expected_metadata = blk: {
     @setEvalBranchQuota(10_000);
     break :blk RecoveryMetadata{
         .common_header = CommonHeader{
-            .signature = Signature.fromString(
+            .leader_signature = Signature.fromString(
                 "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2sAmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m",
             ) catch unreachable,
             .variant = .{
@@ -472,12 +472,12 @@ const expected_metadata = blk: {
             .slot = 284737905,
             .index = 483,
             .version = 50093,
-            .fec_set_index = 483,
+            .erasure_set_index = 483,
         },
         .code_header = CodeHeader{
             .num_data_shreds = 7,
             .num_code_shreds = 21,
-            .position = 0,
+            .erasure_code_index = 0,
         },
         .retransmitter_signature = null,
         .chained_merkle_root = null,

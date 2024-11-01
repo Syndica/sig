@@ -422,7 +422,7 @@ pub const ShredInserter = struct {
 
         // TODO self.metrics
         // self.slots_stats
-        //     .record_shred(shred.slot(), shred.fec_set_index(), shred_source, None);
+        //     .record_shred(shred.slot(), shred.erasure_set_index(), shred_source, None);
         _ = shred_source;
 
         const was_inserted = !std.meta.isError(insertCodeShred(index_meta, shred, write_batch));
@@ -630,7 +630,8 @@ pub const ShredInserter = struct {
                 // replayed entries past the newly detected "last" shred, then mark the slot as dead
                 // and wait for replay to dump and repair the correct version.
                 self.logger.warn().logf(
-                    "Received *last* shred index {} less than previous shred index {}, and slot {} is not full, marking slot dead",
+                    "Received *last* shred index {} less than previous shred index {}, " ++
+                        "and slot {} is not full, marking slot dead",
                     .{ shred_index, slot_meta.received, slot },
                 );
                 try write_batch.put(schema.dead_slots, slot, true);
@@ -1121,8 +1122,7 @@ pub const BlockstoreInsertionMetrics = struct {
 // Tests
 
 const test_shreds = @import("../test_shreds.zig");
-const comptimePrint = std.fmt.comptimePrint;
-const TestState = ledger.tests.TestState("insert_shred");
+const TestState = ledger.tests.TestState;
 const DirectPrintLogger = sig.trace.DirectPrintLogger;
 const Logger = sig.trace.Logger;
 
@@ -1130,21 +1130,26 @@ fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
 }
 
-const test_dir = comptimePrint(sig.TEST_DATA_DIR ++ "blockstore/insert_shred", .{});
-
 const ShredInserterTestState = struct {
     state: *TestState,
     db: BlockstoreDB,
     inserter: ShredInserter,
 
-    pub fn init(allocator_: std.mem.Allocator, comptime test_name: []const u8) !ShredInserterTestState {
+    pub fn init(
+        allocator_: std.mem.Allocator,
+        comptime test_src: std.builtin.SourceLocation,
+    ) !ShredInserterTestState {
         var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
         const logger = test_logger.logger();
-        return initWithLogger(allocator_, test_name, logger);
+        return initWithLogger(allocator_, test_src, logger);
     }
 
-    fn initWithLogger(allocator_: std.mem.Allocator, comptime test_name: []const u8, logger: sig.trace.Logger) !ShredInserterTestState {
-        const state = try TestState.init(allocator_, test_name, logger);
+    fn initWithLogger(
+        allocator_: std.mem.Allocator,
+        comptime test_src: std.builtin.SourceLocation,
+        logger: sig.trace.Logger,
+    ) !ShredInserterTestState {
+        const state = try TestState.init(allocator_, test_src, logger);
         const inserter = try ShredInserter.init(
             state.allocator,
             logger,
@@ -1213,7 +1218,7 @@ pub fn insertShredsForTest(
 }
 
 test "insertShreds single shred" {
-    var state = try ShredInserterTestState.init(std.testing.allocator, "insertShreds single shred");
+    var state = try ShredInserterTestState.init(std.testing.allocator, @src());
     defer state.deinit();
     const allocator = std.testing.allocator;
     const shred = try Shred.fromPayload(allocator, &ledger.shred.test_data_shred);
@@ -1228,7 +1233,7 @@ test "insertShreds single shred" {
 }
 
 test "insertShreds 100 shreds from mainnet" {
-    var state = try ShredInserterTestState.init(std.testing.allocator, "insertShreds 32 shreds");
+    var state = try ShredInserterTestState.init(std.testing.allocator, @src());
     defer state.deinit();
 
     const shred_bytes = test_shreds.mainnet_shreds;
@@ -1253,7 +1258,7 @@ test "insertShreds 100 shreds from mainnet" {
 
 // agave: test_handle_chaining_basic
 test "chaining basic" {
-    var state = try ShredInserterTestState.init(std.testing.allocator, "handle chaining basic");
+    var state = try ShredInserterTestState.init(std.testing.allocator, @src());
     defer state.deinit();
 
     const shreds = test_shreds.handle_chaining_basic_shreds;
@@ -1271,7 +1276,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1282,7 +1287,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1290,7 +1295,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 2)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
         try std.testing.expectEqual(1, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1301,7 +1306,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 0)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{1}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{1}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1309,7 +1314,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1317,7 +1322,7 @@ test "chaining basic" {
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 2)).?;
         defer slot_meta.deinit();
-        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
+        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(1, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
@@ -1326,7 +1331,7 @@ test "chaining basic" {
 
 // agave: test_merkle_root_metas_coding
 test "merkle root metas coding" {
-    var state = try ShredInserterTestState.initWithLogger(std.testing.allocator, "handle chaining basic", .noop);
+    var state = try ShredInserterTestState.initWithLogger(std.testing.allocator, @src(), .noop);
     defer state.deinit();
     const allocator = state.allocator();
     const metrics = try sig.prometheus.globalRegistry().initStruct(BlockstoreInsertionMetrics);
@@ -1470,7 +1475,7 @@ test "merkle root metas coding" {
 
 // agave: test_recovery
 test "recovery" {
-    var state = try ShredInserterTestState.init(std.testing.allocator, "handle chaining basic");
+    var state = try ShredInserterTestState.init(std.testing.allocator, @src());
     defer state.deinit();
     const allocator = state.allocator();
 

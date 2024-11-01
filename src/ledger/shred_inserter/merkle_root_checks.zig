@@ -116,14 +116,14 @@ pub fn checkForwardChainedMerkleRootConsistency(
     const erasure_set_id = shred.common.erasureSetId();
 
     // If a shred from the next fec set has already been inserted, check the chaining
-    const next_fec_set_index = if (erasure_meta.nextFecSetIndex()) |n| n else {
+    const next_erasure_set_index = if (erasure_meta.nextErasureSetIndex()) |n| n else {
         logger.err().logf(
             "Invalid erasure meta, unable to compute next fec set index {any}",
             .{erasure_meta},
         );
         return false;
     };
-    const next_erasure_set = ErasureSetId{ .slot = slot, .fec_set_index = next_fec_set_index };
+    const next_erasure_set = ErasureSetId{ .slot = slot, .erasure_set_index = next_erasure_set_index };
     const next_merkle_root_meta = if (merkle_root_metas.get(next_erasure_set)) |nes|
         nes.asRef().*
     else if (try db.get(allocator, schema.merkle_root_meta, next_erasure_set)) |nes|
@@ -201,9 +201,9 @@ pub fn checkBackwardsChainedMerkleRootConsistency(
 ) !bool {
     const slot = shred.commonHeader().slot;
     const erasure_set_id = shred.commonHeader().erasureSetId();
-    const fec_set_index = shred.commonHeader().fec_set_index;
+    const erasure_set_index = shred.commonHeader().erasure_set_index;
 
-    if (fec_set_index == 0) {
+    if (erasure_set_index == 0) {
         // Although the first fec set chains to the last fec set of the parent block,
         // if this chain is incorrect we do not know which block is the duplicate until votes
         // are received. We instead delay this check until the block reaches duplicate
@@ -275,18 +275,18 @@ fn previousErasureSet(
     erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
 ) !?struct { ErasureSetId, ErasureMeta } { // TODO: agave uses CoW here
     const slot = erasure_set.slot;
-    const fec_set_index = erasure_set.fec_set_index;
+    const erasure_set_index = erasure_set.erasure_set_index;
 
     // Check the previous entry from the in memory map to see if it is the consecutive
     // set to `erasure set`
     const id_range, const meta_range = erasure_metas.range(
-        .{ .slot = slot, .fec_set_index = 0 },
+        .{ .slot = slot, .erasure_set_index = 0 },
         erasure_set,
     );
     if (id_range.len != 0) {
         const i = id_range.len - 1;
         const last_meta = meta_range[i].asRef();
-        if (@as(u32, @intCast(fec_set_index)) == last_meta.nextFecSetIndex()) {
+        if (@as(u32, @intCast(erasure_set_index)) == last_meta.nextErasureSetIndex()) {
             return .{ id_range[i], last_meta.* };
         }
     }
@@ -300,15 +300,15 @@ fn previousErasureSet(
         defer for (entry) |e| e.deinit();
         const key = try key_serializer.deserialize(ErasureSetId, allocator, entry[0].data);
         if (key.slot != slot) return null;
-        if (key.fec_set_index != fec_set_index) break .{
+        if (key.erasure_set_index != erasure_set_index) break .{
             key,
             try value_serializer.deserialize(ErasureMeta, allocator, entry[1].data),
         };
     } else return null;
 
     // Check if this is actually the consecutive erasure set
-    const next = if (candidate.nextFecSetIndex()) |n| n else return error.InvalidErasureConfig;
-    return if (next == fec_set_index)
+    const next = if (candidate.nextErasureSetIndex()) |n| n else return error.InvalidErasureConfig;
+    return if (next == erasure_set_index)
         .{ candidate_set, candidate }
     else
         return null;

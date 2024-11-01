@@ -227,7 +227,7 @@ pub const CodeShred = struct {
         // Assert that the last shred index in the erasure set does not
         // overshoot MAX_{DATA,CODE}_SHREDS_PER_SLOT.
         if (try checkedAdd(
-            self.common.fec_set_index,
+            self.common.erasure_set_index,
             try checkedSub(@as(u32, @intCast(self.custom.num_data_shreds)), 1),
         ) >= data_shred_constants.max_per_slot) {
             return error.InvalidErasureShardIndex;
@@ -240,16 +240,16 @@ pub const CodeShred = struct {
         }
         const num_data_shreds: usize = @intCast(self.custom.num_data_shreds);
         const num_code_shreds: usize = @intCast(self.custom.num_code_shreds);
-        const position: usize = @intCast(self.custom.position);
-        const fec_set_size = try checkedAdd(num_data_shreds, num_code_shreds);
+        const position: usize = @intCast(self.custom.erasure_code_index);
+        const erasure_set_size = try checkedAdd(num_data_shreds, num_code_shreds);
         const index = try checkedAdd(position, num_data_shreds);
-        return if (index < fec_set_size) index else error.InvalidErasureShardIndex;
+        return if (index < erasure_set_size) index else error.InvalidErasureShardIndex;
     }
 
     pub fn firstCodeIndex(self: *const Self) !u32 {
         return sig.utils.math.checkedSub(
             self.common.index,
-            @as(u32, @intCast(self.custom.position)),
+            @as(u32, @intCast(self.custom.erasure_code_index)),
         );
     }
 
@@ -289,7 +289,7 @@ pub const DataShred = struct {
     /// agave: ShredData::from_recovered_shard
     pub fn fromRecoveredShard(
         allocator: Allocator,
-        signature: Signature,
+        leader_signature: Signature,
         chained_merkle_root: ?Hash,
         retransmitter_signature: ?Signature,
         shard: []const u8,
@@ -300,7 +300,7 @@ pub const DataShred = struct {
         }
         const payload = try allocator.alloc(u8, constants.payload_size);
         errdefer allocator.free(payload);
-        @memcpy(payload[0..Signature.size], &signature.data);
+        @memcpy(payload[0..Signature.size], &leader_signature.data);
         @memcpy(payload[Signature.size..][0..shard_size], shard);
         @memset(payload[Signature.size + shard_size ..], 0);
         var shred = try generic.fromPayloadOwned(allocator, payload);
@@ -341,16 +341,16 @@ pub const DataShred = struct {
         return self.payload[constants.headers_size..size];
     }
 
-    pub fn parent(self: *const Self) error{InvalidParentOffset}!Slot {
+    pub fn parent(self: *const Self) error{InvalidParentSlotOffset}!Slot {
         const slot = self.common.slot;
-        if (self.custom.parent_offset == 0 and slot != 0) {
-            return error.InvalidParentOffset;
+        if (self.custom.parent_slot_offset == 0 and slot != 0) {
+            return error.InvalidParentSlotOffset;
         }
-        return checkedSub(slot, self.custom.parent_offset) catch error.InvalidParentOffset;
+        return checkedSub(slot, self.custom.parent_slot_offset) catch error.InvalidParentSlotOffset;
     }
 
     pub fn erasureShardIndex(self: *const Self) !usize {
-        return @intCast(try checkedSub(self.common.index, self.common.fec_set_index));
+        return @intCast(try checkedSub(self.common.index, self.common.erasure_set_index));
     }
 
     pub fn dataComplete(self: Self) bool {
@@ -496,10 +496,10 @@ fn generic_shred(shred_type: ShredType) type {
             return self.payload[start..end];
         }
 
-        fn verify(self: Self, signer: sig.core.Pubkey) bool {
+        fn verify(self: Self, leader: sig.core.Pubkey) bool {
             const signed_data = self.merkleRoot() catch return false;
-            const signature = layout.getSignature(self.payload) orelse return false;
-            return signature.verify(signer, &signed_data.data);
+            const signature = layout.getLeaderSignature(self.payload) orelse return false;
+            return signature.verify(leader, &signed_data.data);
         }
 
         /// this is the data that is signed by the signature
@@ -574,14 +574,17 @@ pub const ShredId = struct {
 
 pub const ErasureSetId = struct {
     slot: Slot,
-    fec_set_index: u64,
+    /// The number that identifies the erasure set within a slot.
+    /// This is shred index for the first data shred in the erasure set.
+    /// aka "fec_set_index"
+    erasure_set_index: u64,
 
     pub fn order(a: ErasureSetId, b: ErasureSetId) std.math.Order {
-        if (a.slot == b.slot and a.fec_set_index == b.fec_set_index) {
+        if (a.slot == b.slot and a.erasure_set_index == b.erasure_set_index) {
             return .eq;
-        } else if (a.slot < b.slot or a.slot == b.slot and a.fec_set_index < b.fec_set_index) {
+        } else if (a.slot < b.slot or a.slot == b.slot and a.erasure_set_index < b.erasure_set_index) {
             return .lt;
-        } else if (a.slot > b.slot or a.slot == b.slot and a.fec_set_index > b.fec_set_index) {
+        } else if (a.slot > b.slot or a.slot == b.slot and a.erasure_set_index > b.erasure_set_index) {
             return .gt;
         } else {
             unreachable;
@@ -771,9 +774,9 @@ fn codeIndex(shred: []const u8) ?usize {
 /// Shred index in the erasure batch
 /// This only works for data shreds.
 fn dataIndex(shred: []const u8) ?usize {
-    const fec_set_index = getInt(u32, shred, 79) orelse return null;
+    const erasure_set_index = getInt(u32, shred, 79) orelse return null;
     const layout_index = layout.getIndex(shred) orelse return null;
-    const index = checkedSub(layout_index, fec_set_index) catch return null;
+    const index = checkedSub(layout_index, erasure_set_index) catch return null;
     return @intCast(index);
 }
 
@@ -835,44 +838,48 @@ pub const MerkleProofEntryList = struct {
 };
 
 pub const CommonHeader = struct {
-    signature: Signature,
+    leader_signature: Signature,
     variant: ShredVariant,
     slot: Slot,
     index: u32,
     version: u16,
-    fec_set_index: u32,
+    /// The number that identifies the erasure set within a slot.
+    /// This is shred index for the first data shred in the erasure set.
+    /// aka "fec_set_index"
+    erasure_set_index: u32,
 
     pub const @"!bincode-config:variant" = ShredVariantConfig;
 
     const Self = @This();
 
     const ZEROED_FOR_TEST = Self{
-        .signature = Signature{ .data = .{0} ** Signature.size },
+        .leader_signature = Signature{ .data = .{0} ** Signature.size },
         .variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
         .slot = 0,
         .index = 0,
         .version = 0,
-        .fec_set_index = 0,
+        .erasure_set_index = 0,
     };
 
     // Identifier for the erasure code set that the shred belongs to.
     pub fn erasureSetId(self: @This()) ErasureSetId {
         return ErasureSetId{
             .slot = self.slot,
-            .fec_set_index = self.fec_set_index,
+            .erasure_set_index = self.erasure_set_index,
         };
     }
 };
 
 pub const DataHeader = struct {
-    parent_offset: u16,
+    /// Number of slots since this slot's parent: parent_slot = slot - parent_slot_offset
+    parent_slot_offset: u16,
     flags: ShredFlags,
     size: u16, // common shred header + data shred header + data
 
     const Self = @This();
 
     const ZEROED_FOR_TEST = Self{
-        .parent_offset = 0,
+        .parent_slot_offset = 0,
         .flags = .{},
         .size = 0,
     };
@@ -881,14 +888,16 @@ pub const DataHeader = struct {
 pub const CodeHeader = struct {
     num_data_shreds: u16,
     num_code_shreds: u16,
-    position: u16, // [0..num_code_shreds)
+    /// Within an erasure set, every code shred is numbered from 0 to the number of code
+    /// shreds in the set. This index is the code shred's position within that sequence.
+    erasure_code_index: u16,
 
     const Self = @This();
 
     const ZEROED_FOR_TEST = Self{
         .num_data_shreds = 0,
         .num_code_shreds = 0,
-        .position = 0,
+        .erasure_code_index = 0,
     };
 };
 
@@ -1080,7 +1089,7 @@ pub const layout = struct {
         return getInt(u32, shred, OFFSET_OF_SHRED_INDEX);
     }
 
-    pub fn getSignature(shred: []const u8) ?Signature {
+    pub fn getLeaderSignature(shred: []const u8) ?Signature {
         if (shred.len < Signature.size) {
             return null;
         }
@@ -1097,7 +1106,7 @@ pub const layout = struct {
     }
 
     /// must be a data shred, otherwise the return value will be corrupted and meaningless
-    pub fn getParentOffset(shred: []const u8) ?u16 {
+    pub fn getParentSlotOffset(shred: []const u8) ?u16 {
         std.debug.assert(getShredVariant(shred).?.shred_type == .data);
         return getInt(u16, shred, 83);
     }
@@ -1193,8 +1202,8 @@ test "getMerkleRoot" {
     try std.testing.expect(std.mem.eql(u8, &expected_signed_data, &merkle_root.data));
 }
 
-test "getSignature" {
-    const signature = layout.getSignature(&test_data_shred).?;
+test "getLeaderSignature" {
+    const signature = layout.getLeaderSignature(&test_data_shred).?;
     const expected_signature = [_]u8{
         102, 205, 108, 67,  218, 3,   214, 186, 28,  110, 167, 22,  75,  135, 233, 156, 45,  215, 209, 1,
         253, 53,  142, 52,  6,   98,  158, 51,  157, 207, 190, 22,  96,  106, 68,  248, 244, 162, 13,  205,
@@ -1245,7 +1254,7 @@ test "mainnet shreds look like agave" {
         const actual_fields = test_data.ParsedFields{
             .slot = shred.commonHeader().slot,
             .index = shred.commonHeader().index,
-            .fec_set_index = shred.commonHeader().fec_set_index,
+            .erasure_set_index = shred.commonHeader().erasure_set_index,
             .merkle_root = (shred.merkleRoot() catch unreachable).data,
         };
         try std.testing.expectEqual(test_data.expected_data[i], actual_fields);

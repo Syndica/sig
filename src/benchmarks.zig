@@ -53,6 +53,7 @@ pub fn main() !void {
 
     const max_time_per_bench = Duration.fromSecs(5); // !!
     const run_all_benchmarks = filter.len == 0;
+    var num_errors: usize = 0;
 
     if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
         try benchmarkCSV(
@@ -145,6 +146,14 @@ pub fn main() !void {
             max_time_per_bench,
             .Nanos,
         );
+        num_errors += try benchmark(
+            @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
+            max_time_per_bench,
+            .milliseconds,
+        );
+    }
+    if (num_errors != 0) {
+        return error.CompletedWithErrors;
     }
 
     // NOTE: we dont support CSV output on this method so all results are printed as debug
@@ -518,4 +527,5 @@ pub fn benchmarkCSV(
             try table.printstd();
         }
     }
+    return num_errors;
 }

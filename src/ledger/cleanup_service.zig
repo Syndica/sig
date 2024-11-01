@@ -11,7 +11,7 @@ const Slot = sig.core.Slot;
 
 const BlockstoreDB = ledger.BlockstoreDB;
 const BlockstoreReader = ledger.reader.BlockstoreReader;
-const BlockstoreWriter = ledger.writer.BlockstoreWriter;
+const LedgerResultWriter = ledger.result_writer.LedgerResultWriter;
 
 const schema = ledger.schema.schema;
 
@@ -235,7 +235,7 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
     try purgeRangeWithCount(write_batch, schema.dead_slots, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.duplicate_slots, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.roots, from_slot, to_slot, &delete_count);
-    try purgeRangeWithCount(write_batch, schema.erasure_meta, .{ .slot = from_slot, .fec_set_index = 0 }, .{ .slot = to_slot, .fec_set_index = 0 }, &delete_count);
+    try purgeRangeWithCount(write_batch, schema.erasure_meta, .{ .slot = from_slot, .erasure_set_index = 0 }, .{ .slot = to_slot, .erasure_set_index = 0 }, &delete_count);
     try purgeRangeWithCount(write_batch, schema.orphans, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.index, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.data_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
@@ -258,7 +258,7 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
     try purgeRangeWithCount(write_batch, schema.block_height, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.bank_hash, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.optimistic_slots, from_slot, to_slot, &delete_count);
-    try purgeRangeWithCount(write_batch, schema.merkle_root_meta, .{ .slot = from_slot, .fec_set_index = 0 }, .{ .slot = to_slot, .fec_set_index = 0 }, &delete_count);
+    try purgeRangeWithCount(write_batch, schema.merkle_root_meta, .{ .slot = from_slot, .erasure_set_index = 0 }, .{ .slot = to_slot, .erasure_set_index = 0 }, &delete_count);
     // slot is not indexed in this method, so this is a full purge
     // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back eventually
     try purgeRangeWithCount(write_batch, schema.program_costs, Pubkey.ZEROES, Pubkey.ZEROES, &delete_count);
@@ -292,7 +292,7 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
     try purgeFileRangeWithCount(db, schema.dead_slots, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.duplicate_slots, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.roots, from_slot, to_slot, &delete_count);
-    try purgeFileRangeWithCount(db, schema.erasure_meta, .{ .slot = from_slot, .fec_set_index = 0 }, .{ .slot = to_slot, .fec_set_index = 0 }, &delete_count);
+    try purgeFileRangeWithCount(db, schema.erasure_meta, .{ .slot = from_slot, .erasure_set_index = 0 }, .{ .slot = to_slot, .erasure_set_index = 0 }, &delete_count);
     try purgeFileRangeWithCount(db, schema.orphans, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.index, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.data_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
@@ -315,7 +315,7 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
     try purgeFileRangeWithCount(db, schema.block_height, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.bank_hash, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.optimistic_slots, from_slot, to_slot, &delete_count);
-    try purgeFileRangeWithCount(db, schema.merkle_root_meta, .{ .slot = from_slot, .fec_set_index = 0 }, .{ .slot = to_slot, .fec_set_index = 0 }, &delete_count);
+    try purgeFileRangeWithCount(db, schema.merkle_root_meta, .{ .slot = from_slot, .erasure_set_index = 0 }, .{ .slot = to_slot, .erasure_set_index = 0 }, &delete_count);
     // slot is not indexed in this method, so this is a full purge
     // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back eventually
     try purgeFileRangeWithCount(db, schema.program_costs, Pubkey.ZEROES, Pubkey.ZEROES, &delete_count);
@@ -336,14 +336,14 @@ fn purgeFileRangeWithCount(
 }
 
 const Blockstore = ledger.BlockstoreDB;
-const TestDB = ledger.tests.TestDB("cleanup_service");
+const TestDB = ledger.tests.TestDB;
 
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("findSlotsToClean");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
@@ -386,18 +386,19 @@ test "purgeSlots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("setRoots");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = BlockstoreWriter{
+    var writer = LedgerResultWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
         .max_root = &max_root,
-        .scan_and_fix_roots_metrics = try registry.initStruct(ledger.writer.ScanAndFixRootsMetrics),
+        .scan_and_fix_roots_metrics = try registry
+            .initStruct(ledger.result_writer.ScanAndFixRootsMetrics),
     };
 
     // write some roots
@@ -422,7 +423,7 @@ test "purgeSlots" {
     var write_batch = try db.initWriteBatch();
     for (0..roots.len + 1) |i| {
         const merkle_root_meta = sig.ledger.shred.ErasureSetId{
-            .fec_set_index = i,
+            .erasure_set_index = i,
             .slot = i,
         };
         const merkle_meta = sig.ledger.meta.MerkleRootMeta{
@@ -440,12 +441,12 @@ test "purgeSlots" {
     try std.testing.expectEqual(true, did_purge2);
 
     for (0..5 + 1) |i| {
-        const r = try db.get(allocator, schema.merkle_root_meta, .{ .slot = i, .fec_set_index = i });
+        const r = try db.get(allocator, schema.merkle_root_meta, .{ .slot = i, .erasure_set_index = i });
         try std.testing.expectEqual(null, r);
     }
 
     for (6..10 + 1) |i| {
-        const r = try db.get(allocator, schema.merkle_root_meta, .{ .slot = i, .fec_set_index = i });
+        const r = try db.get(allocator, schema.merkle_root_meta, .{ .slot = i, .erasure_set_index = i });
         try std.testing.expect(r != null);
     }
 }

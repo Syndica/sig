@@ -120,7 +120,7 @@ pub const BlockstoreReader = struct {
         ) orelse return false;
         defer start_slot_meta.deinit();
         // need a reference so the start_slot_meta.deinit works correctly
-        var next_slots: *ArrayList(Slot) = &start_slot_meta.next_slots;
+        var child_slots: *ArrayList(Slot) = &start_slot_meta.child_slots;
 
         // TODO: revisit this with more extensive testing. how does agave work fine with
         //       supposed bugs? it may be worth opening a PR in agave with the presumed fix
@@ -128,8 +128,8 @@ pub const BlockstoreReader = struct {
         // This logic is a little different than agave because agave seems to have several bugs.
         var i: usize = 0;
         var last_slot = starting_slot;
-        while (i < next_slots.items.len) : (i += 1) {
-            const slot = next_slots.items[i];
+        while (i < child_slots.items.len) : (i += 1) {
+            const slot = child_slots.items[i];
             if (try self.db.get(self.allocator, schema.slot_meta, slot)) |_slot_meta| {
                 var slot_meta = _slot_meta;
                 defer slot_meta.deinit();
@@ -138,7 +138,7 @@ pub const BlockstoreReader = struct {
                     std.debug.assert(last_slot == slot - 1);
                     // this append is the same as agave, but is it redundant?
                     // does the list already have these slots?
-                    try next_slots.appendSlice(slot_meta.next_slots.items);
+                    try child_slots.appendSlice(slot_meta.child_slots.items);
                 } else {
                     return false; // this is missing from agave, which seems like a bug
                 }
@@ -1203,10 +1203,10 @@ pub const BlockstoreReader = struct {
         }
         for (slots) |slot| {
             if (try self.db.get(self.allocator, schema.slot_meta, slot)) |meta| {
-                errdefer meta.next_slots.deinit();
+                errdefer meta.child_slots.deinit();
                 var cdi = meta.completed_data_indexes;
                 cdi.deinit();
-                try map.put(slot, meta.next_slots);
+                try map.put(slot, meta.child_slots);
             }
         }
         return map;
@@ -1509,7 +1509,7 @@ pub const AncestorIterator = struct {
 const bincode = sig.bincode;
 const Blockstore = ledger.BlockstoreDB;
 const CodeShred = ledger.shred.CodeShred;
-const TestDB = ledger.tests.TestDB("BlockstoreReader");
+const TestDB = ledger.tests.TestDB;
 
 const test_shreds = @import("test_shreds.zig");
 
@@ -1523,7 +1523,7 @@ test "getLatestOptimisticSlots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("getLatestOptimisticSlots");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1594,7 +1594,7 @@ test "getFirstDuplicateProof" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_DATA_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
+    const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_STATE_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
     try sig.ledger.tests.freshDir(path);
     var db = try BlockstoreDB.open(allocator, logger, path);
     defer db.deinit();
@@ -1634,7 +1634,7 @@ test "isDead" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("isDead");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1670,7 +1670,7 @@ test "getBlockHeight" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("getBlockHeight");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1699,7 +1699,7 @@ test "getRootedBlockTime" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("getRootedBlockTime");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1738,7 +1738,7 @@ test "slotMetaIterator" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("slotMetaIterator");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1772,7 +1772,7 @@ test "slotMetaIterator" {
         slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < roots.len) {
-            try slot_meta.next_slots.append(roots[i + 1]);
+            try slot_meta.child_slots.append(roots[i + 1]);
         }
         try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
         // connect the chain
@@ -1800,7 +1800,7 @@ test "rootedSlotIterator" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("rootedSlotIterator");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1836,7 +1836,7 @@ test "slotRangeConnected" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("slotRangeConnected");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1864,7 +1864,7 @@ test "slotRangeConnected" {
         slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < roots.len) {
-            try slot_meta.next_slots.append(roots[i + 1]);
+            try slot_meta.child_slots.append(roots[i + 1]);
         }
         try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
         // connect the chain
@@ -1894,7 +1894,7 @@ test "highestSlot" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("highestSlot");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1953,7 +1953,7 @@ test "lowestSlot" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("lowestSlot");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -1999,7 +1999,7 @@ test "isShredDuplicate" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("isShredDuplicate");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -2051,7 +2051,7 @@ test "findMissingDataIndexes" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("findMissingDataIndexes");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -2119,7 +2119,7 @@ test "getCodeShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("getCodeShred");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
@@ -2201,7 +2201,7 @@ test "getDataShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try TestDB.init("getDataShred");
+    var db = try TestDB.init(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
