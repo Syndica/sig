@@ -1110,7 +1110,7 @@ pub fn testTransactionSenderService() !void {
     );
 
     // rpc is used to get blockhashes and other balance information
-    var rpc_client = sig.rpc.Client.init(allocator, cluster, .{ .logger = app_base.logger });
+    var rpc_client = sig.rpc.Client.init(allocator, cluster, .{ .logger = app_base.logger.unscoped() });
     defer rpc_client.deinit();
 
     // this sends mock txs to the transaction sender
@@ -1119,7 +1119,7 @@ pub fn testTransactionSenderService() !void {
         transaction_channel,
         rpc_client,
         &app_base.exit,
-        app_base.logger,
+        app_base.logger.unscoped(),
     );
     // send and confirm mock transactions
     try mock_transfer_service.run(
