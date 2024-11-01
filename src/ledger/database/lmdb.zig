@@ -23,7 +23,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
 
         const Self = @This();
 
-        pub fn open(allocator: Allocator, logger: Logger, path: []const u8) LmdbError!Self {
+        pub fn open(allocator: Allocator, logger: Logger, path: []const u8) anyerror!Self {
             const owned_path = try allocator.dupe(u8, path);
 
             // create and open the database
@@ -91,8 +91,8 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
             errdefer c.mdb_txn_reset(txn);
 
-            const key_val = toVal(key_bytes.data);
-            const val_val = toVal(val_bytes.data);
+            var key_val = toVal(key_bytes.data);
+            var val_val = toVal(val_bytes.data);
             try result(c.mdb_put(txn, cf.find(column_families), &key_val, &val_val, 0));
             try result(c.mdb_txn_commit, .{txn});
         }
@@ -105,7 +105,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         ) anyerror!?cf.Value {
             const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
-            const key_val = toVal(key_bytes);
+            var key_val = toVal(key_bytes);
 
             const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
             defer c.mdb_txn_reset(txn);
@@ -118,7 +118,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         pub fn getBytes(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?BytesRef {
             const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
-            const key_val = toVal(key_bytes);
+            var key_val = toVal(key_bytes);
 
             const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
             errdefer c.mdb_txn_reset(txn);
@@ -138,7 +138,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!void {
             const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
-            const key_val = toVal(key_bytes);
+            var key_val = toVal(key_bytes);
 
             const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
             errdefer c.mdb_txn_reset(txn);
@@ -167,7 +167,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         pub fn initWriteBatch(self: *Self) LmdbError!WriteBatch {
             return .{
                 .allocator = self.allocator,
-                .inner = try ret(c.mdb_txn_begin, .{ self.env, null, 0 }),
+                .txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 }),
                 .cf_handles = self.cf_handles,
             };
         }
@@ -206,8 +206,8 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 const val_bytes = try value_serializer.serializeToRef(self.allocator, value);
                 defer val_bytes.deinit();
 
-                const key_val = toVal(key_bytes.data);
-                const val_val = toVal(val_bytes.data);
+                var key_val = toVal(key_bytes.data);
+                var val_val = toVal(val_bytes.data);
                 try result(c.mdb_put(self.txn, cf.find(column_families), &key_val, &val_val, 0));
             }
 
@@ -219,7 +219,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
                 defer key_bytes.deinit();
 
-                const key_val = toVal(key_bytes.data);
+                var key_val = toVal(key_bytes.data);
                 try result(c.mdb_del(self.txn, cf.find(column_families), &key_val, 0));
             }
 
@@ -278,10 +278,10 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 try result(c.mdb_cursor_get(cursor, &key_val, &val_val, cursorOp(.SET)));
             } else {
                 const operation = switch (direction) {
-                    .forward => cursorOp(.FIRST),
-                    .reverse => cursorOp(.LAST),
+                    .forward => .FIRST,
+                    .reverse => .LAST,
                 };
-                try result(c.mdb_cursor_get(cursor, &key_val, &val_val, operation));
+                try result(c.mdb_cursor_get(cursor, &key_val, &val_val, cursorOp(operation)));
             }
 
             return .{
@@ -289,55 +289,70 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 .logger = self.logger,
                 .txn = txn,
                 .cursot = cursor,
-                .direction = direction,
+                .direction = switch (direction) {
+                    .forward => .NEXT,
+                    .reverse => .PREV,
+                },
             };
         }
 
         pub fn Iterator(cf: ColumnFamily, _: IteratorDirection) type {
             return struct {
                 allocator: Allocator,
-                txn: c.MDB_txn,
-                cursor: c.MDB_cursor,
-                direction: IteratorDirection,
+                txn: *c.MDB_txn,
+                cursor: *c.MDB_cursor,
+                direction: CursorOperation,
+                next_operation: CursorOperation = .GET_CURRENT,
 
                 /// Calling this will free all slices returned by the iterator
                 pub fn deinit(self: *@This()) void {
-                    self.inner.deinit();
+                    c.mdb_cursor_close(self.cursor);
+                    c.mdb_txn_abort(self.txn);
                 }
 
                 pub fn next(self: *@This()) anyerror!?cf.Entry() {
-                    const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
-                    return if (entry) |kv| {
-                        return .{
-                            try key_serializer.deserialize(cf.Key, self.allocator, kv[0].data),
-                            try value_serializer.deserialize(cf.Value, self.allocator, kv[1].data),
-                        };
-                    } else null;
+                    const key, const val = try self.nextImpl() orelse return null;
+                    return .{
+                        try key_serializer.deserialize(cf.Key, self.allocator, key),
+                        try value_serializer.deserialize(cf.Value, self.allocator, val),
+                    };
                 }
 
                 pub fn nextKey(self: *@This()) anyerror!?cf.Key {
-                    const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
-                    return if (entry) |kv|
-                        try key_serializer.deserialize(cf.Key, self.allocator, kv[0].data)
-                    else
-                        null;
+                    const key, _ = try self.nextImpl() orelse return null;
+                    return try key_serializer.deserialize(cf.Key, self.allocator, key);
                 }
 
                 pub fn nextValue(self: *@This()) anyerror!?cf.Value {
-                    const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
-                    return if (entry) |kv|
-                        try key_serializer.deserialize(cf.Value, self.allocator, kv[1].data)
-                    else
-                        null;
+                    _, const val = try self.nextImpl() orelse return null;
+                    return try key_serializer.deserialize(cf.Key, self.allocator, val);
                 }
 
                 /// Returned data does not outlive the iterator.
                 pub fn nextBytes(self: *@This()) LmdbError!?[2]BytesRef {
-                    const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
-                    return if (entry) |kv| .{
-                        .{ .allocator = null, .data = kv[0].data },
-                        .{ .allocator = null, .data = kv[1].data },
-                    } else null;
+                    const key, const val = try self.nextImpl() orelse return null;
+                    return .{
+                        .{ .allocator = null, .data = key },
+                        .{ .allocator = null, .data = val },
+                    };
+                }
+
+                fn nextImpl(self: *@This()) LmdbError!?struct { []const u8, []const u8 } {
+                    var key_val: c.MDB_val = undefined;
+                    var val_val: c.MDB_val = undefined;
+                    result(c.mdb_cursor_get(
+                        self.cursor,
+                        &key_val,
+                        &val_val,
+                        cursorOp(self.next_operation),
+                    )) catch |e| switch (e) {
+                        error.MDB_NOTFOUND => return null,
+                        else => return e,
+                    };
+
+                    self.next_operation = self.direction;
+
+                    return .{ fromVal(key_val), fromVal(val_val) };
                 }
             };
         }
@@ -399,7 +414,7 @@ fn IntermediateType(function: anytype) type {
     return @typeInfo(params[params.len - 1].type.?).Pointer.child;
 }
 
-fn cursorOp(operation: CursorOperation) c_int {
+fn cursorOp(operation: CursorOperation) c_uint {
     return @intFromEnum(operation);
 }
 
@@ -407,7 +422,7 @@ fn cursorOp(operation: CursorOperation) c_int {
 ///
 /// This is the set of all operations for retrieving data
 /// using a cursor.
-const CursorOperation = enum(c_int) {
+const CursorOperation = enum(c_uint) {
     /// Position at first key/data item
     FIRST,
     /// Position at first data item of current key. Only for #MDB_DUPSORT
