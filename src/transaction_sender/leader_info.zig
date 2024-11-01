@@ -45,7 +45,7 @@ pub const LeaderInfo = struct {
         return .{
             .allocator = allocator,
             .config = config,
-            .logger = logger.withScope(ScopedLogger(@typeName(@This()))),
+            .logger = logger.withScope(@typeName(@This())),
             .rpc_client = RpcClient.init(
                 allocator,
                 config.cluster,
