@@ -328,7 +328,7 @@ pub const Config = struct {
     // Time waited between processing the transaction pool
     pool_process_rate: Duration = Duration.fromSecs(1),
     // Maximum number of leaders to forward to ahead of the current leader
-    max_leaders_to_send_to: usize = 1,
+    max_leaders_to_send_to: usize = 5,
     // Number of consecutive leader slots (TODO: this should come from other config somewhere)
     number_of_consecutive_leader_slots: u64 = 4,
     // Maximum number of retries for a transaction whoes max_retries is null
