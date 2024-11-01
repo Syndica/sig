@@ -228,7 +228,7 @@ pub const GossipService = struct {
             for (eps) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
         }
 
-        const metrics = try GossipMetrics.init(gossip_logger.unscoped());
+        const metrics = try GossipMetrics.init(gossip_logger);
 
         const ping_cache_ptr = try allocator.create(PingCache);
         ping_cache_ptr.* = try PingCache.init(
@@ -2001,7 +2001,8 @@ pub const GossipMetrics = struct {
 
     // logging details
     _logging_fields: struct {
-        logger: Logger,
+        // Scoping to GossipService instead of logging fields struct.
+        logger: ScopedLogger(@typeName(GossipService)),
         log_interval_micros: i64 = 10 * std.time.us_per_s,
         last_log: i64 = 0,
         last_logged_snapshot: StatsToLog = .{},
@@ -2038,7 +2039,7 @@ pub const GossipMetrics = struct {
         5000, 10000,
     };
 
-    pub fn init(logger: Logger) GetMetricError!Self {
+    pub fn init(logger: ScopedLogger(@typeName(GossipService))) GetMetricError!Self {
         var self: Self = undefined;
         const registry = globalRegistry();
         std.debug.assert(try registry.initFields(&self) == 1);
