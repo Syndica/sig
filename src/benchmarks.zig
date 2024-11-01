@@ -146,7 +146,7 @@ pub fn main() !void {
             .Nanos,
         );
         try benchmarkCSV(
-            allocator, 
+            allocator,
             logger,
             @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
             max_time_per_bench,
