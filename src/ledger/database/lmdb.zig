@@ -68,18 +68,13 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             return self.dbis[cf.find(column_families)];
         }
 
-        pub fn count(self: *Self, comptime cf: ColumnFamily) Allocator.Error!u64 {
-            const live_files = try self.db.liveFiles(self.allocator);
-            defer live_files.deinit();
+        pub fn count(self: *Self, comptime cf: ColumnFamily) LmdbOrAllocatorError!u64 {
+            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, MDB_RDONLY });
+            defer c.mdb_txn_abort(txn);
 
-            var sum: u64 = 0;
-            for (live_files.items) |live_file| {
-                if (std.mem.eql(u8, live_file.column_family_name, cf.name)) {
-                    sum += live_file.num_entries;
-                }
-            }
+            const stat = try ret(c.mdb_stat, .{ txn, self.dbi(cf) });
 
-            return sum;
+            return stat.ms_entries;
         }
 
         pub fn put(
@@ -131,7 +126,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             const txn = try ret(c.mdb_txn_begin, .{ self.env, null, MDB_RDONLY });
             errdefer c.mdb_txn_abort(txn);
 
-            const item = try ret(c.mdb_get, .{ txn, self.dbi(cf), &key_val }) catch |e| switch (e) {
+            const item = ret(c.mdb_get, .{ txn, self.dbi(cf), &key_val }) catch |e| switch (e) {
                 error.MDB_NOTFOUND => return null,
                 else => return e,
             };
@@ -347,7 +342,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
 
                 pub fn nextValue(self: *@This()) anyerror!?cf.Value {
                     _, const val = try self.nextImpl() orelse return null;
-                    return try key_serializer.deserialize(cf.Key, self.allocator, val);
+                    return try key_serializer.deserialize(cf.Value, self.allocator, val);
                 }
 
                 /// Returned data does not outlive the iterator.
@@ -381,13 +376,14 @@ fn fromVal(value: c.MDB_val) []const u8 {
 }
 
 fn txnResetter(txn: *c.MDB_txn) Allocator {
+    const vtable = .{
+        .alloc = &sig.utils.allocators.noAlloc,
+        .resize = &Allocator.noResize,
+        .free = &resetTxnFree,
+    };
     return .{
         .ptr = @ptrCast(@alignCast(txn)),
-        .vtable = .{
-            .alloc = &sig.utils.allocators.noAlloc,
-            .resize = &Allocator.noResize,
-            .free = &resetTxnFree,
-        },
+        .vtable = &vtable,
     };
 }
 
@@ -576,6 +572,8 @@ fn result(int: isize) LmdbError!void {
         else => error.UnspecifiedErrorCode,
     };
 }
+
+pub const LmdbOrAllocatorError = LmdbError || Allocator.Error;
 
 pub const LmdbError = error{
     ////////////////////////////////////////////////////////
