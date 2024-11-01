@@ -87,7 +87,7 @@ pub fn start(
         .allocator = deps.allocator,
         .keypair = deps.my_keypair,
         .exit = deps.exit,
-        .logger = deps.logger.unscoped(),
+        .logger = deps.logger.withScope(@typeName(ShredReceiver)),
         .repair_socket = repair_socket,
         .turbine_socket = turbine_socket,
         .unverified_shred_sender = unverified_shred_channel,

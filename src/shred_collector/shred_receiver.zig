@@ -15,6 +15,7 @@ const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Histogram = sig.prometheus.Histogram;
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
@@ -30,7 +31,7 @@ pub const ShredReceiver = struct {
     allocator: Allocator,
     keypair: *const KeyPair,
     exit: *Atomic(bool),
-    logger: Logger,
+    logger: ScopedLogger(@typeName(@This())),
     repair_socket: Socket,
     turbine_socket: Socket,
     /// me --> shred verifier
@@ -48,17 +49,17 @@ pub const ShredReceiver = struct {
         errdefer self.logger.err().log("error in shred receiver");
 
         var response_sender = try SocketThread
-            .initSender(self.allocator, self.logger, self.repair_socket, self.exit);
+            .initSender(self.allocator, self.logger.unscoped(), self.repair_socket, self.exit);
         defer response_sender.deinit(self.allocator);
         var repair_receiver = try SocketThread
-            .initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
+            .initReceiver(self.allocator, self.logger.unscoped(), self.repair_socket, self.exit);
         defer repair_receiver.deinit(self.allocator);
 
         var turbine_receivers: [NUM_TVU_RECEIVERS]SocketThread = undefined;
         for (0..NUM_TVU_RECEIVERS) |i| {
             turbine_receivers[i] = try SocketThread.initReceiver(
                 self.allocator,
-                self.logger,
+                self.logger.unscoped(),
                 self.turbine_socket,
                 self.exit,
             );
