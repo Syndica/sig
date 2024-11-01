@@ -305,7 +305,7 @@ pub fn benchmarkCSV(
                 Duration => {
                     // print column headers
                     if (arg_i == 0) {
-                        try writer_average.print("{s}, min, max, mean, variance\n", .{def.name});
+                        try writer_average.print("{s}, min, max, mean, std_dev\n", .{def.name});
                     }
                     const mean = sum / iter_count;
                     var variance: u64 = 0;
@@ -315,8 +315,10 @@ pub fn benchmarkCSV(
                         variance +|= d_sq;
                     }
                     variance /= iter_count;
+                    const std_dev = std.math.sqrt(variance);
+
                     // print column results
-                    try writer_average.print("{s}, {d}, {d}, {d}, {d}\n", .{ arg_name, min, max, mean, variance });
+                    try writer_average.print("{s}, {d}, {d}, {d}, {d}\n", .{ arg_name, min, max, mean, std_dev });
                 },
                 inline else => {
                     // print column headers
@@ -325,9 +327,9 @@ pub fn benchmarkCSV(
                         inline for (U.fields, 0..) |field, i| {
                             if (i == U.fields.len - 1) {
                                 // dont print trailing comma
-                                try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_variance", .{ field.name, field.name, field.name, field.name });
+                                try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_std_dev", .{ field.name, field.name, field.name, field.name });
                             } else {
-                                try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_variance, ", .{ field.name, field.name, field.name, field.name });
+                                try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_std_dev, ", .{ field.name, field.name, field.name, field.name });
                             }
                         }
                         try writer_average.print("\n", .{});
@@ -356,12 +358,13 @@ pub fn benchmarkCSV(
                             }
                         }
                         f_variance /= n_iters;
+                        const f_std_dev = std.math.sqrt(f_variance);
 
                         if (j == U.fields.len - 1) {
                             // dont print trailing comma
-                            try writer_average.print("{d}, {d}, {any}, {any}", .{ f_max, f_min, f_mean, f_variance });
+                            try writer_average.print("{d}, {d}, {any}, {any}", .{ f_max, f_min, f_mean, f_std_dev });
                         } else {
-                            try writer_average.print("{d}, {d}, {any}, {any}, ", .{ f_max, f_min, f_mean, f_variance });
+                            try writer_average.print("{d}, {d}, {any}, {any}, ", .{ f_max, f_min, f_mean, f_std_dev });
                         }
                     }
                     try writer_average.print("\n", .{});

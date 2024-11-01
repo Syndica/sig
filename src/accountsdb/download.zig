@@ -308,7 +308,7 @@ const DownloadProgress = struct {
     min_mb_per_second: ?usize,
     logger: Logger,
 
-    mb_timer: std.time.Timer,
+    progress_timer: sig.time.Timer,
     bytes_read: u64 = 0,
     total_read: u64 = 0,
     has_checked_speed: bool = false,
@@ -333,8 +333,12 @@ const DownloadProgress = struct {
             .logger = logger,
             .file = file,
             .min_mb_per_second = min_mb_per_second,
-            .mb_timer = undefined,
+            .progress_timer = try sig.time.Timer.start(),
         };
+    }
+
+    pub fn resetTimer(self: *Self) void {
+        self.progress_timer.reset();
     }
 
     fn deinit(self: *Self) void {
@@ -342,7 +346,7 @@ const DownloadProgress = struct {
     }
 
     fn writeCallback(
-        ptr: ?[*:0]c_char,
+        ptr: [*c]c_char,
         size: c_uint,
         nmemb: c_uint,
         user_data: *anyopaque,
@@ -350,7 +354,7 @@ const DownloadProgress = struct {
         assert(size == 1); // size will always be 1
         const len = size * nmemb;
         const self: *Self = @alignCast(@ptrCast(user_data));
-        var typed_data: [*]u8 = @ptrCast(ptr.?);
+        var typed_data: [*]u8 = @ptrCast(ptr);
         const buf = typed_data[0..len];
 
         self.file.writeAll(buf) catch |err| {
@@ -375,11 +379,11 @@ const DownloadProgress = struct {
         // we're only downloading
         assert(upload_total == 0);
         assert(upload_now == 0);
-        const elapsed_ns = self.mb_timer.read();
+        const elapsed_ns = self.progress_timer.read().asNanos();
         if (elapsed_ns > DOWNLOAD_PROGRESS_UPDATES_NS) {
             defer {
                 self.bytes_read = 0;
-                self.mb_timer.reset();
+                self.progress_timer.reset();
             }
 
             const mb_read = self.bytes_read / 1024 / 1024;
@@ -522,7 +526,7 @@ pub fn downloadFile(
     try setProgressFunction(easy, DownloadProgress.progressCallback);
     try enableProgress(easy);
 
-    download_progress.mb_timer = try std.time.Timer.start();
+    download_progress.resetTimer();
     var resp = try easy.perform();
     defer resp.deinit();
 

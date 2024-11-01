@@ -6,10 +6,10 @@ import numpy as np
 import random
 
 def random_color_generator():
-    r = random.randint(0, 255)
-    g = random.randint(0, 255)
-    b = random.randint(0, 255)
-    return (r / 255, g / 255, b / 255)
+    # take [r, g, b] from colormap
+    # Dark2 chosen for visibility from
+    # https://matplotlib.org/stable/users/explain/colors/colormaps.html#qualitative
+    return plt.colormaps["Dark2"](random.random())[:3] 
 
 def view_results(paths, units):
     path = paths[0]
