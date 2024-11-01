@@ -71,7 +71,9 @@ pub fn runClient(
 
     var socket = try network.Socket.create(.ipv4, .udp);
     var packets_event = xev.UDP.initFd(socket.internal);
-    try socket.bind(.{ .address = try network.Address.parse("127.0.0.1"), .port = 4444 });
+    socket.bind(.{ .address = network.Address{ .ipv4 = network.Address.IPv4.any }, .port = 4444 }) catch {
+        @panic("failed to bind to port");
+    };
 
     // setup our sol context
     var ctx: Context = undefined;
@@ -613,7 +615,7 @@ const Callbacks = struct {
 };
 
 // zig stdlib does not define the msghdr{_const} for macos.
-const msghdr_const = if (builtin.target.os.tag == .macos) extern struct {
+const msghdr_const = extern struct {
     name: ?*const std.posix.sockaddr,
     namelen: std.posix.socklen_t,
     iov: [*]const std.posix.iovec_const,
@@ -621,7 +623,7 @@ const msghdr_const = if (builtin.target.os.tag == .macos) extern struct {
     control: ?*const anyopaque,
     controllen: usize,
     flags: i32,
-} else std.posix.msghdr_const;
+};
 pub extern "c" fn sendmsg(sockfd: std.posix.fd_t, msg: *const msghdr_const, flags: u32) isize;
 
 pub fn sendmsgPosix(
@@ -632,8 +634,9 @@ pub fn sendmsgPosix(
     flags: u32,
 ) std.posix.SendMsgError!usize {
     while (true) {
+        std.debug.print("message={any}\n", .{msg});
         const rc = sendmsg(sockfd, msg, flags);
-
+        std.debug.print("posix errno: {}\n", .{rc});
         switch (std.posix.errno(rc)) {
             .SUCCESS => return @intCast(rc),
 
