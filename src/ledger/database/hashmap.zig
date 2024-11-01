@@ -178,9 +178,17 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                         const cf_index, const key = delete_ix;
                         self.maps[cf_index].delete(self.allocator, key);
                     },
-                    .delete_range => {
-                        // TODO: also add to database tests
-                        @panic("not implemented");
+                    .delete_range => |delete_range_ix| {
+                        const cf_index, const start, const end = delete_range_ix;
+                        const keys, _ = self.maps[cf_index].map.range(start, end);
+                        const to_delete = try batch.allocator.alloc([]const u8, keys.len);
+                        defer batch.allocator.free(to_delete);
+                        for (keys, 0..) |key, i| {
+                            to_delete[i] = key;
+                        }
+                        for (to_delete) |delete_key| {
+                            self.maps[cf_index].delete(self.allocator, delete_key);
+                        }
                     },
                 }
             }
@@ -266,7 +274,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 const end_bytes = try key_serializer.serializeAlloc(self.allocator, end);
                 errdefer self.allocator.free(end_bytes);
                 const cf_index = cf.find(column_families);
-                self.instructions.append(
+                try self.instructions.append(
                     self.allocator,
                     .{ .delete_range = .{ cf_index, start_bytes, end_bytes } },
                 );
