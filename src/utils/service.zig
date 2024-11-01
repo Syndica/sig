@@ -9,6 +9,7 @@ const Atomic = std.atomic.Value;
 
 const Lazy = sig.utils.lazy.Lazy;
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 
 /// High level manager for long-running threads and the state
 /// shared by those threads.
@@ -16,7 +17,7 @@ const Logger = sig.trace.Logger;
 /// You can add threads or state, then await all threads and
 /// clean up their state.
 pub const ServiceManager = struct {
-    logger: Logger,
+    logger: ScopedLogger(@typeName(@This())),
     /// Threads to join.
     threads: ArrayListUnmanaged(std.Thread),
     exit: *Atomic(bool),
@@ -39,7 +40,7 @@ pub const ServiceManager = struct {
         default_spawn_config: std.Thread.SpawnConfig,
     ) Self {
         return .{
-            .logger = logger,
+            .logger = logger.withScope(@typeName(@This())),
             .exit = exit,
             .threads = .{},
             .arena = ArenaAllocator.init(backing_allocator),
@@ -94,7 +95,7 @@ pub const ServiceManager = struct {
             spawn_config,
             runService,
             .{
-                self.logger,
+                self.logger.unscoped(),
                 self.exit,
                 maybe_name,
                 run_config orelse self.default_run_config,
@@ -123,7 +124,7 @@ pub const ServiceManager = struct {
             spawn_config,
             runService,
             .{
-                self.logger,
+                self.logger.unscoped(),
                 self.exit,
                 maybe_name,
                 run_config orelse self.default_run_config,
