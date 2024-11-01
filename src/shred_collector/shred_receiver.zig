@@ -14,7 +14,6 @@ const Socket = network.Socket;
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Histogram = sig.prometheus.Histogram;
-const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
