@@ -111,7 +111,7 @@ pub const LedgerResultWriter = struct {
         self: *Self,
         duplicate_confirmed_slot_hashes: []struct { Slot, Hash },
     ) !void {
-        var write_batch = try self.db.writeBatch();
+        var write_batch = try self.db.initWriteBatch();
         for (duplicate_confirmed_slot_hashes) |slot_hash| {
             const slot, const frozen_hash = slot_hash;
             const data = FrozenHashVersioned{ .current = FrozenHashStatus{
