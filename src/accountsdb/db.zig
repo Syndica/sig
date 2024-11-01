@@ -4015,6 +4015,272 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
     }
 };
 
+// test "lmdb-accounts" {
+//     const allocator = std.testing.allocator;
+//     const logger = .noop;
+
+//     const lmdb = sig.ledger.database.lmdb;
+//     const ColumnFamily = sig.ledger.database.ColumnFamily;
+//     const LMDB = lmdb.LMDB;
+
+//     const SlotPubkey = [@sizeOf(Slot) + @sizeOf(Pubkey)]u8;
+
+//     const main_index = ColumnFamily{
+//         .name = "main_index",
+//         .Key = Pubkey,
+//         .Value = SlotPubkey,
+//     };
+
+//     const secondary_index = ColumnFamily{
+//         .name = "secondary_index",
+//         .Key = SlotPubkey,
+//         .Value = []const u8, // serialised account
+//     };
+
+//     const DB = LMDB(&.{ main_index, secondary_index });
+
+//     var db = try DB.open(allocator, logger, "lmdb-accounts");
+//     defer db.deinit();
+// }
+const c = @import("lmdb");
+
+const LmdbError = error{
+    KeyExist,
+    NotFound,
+    PageNotfound,
+    Corrupted,
+    Panic,
+    VersionMismatch,
+    Invalid,
+    MapFull,
+    DbsFull,
+    ReadersFull,
+    TlsFull,
+    TxnFull,
+    CursorFull,
+    PageFull,
+    MapResized,
+    Incompatible,
+    BadRslot,
+    BadTxn,
+    BadValsize,
+    BadDbi,
+    EPERM,
+    ENOENT,
+    ESRCH,
+    EINTR,
+    EIO,
+    ENXIO,
+    E2BIG,
+    ENOEXEC,
+    EBADF,
+    ECHILD,
+    EAGAIN,
+    ENOMEM,
+    EACCES,
+    EFAULT,
+    ENOTBLK,
+    EBUSY,
+    EEXIST,
+    EXDEV,
+    ENODEV,
+    ENOTDIR,
+    EISDIR,
+    EINVAL,
+    ENFILE,
+    EMFILE,
+    ENOTTY,
+    ETXTBSY,
+    EFBIG,
+    ENOSPC,
+    ESPIPE,
+    EROFS,
+    EMLINK,
+    EPIPE,
+    EDOM,
+    ERANGE,
+};
+
+fn lldb_int_as_error(int: c_int) LmdbError {
+    return switch (int) {
+        c.MDB_KEYEXIST => error.KeyExist,
+        c.MDB_NOTFOUND => error.NotFound,
+        c.MDB_PAGE_NOTFOUND => error.PageNotfound,
+        c.MDB_CORRUPTED => error.Corrupted,
+        c.MDB_PANIC => error.Panic,
+        c.MDB_VERSION_MISMATCH => error.VersionMismatch,
+        c.MDB_INVALID => error.Invalid,
+        c.MDB_MAP_FULL => error.MapFull,
+        c.MDB_DBS_FULL => error.DbsFull,
+        c.MDB_READERS_FULL => error.ReadersFull,
+        c.MDB_TLS_FULL => error.TlsFull,
+        c.MDB_TXN_FULL => error.TxnFull,
+        c.MDB_CURSOR_FULL => error.CursorFull,
+        c.MDB_PAGE_FULL => error.PageFull,
+        c.MDB_MAP_RESIZED => error.MapResized,
+        c.MDB_INCOMPATIBLE => error.Incompatible,
+        c.MDB_BAD_RSLOT => error.BadRslot,
+        c.MDB_BAD_TXN => error.BadTxn,
+        c.MDB_BAD_VALSIZE => error.BadValsize,
+        c.MDB_BAD_DBI => error.BadDbi,
+        1 => error.EPERM,
+        2 => error.ENOENT,
+        3 => error.ESRCH,
+        4 => error.EINTR,
+        5 => error.EIO,
+        6 => error.ENXIO,
+        7 => error.E2BIG,
+        8 => error.ENOEXEC,
+        9 => error.EBADF,
+        10 => error.ECHILD,
+        11 => error.EAGAIN,
+        12 => error.ENOMEM,
+        13 => error.EACCES,
+        14 => error.EFAULT,
+        15 => error.ENOTBLK,
+        16 => error.EBUSY,
+        17 => error.EEXIST,
+        18 => error.EXDEV,
+        19 => error.ENODEV,
+        20 => error.ENOTDIR,
+        21 => error.EISDIR,
+        22 => error.EINVAL,
+        23 => error.ENFILE,
+        24 => error.EMFILE,
+        25 => error.ENOTTY,
+        26 => error.ETXTBSY,
+        27 => error.EFBIG,
+        28 => error.ENOSPC,
+        29 => error.ESPIPE,
+        30 => error.EROFS,
+        31 => error.EMLINK,
+        32 => error.EPIPE,
+        33 => error.EDOM,
+        34 => error.ERANGE,
+
+        else => {
+            std.debug.panic("invalid lldb error: {}", .{int});
+        },
+    };
+}
+fn lldb_err(int: c_int) LmdbError!void {
+    if (int == 0) return {};
+    std.debug.panic("lldb error: {s}\n", .{@errorName(lldb_int_as_error(int))});
+
+    // return lldb_int_as_error(int);
+}
+
+// try lldb_err(c.mdb_env_set_mapsize(env, 1024 * 1024 * 1024)); // 1GiB
+
+fn asValue(mem: []u8) c.MDB_val {
+    return .{
+        .mv_size = mem.len,
+        .mv_data = @ptrCast(mem.ptr),
+    };
+}
+
+// TODO: order doesn't matter much; is slot-first faster?
+const PubkeyAndSlot = [@sizeOf(Pubkey) + @sizeOf(Slot)]u8;
+
+fn makePubkeyAndSlot(pubkey: Pubkey, slot: Slot) PubkeyAndSlot {
+    var buf: PubkeyAndSlot = undefined;
+
+    @memcpy(buf[0..32], &pubkey.data);
+
+    // make sorting happy :)
+    const slot_BE = std.mem.nativeToBig(Slot, slot);
+    @memcpy(buf[@sizeOf(Pubkey)..], std.mem.asBytes(&slot_BE));
+
+    return buf;
+}
+
+test "lmdb-accounts" {
+    const allocator = std.testing.allocator;
+
+    const dir_name = "lmdb-accounts_db";
+
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
+    var pubkey = Pubkey.initRandom(random);
+
+    var account = try Account.initRandom(allocator, random, 165);
+    defer account.deinit(allocator);
+
+    std.fs.cwd().makeDir(dir_name) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // const allocator = std.testing.allocator;
+    // const logger = .noop;
+    // const SlotAndPubkey = [@sizeOf(Slot) + @sizeOf(Pubkey)]u8;
+
+    var _env: ?*c.MDB_env = undefined;
+    try lldb_err(c.mdb_env_create(&_env));
+    const env: *c.MDB_env = _env orelse unreachable;
+
+    try lldb_err(c.mdb_env_set_maxdbs(env, 50));
+    try lldb_err(c.mdb_env_open(env, dir_name, c.MDB_NORDAHEAD, 0o700));
+
+    var _txn: ?*c.MDB_txn = undefined;
+    try lldb_err(c.mdb_txn_begin(env, null, 0, &_txn));
+    const txn: *c.MDB_txn = _txn orelse unreachable;
+
+    // pubkey -> [pubkey+slotHighest, ..., pubkey+slotLowest]
+
+    var dbi: c.MDB_dbi = undefined;
+    try lldb_err(c.mdb_dbi_open(
+        txn,
+        "pubkey->pubkeyslots",
+        c.MDB_CREATE | c.MDB_DUPSORT | c.MDB_DUPFIXED | c.MDB_INTEGERDUP,
+        &dbi,
+    ));
+
+    var pubkey_slot = makePubkeyAndSlot(pubkey, 1);
+
+    {
+        var key = asValue(&pubkey.data);
+        var value = asValue(&pubkey_slot);
+
+        try lldb_err(c.mdb_put(
+            txn,
+            dbi,
+            &key,
+            &value,
+            0,
+        ));
+    }
+
+    var dbi_2: c.MDB_dbi = undefined;
+    try lldb_err(c.mdb_dbi_open(
+        txn,
+        "pubkeyslots->account",
+        c.MDB_CREATE,
+        &dbi_2,
+    ));
+
+    {
+        // serialise to snapshot format (TODO: change, this is not perfect)
+        const buf = try allocator.alloc(u8, account.getSizeInFile());
+        defer allocator.free(buf);
+        const bytes_written = account.writeToBuf(&pubkey, buf);
+        try std.testing.expectEqual(account.getSizeInFile(), bytes_written);
+
+        var key = asValue(&pubkey_slot);
+        var value = asValue(buf);
+
+        try lldb_err(c.mdb_put(
+            txn,
+            dbi_2,
+            &key,
+            &value,
+            0,
+        ));
+    }
+
+    try lldb_err(c.mdb_txn_commit(txn));
+}
+
 pub const BenchmarkAccountsDB = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 1;
