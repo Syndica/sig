@@ -23,13 +23,13 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
 
         const Self = @This();
 
-        pub fn open(allocator: Allocator, logger: Logger, path: []const u8) anyerror!Self {
+        pub fn open(allocator: Allocator, _: Logger, path: []const u8) anyerror!Self {
             const owned_path = try allocator.dupe(u8, path);
 
             // create and open the database
             const env = try ret(c.mdb_env_create, .{});
             try result(c.mdb_env_set_maxdbs(env, column_families.len));
-            try result(c.mdb_env_open(env, path, 0, 0o700));
+            try result(c.mdb_env_open(env, @ptrCast(path), 0, 0o700));
 
             // begin transaction to create column families aka "databases" in lmdb
             const txn = try ret(c.mdb_txn_begin, .{ env, null, 0 });
@@ -40,18 +40,21 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             errdefer allocator.free(cf_handles);
 
             // save cf handles
-            for (column_families, 0..) |cf, i| {
+            inline for (column_families, 0..) |cf, i| {
                 // open cf/database, creating if necessary
-                cf_handles[i] = try ret(c.mdb_dbi_open, .{ txn, cf.name, 0x40000 });
+                cf_handles[i] = try ret(c.mdb_dbi_open, .{
+                    txn,
+                    @as([*c]const u8, @ptrCast(cf.name)),
+                    0x40000, // create if missing
+                });
             }
 
             // persist column families
-            try result(c.mdb_txn_commit, .{txn});
+            try result(c.mdb_txn_commit(txn));
 
             return .{
                 .allocator = allocator,
-                .db = env,
-                .logger = logger,
+                .env = env,
                 .cf_handles = cf_handles,
                 .path = owned_path,
             };
@@ -59,7 +62,6 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
 
         pub fn deinit(self: *Self) void {
             self.allocator.free(self.cf_handles);
-            self.db.deinit();
             self.allocator.free(self.path);
         }
 
@@ -94,7 +96,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             var key_val = toVal(key_bytes.data);
             var val_val = toVal(val_bytes.data);
             try result(c.mdb_put(txn, cf.find(column_families), &key_val, &val_val, 0));
-            try result(c.mdb_txn_commit, .{txn});
+            try result(c.mdb_txn_commit(txn));
         }
 
         pub fn get(
@@ -105,12 +107,12 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         ) anyerror!?cf.Value {
             const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
-            var key_val = toVal(key_bytes);
+            var key_val = toVal(key_bytes.data);
 
             const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
             defer c.mdb_txn_reset(txn);
 
-            const value = try ret(c.mdb_get(txn, cf.find(column_families), &key_val));
+            const value = try ret(c.mdb_get, .{ txn, cf.find(column_families), &key_val });
 
             return try value_serializer.deserialize(cf.Value, allocator, fromVal(value));
         }
@@ -118,12 +120,12 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         pub fn getBytes(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?BytesRef {
             const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
-            var key_val = toVal(key_bytes);
+            var key_val = toVal(key_bytes.data);
 
             const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
             errdefer c.mdb_txn_reset(txn);
 
-            const item = try ret(c.mdb_get(txn, cf.find(column_families), &key_val));
+            const item = try ret(c.mdb_get, .{ txn, cf.find(column_families), &key_val });
 
             return .{
                 .allocator = txnResetter(txn),
@@ -138,12 +140,13 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!void {
             const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
-            var key_val = toVal(key_bytes);
+            var key_val = toVal(key_bytes.data);
+            var val_val: c.MDB_val = undefined;
 
             const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
             errdefer c.mdb_txn_reset(txn);
 
-            try result(c.mdb_del(txn, cf.find(column_families), &key_val));
+            try result(c.mdb_del(txn, cf.find(column_families), &key_val, &val_val));
             try result(c.mdb_txn_commit(txn));
         }
 
@@ -173,7 +176,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         }
 
         pub fn commit(_: *Self, batch: WriteBatch) LmdbError!void {
-            try result(c.mdb_txn_commit(batch.inner));
+            try result(c.mdb_txn_commit(batch.txn));
         }
 
         /// A write batch is a sequence of operations that execute atomically.
@@ -234,8 +237,8 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 const end_bytes = try key_serializer.serializeToRef(self.allocator, end);
                 defer end_bytes.deinit();
 
-                const cursor = try ret(c.mdb_cursor_open(self.txn, cf.find(column_families)));
-                defer result(c.mdb_cursor_close(cursor));
+                const cursor = try ret(c.mdb_cursor_open, .{ self.txn, cf.find(column_families) });
+                defer c.mdb_cursor_close(cursor);
 
                 var key_val = toVal(start_bytes);
                 var val_val: c.MDB_val = undefined;
@@ -268,13 +271,13 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
             errdefer c.mdb_txn_reset(txn);
 
-            const cursor = try ret(c.mdb_cursor_open(self.txn, cf.find(column_families)));
-            errdefer result(c.mdb_cursor_close(cursor));
+            const cursor = try ret(c.mdb_cursor_open, .{ txn, cf.find(column_families) });
+            errdefer c.mdb_cursor_close(cursor);
 
             var key_val: c.MDB_val = undefined;
             var val_val: c.MDB_val = undefined;
             if (maybe_start_bytes) |start_bytes| {
-                key_val = toVal(start_bytes);
+                key_val = toVal(start_bytes.data);
                 try result(c.mdb_cursor_get(cursor, &key_val, &val_val, cursorOp(.SET)));
             } else {
                 const operation = switch (direction) {
@@ -286,9 +289,8 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
 
             return .{
                 .allocator = self.allocator,
-                .logger = self.logger,
                 .txn = txn,
-                .cursot = cursor,
+                .cursor = cursor,
                 .direction = switch (direction) {
                     .forward => .NEXT,
                     .reverse => .PREV,
@@ -342,8 +344,8 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                     var val_val: c.MDB_val = undefined;
                     result(c.mdb_cursor_get(
                         self.cursor,
-                        &key_val,
-                        &val_val,
+                        @ptrCast(&key_val),
+                        @ptrCast(&val_val),
                         cursorOp(self.next_operation),
                     )) catch |e| switch (e) {
                         error.MDB_NOTFOUND => return null,
@@ -366,7 +368,7 @@ fn toVal(bytes: []const u8) c.MDB_val {
     };
 }
 
-fn fromVal(value: [*c]c.MDB_val) []const u8 {
+fn fromVal(value: c.MDB_val) []const u8 {
     const ptr: [*c]u8 = @ptrCast(value.mv_data);
     return ptr[0..value.mv_size];
 }
