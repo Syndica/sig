@@ -40,8 +40,8 @@
             .hash = "122098d444c9c7112c66481e7655bb5389829c67e04b280a029200545e1971187443",
         },
         .lsquic = .{
-            .url = "https://github.com/Syndica/lsquic/archive/6c83493289c177c8b9df704f41453ce32b95916e.tar.gz",
-            .hash = "122037a4044585d60188ca792fc20afff627e5f3ebb2c2fb9b829364f39c4decc0bb",
+            .url = "https://github.com/Syndica/lsquic/archive/acc73069a56845376708ddb78c6f04de53d4c83e.tar.gz",
+            .hash = "12206082b8e0394eb0245ac760501adb39b3bffbdca397f6c6031d910e2ff4267765",
         },
         .xev = .{
             .url = "https://github.com/mitchellh/libxev/archive/b8d1d93e5c899b27abbaa7df23b496c3e6a178c7.tar.gz",
