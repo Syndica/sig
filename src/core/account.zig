@@ -5,16 +5,12 @@ const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 
-const U8SliceConfig = bincode.int.U8SliceConfig;
-
 pub const Account = struct {
     lamports: u64,
     data: []u8,
     owner: Pubkey,
     executable: bool,
     rent_epoch: Epoch,
-
-    pub const @"!bincode-config:data" = U8SliceConfig();
 
     pub fn deinit(self: Account, allocator: std.mem.Allocator) void {
         allocator.free(self.data);
