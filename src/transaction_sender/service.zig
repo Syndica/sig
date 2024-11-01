@@ -223,30 +223,27 @@ pub const Service = struct {
                 if (signature_status.err) |err| {
                     try self.transaction_pool.drop_signatures.append(signature);
                     self.metrics.transactions_failed_count.inc();
-
                     std.debug.print("transaction {} failed with error: {}\n", .{ signature, err });
-
                     continue;
                 }
+            }
 
-                if (transaction_info.isExpired(block_height)) {
-                    try self.transaction_pool.drop_signatures.append(signature);
-                    self.metrics.transactions_expired_count.inc();
-                    continue;
-                }
-            } else {
-                // TODO: check against transaction_info.last_valid_block_height
+            if (transaction_info.isExpired(block_height)) {
+                try self.transaction_pool.drop_signatures.append(signature);
+                self.metrics.transactions_expired_count.inc();
+                continue;
+            }
 
-                if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
-                    try self.transaction_pool.drop_signatures.append(signature);
-                    self.metrics.transactions_exceeded_max_retries_count.inc();
-                    continue;
-                }
+            if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
+                try self.transaction_pool.drop_signatures.append(signature);
+                self.metrics.transactions_exceeded_max_retries_count.inc();
+                continue;
+            }
 
-                if (transaction_info.shouldRetry(self.config.retry_rate)) {
-                    try self.transaction_pool.retry_signatures.append(signature);
-                    self.metrics.transactions_retry_count.inc();
-                }
+            if (transaction_info.shouldRetry(self.config.retry_rate)) {
+                try self.transaction_pool.retry_signatures.append(signature);
+                self.metrics.transactions_retry_count.inc();
+                continue;
             }
         }
     }

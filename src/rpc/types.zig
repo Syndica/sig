@@ -33,7 +33,7 @@ pub const Balance = struct {
 };
 
 pub const BlockCommitment = struct {
-    commitment: ?[]const u64,
+    commitment: ?[]const u64 = null,
     totalStake: u64,
 };
 
@@ -46,31 +46,31 @@ pub const RpcContactInfo = struct {
     /// Pubkey of the node as a base-58 string
     pubkey: []const u8,
     /// Gossip port
-    gossip: ?[]const u8,
+    gossip: ?[]const u8 = null,
     /// Tvu UDP port
-    tvu: ?[]const u8,
+    tvu: ?[]const u8 = null,
     /// Tpu UDP port
-    tpu: ?[]const u8,
+    tpu: ?[]const u8 = null,
     /// Tpu QUIC port
-    tpuQuic: ?[]const u8,
+    tpuQuic: ?[]const u8 = null,
     /// Tpu UDP forwards port
-    tpuForwards: ?[]const u8,
+    tpuForwards: ?[]const u8 = null,
     /// Tpu QUIC forwards port
-    tpuForwardsQuic: ?[]const u8,
+    tpuForwardsQuic: ?[]const u8 = null,
     /// Tpu UDP vote port
-    tpuVote: ?[]const u8,
+    tpuVote: ?[]const u8 = null,
     /// Server repair UDP port
-    serveRepair: ?[]const u8,
+    serveRepair: ?[]const u8 = null,
     /// JSON RPC port
-    rpc: ?[]const u8,
+    rpc: ?[]const u8 = null,
     /// WebSocket PubSub port
-    pubsub: ?[]const u8,
+    pubsub: ?[]const u8 = null,
     /// Software version
-    version: ?[]const u8,
+    version: ?[]const u8 = null,
     /// First 4 bytes of the FeatureSet identifier
-    featureSet: ?u32,
+    featureSet: ?u32 = null,
     /// Shred version
-    shredVersion: ?u16,
+    shredVersion: ?u16 = null,
 };
 
 pub const EpochInfo = struct {
@@ -120,9 +120,9 @@ pub const SignatureStatuses = struct {
 
     pub const TransactionStatus = struct {
         slot: u64,
-        confirmations: ?usize,
-        err: ?TransactionError,
-        confirmationStatus: ?[]const u8,
+        confirmations: ?usize = null,
+        err: ?TransactionError = null,
+        confirmationStatus: ?[]const u8 = null,
     };
 };
 
@@ -130,7 +130,7 @@ pub const RpcVersionInfo = struct {
     // TODO: figure out how to support "solana_core" and "feature_set"
     // rn to correctly parse the json response we need to have '-' in the field name
     @"solana-core": []const u8,
-    @"feature-set": ?u32,
+    @"feature-set": ?u32 = null,
 };
 
 pub const Signature = []const u8;
