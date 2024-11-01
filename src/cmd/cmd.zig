@@ -20,6 +20,7 @@ const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 const Network = config.Network;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.Pubkey;
@@ -654,7 +655,7 @@ fn validator() !void {
         service_manager.deinit();
     }
 
-    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger);
+    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger.unscoped());
     defer {
         if (geyser_writer) |geyser| {
             geyser.deinit();
@@ -664,7 +665,7 @@ fn validator() !void {
 
     const snapshot = try loadSnapshot(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         gossip_service,
         true,
         geyser_writer,
@@ -685,12 +686,12 @@ fn validator() !void {
     // blockstore
     var blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         sig.VALIDATOR_DIR ++ "blockstore",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         app_base.metrics_registry,
         blockstore_db,
     );
@@ -708,7 +709,7 @@ fn validator() !void {
     defer allocator.destroy(blockstore_reader);
     blockstore_reader.* = try BlockstoreReader.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         blockstore_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
@@ -716,7 +717,7 @@ fn validator() !void {
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        app_base.logger,
+        app_base.logger.unscoped(),
         blockstore_reader,
         &blockstore_db,
         lowest_cleanup_slot,
@@ -782,12 +783,12 @@ fn shredCollector() !void {
     // blockstore
     var blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         sig.VALIDATOR_DIR ++ "blockstore",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         app_base.metrics_registry,
         blockstore_db,
     );
@@ -805,7 +806,7 @@ fn shredCollector() !void {
     defer allocator.destroy(blockstore_reader);
     blockstore_reader.* = try BlockstoreReader.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         blockstore_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
@@ -813,7 +814,7 @@ fn shredCollector() !void {
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        app_base.logger,
+        app_base.logger.unscoped(),
         blockstore_reader,
         &blockstore_db,
         lowest_cleanup_slot,
@@ -890,7 +891,7 @@ fn printManifest() !void {
 
     var snapshots = try AllSnapshotFields.fromFiles(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         snapshot_dir,
         snapshot_file_info,
     );
@@ -916,7 +917,7 @@ fn createSnapshot() !void {
 
     const snapshot_result = try loadSnapshot(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         null,
         false,
         null,
@@ -962,7 +963,7 @@ fn validateSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger);
+    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger.unscoped());
     defer {
         if (geyser_writer) |geyser| {
             geyser.deinit();
@@ -972,7 +973,7 @@ fn validateSnapshot() !void {
 
     const snapshot_result = try loadSnapshot(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         null,
         true,
         geyser_writer,
@@ -993,7 +994,7 @@ fn printLeaderSchedule() !void {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
         const loaded_snapshot = loadSnapshot(
             allocator,
-            app_base.logger,
+            app_base.logger.unscoped(),
             null,
             true,
             null,
@@ -1073,7 +1074,7 @@ pub fn testTransactionSenderService() !void {
         transaction_channel,
         &gossip_service.gossip_table_rw,
         &app_base.exit,
-        app_base.logger,
+        app_base.logger.unscoped(),
     );
 
     const mock_transfer_generator_handle = try std.Thread.spawn(
@@ -1100,7 +1101,7 @@ const AppBase = struct {
     counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     closed: bool,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(@This())),
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
     my_keypair: KeyPair,
@@ -1128,7 +1129,7 @@ const AppBase = struct {
 
         return .{
             .closed = false,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(AppBase)),
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
             .my_keypair = my_keypair,
@@ -1206,7 +1207,7 @@ fn startGossip(
 
     var manager = sig.utils.service_manager.ServiceManager.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         &app_base.exit,
         "gossip",
         .{},
@@ -1221,7 +1222,7 @@ fn startGossip(
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints.items,
         &app_base.counter,
-        app_base.logger,
+        app_base.logger.unscoped(),
     );
     try manager.defers.deferCall(GossipService.deinit, .{service});
 
@@ -1399,7 +1400,7 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{
+    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger.unscoped(), gossip_service, .{
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
@@ -1431,7 +1432,7 @@ fn loadSnapshot(
 
     result.accounts_db = try AccountsDB.init(
         allocator,
-        logger,
+        logger.unscoped(),
         snapshot_dir,
         .{
             .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
@@ -1549,7 +1550,7 @@ fn downloadSnapshot() !void {
 
     try downloadSnapshotsFromGossip(
         gpa_allocator,
-        logger,
+        logger.unscoped(),
         if (trusted_validators) |trusted| trusted.items else null,
         &gossip_service,
         snapshot_dir,
@@ -1616,7 +1617,7 @@ fn getOrDownloadSnapshots(
         const min_mb_per_sec = options.min_snapshot_download_speed_mbs;
         try downloadSnapshotsFromGossip(
             allocator,
-            logger,
+            logger.unscoped(),
             if (trusted_validators) |trusted| trusted.items else null,
             gossip_service orelse return error.SnapshotsNotFoundAndNoGossipService,
             snapshot_dir,
@@ -1669,7 +1670,7 @@ fn getOrDownloadSnapshots(
             defer archive_file.close();
             try parallelUnpackZstdTarBall(
                 allocator,
-                logger,
+                logger.unscoped(),
                 archive_file,
                 snapshot_dir,
                 n_threads_snapshot_unpack,
@@ -1688,7 +1689,7 @@ fn getOrDownloadSnapshots(
 
             try parallelUnpackZstdTarBall(
                 allocator,
-                logger,
+                logger.unscoped(),
                 archive_file,
                 snapshot_dir,
                 n_threads_snapshot_unpack,
@@ -1702,7 +1703,7 @@ fn getOrDownloadSnapshots(
 
     timer.reset();
     logger.info().log("reading snapshot metadata...");
-    const snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+    const snapshots = try AllSnapshotFields.fromFiles(allocator, logger.unscoped(), snapshot_dir, snapshot_files);
     logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
     return .{ snapshots, snapshot_files };
