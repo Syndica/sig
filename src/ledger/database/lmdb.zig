@@ -9,7 +9,6 @@ const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
 const IteratorDirection = database.interface.IteratorDirection;
 const Logger = sig.trace.Logger;
-const ReturnType = sig.utils.types.ReturnType;
 
 const key_serializer = database.interface.key_serializer;
 const value_serializer = database.interface.value_serializer;
