@@ -65,11 +65,13 @@ pub fn main() !void {
         }
 
         if (std.mem.eql(u8, "accounts_db_readwrite_lmdb", filter) or run_all) {
-            num_errors += try benchmark(
+            num_errors += benchmark(
                 @import("accountsdb/db.zig").BenchmarkAccountsLMDB,
                 max_time_per_bench,
                 .milliseconds,
-            );
+            ) catch |err| {
+                std.debug.panic("err: {s}\n", .{@errorName(err)});
+            };
         }
 
         if (std.mem.eql(u8, "accounts_db_snapshot", filter) or run_all) {
@@ -224,7 +226,7 @@ pub fn benchmark(
     try stderr.writeAll("\n");
     try stderr.context.flush();
 
-    var num_errors: usize = 0;
+    const num_errors: usize = 0;
     inline for (functions, 0..) |def, fcni| {
         if (fcni > 0)
             std.debug.print("---\n", .{});
@@ -240,14 +242,15 @@ pub fn benchmark(
                 (i < max_iterations and runtime_sum < max_time)) : (i += 1)
             {
                 const benchFunction = @field(B, def.name);
-                const ns_duration: sig.time.Duration = switch (@TypeOf(arg)) {
+                const ns_duration: sig.time.Duration = try switch (@TypeOf(arg)) {
                     void => benchFunction(),
                     else => benchFunction(arg),
-                } catch |e| blk: {
-                    std.debug.print("{s} failed with error: {}\n", .{ def.name, e });
-                    num_errors += 1;
-                    break :blk .{ .ns = std.math.maxInt(u64) };
                 };
+                // catch |e| blk: {
+                //     std.debug.print("{s} failed with error: {}\n", .{ def.name, e });
+                //     num_errors += 1;
+                //     break :blk .{ .ns = std.math.maxInt(u64) };
+                // };
 
                 const runtime = try time_unit.unitsfromNanoseconds(ns_duration.asNanos());
 

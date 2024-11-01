@@ -4167,9 +4167,9 @@ fn lmdb_int_as_error(int: c_int) LmdbError {
 }
 fn lmdb_err(int: c_int) LmdbError!void {
     if (int == 0) return {};
-    std.debug.panic("lmdb error: {s}\n", .{@errorName(lmdb_int_as_error(int))});
+    // std.debug.panic("lmdb error: {s}\n", .{@errorName(lmdb_int_as_error(int))});
 
-    // return lmdb_int_as_error(int);
+    return lmdb_int_as_error(int);
 }
 
 // try lmdb_err(c.mdb_env_set_mapsize(env, 1024 * 1024 * 1024)); // 1GiB
@@ -4221,9 +4221,17 @@ fn getSecondaryIndex(txn: *c.MDB_txn) !c.MDB_dbi {
 }
 
 // todo: pass flags (e.g. read-only)
-fn lmdbTransaction(env: *c.MDB_env) !*c.MDB_txn {
+fn lmdbTransaction(env: *c.MDB_env, mode: enum { ReadOnly, Writable }) !*c.MDB_txn {
     var txn: ?*c.MDB_txn = undefined;
-    try lmdb_err(c.mdb_txn_begin(env, null, 0, &txn));
+    try lmdb_err(c.mdb_txn_begin(
+        env,
+        null,
+        switch (mode) {
+            .ReadOnly => c.MDB_RDONLY,
+            .Writable => 0,
+        },
+        &txn,
+    ));
     return txn orelse unreachable;
 }
 
@@ -4234,7 +4242,7 @@ fn lmdbPutAccountsBatch(
     slots: []const Slot,
     accounts: []const Account,
 ) !void {
-    const txn = try lmdbTransaction(env);
+    const txn = try lmdbTransaction(env, .Writable);
     const primary_dbi = try getPrimaryIndex(txn);
     const secondary_dbi = try getSecondaryIndex(txn);
 
@@ -4261,7 +4269,7 @@ fn lmdbPutAccount(
     slot: Slot,
     account: Account,
 ) !void {
-    const txn = try lmdbTransaction(env);
+    const txn = try lmdbTransaction(env, .Writable);
     const primary_dbi = try getPrimaryIndex(txn);
     const secondary_dbi = try getSecondaryIndex(txn);
 
@@ -4282,8 +4290,8 @@ fn lmdbGetAccount(
     pubkey: Pubkey,
     slot: Slot,
 ) !Account {
-    const txn = try lmdbTransaction(env);
-    defer c.mdb_txn_commit(txn);
+    const txn = try lmdbTransaction(env, .ReadOnly);
+    defer _ = c.mdb_txn_commit(txn);
 
     const secondary_dbi = try getSecondaryIndex(txn);
 
@@ -4295,18 +4303,21 @@ fn lmdbGetAccountLatest(
     allocator: std.mem.Allocator,
     pubkey: Pubkey,
 ) !Account {
-    const r_txn = try lmdbTransaction(env);
+    const r_txn = try lmdbTransaction(env, .ReadOnly);
     const primary_dbi = try getPrimaryIndex(r_txn);
     const secondary_dbi = try getSecondaryIndex(r_txn);
 
     var _cursor: ?*c.MDB_cursor = undefined;
     try lmdb_err(c.mdb_cursor_open(r_txn, primary_dbi, &_cursor));
     const cursor = _cursor orelse unreachable;
+    defer c.mdb_cursor_close(cursor);
 
     var pubkey_copy = pubkey.data;
     var primary_index_key = asValue(&pubkey_copy);
     var _data: c.MDB_val = undefined;
-    try lmdb_err(c.mdb_cursor_get(cursor, &primary_index_key, &_data, c.MDB_FIRST_DUP));
+    try lmdb_err(c.mdb_cursor_get(cursor, &primary_index_key, null, c.MDB_SET));
+
+    try lmdb_err(c.mdb_cursor_get(cursor, &primary_index_key, &_data, c.MDB_LAST_DUP));
     const data: []const u8 = @as([*]const u8, @ptrCast(_data.mv_data))[0.._data.mv_size];
 
     if (data.len != @sizeOf(PubkeyAndSlot)) unreachable;
@@ -4318,6 +4329,9 @@ fn lmdbGetAccountLatest(
     var _account_data: c.MDB_val = undefined;
     try lmdb_err(c.mdb_get(r_txn, secondary_dbi, &secondary_index_key, &_account_data));
     const account_data: []const u8 = @as([*]const u8, @ptrCast(_account_data.mv_data))[0.._account_data.mv_size];
+
+    try lmdb_err(c.mdb_txn_commit(r_txn));
+
     const account = try bincode.readFromSlice(allocator, Account, account_data, .{});
 
     return account;
@@ -4412,9 +4426,57 @@ test "lmdb-accounts put & get" {
     try std.testing.expectEqualDeep(account, got_account);
 }
 
+pub const AccountsLmdb = struct {
+    env: *c.MDB_env,
+
+    // pubkey_slots: c.MDB_dbi,
+    // pubkeyslot_account: c.MDB_dbi,
+    // slot_pubkeys: c.MDB_dbi // TODO: make this index
+
+    pub fn init(disk_path: [*:0]const u8) AccountsLmdb {
+        var _env: ?*c.MDB_env = undefined;
+        try lmdb_err(c.mdb_env_create(&_env));
+        const env: *c.MDB_env = _env orelse unreachable;
+        try lmdb_err(c.mdb_env_set_maxdbs(env, 50));
+        try lmdb_err(c.mdb_env_set_mapsize(env, 1024 * 1024 * 200)); //200 MiB
+
+        // std.debug.print("opening db\n", .{});
+
+        try lmdb_err(c.mdb_env_open(env, disk_path, c.MDB_NORDAHEAD, 0o700));
+
+        // std.debug.print("opened db\n", .{});
+
+        return .{ .env = env };
+    }
+
+    fn getPrimaryIndex(txn: *c.MDB_txn) !c.MDB_dbi {
+        var primary_dbi: c.MDB_dbi = undefined;
+
+        try lmdb_err(c.mdb_dbi_open(
+            txn,
+            "pubkey->pubkeyslots",
+            c.MDB_CREATE | c.MDB_DUPSORT | c.MDB_DUPFIXED | c.MDB_INTEGERDUP,
+            &primary_dbi,
+        ));
+
+        return primary_dbi;
+    }
+
+    fn getSecondaryIndex(txn: *c.MDB_txn) !c.MDB_dbi {
+        var secondary_dbi: c.MDB_dbi = undefined;
+        try lmdb_err(c.mdb_dbi_open(
+            txn,
+            "pubkeyslots->account",
+            c.MDB_CREATE | c.MDB_RDONLY,
+            &secondary_dbi,
+        ));
+        return secondary_dbi;
+    }
+};
+
 pub const BenchmarkAccountsLMDB = struct {
-    pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const min_iterations = 10;
+    pub const max_iterations = 10;
 
     pub const BenchArgs = struct {
         /// the number of accounts to store in the database (for each slot)
@@ -4452,11 +4514,11 @@ pub const BenchmarkAccountsLMDB = struct {
         try lmdb_err(c.mdb_env_set_maxdbs(env, 50));
         try lmdb_err(c.mdb_env_set_mapsize(env, 1024 * 1024 * 1024 * 20)); //20 GiB
 
-        std.debug.print("opening db\n", .{});
+        // std.debug.print("opening db\n", .{});
 
         try lmdb_err(c.mdb_env_open(env, disk_path, c.MDB_NORDAHEAD, 0o700));
 
-        std.debug.print("opened db\n", .{});
+        // std.debug.print("opened db\n", .{});
 
         var prng = std.Random.DefaultPrng.init(19);
         const random = prng.random();
@@ -4479,7 +4541,7 @@ pub const BenchmarkAccountsLMDB = struct {
             }
         }
 
-        std.debug.print("written\n", .{});
+        // std.debug.print("written\n", .{});
 
         const pubkeys_read_weighting = try allocator.alloc(f32, n_accounts);
         for (pubkeys_read_weighting) |*read_probability| read_probability.* = random.floatNorm(f32);
@@ -4488,23 +4550,21 @@ pub const BenchmarkAccountsLMDB = struct {
 
         var timer = try sig.time.Timer.start();
 
-        std.debug.print("reading first account\n", .{});
+        // std.debug.print("reading first account\n", .{});
 
         const do_read_count = n_accounts;
         var i: usize = 0;
+        var account_buf: [2000]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&account_buf);
+
         while (i < do_read_count) : (i += 1) {
             const pubkey_idx = indexer.sample();
-            const account = try lmdbGetAccountLatest(env, allocator, pubkeys[pubkey_idx]);
-            defer bincode.free(allocator, account);
-
-            if (i % 1000 == 0) std.debug.print("read 1000x\n", .{});
+            const account = try lmdbGetAccountLatest(env, fba.allocator(), pubkeys[pubkey_idx]);
+            defer fba.reset();
+            // defer bincode.free(fbaallocator, account);
 
             if (account.data.len != (pubkey_idx % 1_000)) {
                 std.debug.panic("account data len dnm {}: {} != {}", .{ pubkey_idx, account.data.len, (pubkey_idx % 1_000) });
-            }
-
-            if (i == 0) {
-                std.debug.print("read first account\n", .{});
             }
         }
 
