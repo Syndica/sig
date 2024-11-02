@@ -441,6 +441,6 @@ const SharedHashMap = struct {
     }
 };
 
-test "hashmap database" {
-    try database.interface.testDatabase(SharedHashMapDB);
+comptime {
+    _ = &database.interface.testDatabase(SharedHashMapDB);
 }
