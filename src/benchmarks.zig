@@ -70,7 +70,8 @@ pub fn main() !void {
                 max_time_per_bench,
                 .milliseconds,
             ) catch |err| {
-                std.debug.panic("err: {s}\n", .{@errorName(err)});
+                return err;
+                // std.debug.panic("err: {s}\n", .{@errorName(err)});
             };
         }
 

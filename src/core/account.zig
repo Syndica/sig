@@ -104,6 +104,79 @@ pub const Account = struct {
 
         return offset;
     }
+
+    pub fn getRawBufferSize(self: *const Account) usize {
+        var size: usize = 0;
+        size += @sizeOf(u64); // lamports
+        size += @sizeOf(Epoch); // rent_epoch
+        size += @sizeOf(bool); // executable
+        size += @sizeOf(Pubkey); // owner
+        size += self.data.len;
+        return size;
+    }
+
+    // store fields & data into one buffer
+    pub fn writeRawBuffer(self: *const Account, buf: []u8) usize {
+        var offset: usize = 0;
+
+        buf[offset..][0..@sizeOf(u64)].* = @bitCast(self.lamports);
+        offset += @sizeOf(u64);
+
+        buf[offset..][0..@sizeOf(Epoch)].* = @bitCast(self.rent_epoch);
+        offset += @sizeOf(Epoch);
+
+        buf[offset..][0..@sizeOf(bool)].* = std.mem.asBytes(&self.executable).*;
+        offset += @sizeOf(bool);
+
+        buf[offset..][0..@sizeOf(Pubkey)].* = @bitCast(self.owner);
+        offset += @sizeOf(Pubkey);
+
+        @memcpy(buf[offset..][0..self.data.len], self.data);
+        offset += self.data.len;
+
+        return offset;
+    }
+
+    pub fn fromRawBuffer(allocator: std.mem.Allocator, buf: []const u8) !Account {
+        var offset: usize = 0;
+
+        const lamports = @as(*align(1) const u64, @ptrCast(
+            buf[offset..][0..@sizeOf(u64)],
+        ));
+        offset += @sizeOf(u64);
+
+        const rent_epoch = @as(
+            *align(1) const Epoch,
+            @ptrCast(
+                buf[offset..][0..@sizeOf(Epoch)],
+            ),
+        );
+        offset += @sizeOf(Epoch);
+
+        const executable = @as(
+            *align(1) const bool,
+            @ptrCast(
+                buf[offset..][0..@sizeOf(bool)],
+            ),
+        );
+        offset += @sizeOf(bool);
+
+        const owner = @as(
+            *align(1) const Pubkey,
+            @ptrCast(
+                buf[offset..][0..@sizeOf(Pubkey)],
+            ),
+        );
+        offset += @sizeOf(Pubkey);
+
+        return Account{
+            .lamports = lamports.*,
+            .rent_epoch = rent_epoch.*,
+            .executable = executable.*,
+            .owner = owner.*,
+            .data = try allocator.dupe(u8, buf[offset..]),
+        };
+    }
 };
 
 /// helper function for writing to memory
