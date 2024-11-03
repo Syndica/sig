@@ -23,7 +23,7 @@ pub fn runShredVerifier(
     /// me --> shred processor
     verified_shred_sender: *Channel(Packet),
     /// me --> retransmit service
-    retransmit_shred_sender: *Channel(Packet),
+    maybe_retransmit_shred_sender: ?*Channel(Packet),
     leader_schedule: SlotLeaderProvider,
 ) !void {
     const metrics = try registry.initStruct(Metrics);
@@ -37,7 +37,9 @@ pub fn runShredVerifier(
             if (verifyShred(&packet, leader_schedule)) |_| {
                 metrics.verified_count.inc();
                 try verified_shred_sender.send(packet);
-                try retransmit_shred_sender.send(packet);
+                if (maybe_retransmit_shred_sender) |retransmit_shred_sender| {
+                    try retransmit_shred_sender.send(packet);
+                }
             } else |err| {
                 metrics.fail.observe(err);
             }

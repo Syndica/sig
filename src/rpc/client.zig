@@ -473,7 +473,15 @@ test "getEpochInfo" {
     _ = try response.result();
 }
 
-// TODO: test getEpochSchedule()
+test "getEpochSchedule" {
+    const allocator = std.testing.allocator;
+    var client = Client.init(allocator, .Testnet, .{});
+    defer client.deinit();
+    const response = try client.getEpochSchedule(allocator);
+    defer response.deinit();
+    _ = try response.result();
+}
+
 // TODO: test getFeeForMessage()
 // TODO: test getFirstAvailableBlock()
 // TODO: test getGenesisHash()

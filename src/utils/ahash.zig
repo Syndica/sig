@@ -15,11 +15,11 @@ pub const AHasher = struct {
     const MULTIPLE: u64 = 6364136223846793005;
     const ROTATE: u32 = 23;
 
-    pub fn fromRandomState(rand_state: RandomState) AHasher {
+    pub fn fromSeed(seed: AHashSeed) AHasher {
         return .{
-            .buffer = rand_state.k0,
-            .pad = rand_state.k1,
-            .extra_keys = .{ rand_state.k2, rand_state.k3 },
+            .buffer = seed.k0,
+            .pad = seed.k1,
+            .extra_keys = .{ seed.k2, seed.k3 },
         };
     }
 
@@ -106,7 +106,7 @@ pub const AHasher = struct {
     }
 };
 
-pub const RandomState = struct {
+pub const AHashSeed = struct {
     k0: u64,
     k1: u64,
     k2: u64,
@@ -119,8 +119,8 @@ pub const RandomState = struct {
         0x3f84_d5b5_b547_0917,
     };
 
-    pub fn fromRng(rng: Random) RandomState {
-        return RandomState.fromSeeds(
+    pub fn fromRng(rng: Random) AHashSeed {
+        return AHashSeed.fromSeeds(
             rng.int(u64),
             rng.int(u64),
             rng.int(u64),
@@ -128,7 +128,7 @@ pub const RandomState = struct {
         );
     }
 
-    pub fn fromSeeds(k0: u64, k1: u64, k2: u64, k3: u64) RandomState {
+    pub fn fromSeeds(k0: u64, k1: u64, k2: u64, k3: u64) AHashSeed {
         return .{
             .k0 = k0 ^ PI2[0],
             .k1 = k1 ^ PI2[1],
@@ -156,24 +156,24 @@ inline fn foldedMultiply(s: u64, by: u64) u64 {
 
 test "AHasher.write" {
     // Test cases are derived from running the reference implementation in Rust.
-    const random_state = RandomState.fromSeeds(0, 0, 0, 0);
+    const random_state = AHashSeed.fromSeeds(0, 0, 0, 0);
     {
-        var hasher = AHasher.fromRandomState(random_state);
+        var hasher = AHasher.fromSeed(random_state);
         hasher.write(&[_]u8{});
         try std.testing.expectEqual(13476623659777435794, hasher.finish());
     }
     {
-        var hasher = AHasher.fromRandomState(random_state);
+        var hasher = AHasher.fromSeed(random_state);
         hasher.write(&[_]u8{0});
         try std.testing.expectEqual(4433649978346923560, hasher.finish());
     }
     {
-        var hasher = AHasher.fromRandomState(random_state);
+        var hasher = AHasher.fromSeed(random_state);
         hasher.write(&[_]u8{ 91, 243, 18, 129, 64, 220, 188, 11 });
         try std.testing.expectEqual(17851898492460713816, hasher.finish());
     }
     {
-        var hasher = AHasher.fromRandomState(random_state);
+        var hasher = AHasher.fromSeed(random_state);
         hasher.write(&[_]u8{ 21, 37, 138, 62, 157, 245, 23, 48, 98, 184, 127, 221, 73, 156, 24, 56 });
         try std.testing.expectEqual(15170204645034903865, hasher.finish());
     }
@@ -181,9 +181,9 @@ test "AHasher.write" {
 
 test "AHasher.hash" {
     // Test cases are derived from running the reference implementation in Rust.
-    const random_state = RandomState.fromSeeds(0, 0, 0, 0);
+    const random_state = AHashSeed.fromSeeds(0, 0, 0, 0);
     {
-        var hasher = AHasher.fromRandomState(random_state);
+        var hasher = AHasher.fromSeed(random_state);
         const data: u32 = 10;
         hasher.hash(@TypeOf(data), &data);
         hasher.hash(@TypeOf(data), &data);
@@ -191,7 +191,7 @@ test "AHasher.hash" {
         try std.testing.expectEqual(12791420710718635355, hasher.finish());
     }
     {
-        var hasher = AHasher.fromRandomState(random_state);
+        var hasher = AHasher.fromSeed(random_state);
         const data = [_]u8{};
         hasher.hash(@TypeOf(data), &data);
         hasher.hash(@TypeOf(data), &data);
@@ -199,7 +199,7 @@ test "AHasher.hash" {
         try std.testing.expectEqual(6946764487996054145, hasher.finish());
     }
     {
-        var hasher = AHasher.fromRandomState(random_state);
+        var hasher = AHasher.fromSeed(random_state);
         const data = [_]u8{ 10, 3, 5 };
         hasher.hash(@TypeOf(data), &data);
         hasher.hash(@TypeOf(data), &data);
