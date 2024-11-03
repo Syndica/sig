@@ -118,6 +118,7 @@ pub fn run() !void {
         .value_name = "Number of turbine retransmit threads",
     };
 
+    // TODO: Remove when no longer needed
     var turbine_overwrite_stake_for_testing = cli.Option{
         .long_name = "overwrite-stake-for-testing",
         .help = "Overwrite the stake for testing purposes",

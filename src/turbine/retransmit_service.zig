@@ -75,12 +75,6 @@ pub fn run(
     var retransmit_to_socket_channel = try Channel(Packet).init(allocator);
     defer retransmit_to_socket_channel.deinit();
 
-    var retransmit_threads = std.ArrayList(std.Thread).init(allocator);
-    defer retransmit_threads.deinit();
-
-    var socket_threads = std.ArrayList(std.Thread).init(allocator);
-    defer socket_threads.deinit();
-
     var retransmit_sockets: std.ArrayList(UdpSocket) = std.ArrayList(UdpSocket).init(allocator);
     defer {
         for (retransmit_sockets.items) |socket| socket.close();
@@ -90,11 +84,13 @@ pub fn run(
     for (0..num_retransmit_sockets) |_| {
         var socket = try UdpSocket.create(.ipv4, .udp);
         try socket.bind(try EndPoint.parse("0.0.0.0:0"));
-        try retransmit_sockets.append(try UdpSocket.create(.ipv4, .udp));
+        try retransmit_sockets.append(socket);
     }
 
-    const receive_thread = try std.Thread.spawn(
-        .{},
+    var wait_group: std.Thread.WaitGroup = .{};
+    defer wait_group.wait();
+
+    wait_group.spawnManager(
         receiveShreds,
         .{
             allocator,
@@ -113,8 +109,7 @@ pub fn run(
     );
 
     for (0..num_retransmit_threads) |_| {
-        try retransmit_threads.append(try std.Thread.spawn(
-            .{},
+        wait_group.spawnManager(
             retransmitShreds,
             .{
                 allocator,
@@ -123,12 +118,11 @@ pub fn run(
                 &stats,
                 exit,
             },
-        ));
+        );
     }
 
     for (retransmit_sockets.items) |socket| {
-        try socket_threads.append(try std.Thread.spawn(
-            .{},
+        wait_group.spawnManager(
             socket_utils.sendSocket,
             .{
                 socket,
@@ -138,12 +132,8 @@ pub fn run(
                 exit,
                 {},
             },
-        ));
+        );
     }
-
-    receive_thread.join();
-    for (retransmit_threads.items) |thread| thread.join();
-    for (socket_threads.items) |thread| thread.join();
 }
 
 /// Receive shreds from the network, deduplicate them, and then package
@@ -172,13 +162,17 @@ fn receiveShreds(
     );
     defer deduper.deinit();
 
+    var shreds = std.ArrayList(Packet).init(allocator);
+
     while (!exit.load(.acquire)) {
         var receive_shreds_timer = try sig.time.Timer.start();
 
         const receiver_len = receiver.len();
         if (receiver_len == 0) continue;
 
-        var shreds = try std.ArrayList(Packet).initCapacity(allocator, receiver_len);
+        shreds.clearRetainingCapacity();
+        try shreds.ensureTotalCapacity(receiver_len);
+
         while (receiver.receive()) |packet| try shreds.append(packet);
         defer shreds.deinit();
 
@@ -270,7 +264,7 @@ fn createAndSendRetransmitInfo(
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     leader_schedule_cache: *LeaderScheduleCache,
     turbine_tree_cache: *TurbineTreeCache,
-    sender: *Channel(RetransmitShredInfo),
+    retransmit_shred_sender: *Channel(RetransmitShredInfo),
     stats: *Stats,
     overwrite_stake_for_testing: bool,
 ) !void {
@@ -302,7 +296,7 @@ fn createAndSendRetransmitInfo(
         stats.retransmit_get_turbine_tree_nanos.set(get_turbine_tree_timer.read().asNanos());
 
         for (slot_shreds.items) |shred_id_and_packet| {
-            try sender.send(.{
+            try retransmit_shred_sender.send(.{
                 .slot_leader = slot_leader,
                 // CAUTION: .acquireUnsafe() is used here as the turbine_tree is guaranteed to be valid since:
                 // 1. the turbine_tree_provider has one exactly on reference to the turbine_tree after getTurbineTree
