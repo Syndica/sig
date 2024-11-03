@@ -95,8 +95,8 @@ fn testDedupSeeded(
     }
 
     try std.testing.expectEqual(num_dups, dup_count);
-    try std.testing.expectEqual(bytes_popcount, deduper.byte_filter.popcount.load(.monotonic));
-    try std.testing.expectEqual(shred_id_popcount, deduper.shred_id_filter.popcount.load(.monotonic));
+    try std.testing.expectEqual(bytes_popcount, deduper.byte_filter.masked_count.load(.monotonic));
+    try std.testing.expectEqual(shred_id_popcount, deduper.shred_id_filter.masked_count.load(.monotonic));
 }
 
 test "agave: dedup seeded" {

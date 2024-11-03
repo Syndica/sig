@@ -5,76 +5,76 @@ const AtomicU64 = std.atomic.Value(u64);
 
 const Instant = sig.time.Instant;
 const Duration = sig.time.Duration;
-const RandomState = sig.utils.ahash.RandomState;
+const AHashSeed = sig.utils.ahash.AHashSeed;
 const AHasher = sig.utils.ahash.AHasher;
 const ChaChaRng = sig.rand.ChaChaRng(20);
 const uintLessThanRust = sig.rand.weighted_shuffle.uintLessThanRust;
 
-/// Deduper from agave.
-pub fn Deduper(comptime K: usize, comptime T: type) type {
+/// Deduper which uses the AHash algorithm across K different seeds/hashers to find possible duplicates.
+pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
     return struct {
         num_bits: u64,
         bits: std.ArrayList(AtomicU64),
-        state: [K]RandomState,
-        clock: Instant,
-        popcount: AtomicU64,
+        state: [n_hashers]AHashSeed,
+        last_reset_instant: Instant,
+        masked_count: AtomicU64,
 
         pub fn init(
             allocator: std.mem.Allocator,
             rand: std.rand.Random,
             num_bits: u64,
-        ) !Deduper(K, T) {
+        ) !Deduper(n_hashers, T) {
             const size: usize = @intCast((num_bits + 63) / 64);
             var bits = try std.ArrayList(AtomicU64).initCapacity(allocator, size);
-            for (0..size) |_| try bits.append(AtomicU64.init(0));
-            var state: [K]RandomState = undefined;
-            for (0..K) |i| state[i] = RandomState.fromRng(rand);
+            for (0..size) |_| bits.appendAssumeCapacity(AtomicU64.init(0));
+            var state: [n_hashers]AHashSeed = undefined;
+            for (0..n_hashers) |i| state[i] = AHashSeed.fromRng(rand);
             return .{
                 .num_bits = num_bits,
                 .bits = bits,
                 .state = state,
-                .clock = Instant.now(),
-                .popcount = AtomicU64.init(0),
+                .last_reset_instant = Instant.now(),
+                .masked_count = AtomicU64.init(0),
             };
         }
 
-        pub fn deinit(self: Deduper(K, T)) void {
+        pub fn deinit(self: Deduper(n_hashers, T)) void {
             self.bits.deinit();
         }
 
         /// Resets the deduper if the false positive rate is too high or the reset cycle has elapsed.
         pub fn maybeReset(
-            self: *Deduper(K, T),
+            self: *Deduper(n_hashers, T),
             rand: std.rand.Random,
             false_positive_rate: f64,
             reset_cycle: Duration,
         ) bool {
             std.debug.assert(0.0 < false_positive_rate and false_positive_rate < 1.0);
             const saturated = self.falsePositiveRate() >= false_positive_rate;
-            if (saturated or self.clock.elapsed().asNanos() >= reset_cycle.asNanos()) {
+            if (saturated or self.last_reset_instant.elapsed().asNanos() >= reset_cycle.asNanos()) {
                 for (self.bits.items) |_bit| {
                     var bit = _bit;
                     bit = AtomicU64.init(0);
                 }
-                for (0..K) |i| self.state[i] = RandomState.fromRng(rand);
-                self.clock = Instant.now();
-                self.popcount = AtomicU64.init(0);
+                for (0..n_hashers) |i| self.state[i] = AHashSeed.fromRng(rand);
+                self.last_reset_instant = Instant.now();
+                self.masked_count = AtomicU64.init(0);
             }
             return saturated;
         }
 
         /// Returns true if the data is likely a duplicate.
-        pub fn dedup(self: *Deduper(K, T), data: *const T) bool {
+        pub fn dedup(self: *Deduper(n_hashers, T), data: *const T) bool {
             var duplicate = true;
-            for (0..K) |i| {
-                var hasher = AHasher.fromRandomState(self.state[i]);
+            for (0..n_hashers) |i| {
+                var hasher = AHasher.fromSeed(self.state[i]);
                 hasher.hash(T, data);
                 const hash: u64 = hasher.finish() % self.num_bits;
                 const mask: u64 = @as(u64, 1) << @truncate(hash);
                 const index = @as(usize, hash >> 6);
                 const old = self.bits.items[index].fetchOr(mask, .acquire);
                 if (old & mask == 0) {
-                    _ = self.popcount.fetchAdd(1, .acquire);
+                    _ = self.masked_count.fetchAdd(1, .acquire);
                     duplicate = false;
                 }
             }
@@ -82,12 +82,12 @@ pub fn Deduper(comptime K: usize, comptime T: type) type {
         }
 
         /// False positive rate computed from the current popcount and num_bits.
-        pub fn falsePositiveRate(self: *Deduper(K, T)) f64 {
-            const popcount = self.popcount.load(.unordered);
+        pub fn falsePositiveRate(self: *Deduper(n_hashers, T)) f64 {
+            const popcount = self.masked_count.load(.unordered);
             const numerator: f64 = @floatFromInt(@min(popcount, self.num_bits));
             const denominator: f64 = @floatFromInt(self.num_bits);
             const ones_ratio = numerator / denominator;
-            return std.math.pow(f64, ones_ratio, @as(f64, K));
+            return std.math.pow(f64, ones_ratio, @as(f64, n_hashers));
         }
     };
 }
@@ -117,10 +117,10 @@ fn testDedupCapacity(num_bits: u64, false_positive_rate: f64, capacity: u64) !vo
         deduper.falsePositiveRate(),
     );
 
-    deduper.popcount.store(capacity, .monotonic);
+    deduper.masked_count.store(capacity, .monotonic);
     try std.testing.expect(deduper.falsePositiveRate() < false_positive_rate);
 
-    deduper.popcount.store(capacity + 1, .monotonic);
+    deduper.masked_count.store(capacity + 1, .monotonic);
     try std.testing.expect(deduper.falsePositiveRate() >= false_positive_rate);
     try std.testing.expect(deduper.maybeReset(
         rng,
@@ -161,7 +161,7 @@ fn testDedupSeeded(
     }
 
     try std.testing.expectEqual(num_dups, num_dups);
-    try std.testing.expectEqual(popcount, deduper.popcount.load(.unordered)); // TODO: Find why this fails
+    try std.testing.expectEqual(popcount, deduper.masked_count.load(.unordered)); // TODO: Find why this fails
     try std.testing.expect(deduper.falsePositiveRate() < false_positive_rate);
     try std.testing.expect(!deduper.maybeReset(rng, false_positive_rate, Duration.fromMillis(0)));
 }

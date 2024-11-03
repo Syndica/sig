@@ -159,10 +159,6 @@ pub const TurbineTree = struct {
         );
         errdefer nodes.deinit();
 
-        // for (nodes.items) |node| {
-        //     std.debug.print("{s}:{any}:{}\n", .{ node.pubkey().string().slice(), node.tvuAddress(), node.stake });
-        // }
-
         var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
         errdefer index.deinit();
         for (nodes.items, 0..) |node, i| try index.put(node.pubkey(), i);
@@ -170,8 +166,6 @@ pub const TurbineTree = struct {
         var node_stakes = try std.ArrayList(u64).initCapacity(allocator, nodes.items.len);
         defer node_stakes.deinit();
         for (nodes.items) |node| node_stakes.appendAssumeCapacity(node.stake);
-
-        std.debug.print("node stakes: {any}\n\n", .{node_stakes.items});
 
         const weighted_shuffle = try WeightedShuffle.init(allocator, node_stakes.items);
 
@@ -405,8 +399,8 @@ pub const TurbineTree = struct {
 
         // Filter out nodes which exceed the maximum number of nodes per IP and
         // nodes with a stake of 0
-        var result = try std.ArrayList(Node).initCapacity(allocator, nodes.items.len);
-        errdefer result.deinit();
+        var result_nodes = try std.ArrayList(Node).initCapacity(allocator, nodes.items.len);
+        errdefer result_nodes.deinit();
         var ip_counts = std.AutoArrayHashMap(IpAddr, usize).init(allocator);
         defer ip_counts.deinit();
         for (nodes.items) |node| {
@@ -417,22 +411,22 @@ pub const TurbineTree = struct {
                 const ip_count = ip_counts.get(tvu_addr.ip()) orelse 0;
                 if (ip_count < MAX_NODES_PER_IP_ADDRESS) {
                     node_appended = true;
-                    result.appendAssumeCapacity(node);
+                    result_nodes.appendAssumeCapacity(node);
+                    try ip_counts.put(tvu_addr.ip(), ip_count + 1);
                 }
-                try ip_counts.put(tvu_addr.ip(), ip_count + 1);
             }
 
             // Keep the node for deterministic shuffle but remove
             // contact info so that it is not used for retransmit
             if (!node_appended and node.stake > 0) {
-                result.appendAssumeCapacity(.{
+                result_nodes.appendAssumeCapacity(.{
                     .id = .{ .pubkey = node.pubkey() },
                     .stake = node.stake,
                 });
             }
         }
 
-        return result;
+        return result_nodes;
     }
 
     /// Get Tvu peers from the gossip table, that is all peers with a matching

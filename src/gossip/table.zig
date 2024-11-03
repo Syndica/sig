@@ -444,9 +444,9 @@ pub const GossipTable = struct {
     ) []ThreadSafeContactInfo {
         var infos = self.contactInfoIterator(minimum_insertion_timestamp);
         var i: usize = 0;
-        while (infos.next()) |info| {
+        while (infos.nextThreadSafe()) |info| {
             if (i >= buf.len) break;
-            buf[i] = ThreadSafeContactInfo.fromContactInfo(info.*);
+            buf[i] = info;
             i += 1;
         }
         return buf[0..i];
