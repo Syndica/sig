@@ -232,6 +232,29 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
+    pub fn @"BlockstoreReader.getCodeShredsForSlot"() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try TestState.init(allocator, @src(), .noop);
+        defer state.deinit();
+        var inserter = try state.shredInserter();
+        var reader = try state.reader();
+
+        const shreds_path = "agave.blockstore.bench_read.code_shreds.bin";
+        const shreds = try testShreds(std.heap.c_allocator, shreds_path);
+        defer deinitShreds(allocator, shreds);
+
+        _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
+
+        const slot = 1;
+        const start_index = 0;
+
+        var timer = try sig.time.Timer.start();
+        const code_shreds = try reader.getCodeShredsForSlot(slot, start_index);
+        const duration = timer.read();
+        try std.testing.expect(code_shreds.items.len > 0);
+        return duration;
+    }
+
     /// Benchmarks for LedgerResultWriter.
     ///
     /// Analogous to [bench_write_transaction_status]https://github.com/anza-xyz/agave/blob/ff1b22007c34669768c5b676cac491f580b39e0b/ledger/benches/blockstore.rs#L206
