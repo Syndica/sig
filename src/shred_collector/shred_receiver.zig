@@ -193,7 +193,7 @@ fn validateShred(
     // https://github.com/solana-labs/solana/pull/35076
 
     _ = layout.getLeaderSignature(shred) orelse return error.signature_missing;
-    _ = layout.getSignedData(shred) orelse return error.signed_data_missing;
+    _ = layout.merkleRoot(shred) orelse return error.signed_data_missing;
 }
 
 /// TODO: this may need to move to blockstore

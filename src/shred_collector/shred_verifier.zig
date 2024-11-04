@@ -51,7 +51,7 @@ fn verifyShred(
     const shred = shred_layout.getShred(packet) orelse return error.insufficient_shred_size;
     const slot = shred_layout.getSlot(shred) orelse return error.slot_missing;
     const signature = shred_layout.getLeaderSignature(shred) orelse return error.signature_missing;
-    const signed_data = shred_layout.getSignedData(shred) orelse return error.signed_data_missing;
+    const signed_data = shred_layout.merkleRoot(shred) orelse return error.signed_data_missing;
     const leader = leader_schedule.call(slot) orelse return error.leader_unknown;
 
     const valid = signature.verify(leader, &signed_data.data) catch
