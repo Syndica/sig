@@ -109,7 +109,7 @@ pub const ShredInserter = struct {
     ///     - In `commit_slot_meta_working_set()`, persists everything stored
     ///       in the in-memory structure slot_meta_working_set, which is updated
     ///       by both `check_insert_data_shred()` and `handle_chaining()`.
-    ///   - [`schema.orphans`]: add or remove the ID of a slot to `schema.orphans`
+    ///   - [`schema.orphan_slots`]: add or remove the ID of a slot to `schema.orphan_slots`
     ///     if it becomes / is no longer an orphan slot in `handle_chaining()`.
     ///   - [`schema.erasure_meta`]: the associated ErasureMeta of the code and data
     ///     shreds inside `shreds` will be updated and committed to

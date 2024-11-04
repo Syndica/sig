@@ -130,7 +130,7 @@ pub const LedgerResultWriter = struct {
         var max_new_rooted_slot: Slot = 0;
         for (rooted_slots) |slot| {
             max_new_rooted_slot = @max(max_new_rooted_slot, slot);
-            try write_batch.put(schema.roots, slot, true);
+            try write_batch.put(schema.rooted_slots, slot, true);
         }
 
         try self.db.commit(write_batch);
@@ -300,7 +300,7 @@ pub const LedgerResultWriter = struct {
     }
 
     fn isRoot(self: *Self, slot: Slot) !bool {
-        return try self.db.get(self.allocator, schema.roots, slot) orelse false;
+        return try self.db.get(self.allocator, schema.rooted_slots, slot) orelse false;
     }
 };
 
