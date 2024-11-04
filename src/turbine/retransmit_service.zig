@@ -67,7 +67,7 @@ pub fn run(
         num_retransmit_threads,
     });
 
-    var stats = try Stats.init();
+    var metrics = try RetransmitServiceMetrics.init();
 
     var receive_to_retransmit_channel = try Channel(RetransmitShredInfo).init(allocator);
     defer receive_to_retransmit_channel.deinit();
@@ -103,7 +103,7 @@ pub fn run(
             rand,
             exit,
             logger,
-            &stats,
+            &metrics,
             overwrite_stake_for_testing,
         },
     );
@@ -115,7 +115,7 @@ pub fn run(
                 allocator,
                 &receive_to_retransmit_channel,
                 &retransmit_to_socket_channel,
-                &stats,
+                &metrics,
                 exit,
             },
         );
@@ -149,7 +149,7 @@ fn receiveShreds(
     rand: Random,
     exit: *AtomicBool,
     logger: Logger,
-    stats: *Stats,
+    metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
 ) !void {
     var turbine_tree_cache = TurbineTreeCache.init(allocator);
@@ -181,14 +181,14 @@ fn receiveShreds(
             DEDUPER_FALSE_POSITIVE_RATE,
             DEDUPER_RESET_CYCLE,
         );
-        stats.retransmit_shred_byte_filter_saturated.set(@intFromBool(bytes_filter_saturated));
-        stats.retransmit_shred_id_filter_saturated.set(@intFromBool(shred_id_filter_saturated));
+        metrics.shred_byte_filter_saturated.set(@intFromBool(bytes_filter_saturated));
+        metrics.shred_id_filter_saturated.set(@intFromBool(shred_id_filter_saturated));
 
         var grouped_shreds = try dedupAndGroupShredsBySlot(
             allocator,
             &shreds,
             &deduper,
-            stats,
+            metrics,
         );
         defer {
             for (grouped_shreds.values()) |arr| arr.deinit();
@@ -205,15 +205,15 @@ fn receiveShreds(
                 leader_schedule_cache,
                 &turbine_tree_cache,
                 sender,
-                stats,
+                metrics,
                 overwrite_stake_for_testing,
             );
         }
 
-        stats.retransmit_shreds_received_count.add(shreds.items.len);
-        stats.retransmit_receive_shreds_nanos.set(receive_shreds_timer.read().asNanos());
+        metrics.shreds_received_count.add(shreds.items.len);
+        metrics.receive_shreds_nanos.set(receive_shreds_timer.read().asNanos());
 
-        stats.log(logger);
+        metrics.log(logger);
     }
 }
 
@@ -223,7 +223,7 @@ fn dedupAndGroupShredsBySlot(
     allocator: std.mem.Allocator,
     shreds: *std.ArrayList(Packet),
     deduper: *ShredDeduper(2),
-    stats: *Stats,
+    metrics: *RetransmitServiceMetrics,
 ) !std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)) {
     var dedup_and_group_shreds_timer = try sig.time.Timer.start();
     var result = std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
@@ -232,11 +232,11 @@ fn dedupAndGroupShredsBySlot(
 
         switch (deduper.dedup(&shred_id, &shred_packet.data, DEDUPER_MAX_DUPLICATE_COUNT)) {
             .byte_duplicate => {
-                stats.retransmit_shred_byte_filtered_count.inc();
+                metrics.shred_byte_filtered_count.inc();
                 continue;
             },
             .shred_id_duplicate => {
-                stats.retransmit_shred_id_filtered_count.inc();
+                metrics.shred_id_filtered_count.inc();
                 continue;
             },
             .not_duplicate => {},
@@ -250,7 +250,7 @@ fn dedupAndGroupShredsBySlot(
             try result.put(shred_id.slot, new_slot_shreds);
         }
     }
-    stats.retransmit_dedup_and_group_shreds_nanos.set(dedup_and_group_shreds_timer.read().asNanos());
+    metrics.dedup_and_group_shreds_nanos.set(dedup_and_group_shreds_timer.read().asNanos());
     return result;
 }
 
@@ -265,7 +265,7 @@ fn createAndSendRetransmitInfo(
     leader_schedule_cache: *LeaderScheduleCache,
     turbine_tree_cache: *TurbineTreeCache,
     retransmit_shred_sender: *Channel(RetransmitShredInfo),
-    stats: *Stats,
+    metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
 ) !void {
     var create_and_send_retransmit_info_timer = try sig.time.Timer.start();
@@ -277,7 +277,7 @@ fn createAndSendRetransmitInfo(
             try leader_schedule_cache.put(epoch, try bank.leaderSchedule(allocator));
             break :blk leader_schedule_cache.slotLeader(slot) orelse @panic("failed to get slot leader");
         };
-        stats.retransmit_get_slot_leader_nanos.set(get_slot_leader_timer.read().asNanos());
+        metrics.get_slot_leader_nanos.set(get_slot_leader_timer.read().asNanos());
 
         var get_turbine_tree_timer = try sig.time.Timer.start();
         const turbine_tree = if (try turbine_tree_cache.get(epoch)) |tree| tree else blk: {
@@ -293,7 +293,7 @@ fn createAndSendRetransmitInfo(
             break :blk turbine_tree;
         };
         defer turbine_tree.releaseUnsafe();
-        stats.retransmit_get_turbine_tree_nanos.set(get_turbine_tree_timer.read().asNanos());
+        metrics.get_turbine_tree_nanos.set(get_turbine_tree_timer.read().asNanos());
 
         for (slot_shreds.items) |shred_id_and_packet| {
             try retransmit_shred_sender.send(.{
@@ -308,7 +308,7 @@ fn createAndSendRetransmitInfo(
             });
         }
     }
-    stats.retransmit_create_and_send_retransmit_info_nanos.set(create_and_send_retransmit_info_timer.read().asNanos());
+    metrics.create_and_send_retransmit_info_nanos.set(create_and_send_retransmit_info_timer.read().asNanos());
 }
 
 /// Retransmit shreds to nodes in the network
@@ -319,7 +319,7 @@ fn retransmitShreds(
     allocator: std.mem.Allocator,
     receiver: *Channel(RetransmitShredInfo),
     sender: *Channel(Packet),
-    stats: *Stats,
+    metrics: *RetransmitServiceMetrics,
     exit: *AtomicBool,
 ) !void {
     while (!exit.load(.acquire)) {
@@ -336,7 +336,7 @@ fn retransmitShreds(
         );
         defer children.deinit();
         defer retransmit_info.turbine_tree.releaseUnsafe();
-        stats.retransmit_get_children_nanos.set(get_retransmit_children_timer.read().asNanos());
+        metrics.get_children_nanos.set(get_retransmit_children_timer.read().asNanos());
 
         var children_with_addresses_count: usize = 0;
         for (children.items) |child| {
@@ -351,13 +351,13 @@ fn retransmitShreds(
         }
 
         if (children_with_addresses_count > 0) {
-            stats.retransmit_shreds_sent_count.inc();
+            metrics.shreds_sent_count.inc();
         }
 
-        stats.retransmit_level.set(level);
-        stats.retransmit_children.set(children.items.len);
-        stats.retransmit_children_with_addresses.set(children_with_addresses_count);
-        stats.retransmit_shred_nanos.set(retransmit_shred_timer.read().asNanos());
+        metrics.turbine_tree_level.set(level);
+        metrics.turbine_tree_children.set(children.items.len);
+        metrics.turbine_tree_children_with_addresses.set(children_with_addresses_count);
+        metrics.retransmit_shred_nanos.set(retransmit_shred_timer.read().asNanos());
     }
 }
 
@@ -373,52 +373,47 @@ const RetransmitShredInfo = struct {
     turbine_tree: *TurbineTree,
 };
 
-pub const Stats = struct {
+pub const RetransmitServiceMetrics = struct {
     // receiveShreds
-    retransmit_shreds_received_count: *Counter,
-    retransmit_shred_byte_filter_saturated: *Gauge(u64),
-    retransmit_shred_id_filter_saturated: *Gauge(u64),
-    retransmit_receive_shreds_nanos: *Gauge(u64),
+    shreds_received_count: *Counter,
+    shred_byte_filter_saturated: *Gauge(u64),
+    shred_id_filter_saturated: *Gauge(u64),
+    receive_shreds_nanos: *Gauge(u64),
 
     // dedupAndGroupShredsBySlot
-    retransmit_shred_byte_filtered_count: *Counter,
-    retransmit_shred_id_filtered_count: *Counter,
-    retransmit_dedup_and_group_shreds_nanos: *Gauge(u64),
+    shred_byte_filtered_count: *Counter,
+    shred_id_filtered_count: *Counter,
+    dedup_and_group_shreds_nanos: *Gauge(u64),
 
     // createAndSendRetransmitInfo
-    retransmit_get_slot_leader_nanos: *Gauge(u64),
-    retransmit_get_turbine_tree_nanos: *Gauge(u64),
-    retransmit_create_and_send_retransmit_info_nanos: *Gauge(u64),
+    get_slot_leader_nanos: *Gauge(u64),
+    get_turbine_tree_nanos: *Gauge(u64),
+    create_and_send_retransmit_info_nanos: *Gauge(u64),
 
     // retransmitShreds
-    retransmit_shreds_sent_count: *Counter,
-    retransmit_level: *Gauge(u64),
-    retransmit_children: *Gauge(u64),
-    retransmit_children_with_addresses: *Gauge(u64),
+    shreds_sent_count: *Counter,
+    turbine_tree_level: *Gauge(u64),
+    turbine_tree_children: *Gauge(u64),
+    turbine_tree_children_with_addresses: *Gauge(u64),
+    turbine_tree_get_children_nanos: *Gauge(u64),
     retransmit_shred_nanos: *Gauge(u64),
-    retransmit_get_children_nanos: *Gauge(u64),
 
-    pub fn init() GetMetricError!Stats {
-        var self: Stats = undefined;
-        const registry = globalRegistry();
-        const stats_struct_info = @typeInfo(Stats).Struct;
-        inline for (stats_struct_info.fields) |field| {
-            @field(self, field.name) = switch (field.type) {
-                *Counter => try registry.getOrCreateCounter(field.name),
-                *Gauge(u64) => try registry.getOrCreateGauge(field.name, u64),
-                else => @compileError("Unhandled field type: " ++ field.name ++ ": " ++ @typeName(field.type)),
-            };
-        }
-        return self;
+    // metrics prefix
+    pub const prefix = "retransmit_service";
+
+    const Gauge64 = Gauge(u64);
+
+    pub fn init() !RetransmitServiceMetrics {
+        return try globalRegistry().initStruct(RetransmitServiceMetrics);
     }
 
-    pub fn log(self: *const Stats, logger: Logger) void {
+    pub fn log(self: *const RetransmitServiceMetrics, logger: Logger) void {
         logger.info().logf("retransmit-service: received={} retransmitted={} skipped={}:{}:{}", .{
-            self.retransmit_shreds_received_count.get(),
-            self.retransmit_shreds_sent_count.get(),
-            self.retransmit_shred_byte_filtered_count.get() + self.retransmit_shred_id_filtered_count.get(),
-            self.retransmit_shred_byte_filtered_count.get(),
-            self.retransmit_shred_id_filtered_count.get(),
+            self.shreds_received_count.get(),
+            self.shreds_sent_count.get(),
+            self.shred_byte_filtered_count.get() + self.shred_id_filtered_count.get(),
+            self.shred_byte_filtered_count.get(),
+            self.shred_id_filtered_count.get(),
         });
     }
 };
