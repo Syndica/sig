@@ -30,7 +30,7 @@ pub const ShredReceiver = struct {
     allocator: Allocator,
     keypair: *const KeyPair,
     exit: *Atomic(bool),
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     repair_socket: Socket,
     turbine_socket: Socket,
     /// me --> shred verifier

@@ -30,11 +30,13 @@ const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 pub const LeaderInfo = struct {
     allocator: Allocator,
     config: Config,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     rpc_client: RpcClient,
     leader_schedule_cache: LeaderScheduleCache,
     leader_addresses_cache: std.AutoArrayHashMapUnmanaged(Pubkey, SocketAddr),
     gossip_table_rw: *RwMux(GossipTable),
+
+    const Self = @This();
 
     pub fn init(
         allocator: Allocator,
@@ -46,7 +48,7 @@ pub const LeaderInfo = struct {
         return .{
             .allocator = allocator,
             .config = config,
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .rpc_client = RpcClient.init(
                 allocator,
                 config.cluster,

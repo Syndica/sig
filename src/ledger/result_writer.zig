@@ -31,7 +31,7 @@ const schema = ledger.schema.schema;
 /// or reaching consensus on a block.
 pub const LedgerResultWriter = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     db: BlockstoreDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
@@ -50,7 +50,7 @@ pub const LedgerResultWriter = struct {
     ) !LedgerResultWriter {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .db = db,
             .lowest_cleanup_slot = lowest_cleanup_slot,
             .max_root = max_root,

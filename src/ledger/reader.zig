@@ -49,7 +49,7 @@ const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 pub const BlockstoreReader = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     db: BlockstoreDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
@@ -70,7 +70,7 @@ pub const BlockstoreReader = struct {
     ) !Self {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .db = db,
             .rpc_api_metrics = try registry.initStruct(BlockstoreRpcApiMetrics),
             .metrics = try registry.initStruct(BlockstoreReaderMetrics),

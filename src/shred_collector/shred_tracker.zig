@@ -23,7 +23,7 @@ pub const Range = struct {
 /// once it is implemented. This struct tracks shreds linearly with no regard
 /// for forking. The Blockstore will fix this by tracking forks.
 pub const BasicShredTracker = struct {
-    logger: sig.trace.ScopedLogger(@typeName(@This())),
+    logger: sig.trace.ScopedLogger(@typeName(Self)),
     mux: Mutex = .{},
     /// The slot that this struct was initialized with at index 0
     start_slot: ?Slot,
@@ -52,7 +52,7 @@ pub const BasicShredTracker = struct {
         return .{
             .start_slot = slot,
             .current_bottom_slot = slot orelse 0,
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .metrics = try registry.initStruct(Metrics),
         };
     }

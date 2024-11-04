@@ -50,7 +50,9 @@ pub const Service = struct {
     send_channel: *Channel(Packet),
     receive_channel: *Channel(TransactionInfo),
     exit: *AtomicBool,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
+
+    const Self = @This();
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -82,7 +84,7 @@ pub const Service = struct {
             ),
             .send_channel = try Channel(Packet).create(allocator),
             .receive_channel = receive_channel,
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
         };
     }

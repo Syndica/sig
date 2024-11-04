@@ -1139,7 +1139,7 @@ const AppBase = struct {
     counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     closed: bool,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
     my_keypair: KeyPair,
@@ -1147,6 +1147,8 @@ const AppBase = struct {
     shred_version: u16,
     my_ip: IpAddr,
     my_port: u16,
+
+    const Self = @This();
 
     fn init(allocator: Allocator) !AppBase {
         const logger = try spawnLogger();

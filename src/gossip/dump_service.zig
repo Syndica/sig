@@ -13,7 +13,7 @@ pub const DUMP_INTERVAL = Duration.fromSecs(10);
 
 pub const GossipDumpService = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     gossip_table_rw: *RwMux(GossipTable),
     counter: *Atomic(usize),
 

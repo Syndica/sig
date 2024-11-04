@@ -17,7 +17,7 @@ const ScopedLogger = sig.trace.ScopedLogger;
 /// You can add threads or state, then await all threads and
 /// clean up their state.
 pub const ServiceManager = struct {
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     /// Threads to join.
     threads: ArrayListUnmanaged(std.Thread),
     exit: *Atomic(bool),
@@ -40,7 +40,7 @@ pub const ServiceManager = struct {
         default_spawn_config: std.Thread.SpawnConfig,
     ) Self {
         return .{
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
             .threads = .{},
             .arena = ArenaAllocator.init(backing_allocator),

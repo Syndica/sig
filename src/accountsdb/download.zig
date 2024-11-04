@@ -306,7 +306,7 @@ const DownloadProgress = struct {
     mmap: []align(std.mem.page_size) u8,
     download_size: usize,
     min_mb_per_second: ?usize,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
 
     mb_timer: std.time.Timer,
     bytes_read: usize = 0,
@@ -340,7 +340,7 @@ const DownloadProgress = struct {
         );
 
         return .{
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .mmap = file_memory,
             .download_size = download_size,
             .min_mb_per_second = min_mb_per_second,

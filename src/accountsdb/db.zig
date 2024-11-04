@@ -123,7 +123,7 @@ pub const AccountsDB = struct {
     bank_hash_stats: RwMux(BankHashStatsMap) = RwMux(BankHashStatsMap).init(.{}),
 
     metrics: AccountsDBMetrics,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     config: InitConfig,
 
     const Self = @This();
@@ -185,7 +185,7 @@ pub const AccountsDB = struct {
         return .{
             .allocator = allocator,
             .account_index = account_index,
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .config = config,
             .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(allocator)),
             .maybe_accounts_cache_rw = maybe_accounts_cache_rw,
