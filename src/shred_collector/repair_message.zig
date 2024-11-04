@@ -148,7 +148,9 @@ pub const RepairMessage = union(enum(u8)) {
         current_timestamp_millis: u64,
     ) error{ IdMismatch, InvalidSignature, Malformed, TimeSkew }!void {
         switch (self.*) {
-            .Pong => |pong| try pong.verify(),
+            .Pong => |pong| pong.verify() catch {
+                return error.InvalidSignature;
+            },
             inline else => |msg| {
                 // i am the intended recipient
                 const header: RepairRequestHeader = msg.header;

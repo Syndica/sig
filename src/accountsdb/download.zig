@@ -228,11 +228,11 @@ pub fn downloadSnapshotsFromGossip(
             const rpc_url = rpc_url_bounded.constSlice();
 
             const bStr = sig.utils.fmt.boundedString;
-            const snapshot_url_bounded = sig.utils.fmt.boundedFmt("https://{s}/{s}\x00", .{
+            const snapshot_url_bounded = sig.utils.fmt.boundedFmt("http://{s}/{s}\x00", .{
                 bStr(&rpc_url_bounded),
                 bStr(&snapshot_filename_bounded),
             });
-            const snapshot_url = snapshot_url_bounded.constSlice()[0.. :0];
+            const snapshot_url = snapshot_url_bounded.constSlice()[0 .. snapshot_url_bounded.len - 1 :0];
 
             logger
                 .info()

@@ -28,19 +28,25 @@ pub const Signature = struct {
         return .{ .data = try base58.decode(str) };
     }
 
-    pub fn verify(self: Self, pubkey: Pubkey, msg: []const u8) bool {
+    pub fn verify(
+        self: Self,
+        pubkey: Pubkey,
+        msg: []const u8,
+    ) e.NonCanonicalError!bool {
         const signature = Ed25519.Signature.fromBytes(self.data);
-        signature.verify(msg, Ed25519.PublicKey.fromBytes(pubkey.data) catch unreachable) catch
-            return false;
+        const byte_pubkey = try Ed25519.PublicKey.fromBytes(pubkey.data);
+        signature.verify(msg, byte_pubkey) catch return false;
         return true;
     }
 
     pub fn verifier(
         self: Self,
         pubkey: Pubkey,
-    ) (e.NonCanonicalError || e.EncodingError || e.IdentityElementError)!Verifier {
+    ) (e.NonCanonicalError ||
+        e.EncodingError ||
+        e.IdentityElementError)!Verifier {
         const signature = Ed25519.Signature.fromBytes(self.data);
-        return signature.verifier(Ed25519.PublicKey.fromBytes(pubkey.data) catch unreachable);
+        return signature.verifier(try Ed25519.PublicKey.fromBytes(pubkey.data));
     }
 
     pub fn eql(self: *const Self, other: *const Self) bool {
@@ -51,7 +57,10 @@ pub const Signature = struct {
         return base58.encode(self.data);
     }
 
-    pub fn base58StringAlloc(self: Signature, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
+    pub fn base58StringAlloc(
+        self: Signature,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error![]const u8 {
         return base58.encodeAlloc(self.data, allocator);
     }
 

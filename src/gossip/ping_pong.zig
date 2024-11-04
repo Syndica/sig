@@ -50,7 +50,7 @@ pub const Ping = struct {
     }
 
     pub fn verify(self: *const Self) !void {
-        if (!self.signature.verify(self.from, &self.token)) {
+        if (!try self.signature.verify(self.from, &self.token)) {
             return error.InvalidSignature;
         }
     }
@@ -75,8 +75,8 @@ pub const Pong = struct {
         };
     }
 
-    pub fn verify(self: *const Self) error{InvalidSignature}!void {
-        if (!self.signature.verify(self.from, &self.hash.data)) {
+    pub fn verify(self: *const Self) !void {
+        if (!try self.signature.verify(self.from, &self.hash.data)) {
             return error.InvalidSignature;
         }
     }
