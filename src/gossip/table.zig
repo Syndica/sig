@@ -460,6 +460,25 @@ pub const GossipTable = struct {
         return buf[0..i];
     }
 
+    /// Get peers from the gossip table which have the same shred version.
+    pub fn getThreadSafeContactInfosMatchingShredVersion(
+        self: Self,
+        allocator: std.mem.Allocator,
+        my_contact_info: ThreadSafeContactInfo,
+        minumum_insertion_timestamp: u64,
+    ) !std.ArrayList(ThreadSafeContactInfo) {
+        var contact_info_iter = self.contactInfoIterator(minumum_insertion_timestamp);
+        var peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(allocator, self.contact_infos.count());
+
+        while (contact_info_iter.nextThreadSafe()) |contact_info| {
+            if (!contact_info.pubkey.equals(&my_contact_info.pubkey) and contact_info.shred_version == my_contact_info.shred_version) {
+                peers.appendAssumeCapacity(contact_info);
+            }
+        }
+
+        return peers;
+    }
+
     /// Returns a slice of contact infos that are no older than minimum_insertion_timestamp.
     /// You must provide a buffer to fill with the contact infos. If you want all contact
     /// infos, the buffer should be at least `self.contact_infos.count()` in size.

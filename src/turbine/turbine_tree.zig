@@ -143,14 +143,17 @@ pub const TurbineTree = struct {
         staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
         use_stake_hack_for_testing: bool,
     ) !TurbineTree {
-        const tvu_peers = try getTvuPeers(
+        const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
+        defer gossip_table_lg.unlock();
+
+        const tvu_peers = try gossip_table.getThreadSafeContactInfosMatchingShredVersion(
             allocator,
             my_contact_info,
-            gossip_table_rw,
+            0,
         );
         defer tvu_peers.deinit();
 
-        const nodes = try getNodes(
+        const nodes = try collectTvuAndStakedNodes(
             allocator,
             my_contact_info,
             tvu_peers.items,
@@ -339,14 +342,14 @@ pub const TurbineTree = struct {
 
     /// All staked nodes + other known tvu-peers + the node itself;
     /// sorted by (stake, pubkey) in descending order.
-    fn getNodes(
+    fn collectTvuAndStakedNodes(
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
-        tvu_peers: []const ThreadSafeContactInfo,
+        gossip_peers: []const ThreadSafeContactInfo,
         staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
         use_stake_hack_for_testing: bool,
     ) !std.ArrayList(Node) {
-        var nodes = try std.ArrayList(Node).initCapacity(allocator, tvu_peers.len + staked_nodes.count());
+        var nodes = try std.ArrayList(Node).initCapacity(allocator, gossip_peers.len + staked_nodes.count());
         defer nodes.deinit();
 
         var pubkeys = std.AutoArrayHashMap(Pubkey, void).init(allocator);
@@ -369,7 +372,7 @@ pub const TurbineTree = struct {
 
         // Add all TVU peers directly to the list of nodes
         // The TVU peers are all nodes in gossip table with the same shred version
-        for (tvu_peers) |peer| {
+        for (gossip_peers) |peer| {
             nodes.appendAssumeCapacity(.{
                 .id = .{ .contact_info = peer },
                 .stake = if (staked_nodes.get(peer.pubkey)) |stake| stake else 0,
@@ -427,28 +430,6 @@ pub const TurbineTree = struct {
         }
 
         return result_nodes;
-    }
-
-    /// Get Tvu peers from the gossip table, that is all peers with a matching
-    /// shred version.
-    fn getTvuPeers(
-        allocator: std.mem.Allocator,
-        my_contact_info: ThreadSafeContactInfo,
-        gossip_table_rw: *RwMux(GossipTable),
-    ) !std.ArrayList(ThreadSafeContactInfo) {
-        const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
-        defer gossip_table_lg.unlock();
-
-        var contact_info_iter = gossip_table.contactInfoIterator(0);
-        var tvu_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(allocator, gossip_table.contact_infos.count());
-
-        while (contact_info_iter.nextThreadSafe()) |contact_info| {
-            if (!contact_info.pubkey.equals(&my_contact_info.pubkey) and contact_info.shred_version == my_contact_info.shred_version) {
-                tvu_peers.appendAssumeCapacity(contact_info);
-            }
-        }
-
-        return tvu_peers;
     }
 };
 
@@ -898,7 +879,5 @@ test "AgaveEquivalence.getRetransmitChildren" {
 
         const shuffled_indices = try shuffled_iterator.intoArrayList(std.testing.allocator);
         defer shuffled_indices.deinit();
-
-        std.debug.print("shuffled indices: {any}\n\n", .{shuffled_indices.items});
     }
 }
