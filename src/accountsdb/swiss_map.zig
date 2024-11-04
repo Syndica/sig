@@ -798,7 +798,7 @@ pub fn BenchHashMap(T: type) type {
 }
 
 test "bench swissmap read/write" {
-    _ = try BenchmarkSwissMap.swissmapReadWriteBenchmark(.Nanos, .{
+    _ = try BenchmarkSwissMap.swissmapReadWriteBenchmark(.nanos, .{
         .n_accounts = 1_000_000,
     });
 }

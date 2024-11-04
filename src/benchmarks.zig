@@ -8,15 +8,15 @@ const Decl = std.builtin.Type.Declaration;
 const Duration = sig.time.Duration;
 
 pub const BenchTimeUnit = enum {
-    Nanos,
-    Millis,
-    Seconds,
+    nanos,
+    millis,
+    seconds,
 
     pub fn convertDuration(self: BenchTimeUnit, duration: Duration) u64 {
         return switch (self) {
-            .Nanos => duration.asNanos(),
-            .Millis => duration.asMillis(),
-            .Seconds => duration.asSecs(),
+            .nanos => duration.asNanos(),
+            .millis => duration.asMillis(),
+            .seconds => duration.asSecs(),
         };
     }
 };
@@ -60,7 +60,7 @@ pub fn main() !void {
             logger,
             @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
             max_time_per_bench,
-            .Nanos,
+            .nanos,
         );
     }
 
@@ -76,7 +76,7 @@ pub fn main() !void {
                 logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
-                .Millis,
+                .millis,
             );
         }
 
@@ -95,7 +95,7 @@ pub fn main() !void {
                 logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
-                .Millis,
+                .millis,
             );
         }
     }
@@ -106,7 +106,7 @@ pub fn main() !void {
             logger,
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
-            .Millis,
+            .millis,
         );
     }
 
@@ -116,14 +116,14 @@ pub fn main() !void {
             logger,
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
-            .Millis,
+            .millis,
         );
         try benchmarkCSV(
             allocator,
             logger,
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
-            .Millis,
+            .millis,
         );
     }
 
@@ -133,7 +133,7 @@ pub fn main() !void {
             logger,
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
-            .Nanos,
+            .nanos,
         );
     }
 
@@ -143,14 +143,14 @@ pub fn main() !void {
             logger,
             @import("ledger/benchmarks.zig").BenchmarkLedger,
             max_time_per_bench,
-            .Nanos,
+            .nanos,
         );
         try benchmarkCSV(
             allocator,
             logger,
             @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
             max_time_per_bench,
-            .Millis,
+            .millis,
         );
     }
 
@@ -160,7 +160,7 @@ pub fn main() !void {
             logger,
             @import("bincode/benchmarks.zig").BenchmarkEntry,
             max_time_per_bench,
-            .Nanos,
+            .nanos,
         );
     }
 

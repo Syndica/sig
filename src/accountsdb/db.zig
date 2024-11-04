@@ -4407,7 +4407,7 @@ pub const BenchmarkAccountsDB = struct {
 };
 
 test "read/write benchmark ram" {
-    _ = try BenchmarkAccountsDB.readWriteAccounts(.Nanos, .{
+    _ = try BenchmarkAccountsDB.readWriteAccounts(.nanos, .{
         .n_accounts = 10,
         .slot_list_len = 1,
         .accounts = .ram,
@@ -4416,7 +4416,7 @@ test "read/write benchmark ram" {
 }
 
 test "read/write benchmark disk" {
-    _ = try BenchmarkAccountsDB.readWriteAccounts(.Nanos, .{
+    _ = try BenchmarkAccountsDB.readWriteAccounts(.nanos, .{
         .n_accounts = 10,
         .slot_list_len = 1,
         .accounts = .disk,
