@@ -94,9 +94,9 @@ pub const ShredReceiver = struct {
     ) !void {
         while (!self.exit.load(.acquire)) {
             for (receivers) |receiver| {
-                self.metrics.received_count.inc();
                 var packet_count: usize = 0;
                 while (receiver.receive()) |packet| {
+                    self.metrics.received_count.inc();
                     packet_count += 1;
                     try self.handlePacket(packet, response_sender, is_repair);
                 }
