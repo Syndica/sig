@@ -537,7 +537,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator forward start before all"() !void {
+        test "iterator forward start before all" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -567,7 +568,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator forward start after all"() !void {
+        test "iterator forward start after all" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -584,7 +586,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator reverse start before all"() !void {
+        test "iterator reverse start before all" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -614,7 +617,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator reverse start after all"() !void {
+        test "iterator reverse start after all" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -631,7 +635,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator forward empty"() !void {
+        test "iterator forward empty" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -643,7 +648,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator reverse empty"() !void {
+        test "iterator reverse empty" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -655,7 +661,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator forward empty with null start"() !void {
+        test "iterator forward empty with null start" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -667,7 +674,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator reverse empty with null start"() !void {
+        test "iterator reverse empty with null start" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -679,7 +687,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"WriteBatch.deleteRange"() !void {
+        test "WriteBatch.deleteRange" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
