@@ -510,7 +510,7 @@ test "swissmap resize" {
 
     try map.ensureTotalCapacity(100);
 
-    const ref = accounts_db.index.AccountRef.default();
+    const ref = accounts_db.index.AccountRef.DEFAULT;
     map.putAssumeCapacity(sig.core.Pubkey.ZEROES, ref);
 
     // this will resize the map with the key still in there
@@ -613,7 +613,7 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
     const account_refs = try allocator.alloc(accounts_db.index.AccountRef, n_accounts);
     const pubkeys = try allocator.alloc(sig.core.Pubkey, n_accounts);
     for (account_refs, pubkeys) |*account_ref, *pubkey| {
-        account_ref.* = accounts_db.index.AccountRef.default();
+        account_ref.* = accounts_db.index.AccountRef.DEFAULT;
         pubkey.* = account_ref.pubkey;
     }
     random.shuffle(sig.core.Pubkey, pubkeys);
