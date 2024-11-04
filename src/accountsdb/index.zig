@@ -66,12 +66,13 @@ pub const AccountIndex = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
+        logger_: sig.trace.Logger,
         allocator_config: AllocatorConfig,
         /// number of shards for the pubkey_ref_map
         number_of_shards: usize,
         max_account_references: u64,
     ) !Self {
+        const logger = logger_.withScope(@typeName((Self)));
         const reference_allocator: ReferenceAllocator = switch (allocator_config) {
             .Ram => |ram| blk: {
                 logger.info().logf("using ram memory for account index", .{});
@@ -81,7 +82,7 @@ pub const AccountIndex = struct {
                 var index_dir = try disk.accountsdb_dir.makeOpenPath("index", .{});
                 errdefer index_dir.close();
                 const disk_allocator = try allocator.create(DiskMemoryAllocator);
-                disk_allocator.* = .{ .dir = index_dir, .logger = logger };
+                disk_allocator.* = .{ .dir = index_dir, .logger = logger.withScope(@typeName(DiskMemoryAllocator)) };
                 logger.info().logf("using disk memory (@{s}) for account index", .{sig.utils.fmt.tryRealPath(index_dir, ".")});
                 break :blk .{ .disk = .{ .dma = disk_allocator, .ptr_allocator = allocator } };
             },

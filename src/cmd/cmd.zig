@@ -1421,7 +1421,7 @@ const LoadedSnapshot = struct {
 
 fn loadSnapshot(
     allocator: Allocator,
-    logger: Logger,
+    logger_: Logger,
     /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
     gossip_service: ?*GossipService,
     /// whether to validate the snapshot account data against the metadata
@@ -1429,6 +1429,7 @@ fn loadSnapshot(
     /// optional geyser to write snapshot data to
     geyser_writer: ?*GeyserWriter,
 ) !*LoadedSnapshot {
+    const logger = logger_.withScope(@typeName(@This()));
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
     result.allocator = allocator;

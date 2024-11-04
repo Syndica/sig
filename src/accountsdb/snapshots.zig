@@ -1734,10 +1734,11 @@ pub const AllSnapshotFields = struct {
 
     pub fn fromFiles(
         allocator: std.mem.Allocator,
-        logger: Logger,
+        logger_: Logger,
         snapshot_dir: std.fs.Dir,
         files: SnapshotFiles,
     ) !Self {
+        const logger = logger_.withScope(@typeName((Self)));
         // unpack
         const full_fields = blk: {
             const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full_snapshot.slot});
