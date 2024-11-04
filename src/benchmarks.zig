@@ -213,8 +213,9 @@ pub fn benchmarkCSV(
     }
     const benchmark_name = raw_benchmark_name[index..];
     results_dir.makeDir(benchmark_name) catch |err| {
-        if (err == std.fs.Dir.MakeError.PathAlreadyExists) {} else {
-            return err;
+        switch (err) {
+            std.fs.Dir.MakeError.PathAlreadyExists => {},
+            else => return err,
         }
     };
 
@@ -244,30 +245,18 @@ pub fn benchmarkCSV(
             // this means the function will *not* be called, this is just computing the return
             // type.
             const arguments = blk: {
-                switch (@typeInfo(@TypeOf(benchFunction))) {
-                    .Fn => |info| {
-                        // NOTE: to know if we should pass in the time unit we
-                        // check the input params of the function, so any multi-return
-                        // function NEEDS to have the time unit as the first parameter
-                        if (info.params.len > 0 and info.params[0].type.? == BenchTimeUnit) {
-                            break :blk switch (@TypeOf(arg)) {
-                                void => .{time_unit},
-                                else => .{ time_unit, arg },
-                            };
-                        } else {
-                            // single return type
-                            break :blk switch (@TypeOf(arg)) {
-                                void => .{},
-                                else => .{arg},
-                            };
-                        }
-                    },
-                    else => unreachable,
-                }
+                // NOTE: to know if we should pass in the time unit we
+                // check the input params of the function, so any multi-return
+                // function NEEDS to have the time unit as the first parameter
+                const info = @typeInfo(@TypeOf(benchFunction)).Fn;
+                const has_time_unit = info.params.len > 0 and info.params[0].type.? == BenchTimeUnit;
+                const time_arg = if (has_time_unit) .{time_unit} else .{};
+                const other_arg = if (@TypeOf(arg) != void) .{arg} else .{};
+                break :blk time_arg ++ other_arg;
             };
-            const result_type: type = @TypeOf(try @call(.auto, benchFunction, arguments));
-            const runtime_type = blk: {
-                switch (result_type) {
+            const ResultType: type = @TypeOf(try @call(.auto, benchFunction, arguments));
+            const RuntimeType = blk: {
+                switch (ResultType) {
                     // single value
                     Duration => {
                         try is_multi_return.append(false);
@@ -276,11 +265,11 @@ pub fn benchmarkCSV(
                     // multiple values
                     else => {
                         try is_multi_return.append(true);
-                        break :blk result_type;
+                        break :blk ResultType;
                     },
                 }
             };
-            var runtimes: std.MultiArrayList(runtime_type) = .{};
+            var runtimes: std.MultiArrayList(RuntimeType) = .{};
             defer runtimes.deinit(allocator);
 
             //
@@ -289,10 +278,10 @@ pub fn benchmarkCSV(
             var sum: u64 = 0;
 
             // NOTE: these are set to valid values on first iteration
-            const U = @typeInfo(runtime_type).Struct;
-            var sum_s: runtime_type = undefined;
-            var min_s: runtime_type = undefined;
-            var max_s: runtime_type = undefined;
+            const runtime_info = @typeInfo(RuntimeType).Struct;
+            var sum_s: RuntimeType = undefined;
+            var min_s: RuntimeType = undefined;
+            var max_s: RuntimeType = undefined;
 
             //
             var ran_out_of_time = false;
@@ -301,7 +290,7 @@ pub fn benchmarkCSV(
             while (iter_count < min_iterations or
                 (iter_count < max_iterations and ran_out_of_time)) : (iter_count += 1)
             {
-                switch (result_type) {
+                switch (ResultType) {
                     Duration => {
                         const duration = try @call(.auto, benchFunction, arguments);
                         const runtime = time_unit.convertDuration(duration);
@@ -310,7 +299,7 @@ pub fn benchmarkCSV(
                         sum += runtime;
                         try runtimes.append(allocator, .{ .result = runtime });
                     },
-                    inline else => {
+                    else => {
                         const result = try @call(.auto, benchFunction, arguments);
                         try runtimes.append(allocator, result);
 
@@ -319,7 +308,7 @@ pub fn benchmarkCSV(
                             max_s = result;
                             sum_s = result;
                         } else {
-                            inline for (U.fields) |field| {
+                            inline for (runtime_info.fields) |field| {
                                 const f_max = @field(max_s, field.name);
                                 const f_min = @field(min_s, field.name);
                                 @field(max_s, field.name) = @max(@field(result, field.name), f_max);
@@ -341,7 +330,7 @@ pub fn benchmarkCSV(
             // benchmark, result
             // read_write (100k) (read), 1, 2, 3, 4,
             // read_write (100k) (write), 1, 2, 3, 4,
-            switch (result_type) {
+            switch (ResultType) {
                 Duration => {
                     try writer_runtimes.print("{s}({s}), results", .{ def.name, arg_name });
                     for (runtimes.items(.result), 0..) |runtime, i| {
@@ -351,9 +340,9 @@ pub fn benchmarkCSV(
                     try writer_runtimes.print("\n", .{});
                 },
                 else => {
-                    inline for (U.fields, 0..) |field, j| {
+                    inline for (runtime_info.fields, 0..) |field, j| {
                         try writer_runtimes.print("{s}({s}) ({s}), ", .{ def.name, arg_name, field.name });
-                        const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
+                        const x: std.MultiArrayList(RuntimeType).Field = @enumFromInt(j);
                         for (runtimes.items(x), 0..) |runtime, i| {
                             if (i != 0) try writer_runtimes.print(", ", .{});
                             try writer_runtimes.print("{d}", .{runtime});
@@ -368,7 +357,7 @@ pub fn benchmarkCSV(
             // benchmark, read_min, read_max, read_mean, read_variance, write_min, write_max, write_mean, write_variance
             // read_write (100k), 1, 2, 3, 4, 1, 2, 3, 4
             // read_write (200k), 1, 2, 3, 4, 1, 2, 3, 4
-            switch (result_type) {
+            switch (ResultType) {
                 Duration => {
                     // print column headers
                     if (arg_i == 0) {
@@ -387,12 +376,12 @@ pub fn benchmarkCSV(
                     // print column results
                     try writer_average.print("{s}, {d}, {d}, {d}, {d}\n", .{ arg_name, min, max, mean, std_dev });
                 },
-                inline else => {
+                else => {
                     // print column headers
                     if (arg_i == 0) {
                         try writer_average.print("{s}, ", .{def.name});
-                        inline for (U.fields, 0..) |field, i| {
-                            if (i == U.fields.len - 1) {
+                        inline for (runtime_info.fields, 0..) |field, i| {
+                            if (i == runtime_info.fields.len - 1) {
                                 // dont print trailing comma
                                 try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_std_dev", .{ field.name, field.name, field.name, field.name });
                             } else {
@@ -404,7 +393,7 @@ pub fn benchmarkCSV(
 
                     // print results
                     try writer_average.print("{s}, ", .{arg_name});
-                    inline for (U.fields, 0..) |field, j| {
+                    inline for (runtime_info.fields, 0..) |field, j| {
                         const f_max = @field(max_s, field.name);
                         const f_min = @field(min_s, field.name);
                         const f_sum = @field(sum_s, field.name);
@@ -416,7 +405,7 @@ pub fn benchmarkCSV(
                         const f_mean = f_sum / n_iters;
 
                         var f_variance: T = 0;
-                        const x: std.MultiArrayList(runtime_type).Field = @enumFromInt(j);
+                        const x: std.MultiArrayList(RuntimeType).Field = @enumFromInt(j);
                         for (runtimes.items(x)) |f_runtime| {
                             const d = if (f_runtime > f_mean) f_runtime - f_mean else f_mean - f_runtime;
                             switch (@typeInfo(T)) {
@@ -427,7 +416,7 @@ pub fn benchmarkCSV(
                         f_variance /= n_iters;
                         const f_std_dev = std.math.sqrt(f_variance);
 
-                        if (j == U.fields.len - 1) {
+                        if (j == runtime_info.fields.len - 1) {
                             // dont print trailing comma
                             try writer_average.print("{d}, {d}, {any}, {any}", .{ f_max, f_min, f_mean, f_std_dev });
                         } else {
@@ -458,42 +447,33 @@ pub fn benchmarkCSV(
         } else {
             // re-parse the return type
             const benchFunction = @field(B, def.name);
+            // NOTE: @TypeOf guarantees no runtime side-effects of argument expressions.
+            // this means the function will *not* be called, this is just computing the return
+            // type.
             const arguments = blk: {
-                switch (@typeInfo(@TypeOf(benchFunction))) {
-                    .Fn => |info| {
-                        // NOTE: to know if we should pass in the time unit we
-                        // check the input params of the function, so any multi-return
-                        // function NEEDS to have the time unit as the first parameter
-                        if (info.params.len > 0 and info.params[0].type.? == BenchTimeUnit) {
-                            break :blk switch (@TypeOf(args[0])) {
-                                void => .{time_unit},
-                                else => .{ time_unit, args[0] },
-                            };
-                        } else {
-                            // single return type
-                            break :blk switch (@TypeOf(args[0])) {
-                                void => .{},
-                                else => .{args[0]},
-                            };
-                        }
-                    },
-                    else => unreachable,
-                }
+                // NOTE: to know if we should pass in the time unit we
+                // check the input params of the function, so any multi-return
+                // function NEEDS to have the time unit as the first parameter
+                const info = @typeInfo(@TypeOf(benchFunction)).Fn;
+                const has_time_unit = info.params.len > 0 and info.params[0].type.? == BenchTimeUnit;
+                const time_arg = if (has_time_unit) .{time_unit} else .{};
+                const other_arg = if (@TypeOf(args[0]) != void) .{args[0]} else .{};
+                break :blk time_arg ++ other_arg;
             };
-            const result_type: type = @TypeOf(try @call(.auto, benchFunction, arguments));
-            const runtime_type = blk: {
-                switch (result_type) {
+            const ResultType: type = @TypeOf(try @call(.auto, benchFunction, arguments));
+            const RuntimeType = blk: {
+                switch (ResultType) {
                     // single value
                     Duration => {
                         break :blk struct { result: u64 };
                     },
                     // multiple values
                     else => {
-                        break :blk result_type;
+                        break :blk ResultType;
                     },
                 }
             };
-            const U = @typeInfo(runtime_type).Struct;
+            const runtime_info = @typeInfo(RuntimeType).Struct;
 
             // organize the data into a table:
             // field_name,              field_name2
@@ -501,14 +481,14 @@ pub fn benchmarkCSV(
             const stat_titles: [4][]const u8 = .{ "min", "max", "mean", "std_dev" };
             const per_field_column_count = stat_titles.len;
             // first column is the field names
-            const field_name_data = try allocator.alloc([]const u8, 1 + per_field_column_count * U.fields.len);
+            const field_name_data = try allocator.alloc([]const u8, 1 + per_field_column_count * runtime_info.fields.len);
             field_name_data[0] = ""; // benchmark name is blank
-            const stat_data_row = try allocator.alloc([]const u8, 1 + per_field_column_count * U.fields.len);
+            const stat_data_row = try allocator.alloc([]const u8, 1 + per_field_column_count * runtime_info.fields.len);
             stat_data_row[0] = def.name;
             var i: u64 = 1;
             var k: u64 = 1;
 
-            inline for (U.fields) |field| {
+            inline for (runtime_info.fields) |field| {
                 field_name_data[i] = field.name;
                 i += 1;
                 for (0..per_field_column_count - 1) |_| {

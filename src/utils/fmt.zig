@@ -188,19 +188,19 @@ pub fn newlinesToSpaces(comptime str: []const u8) [str.len]u8 {
 /// Tries to format the real path resolved from `dir` and `pathname`.
 /// Should it encounter an error when doing so, `"(error.Name)/pathname"`
 /// is printed instead.
-pub inline fn tryRealPath(dir: std.fs.Dir, pathname: []const u8) std.fmt.Formatter(TryRealPathCtx.realPathFormat) {
-    return .{ .data = .{
+pub inline fn tryRealPath(dir: std.fs.Dir, pathname: []const u8) TryRealPathFmt {
+    return .{
         .dir = dir,
         .pathname = pathname,
-    } };
+    };
 }
 
-pub const TryRealPathCtx = struct {
+pub const TryRealPathFmt = struct {
     dir: std.fs.Dir,
     pathname: []const u8,
 
-    pub fn realPathFormat(
-        fmt: TryRealPathCtx,
+    pub fn format(
+        fmt: TryRealPathFmt,
         comptime fmt_str: []const u8,
         _: std.fmt.FormatOptions,
         writer: anytype,

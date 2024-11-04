@@ -16,7 +16,7 @@ pub const AccountRef = struct {
     location: AccountLocation,
     next_ptr: ?*AccountRef = null,
 
-    pub const DEFAULT: AccountRef = .{ 
+    pub const DEFAULT: AccountRef = .{
         .pubkey = Pubkey.ZEROES,
         .slot = 0,
         .location = .{ .UnrootedMap = .{ .index = 0 } },
