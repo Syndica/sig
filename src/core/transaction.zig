@@ -512,8 +512,21 @@ const SystemInstruction = union(enum(u8)) {
     },
 };
 
-pub fn buildTransferTansaction(allocator: std.mem.Allocator, from_keypair: KeyPair, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64, recent_blockhash: Hash) !Transaction {
-    const transfer_instruction = try transfer(allocator, from_pubkey, to_pubkey, lamports);
+pub fn buildTransferTansaction(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    from_keypair: KeyPair,
+    to_pubkey: Pubkey,
+    lamports: u64,
+    recent_blockhash: Hash,
+) !Transaction {
+    const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
+    const transfer_instruction = try transfer(
+        allocator,
+        from_pubkey,
+        to_pubkey,
+        lamports,
+    );
     defer transfer_instruction.deinit(allocator);
     const instructions = [_]Instruction{transfer_instruction};
 
@@ -522,7 +535,9 @@ pub fn buildTransferTansaction(allocator: std.mem.Allocator, from_keypair: KeyPa
     defer allocator.free(message_bytes);
 
     var signatures = try allocator.alloc(Signature, 1);
-    signatures[0] = Signature.init((try from_keypair.sign(message_bytes, null)).toBytes());
+    var noise: [KeyPair.seed_length]u8 = undefined;
+    random.bytes(noise[0..]);
+    signatures[0] = Signature.init((try from_keypair.sign(message_bytes, noise)).toBytes());
 
     return .{
         .signatures = signatures,
@@ -560,24 +575,38 @@ pub fn compileInstructions(allocator: std.mem.Allocator, instructions: []const I
 
 test "create transfer transaction" {
     const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(19);
+    const random = prng.random();
+
     const from_keypair = try KeyPair.create([_]u8{0} ** KeyPair.seed_length);
-    const from_pubkey = Pubkey{ .data = from_keypair.public_key.bytes };
     const to_pubkey = Pubkey{ .data = [_]u8{1} ** Pubkey.size };
     const recent_blockhash = Hash.generateSha256Hash(&[_]u8{0});
-    const tx = try buildTransferTansaction(allocator, from_keypair, from_pubkey, to_pubkey, 100, recent_blockhash);
+    const tx = try buildTransferTansaction(
+        allocator,
+        random,
+        from_keypair,
+        to_pubkey,
+        100,
+        recent_blockhash,
+    );
     defer tx.deinit(allocator);
     const actual_bytes = try sig.bincode.writeAlloc(allocator, tx, .{});
     defer allocator.free(actual_bytes);
     const expected_bytes = [_]u8{
-        1,   179, 96,  234, 171, 102, 151, 31,  74,  246, 57,  213, 75,  38,  199, 70,  105, 32,  146, 18,  245, 92,  92,  138,
-        253, 30,  247, 119, 174, 140, 95,  67,  39,  148, 154, 255, 94,  118, 221, 113, 29,  20,  87,  102, 114, 28,  40,  39,
-        125, 107, 122, 16,  63,  237, 139, 165, 163, 143, 40,  229, 32,  132, 188, 201, 2,   1,   0,   1,   3,   59,  106, 39,
-        188, 206, 182, 164, 45,  98,  163, 168, 208, 42,  111, 13,  115, 101, 50,  21,  119, 29,  226, 67,  166, 58,  192, 72,
-        161, 139, 89,  218, 41,  1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
-        1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   110, 52,  11,
-        156, 255, 179, 122, 152, 156, 165, 68,  230, 187, 120, 10,  44,  120, 144, 29,  63,  179, 55,  56,  118, 133, 17,  163,
-        6,   23,  175, 160, 29,  1,   2,   2,   0,   1,   12,  2,   0,   0,   0,   100, 0,   0,   0,   0,   0,   0,   0,
+        1,   27,  158, 238, 65,  248, 46,  208, 15,  65,  178, 83,  163, 117, 224, 86,  163,
+        91,  67,  228, 176, 117, 246, 111, 69,  133, 194, 78,  89,  205, 86,  166, 98,  22,
+        27,  163, 250, 167, 208, 146, 201, 53,  24,  212, 97,  230, 100, 176, 26,  194, 121,
+        177, 18,  155, 167, 75,  230, 252, 22,  204, 75,  19,  13,  3,   7,   1,   0,   1,
+        3,   59,  106, 39,  188, 206, 182, 164, 45,  98,  163, 168, 208, 42,  111, 13,  115,
+        101, 50,  21,  119, 29,  226, 67,  166, 58,  192, 72,  161, 139, 89,  218, 41,  1,
+        1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+        1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   110, 52,  11,  156, 255,
+        179, 122, 152, 156, 165, 68,  230, 187, 120, 10,  44,  120, 144, 29,  63,  179, 55,
+        56,  118, 133, 17,  163, 6,   23,  175, 160, 29,  1,   2,   2,   0,   1,   12,  2,
+        0,   0,   0,   100, 0,   0,   0,   0,   0,   0,   0,
     };
     try std.testing.expectEqualSlices(u8, &expected_bytes, actual_bytes);
 }
@@ -690,33 +719,32 @@ test "Message sanitize fails if account index is out of bounds" {
 }
 
 test "V0Message serialization and deserialization" {
-    const message = try test_v0_message.asStruct(std.testing.allocator);
-    defer message.deinit(std.testing.allocator);
+    const message = test_v0_message.as_struct;
     try sig.bincode.testRoundTrip(message, &test_v0_message.bincode_serialized_bytes);
 }
 
 test "VersionedTransaction v0 serialization and deserialization" {
-    const transaction = try test_v0_transaction.asStruct(std.testing.allocator);
-    defer transaction.deinit(std.testing.allocator);
+    const transaction = test_v0_transaction.as_struct;
     try sig.bincode.testRoundTrip(transaction, &test_v0_transaction.bincode_serialized_bytes);
 }
 
 test "VersionedMessage v0 serialization and deserialization" {
-    const versioned_message = try test_v0_versioned_message.asStruct(std.testing.allocator);
-    defer versioned_message.deinit(std.testing.allocator);
+    const versioned_message = test_v0_versioned_message.as_struct;
     try sig.bincode.testRoundTrip(versioned_message, &test_v0_versioned_message.bincode_serialized_bytes);
 }
 
 pub const test_v0_transaction = struct {
-    pub fn asStruct(allocator: std.mem.Allocator) !VersionedTransaction {
-        return .{
-            .signatures = try allocator.dupe(Signature, &.{
-                try Signature.fromString("2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw"),
-                try Signature.fromString("4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj"),
-            }),
-            .message = .{ .v0 = try test_v0_message.asStruct(allocator) },
-        };
-    }
+    pub const as_struct = VersionedTransaction{
+        .signatures = &.{
+            Signature.fromString(
+                "2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw",
+            ) catch unreachable,
+            Signature.fromString(
+                "4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj",
+            ) catch unreachable,
+        },
+        .message = .{ .v0 = test_v0_message.as_struct },
+    };
 
     pub const bincode_serialized_bytes = [_]u8{
         2,   81,  7,   106, 50,  99,  54,  99,  92,  187, 47,  10,  170, 102, 132, 42,  25,  4,
@@ -741,9 +769,7 @@ pub const test_v0_transaction = struct {
 };
 
 pub const test_v0_versioned_message = struct {
-    pub fn asStruct(allocator: std.mem.Allocator) !VersionedMessage {
-        return .{ .v0 = try test_v0_message.asStruct(allocator) };
-    }
+    pub const as_struct = VersionedMessage{ .v0 = test_v0_message.as_struct };
 
     pub const bincode_serialized_bytes = [_]u8{
         128, 39,  12,  102, 2,   236, 88,  117, 221, 34,  125, 55,  183, 193, 174, 21,  99,  70,
@@ -760,33 +786,31 @@ pub const test_v0_versioned_message = struct {
 };
 
 pub const test_v0_message = struct {
-    pub fn asStruct(allocator: std.mem.Allocator) !V0Message {
-        return .{
-            .header = .{
-                .num_required_signatures = 39,
-                .num_readonly_signed_accounts = 12,
-                .num_readonly_unsigned_accounts = 102,
+    pub const as_struct = V0Message{
+        .header = .{
+            .num_required_signatures = 39,
+            .num_readonly_signed_accounts = 12,
+            .num_readonly_unsigned_accounts = 102,
+        },
+        .account_keys = &.{
+            Pubkey.fromString("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE") catch unreachable,
+            Pubkey.fromString("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4") catch unreachable,
+        },
+        .recent_blockhash = Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW") catch unreachable,
+        .instructions = &.{.{
+            .program_id_index = 100,
+            .accounts = &.{ 1, 3 },
+            .data = &.{
+                104, 232, 42,  254, 46, 48, 104, 89,  101, 211, 253, 161, 65, 155, 204, 89,
+                126, 187, 180, 191, 60, 59, 88,  119, 106, 20,  194, 80,  11, 200, 76,  0,
             },
-            .account_keys = try allocator.dupe(Pubkey, &.{
-                try Pubkey.fromString("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE"),
-                try Pubkey.fromString("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4"),
-            }),
-            .recent_blockhash = try Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW"),
-            .instructions = try allocator.dupe(CompiledInstruction, &.{.{
-                .program_id_index = 100,
-                .accounts = try allocator.dupe(u8, &.{ 1, 3 }),
-                .data = try allocator.dupe(u8, &.{
-                    104, 232, 42,  254, 46, 48, 104, 89,  101, 211, 253, 161, 65, 155, 204, 89,
-                    126, 187, 180, 191, 60, 59, 88,  119, 106, 20,  194, 80,  11, 200, 76,  0,
-                }),
-            }}),
-            .address_table_lookups = try allocator.dupe(MessageAddressTableLookup, &.{.{
-                .account_key = try Pubkey.fromString("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD"),
-                .writable_indexes = try allocator.dupe(u8, &.{ 1, 3, 5, 7, 90 }),
-                .readonly_indexes = &.{},
-            }}),
-        };
-    }
+        }},
+        .address_table_lookups = &.{.{
+            .account_key = Pubkey.fromString("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD") catch unreachable,
+            .writable_indexes = &.{ 1, 3, 5, 7, 90 },
+            .readonly_indexes = &.{},
+        }},
+    };
 
     pub const bincode_serialized_bytes = [_]u8{
         39,  12,  102, 2,   236, 88,  117, 221, 34,  125, 55,  183, 193, 174, 21,  99,  70,  167,

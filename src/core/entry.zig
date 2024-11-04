@@ -27,27 +27,25 @@ pub const Entry = struct {
 };
 
 test "Entry serialization and deserialization" {
-    const entry = try test_entry.asStruct(std.testing.allocator);
-    defer entry.deinit(std.testing.allocator);
+    const entry = test_entry.as_struct;
     try sig.bincode.testRoundTrip(entry, &test_entry.bincode_serialized_bytes);
 }
 
-const test_entry = struct {
-    pub fn asStruct(allocator: std.mem.Allocator) !Entry {
-        var transactions = try std.ArrayListUnmanaged(core.VersionedTransaction)
-            .initCapacity(allocator, 2);
-        transactions.appendAssumeCapacity(
-            try core.transaction.test_v0_transaction.asStruct(allocator),
-        );
-        transactions.appendAssumeCapacity(
-            try core.transaction.test_v0_transaction.asStruct(allocator),
-        );
-        return .{
-            .num_hashes = 149218308,
-            .hash = try core.Hash.parseBase58String("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd"),
-            .transactions = transactions,
-        };
-    }
+pub const test_entry = struct {
+    pub const as_struct = Entry{
+        .num_hashes = 149218308,
+        .hash = core.Hash
+            .parseBase58String("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd") catch unreachable,
+        .transactions = .{
+            .items = txns[0..2],
+            .capacity = 2,
+        },
+    };
+
+    var txns = [_]core.VersionedTransaction{
+        core.transaction.test_v0_transaction.as_struct,
+        core.transaction.test_v0_transaction.as_struct,
+    };
 
     pub const bincode_serialized_bytes = [_]u8{
         4,   228, 228, 8,   0,   0,   0,   0,   224, 199, 210, 235, 148, 143, 98,  241, 248, 45,
