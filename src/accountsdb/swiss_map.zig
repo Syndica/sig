@@ -612,10 +612,9 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
 
     const account_refs = try allocator.alloc(accounts_db.index.AccountRef, n_accounts);
     const pubkeys = try allocator.alloc(sig.core.Pubkey, n_accounts);
-    for (0..n_accounts) |i| {
-        random.bytes(&pubkeys[i].data);
-        account_refs[i] = accounts_db.index.AccountRef.default();
-        account_refs[i].pubkey = pubkeys[i];
+    for (account_refs, pubkeys) |*account_ref, *pubkey| {
+        account_ref.* = accounts_db.index.AccountRef.default();
+        pubkey.* = account_ref.pubkey;
     }
     random.shuffle(sig.core.Pubkey, pubkeys);
 

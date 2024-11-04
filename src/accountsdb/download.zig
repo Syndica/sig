@@ -321,11 +321,8 @@ const DownloadProgress = struct {
         min_mb_per_second: ?usize,
     ) !Self {
         const file = try output_dir.createFile(filename, .{});
-
         // resize the file
-        try file.seekTo(download_size - 1);
-        _ = try file.write(&[_]u8{1});
-        try file.seekTo(0);
+        try file.setEndPos(download_size);
 
         return .{
             .logger = logger,
