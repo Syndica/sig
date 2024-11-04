@@ -1,10 +1,9 @@
 const std = @import("std");
-const Atomic = std.atomic.Value;
-const Allocator = std.mem.Allocator;
-const assert = std.debug.assert;
 
 const sig = @import("../sig.zig");
 const Backoff = @import("backoff.zig").Backoff;
+const Atomic = std.atomic.Value;
+const Allocator = std.mem.Allocator;
 
 pub fn Channel(T: type) type {
     return struct {
@@ -387,7 +386,7 @@ test "spsc" {
             for (0..COUNT) |i| {
                 while (true) {
                     if (ch.receive()) |x| {
-                        assert(x == i);
+                        std.debug.assert(x == i);
                         break;
                     }
                 }

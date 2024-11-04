@@ -11,8 +11,6 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipService = sig.gossip.GossipService;
 const Logger = sig.trace.Logger;
 
-const assert = std.debug.assert;
-
 const DOWNLOAD_PROGRESS_UPDATES_NS = 6 * std.time.ns_per_s;
 
 /// Analogous to [PeerSnapshotHash](https://github.com/anza-xyz/agave/blob/f868aa38097094e4fb78a885b6fb27ce0e43f5c7/validator/src/bootstrap.rs#L342)
@@ -55,7 +53,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
 ) !PeerSearchResult {
     // clear the list
     valid_peers.clearRetainingCapacity();
-    assert(valid_peers.capacity >= contact_infos.len);
+    std.debug.assert(valid_peers.capacity >= contact_infos.len);
 
     const TrustedMapType = std.AutoHashMap(
         SlotAndHash, // full snapshot hash
@@ -351,7 +349,7 @@ const DownloadProgress = struct {
         nmemb: c_uint,
         user_data: *anyopaque,
     ) callconv(.C) c_uint {
-        assert(size == 1); // size will always be 1
+        std.debug.assert(size == 1); // size will always be 1
         const len = size * nmemb;
         const self: *Self = @alignCast(@ptrCast(user_data));
         var typed_data: [*]u8 = @ptrCast(ptr);
@@ -377,8 +375,8 @@ const DownloadProgress = struct {
         const self: *Self = @alignCast(@ptrCast(user_data));
 
         // we're only downloading
-        assert(upload_total == 0);
-        assert(upload_now == 0);
+        std.debug.assert(upload_total == 0);
+        std.debug.assert(upload_now == 0);
         const elapsed_ns = self.progress_timer.read().asNanos();
         if (elapsed_ns > DOWNLOAD_PROGRESS_UPDATES_NS) {
             defer {
