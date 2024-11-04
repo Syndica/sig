@@ -179,7 +179,6 @@ fn receiveShreds(
         try shreds.ensureTotalCapacity(receiver_len);
 
         while (receiver.receive()) |packet| try shreds.append(packet);
-        defer shreds.deinit();
 
         const bytes_filter_saturated, const shred_id_filter_saturated = deduper.maybeReset(
             rand,
