@@ -233,7 +233,7 @@ pub fn downloadSnapshotsFromGossip(
                 bStr(&rpc_url_bounded),
                 bStr(&snapshot_filename_bounded),
             });
-            const snapshot_url = snapshot_url_bounded.constSlice()[0.. :0];
+            const snapshot_url = snapshot_url_bounded.constSlice()[0 .. snapshot_url_bounded.len - 1 :0];
 
             logger
                 .info()
