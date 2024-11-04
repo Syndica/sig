@@ -399,8 +399,7 @@ pub const AccountsDB = struct {
         }
 
         for (0..n_parse_threads) |_| {
-            const thread_db = loading_threads.addOneAssumeCapacity();
-            thread_db.* = try AccountsDB.init(.{
+            var thread_db = try AccountsDB.init(.{
                 .allocator = per_thread_allocator,
                 .snapshot_dir = self.snapshot_dir,
                 .gossip = self.gossip,
@@ -414,6 +413,8 @@ pub const AccountsDB = struct {
             thread_db.logger = self.logger;
             // set the disk allocator after init() doesnt create a new one
             thread_db.account_index.reference_allocator = self.account_index.reference_allocator;
+
+            loading_threads.appendAssumeCapacity(thread_db);
         }
 
         self.logger.info().logf("[{d} threads]: reading and indexing accounts...", .{n_parse_threads});
