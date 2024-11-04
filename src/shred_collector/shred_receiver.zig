@@ -94,6 +94,7 @@ pub const ShredReceiver = struct {
     ) !void {
         while (!self.exit.load(.acquire)) {
             for (receivers) |receiver| {
+                self.metrics.received_count.inc();
                 var packet_count: usize = 0;
                 while (receiver.receive()) |packet| {
                     packet_count += 1;
@@ -128,6 +129,7 @@ pub const ShredReceiver = struct {
             };
             var our_packet = packet;
             if (is_repair) our_packet.flags.set(.repair);
+            self.metrics.satisfactory_shred_count.inc();
             try self.unverified_shred_sender.send(our_packet);
         }
     }
