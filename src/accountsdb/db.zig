@@ -4203,9 +4203,8 @@ pub const BenchmarkAccountsDB = struct {
 
         // make sure theres no leaks
         const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
-        const disk_path = sig.TEST_DATA_DIR ++ "tmp/";
-        std.fs.cwd().makeDir(disk_path) catch {};
-        defer std.fs.cwd().deleteTreeMinStackSize(disk_path) catch {};
+        var disk_dir = std.testing.tmpDir(.{});
+        defer disk_dir.cleanup();
 
         var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
         defer snapshot_dir.close();
@@ -4231,113 +4230,114 @@ pub const BenchmarkAccountsDB = struct {
         defer all_filenames.deinit();
         defer {
             for (all_filenames.items) |filepath| {
-                std.fs.cwd().deleteFile(filepath) catch {
+                disk_dir.dir.deleteFile(filepath) catch {
                     std.debug.print("failed to delete file: {s}\n", .{filepath});
                 };
                 allocator.free(filepath);
             }
         }
 
-        const write_time = if (bench_args.accounts == .ram) timer_blk: {
-            const n_accounts_init = bench_args.n_accounts_multiple * bench_args.n_accounts;
-            const accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));
-            defer {
-                for (accounts[0..total_n_accounts]) |account| account.deinit(allocator);
-                allocator.free(accounts);
-            }
-            for (0..(total_n_accounts + n_accounts_init)) |i| {
-                accounts[i] = try Account.initRandom(allocator, random, i % 1_000);
-            }
-
-            if (n_accounts_init > 0) {
-                try accounts_db.putAccountSlice(
-                    accounts[total_n_accounts..(total_n_accounts + n_accounts_init)],
-                    pubkeys,
-                    @as(u64, @intCast(0)),
-                );
-            }
-
-            var timer = try sig.time.Timer.start();
-            for (0..slot_list_len) |i| {
-                const start_index = i * n_accounts;
-                const end_index = start_index + n_accounts;
-                try accounts_db.putAccountSlice(
-                    accounts[start_index..end_index],
-                    pubkeys,
-                    @as(u64, @intCast(i)),
-                );
-            }
-            break :timer_blk timer.read();
-        } else timer_blk: {
-            var account_files = try ArrayList(AccountFile).initCapacity(allocator, slot_list_len);
-            defer account_files.deinit();
-
-            for (0..(slot_list_len + bench_args.n_accounts_multiple)) |s| {
-                var size: usize = 0;
-                for (0..total_n_accounts) |i| {
-                    const data_len = i % 1_000;
-                    size += std.mem.alignForward(
-                        usize,
-                        AccountInFile.STATIC_SIZE + data_len,
-                        @sizeOf(u64),
-                    );
-                }
-                const aligned_size = std.mem.alignForward(usize, size, std.mem.page_size);
-                const filepath_bounded = sig.utils.fmt.boundedFmt(disk_path ++ "slot{d}.bin", .{s});
-                const filepath = filepath_bounded.constSlice();
-
-                const length = blk: {
-                    var file = try std.fs.cwd().createFile(filepath, .{ .read = true });
-                    defer file.close();
-
-                    // resize the file
-                    const file_size = (try file.stat()).size;
-                    if (file_size < aligned_size) {
-                        try file.seekTo(aligned_size - 1);
-                        _ = try file.write(&[_]u8{1});
-                        try file.seekTo(0);
+        const write_time = timer_blk: {
+            switch (bench_args.accounts) {
+                .ram => {
+                    const n_accounts_init = bench_args.n_accounts_multiple * bench_args.n_accounts;
+                    const accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));
+                    defer {
+                        for (accounts[0..total_n_accounts]) |account| account.deinit(allocator);
+                        allocator.free(accounts);
+                    }
+                    for (0..(total_n_accounts + n_accounts_init)) |i| {
+                        accounts[i] = try Account.initRandom(allocator, random, i % 1_000);
                     }
 
-                    var memory = try std.posix.mmap(
-                        null,
-                        aligned_size,
-                        std.posix.PROT.READ | std.posix.PROT.WRITE,
-                        std.posix.MAP{ .TYPE = .SHARED }, // need it written to the file before it can be used
-                        file.handle,
-                        0,
-                    );
-
-                    var offset: usize = 0;
-                    for (0..n_accounts) |i| {
-                        const account = try Account.initRandom(allocator, random, i % 1_000);
-                        defer allocator.free(account.data);
-                        var pubkey = pubkeys[i % n_accounts];
-                        offset += account.writeToBuf(&pubkey, memory[offset..]);
+                    if (n_accounts_init > 0) {
+                        try accounts_db.putAccountSlice(
+                            accounts[total_n_accounts..(total_n_accounts + n_accounts_init)],
+                            pubkeys,
+                            @as(u64, @intCast(0)),
+                        );
                     }
-                    break :blk offset;
-                };
 
-                var account_file = blk: {
-                    const file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
-                    defer file.close();
-                    break :blk try AccountFile.init(file, .{ .id = FileId.fromInt(@intCast(s)), .length = length }, s);
-                };
-                errdefer account_file.deinit();
+                    var timer = try sig.time.Timer.start();
+                    for (0..slot_list_len) |i| {
+                        const start_index = i * n_accounts;
+                        const end_index = start_index + n_accounts;
+                        try accounts_db.putAccountSlice(
+                            accounts[start_index..end_index],
+                            pubkeys,
+                            @as(u64, @intCast(i)),
+                        );
+                    }
+                    break :timer_blk timer.read();
+                },
+                .disk => {
+                    var account_files = try ArrayList(AccountFile).initCapacity(allocator, slot_list_len);
+                    defer account_files.deinit();
 
-                if (s < bench_args.n_accounts_multiple) {
-                    try accounts_db.putAccountFile(&account_file, n_accounts);
-                } else {
-                    // to be indexed later (and timed)
-                    account_files.appendAssumeCapacity(account_file);
-                }
-                all_filenames.appendAssumeCapacity(try allocator.dupe(u8, filepath));
+                    for (0..(slot_list_len + bench_args.n_accounts_multiple)) |s| {
+                        var size: usize = 0;
+                        for (0..total_n_accounts) |i| {
+                            const data_len = i % 1_000;
+                            size += std.mem.alignForward(
+                                usize,
+                                AccountInFile.STATIC_SIZE + data_len,
+                                @sizeOf(u64),
+                            );
+                        }
+                        const aligned_size = std.mem.alignForward(usize, size, std.mem.page_size);
+
+                        const filepath_bounded = sig.utils.fmt.boundedFmt("slot{d}.bin", .{s});
+                        const filepath = filepath_bounded.constSlice();
+
+                        var account_file = blk: {
+                            var file = try disk_dir.dir.createFile(filepath, .{ .read = true });
+                            defer file.close();
+
+                            // resize the file
+                            const file_size = (try file.stat()).size;
+                            if (file_size < aligned_size) {
+                                try file.seekTo(aligned_size - 1);
+                                _ = try file.write(&[_]u8{1});
+                                try file.seekTo(0);
+                            }
+
+                            var memory = try std.posix.mmap(
+                                null,
+                                aligned_size,
+                                std.posix.PROT.READ | std.posix.PROT.WRITE,
+                                std.posix.MAP{ .TYPE = .SHARED }, // need it written to the file before it can be used
+                                file.handle,
+                                0,
+                            );
+
+                            var offset: usize = 0;
+                            for (0..n_accounts) |i| {
+                                const account = try Account.initRandom(allocator, random, i % 1_000);
+                                defer allocator.free(account.data);
+                                var pubkey = pubkeys[i % n_accounts];
+                                offset += account.writeToBuf(&pubkey, memory[offset..]);
+                            }
+
+                            break :blk try AccountFile.init(file, .{ .id = FileId.fromInt(@intCast(s)), .length = offset }, s);
+                        };
+                        errdefer account_file.deinit();
+
+                        if (s < bench_args.n_accounts_multiple) {
+                            try accounts_db.putAccountFile(&account_file, n_accounts);
+                        } else {
+                            // to be indexed later (and timed)
+                            account_files.appendAssumeCapacity(account_file);
+                        }
+                        all_filenames.appendAssumeCapacity(try allocator.dupe(u8, filepath));
+                    }
+
+                    var timer = try sig.time.Timer.start();
+                    for (account_files.items) |*account_file| {
+                        try accounts_db.putAccountFile(account_file, n_accounts);
+                    }
+                    break :timer_blk timer.read();
+                },
             }
-
-            var timer = try sig.time.Timer.start();
-            for (account_files.items) |*account_file| {
-                try accounts_db.putAccountFile(account_file, n_accounts);
-            }
-            break :timer_blk timer.read();
         };
 
         // set up a WeightedAliasSampler to give our accounts normally distributed access probabilities.
