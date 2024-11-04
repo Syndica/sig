@@ -499,7 +499,7 @@ fn generic_shred(shred_type: ShredType) type {
         fn verify(self: Self, leader: sig.core.Pubkey) bool {
             const signed_data = self.merkleRoot() catch return false;
             const signature = layout.getLeaderSignature(self.payload) orelse return false;
-            return signature.verify(leader, &signed_data.data);
+            return signature.verify(leader, &signed_data.data) catch return false;
         }
 
         /// this is the data that is signed by the signature
