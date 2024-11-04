@@ -15,6 +15,7 @@ pub const ContactInfo = data.ContactInfo;
 pub const GossipService = service.GossipService;
 pub const GossipTable = table.GossipTable;
 pub const SignedGossipData = data.SignedGossipData;
+pub const GossipData = data.GossipData;
 pub const LowestSlot = data.LowestSlot;
 pub const Ping = ping_pong.Ping;
 pub const Pong = ping_pong.Pong;

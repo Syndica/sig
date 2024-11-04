@@ -458,10 +458,12 @@ test "recover mainnet shreds - construct shreds from shards" {
 
 const expected_metadata = blk: {
     @setEvalBranchQuota(10_000);
+
     break :blk RecoveryMetadata{
         .common_header = CommonHeader{
             .leader_signature = Signature.fromString(
-                "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2sAmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m",
+                "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2s" ++
+                    "AmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m",
             ) catch unreachable,
             .variant = .{
                 .shred_type = .code,

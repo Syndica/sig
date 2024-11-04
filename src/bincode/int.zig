@@ -10,10 +10,8 @@ pub fn defaultOnEof(comptime T: type, comptime eof_value: T) bincode.FieldConfig
             params: bincode.Params,
         ) anyerror!T {
             var fba = comptime std.heap.FixedBufferAllocator.init(&.{});
-            return bincode.read(fba.allocator(), T, reader, params) catch |err| switch (err) {
-                error.EndOfStream => eof_value,
-                else => |e| e,
-            };
+            return bincode.read(fba.allocator(), T, reader, params) catch |err|
+                if (err == error.EndOfStream) eof_value else err;
         }
 
         fn serializer(
@@ -31,7 +29,6 @@ pub fn defaultOnEof(comptime T: type, comptime eof_value: T) bincode.FieldConfig
     };
 }
 
-// TODO: make this the default behaviour for bincode []u8 slices
 pub fn U8SliceConfig() bincode.FieldConfig([]u8) {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, _: bincode.Params) !void {
@@ -63,7 +60,44 @@ pub fn U8SliceConfig() bincode.FieldConfig([]u8) {
     };
 }
 
-// TODO: make this the default behaviour for bincode [size]u8 arrays
+pub fn U8Config() bincode.FieldConfig(u8) {
+    const S = struct {
+        pub fn serialize(writer: anytype, data: anytype, _: bincode.Params) !void {
+            try writer.writeByte(data);
+        }
+
+        pub fn deserialize(_: std.mem.Allocator, reader: anytype, _: bincode.Params) !u8 {
+            return try reader.readByte();
+        }
+
+        pub fn free(_: std.mem.Allocator, _: anytype) void {}
+    };
+
+    return bincode.FieldConfig(u8){
+        .serializer = S.serialize,
+        .deserializer = S.deserialize,
+        .free = S.free,
+    };
+}
+
+pub fn U8ConstSliceConfig() bincode.FieldConfig([]const u8) {
+    const S = struct {
+        pub fn deserialize(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            params: bincode.Params,
+        ) ![]const u8 {
+            return U8SliceConfig().deserializer.?(allocator, reader, params);
+        }
+    };
+
+    return bincode.FieldConfig([]const u8){
+        .serializer = U8SliceConfig().serializer,
+        .deserializer = S.deserialize,
+        .free = U8SliceConfig().free,
+    };
+}
+
 pub fn U8ArrayConfig(comptime size: u64) bincode.FieldConfig([size]u8) {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
@@ -92,5 +126,24 @@ pub fn U8ArrayConfig(comptime size: u64) bincode.FieldConfig([size]u8) {
         .serializer = S.serialize,
         .deserializer = S.deserialize,
         .free = S.free,
+    };
+}
+
+pub fn U8ArraySentinelConfig(comptime size: u64) bincode.FieldConfig([size:0]u8) {
+    const S = struct {
+        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) ![size:0]u8 {
+            if (params.include_fixed_array_length) {
+                _ = try bincode.read(allocator, u64, reader, .{});
+            }
+            var buf: [size:0]u8 = undefined;
+            @memcpy(&buf, &try reader.readBytesNoEof(size));
+            return buf;
+        }
+    };
+
+    return bincode.FieldConfig([size:0]u8){
+        .serializer = U8ArrayConfig(size).serializer,
+        .deserializer = S.deserialize,
+        .free = U8ArrayConfig(size).free,
     };
 }

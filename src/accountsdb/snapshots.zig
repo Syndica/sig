@@ -930,20 +930,7 @@ pub const AccountFileInfo = struct {
     /// amount of bytes used
     length: usize,
 
-    pub const @"!bincode-config:id": bincode.FieldConfig(FileId) = .{
-        .serializer = idSerializer,
-        .deserializer = idDeserializer,
-    };
-
-    fn idSerializer(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
-        try bincode.write(writer, @as(usize, data.toInt()), params);
-    }
-
-    fn idDeserializer(_: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!FileId {
-        const int = try bincode.readInt(usize, reader, params);
-        if (int > std.math.maxInt(FileId.Int)) return error.IdOverflow;
-        return FileId.fromInt(@intCast(int));
-    }
+    pub const @"!bincode-config:id" = FileId.BincodeConfig;
 
     /// Analogous to [AppendVecError](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L74)
     pub const ValidateError = error{
@@ -1042,7 +1029,16 @@ pub const BankHashStats = struct {
     }
 };
 
-pub const SlotAndHash = struct { slot: Slot, hash: Hash };
+pub const SlotAndHash = struct {
+    slot: Slot,
+    hash: Hash,
+
+    pub fn equals(a: *const SlotAndHash, b: *const SlotAndHash) bool {
+        if (a.slot != b.slot) return false;
+        if (!a.hash.eql(b.hash)) return false;
+        return true;
+    }
+};
 
 /// Analogous to [AccountsDbFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L77)
 pub const AccountsDbFields = struct {
@@ -1453,9 +1449,7 @@ pub const BankSlotDelta = struct {
 pub const StatusCache = struct {
     bank_slot_deltas: []const BankSlotDelta,
 
-    pub fn default() @This() {
-        return .{ .bank_slot_deltas = &.{} };
-    }
+    pub const EMPTY: StatusCache = .{ .bank_slot_deltas = &.{} };
 
     pub fn initFromPath(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
         const status_cache_file = try std.fs.cwd().openFile(path, .{});
@@ -1680,19 +1674,16 @@ pub const SnapshotFiles = struct {
 
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
     pub fn find(allocator: std.mem.Allocator, snapshot_directory: std.fs.Dir) !Self {
-        const snapshot_dir_iter = snapshot_directory.iterate();
-
-        const files = try readDirectory(allocator, snapshot_dir_iter);
-        var filenames = files.filenames;
+        const files = try readDirectory(allocator, snapshot_directory);
         defer {
-            filenames.deinit();
-            allocator.free(files.filename_memory);
+            for (files) |file| allocator.free(file);
+            allocator.free(files);
         }
 
         // find the snapshots
         var maybe_latest_full_snapshot: ?FullSnapshotFileInfo = null;
         var count: usize = 0;
-        for (filenames.items) |filename| {
+        for (files) |filename| {
             const snapshot = FullSnapshotFileInfo.fromString(filename) catch continue;
             if (count == 0 or snapshot.slot > maybe_latest_full_snapshot.?.slot) {
                 maybe_latest_full_snapshot = snapshot;
@@ -1703,7 +1694,7 @@ pub const SnapshotFiles = struct {
 
         count = 0;
         var maybe_latest_incremental_snapshot: ?IncrementalSnapshotFileInfo = null;
-        for (filenames.items) |filename| {
+        for (files) |filename| {
             const snapshot = IncrementalSnapshotFileInfo.fromString(filename) catch continue;
             // need to match the base slot
             if (snapshot.base_slot == latest_full_snapshot.slot and (count == 0 or
@@ -1734,10 +1725,11 @@ pub const AllSnapshotFields = struct {
 
     pub fn fromFiles(
         allocator: std.mem.Allocator,
-        logger: Logger,
+        logger_: Logger,
         snapshot_dir: std.fs.Dir,
         files: SnapshotFiles,
     ) !Self {
+        const logger = logger_.withScope(@typeName((Self)));
         // unpack
         const full_fields = blk: {
             const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full_snapshot.slot});
@@ -1802,6 +1794,7 @@ pub const AllSnapshotFields = struct {
         // TODO: use a better allocator
         const allocator = storages_map.allocator;
         var slots_to_remove = std.ArrayList(Slot).init(allocator);
+        defer slots_to_remove.deinit();
 
         // make sure theres no overlap in slots between full and incremental and combine
         var storages_entry_iter = storages_map.iterator();

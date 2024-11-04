@@ -16,6 +16,7 @@ pub fn Base58Sized(decoded_size: usize) type {
 
         pub fn decode(str: []const u8) ![decoded_size]u8 {
             var result_data: [decoded_size]u8 = undefined;
+            @setEvalBranchQuota(6100);
             const decoded_len = try decoder.decode(str, &result_data);
             if (decoded_len != decoded_size) return error.InvalidDecodedSize;
             return result_data;
@@ -30,7 +31,10 @@ pub fn Base58Sized(decoded_size: usize) type {
             return result;
         }
 
-        pub fn encodeAlloc(data: [decoded_size]u8, allocator: Allocator) Allocator.Error![]const u8 {
+        pub fn encodeAlloc(
+            data: [decoded_size]u8,
+            allocator: Allocator,
+        ) Allocator.Error![]const u8 {
             const buf = try allocator.alloc(u8, max_encoded_size);
             const actual_size = encodeToSlice(data, buf[0..max_encoded_size]);
             return try allocator.realloc(buf, actual_size);

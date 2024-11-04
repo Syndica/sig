@@ -30,7 +30,7 @@ pub const ShredReceiver = struct {
     allocator: Allocator,
     keypair: *const KeyPair,
     exit: *Atomic(bool),
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     repair_socket: Socket,
     turbine_socket: Socket,
     /// me --> shred verifier
@@ -96,14 +96,11 @@ pub const ShredReceiver = struct {
             for (receivers) |receiver| {
                 var packet_count: usize = 0;
                 while (receiver.receive()) |packet| {
+                    self.metrics.incReceived(is_repair);
                     packet_count += 1;
                     try self.handlePacket(packet, response_sender, is_repair);
                 }
-                if (is_repair) {
-                    self.metrics.repair_batch_size.observe(packet_count);
-                } else {
-                    self.metrics.turbine_batch_size.observe(packet_count);
-                }
+                self.metrics.observeBatchSize(is_repair, packet_count);
             }
         }
     }
@@ -128,13 +125,19 @@ pub const ShredReceiver = struct {
             };
             var our_packet = packet;
             if (is_repair) our_packet.flags.set(.repair);
+            self.metrics.satisfactory_shred_count.inc();
             try self.unverified_shred_sender.send(our_packet);
         }
     }
 
     /// Handle a ping message and returns the repair message.
     fn handlePing(self: *const Self, packet: *const Packet) !?Packet {
-        const repair_ping = bincode.readFromSlice(self.allocator, RepairPing, &packet.data, .{}) catch {
+        const repair_ping = bincode.readFromSlice(
+            self.allocator,
+            RepairPing,
+            &packet.data,
+            .{},
+        ) catch {
             self.metrics.ping_deserialize_fail_count.inc();
             return null;
         };
@@ -193,7 +196,7 @@ fn validateShred(
     // https://github.com/solana-labs/solana/pull/35076
 
     _ = layout.getLeaderSignature(shred) orelse return error.signature_missing;
-    _ = layout.getSignedData(shred) orelse return error.signed_data_missing;
+    _ = layout.merkleRoot(shred) orelse return error.signed_data_missing;
 }
 
 /// TODO: this may need to move to blockstore
@@ -212,6 +215,8 @@ const RepairPing = union(enum) { Ping: Ping };
 
 pub const ShredReceiverMetrics = struct {
     received_count: *Counter,
+    turbine_received_count: *Counter,
+    repair_received_count: *Counter,
     satisfactory_shred_count: *Counter,
     valid_ping_count: *Counter,
     ping_deserialize_fail_count: *Counter,
@@ -223,6 +228,27 @@ pub const ShredReceiverMetrics = struct {
 
     pub const prefix = "shred_receiver";
     pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(2, -1, 8);
+
+    pub fn incReceived(self: *const ShredReceiverMetrics, is_repair: bool) void {
+        self.received_count.inc();
+        if (is_repair) {
+            self.repair_received_count.inc();
+        } else {
+            self.turbine_received_count.inc();
+        }
+    }
+
+    pub fn observeBatchSize(
+        self: *const ShredReceiverMetrics,
+        is_repair: bool,
+        packet_count: usize,
+    ) void {
+        if (is_repair) {
+            self.repair_batch_size.observe(packet_count);
+        } else {
+            self.turbine_batch_size.observe(packet_count);
+        }
+    }
 };
 
 /// Something about the shred was unexpected, so we will discard it.

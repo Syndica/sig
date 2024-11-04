@@ -1,6 +1,5 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const shred_collector = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -23,7 +22,7 @@ pub const Range = struct {
 /// once it is implemented. This struct tracks shreds linearly with no regard
 /// for forking. The Blockstore will fix this by tracking forks.
 pub const BasicShredTracker = struct {
-    logger: sig.trace.ScopedLogger(@typeName(@This())),
+    logger: sig.trace.ScopedLogger(@typeName(Self)),
     mux: Mutex = .{},
     /// The slot that this struct was initialized with at index 0
     start_slot: ?Slot,
@@ -52,7 +51,7 @@ pub const BasicShredTracker = struct {
         return .{
             .start_slot = slot,
             .current_bottom_slot = slot orelse 0,
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .metrics = try registry.initStruct(Metrics),
         };
     }
@@ -115,7 +114,10 @@ pub const BasicShredTracker = struct {
     }
 
     /// returns whether it makes sense to send any repair requests
-    pub fn identifyMissing(self: *Self, slot_reports: *MultiSlotReport) (Allocator.Error || SlotOutOfBounds)!bool {
+    pub fn identifyMissing(
+        self: *Self,
+        slot_reports: *MultiSlotReport,
+    ) (Allocator.Error || SlotOutOfBounds)!bool {
         if (self.start_slot == null) return false;
         self.mux.lock();
         defer self.mux.unlock();
@@ -126,7 +128,9 @@ pub const BasicShredTracker = struct {
         const last_slot_to_check = @max(self.max_slot_processed, self.current_bottom_slot);
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getMonitoredSlot(slot);
-            if (monitored_slot.first_received_timestamp_ms + MIN_SLOT_AGE_TO_REPORT_AS_MISSING > timestamp) {
+            if (monitored_slot.first_received_timestamp_ms +
+                MIN_SLOT_AGE_TO_REPORT_AS_MISSING > timestamp)
+            {
                 continue;
             }
             var slot_report = try slot_reports.addOne();
@@ -139,9 +143,15 @@ pub const BasicShredTracker = struct {
             }
             if (!found_an_incomplete_slot) {
                 if (slot % 20 == 0) {
-                    self.logger.info().logf("shred tracker: received all shreds up to slot {}", .{slot});
+                    self.logger.info().logf(
+                        "shred tracker: received all shreds up to slot {}",
+                        .{slot},
+                    );
                 } else {
-                    self.logger.debug().logf("shred tracker: received all shreds up to slot {}", .{slot});
+                    self.logger.debug().logf(
+                        "shred tracker: received all shreds up to slot {}",
+                        .{slot},
+                    );
                 }
                 self.current_bottom_slot = @max(self.current_bottom_slot, slot + 1);
                 self.metrics.finished_slots_through.set(slot);

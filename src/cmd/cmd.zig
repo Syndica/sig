@@ -57,6 +57,9 @@ else
 
 const base58Encoder = base58.Encoder.init(.{});
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE = "cmd";
+
 pub fn run() !void {
     defer {
         // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
@@ -65,7 +68,10 @@ pub fn run() !void {
 
     var gossip_host_option = cli.Option{
         .long_name = "gossip-host",
-        .help = "IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1",
+        .help =
+        \\IPv4 address for the validator to advertise in gossip
+        \\ - default: get from --entrypoint, fallback to 127.0.0.1"
+        ,
         .value_ref = cli.mkRef(&config.current.gossip.host),
         .required = false,
         .value_name = "Gossip Host",
@@ -262,7 +268,11 @@ pub fn run() !void {
     var accounts_per_file_estimate = cli.Option{
         .long_name = "accounts-per-file-estimate",
         .short_alias = 'a',
-        .help = "number of accounts to estimate inside of account files (used for pre-allocation). Safer to set it larger than smaller (approx values we found work well testnet/devnet: 1_500, mainnet: 3_000).",
+        .help =
+        \\number of accounts to estimate inside of account files (used for pre-allocation).
+        \\Safer to set it larger than smaller.
+        \\(approx values we found work well testnet/devnet: 1_500, mainnet: 3_000)"
+        ,
         .value_ref = cli.mkRef(&config.current.accounts_db.accounts_per_file_estimate),
         .required = false,
         .value_name = "accounts_per_file_estimate",
@@ -421,9 +431,10 @@ pub fn run() !void {
                         \\ NOTE: this means that this command *requires* a leader schedule to be provided
                         \\ (which would usually be derived from the accountsdb snapshot).
                         \\
-                        \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well (
-                        \\ which is usually derived from the accountsdb snapshot). This can be done 
-                        \\ with `--test-repair-for-slot $(solana slot -u testnet)` for testnet or another `-u` for mainnet/devnet.
+                        \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well 
+                        \\ (which is usually derived from the accountsdb snapshot). 
+                        \\ This can be done with `--test-repair-for-slot $(solana slot -u testnet)`
+                        \\ for testnet or another `-u` for mainnet/devnet.
                         },
                         .options = &.{
                             // gossip
@@ -757,7 +768,7 @@ fn validator() !void {
         shred_col_conf,
         ShredCollectorDependencies{
             .allocator = allocator,
-            .logger = app_base.logger.withScope(@typeName(ShredCollectorDependencies)),
+            .logger = app_base.logger.unscoped(),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
@@ -801,7 +812,8 @@ fn shredCollector() !void {
 
     // This is a sort of hack to get the epoch of the leader schedule and then insert into the cache
     const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
-    const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(start_slot); // first_slot is non null iff leader schedule is built from cli
+    // first_slot is non null iff leader schedule is built from cli
+    const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(start_slot);
     try leader_schedule_cache.put(leader_schedule_epoch, leader_schedule);
 
     const leader_provider = leader_schedule_cache.slotLeaderProvider();
@@ -857,7 +869,7 @@ fn shredCollector() !void {
         shred_col_conf,
         .{
             .allocator = allocator,
-            .logger = app_base.logger.withScope(@typeName(ShredCollectorDependencies)),
+            .logger = app_base.logger.unscoped(),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
@@ -876,7 +888,8 @@ fn shredCollector() !void {
 
 const GeyserWriter = sig.geyser.GeyserWriter;
 
-fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWriter {
+fn buildGeyserWriter(allocator: std.mem.Allocator, logger_: Logger) !?*GeyserWriter {
+    const logger = logger_.withScope(LOG_SCOPE);
     var geyser_writer: ?*GeyserWriter = null;
     if (config.current.geyser.enable) {
         logger.info().log("Starting GeyserWriter...");
@@ -1035,10 +1048,11 @@ fn printLeaderSchedule() !void {
                 return err;
             }
         };
-        _, const slot_index = loaded_snapshot.bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(loaded_snapshot.bank.bank_fields.slot);
+        const bank_fields = loaded_snapshot.bank.bank_fields;
+        _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
         break :b .{
-            loaded_snapshot.bank.bank_fields.slot - slot_index,
-            try loaded_snapshot.bank.bank_fields.leaderSchedule(allocator),
+            bank_fields.slot - slot_index,
+            try bank_fields.leaderSchedule(allocator),
         };
     };
 
@@ -1067,7 +1081,8 @@ pub fn testTransactionSenderService() !void {
     const allocator = gpa_allocator;
 
     // read genesis (used for leader schedule)
-    const genesis_file_path = try config.current.genesisFilePath() orelse @panic("No genesis file path found: use -g or -n");
+    const genesis_file_path = try config.current.genesisFilePath() orelse
+        @panic("No genesis file path found: use -g or -n");
     const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
@@ -1139,7 +1154,7 @@ const AppBase = struct {
     counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     closed: bool,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
     my_keypair: KeyPair,
@@ -1148,8 +1163,10 @@ const AppBase = struct {
     my_ip: IpAddr,
     my_port: u16,
 
+    const Self = @This();
+
     fn init(allocator: Allocator) !AppBase {
-        const logger = try spawnLogger();
+        const logger = (try spawnLogger()).withScope(@typeName(Self));
         errdefer logger.deinit();
 
         const metrics_registry = globalRegistry();
@@ -1157,17 +1174,17 @@ const AppBase = struct {
         const metrics_thread = try spawnMetrics(gpa_allocator, config.current.metrics_port);
         errdefer metrics_thread.detach();
 
-        const my_keypair = try getOrInitIdentity(allocator, logger);
+        const my_keypair = try getOrInitIdentity(allocator, logger.unscoped());
 
-        const entrypoints = try getEntrypoints(logger);
+        const entrypoints = try getEntrypoints(logger.unscoped());
         errdefer entrypoints.deinit();
 
-        const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
+        const ip_echo_data = try getMyDataFromIpEcho(logger.unscoped(), entrypoints.items);
         const my_port = config.current.gossip.port;
 
         return .{
             .closed = false,
-            .logger = logger.withScope(@typeName(AppBase)),
+            .logger = logger,
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
             .my_keypair = my_keypair,
@@ -1197,7 +1214,7 @@ const AppBase = struct {
 
 /// Initialize an instance of GossipService and configure with CLI arguments
 fn initGossip(
-    logger: Logger,
+    logger_: Logger,
     my_keypair: KeyPair,
     exit: *Atomic(usize),
     entrypoints: []const SocketAddr,
@@ -1205,6 +1222,7 @@ fn initGossip(
     gossip_host_ip: IpAddr,
     sockets: []const struct { tag: SocketTag, port: u16 },
 ) !GossipService {
+    const logger = logger_.withScope(LOG_SCOPE);
     const gossip_port: u16 = config.current.gossip.port;
     logger.info().logf("gossip host: {any}", .{gossip_host_ip});
     logger.info().logf("gossip port: {d}", .{gossip_port});
@@ -1223,7 +1241,7 @@ fn initGossip(
         my_keypair,
         entrypoints,
         exit,
-        logger,
+        logger.unscoped(),
     );
 }
 
@@ -1283,9 +1301,10 @@ fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
 /// determine our shred version and ip. in the solana-labs client, the shred version
 /// comes from the snapshot, and ip echo is only used to validate it.
 fn getMyDataFromIpEcho(
-    logger: Logger,
+    logger_: Logger,
     entrypoints: []SocketAddr,
 ) !struct { shred_version: u16, ip: IpAddr } {
+    const logger = logger_.withScope(LOG_SCOPE);
     var my_ip_from_entrypoint: ?IpAddr = null;
     const my_shred_version = loop: for (entrypoints) |entrypoint| {
         if (requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
@@ -1354,7 +1373,8 @@ fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     return socket_addr;
 }
 
-fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
+fn getEntrypoints(logger_: Logger) !std.ArrayList(SocketAddr) {
+    const logger = logger_.withScope(LOG_SCOPE);
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     errdefer entrypoints.deinit();
 
@@ -1375,7 +1395,7 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 
     for (config.current.gossip.entrypoints) |entrypoint| {
         const socket_addr = SocketAddr.parse(entrypoint) catch brk: {
-            break :brk try resolveSocketAddr(entrypoint, logger);
+            break :brk try resolveSocketAddr(entrypoint, logger.unscoped());
         };
 
         const gop = try entrypoint_set.getOrPut(socket_addr);
@@ -1419,14 +1439,15 @@ const LoadedSnapshot = struct {
 
 fn loadSnapshot(
     allocator: Allocator,
-    logger: Logger,
+    logger_: Logger,
     /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
-    gossip_service: ?*GossipService,
+    maybe_gossip_service: ?*GossipService,
     /// whether to validate the snapshot account data against the metadata
     validate_snapshot: bool,
     /// optional geyser to write snapshot data to
     geyser_writer: ?*GeyserWriter,
 ) !*LoadedSnapshot {
+    const logger = logger_.withScope(@typeName(@This()));
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
     result.allocator = allocator;
@@ -1468,17 +1489,16 @@ fn loadSnapshot(
     };
     logger.info().logf("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
-    result.accounts_db = try AccountsDB.init(
-        allocator,
-        logger.unscoped(),
-        snapshot_dir,
-        .{
-            .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
-            .use_disk_index = config.current.accounts_db.use_disk_index,
-            .lru_size = 10_000,
-        },
-        geyser_writer,
-    );
+    result.accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger.unscoped(),
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = geyser_writer,
+        .gossip_view = if (maybe_gossip_service) |service| AccountsDB.GossipView.fromService(service) else null,
+        .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
+        .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
+        .lru_size = 10_000,
+    });
     errdefer result.accounts_db.deinit();
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(
@@ -1510,7 +1530,10 @@ fn loadSnapshot(
     // validate the status cache
     result.status_cache = readStatusCache(allocator, snapshot_dir) catch |err| {
         if (err == error.StatusCacheNotFound) {
-            logger.err().logf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
+            logger.err().logf(
+                "status-cache.bin not found - expecting {s}/snapshots/status-cache to exist",
+                .{snapshot_dir_str},
+            );
         }
         return err;
     };
@@ -1615,7 +1638,7 @@ fn getTrustedValidators(allocator: Allocator) !?std.ArrayList(Pubkey) {
 
 fn getOrDownloadSnapshots(
     allocator: Allocator,
-    logger: Logger,
+    logger_: Logger,
     gossip_service: ?*GossipService,
     // accounts_db_config: config.AccountsDBConfig,
     options: struct {
@@ -1626,6 +1649,7 @@ fn getOrDownloadSnapshots(
         min_snapshot_download_speed_mbs: usize,
     },
 ) !struct { AllSnapshotFields, SnapshotFiles } {
+    const logger = logger_.withScope(LOG_SCOPE);
     // arg parsing
     const snapshot_dir = options.snapshot_dir;
     const force_unpack_snapshot = options.force_unpack_snapshot;
@@ -1704,7 +1728,10 @@ fn getOrDownloadSnapshots(
         timer.reset();
         logger.info().logf("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
         {
-            const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
+            const archive_file = try snapshot_dir.openFile(
+                snapshot_files.full_snapshot.snapshotNameStr().constSlice(),
+                .{},
+            );
             defer archive_file.close();
             try parallelUnpackZstdTarBall(
                 allocator,

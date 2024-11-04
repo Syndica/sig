@@ -16,6 +16,7 @@ const Timer = sig.time.Timer;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const BlockstoreInsertionMetrics = shred_inserter.shred_inserter.BlockstoreInsertionMetrics;
+const BytesRef = ledger.database.BytesRef;
 const CodeShred = ledger.shred.CodeShred;
 const ColumnFamily = ledger.database.ColumnFamily;
 const ErasureSetId = ledger.shred.ErasureSetId;
@@ -75,7 +76,7 @@ const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 /// database and working sets.
 pub const PendingInsertShredsState = struct {
     allocator: Allocator,
-    logger: sig.trace.Logger,
+    logger: sig.trace.ScopedLogger(@typeName(Self)),
     db: *BlockstoreDB,
     write_batch: WriteBatch,
     just_inserted_shreds: AutoHashMap(ShredId, Shred),
@@ -99,7 +100,7 @@ pub const PendingInsertShredsState = struct {
         return .{
             .allocator = allocator,
             .db = db,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(Self)),
             .write_batch = try db.initWriteBatch(),
             .just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator), // TODO capacity = shreds.len
             .erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator),
@@ -119,24 +120,6 @@ pub const PendingInsertShredsState = struct {
         deinitMapRecursive(&self.index_working_set);
         self.duplicate_shreds.deinit();
         self.write_batch.deinit();
-    }
-
-    pub fn getOrPutErasureMeta(
-        self: *Self,
-        erasure_set_id: ErasureSetId,
-        code_shred: CodeShred,
-    ) !*const ErasureMeta {
-        const erasure_meta_entry = try self.erasure_metas.getOrPut(erasure_set_id);
-        if (!erasure_meta_entry.found_existing) {
-            if (try self.db.get(self.allocator, schema.erasure_meta, erasure_set_id)) |meta_| {
-                erasure_meta_entry.value_ptr.* = .{ .clean = meta_ };
-            } else {
-                erasure_meta_entry.value_ptr.* = .{
-                    .dirty = ErasureMeta.fromCodeShred(code_shred) orelse return error.Unwrap,
-                };
-            }
-        }
-        return erasure_meta_entry.value_ptr.asRef();
     }
 
     /// agave: get_index_meta_entry
@@ -185,44 +168,32 @@ pub const PendingInsertShredsState = struct {
         return entry.value_ptr;
     }
 
-    pub fn shredStore(self: *Self) WorkingShredStore {
+    pub fn shreds(self: *Self) ShredWorkingStore {
         return .{
-            .logger = self.logger,
+            .logger = self.logger.withScope(@typeName(ShredWorkingStore)),
             .db = self.db,
             .just_inserted_shreds = &self.just_inserted_shreds,
         };
     }
 
-    // TODO: should this actually be called externally?
-    // consider moving this logic into a getOrPut-style method
-    pub fn loadErasureMeta(self: *Self, erasure_set_id: ErasureSetId) !void {
-        if (!self.erasure_metas.contains(erasure_set_id)) {
-            if (try self.db.get(self.allocator, schema.erasure_meta, erasure_set_id)) |meta_| {
-                try self.erasure_metas.put(erasure_set_id, .{ .clean = meta_ });
-            }
-        }
+    pub fn erasureMetas(self: *Self) ErasureMetaWorkingStore {
+        return .{
+            .allocator = self.allocator,
+            .db = self.db,
+            .working_entries = &self.erasure_metas,
+        };
     }
 
-    // TODO: should this actually be called externally?
-    // consider moving this logic into a getOrPut-style method
-    pub fn loadMerkleRootMeta(self: *Self, erasure_set_id: ErasureSetId) !void {
-        if (!self.merkle_root_metas.contains(erasure_set_id)) {
-            if (try self.db.get(self.allocator, schema.merkle_root_meta, erasure_set_id)) |meta_| {
-                try self.merkle_root_metas.put(erasure_set_id, .{ .clean = meta_ });
-            }
-        }
+    pub fn merkleRootMetas(self: *Self) MerkleRootMetaWorkingStore {
+        return .{
+            .allocator = self.allocator,
+            .db = self.db,
+            .working_entries = &self.merkle_root_metas,
+        };
     }
 
-    // TODO: should this actually be called externally?
-    pub fn initMerkleRootMetaIfMissing(
-        self: *Self,
-        erasure_set_id: ErasureSetId,
-        shred: anytype,
-    ) !void {
-        const entry = try self.merkle_root_metas.getOrPut(erasure_set_id);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromFirstReceivedShred(shred) };
-        }
+    pub fn duplicateShreds(self: *Self) DuplicateShredsWorkingStore {
+        return .{ .db = self.db, .duplicate_shreds = &self.duplicate_shreds };
     }
 
     pub fn commit(self: *Self) !void {
@@ -247,7 +218,7 @@ pub const PendingInsertShredsState = struct {
         self.metrics.insert_working_sets_elapsed_us.add(commit_working_sets_timer.read().asMicros());
 
         var commit_timer = try Timer.start();
-        try self.db.commit(self.write_batch);
+        try self.db.commit(&self.write_batch);
         self.metrics.write_batch_elapsed_us.add(commit_timer.read().asMicros());
     }
 
@@ -316,6 +287,144 @@ pub const PendingInsertShredsState = struct {
     }
 };
 
+pub const MerkleRootMetaWorkingStore = struct {
+    allocator: Allocator,
+    db: *BlockstoreDB,
+    working_entries: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
+
+    const Self = @This();
+
+    pub fn get(self: Self, id: ErasureSetId) !?MerkleRootMeta {
+        return if (self.working_entries.get(id)) |nes|
+            nes.asRef().*
+        else
+            try self.db.get(self.allocator, schema.merkle_root_meta, id);
+    }
+
+    // TODO: should this actually be called externally?
+    // consider moving this logic into a getOrPut-style method
+    pub fn load(self: Self, erasure_set_id: ErasureSetId) !void {
+        if (!self.working_entries.contains(erasure_set_id)) {
+            if (try self.db.get(self.allocator, schema.merkle_root_meta, erasure_set_id)) |meta_| {
+                try self.working_entries.put(erasure_set_id, .{ .clean = meta_ });
+            }
+        }
+    }
+
+    // TODO: should this actually be called externally?
+    pub fn initIfMissing(self: Self, erasure_set_id: ErasureSetId, shred: anytype) !void {
+        const entry = try self.working_entries.getOrPut(erasure_set_id);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromFirstReceivedShred(shred) };
+        }
+    }
+};
+
+pub const ErasureMetaWorkingStore = struct {
+    allocator: Allocator,
+    db: *BlockstoreDB,
+    working_entries: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
+
+    const Self = @This();
+
+    pub fn get(self: Self, id: ErasureSetId) !?MerkleRootMeta {
+        return if (self.working_entries.get(id)) |nes|
+            nes.asRef().*
+        else if (try self.db.get(self.allocator, schema.erasure_meta, id)) |nes|
+            nes;
+    }
+
+    pub fn getOrPut(
+        self: Self,
+        erasure_set_id: ErasureSetId,
+        code_shred: CodeShred,
+    ) !*const ErasureMeta {
+        const erasure_meta_entry = try self.working_entries.getOrPut(erasure_set_id);
+        if (!erasure_meta_entry.found_existing) {
+            if (try self.db.get(self.allocator, schema.erasure_meta, erasure_set_id)) |meta_| {
+                erasure_meta_entry.value_ptr.* = .{ .clean = meta_ };
+            } else {
+                erasure_meta_entry.value_ptr.* = .{
+                    .dirty = ErasureMeta.fromCodeShred(code_shred) orelse return error.Unwrap,
+                };
+            }
+        }
+        return erasure_meta_entry.value_ptr.asRef();
+    }
+
+    // TODO: should this actually be called externally?
+    // consider moving this logic into a getOrPut-style method
+    pub fn load(self: Self, erasure_set_id: ErasureSetId) !void {
+        if (!self.working_entries.contains(erasure_set_id)) {
+            if (try self.db.get(self.allocator, schema.erasure_meta, erasure_set_id)) |meta_| {
+                try self.working_entries.put(erasure_set_id, .{ .clean = meta_ });
+            }
+        }
+    }
+
+    /// agave: previous_erasure_set
+    pub fn previousSet(
+        self: Self,
+        erasure_set: ErasureSetId,
+    ) !?struct { ErasureSetId, ErasureMeta } { // TODO: agave uses CoW here
+        const slot = erasure_set.slot;
+        const erasure_set_index = erasure_set.erasure_set_index;
+
+        // Check the previous entry from the in memory map to see if it is the consecutive
+        // set to `erasure set`
+        const id_range, const meta_range = self.working_entries.range(
+            .{ .slot = slot, .erasure_set_index = 0 },
+            erasure_set,
+        );
+        if (id_range.len != 0) {
+            const i = id_range.len - 1;
+            const last_meta = meta_range[i].asRef();
+            if (@as(u32, @intCast(erasure_set_index)) == last_meta.nextErasureSetIndex()) {
+                return .{ id_range[i], last_meta.* };
+            }
+        }
+
+        // Consecutive set was not found in memory, scan blockstore for a potential candidate
+        const key_serializer = ledger.database.key_serializer;
+        const value_serializer = ledger.database.value_serializer;
+        var iter = try self.db.iterator(schema.erasure_meta, .reverse, erasure_set);
+        defer iter.deinit();
+        const candidate_set: ErasureSetId, //
+        const candidate: ErasureMeta //
+        = while (try iter.nextBytes()) |entry| {
+            defer for (entry) |e| e.deinit();
+            const key = try key_serializer.deserialize(ErasureSetId, self.allocator, entry[0].data);
+            if (key.slot != slot) return null;
+            if (key.erasure_set_index != erasure_set_index) break .{
+                key,
+                try value_serializer.deserialize(ErasureMeta, self.allocator, entry[1].data),
+            };
+        } else return null;
+
+        // Check if this is actually the consecutive erasure set
+        const next = if (candidate.nextErasureSetIndex()) |n| n else return error.InvalidErasureConfig;
+        return if (next == erasure_set_index)
+            .{ candidate_set, candidate }
+        else
+            return null;
+    }
+};
+
+pub const DuplicateShredsWorkingStore = struct {
+    db: *BlockstoreDB,
+    duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
+
+    const Self = DuplicateShredsWorkingStore;
+
+    pub fn contains(self: Self, slot: Slot) !bool {
+        return try self.db.contains(schema.duplicate_slots, slot);
+    }
+
+    pub fn append(self: Self, dupe: PossibleDuplicateShred) !void {
+        try self.duplicate_shreds.append(dupe);
+    }
+};
+
 pub fn WorkingEntry(comptime T: type) type {
     return union(enum) {
         // Value has been modified with respect to the blockstore column
@@ -377,23 +486,22 @@ pub const PossibleDuplicateShred = union(enum) {
 
 const ShredConflict = struct {
     original: Shred,
-    conflict: []const u8,
+    conflict: BytesRef,
 };
 
-pub const WorkingShredStore = struct {
-    logger: sig.trace.Logger,
+pub const ShredWorkingStore = struct {
+    logger: sig.trace.ScopedLogger(@typeName(Self)),
     db: *BlockstoreDB,
     just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
 
     const Self = @This();
 
-    // TODO consider lifetime -> return must inform a conditional deinit
-    pub fn get(self: Self, id: ShredId) !?[]const u8 {
+    /// returned shred lifetime does not exceed this struct
+    pub fn get(self: Self, id: ShredId) !?BytesRef {
         if (self.just_inserted_shreds.get(id)) |shred| {
-            return shred.payload(); // owned by map
+            return .{ .data = shred.payload(), .deinitializer = null };
         }
         return switch (id.shred_type) {
-            // owned by database
             .data => self.getFromDb(schema.data_shred, id),
             .code => self.getFromDb(schema.code_shred, id),
         };
@@ -431,9 +539,9 @@ pub const WorkingShredStore = struct {
         } else null;
     }
 
-    fn getFromDb(self: Self, comptime cf: ColumnFamily, id: ShredId) !?[]const u8 {
+    fn getFromDb(self: Self, comptime cf: ColumnFamily, id: ShredId) !?BytesRef {
         return if (try self.db.getBytes(cf, .{ id.slot, @intCast(id.index) })) |s|
-            s.data
+            s
         else
             null;
     }
@@ -452,7 +560,7 @@ pub fn isNewlyCompletedSlot(slot_meta: *const SlotMeta, backup_slot_meta: *const
     return slot_meta.isFull() and ( //
         backup_slot_meta.* == null or
         slot_meta.consecutive_received_from_0 !=
-        (backup_slot_meta.* orelse unreachable).consecutive_received_from_0);
+        (backup_slot_meta.*.?).consecutive_received_from_0);
     // TODO unreachable: explain or fix
 }
 

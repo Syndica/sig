@@ -12,7 +12,7 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v2
-        
+
       - name: setup-zig
         uses: mlugg/setup-zig@v1
         with:
@@ -22,7 +22,7 @@ jobs:
         run: |
           zig fmt --check src/ build.zig
 
-  unused_imports:
+  check_style:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
@@ -30,11 +30,11 @@ jobs:
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v3
-        with: 
-          python-version: "3.10"      
+        with:
+          python-version: "3.10"
 
-      - name: remove unused imports
-        run: python scripts/remove_unused.py --check src
+      - name: check style
+        run: python scripts/style.py --check src
 
   test:
     strategy:
@@ -54,7 +54,9 @@ jobs:
           version: 0.13.0
 
       - name: test
-        run: zig build test -Denable-tsan=true
+        run: |
+          zig build test -Denable-tsan=true
+          zig build test -Denable-tsan=true -Dblockstore-db=hashmap -Dfilter=ledger
 
   kcov_test:
     strategy:
@@ -73,7 +75,7 @@ jobs:
 
       - name: Set up dependencies
         run: sudo apt-get update
-        
+
       - name: install kcov
         run: |
           wget https://github.com/SimonKagstrom/kcov/releases/download/v42/kcov-amd64.tar.gz
@@ -103,8 +105,8 @@ jobs:
         with:
           version: 0.13.0
 
-      - name: benchmarks 
-        run: zig build -Doptimize=ReleaseSafe benchmark
+      - name: benchmarks
+        run: zig build -Doptimize=ReleaseSafe benchmark -- all
 
   gossip:
     strategy:
@@ -122,7 +124,7 @@ jobs:
         with:
           version: 0.13.0
 
-      - name: build release 
-        run: zig build -Doptimize=ReleaseSafe 
+      - name: build release
+        run: zig build -Doptimize=ReleaseSafe
       - name: run gossip
         run: bash scripts/gossip_test.sh 120 # in seconds

@@ -49,7 +49,7 @@ pub const RepairService = struct {
     requester: RepairRequester,
     peer_provider: RepairPeerProvider,
     shred_tracker: *BasicShredTracker,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     exit: *Atomic(bool),
     last_big_request_timestamp_ms: i64 = 0,
     /// memory to re-use across iterations. initialized to empty
@@ -93,7 +93,7 @@ pub const RepairService = struct {
             .requester = requester,
             .peer_provider = peer_provider,
             .shred_tracker = shred_tracker,
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
             .thread_pool = RequestBatchThreadPool.init(allocator, NUM_REQUESTER_THREADS),
@@ -248,7 +248,7 @@ pub const RepairService = struct {
 /// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     random: Random,
     keypair: *const KeyPair,
     sender: SocketThread,
@@ -275,7 +275,7 @@ pub const RepairRequester = struct {
         const sndr = try SocketThread.initSender(allocator, logger, udp_send_socket, exit);
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .random = random,
             .keypair = keypair,
             .sender = sndr,
@@ -516,10 +516,15 @@ test "RepairService sends repair request to gossip peer" {
     };
     try peer_socket.bind(peer_endpoint);
     try peer_socket.setReadTimeout(100_000);
-    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.acquire));
+    var peer_contact_info = ContactInfo.init(
+        allocator,
+        Pubkey.fromPublicKey(&peer_keypair.public_key),
+        wallclock,
+        my_shred_version.load(.acquire),
+    );
     try peer_contact_info.setSocket(.serve_repair, SocketAddr.fromEndpoint(&peer_endpoint));
     try peer_contact_info.setSocket(.turbine_recv, SocketAddr.fromEndpoint(&peer_endpoint));
-    _ = try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
+    _ = try gossip.insert(SignedGossipData.initSigned(&peer_keypair, .{ .ContactInfo = peer_contact_info }), wallclock);
 
     // init service
     var exit = Atomic(bool).init(false);
@@ -612,7 +617,8 @@ test "RepairPeerProvider selects correct peers" {
     var observed_peers = std.AutoHashMap(RepairPeer, void).init(allocator);
     defer observed_peers.deinit();
     for (0..10) |_| {
-        try observed_peers.put(try peers.getRandomPeer(13579) orelse unreachable, {});
+        const peer = (try peers.getRandomPeer(13579)).?;
+        try observed_peers.put(peer, {});
     }
 
     // assertions
@@ -660,6 +666,7 @@ const TestPeerGenerator = struct {
         const serve_repair_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8003);
         const shred_version = if (peer_type == .WrongShredVersion) self.shred_version + 1 else self.shred_version;
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+
         var contact_info = ContactInfo.init(self.allocator, pubkey, wallclock, shred_version);
         if (peer_type != .MissingServeRepairPort) {
             try contact_info.setSocket(.serve_repair, serve_repair_addr);
@@ -667,7 +674,7 @@ const TestPeerGenerator = struct {
         if (peer_type != .MissingTvuPort) {
             try contact_info.setSocket(.turbine_recv, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
         }
-        _ = try self.gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = contact_info }, &keypair), wallclock);
+        _ = try self.gossip.insert(SignedGossipData.initSigned(&keypair, .{ .ContactInfo = contact_info }), wallclock);
         switch (peer_type) {
             inline .HasSlot, .MissingSlot => {
                 var lowest_slot = sig.gossip.LowestSlot.initRandom(self.random);
@@ -676,7 +683,7 @@ const TestPeerGenerator = struct {
                     .MissingSlot => self.slot + 1,
                     else => self.slot,
                 };
-                _ = try self.gossip.insert(try SignedGossipData.initSigned(.{ .LowestSlot = .{ 0, lowest_slot } }, &keypair), wallclock);
+                _ = try self.gossip.insert(SignedGossipData.initSigned(&keypair, .{ .LowestSlot = .{ 0, lowest_slot } }), wallclock);
             },
             else => {},
         }

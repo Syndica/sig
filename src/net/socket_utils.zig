@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 
@@ -13,16 +14,23 @@ const UdpSocket = @import("zig-network").Socket;
 pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE: []const u8 = "socket_utils";
+
 pub fn readSocket(
     socket_: UdpSocket,
     incoming_channel: *Channel(Packet),
-    logger: Logger,
+    logger_: Logger,
     comptime needs_exit_order: bool,
     counter: *Atomic(if (needs_exit_order) usize else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
+    const logger = logger_.withScope(LOG_SCOPE);
     defer {
-        logger.info().logf("leaving with: {}, {}, {}", .{ incoming_channel.len(), counter.load(.acquire), idx });
+        logger.info().logf(
+            "leaving with: {}, {}, {}",
+            .{ incoming_channel.len(), counter.load(.acquire), idx },
+        );
         if (needs_exit_order) {
             counter.store(idx + 1, .release);
         }
@@ -51,11 +59,12 @@ pub fn readSocket(
 pub fn sendSocket(
     socket: UdpSocket,
     outgoing_channel: *Channel(Packet),
-    logger: Logger,
+    logger_: Logger,
     comptime needs_exit_order: bool,
     counter: *Atomic(if (needs_exit_order) usize else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
+    const logger = logger_.withScope(LOG_SCOPE);
     defer {
         if (needs_exit_order) {
             // exit the next service in the chain
@@ -152,7 +161,7 @@ pub const BenchmarkPacketProcessing = struct {
 
     pub fn benchmarkReadSocket(bench_args: BenchmarkArgs) !sig.time.Duration {
         const n_packets = bench_args.n_packets;
-        const allocator = std.heap.c_allocator;
+        const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
 
         var channel = try Channel(Packet).init(allocator);
         defer channel.deinit();
@@ -173,7 +182,11 @@ pub const BenchmarkPacketProcessing = struct {
             counter.store(true, .release);
             handle.join();
         }
-        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ &channel, n_packets });
+        var recv_handle = try std.Thread.spawn(
+            .{},
+            benchmarkChannelRecv,
+            .{ &channel, n_packets },
+        );
 
         var prng = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -211,4 +224,10 @@ pub fn benchmarkChannelRecv(
             count += 1;
         }
     }
+}
+
+test "benchmark packet processing" {
+    _ = try BenchmarkPacketProcessing.benchmarkReadSocket(.{
+        .n_packets = 100_000,
+    });
 }

@@ -172,7 +172,7 @@ pub const PruneData = struct {
             .wallclock = self.wallclock,
         };
         const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
-        if (!self.signature.verify(self.pubkey, out)) {
+        if (!try self.signature.verify(self.pubkey, out)) {
             return error.InvalidSignature;
         }
     }
@@ -187,7 +187,8 @@ test "gossip.message: push message serialization is predictable" {
     const msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
     const empty_size = bincode.sizeOf(msg, .{});
 
-    const value = try SignedGossipData.initRandom(prng.random(), &(try KeyPair.create(null)));
+    const keypair = try KeyPair.create(null);
+    const value = SignedGossipData.initRandom(prng.random(), &keypair);
     const value_size = bincode.sizeOf(value, .{});
     try values.append(value);
     try std.testing.expect(values.items.len == 1);
@@ -282,25 +283,21 @@ test "gossip.message: pull request serializes and deserializes" {
         .wallclock = 0,
         .shred_version = 0,
     };
-    const data = GossipData{
+    const value = SignedGossipData.initSigned(&keypair, .{
         .LegacyContactInfo = legacy_contact_info,
-    };
-    const value = try SignedGossipData.initSigned(data, &keypair);
+    });
 
     var filter = GossipPullFilter.init(testing.allocator);
     defer filter.deinit();
 
-    const pull = GossipMessage{ .PullRequest = .{
-        filter,
-        value,
-    } };
+    const pull: GossipMessage = .{ .PullRequest = .{ filter, value } };
 
     var buf = [_]u8{0} ** 1232;
     const serialized = try bincode.writeToSlice(buf[0..], pull, bincode.Params.standard);
     try testing.expectEqualSlices(u8, rust_bytes[0..], serialized);
 
     const deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
-    try testing.expect(std.meta.eql(pull, deserialized));
+    try std.testing.expectEqualDeep(pull, deserialized);
 }
 
 test "gossip.message: push message serializes and deserializes correctly" {
@@ -310,22 +307,19 @@ test "gossip.message: push message serializes and deserializes correctly" {
     const id = Pubkey.fromPublicKey(&pk);
 
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
-    const unspecified_addr = SocketAddr.UNSPECIFIED;
-
-    var buf = [_]u8{0} ** 1024;
 
     const legacy_contact_info = LegacyContactInfo{
         .id = id,
         .gossip = gossip_addr,
-        .turbine_recv = unspecified_addr,
-        .turbine_recv_quic = unspecified_addr,
-        .repair = unspecified_addr,
-        .tpu = unspecified_addr,
-        .tpu_forwards = unspecified_addr,
-        .tpu_vote = unspecified_addr,
-        .rpc = unspecified_addr,
-        .rpc_pubsub = unspecified_addr,
-        .serve_repair = unspecified_addr,
+        .turbine_recv = SocketAddr.UNSPECIFIED,
+        .turbine_recv_quic = SocketAddr.UNSPECIFIED,
+        .repair = SocketAddr.UNSPECIFIED,
+        .tpu = SocketAddr.UNSPECIFIED,
+        .tpu_forwards = SocketAddr.UNSPECIFIED,
+        .tpu_vote = SocketAddr.UNSPECIFIED,
+        .rpc = SocketAddr.UNSPECIFIED,
+        .rpc_pubsub = SocketAddr.UNSPECIFIED,
+        .serve_repair = SocketAddr.UNSPECIFIED,
         .wallclock = 0,
         .shred_version = 0,
     };
@@ -334,12 +328,31 @@ test "gossip.message: push message serializes and deserializes correctly" {
         .LegacyContactInfo = legacy_contact_info,
     };
 
-    var rust_bytes = [_]u8{ 2, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 1, 0, 0, 0, 0, 0, 0, 0, 247, 119, 8, 235, 122, 255, 148, 105, 239, 205, 20, 32, 112, 227, 208, 92, 37, 18, 5, 71, 105, 58, 203, 18, 69, 196, 217, 80, 56, 47, 2, 45, 166, 139, 244, 114, 132, 206, 156, 187, 206, 205, 0, 176, 167, 196, 11, 17, 22, 77, 142, 176, 215, 8, 110, 221, 30, 206, 219, 80, 196, 217, 118, 13, 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    const gossip_value = try SignedGossipData.initSigned(data, &kp);
+    const rust_bytes = [_]u8{
+        2,   0,   0,   0,   138, 136, 227, 221, 116, 9,   241, 149, 253, 82,  219, 45,
+        60,  186, 93,  114, 202, 103, 9,   191, 29,  148, 18,  27,  243, 116, 136, 1,
+        180, 15,  111, 92,  1,   0,   0,   0,   0,   0,   0,   0,   247, 119, 8,   235,
+        122, 255, 148, 105, 239, 205, 20,  32,  112, 227, 208, 92,  37,  18,  5,   71,
+        105, 58,  203, 18,  69,  196, 217, 80,  56,  47,  2,   45,  166, 139, 244, 114,
+        132, 206, 156, 187, 206, 205, 0,   176, 167, 196, 11,  17,  22,  77,  142, 176,
+        215, 8,   110, 221, 30,  206, 219, 80,  196, 217, 118, 13,  0,   0,   0,   0,
+        138, 136, 227, 221, 116, 9,   241, 149, 253, 82,  219, 45,  60,  186, 93,  114,
+        202, 103, 9,   191, 29,  148, 18,  27,  243, 116, 136, 1,   180, 15,  111, 92,
+        0,   0,   0,   0,   127, 0,   0,   1,   210, 4,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+    };
+    const gossip_value = SignedGossipData.initSigned(&kp, data);
     var values = [_]SignedGossipData{gossip_value};
     const pushmsg = GossipMessage{ .PushMessage = .{ id, &values } };
-    var bytes = try bincode.writeToSlice(buf[0..], pushmsg, bincode.Params.standard);
-    try testing.expectEqualSlices(u8, bytes[0..bytes.len], &rust_bytes);
+
+    var buf = [_]u8{0} ** 1024;
+    const bytes = try bincode.writeToSlice(&buf, pushmsg, bincode.Params.standard);
+    try testing.expectEqualSlices(u8, &rust_bytes, bytes);
 }
 
 test "gossip.message: Protocol.PullRequest.ContactInfo signature is valid" {

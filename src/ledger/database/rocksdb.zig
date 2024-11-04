@@ -2,6 +2,7 @@ const std = @import("std");
 const rocks = @import("rocksdb");
 const sig = @import("../../sig.zig");
 const database = @import("lib.zig");
+const build_options = @import("build-options");
 
 const Allocator = std.mem.Allocator;
 
@@ -9,22 +10,28 @@ const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
 const IteratorDirection = database.interface.IteratorDirection;
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 const ReturnType = sig.utils.types.ReturnType;
 
 const key_serializer = database.interface.key_serializer;
 const value_serializer = database.interface.value_serializer;
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE: []const u8 = "rocksdb";
+
 pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         allocator: Allocator,
         db: rocks.DB,
-        logger: Logger,
+        logger: ScopedLogger(LOG_SCOPE),
         cf_handles: []const rocks.ColumnFamilyHandle,
         path: []const u8,
 
         const Self = @This();
 
-        pub fn open(allocator: Allocator, logger: Logger, path: []const u8) Error!Self {
+        pub fn open(allocator: Allocator, logger_: Logger, path: []const u8) Error!Self {
+            const logger = logger_.withScope(LOG_SCOPE);
+            logger.info().log("Initializing RocksDB");
             const owned_path = try allocator.dupe(u8, path);
 
             // allocate cf descriptions
@@ -133,7 +140,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 .{ &self.db, self.cf_handles[cf.find(column_families)], key_bytes.data },
             ) orelse return null;
             return .{
-                .allocator = val_bytes.allocator,
+                .deinitializer = .{ .rocksdb = val_bytes.free },
                 .data = val_bytes.data,
             };
         }
@@ -179,7 +186,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn commit(self: *Self, batch: WriteBatch) Error!void {
+        pub fn commit(self: *Self, batch: *WriteBatch) Error!void {
             return callRocks(self.logger, rocks.DB.write, .{ &self.db, batch.inner });
         }
 
@@ -275,7 +282,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             return struct {
                 allocator: Allocator,
                 inner: rocks.Iterator,
-                logger: Logger,
+                logger: ScopedLogger(LOG_SCOPE),
 
                 /// Calling this will free all slices returned by the iterator
                 pub fn deinit(self: *@This()) void {
@@ -312,8 +319,8 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 pub fn nextBytes(self: *@This()) Error!?[2]BytesRef {
                     const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
                     return if (entry) |kv| .{
-                        .{ .allocator = null, .data = kv[0].data },
-                        .{ .allocator = null, .data = kv[1].data },
+                        .{ .deinitializer = null, .data = kv[0].data },
+                        .{ .deinitializer = null, .data = kv[1].data },
                     } else null;
                 }
             };
@@ -331,7 +338,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     };
 }
 
-fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
+fn callRocks(logger: ScopedLogger(LOG_SCOPE), comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
     var err_str: ?rocks.Data = null;
     return @call(.auto, func, args ++ .{&err_str}) catch |e| {
         logger.err().logf("{} - {s}", .{ e, err_str.? });
@@ -339,6 +346,8 @@ fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@
     };
 }
 
-test "rocksdb database" {
-    try database.interface.testDatabase(RocksDB);
+comptime {
+    if (build_options.blockstore_db == .rocksdb) {
+        _ = &database.interface.testDatabase(RocksDB);
+    }
 }

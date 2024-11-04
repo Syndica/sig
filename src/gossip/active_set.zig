@@ -101,7 +101,10 @@ pub const ActiveSet = struct {
         origin: Pubkey,
         table: *const GossipTable,
     ) error{OutOfMemory}!std.ArrayList(EndPoint) {
-        var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(allocator, GOSSIP_PUSH_FANOUT);
+        var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(
+            allocator,
+            GOSSIP_PUSH_FANOUT,
+        );
         errdefer active_set_endpoints.deinit();
 
         var iter = self.peers.iterator();
@@ -145,10 +148,10 @@ test "init/denit" {
         const data = LegacyContactInfo.initRandom(prng.random());
         try gossip_peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(data));
 
-        var keypair = try KeyPair.create(null);
-        const value = try SignedGossipData.initSigned(.{
+        const keypair = try KeyPair.create(null);
+        const value = SignedGossipData.initSigned(&keypair, .{
             .LegacyContactInfo = data,
-        }, &keypair);
+        });
         _ = try table.insert(value, getWallclockMs());
     }
 

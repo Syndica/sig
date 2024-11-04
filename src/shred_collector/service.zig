@@ -11,7 +11,7 @@ const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
 const GossipTable = sig.gossip.GossipTable;
-const ScopedLogger = sig.trace.ScopedLogger;
+const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
@@ -38,7 +38,7 @@ pub const ShredCollectorConfig = struct {
 /// Resources that are required for the Shred Collector to operate.
 pub const ShredCollectorDependencies = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: Logger,
     random: Random,
     registry: *Registry(.{}),
     /// This validator's keypair

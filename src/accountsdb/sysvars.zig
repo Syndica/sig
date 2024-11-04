@@ -6,13 +6,10 @@ const ArrayList = std.ArrayList;
 const Slot = @import("../core/time.zig").Slot;
 const Epoch = @import("../core/time.zig").Epoch;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const Hash = @import("../core/hash.zig").Hash;
 
 const StakeHistoryEntry = @import("./snapshots.zig").StakeHistoryEntry;
 const UnixTimestamp = @import("genesis_config.zig").UnixTimestamp;
-const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 
-const BitVec = @import("../bloom/bit_vec.zig").BitVec;
 const DynamicArrayBitSet = @import("../bloom/bit_set.zig").DynamicArrayBitSet;
 const BitVecConfig = @import("../bloom/bit_vec.zig").BitVecConfig;
 const bincode = @import("../bincode/bincode.zig");

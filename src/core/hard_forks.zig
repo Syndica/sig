@@ -21,7 +21,10 @@ pub const HardForks = struct {
         } else null;
 
         if (maybe_index) |index| {
-            self.hard_forks.items[index] = .{ .slot = new_slot, .count = self.hard_forks.items[index].count +| 1 };
+            self.hard_forks.items[index] = .{
+                .slot = new_slot,
+                .count = self.hard_forks.items[index].count +| 1,
+            };
         } else {
             try self.hard_forks.append(.{ .slot = new_slot, .count = 1 });
         }

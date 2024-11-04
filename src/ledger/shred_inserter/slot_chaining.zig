@@ -55,7 +55,14 @@ pub fn handleChaining(
     var new_chained_slots = AutoHashMap(u64, SlotMeta).init(allocator);
     defer deinitMapRecursive(&new_chained_slots);
     for (keys[0..keep_i]) |slot| {
-        try handleChainingForSlot(allocator, db, write_batch, working_set, &new_chained_slots, slot);
+        try handleChainingForSlot(
+            allocator,
+            db,
+            write_batch,
+            working_set,
+            &new_chained_slots,
+            slot,
+        );
     }
 
     // Write all the newly changed slots in new_chained_slots to the write_batch
@@ -105,14 +112,14 @@ fn handleChainingForSlot(
             // If the parent of `slot` is a newly inserted orphan, insert it into the orphans
             // column family
             if (prev_slot_meta.isOrphan()) {
-                try write_batch.put(schema.orphans, prev_slot, true);
+                try write_batch.put(schema.orphan_slots, prev_slot, true);
             }
         }
     };
 
     // At this point this slot has received a parent, so it's no longer an orphan
     if (was_orphan_slot) {
-        try write_batch.delete(schema.orphans, slot);
+        try write_batch.delete(schema.orphan_slots, slot);
     }
 
     // If this is a newly completed slot and the parent is connected, then the

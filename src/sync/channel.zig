@@ -1,10 +1,9 @@
 const std = @import("std");
-const Atomic = std.atomic.Value;
-const Allocator = std.mem.Allocator;
-const assert = std.debug.assert;
 
 const sig = @import("../sig.zig");
 const Backoff = @import("backoff.zig").Backoff;
+const Atomic = std.atomic.Value;
+const Allocator = std.mem.Allocator;
 
 pub fn Channel(T: type) type {
     return struct {
@@ -387,7 +386,7 @@ test "spsc" {
             for (0..COUNT) |i| {
                 while (true) {
                     if (ch.receive()) |x| {
-                        assert(x == i);
+                        std.debug.assert(x == i);
                         break;
                     }
                 }
@@ -508,25 +507,25 @@ pub const BenchmarkChannel = struct {
 
     pub const args = [_]BenchmarkArgs{
         .{
-            .name = "  10k_items,   1_senders,   1_receivers ",
+            .name = "  10k_items-   1_senders-   1_receivers ",
             .n_items = 10_000,
             .n_senders = 1,
             .n_receivers = 1,
         },
         .{
-            .name = " 100k_items,   4_senders,   4_receivers ",
+            .name = " 100k_items-   4_senders-   4_receivers ",
             .n_items = 100_000,
             .n_senders = 4,
             .n_receivers = 4,
         },
         .{
-            .name = " 500k_items,   8_senders,   8_receivers ",
+            .name = " 500k_items-   8_senders-   8_receivers ",
             .n_items = 500_000,
             .n_senders = 8,
             .n_receivers = 8,
         },
         .{
-            .name = "   1m_items,  16_senders,  16_receivers ",
+            .name = "   1m_items-  16_senders-  16_receivers ",
             .n_items = 1_000_000,
             .n_senders = 16,
             .n_receivers = 16,
@@ -540,7 +539,10 @@ pub const BenchmarkChannel = struct {
         const receivers_count = argss.n_receivers;
         var timer = try sig.time.Timer.start();
 
-        const allocator = std.heap.c_allocator;
+        const allocator = if (@import("builtin").is_test)
+            std.testing.allocator
+        else
+            std.heap.c_allocator;
         var channel = try Channel(usize).init(allocator);
         defer channel.deinit();
 
@@ -549,11 +551,17 @@ pub const BenchmarkChannel = struct {
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{ &channel, sends_per_sender });
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{
+                &channel,
+                sends_per_sender,
+            });
         }
 
         while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{ &channel, receives_per_receiver });
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{
+                &channel,
+                receives_per_receiver,
+            });
         }
 
         for (0..thread_handles.len) |i| {
@@ -584,11 +592,17 @@ pub const BenchmarkChannel = struct {
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketSender, .{ &channel, sends_per_sender });
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketSender, .{
+                &channel,
+                sends_per_sender,
+            });
         }
 
         while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketReceiver, .{ &channel, receives_per_receiver });
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketReceiver, .{
+                &channel,
+                receives_per_receiver,
+            });
         }
 
         for (0..thread_handles.len) |i| {
@@ -602,3 +616,11 @@ pub const BenchmarkChannel = struct {
         return timer.read();
     }
 };
+
+test "BenchmarkChannel.benchmarkSimplePacketBetterChannel" {
+    _ = try BenchmarkChannel.benchmarkSimplePacketBetterChannel(.{
+        .n_items = 100_000,
+        .n_senders = 4,
+        .n_receivers = 4,
+    });
+}

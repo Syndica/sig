@@ -32,8 +32,12 @@
             .hash = "1220f70ac854b59315a8512861e039648d677feb4f9677bd873d6b9b7074a5906485",
         },
         .rocksdb = .{
-            .url = "https://github.com/Syndica/rocksdb-zig/archive/9c09659a5e41f226b6b8f3fa21149247eb26dfae.tar.gz",
-            .hash = "1220aeb80b2f8bb48c131ef306fe48ddfcb537210c5f77742e921cbf40fc4c19b41e",
+            .url = "https://github.com/Syndica/rocksdb-zig/archive/5783fb073d45e376be308e9ece32805d71079fe3.tar.gz",
+            .hash = "1220b27e10217b145f498f2af2bc34a4b04aa0b6f4866428fb379ee6580d1d097346",
+        },
+        .prettytable = .{
+            .url = "https://github.com/dying-will-bullet/prettytable-zig/archive/46b6ad9b5970def35fa43c9613cd244f28862fa9.tar.gz",
+            .hash = "122098d444c9c7112c66481e7655bb5389829c67e04b280a029200545e1971187443",
         },
     },
 }

@@ -49,7 +49,7 @@ const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 pub const BlockstoreReader = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     db: BlockstoreDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
@@ -70,7 +70,7 @@ pub const BlockstoreReader = struct {
     ) !Self {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .db = db,
             .rpc_api_metrics = try registry.initStruct(BlockstoreRpcApiMetrics),
             .metrics = try registry.initStruct(BlockstoreReaderMetrics),
@@ -101,8 +101,8 @@ pub const BlockstoreReader = struct {
     pub fn rootedSlotIterator(
         self: *Self,
         slot: Slot,
-    ) !BlockstoreDB.Iterator(schema.roots, .forward) {
-        return self.db.iterator(schema.roots, .forward, slot);
+    ) !BlockstoreDB.Iterator(schema.rooted_slots, .forward) {
+        return self.db.iterator(schema.rooted_slots, .forward, slot);
     }
 
     /// Determines if we can iterate from `starting_slot` to >= `ending_slot` by full slots
@@ -369,7 +369,7 @@ pub const BlockstoreReader = struct {
     ///
     /// Analogous to [get_first_available_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2556)
     pub fn getFirstAvailableBlock(self: *Self) !Slot {
-        var root_iterator = try self.db.iterator(schema.roots, .forward, try self.lowestSlotWithGenesis());
+        var root_iterator = try self.db.iterator(schema.rooted_slots, .forward, try self.lowestSlotWithGenesis());
         defer root_iterator.deinit();
         const first_root = try root_iterator.nextKey() orelse return 0;
         // If the first root is slot 0, it is genesis. Genesis is always complete, so it is correct
@@ -1218,7 +1218,7 @@ pub const BlockstoreReader = struct {
     /// agave handles DB errors with placeholder values, which seems like a mistake.
     /// this implementation instead returns errors.
     pub fn isRoot(self: *Self, slot: Slot) !bool {
-        return try self.db.get(self.allocator, schema.roots, slot) orelse false;
+        return try self.db.get(self.allocator, schema.rooted_slots, slot) orelse false;
     }
 
     /// Returns true if a slot is between the rooted slot bounds of the ledger, but has not itself
@@ -1230,10 +1230,10 @@ pub const BlockstoreReader = struct {
     /// agave handles DB errors with placeholder values, which seems like a mistake.
     /// this implementation instead returns errors.
     pub fn isSkipped(self: *Self, slot: Slot) !bool {
-        var iterator = try self.db.iterator(schema.roots, .forward, 0);
+        var iterator = try self.db.iterator(schema.rooted_slots, .forward, 0);
         defer iterator.deinit();
         const lowest_root = try iterator.nextKey() orelse 0;
-        return if (try self.db.get(self.allocator, schema.roots, slot)) |_|
+        return if (try self.db.get(self.allocator, schema.rooted_slots, slot)) |_|
             false
         else
             slot < self.max_root.load(.monotonic) and slot > lowest_root;
@@ -1548,7 +1548,7 @@ test "getLatestOptimisticSlots" {
                 .timestamp = 10,
             },
         });
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         const get_hash, const ts = (try reader.getOptimisticSlot(1)).?;
         try std.testing.expectEqual(hash, get_hash);
@@ -1573,7 +1573,7 @@ test "getLatestOptimisticSlots" {
                 .timestamp = 100,
             },
         });
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         const get_hash, const ts = (try reader.getOptimisticSlot(10)).?;
         try std.testing.expectEqual(hash, get_hash);
@@ -1619,7 +1619,7 @@ test "getFirstDuplicateProof" {
         var write_batch = try db.initWriteBatch();
         defer write_batch.deinit();
         try write_batch.put(schema.duplicate_slots, 19, proof);
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         const slot, const proof2 = (try reader.getFirstDuplicateProof()).?;
         defer bincode.free(allocator, proof2);
@@ -1653,7 +1653,7 @@ test "isDead" {
         var write_batch = try db.initWriteBatch();
         defer write_batch.deinit();
         try write_batch.put(schema.dead_slots, 19, true);
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
     }
     try std.testing.expectEqual(try reader.isDead(19), true);
 
@@ -1661,7 +1661,7 @@ test "isDead" {
         var write_batch = try db.initWriteBatch();
         defer write_batch.deinit();
         try write_batch.put(schema.dead_slots, 19, false);
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
     }
     try std.testing.expectEqual(try reader.isDead(19), false);
 }
@@ -1688,7 +1688,7 @@ test "getBlockHeight" {
     var write_batch = try db.initWriteBatch();
     defer write_batch.deinit();
     try write_batch.put(schema.block_height, 19, 19);
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // should succeeed
     const height = try reader.getBlockHeight(19);
@@ -1717,7 +1717,7 @@ test "getRootedBlockTime" {
     var write_batch = try db.initWriteBatch();
     defer write_batch.deinit();
     try write_batch.put(schema.blocktime, 19, 19);
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // not rooted
     const r = reader.getRootedBlockTime(19);
@@ -1726,8 +1726,8 @@ test "getRootedBlockTime" {
     // root it
     var write_batch2 = try db.initWriteBatch();
     defer write_batch2.deinit();
-    try write_batch2.put(schema.roots, 19, true);
-    try db.commit(write_batch2);
+    try write_batch2.put(schema.rooted_slots, 19, true);
+    try db.commit(&write_batch2);
 
     // should succeeed
     const time = try reader.getRootedBlockTime(19);
@@ -1781,7 +1781,7 @@ test "slotMetaIterator" {
 
         try slot_metas.append(slot_meta);
     }
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     var iter = try reader.slotMetaIterator(0);
     defer iter.deinit();
@@ -1819,9 +1819,9 @@ test "rootedSlotIterator" {
     defer write_batch.deinit();
     const roots: [3]Slot = .{ 2, 3, 4 };
     for (roots) |slot| {
-        try write_batch.put(schema.roots, slot, true);
+        try write_batch.put(schema.rooted_slots, slot, true);
     }
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     var iter = try reader.rootedSlotIterator(0);
     defer iter.deinit();
@@ -1871,7 +1871,10 @@ test "slotRangeConnected" {
         // connect the chain
         parent_slot = slot;
     }
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
+
+    var write_batch2 = try db.initWriteBatch();
+    defer write_batch2.deinit();
 
     const is_connected = try reader.slotRangeConnected(1, 3);
     try std.testing.expectEqual(true, is_connected);
@@ -1881,7 +1884,7 @@ test "slotRangeConnected" {
     defer slot_meta.deinit();
     // ensure isFull() is FALSE
     slot_meta.last_index = 1;
-    try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
+    try write_batch2.put(schema.slot_meta, slot_meta.slot, slot_meta);
 
     // this should still pass
     try std.testing.expectEqual(true, try reader.slotRangeConnected(1, 3));
@@ -1923,7 +1926,7 @@ test "highestSlot" {
             shred_slot,
             slot_meta,
         );
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         const highest_slot = (try reader.highestSlot()).?;
         try std.testing.expectEqual(slot_meta.slot, highest_slot);
@@ -1942,7 +1945,7 @@ test "highestSlot" {
             slot_meta2.slot,
             slot_meta2,
         );
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         const highest_slot = (try reader.highestSlot()).?;
         try std.testing.expectEqual(slot_meta2.slot, highest_slot);
@@ -1989,7 +1992,7 @@ test "lowestSlot" {
         shred_slot,
         slot_meta,
     );
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     const lowest_slot = try reader.lowestSlot();
     try std.testing.expectEqual(slot_meta.slot, lowest_slot);
@@ -2038,7 +2041,7 @@ test "isShredDuplicate" {
         .{ shred_slot, shred_index },
         shred_payload,
     );
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // should now be a duplicate
     const other_payload = (try reader.isShredDuplicate(shred)).?;
@@ -2099,7 +2102,7 @@ test "findMissingDataIndexes" {
         shred_slot,
         slot_meta,
     );
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     var indexes = try reader.findMissingDataIndexes(
         slot_meta.slot,
@@ -2163,13 +2166,14 @@ test "getCodeShred" {
         .{ shred_slot, shred_index },
         shred.payload(),
     );
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // correct data read
-    const read_bytes_ref = try reader.getCodeShred(shred_slot, shred_index) orelse {
+    const code_shred = try reader.getCodeShred(shred_slot, shred_index) orelse {
         return error.NullDataShred;
     };
-    try std.testing.expectEqualSlices(u8, shred.payload(), read_bytes_ref.data);
+    defer code_shred.deinit();
+    try std.testing.expectEqualSlices(u8, shred.payload(), code_shred.data);
 
     // incorrect slot
     if (try reader.getCodeShred(shred_slot + 10, shred_index) != null) {
@@ -2232,16 +2236,17 @@ test "getDataShred" {
         .{ shred_slot, shred_index },
         shred_payload,
     );
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // correct data read
-    const read_bytes_ref = try reader.getDataShred(
+    const data_shred = try reader.getDataShred(
         shred_slot,
         shred_index,
     ) orelse {
         return error.NullDataShred;
     };
-    try std.testing.expectEqualSlices(u8, shred_payload, read_bytes_ref.data);
+    defer data_shred.deinit();
+    try std.testing.expectEqualSlices(u8, shred_payload, data_shred.data);
 
     // incorrect slot
     if (try reader.getDataShred(shred_slot + 10, shred_index) != null) {

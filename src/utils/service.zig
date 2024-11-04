@@ -17,7 +17,7 @@ const ScopedLogger = sig.trace.ScopedLogger;
 /// You can add threads or state, then await all threads and
 /// clean up their state.
 pub const ServiceManager = struct {
-    logger: ScopedLogger(@typeName(@This())),
+    logger: ScopedLogger(@typeName(Self)),
     /// Threads to join.
     threads: ArrayListUnmanaged(std.Thread),
     exit: *Atomic(bool),
@@ -40,7 +40,7 @@ pub const ServiceManager = struct {
         default_spawn_config: std.Thread.SpawnConfig,
     ) Self {
         return .{
-            .logger = logger.withScope(@typeName(@This())),
+            .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
             .threads = .{},
             .arena = ArenaAllocator.init(backing_allocator),
@@ -55,7 +55,7 @@ pub const ServiceManager = struct {
     /// The function may be restarted periodically, according to default_run_config.
     pub fn spawn(
         self: *Self,
-        name: ?[]const u8,
+        comptime name: []const u8,
         comptime function: anytype,
         args: anytype,
         comptime needs_exit_order: bool,
@@ -83,7 +83,7 @@ pub const ServiceManager = struct {
     /// The function may be restarted periodically, according to the provided config.
     fn spawnCustom(
         self: *Self,
-        maybe_name: ?[]const u8,
+        comptime name: []const u8,
         run_config: ?RunConfig,
         spawn_config: std.Thread.SpawnConfig,
         comptime function: anytype,
@@ -95,16 +95,16 @@ pub const ServiceManager = struct {
             spawn_config,
             runService,
             .{
-                self.logger.unscoped(),
+                self.logger,
                 self.exit,
-                maybe_name,
+                name,
                 run_config orelse self.default_run_config,
                 function,
                 args,
             },
         );
 
-        if (maybe_name) |name| thread.setName(name) catch {};
+        thread.setName(name) catch {};
         try self.threads.append(allocator, thread);
     }
 
@@ -112,7 +112,7 @@ pub const ServiceManager = struct {
     /// in the shutdown chain to the arguments.
     fn spawnCustomIdx(
         self: *Self,
-        maybe_name: ?[]const u8,
+        comptime name: []const u8,
         run_config: ?RunConfig,
         spawn_config: std.Thread.SpawnConfig,
         comptime function: anytype,
@@ -124,16 +124,16 @@ pub const ServiceManager = struct {
             spawn_config,
             runService,
             .{
-                self.logger.unscoped(),
+                self.logger,
                 self.exit,
-                maybe_name,
+                name,
                 run_config orelse self.default_run_config,
                 function,
                 args ++ .{(self.threads.items.len + 1)},
             },
         );
 
-        if (maybe_name) |name| thread.setName(name) catch {};
+        thread.setName(name) catch {};
         try self.threads.append(allocator, thread);
     }
 
@@ -187,7 +187,7 @@ pub const ReturnHandler = struct {
 /// It's guaranteed to run at least once in order to not race initialization with
 /// the `exit` flag.
 pub fn runService(
-    logger: Logger,
+    logger: ScopedLogger(@typeName(ServiceManager)),
     exit: *Atomic(bool),
     maybe_name: ?[]const u8,
     config: RunConfig,
