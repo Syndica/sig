@@ -154,6 +154,16 @@ pub fn main() !void {
         );
     }
 
+    if (std.mem.startsWith(u8, filter, "bincode") or run_all_benchmarks) {
+        try benchmarkCSV(
+            allocator,
+            logger,
+            @import("bincode/benchmarks.zig").BenchmarkEntry,
+            max_time_per_bench,
+            .Nanos,
+        );
+    }
+
     // NOTE: we dont support CSV output on this method so all results are printed as debug
     if (std.mem.startsWith(u8, filter, "geyser") or run_all_benchmarks) {
         logger.debug().log("Geyser Streaming Benchmark:");
