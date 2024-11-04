@@ -87,10 +87,11 @@ pub fn run(
         try retransmit_sockets.append(socket);
     }
 
-    var wait_group: std.Thread.WaitGroup = .{};
-    defer wait_group.wait();
+    var thread_handles = std.ArrayList(std.Thread).init(allocator);
+    defer thread_handles.deinit();
 
-    wait_group.spawnManager(
+    try thread_handles.append(try std.Thread.spawn(
+        .{},
         receiveShreds,
         .{
             allocator,
@@ -106,10 +107,11 @@ pub fn run(
             &metrics,
             overwrite_stake_for_testing,
         },
-    );
+    ));
 
     for (0..num_retransmit_threads) |_| {
-        wait_group.spawnManager(
+        try thread_handles.append(try std.Thread.spawn(
+            .{},
             retransmitShreds,
             .{
                 allocator,
@@ -118,11 +120,12 @@ pub fn run(
                 &metrics,
                 exit,
             },
-        );
+        ));
     }
 
     for (retransmit_sockets.items) |socket| {
-        wait_group.spawnManager(
+        try thread_handles.append(try std.Thread.spawn(
+            .{},
             socket_utils.sendSocket,
             .{
                 socket,
@@ -132,8 +135,10 @@ pub fn run(
                 exit,
                 {},
             },
-        );
+        ));
     }
+
+    for (thread_handles.items) |thread| thread.join();
 }
 
 /// Receive shreds from the network, deduplicate them, and then package
@@ -336,7 +341,7 @@ fn retransmitShreds(
         );
         defer children.deinit();
         defer retransmit_info.turbine_tree.releaseUnsafe();
-        metrics.get_children_nanos.set(get_retransmit_children_timer.read().asNanos());
+        metrics.turbine_tree_get_children_nanos.set(get_retransmit_children_timer.read().asNanos());
 
         var children_with_addresses_count: usize = 0;
         for (children.items) |child| {
