@@ -54,9 +54,7 @@ const WeightedAliasSampler = sig.rand.WeightedAliasSampler;
 
 const RwMux = sig.sync.RwMux;
 
-const Level = sig.trace.level.Level;
 const Logger = sig.trace.log.Logger;
-const StandardErrLogger = sig.trace.log.ChannelPrintLogger;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
