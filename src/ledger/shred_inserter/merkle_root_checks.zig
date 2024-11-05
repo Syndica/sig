@@ -9,7 +9,6 @@ const Allocator = std.mem.Allocator;
 
 const ErasureSetId = sig.ledger.shred.ErasureSetId;
 const Hash = sig.core.Hash;
-const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 const Slot = sig.core.Slot;
 
