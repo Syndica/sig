@@ -1242,6 +1242,7 @@ test "insertShreds 100 shreds from mainnet" {
             schema.data_shred,
             .{ shred.commonHeader().slot, shred.commonHeader().index },
         );
+        defer if (bytes) |b| b.deinit();
         try std.testing.expectEqualSlices(u8, shred.payload(), bytes.?.data);
     }
 }
@@ -1420,6 +1421,12 @@ test "merkle root metas coding" {
         try state.db.commit(&write_batch);
     }
 
+    for (insert_state.duplicate_shreds.items) |duplicate| {
+        switch (duplicate) {
+            .Exists => |s| s.deinit(),
+            inline else => |sc| insert_state.allocator.free(sc.conflict),
+        }
+    }
     insert_state.duplicate_shreds.clearRetainingCapacity();
 
     { // third shred (different index, should succeed)
