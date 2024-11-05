@@ -2168,10 +2168,11 @@ test "getCodeShred" {
     try db.commit(write_batch);
 
     // correct data read
-    const read_bytes_ref = try reader.getCodeShred(shred_slot, shred_index) orelse {
+    const code_shred = try reader.getCodeShred(shred_slot, shred_index) orelse {
         return error.NullDataShred;
     };
-    try std.testing.expectEqualSlices(u8, shred.payload(), read_bytes_ref.data);
+    defer code_shred.deinit();
+    try std.testing.expectEqualSlices(u8, shred.payload(), code_shred.data);
 
     // incorrect slot
     if (try reader.getCodeShred(shred_slot + 10, shred_index) != null) {
@@ -2237,13 +2238,14 @@ test "getDataShred" {
     try db.commit(write_batch);
 
     // correct data read
-    const read_bytes_ref = try reader.getDataShred(
+    const data_shred = try reader.getDataShred(
         shred_slot,
         shred_index,
     ) orelse {
         return error.NullDataShred;
     };
-    try std.testing.expectEqualSlices(u8, shred_payload, read_bytes_ref.data);
+    defer data_shred.deinit();
+    try std.testing.expectEqualSlices(u8, shred_payload, data_shred.data);
 
     // incorrect slot
     if (try reader.getDataShred(shred_slot + 10, shred_index) != null) {
