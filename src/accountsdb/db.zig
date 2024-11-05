@@ -1608,7 +1608,6 @@ pub const AccountsDB = struct {
 
         for (delete_queue.items) |account_file| {
             const slot = account_file.slot;
-            self.logger.info().logf("deleting slot: {}...", .{slot});
             account_file.deinit();
 
             // delete file from disk
@@ -1619,6 +1618,9 @@ pub const AccountsDB = struct {
                     .{ slot, account_file.id, @errorName(err) },
                 );
             };
+        }
+        if (delete_queue.items.len > 0) { 
+            self.logger.info().logf("deleted {} account files", .{ delete_queue.items.len });
         }
 
         {
