@@ -129,7 +129,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             };
 
             return .{
-                .allocator = txnResetter(txn),
+                .allocator = txnAborter(txn),
                 .data = fromVal(item),
             };
         }
@@ -372,7 +372,16 @@ fn fromVal(value: c.MDB_val) []const u8 {
     return ptr[0..value.mv_size];
 }
 
-fn txnResetter(txn: *c.MDB_txn) Allocator {
+/// Returns an `Allocator` that frees memory by aborting the transaction
+/// that owns the memory. It cannot allocate anything.
+///
+/// This exists to be the Allocator used in a `BytesRef` instance
+///
+/// Calling `free` with any input will free all memory that was allocated
+/// by the transaction. This means you cannot manage lifetimes of multiple
+/// items separately. Ideally you would only use this when you've only
+/// read exactly one item in the transaction.
+fn txnAborter(txn: *c.MDB_txn) Allocator {
     const vtable = .{
         .alloc = &sig.utils.allocators.noAlloc,
         .resize = &Allocator.noResize,
