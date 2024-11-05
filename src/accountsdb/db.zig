@@ -140,6 +140,10 @@ pub const AccountsDB = struct {
     // TODO: move to Bank struct
     bank_hash_stats: RwMux(BankHashStatsMap),
 
+    debug: if (debug_enabled) struct {
+        is_loading_thread: bool,
+    } else void,
+
     const Self = @This();
 
     pub const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
@@ -147,6 +151,8 @@ pub const AccountsDB = struct {
     pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
+
+    const debug_enabled = std.debug.runtime_safety or builtin.is_test;
 
     pub const Gossip = struct {
         my_keypair: *const KeyPair,
@@ -228,6 +234,10 @@ pub const AccountsDB = struct {
             .latest_snapshot_info = RwMux(?SnapshotGenerationInfo).init(null),
 
             .bank_hash_stats = RwMux(BankHashStatsMap).init(.{}),
+
+            .debug = if (debug_enabled) .{
+                .is_loading_thread = false,
+            },
         };
     }
 
@@ -362,58 +372,12 @@ pub const AccountsDB = struct {
         }
 
         // setup the parallel indexing
-        var loading_threads = try ArrayList(AccountsDB).initCapacity(
-            self.allocator,
-            n_parse_threads,
-        );
-        defer loading_threads.deinit();
-        defer {
-            // at this defer point, there are three memory components we care about
-            // 1) the account references (AccountRef)
-            // 2) the hashmap of refs (Map(Pubkey, *AccountRef))
-            // 3) the file maps Map(FileId, AccountFile)
-            //
-            // each loading thread will have its own copy of these
-            // what happens:
-            // 2) and 3) will be copied into the main index thread and so we can deinit them
-            // 1) will continue to exist on the heap and its ownership is given
-            // the main accounts-db index
-            for (loading_threads.items) |*loading_thread| {
-                // NOTE: deinit hashmap, dont close the files
-                const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
-                defer file_map_lg.unlock();
-                file_map.deinit(per_thread_allocator);
 
-                // NOTE: important `false` (ie, 1)
-                loading_thread.account_index.reference_allocator = .{ .ram = per_thread_allocator }; // dont destory the **disk** allocator (since its shared)
-                loading_thread.account_index.deinit(false);
+        const loading_threads = try self.allocator.alloc(AccountsDB, n_parse_threads);
+        defer self.allocator.free(loading_threads);
 
-                if (loading_thread.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-                    const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-                    defer accounts_cache_lg.unlock();
-                    accounts_cache.deinit();
-                }
-            }
-        }
-
-        for (0..n_parse_threads) |_| {
-            var thread_db = try AccountsDB.init(.{
-                .allocator = per_thread_allocator,
-                .snapshot_dir = self.snapshot_dir,
-                .gossip = self.gossip,
-                .geyser_writer = self.geyser_writer,
-                .number_of_index_shards = self.number_of_index_shards,
-                .lru_size = self.lru_size,
-
-                .logger = .noop, // dont spam the logs with init information (we set it after)
-                .index_allocation = .ram, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
-            });
-            thread_db.logger = self.logger;
-            // set the disk allocator after init() doesnt create a new one
-            thread_db.account_index.reference_allocator = self.account_index.reference_allocator;
-
-            loading_threads.appendAssumeCapacity(thread_db);
-        }
+        try initLoadingThreads(per_thread_allocator, loading_threads, self);
+        defer deinitLoadingThreads(per_thread_allocator, loading_threads);
 
         self.logger.info().logf("[{d} threads]: reading and indexing accounts...", .{n_parse_threads});
         {
@@ -424,7 +388,7 @@ pub const AccountsDB = struct {
                 .data_len = n_account_files,
                 .max_threads = n_parse_threads,
                 .params = .{
-                    loading_threads.items,
+                    loading_threads,
                     accounts_dir,
                     snapshot_manifest.file_map,
                     accounts_per_file_estimate,
@@ -440,11 +404,83 @@ pub const AccountsDB = struct {
 
         self.logger.info().logf("[{d} threads]: merging thread indexes...", .{n_combine_threads});
         var merge_timer = try sig.time.Timer.start();
-        try self.mergeMultipleDBs(loading_threads.items, n_combine_threads);
+        try self.mergeMultipleDBs(loading_threads, n_combine_threads);
         self.logger.debug().logf("merging thread indexes took: {}", .{merge_timer.read()});
 
         self.logger.debug().logf("total time: {s}", .{timer.read()});
         return timer.read();
+    }
+
+    /// Initializes a slice of children `AccountsDB`s, used to divide the work of loading from a snapshot.
+    ///
+    /// If successful, the caller is responsible for calling `deinitLoadingThreads(per_thread_allocator, loading_threads)`.
+    ///
+    /// On error, all resources which were allocated before encountering the error are freed, and the caller
+    /// is to assume `loaoding_threads` points to undefined memory.
+    fn initLoadingThreads(
+        per_thread_allocator: std.mem.Allocator,
+        /// Entirely overwritten, the caller should not assume retention of any information.
+        loading_threads: []AccountsDB,
+        parent: *AccountsDB,
+    ) !void {
+        @memset(loading_threads, undefined);
+
+        for (loading_threads, 0..) |*loading_thread, init_count| {
+            errdefer deinitLoadingThreads(per_thread_allocator, loading_threads[0..init_count]);
+            loading_thread.* = try AccountsDB.init(.{
+                .allocator = per_thread_allocator,
+                .snapshot_dir = parent.snapshot_dir,
+                .gossip = parent.gossip,
+                .geyser_writer = parent.geyser_writer,
+                .number_of_index_shards = parent.number_of_index_shards,
+                .lru_size = parent.lru_size,
+
+                .logger = .noop, // dont spam the logs with init information (we set it after)
+                .index_allocation = .ram, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
+            });
+
+            loading_thread.logger = parent.logger;
+            // set the disk allocator after init() doesnt create a new one
+            loading_thread.account_index.reference_allocator = parent.account_index.reference_allocator;
+
+            if (debug_enabled) loading_thread.debug.is_loading_thread = true;
+        }
+    }
+
+    /// At this point, there will be three groups of resources we care about per loading thread:
+    /// 1) The `AccountRef`s themselves.
+    /// 2) The ref hashmaps (`Map(Pubkey, *AccountRef)`).
+    /// 3) The account file maps (`Map(FileId, AccountFile)`).
+    ///
+    /// What happens:
+    /// 2) and 3) will be copied into the main index so we can deinit them, while 1) will
+    /// continue to exist on the heap and its ownership is given to the main index
+    fn deinitLoadingThreads(
+        per_thread_allocator: std.mem.Allocator,
+        loading_threads: []AccountsDB,
+    ) void {
+        for (loading_threads) |*loading_thread| {
+            if (debug_enabled and !loading_thread.debug.is_loading_thread) {
+                const init_fn_name = "initLoadingThreads";
+                comptime std.debug.assert(initLoadingThreads == @field(AccountsDB, init_fn_name));
+                std.debug.panic("{s} must only be called on a slice of AccountsDB initialized with {s}.", .{ @src().fn_name, init_fn_name });
+            }
+
+            // NOTE: deinit hashmap, dont close the files
+            const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
+            defer file_map_lg.unlock();
+            file_map.deinit(per_thread_allocator);
+
+            // NOTE: important `false` (ie, 1)
+            loading_thread.account_index.reference_allocator = .{ .ram = per_thread_allocator }; // dont destory the **disk** allocator (since its shared)
+            loading_thread.account_index.deinit(false);
+
+            if (loading_thread.maybe_accounts_cache_rw) |*accounts_cache_rw| {
+                const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
+                defer accounts_cache_lg.unlock();
+                accounts_cache.deinit();
+            }
+        }
     }
 
     /// multithread entrypoint into loadAndVerifyAccountsFiles.
