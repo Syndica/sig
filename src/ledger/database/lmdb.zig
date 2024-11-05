@@ -511,7 +511,6 @@ const CursorRelativeOperation = enum(c_uint) {
 
 fn result(int: isize) LmdbError!void {
     return switch (int) {
-        0 => {},
         -30799 => error.MDB_KEYEXIST,
         -30798 => error.MDB_NOTFOUND,
         -30797 => error.MDB_PAGE_NOTFOUND,
@@ -533,51 +532,13 @@ fn result(int: isize) LmdbError!void {
         -30781 => error.MDB_BAD_VALSIZE,
         -30780 => error.MDB_BAD_DBI,
         -30779 => error.MDB_PROBLEM,
-        1 => error.EPERM,
-        2 => error.ENOENT,
-        3 => error.ESRCH,
-        4 => error.EINTR,
-        5 => error.EIO,
-        6 => error.ENXIO,
-        7 => error.E2BIG,
-        8 => error.ENOEXEC,
-        9 => error.EBADF,
-        10 => error.ECHILD,
-        11 => error.EAGAIN,
-        12 => error.ENOMEM,
-        13 => error.EACCES,
-        14 => error.EFAULT,
-        15 => error.ENOTBLK,
-        16 => error.EBUSY,
-        17 => error.EEXIST,
-        18 => error.EXDEV,
-        19 => error.ENODEV,
-        20 => error.ENOTDIR,
-        21 => error.EISDIR,
-        22 => error.EINVAL,
-        23 => error.ENFILE,
-        24 => error.EMFILE,
-        25 => error.ENOTTY,
-        26 => error.ETXTBSY,
-        27 => error.EFBIG,
-        28 => error.ENOSPC,
-        29 => error.ESPIPE,
-        30 => error.EROFS,
-        31 => error.EMLINK,
-        32 => error.EPIPE,
-        33 => error.EDOM,
-        34 => error.ERANGE,
-        else => error.UnspecifiedErrorCode,
+        else => sig.utils.errors.errnoToError(@enumFromInt(int)),
     };
 }
 
 pub const LmdbOrAllocatorError = LmdbError || Allocator.Error;
 
-pub const LmdbError = error{
-    ////////////////////////////////////////////////////////
-    /// lmdb-specific errors
-    ////
-
+pub const LmdbError = sig.utils.errors.LibcError || error{
     /// Successful result
     MDB_SUCCESS,
     /// key/data pair already exists
@@ -626,86 +587,6 @@ pub const LmdbError = error{
     MDB_BAD_DBI,
     /// Unexpected problem - txn should abort
     MDB_PROBLEM,
-
-    ////////////////////////////////////////////////////////
-    /// asm-generic errors - may be thrown by lmdb
-    ////
-
-    /// Operation not permitted
-    EPERM,
-    /// No such file or directory
-    ENOENT,
-    /// No such process
-    ESRCH,
-    /// Interrupted system call
-    EINTR,
-    /// I/O error
-    EIO,
-    /// No such device or address
-    ENXIO,
-    /// Argument list too long
-    E2BIG,
-    /// Exec format error
-    ENOEXEC,
-    /// Bad file number
-    EBADF,
-    /// No child processes
-    ECHILD,
-    /// Try again
-    EAGAIN,
-    /// Out of memory
-    ENOMEM,
-    /// Permission denied
-    EACCES,
-    /// Bad address
-    EFAULT,
-    /// Block device required
-    ENOTBLK,
-    /// Device or resource busy
-    EBUSY,
-    /// File exists
-    EEXIST,
-    /// Cross-device link
-    EXDEV,
-    /// No such device
-    ENODEV,
-    /// Not a directory
-    ENOTDIR,
-    /// Is a directory
-    EISDIR,
-    /// Invalid argument
-    EINVAL,
-    /// File table overflow
-    ENFILE,
-    /// Too many open files
-    EMFILE,
-    /// Not a typewriter
-    ENOTTY,
-    /// Text file busy
-    ETXTBSY,
-    /// File too large
-    EFBIG,
-    /// No space left on device
-    ENOSPC,
-    /// Illegal seek
-    ESPIPE,
-    /// Read-only file system
-    EROFS,
-    /// Too many links
-    EMLINK,
-    /// Broken pipe
-    EPIPE,
-    /// Math argument out of domain of func
-    EDOM,
-    /// Math result not representable
-    ERANGE,
-
-    ////////////////////////////////////////////////////////
-    /// errors interfacing with Lmdb
-    ////
-
-    /// Got a return value that is not specified in LMDB's header files
-    UnspecifiedErrorCode,
 };
 
 comptime {
