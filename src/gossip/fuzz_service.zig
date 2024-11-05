@@ -67,7 +67,7 @@ pub fn randomSignedGossipData(random: std.rand.Random, must_pass_sign_verificati
     const keypair = try KeyPair.create(null);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     const lci = LegacyContactInfo.default(if (must_pass_sign_verification) pubkey else Pubkey.initRandom(random));
-    return try SignedGossipData.initSigned(&keypair, .{ .LegacyContactInfo = lci });
+    return SignedGossipData.initSigned(&keypair, .{ .LegacyContactInfo = lci });
 }
 
 pub fn randomPushMessage(
@@ -123,16 +123,8 @@ pub fn randomPullRequest(
     keypair: *const KeyPair,
     to_addr: EndPoint,
 ) !Packet {
-    const value = try SignedGossipData.initSigned(keypair, .{
-        .LegacyContactInfo = contact_info,
-    });
-
-    return randomPullRequestWithContactInfo(
-        allocator,
-        random,
-        to_addr,
-        value,
-    );
+    const value = SignedGossipData.initSigned(keypair, .{ .LegacyContactInfo = contact_info });
+    return randomPullRequestWithContactInfo(allocator, random, to_addr, value);
 }
 
 pub fn randomPullRequestWithContactInfo(

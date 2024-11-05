@@ -566,10 +566,11 @@ test "accounts_db.download: test remove untrusted peers" {
     var trusted_validators = try std.ArrayList(Pubkey).initCapacity(allocator, 10);
     defer trusted_validators.deinit();
 
-    for (contact_infos) |*ci| {
-        var kp = try KeyPair.create(null);
-        var data = try SignedGossipData.randomWithIndex(random, &kp, 9);
-        data.data.SnapshotHashes.from = ci.pubkey;
+    for (contact_infos) |ci| {
+        const kp = try KeyPair.create(null);
+        var snapshot_hashes = sig.gossip.data.SnapshotHashes.initRandom(random);
+        snapshot_hashes.from = ci.pubkey;
+        const data = SignedGossipData.initSigned(&kp, .{ .SnapshotHashes = snapshot_hashes });
         try trusted_validators.append(ci.pubkey);
         _ = try table.insert(data, 0);
     }
@@ -659,9 +660,10 @@ test "accounts_db.download: test finding peers" {
     try std.testing.expect(result.no_snapshot_hashes_count == 10);
 
     for (contact_infos) |*ci| {
-        var kp = try KeyPair.create(null);
-        var data = try SignedGossipData.randomWithIndex(random, &kp, 9);
-        data.data.SnapshotHashes.from = ci.pubkey;
+        const kp = try KeyPair.create(null);
+        var snapshot_hashes = sig.gossip.data.SnapshotHashes.initRandom(random);
+        snapshot_hashes.from = ci.pubkey;
+        const data = SignedGossipData.initSigned(&kp, .{ .SnapshotHashes = snapshot_hashes });
         _ = try table.insert(data, 0);
     }
 

@@ -84,13 +84,15 @@ pub const AccountsDB = struct {
     /// Not closed by the `AccountsDB`, but must live at least as long as it.
     snapshot_dir: std.fs.Dir,
 
-    /// Reference to the relevant parts of the gossip service, used to push updates to snapshot info.
-    gossip: ?Gossip,
+    /// Reference to the gossip service's message push queue, used to push updates to snapshot info.
+    gossip_push_msg_queue: ?*sig.sync.Mux(std.ArrayList(sig.gossip.GossipData)),
 
-    // some initialization data
+    // some static data
 
     number_of_index_shards: usize,
     lru_size: ?usize,
+    /// Used to initialize new gossip data (namely snapshot hashes).
+    my_pubkey: Pubkey,
 
     // internal structures & data
 
@@ -154,23 +156,12 @@ pub const AccountsDB = struct {
 
     const debug_enabled = std.debug.runtime_safety or builtin.is_test;
 
-    pub const Gossip = struct {
-        my_keypair: *const KeyPair,
-        push_msg_queue_mux: *sig.sync.Mux(std.ArrayList(sig.gossip.SignedGossipData)),
-
-        pub fn fromService(gossip_service: *sig.gossip.GossipService) Gossip {
-            return .{
-                .my_keypair = &gossip_service.my_keypair,
-                .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
-            };
-        }
-    };
-
     pub const InitParams = struct {
         allocator: std.mem.Allocator,
         logger: Logger,
         snapshot_dir: std.fs.Dir,
-        gossip: ?Gossip,
+        my_pubkey: Pubkey,
+        gossip_push_msg_queue: ?*sig.sync.Mux(std.ArrayList(sig.gossip.GossipData)),
         geyser_writer: ?*GeyserWriter,
         index_allocation: AccountIndex.AllocatorConfig.Tag,
         number_of_index_shards: usize,
@@ -214,10 +205,11 @@ pub const AccountsDB = struct {
             .logger = params.logger,
             .geyser_writer = params.geyser_writer,
             .snapshot_dir = params.snapshot_dir,
-            .gossip = params.gossip,
+            .gossip_push_msg_queue = params.gossip_push_msg_queue,
 
             .number_of_index_shards = params.number_of_index_shards,
             .lru_size = params.lru_size,
+            .my_pubkey = params.my_pubkey,
 
             .account_index = account_index,
             .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(params.allocator)),
@@ -430,7 +422,8 @@ pub const AccountsDB = struct {
             loading_thread.* = try AccountsDB.init(.{
                 .allocator = per_thread_allocator,
                 .snapshot_dir = parent.snapshot_dir,
-                .gossip = parent.gossip,
+                .my_pubkey = parent.my_pubkey,
+                .gossip_push_msg_queue = parent.gossip_push_msg_queue,
                 .geyser_writer = parent.geyser_writer,
                 .number_of_index_shards = parent.number_of_index_shards,
                 .lru_size = parent.lru_size,
@@ -2584,21 +2577,17 @@ pub const AccountsDB = struct {
         );
         try zstd_write_ctx.finish();
 
-        if (self.gossip) |gossip| { // advertise new snapshot via gossip
-            const push_msg_queue, var push_msg_queue_lg = gossip.push_msg_queue_mux.writeWithLock();
+        if (self.gossip_push_msg_queue) |push_msg_queue_rw| { // advertise new snapshot via gossip
+            const push_msg_queue, var push_msg_queue_lg = push_msg_queue_rw.writeWithLock();
             defer push_msg_queue_lg.unlock();
-            try push_msg_queue.ensureUnusedCapacity(1);
-
-            const now_ts = sig.time.getWallclockMs();
-            const signed_gossip_data = try sig.gossip.SignedGossipData.initSigned(gossip.my_keypair, .{
+            try push_msg_queue.append(.{
                 .SnapshotHashes = .{
-                    .from = Pubkey.fromPublicKey(&gossip.my_keypair.public_key),
+                    .from = self.my_pubkey,
                     .full = .{ .slot = params.target_slot, .hash = full_hash },
                     .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.EMPTY,
-                    .wallclock = now_ts,
+                    .wallclock = 0, // the wallclock will be set when it's processed in the queue
                 },
             });
-            push_msg_queue.appendAssumeCapacity(signed_gossip_data);
         }
 
         // update tracking for new snapshot
@@ -2817,24 +2806,20 @@ pub const AccountsDB = struct {
         );
         try zstd_write_ctx.finish();
 
-        if (self.gossip) |gossip| { // advertise new snapshot via gossip
-            const push_msg_queue, var push_msg_queue_lg = gossip.push_msg_queue_mux.writeWithLock();
+        if (self.gossip_push_msg_queue) |push_msg_queue_rw| { // advertise new snapshot via gossip
+            const push_msg_queue, var push_msg_queue_lg = push_msg_queue_rw.writeWithLock();
             defer push_msg_queue_lg.unlock();
-            try push_msg_queue.ensureUnusedCapacity(1);
-
-            const now_ts = sig.time.getWallclockMs();
-            const signed_gossip_data = try sig.gossip.SignedGossipData.initSigned(gossip.my_keypair, .{
+            try push_msg_queue.append(.{
                 .SnapshotHashes = .{
-                    .from = Pubkey.fromPublicKey(&gossip.my_keypair.public_key),
+                    .from = self.my_pubkey,
                     .full = .{ .slot = full_snapshot_info.slot, .hash = full_snapshot_info.hash },
                     .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.initSingle(.{
                         .slot = params.target_slot,
                         .hash = incremental_hash,
                     }),
-                    .wallclock = now_ts,
+                    .wallclock = 0, // the wallclock will be set when it's processed in the queue
                 },
             });
-            push_msg_queue.appendAssumeCapacity(signed_gossip_data);
         }
 
         // update tracking for new snapshot
@@ -3290,11 +3275,13 @@ test "testWriteSnapshot" {
         try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, false);
     }
 
+    const keypair = try KeyPair.create(null);
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = .noop,
         .snapshot_dir = tmp_snap_dir,
-        .gossip = null,
+        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .gossip_push_msg_queue = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
@@ -3368,11 +3355,14 @@ fn loadTestAccountsDB(
     errdefer snapshots.deinit(allocator);
 
     const snapshot = try snapshots.collapse();
+
+    const keypair = try KeyPair.create(null);
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = dir,
-        .gossip = null,
+        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .gossip_push_msg_queue = null,
         .geyser_writer = null,
         .index_allocation = if (use_disk) .disk else .ram,
         .number_of_index_shards = 4,
@@ -3440,11 +3430,13 @@ test "geyser stream on load" {
     const snapshot = try snapshots.collapse();
     defer snapshots.deinit(allocator);
 
+    const keypair = try KeyPair.create(null);
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = dir,
-        .gossip = null,
+        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .gossip_push_msg_queue = null,
         .geyser_writer = geyser_writer,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3619,11 +3611,13 @@ test "flushing slots works" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
 
+    const keypair = try KeyPair.create(null);
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
-        .gossip = null,
+        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .gossip_push_msg_queue = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3678,11 +3672,13 @@ test "purge accounts in cache works" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
 
+    const keypair = try KeyPair.create(null);
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
-        .gossip = null,
+        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .gossip_push_msg_queue = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3741,11 +3737,14 @@ test "clean to shrink account file works with zero-lamports" {
     const logger = .noop;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
+
+    const keypair = try KeyPair.create(null);
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
-        .gossip = null,
+        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .gossip_push_msg_queue = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3825,11 +3824,13 @@ test "clean to shrink account file works" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
 
+    const keypair = try KeyPair.create(null);
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
-        .gossip = null,
+        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .gossip_push_msg_queue = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3901,11 +3902,13 @@ test "full clean account file works" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
 
+    const keypair = try KeyPair.create(null);
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
-        .gossip = null,
+        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .gossip_push_msg_queue = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -3994,11 +3997,13 @@ test "shrink account file works" {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
 
+    const keypair = try KeyPair.create(null);
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
-        .gossip = null,
+        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .gossip_push_msg_queue = null,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
@@ -4169,7 +4174,7 @@ test "generate snapshot & update gossip snapshot hashes" {
     }
 
     // mock gossip service
-    const Queue = std.ArrayList(sig.gossip.SignedGossipData);
+    const Queue = std.ArrayList(sig.gossip.GossipData);
     var push_msg_queue_mux = sig.sync.Mux(Queue).init(Queue.init(allocator));
     defer push_msg_queue_mux.private.v.deinit();
     const my_keypair = try KeyPair.create(null);
@@ -4178,10 +4183,8 @@ test "generate snapshot & update gossip snapshot hashes" {
         .allocator = allocator,
         .logger = .noop,
         .snapshot_dir = tmp_snap_dir,
-        .gossip = .{
-            .my_keypair = &my_keypair,
-            .push_msg_queue_mux = &push_msg_queue_mux,
-        },
+        .my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key),
+        .gossip_push_msg_queue = &push_msg_queue_mux,
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
@@ -4235,11 +4238,11 @@ test "generate snapshot & update gossip snapshot hashes" {
     const queue_item_0 = queue.items[0]; // should be from the full generation
     const queue_item_1 = queue.items[1]; // should be from the incremental generation
 
-    try std.testing.expect(try queue_item_0.verify(Pubkey.fromPublicKey(&my_keypair.public_key)));
-    try std.testing.expect(try queue_item_1.verify(Pubkey.fromPublicKey(&my_keypair.public_key)));
+    // try std.testing.expect(try queue_item_0.verify(Pubkey.fromPublicKey(&my_keypair.public_key)));
+    // try std.testing.expect(try queue_item_1.verify(Pubkey.fromPublicKey(&my_keypair.public_key)));
 
-    try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_0.data));
-    try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_1.data));
+    try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_0));
+    try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_1));
 
     const SnapshotHashes = sig.gossip.data.SnapshotHashes;
 
@@ -4248,18 +4251,18 @@ test "generate snapshot & update gossip snapshot hashes" {
             .from = Pubkey.fromPublicKey(&my_keypair.public_key),
             .full = .{ .slot = full_slot, .hash = full_hash },
             .incremental = SnapshotHashes.IncrementalSnapshotsList.EMPTY,
-            .wallclock = queue_item_0.data.SnapshotHashes.wallclock,
+            .wallclock = queue_item_0.SnapshotHashes.wallclock,
         },
-        queue_item_0.data.SnapshotHashes,
+        queue_item_0.SnapshotHashes,
     );
     try std.testing.expectEqualDeep(
         SnapshotHashes{
             .from = Pubkey.fromPublicKey(&my_keypair.public_key),
             .full = .{ .slot = full_slot, .hash = full_hash },
             .incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{ .slot = inc_slot, .hash = inc_hash }),
-            .wallclock = queue_item_1.data.SnapshotHashes.wallclock,
+            .wallclock = queue_item_1.SnapshotHashes.wallclock,
         },
-        queue_item_1.data.SnapshotHashes,
+        queue_item_1.SnapshotHashes,
     );
 }
 
@@ -4335,11 +4338,13 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         defer snapshots.deinit(allocator);
         const snapshot = try snapshots.collapse();
 
+        const keypair = try KeyPair.create(null);
         var accounts_db = try AccountsDB.init(.{
             .allocator = allocator,
             .logger = logger,
             .snapshot_dir = snapshot_dir,
-            .gossip = null,
+            .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+            .gossip_push_msg_queue = null,
             .geyser_writer = null,
             .index_allocation = if (bench_args.use_disk) .disk else .ram,
             .number_of_index_shards = 32,
@@ -4556,12 +4561,15 @@ pub const BenchmarkAccountsDB = struct {
         var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
         defer snapshot_dir.close();
 
+        const keypair = try KeyPair.create(null);
+
         const logger = .noop;
         var accounts_db: AccountsDB = try AccountsDB.init(.{
             .allocator = allocator,
             .logger = logger,
             .snapshot_dir = snapshot_dir,
-            .gossip = null,
+            .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+            .gossip_push_msg_queue = null,
             .geyser_writer = null,
             .index_allocation = bench_args.index,
             .number_of_index_shards = 32,

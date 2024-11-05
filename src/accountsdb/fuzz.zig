@@ -11,6 +11,7 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
@@ -92,11 +93,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var last_full_snapshot_validated_slot: Slot = 0;
     var last_inc_snapshot_validated_slot: Slot = 0;
 
+    const keypair = try KeyPair.create(null);
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
-        .gossip = null,
+        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .gossip_push_msg_queue = null,
         .geyser_writer = null,
         .index_allocation = if (use_disk) .disk else .ram,
         .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
@@ -302,7 +305,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 .allocator = allocator,
                 .logger = .noop,
                 .snapshot_dir = alternative_snapshot_dir,
-                .gossip = null,
+                .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+                .gossip_push_msg_queue = null,
                 .geyser_writer = null,
                 .index_allocation = accounts_db.account_index.reference_allocator,
                 .number_of_index_shards = accounts_db.number_of_index_shards,

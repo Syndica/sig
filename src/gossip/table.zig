@@ -867,7 +867,7 @@ test "remove old values" {
     }
 
     for (0..5) |_| {
-        const value = try SignedGossipData.initSigned(
+        const value = SignedGossipData.initSigned(
             &keypair,
             GossipData.initRandom(prng.random()),
         );
@@ -900,7 +900,7 @@ test "insert and remove value" {
         table.deinit();
     }
 
-    const value = try SignedGossipData.initSigned(
+    const value = SignedGossipData.initSigned(
         &keypair,
         GossipData.randomFromIndex(prng.random(), 0),
     );
@@ -930,7 +930,7 @@ test "trim pruned values" {
     defer values.deinit();
 
     for (0..N_VALUES) |_| {
-        const value = try SignedGossipData.initSigned(
+        const value = SignedGossipData.initSigned(
             &keypair,
             GossipData.initRandom(prng.random()),
         );
@@ -986,7 +986,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     const data = GossipData{
         .LegacyContactInfo = LegacyContactInfo.initRandom(random),
     };
-    var value = try SignedGossipData.initSigned(&keypair, data);
+    var value = SignedGossipData.initSigned(&keypair, data);
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
@@ -1006,7 +1006,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     new_data.LegacyContactInfo.id = data.LegacyContactInfo.id;
     // older wallclock
     new_data.LegacyContactInfo.wallclock += data.LegacyContactInfo.wallclock;
-    value = try SignedGossipData.initSigned(&keypair, new_data);
+    value = SignedGossipData.initSigned(&keypair, new_data);
     _ = try table.insert(value, 120);
 
     try std.testing.expectEqual(table.purged.len(), 1);
@@ -1022,7 +1022,7 @@ test "insert and get" {
 
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
-    var value = try SignedGossipData.initRandom(random, &keypair);
+    var value = SignedGossipData.initRandom(random, &keypair);
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
@@ -1044,7 +1044,7 @@ test "insert and get contact_info" {
     var id = Pubkey.fromPublicKey(&kp.public_key);
 
     const legacy_contact_info = LegacyContactInfo.default(id);
-    var gossip_value = try SignedGossipData.initSigned(&kp, .{
+    var gossip_value = SignedGossipData.initSigned(&kp, .{
         .LegacyContactInfo = legacy_contact_info,
     });
 

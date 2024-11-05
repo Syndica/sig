@@ -78,12 +78,27 @@ pub const SignedGossipData = struct {
     data: GossipData,
     const Self = @This();
 
-    pub fn initSigned(keypair: *const KeyPair, data: GossipData) !Self {
+    pub fn initSigned(
+        /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
+        keypair: *const KeyPair,
+        /// Assumed to be valid, passing invalid data is illegal.
+        data: GossipData,
+    ) Self {
         // should always be enough space or is invalid msg
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
-        const bytes = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
-        const signature = try keypair.sign(bytes, null);
+        const bytes = bincode.writeToSlice(&buf, data, bincode.Params.standard) catch |err| {
+            // should never be possible for a valid gossip value
+            std.debug.panic("Unexpected bincode failure: {}", .{err});
+        };
+        const signature = keypair.sign(bytes, null) catch |err| switch (err) {
+            error.KeyMismatch => unreachable, // the keypair must match, passing a mismatched keypair is illegal
+            error.IdentityElement => unreachable, // this would only be possible with a weak or invalid keypair, which is illegal
+            error.WeakPublicKey => unreachable, // this would only be possible with a weak or invalid keypair, which is illegal
 
+            // TODO: inspecting the code reveals this error is never actually reached from this function, despite being part of the error set
+            // we should upstream a fix to zig's stdlib that amends this or documents why it's part of the error set at all.
+            error.NonCanonical => unreachable,
+        };
         return .{
             .signature = Signature.init(signature.toBytes()),
             .data = data,
@@ -101,27 +116,6 @@ pub const SignedGossipData = struct {
         self.data.deinit(allocator);
     }
 
-    /// only used in tests
-    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Self {
-        return try initSigned(keypair, GossipData.initRandom(random));
-    }
-
-    /// only used in tests
-    pub fn randomWithIndex(random: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
-        var data = GossipData.randomFromIndex(random, index);
-        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-        data.setId(pubkey);
-        return try initSigned(keypair, data);
-    }
-
-    pub fn sign(self: *Self, keypair: *const KeyPair) !void {
-        // should always be enough space or is invalid msg
-        var buf: [PACKET_DATA_SIZE]u8 = undefined;
-        const bytes = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
-        var signature = try keypair.sign(bytes, null);
-        self.signature.data = signature.toBytes();
-    }
-
     pub fn verify(self: *const Self, pubkey: Pubkey) !bool {
         // should always be enough space or is invalid msg
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -130,87 +124,37 @@ pub const SignedGossipData = struct {
     }
 
     pub fn id(self: *const Self) Pubkey {
-        return switch (self.data) {
-            // zig fmt: off
-            .LegacyContactInfo         => |v| v.id,
-            .Vote                      => |v| v[1].from,
-            .LowestSlot                => |v| v[1].from,
-            .LegacySnapshotHashes      => |v| v.from,
-            .AccountsHashes            => |v| v.from,
-            .EpochSlots                => |v| v[1].from,
-            .LegacyVersion             => |v| v.from,
-            .Version                   => |v| v.from,
-            .NodeInstance              => |v| v.from,
-            .DuplicateShred            => |v| v[1].from,
-            .SnapshotHashes            => |v| v.from,
-            .ContactInfo               => |v| v.pubkey,
-            .RestartLastVotedForkSlots => |v| v.from,
-            .RestartHeaviestFork       => |v| v.from,
-            // zig fmt: on
-        };
+        return self.data.id();
     }
 
     pub fn label(self: *const Self) GossipKey {
-        return switch (self.data) {
-            // zig fmt: off
-            .LegacyContactInfo         => |v|.{ .LegacyContactInfo        = v.id },
-            .Vote                      => |v|.{ .Vote                     = .{ v[0], v[1].from } },
-            .LowestSlot                => |v|.{ .LowestSlot               = v[1].from },
-            .LegacySnapshotHashes      => |v|.{ .LegacySnapshotHashes     = v.from },
-            .AccountsHashes            => |v|.{ .AccountsHashes           = v.from },
-            .EpochSlots                => |v|.{ .EpochSlots               = .{ v[0], v[1].from } },
-            .LegacyVersion             => |v|.{ .LegacyVersion            = v.from },
-            .Version                   => |v|.{ .Version                  = v.from },
-            .NodeInstance              => |v|.{ .NodeInstance             = v.from },
-            .DuplicateShred            => |v|.{ .DuplicateShred           = .{ v[0], v[1].from } },
-            .SnapshotHashes            => |v|.{ .SnapshotHashes           = v.from },
-            .ContactInfo               => |v|.{ .ContactInfo              = v.pubkey },
-            .RestartLastVotedForkSlots => |v|.{ .RestartLastVotedForkSlots= v.from },
-            .RestartHeaviestFork       => |v|.{ .RestartHeaviestFork      = v.from },
-            // zig fmt: on
-        };
-    }
-
-    pub fn wallclockPtr(self: *Self) *u64 {
-        return switch (self.data) {
-            // zig fmt: off
-            .LegacyContactInfo         => |*v| &v.wallclock,
-            .Vote                      => |*v| &v[1].wallclock,
-            .LowestSlot                => |*v| &v[1].wallclock,
-            .LegacySnapshotHashes      => |*v| &v.wallclock,
-            .AccountsHashes            => |*v| &v.wallclock,
-            .EpochSlots                => |*v| &v[1].wallclock,
-            .LegacyVersion             => |*v| &v.wallclock,
-            .Version                   => |*v| &v.wallclock,
-            .NodeInstance              => |*v| &v.wallclock,
-            .DuplicateShred            => |*v| &v[1].wallclock,
-            .SnapshotHashes            => |*v| &v.wallclock,
-            .ContactInfo               => |*v| &v.wallclock,
-            .RestartLastVotedForkSlots => |*v| &v.wallclock,
-            .RestartHeaviestFork       => |*v| &v.wallclock,
-            // zig fmt: on
-        };
+        return self.data.label();
     }
 
     pub fn wallclock(self: *const Self) u64 {
-        return switch (self.data) {
-            // zig fmt: off
-            .LegacyContactInfo         => |v| v.wallclock,
-            .Vote                      => |v| v[1].wallclock,
-            .LowestSlot                => |v| v[1].wallclock,
-            .LegacySnapshotHashes      => |v| v.wallclock,
-            .AccountsHashes            => |v| v.wallclock,
-            .EpochSlots                => |v| v[1].wallclock,
-            .LegacyVersion             => |v| v.wallclock,
-            .Version                   => |v| v.wallclock,
-            .NodeInstance              => |v| v.wallclock,
-            .DuplicateShred            => |v| v[1].wallclock,
-            .SnapshotHashes            => |v| v.wallclock,
-            .ContactInfo               => |v| v.wallclock,
-            .RestartLastVotedForkSlots => |v| v.wallclock,
-            .RestartHeaviestFork       => |v| v.wallclock,
-            // zig fmt: on
-        };
+        return self.data.wallclock();
+    }
+
+    /// only used in tests.
+    pub fn initRandom(
+        random: std.rand.Random,
+        /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
+        keypair: *const KeyPair,
+    ) Self {
+        return initSigned(keypair, GossipData.initRandom(random));
+    }
+
+    /// only used in tests
+    pub fn randomWithIndex(
+        random: std.rand.Random,
+        /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
+        keypair: *const KeyPair,
+        index: usize,
+    ) Self {
+        var data = GossipData.randomFromIndex(random, index);
+        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+        data.setId(pubkey);
+        return initSigned(keypair, data);
     }
 };
 
@@ -363,28 +307,129 @@ pub const GossipData = union(GossipDataTag) {
         }
     }
 
-    // only used in tests
-    pub fn setId(self: *GossipData, id: Pubkey) void {
+    pub fn gossipAddr(self: *const @This()) ?SocketAddr {
+        return switch (self.*) {
+            .LegacyContactInfo => |*v| if (v.gossip.isUnspecified()) null else v.gossip,
+            .ContactInfo => |*v| v.getSocket(.gossip),
+            else => null,
+        };
+    }
+
+    pub fn shredVersion(self: *const @This()) ?u16 {
+        return switch (self.*) {
+            .LegacyContactInfo => |*v| v.shred_version,
+            .ContactInfo => |*v| v.shred_version,
+            else => null,
+        };
+    }
+
+    pub fn id(self: *const GossipData) Pubkey {
+        return switch (self.*) {
+            // zig fmt: off
+            .LegacyContactInfo         => |v| v.id,
+            .Vote                      => |v| v[1].from,
+            .LowestSlot                => |v| v[1].from,
+            .LegacySnapshotHashes      => |v| v.from,
+            .AccountsHashes            => |v| v.from,
+            .EpochSlots                => |v| v[1].from,
+            .LegacyVersion             => |v| v.from,
+            .Version                   => |v| v.from,
+            .NodeInstance              => |v| v.from,
+            .DuplicateShred            => |v| v[1].from,
+            .SnapshotHashes            => |v| v.from,
+            .ContactInfo               => |v| v.pubkey,
+            .RestartLastVotedForkSlots => |v| v.from,
+            .RestartHeaviestFork       => |v| v.from,
+            // zig fmt: on
+        };
+    }
+
+    pub fn label(self: *const GossipData) GossipKey {
+        return switch (self.*) {
+            // zig fmt: off
+            .LegacyContactInfo         => |v|.{ .LegacyContactInfo        = v.id },
+            .Vote                      => |v|.{ .Vote                     = .{ v[0], v[1].from } },
+            .LowestSlot                => |v|.{ .LowestSlot               = v[1].from },
+            .LegacySnapshotHashes      => |v|.{ .LegacySnapshotHashes     = v.from },
+            .AccountsHashes            => |v|.{ .AccountsHashes           = v.from },
+            .EpochSlots                => |v|.{ .EpochSlots               = .{ v[0], v[1].from } },
+            .LegacyVersion             => |v|.{ .LegacyVersion            = v.from },
+            .Version                   => |v|.{ .Version                  = v.from },
+            .NodeInstance              => |v|.{ .NodeInstance             = v.from },
+            .DuplicateShred            => |v|.{ .DuplicateShred           = .{ v[0], v[1].from } },
+            .SnapshotHashes            => |v|.{ .SnapshotHashes           = v.from },
+            .ContactInfo               => |v|.{ .ContactInfo              = v.pubkey },
+            .RestartLastVotedForkSlots => |v|.{ .RestartLastVotedForkSlots= v.from },
+            .RestartHeaviestFork       => |v|.{ .RestartHeaviestFork      = v.from },
+            // zig fmt: on
+        };
+    }
+
+    pub fn wallclockPtr(self: *GossipData) *u64 {
+        return switch (self.*) {
+            // zig fmt: off
+            .LegacyContactInfo         => |*v| &v.wallclock,
+            .Vote                      => |*v| &v[1].wallclock,
+            .LowestSlot                => |*v| &v[1].wallclock,
+            .LegacySnapshotHashes      => |*v| &v.wallclock,
+            .AccountsHashes            => |*v| &v.wallclock,
+            .EpochSlots                => |*v| &v[1].wallclock,
+            .LegacyVersion             => |*v| &v.wallclock,
+            .Version                   => |*v| &v.wallclock,
+            .NodeInstance              => |*v| &v.wallclock,
+            .DuplicateShred            => |*v| &v[1].wallclock,
+            .SnapshotHashes            => |*v| &v.wallclock,
+            .ContactInfo               => |*v| &v.wallclock,
+            .RestartLastVotedForkSlots => |*v| &v.wallclock,
+            .RestartHeaviestFork       => |*v| &v.wallclock,
+            // zig fmt: on
+        };
+    }
+
+    pub fn wallclock(self: *const GossipData) u64 {
+        return switch (self.*) {
+            // zig fmt: off
+            .LegacyContactInfo         => |v| v.wallclock,
+            .Vote                      => |v| v[1].wallclock,
+            .LowestSlot                => |v| v[1].wallclock,
+            .LegacySnapshotHashes      => |v| v.wallclock,
+            .AccountsHashes            => |v| v.wallclock,
+            .EpochSlots                => |v| v[1].wallclock,
+            .LegacyVersion             => |v| v.wallclock,
+            .Version                   => |v| v.wallclock,
+            .NodeInstance              => |v| v.wallclock,
+            .DuplicateShred            => |v| v[1].wallclock,
+            .SnapshotHashes            => |v| v.wallclock,
+            .ContactInfo               => |v| v.wallclock,
+            .RestartLastVotedForkSlots => |v| v.wallclock,
+            .RestartHeaviestFork       => |v| v.wallclock,
+            // zig fmt: on
+        };
+    }
+
+    /// only used in tests
+    pub fn setId(self: *GossipData, new_id: Pubkey) void {
         switch (self.*) {
             // zig fmt: off
-            .LegacyContactInfo         => |*v| v.id = id,
-            .Vote                      => |*v| v[1].from = id,
-            .LowestSlot                => |*v| v[1].from = id,
-            .LegacySnapshotHashes      => |*v| v.from = id,
-            .AccountsHashes            => |*v| v.from = id,
-            .EpochSlots                => |*v| v[1].from = id,
-            .LegacyVersion             => |*v| v.from = id,
-            .Version                   => |*v| v.from = id,
-            .NodeInstance              => |*v| v.from = id,
-            .DuplicateShred            => |*v| v[1].from = id,
-            .SnapshotHashes            => |*v| v.from = id,
-            .ContactInfo               => |*v| v.pubkey = id,
-            .RestartLastVotedForkSlots => |*v| v.from = id,
-            .RestartHeaviestFork       => |*v| v.from = id,
+            .LegacyContactInfo         => |*v| v.id = new_id,
+            .Vote                      => |*v| v[1].from = new_id,
+            .LowestSlot                => |*v| v[1].from = new_id,
+            .LegacySnapshotHashes      => |*v| v.from = new_id,
+            .AccountsHashes            => |*v| v.from = new_id,
+            .EpochSlots                => |*v| v[1].from = new_id,
+            .LegacyVersion             => |*v| v.from = new_id,
+            .Version                   => |*v| v.from = new_id,
+            .NodeInstance              => |*v| v.from = new_id,
+            .DuplicateShred            => |*v| v[1].from = new_id,
+            .SnapshotHashes            => |*v| v.from = new_id,
+            .ContactInfo               => |*v| v.pubkey = new_id,
+            .RestartLastVotedForkSlots => |*v| v.from = new_id,
+            .RestartHeaviestFork       => |*v| v.from = new_id,
             // zig fmt: on
         }
     }
 
+    /// only used in tests
     pub fn initRandom(random: std.rand.Random) GossipData {
         const v = random.intRangeAtMost(u16, 0, 10);
         return GossipData.randomFromIndex(random, v);
@@ -404,22 +449,6 @@ pub const GossipData = union(GossipDataTag) {
             9 => .{ .SnapshotHashes = SnapshotHashes.initRandom(random) },
             // 10 => .{ .ContactInfo = ContactInfo.initRandom(random) },
             else => .{ .DuplicateShred = .{ random.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.initRandom(random) } },
-        };
-    }
-
-    pub fn gossipAddr(self: *const @This()) ?SocketAddr {
-        return switch (self.*) {
-            .LegacyContactInfo => |*v| if (v.gossip.isUnspecified()) null else v.gossip,
-            .ContactInfo => |*v| v.getSocket(.gossip),
-            else => null,
-        };
-    }
-
-    pub fn shredVersion(self: *const @This()) ?u16 {
-        return switch (self.*) {
-            .LegacyContactInfo => |*v| v.shred_version,
-            .ContactInfo => |*v| v.shred_version,
-            else => null,
         };
     }
 };
@@ -1779,8 +1808,7 @@ test "sig verify duplicateShreds" {
     var data = DuplicateShred.initRandom(prng.random());
     data.from = pubkey;
 
-    var value = try SignedGossipData.initSigned(&keypair, .{ .DuplicateShred = .{ 0, data } });
-
+    const value = SignedGossipData.initSigned(&keypair, .{ .DuplicateShred = .{ 0, data } });
     try std.testing.expect(try value.verify(pubkey));
 }
 
@@ -1796,14 +1824,14 @@ test "sanitize GossipData" {
 
 test "SignedGossipData label() and id() methods" {
     const kp_bytes = [_]u8{1} ** 32;
-    var kp = try KeyPair.create(kp_bytes);
+    const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
     var id = Pubkey.fromPublicKey(&pk);
 
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.wallclock = 0;
 
-    var value = try SignedGossipData.initSigned(&kp, .{
+    const value = SignedGossipData.initSigned(&kp, .{
         .LegacyContactInfo = legacy_contact_info,
     });
 

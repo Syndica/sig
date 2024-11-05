@@ -187,7 +187,8 @@ test "gossip.message: push message serialization is predictable" {
     const msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
     const empty_size = bincode.sizeOf(msg, .{});
 
-    const value = try SignedGossipData.initRandom(prng.random(), &(try KeyPair.create(null)));
+    const keypair = try KeyPair.create(null);
+    const value = SignedGossipData.initRandom(prng.random(), &keypair);
     const value_size = bincode.sizeOf(value, .{});
     try values.append(value);
     try std.testing.expect(values.items.len == 1);
@@ -282,7 +283,7 @@ test "gossip.message: pull request serializes and deserializes" {
         .wallclock = 0,
         .shred_version = 0,
     };
-    const value = try SignedGossipData.initSigned(&keypair, .{
+    const value = SignedGossipData.initSigned(&keypair, .{
         .LegacyContactInfo = legacy_contact_info,
     });
 
@@ -345,7 +346,7 @@ test "gossip.message: push message serializes and deserializes correctly" {
         0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
         0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
     };
-    const gossip_value = try SignedGossipData.initSigned(&kp, data);
+    const gossip_value = SignedGossipData.initSigned(&kp, data);
     var values = [_]SignedGossipData{gossip_value};
     const pushmsg = GossipMessage{ .PushMessage = .{ id, &values } };
 
