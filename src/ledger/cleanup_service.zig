@@ -234,9 +234,9 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
     try purgeRangeWithCount(write_batch, schema.slot_meta, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.dead_slots, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.duplicate_slots, from_slot, to_slot, &delete_count);
-    try purgeRangeWithCount(write_batch, schema.roots, from_slot, to_slot, &delete_count);
+    try purgeRangeWithCount(write_batch, schema.rooted_slots, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.erasure_meta, .{ .slot = from_slot, .erasure_set_index = 0 }, .{ .slot = to_slot, .erasure_set_index = 0 }, &delete_count);
-    try purgeRangeWithCount(write_batch, schema.orphans, from_slot, to_slot, &delete_count);
+    try purgeRangeWithCount(write_batch, schema.orphan_slots, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.index, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.data_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
     try purgeRangeWithCount(write_batch, schema.code_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
@@ -291,9 +291,9 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
     try purgeFileRangeWithCount(db, schema.slot_meta, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.dead_slots, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.duplicate_slots, from_slot, to_slot, &delete_count);
-    try purgeFileRangeWithCount(db, schema.roots, from_slot, to_slot, &delete_count);
+    try purgeFileRangeWithCount(db, schema.rooted_slots, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.erasure_meta, .{ .slot = from_slot, .erasure_set_index = 0 }, .{ .slot = to_slot, .erasure_set_index = 0 }, &delete_count);
-    try purgeFileRangeWithCount(db, schema.orphans, from_slot, to_slot, &delete_count);
+    try purgeFileRangeWithCount(db, schema.orphan_slots, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.index, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.data_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
     try purgeFileRangeWithCount(db, schema.code_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
@@ -410,12 +410,12 @@ test "purgeSlots" {
     try std.testing.expectEqual(true, did_purge);
 
     for (0..5 + 1) |slot| {
-        const is_root = try db.get(allocator, schema.roots, slot) orelse false;
+        const is_root = try db.get(allocator, schema.rooted_slots, slot) orelse false;
         try std.testing.expectEqual(false, is_root);
     }
 
     for (6..10 + 1) |slot| {
-        const is_root = try db.get(allocator, schema.roots, slot) orelse false;
+        const is_root = try db.get(allocator, schema.rooted_slots, slot) orelse false;
         try std.testing.expectEqual(true, is_root);
     }
 
