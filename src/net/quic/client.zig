@@ -207,7 +207,7 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
                 xev_loop.stop();
             }
 
-            self.logger.info().logf("(demo.transaction_sender)    quic client active connections: {d}", .{self.connections.len});
+            self.logger.debug().logf("quic client active connections: {d}", .{self.connections.len});
 
             return .disarm;
         }
