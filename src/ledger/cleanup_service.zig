@@ -204,6 +204,7 @@ fn findSlotsToClean(
 /// analog to [`run_purge_with_stats`](https://github.com/anza-xyz/agave/blob/26692e666454d340a6691e2483194934e6a8ddfc/ledger/src/blockstore/blockstore_purge.rs#L202)
 pub fn purgeSlots(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !bool {
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
 
     // the methods used below are exclusive [from_slot, to_slot), so we add 1 to purge inclusive
     const purge_to_slot = to_slot + 1;
@@ -421,6 +422,7 @@ test "purgeSlots" {
 
     // write another type
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     for (0..roots.len + 1) |i| {
         const merkle_root_meta = sig.ledger.shred.ErasureSetId{
             .erasure_set_index = i,
