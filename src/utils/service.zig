@@ -55,7 +55,7 @@ pub const ServiceManager = struct {
     /// The function may be restarted periodically, according to default_run_config.
     pub fn spawn(
         self: *Self,
-        name: ?[]const u8,
+        comptime name: []const u8,
         comptime function: anytype,
         args: anytype,
         comptime needs_exit_order: bool,
@@ -83,7 +83,7 @@ pub const ServiceManager = struct {
     /// The function may be restarted periodically, according to the provided config.
     fn spawnCustom(
         self: *Self,
-        maybe_name: ?[]const u8,
+        comptime name: []const u8,
         run_config: ?RunConfig,
         spawn_config: std.Thread.SpawnConfig,
         comptime function: anytype,
@@ -95,16 +95,16 @@ pub const ServiceManager = struct {
             spawn_config,
             runService,
             .{
-                self.logger.unscoped(),
+                self.logger.withScope(name),
                 self.exit,
-                maybe_name,
+                name,
                 run_config orelse self.default_run_config,
                 function,
                 args,
             },
         );
 
-        if (maybe_name) |name| thread.setName(name) catch {};
+        thread.setName(name) catch {};
         try self.threads.append(allocator, thread);
     }
 
@@ -112,7 +112,7 @@ pub const ServiceManager = struct {
     /// in the shutdown chain to the arguments.
     fn spawnCustomIdx(
         self: *Self,
-        maybe_name: ?[]const u8,
+        comptime name: []const u8,
         run_config: ?RunConfig,
         spawn_config: std.Thread.SpawnConfig,
         comptime function: anytype,
@@ -124,16 +124,16 @@ pub const ServiceManager = struct {
             spawn_config,
             runService,
             .{
-                self.logger.unscoped(),
+                self.logger.withScope(name),
                 self.exit,
-                maybe_name,
+                name,
                 run_config orelse self.default_run_config,
                 function,
                 args ++ .{(self.threads.items.len + 1)},
             },
         );
 
-        if (maybe_name) |name| thread.setName(name) catch {};
+        thread.setName(name) catch {};
         try self.threads.append(allocator, thread);
     }
 
@@ -187,14 +187,13 @@ pub const ReturnHandler = struct {
 /// It's guaranteed to run at least once in order to not race initialization with
 /// the `exit` flag.
 pub fn runService(
-    logger_: Logger,
+    logger: anytype,
     exit: *Atomic(bool),
     maybe_name: ?[]const u8,
     config: RunConfig,
     function: anytype,
     args: anytype,
 ) !void {
-    const logger = logger_.withScope(@src().fn_name);
     var buf: [16]u8 = undefined;
     const name = maybe_name orelse try std.fmt.bufPrint(
         &buf,
