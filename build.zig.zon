@@ -35,5 +35,9 @@
             .url = "https://github.com/Syndica/rocksdb-zig/archive/9c09659a5e41f226b6b8f3fa21149247eb26dfae.tar.gz",
             .hash = "1220aeb80b2f8bb48c131ef306fe48ddfcb537210c5f77742e921cbf40fc4c19b41e",
         },
+        .prettytable = .{
+            .url = "https://github.com/dying-will-bullet/prettytable-zig/archive/46b6ad9b5970def35fa43c9613cd244f28862fa9.tar.gz",
+            .hash = "122098d444c9c7112c66481e7655bb5389829c67e04b280a029200545e1971187443",
+        },
     },
 }

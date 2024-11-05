@@ -2,7 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const TailQueue = std.TailQueue;
 const testing = std.testing;
-const assert = std.debug.assert;
 const Mutex = std.Thread.Mutex;
 
 pub const Kind = enum {
@@ -136,7 +135,7 @@ pub fn LruCacheCustom(
             if (self.dbl_link_list.len == self.max_items) {
                 const recycled_node = self.dbl_link_list.popFirst().?;
                 deinitFn(&recycled_node.data.value, self.deinit_context);
-                assert(self.hashmap.swapRemove(recycled_node.data.key));
+                std.debug.assert(self.hashmap.swapRemove(recycled_node.data.key));
                 // after swap, this node is thrown away
                 var node_to_swap: Node = .{
                     .data = LruEntry.init(key, value),
