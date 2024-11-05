@@ -138,6 +138,10 @@ pub const AccountsDBConfig = struct {
     force_new_snapshot_download: bool = false,
     /// estimate of the number of accounts per file (used for preallocation)
     accounts_per_file_estimate: u64 = 1_500,
+    /// maximum number of accounts to manage references to for the account index. if loading from a snapshot,
+    /// the number of accounts supported will be max(this, accounts_per_file_estimate * number_of_account_files).
+    /// NOTE: usually number_of_account_files is ~400K.
+    max_number_of_accounts: u64 = 1_000_000,
 };
 
 pub const GeyserConfig = struct {

@@ -8,6 +8,7 @@ const FileId = sig.accounts_db.accounts_file.FileId;
 const RwMux = sig.sync.RwMux;
 const SwissMap = sig.accounts_db.swiss_map.SwissMap;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
+const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
 /// reference to an account (either in a file or in the unrooted_map)
 pub const AccountRef = struct {
@@ -39,21 +40,17 @@ pub const AccountRef = struct {
 /// Analogous to [AccountsIndex](https://github.com/anza-xyz/agave/blob/a6b2283142192c5360ad0f53bec1eb4a9fb36154/accounts-db/src/accounts_index.rs#L644)
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
-
     /// map from Pubkey -> AccountRefHead
     pubkey_ref_map: ShardedPubkeyRefMap,
-
-    /// things for managing the AccountRef memory
-    reference_allocator: ReferenceAllocator,
     /// map from slot -> []AccountRef
     slot_reference_map: RwMux(SlotRefMap),
+    // this uses the reference_allocator to allocate a max number of references
+    // which can be re-used throughout the life of the program (ie, manages the state of free/used AccountRefs)
+    reference_allocator: *RecycleFBA(.{}),
+    // this is the allocator used to allocate bytes for the reference_allocator
+    underlying_reference_allocator: ReferenceAllocator,
 
-    // TODO(fastload): add field []AccountRef which is a single allocation of a large array of AccountRefs
-    // reads can access this directly
-    // TODO(fastload): recycle_fba.init([]AccountRef) - this will manage the state of free/used AccountRefs
-
-    // TODO(fastload): change to []AccountRef
-    pub const SlotRefMap = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
+    pub const SlotRefMap = std.AutoHashMap(Slot, []AccountRef);
     pub const AllocatorConfig = union(enum) {
         Ram: struct { allocator: std.mem.Allocator },
         Disk: struct { accountsdb_dir: std.fs.Dir },
@@ -70,7 +67,7 @@ pub const AccountIndex = struct {
         number_of_shards: usize,
         max_account_references: u64,
     ) !Self {
-        const reference_allocator: ReferenceAllocator = switch (allocator_config) {
+        const underlying_reference_allocator: ReferenceAllocator = switch (allocator_config) {
             .Ram => |ram| blk: {
                 logger.info().logf("using ram memory for account index", .{});
                 break :blk .{ .ram = ram.allocator };
@@ -84,13 +81,21 @@ pub const AccountIndex = struct {
                 break :blk .{ .disk = .{ .dma = disk_allocator, .ptr_allocator = allocator } };
             },
         };
-        _ = max_account_references; // TODO(fastload): use this
+
+        const reference_allocator = try RecycleFBA(.{}).create(
+            .{
+                .records_allocator = allocator,
+                .bytes_allocator = underlying_reference_allocator.get(),
+            },
+            max_account_references * @sizeOf(AccountRef),
+        );
 
         return .{
             .allocator = allocator,
-            .reference_allocator = reference_allocator,
             .pubkey_ref_map = try ShardedPubkeyRefMap.init(allocator, number_of_shards),
             .slot_reference_map = RwMux(SlotRefMap).init(SlotRefMap.init(allocator)),
+            .reference_allocator = reference_allocator,
+            .underlying_reference_allocator = underlying_reference_allocator,
         };
     }
 
@@ -100,31 +105,14 @@ pub const AccountIndex = struct {
         {
             const slot_reference_map, var slot_reference_map_lg = self.slot_reference_map.writeWithLock();
             defer slot_reference_map_lg.unlock();
-
-            if (free_memory) {
-                var iter = slot_reference_map.iterator();
-                while (iter.next()) |entry| {
-                    entry.value_ptr.deinit();
-                }
-            }
             slot_reference_map.deinit();
         }
 
-        self.reference_allocator.deinit();
-    }
-
-    pub fn putReferenceBlock(self: *Self, slot: Slot, references: std.ArrayList(AccountRef)) !void {
-        const slot_reference_map, var slot_reference_map_lg = self.slot_reference_map.writeWithLock();
-        defer slot_reference_map_lg.unlock();
-        try slot_reference_map.putNoClobber(slot, references);
-    }
-
-    pub fn freeReferenceBlock(self: *Self, slot: Slot) error{MemoryNotFound}!void {
-        const slot_reference_map, var slot_reference_map_lg = self.slot_reference_map.writeWithLock();
-        defer slot_reference_map_lg.unlock();
-
-        const removed_kv = slot_reference_map.fetchRemove(slot) orelse return error.MemoryNotFound;
-        removed_kv.value.deinit();
+        if (free_memory) {
+            self.reference_allocator.deinit();
+            self.allocator.destroy(self.reference_allocator);
+        }
+        self.underlying_reference_allocator.deinit();
     }
 
     pub const ReferenceParent = union(enum) {

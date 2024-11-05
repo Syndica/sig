@@ -99,6 +99,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
             .use_disk_index = use_disk,
             .lru_size = 10_000,
+            .max_number_of_accounts = 1_000_000,
             // TODO: other things we can fuzz (number of shards, ...)
         },
         null,
@@ -334,7 +335,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             var alt_accounts_db = try AccountsDB.init(allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
             defer alt_accounts_db.deinit();
 
-            _ = try alt_accounts_db.loadWithDefaults(allocator, &snapshot_fields, 1, true, 1_500);
+            _ = try alt_accounts_db.loadWithDefaults(allocator, &snapshot_fields, 1, true, 500);
             const maybe_inc_slot = if (snapshot_files.incremental_snapshot) |inc| inc.slot else null;
             logger.info().logf("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})", .{ snapshot_info.slot, maybe_inc_slot });
         }
