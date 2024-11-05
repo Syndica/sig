@@ -122,23 +122,23 @@ pub const AccountsDB = struct {
 
     /// Used for filenames when flushing accounts to disk.
     // TODO: do we need this? since flushed slots will be unique
-    largest_file_id: FileId = FileId.fromInt(0),
+    largest_file_id: FileId,
     // TODO: integrate these values into consensus
     /// Used for flushing/cleaning/purging/shrinking.
-    largest_rooted_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
+    largest_rooted_slot: std.atomic.Value(Slot),
     /// Represents the largest slot for which all account data has been flushed to disk.
     /// Always `<= largest_rooted_slot`.
-    largest_flushed_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
+    largest_flushed_slot: std.atomic.Value(Slot),
 
     /// The snapshot info from which this instance was loaded from and validated against (null if that didn't happen).
     /// Used to potentially skip the first `computeAccountHashesAndLamports`.
-    first_snapshot_load_info: RwMux(?SnapshotGenerationInfo) = RwMux(?SnapshotGenerationInfo).init(null),
+    first_snapshot_load_info: RwMux(?SnapshotGenerationInfo),
     /// Represents the largest slot info used to generate a full snapshot, and optionally an incremental snapshot relative to it, which currently exists.
-    latest_snapshot_info: RwMux(?SnapshotGenerationInfo) = RwMux(?SnapshotGenerationInfo).init(null),
+    latest_snapshot_info: RwMux(?SnapshotGenerationInfo),
 
     // TODO: populate this during snapshot load
     // TODO: move to Bank struct
-    bank_hash_stats: RwMux(BankHashStatsMap) = RwMux(BankHashStatsMap).init(.{}),
+    bank_hash_stats: RwMux(BankHashStatsMap),
 
     const Self = @This();
 
