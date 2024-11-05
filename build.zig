@@ -63,8 +63,11 @@ pub fn build(b: *Build) void {
     sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
     sig_mod.addImport("curl", curl_mod);
-    if (blockstore_db == .rocksdb) sig_mod.addImport("rocksdb", rocksdb_mod);
-    if (blockstore_db == .lmdb) sig_mod.addImport("lmdb", lmdb_mod);
+    switch (blockstore_db) {
+        .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
+        .lmdb => sig_mod.addImport("lmdb", lmdb_mod),
+        .hashmap => {},
+    }
     sig_mod.addOptions("build-options", build_options);
 
     // main executable
@@ -82,8 +85,11 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("zig-cli", zig_cli_module);
     sig_exe.root_module.addImport("zig-network", zig_network_module);
     sig_exe.root_module.addImport("zstd", zstd_mod);
-    if (blockstore_db == .rocksdb) sig_exe.root_module.addImport("rocksdb", rocksdb_mod);
-    if (blockstore_db == .lmdb) sig_exe.root_module.addImport("lmdb", lmdb_mod);
+    switch (blockstore_db) {
+        .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .lmdb => sig_exe.root_module.addImport("lmdb", lmdb_mod),
+        .hashmap => {},
+    }
     sig_exe.root_module.addOptions("build-options", build_options);
     sig_exe.linkLibC();
 
@@ -164,11 +170,12 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("zig-network", zig_network_module);
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
-    benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod);
-    benchmark_exe.root_module.addImport("lmdb", lmdb_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
-    if (blockstore_db == .rocksdb) sig_exe.root_module.addImport("rocksdb", rocksdb_mod);
-    if (blockstore_db == .lmdb) sig_exe.root_module.addImport("lmdb", lmdb_mod);
+    switch (blockstore_db) {
+        .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .lmdb => benchmark_exe.root_module.addImport("lmdb", lmdb_mod),
+        .hashmap => {},
+    }
     benchmark_exe.root_module.addOptions("build-options", build_options);
     benchmark_exe.linkLibC();
 
