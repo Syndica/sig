@@ -9,6 +9,7 @@ const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
 const IteratorDirection = database.interface.IteratorDirection;
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 const ReturnType = sig.utils.types.ReturnType;
 
 const key_serializer = database.interface.key_serializer;
@@ -18,7 +19,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         allocator: Allocator,
         db: rocks.DB,
-        logger: Logger,
+        logger: ScopedLogger(@typeName(Self)),
         cf_handles: []const rocks.ColumnFamilyHandle,
         path: []const u8,
 
@@ -65,7 +66,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             return .{
                 .allocator = allocator,
                 .db = db,
-                .logger = logger,
+                .logger = logger.withScope(@typeName(Self)),
                 .cf_handles = cf_handles,
                 .path = owned_path,
             };
@@ -259,7 +260,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             defer if (start_bytes) |sb| sb.deinit();
             return .{
                 .allocator = self.allocator,
-                .logger = self.logger,
+                .logger = self.logger.unscoped(),
                 .inner = self.db.iterator(
                     self.cf_handles[cf.find(column_families)],
                     switch (direction) {
@@ -331,8 +332,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     };
 }
 
-fn callRocks(logger_: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
-    const logger = logger_.withScope(@src().fn_name);
+fn callRocks(logger: anytype, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
     var err_str: ?rocks.Data = null;
     return @call(.auto, func, args ++ .{&err_str}) catch |e| {
         logger.err().logf("{} - {s}", .{ e, err_str.? });
