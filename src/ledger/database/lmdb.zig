@@ -45,7 +45,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 dbis[i] = try ret(c.mdb_dbi_open, .{
                     txn,
                     @as([*]const u8, @ptrCast(cf.name)),
-                    MDB_CREATE,
+                    c.MDB_CREATE,
                 });
             }
 
@@ -70,7 +70,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         }
 
         pub fn count(self: *Self, comptime cf: ColumnFamily) LmdbOrAllocatorError!u64 {
-            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, MDB_RDONLY });
+            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
             defer c.mdb_txn_abort(txn);
 
             const stat = try ret(c.mdb_stat, .{ txn, self.dbi(cf) });
@@ -108,7 +108,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             defer key_bytes.deinit();
             var key_val = toVal(key_bytes.data);
 
-            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, MDB_RDONLY });
+            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
             defer c.mdb_txn_abort(txn);
 
             const value = ret(c.mdb_get, .{ txn, self.dbi(cf), &key_val }) catch |e| switch (e) {
@@ -124,7 +124,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             defer key_bytes.deinit();
             var key_val = toVal(key_bytes.data);
 
-            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, MDB_RDONLY });
+            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
             errdefer c.mdb_txn_abort(txn);
 
             const item = ret(c.mdb_get, .{ txn, self.dbi(cf), &key_val }) catch |e| switch (e) {
@@ -419,9 +419,6 @@ fn IntermediateType(function: anytype) type {
     const params = @typeInfo(@TypeOf(function)).Fn.params;
     return @typeInfo(params[params.len - 1].type.?).Pointer.child;
 }
-
-const MDB_CREATE = 0x40000;
-const MDB_RDONLY = 0x20000;
 
 fn cursorGet(
     cursor: *c.MDB_cursor,
