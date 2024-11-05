@@ -214,10 +214,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         snapshot_validation: {
             // holding the lock here means that the snapshot archive(s) wont be deleted
             // since deletion requires a write lock
-            const p_maybe_snapshot_info, var snapshot_info_lg = accounts_db.latest_snapshot_info.readWithLock();
+            const maybe_latest_snapshot_info, var snapshot_info_lg = accounts_db.latest_snapshot_gen_info.readWithLock();
             defer snapshot_info_lg.unlock();
 
-            const snapshot_info = p_maybe_snapshot_info.* orelse break :snapshot_validation; // no snapshot yet
+            const snapshot_info = maybe_latest_snapshot_info.* orelse break :snapshot_validation; // no snapshot yet
             const full_snapshot_info = snapshot_info.full;
 
             // copy the archive to the alternative snapshot dir

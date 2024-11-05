@@ -1092,7 +1092,7 @@ pub const SnapshotHashes = struct {
     /// This optimizes the case where we only have a single incremental snapshot.
     pub const IncrementalSnapshotsList = union(enum) {
         single: SlotAndHash,
-        list: []const SlotAndHash,
+        multiple: []const SlotAndHash,
 
         pub const @"!bincode-config": bincode.FieldConfig(IncrementalSnapshotsList) = .{
             .serializer = bincodeSerializeFn,
@@ -1105,19 +1105,19 @@ pub const SnapshotHashes = struct {
         pub fn getSlice(inc: *const IncrementalSnapshotsList) []const SlotAndHash {
             return switch (inc.*) {
                 .single => |*single| single[0..1],
-                .list => |list| list,
+                .multiple => |list| list,
             };
         }
 
         pub fn deinit(self: *const IncrementalSnapshotsList, allocator: std.mem.Allocator) void {
             switch (self.*) {
                 .single => {},
-                .list => |list| allocator.free(list),
+                .multiple => |list| allocator.free(list),
             }
         }
 
         /// Can optionally and safely have `.deinit` called.
-        pub const EMPTY: IncrementalSnapshotsList = .{ .list = &.{} };
+        pub const EMPTY: IncrementalSnapshotsList = .{ .multiple = &.{} };
 
         /// The returned snapshot collection can optionally and safely have `.deinit` called.
         pub fn initSingle(single: SlotAndHash) IncrementalSnapshotsList {
@@ -1128,7 +1128,7 @@ pub const SnapshotHashes = struct {
         /// Asserts `list.len != 1`.
         pub fn initList(list: []const SlotAndHash) IncrementalSnapshotsList {
             std.debug.assert(list.len != 1);
-            return .{ .list = list };
+            return .{ .multiple = list };
         }
 
         /// Responsibility to `.deinit` the returned snapshot collection with the specified allocator falls to the caller.
@@ -1142,7 +1142,7 @@ pub const SnapshotHashes = struct {
         pub fn clone(inc: *const IncrementalSnapshotsList, allocator: std.mem.Allocator) !IncrementalSnapshotsList {
             return switch (inc.*) {
                 .single => |single| .{ .single = single },
-                .list => |list| .{ .list = try allocator.dupe(SlotAndHash, list) },
+                .multiple => |list| .{ .multiple = try allocator.dupe(SlotAndHash, list) },
             };
         }
 

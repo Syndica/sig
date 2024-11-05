@@ -134,7 +134,7 @@ pub const AccountsDB = struct {
     /// Used to potentially skip the first `computeAccountHashesAndLamports`.
     first_snapshot_load_info: RwMux(?SnapshotGenerationInfo),
     /// Represents the largest slot info used to generate a full snapshot, and optionally an incremental snapshot relative to it, which currently exists.
-    latest_snapshot_info: RwMux(?SnapshotGenerationInfo),
+    latest_snapshot_gen_info: RwMux(?SnapshotGenerationInfo),
 
     // TODO: populate this during snapshot load
     // TODO: move to Bank struct
@@ -231,7 +231,7 @@ pub const AccountsDB = struct {
             .largest_flushed_slot = std.atomic.Value(Slot).init(0),
 
             .first_snapshot_load_info = RwMux(?SnapshotGenerationInfo).init(null),
-            .latest_snapshot_info = RwMux(?SnapshotGenerationInfo).init(null),
+            .latest_snapshot_gen_info = RwMux(?SnapshotGenerationInfo).init(null),
 
             .bank_hash_stats = RwMux(BankHashStatsMap).init(.{}),
 
@@ -961,10 +961,10 @@ pub const AccountsDB = struct {
         self: *Self,
         params: ValidateLoadFromSnapshotParams,
     ) !void {
-        const p_maybe_first: *?SnapshotGenerationInfo, var first_lg = self.first_snapshot_load_info.writeWithLock();
-        defer first_lg.unlock();
+        const maybe_first_snapshot_info: *?SnapshotGenerationInfo, var first_snapshot_info_lg = self.first_snapshot_load_info.writeWithLock();
+        defer first_snapshot_info_lg.unlock();
 
-        if (p_maybe_first.*) |first| {
+        if (maybe_first_snapshot_info.*) |first| {
             std.debug.assert(first.full.slot == params.full_slot); // already validated against a different set of snapshot info
         }
 
@@ -992,7 +992,7 @@ pub const AccountsDB = struct {
             return error.IncorrectTotalLamports;
         }
 
-        p_maybe_first.* = .{
+        maybe_first_snapshot_info.* = .{
             .full = .{
                 .slot = params.full_slot,
                 .hash = accounts_hash,
@@ -1000,7 +1000,7 @@ pub const AccountsDB = struct {
             },
             .inc = null,
         };
-        const p_maybe_first_inc = &p_maybe_first.*.?.inc;
+        const p_maybe_first_inc = &maybe_first_snapshot_info.*.?.inc;
 
         // validate the incremental snapshot
         if (params.expected_incremental) |expected_incremental| {
@@ -1322,9 +1322,9 @@ pub const AccountsDB = struct {
             const largest_flushed_slot = self.largest_flushed_slot.load(.seq_cst);
 
             const latest_full_snapshot_slot_before_generation = blk: {
-                const p_maybe_latest_info, var latest_info_lg = self.latest_snapshot_info.readWithLock();
-                defer latest_info_lg.unlock();
-                const latest_info = p_maybe_latest_info.* orelse break :blk 0;
+                const maybe_latest_snapshot_info, var latest_snapshot_info_lg = self.latest_snapshot_gen_info.readWithLock();
+                defer latest_snapshot_info_lg.unlock();
+                const latest_info = maybe_latest_snapshot_info.* orelse break :blk 0;
                 break :blk latest_info.full.slot;
             };
             if (largest_flushed_slot - latest_full_snapshot_slot_before_generation >= slots_per_full_snapshot) {
@@ -1340,9 +1340,9 @@ pub const AccountsDB = struct {
             const latest_full_snapshot_slot, // we may have just generated a full snapshot, so we re-read the latest full snapshot slot
             const latest_inc_snapshot_slot //
             = blk: {
-                const p_maybe_latest_info, var latest_info_lg = self.latest_snapshot_info.readWithLock();
-                defer latest_info_lg.unlock();
-                const latest_info = p_maybe_latest_info.* orelse break :blk .{largest_flushed_slot} ** 2;
+                const maybe_latest_snapshot_info, var latest_snapshot_info_lg = self.latest_snapshot_gen_info.readWithLock();
+                defer latest_snapshot_info_lg.unlock();
+                const latest_info = maybe_latest_snapshot_info.* orelse break :blk .{largest_flushed_slot} ** 2;
                 const latest_info_inc = latest_info.inc orelse break :blk .{ latest_info.full.slot, largest_flushed_slot };
                 break :blk .{
                     latest_info.full.slot,
@@ -2484,7 +2484,7 @@ pub const AccountsDB = struct {
 
         // lock this now such that, if under any circumstance this method was invoked twice in parallel
         // on separate threads, there wouldn't be any overlapping work being done.
-        const p_maybe_latest_snapshot_info: *?SnapshotGenerationInfo, var latest_snapshot_info_lg = self.latest_snapshot_info.writeWithLock();
+        const maybe_latest_snapshot_info: *?SnapshotGenerationInfo, var latest_snapshot_info_lg = self.latest_snapshot_gen_info.writeWithLock();
         defer latest_snapshot_info_lg.unlock();
 
         std.debug.assert(zstd_buffer.len != 0);
@@ -2492,10 +2492,10 @@ pub const AccountsDB = struct {
 
         const full_hash, const full_capitalization = compute: {
             check_first: {
-                const p_maybe_first, var first_lg = self.first_snapshot_load_info.readWithLock();
-                defer first_lg.unlock();
+                const maybe_first_snapshot_info, var first_snapshot_info_lg = self.first_snapshot_load_info.readWithLock();
+                defer first_snapshot_info_lg.unlock();
 
-                const first = p_maybe_first.* orelse break :check_first;
+                const first = maybe_first_snapshot_info.* orelse break :check_first;
                 if (first.full.slot != params.target_slot) break :check_first;
 
                 break :compute .{ first.full.hash, first.full.capitalization };
@@ -2603,7 +2603,7 @@ pub const AccountsDB = struct {
 
         // update tracking for new snapshot
 
-        if (p_maybe_latest_snapshot_info.*) |old_snapshot_info| {
+        if (maybe_latest_snapshot_info.*) |old_snapshot_info| {
             std.debug.assert(old_snapshot_info.full.slot <= params.target_slot);
 
             switch (params.old_snapshot_action) {
@@ -2625,7 +2625,7 @@ pub const AccountsDB = struct {
             }
         }
 
-        p_maybe_latest_snapshot_info.* = .{
+        maybe_latest_snapshot_info.* = .{
             .full = .{
                 .slot = params.target_slot,
                 .hash = full_hash,
@@ -2688,13 +2688,13 @@ pub const AccountsDB = struct {
 
         // we need to hold a lock on the full & incremental snapshot for the duration of the function
         // to ensure we could never race if this method was invoked in parallel on different threads.
-        const latest_snapshot_info, var latest_snapshot_info_lg = blk: {
-            const p_maybe_latest_snapshot_info, var latest_snapshot_info_lg = self.latest_snapshot_info.writeWithLock();
+        const latest_snapshot_info: *SnapshotGenerationInfo, //
+        var latest_snapshot_info_lg //
+        = blk: {
+            const maybe_latest_snapshot_info, var latest_snapshot_info_lg = self.latest_snapshot_gen_info.writeWithLock();
             errdefer latest_snapshot_info_lg.unlock();
-            break :blk .{
-                &(p_maybe_latest_snapshot_info.* orelse return error.NoFullSnapshotExists),
-                latest_snapshot_info_lg,
-            };
+            const latest_snapshot_info: *SnapshotGenerationInfo = &(maybe_latest_snapshot_info.* orelse return error.NoFullSnapshotExists);
+            break :blk .{ latest_snapshot_info, latest_snapshot_info_lg };
         };
         defer latest_snapshot_info_lg.unlock();
 
@@ -2704,10 +2704,10 @@ pub const AccountsDB = struct {
         const incremental_capitalization //
         = compute: {
             check_first: {
-                const p_maybe_first, var first_lg = self.first_snapshot_load_info.readWithLock();
-                defer first_lg.unlock();
+                const maybe_first_snapshot_info, var first_snapshot_info_lg = self.first_snapshot_load_info.readWithLock();
+                defer first_snapshot_info_lg.unlock();
 
-                const first = p_maybe_first.* orelse break :check_first;
+                const first = maybe_first_snapshot_info.* orelse break :check_first;
                 const first_inc = first.inc orelse break :check_first;
                 if (first.full.slot != full_snapshot_info.slot) break :check_first;
                 if (first_inc.slot != params.target_slot) break :check_first;
