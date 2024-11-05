@@ -1619,8 +1619,8 @@ pub const AccountsDB = struct {
                 );
             };
         }
-        if (delete_queue.items.len > 0) { 
-            self.logger.info().logf("deleted {} account files", .{ delete_queue.items.len });
+        if (delete_queue.items.len > 0) {
+            self.logger.info().logf("deleted {} account files", .{delete_queue.items.len});
         }
 
         {
