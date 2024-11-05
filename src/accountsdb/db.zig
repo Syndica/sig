@@ -142,10 +142,6 @@ pub const AccountsDB = struct {
     // TODO: move to Bank struct
     bank_hash_stats: RwMux(BankHashStatsMap),
 
-    debug: if (debug_enabled) struct {
-        is_loading_thread: bool,
-    } else void,
-
     const Self = @This();
 
     pub const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
@@ -153,8 +149,6 @@ pub const AccountsDB = struct {
     pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
-
-    const debug_enabled = std.debug.runtime_safety or builtin.is_test;
 
     pub const InitParams = struct {
         allocator: std.mem.Allocator,
@@ -226,10 +220,6 @@ pub const AccountsDB = struct {
             .latest_snapshot_gen_info = RwMux(?SnapshotGenerationInfo).init(null),
 
             .bank_hash_stats = RwMux(BankHashStatsMap).init(.{}),
-
-            .debug = if (debug_enabled) .{
-                .is_loading_thread = false,
-            },
         };
     }
 
@@ -435,8 +425,6 @@ pub const AccountsDB = struct {
             loading_thread.logger = parent.logger;
             // set the disk allocator after init() doesnt create a new one
             loading_thread.account_index.reference_allocator = parent.account_index.reference_allocator;
-
-            if (debug_enabled) loading_thread.debug.is_loading_thread = true;
         }
     }
 
@@ -453,12 +441,6 @@ pub const AccountsDB = struct {
         loading_threads: []AccountsDB,
     ) void {
         for (loading_threads) |*loading_thread| {
-            if (debug_enabled and !loading_thread.debug.is_loading_thread) {
-                const init_fn_name = "initLoadingThreads";
-                comptime std.debug.assert(initLoadingThreads == @field(AccountsDB, init_fn_name));
-                std.debug.panic("{s} must only be called on a slice of AccountsDB initialized with {s}.", .{ @src().fn_name, init_fn_name });
-            }
-
             // NOTE: deinit hashmap, dont close the files
             const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
             defer file_map_lg.unlock();
