@@ -17,25 +17,6 @@ pub fn assertIsDatabase(comptime Impl: type) void {
     );
 }
 
-/// Runs all tests in `tests`
-pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) !void {
-    assertIsDatabase(Impl(&.{}));
-    var err: ?anyerror = null;
-    inline for (@typeInfo(tests(Impl)).Struct.decls) |decl| {
-        @call(.auto, @field(tests(Impl), decl.name), .{}) catch |e| {
-            if (err == null) {
-                std.debug.print("The following tests failed:\n", .{});
-            }
-            err = e;
-            std.debug.print("\n\u{001B}[35m{s}\u{001B}[0m\n\n", .{decl.name});
-            if (@errorReturnTrace()) |trace| std.debug.dumpStackTrace(trace.*);
-        };
-    }
-    if (err) |e| {
-        return e;
-    }
-}
-
 /// Interface defining the blockstore's dependency on a database
 pub fn Database(comptime Impl: type) type {
     return struct {
@@ -273,12 +254,12 @@ pub const BytesRef = struct {
 };
 
 /// Test cases that can be applied to any implementation of Database
-fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
+pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
+    assertIsDatabase(Impl(&.{}));
+
     @setEvalBranchQuota(10_000);
     const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
     const test_dir = sig.TEST_STATE_DIR ++ "blockstore/database/" ++ impl_id.buffer ++ "/";
-
-    const allocator = std.testing.allocator;
 
     const Value1 = struct { hello: u16 };
     const Value2 = struct { world: u16 };
@@ -297,7 +278,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     const logger = .noop;
 
     return struct {
-        pub fn basic() !void {
+        test "basic" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -318,7 +300,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expect(null == not_now);
         }
 
-        pub fn @"write batch"() !void {
+        test "write batch" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -349,7 +332,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(Value2{ .world = 666 }, try db.get(allocator, cf2, 133));
         }
 
-        pub fn @"iterator forward"() !void {
+        test "iterator forward" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -379,7 +363,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator forward start exact"() !void {
+        test "iterator forward start exact" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -406,7 +391,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator forward start between"() !void {
+        test "iterator forward start between" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -433,7 +419,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator reverse"() !void {
+        test "iterator reverse" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -463,7 +450,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator reverse start at end"() !void {
+        test "iterator reverse start at end" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -493,7 +481,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator reverse start exact"() !void {
+        test "iterator reverse start exact" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);
@@ -520,7 +509,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try iter.next());
         }
 
-        pub fn @"iterator reverse start between"() !void {
+        test "iterator reverse start between" {
+            const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
             var db = try DB.open(allocator, logger, path);

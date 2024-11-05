@@ -499,7 +499,7 @@ fn generic_shred(shred_type: ShredType) type {
         fn verify(self: Self, leader: sig.core.Pubkey) bool {
             const signed_data = self.merkleRoot() catch return false;
             const signature = layout.getLeaderSignature(self.payload) orelse return false;
-            return signature.verify(leader, &signed_data.data);
+            return signature.verify(leader, &signed_data.data) catch return false;
         }
 
         /// this is the data that is signed by the signature
@@ -1048,16 +1048,20 @@ pub const ShredConstants = struct {
 };
 
 pub const layout = struct {
-    pub const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
-    pub const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
-    pub const SIZE_OF_CODE_SHRED_HEADERS: usize = 89;
-    pub const SIZE_OF_SIGNATURE: usize = sig.core.Signature.size;
-    pub const SIZE_OF_SHRED_VARIANT: usize = 1;
-    pub const SIZE_OF_SHRED_SLOT: usize = 8;
+    const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
+    const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
+    const SIZE_OF_CODE_SHRED_HEADERS: usize = 89;
+    const SIZE_OF_SIGNATURE: usize = sig.core.Signature.size;
+    const SIZE_OF_SHRED_VARIANT: usize = 1;
+    const SIZE_OF_SHRED_SLOT: usize = 8;
+    const SIZE_OF_INDEX: usize = 4;
+    const SIZE_OF_VERSION: usize = 2;
 
-    pub const OFFSET_OF_SHRED_VARIANT: usize = SIZE_OF_SIGNATURE; // 64
-    pub const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_VARIANT; // 64 + 1 = 65
-    pub const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT; // 65 + 8 = 73
+    const OFFSET_OF_SHRED_VARIANT: usize = SIZE_OF_SIGNATURE; // 64
+    const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_VARIANT; // 64 + 1 = 65
+    const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT; // 65 + 8 = 73
+    const OFFSET_OF_ERASURE_SET_INDEX: usize =
+        OFFSET_OF_SHRED_INDEX + SIZE_OF_INDEX + SIZE_OF_VERSION;
 
     pub fn getShred(packet: *const Packet) ?[]const u8 {
         if (getShredSize(packet) > packet.data.len) return null;
@@ -1096,13 +1100,17 @@ pub const layout = struct {
         return Signature.init(shred[0..SIZE_OF_SIGNATURE].*);
     }
 
-    pub fn getSignedData(shred: []const u8) ?Hash {
+    pub fn merkleRoot(shred: []const u8) ?Hash {
         const variant = getShredVariant(shred) orelse return null;
         const constants = switch (variant.shred_type) {
             .code => code_shred_constants,
             .data => data_shred_constants,
         };
         return getMerkleRoot(shred, constants, variant) catch null;
+    }
+
+    pub fn getErasureSetIndex(shred: []const u8) ?u32 {
+        return getInt(u32, shred, OFFSET_OF_ERASURE_SET_INDEX);
     }
 
     /// must be a data shred, otherwise the return value will be corrupted and meaningless
@@ -1213,8 +1221,8 @@ test "getLeaderSignature" {
     try std.testing.expect(std.mem.eql(u8, &expected_signature, &signature.data));
 }
 
-test "getSignedData" {
-    const signed_data = layout.getSignedData(&test_data_shred).?;
+test "layout.merkleRoot" {
+    const signed_data = layout.merkleRoot(&test_data_shred).?;
     const expected_signed_data = [_]u8{
         224, 241, 85,  253, 247, 62,  137, 179, 152, 192, 186, 203, 121, 194, 178, 130,
         33,  181, 143, 156, 220, 150, 69,  197, 81,  97,  237, 11,  74,  156, 129, 134,

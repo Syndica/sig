@@ -340,6 +340,6 @@ fn callRocks(logger_: Logger, comptime func: anytype, args: anytype) ReturnType(
     };
 }
 
-test "rocksdb database" {
-    try database.interface.testDatabase(RocksDB);
+comptime {
+    _ = &database.interface.testDatabase(RocksDB);
 }
