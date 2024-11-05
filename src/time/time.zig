@@ -570,10 +570,6 @@ pub const Instant = struct {
     pub fn elapsedSince(self: Instant, earlier: Instant) Duration {
         return Duration.fromNanos(self.inner.since(earlier.inner));
     }
-
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return try writer.print("{s}", .{std.fmt.fmtDuration(self.ns)});
-    }
 };
 
 pub const Timer = struct {

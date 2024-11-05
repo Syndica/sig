@@ -82,7 +82,14 @@ pub const EpochInfo = struct {
     transactionCount: u64,
 };
 
-// TODO: EpochSchedule
+pub const EpochSchedule = struct {
+    slotsPerEpoch: u64,
+    leaderScheduleSlotOffset: u64,
+    warmup: bool,
+    firstNormalEpoch: u64,
+    firstNormalSlot: u64,
+};
+
 // TODO: FeeForMessage
 // TODO: FirstAvailableBlock
 // TODO: GenesisHash

@@ -172,7 +172,7 @@ pub const PruneData = struct {
             .wallclock = self.wallclock,
         };
         const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
-        if (!self.signature.verify(self.pubkey, out)) {
+        if (!try self.signature.verify(self.pubkey, out)) {
             return error.InvalidSignature;
         }
     }

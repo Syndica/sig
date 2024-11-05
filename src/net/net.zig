@@ -557,7 +557,7 @@ test "valid ipv4 socket parsing" {
     try std.testing.expectEqual(expected_addr, actual_addr);
 }
 
-test "SocketAddr.random" {
+test "SocketAddr.initRandom" {
     var prng = std.rand.DefaultPrng.init(100);
     const addr = SocketAddr.initRandom(prng.random());
     _ = addr;

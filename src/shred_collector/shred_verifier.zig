@@ -22,6 +22,8 @@ pub fn runShredVerifier(
     unverified_shred_receiver: *Channel(Packet),
     /// me --> shred processor
     verified_shred_sender: *Channel(Packet),
+    /// me --> retransmit service
+    maybe_retransmit_shred_sender: ?*Channel(Packet),
     leader_schedule: SlotLeaderProvider,
 ) !void {
     const metrics = try registry.initStruct(Metrics);
@@ -35,6 +37,9 @@ pub fn runShredVerifier(
             if (verifyShred(&packet, leader_schedule)) |_| {
                 metrics.verified_count.inc();
                 try verified_shred_sender.send(packet);
+                if (maybe_retransmit_shred_sender) |retransmit_shred_sender| {
+                    try retransmit_shred_sender.send(packet);
+                }
             } else |err| {
                 metrics.fail.observe(err);
             }
@@ -51,10 +56,12 @@ fn verifyShred(
     const shred = shred_layout.getShred(packet) orelse return error.insufficient_shred_size;
     const slot = shred_layout.getSlot(shred) orelse return error.slot_missing;
     const signature = shred_layout.getLeaderSignature(shred) orelse return error.signature_missing;
-    const signed_data = shred_layout.getSignedData(shred) orelse return error.signed_data_missing;
+    const signed_data = shred_layout.merkleRoot(shred) orelse return error.signed_data_missing;
     const leader = leader_schedule.call(slot) orelse return error.leader_unknown;
 
-    _ = signature.verify(leader, &signed_data.data) or return error.failed_verification;
+    const valid = signature.verify(leader, &signed_data.data) catch
+        return error.failed_verification;
+    if (!valid) return error.failed_verification;
 }
 
 pub const ShredVerificationFailure = error{

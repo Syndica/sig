@@ -6,7 +6,6 @@ pub const Pubkey = extern struct {
     const Self = @This();
 
     pub const size = 32;
-    pub const @"!bincode-config:data" = sig.bincode.int.U8ArrayConfig(size);
 
     pub const ZEROES: Pubkey = .{ .data = .{0} ** size };
 

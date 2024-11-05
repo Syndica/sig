@@ -96,6 +96,7 @@ pub const ShredReceiver = struct {
             for (receivers) |receiver| {
                 var packet_count: usize = 0;
                 while (receiver.receive()) |packet| {
+                    self.metrics.received_count.inc();
                     packet_count += 1;
                     try self.handlePacket(packet, response_sender, is_repair);
                 }
@@ -128,6 +129,7 @@ pub const ShredReceiver = struct {
             };
             var our_packet = packet;
             if (is_repair) our_packet.flags.set(.repair);
+            self.metrics.satisfactory_shred_count.inc();
             try self.unverified_shred_sender.send(our_packet);
         }
     }
@@ -193,7 +195,7 @@ fn validateShred(
     // https://github.com/solana-labs/solana/pull/35076
 
     _ = layout.getLeaderSignature(shred) orelse return error.signature_missing;
-    _ = layout.getSignedData(shred) orelse return error.signed_data_missing;
+    _ = layout.merkleRoot(shred) orelse return error.signed_data_missing;
 }
 
 /// TODO: this may need to move to blockstore

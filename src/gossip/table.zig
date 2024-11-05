@@ -443,12 +443,31 @@ pub const GossipTable = struct {
     ) []ThreadSafeContactInfo {
         var infos = self.contactInfoIterator(minimum_insertion_timestamp);
         var i: usize = 0;
-        while (infos.next()) |info| {
+        while (infos.nextThreadSafe()) |info| {
             if (i >= buf.len) break;
-            buf[i] = ThreadSafeContactInfo.fromContactInfo(info.*);
+            buf[i] = info;
             i += 1;
         }
         return buf[0..i];
+    }
+
+    /// Get peers from the gossip table which have the same shred version.
+    pub fn getThreadSafeContactInfosMatchingShredVersion(
+        self: Self,
+        allocator: std.mem.Allocator,
+        my_contact_info: ThreadSafeContactInfo,
+        minumum_insertion_timestamp: u64,
+    ) !std.ArrayList(ThreadSafeContactInfo) {
+        var contact_info_iter = self.contactInfoIterator(minumum_insertion_timestamp);
+        var peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(allocator, self.contact_infos.count());
+
+        while (contact_info_iter.nextThreadSafe()) |contact_info| {
+            if (!contact_info.pubkey.equals(&my_contact_info.pubkey) and contact_info.shred_version == my_contact_info.shred_version) {
+                peers.appendAssumeCapacity(contact_info);
+            }
+        }
+
+        return peers;
     }
 
     /// Returns a slice of contact infos that are no older than minimum_insertion_timestamp.
@@ -507,6 +526,11 @@ pub const GossipTable = struct {
                 }
             }
             return null;
+        }
+
+        pub fn nextThreadSafe(self: *@This()) ?ThreadSafeContactInfo {
+            const contact_info = self.next() orelse return null;
+            return ThreadSafeContactInfo.fromContactInfo(contact_info.*);
         }
     };
 

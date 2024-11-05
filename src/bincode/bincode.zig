@@ -620,6 +620,17 @@ pub fn getConfig(comptime T: type) ?FieldConfig(T) {
         hashmap.hashMapFieldConfig(T, .{})
     else if (comptime arrayListInfo(T) != null)
         arraylist.standardConfig(T)
+    else if (T == u8)
+        int.U8Config()
+    else if (T == []const u8)
+        int.U8ConstSliceConfig()
+    else if (T == []u8)
+        int.U8SliceConfig()
+    else if (@typeInfo(T) == .Array and @typeInfo(T).Array.child == u8)
+        if (@typeInfo(T).Array.sentinel) |_|
+            int.U8ArraySentinelConfig(@typeInfo(T).Array.len)
+        else
+            int.U8ArrayConfig(@typeInfo(T).Array.len)
     else
         null;
 }

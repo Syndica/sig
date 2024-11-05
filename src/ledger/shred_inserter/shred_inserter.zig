@@ -30,10 +30,11 @@ const Timer = sig.time.Timer;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const IndexMetaWorkingSetEntry = lib.working_state.IndexMetaWorkingSetEntry;
+const MerkleRootValidator = lib.merkle_root_checks.MerkleRootValidator;
 const PendingInsertShredsState = lib.working_state.PendingInsertShredsState;
 const PossibleDuplicateShred = lib.working_state.PossibleDuplicateShred;
 const WorkingEntry = lib.working_state.WorkingEntry;
-const WorkingShredStore = lib.working_state.WorkingShredStore;
+const ShredWorkingStore = lib.working_state.ShredWorkingStore;
 const WriteBatch = BlockstoreDB.WriteBatch;
 
 const ErasureMeta = meta.ErasureMeta;
@@ -42,11 +43,6 @@ const MerkleRootMeta = meta.MerkleRootMeta;
 const ShredIndex = meta.ShredIndex;
 const SlotMeta = meta.SlotMeta;
 
-const checkForwardChainedMerkleRootConsistency =
-    lib.merkle_root_checks.checkForwardChainedMerkleRootConsistency;
-const checkBackwardsChainedMerkleRootConsistency =
-    lib.merkle_root_checks.checkBackwardsChainedMerkleRootConsistency;
-const checkMerkleRootConsistency = lib.merkle_root_checks.checkMerkleRootConsistency;
 const handleChaining = lib.slot_chaining.handleChaining;
 const recover = lib.recovery.recover;
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
@@ -175,6 +171,7 @@ pub const ShredInserter = struct {
         );
         defer state.deinit();
         var write_batch = state.write_batch;
+        const merkle_root_validator = MerkleRootValidator.init(&state);
 
         var get_lock_timer = try Timer.start();
         self.lock.lock();
@@ -194,6 +191,7 @@ pub const ShredInserter = struct {
                     if (self.checkInsertDataShred(
                         data_shred,
                         &state,
+                        merkle_root_validator,
                         &write_batch,
                         is_trusted,
                         leader_schedule,
@@ -224,6 +222,7 @@ pub const ShredInserter = struct {
                     _ = try self.checkInsertCodeShred(
                         code_shred,
                         &state,
+                        merkle_root_validator,
                         &write_batch,
                         is_trusted,
                         shred_source,
@@ -245,7 +244,7 @@ pub const ShredInserter = struct {
             const recovered_shreds = try self.tryShredRecovery(
                 &state.erasure_metas,
                 &state.index_working_set,
-                state.shredStore(),
+                state.shreds(),
                 &reed_solomon_cache,
             );
             defer {
@@ -277,6 +276,7 @@ pub const ShredInserter = struct {
                 if (self.checkInsertDataShred(
                     shred.data,
                     &state,
+                    merkle_root_validator,
                     &write_batch,
                     is_trusted,
                     leader_schedule,
@@ -337,15 +337,10 @@ pub const ShredInserter = struct {
             // unreachable: Erasure meta was just created, initial shred must exist
             const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
             // TODO: agave discards the result here. should we also?
-            _ = try checkForwardChainedMerkleRootConsistency(
-                allocator,
-                self.logger,
-                &self.db,
+            _ = try merkle_root_validator.checkForwardChaining(
                 shred.code,
                 erasure_meta,
-                state.shredStore(),
-                &state.merkle_root_metas,
-                &state.duplicate_shreds,
+                state.merkleRootMetas(),
             );
         };
 
@@ -371,15 +366,7 @@ pub const ShredInserter = struct {
             // unreachable: Merkle root meta was just created, initial shred must exist
             const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
             // TODO: agave discards the result here. should we also?
-            _ = try checkBackwardsChainedMerkleRootConsistency(
-                allocator,
-                self.logger,
-                &self.db,
-                shred,
-                state.shredStore(),
-                &state.erasure_metas,
-                &state.duplicate_shreds,
-            );
+            _ = try merkle_root_validator.checkBackwardChaining(shred, state.erasureMetas());
         }
 
         self.metrics.merkle_chaining_elapsed_us.add(merkle_chaining_timer.read().asMicros());
@@ -404,6 +391,7 @@ pub const ShredInserter = struct {
         self: *Self,
         shred: CodeShred,
         state: *PendingInsertShredsState,
+        merkle_root_validator: MerkleRootValidator,
         write_batch: *WriteBatch,
         is_trusted: bool,
         shred_source: ShredSource,
@@ -414,9 +402,15 @@ pub const ShredInserter = struct {
         const index_meta = &index_meta_working_set_entry.index;
 
         const erasure_set_id = shred.common.erasureSetId();
-        try state.loadMerkleRootMeta(erasure_set_id);
+        try state.merkleRootMetas().load(erasure_set_id);
 
-        if (!try self.shouldInsertCodeShred(state, shred, index_meta, is_trusted)) {
+        if (!try self.shouldInsertCodeShred(
+            state,
+            merkle_root_validator,
+            shred,
+            index_meta,
+            is_trusted,
+        )) {
             return false;
         }
 
@@ -430,7 +424,7 @@ pub const ShredInserter = struct {
         if (was_inserted) {
             index_meta_working_set_entry.did_insert_occur = true;
             self.metrics.num_inserted.inc();
-            try state.initMerkleRootMetaIfMissing(erasure_set_id, shred);
+            try state.merkleRootMetas().initIfMissing(erasure_set_id, shred);
         }
 
         // NOTE: it's not accurate to say the shred was "just inserted" if was_inserted is false,
@@ -449,6 +443,7 @@ pub const ShredInserter = struct {
     fn shouldInsertCodeShred(
         self: *Self,
         state: *PendingInsertShredsState,
+        merkle_root_validator: MerkleRootValidator,
         shred: CodeShred,
         index_meta: *const Index,
         is_trusted: bool,
@@ -479,14 +474,10 @@ pub const ShredInserter = struct {
                 // A previous shred has been inserted in this batch or in blockstore
                 // Compare our current shred against the previous shred for potential
                 // conflicts
-                if (!try checkMerkleRootConsistency(
-                    self.logger,
-                    &self.db,
-                    state.shredStore(),
+                if (!try merkle_root_validator.checkConsistency(
                     shred.common.slot,
                     merkle_root_meta.asRef(),
                     &.{ .code = shred },
-                    &state.duplicate_shreds,
                 )) {
                     return false;
                 }
@@ -498,7 +489,7 @@ pub const ShredInserter = struct {
         // NOTE perf: maybe this can be skipped for trusted shreds.
         // agave runs this regardless of trust, but we can check if it has
         // a meaningful performance impact to skip this for trusted shreds.
-        const erasure_meta = try state.getOrPutErasureMeta(erasure_set_id, shred);
+        const erasure_meta = try state.erasureMetas().getOrPut(erasure_set_id, shred);
         if (!erasure_meta.checkCodeShred(shred)) {
             self.metrics.num_code_shreds_invalid_erasure_config.inc();
             try self.recordShredConflict(state, shred, erasure_meta);
@@ -523,7 +514,7 @@ pub const ShredInserter = struct {
         // erasure set, but not this one. is it worth persisting this one as well?
         if (!try self.hasDuplicateShredsInSlot(slot)) {
             if (try findConflictingCodeShred(
-                state.shredStore(),
+                state.shreds(),
                 shred,
                 slot,
                 erasure_meta,
@@ -571,7 +562,7 @@ pub const ShredInserter = struct {
 
     /// agave: find_conflicting_coding_shred
     fn findConflictingCodeShred(
-        shred_store: WorkingShredStore,
+        shred_store: ShredWorkingStore,
         _: CodeShred, // TODO: figure out why this is here. delete it or add what is missing.
         slot: Slot,
         erasure_meta: *const ErasureMeta,
@@ -594,6 +585,7 @@ pub const ShredInserter = struct {
         self: *Self,
         shred: DataShred,
         state: *PendingInsertShredsState,
+        merkle_root_validator: MerkleRootValidator,
         write_batch: *WriteBatch,
         is_trusted: bool,
         leader_schedule: ?SlotLeaderProvider,
@@ -609,7 +601,7 @@ pub const ShredInserter = struct {
         const slot_meta = &slot_meta_entry.new_slot_meta;
 
         const erasure_set_id = shred.common.erasureSetId();
-        try state.loadMerkleRootMeta(erasure_set_id);
+        try state.merkleRootMetas().load(erasure_set_id);
 
         if (!is_trusted) {
             if (isDataShredPresent(shred, slot_meta, &index_meta.data_index)) {
@@ -640,7 +632,7 @@ pub const ShredInserter = struct {
             if (!try self.shouldInsertDataShred(
                 shred,
                 slot_meta,
-                state.shredStore(),
+                state.shreds(),
                 self.max_root.load(.acquire),
                 leader_schedule,
                 shred_source,
@@ -653,14 +645,10 @@ pub const ShredInserter = struct {
                 // A previous shred has been inserted in this batch or in blockstore
                 // Compare our current shred against the previous shred for potential
                 // conflicts
-                if (!try checkMerkleRootConsistency(
-                    self.logger,
-                    &self.db,
-                    state.shredStore(),
+                if (!try merkle_root_validator.checkConsistency(
                     slot,
                     merkle_root_meta.asRef(),
                     &shred_union,
-                    &state.duplicate_shreds,
                 )) {
                     return error.InvalidShred;
                 }
@@ -674,12 +662,12 @@ pub const ShredInserter = struct {
             write_batch,
             shred_source,
         );
-        try state.initMerkleRootMetaIfMissing(erasure_set_id, shred);
+        try state.merkleRootMetas().initIfMissing(erasure_set_id, shred);
         try state.just_inserted_shreds.put(shred.id(), shred_union); // TODO check first?
         index_meta_working_set_entry.did_insert_occur = true;
         slot_meta_entry.did_insert_occur = true;
 
-        try state.loadErasureMeta(erasure_set_id);
+        try state.erasureMetas().load(erasure_set_id);
 
         return newly_completed_data_sets;
     }
@@ -716,7 +704,7 @@ pub const ShredInserter = struct {
         self: *Self,
         shred: DataShred,
         slot_meta: *const SlotMeta,
-        shred_store: WorkingShredStore,
+        shred_store: ShredWorkingStore,
         max_root: Slot,
         leader_schedule: ?SlotLeaderProvider,
         shred_source: ShredSource,
@@ -853,7 +841,7 @@ pub const ShredInserter = struct {
         self: *Self,
         erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
         index_working_set: *AutoHashMap(u64, IndexMetaWorkingSetEntry),
-        shred_store: WorkingShredStore,
+        shred_store: ShredWorkingStore,
         reed_solomon_cache: *ReedSolomonCache,
     ) !ArrayList(Shred) {
         // Recovery rules:
@@ -892,7 +880,7 @@ pub const ShredInserter = struct {
         self: *Self,
         index: *const Index,
         erasure_meta: *const ErasureMeta,
-        shred_store: WorkingShredStore,
+        shred_store: ShredWorkingStore,
         reed_solomon_cache: *ReedSolomonCache,
     ) !std.ArrayList(Shred) {
         var available_shreds = ArrayList(Shred).init(self.allocator);
@@ -938,7 +926,7 @@ pub const ShredInserter = struct {
         index: *const ShredIndex,
         slot: Slot,
         shred_indices: [2]u64,
-        shred_store: WorkingShredStore,
+        shred_store: ShredWorkingStore,
         available_shreds: *ArrayList(Shred),
     ) !void {
         for (shred_indices[0]..shred_indices[1]) |i| {
@@ -1193,6 +1181,7 @@ const ShredInserterTestState = struct {
         return try self.inserter.checkInsertCodeShred(
             shred.code,
             state,
+            MerkleRootValidator.init(state),
             write_batch,
             false,
             .turbine,
