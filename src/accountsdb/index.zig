@@ -16,6 +16,12 @@ pub const AccountRef = struct {
     location: AccountLocation,
     next_ptr: ?*AccountRef = null,
 
+    pub const DEFAULT: AccountRef = .{
+        .pubkey = Pubkey.ZEROES,
+        .slot = 0,
+        .location = .{ .UnrootedMap = .{ .index = 0 } },
+    };
+
     /// Analogous to [StorageLocation](https://github.com/anza-xyz/agave/blob/b47a4ec74d85dae0b6d5dd24a13a8923240e03af/accounts-db/src/account_info.rs#L23)
     pub const AccountLocation = union(enum(u8)) {
         File: struct {
@@ -26,14 +32,6 @@ pub const AccountRef = struct {
             index: usize,
         },
     };
-
-    pub fn default() AccountRef {
-        return AccountRef{
-            .pubkey = Pubkey.ZEROES,
-            .slot = 0,
-            .location = .{ .UnrootedMap = .{ .index = 0 } },
-        };
-    }
 };
 
 /// stores the mapping from Pubkey to the account location (AccountRef)
@@ -541,10 +539,10 @@ test "account index update/remove reference" {
     try index.pubkey_ref_map.ensureTotalCapacityPerShard(100);
 
     // pubkey -> a
-    var ref_a = AccountRef.default();
+    var ref_a = AccountRef.DEFAULT;
     index.indexRefAssumeCapacity(&ref_a);
 
-    var ref_b = AccountRef.default();
+    var ref_b = AccountRef.DEFAULT;
     ref_b.slot = 1;
     index.indexRefAssumeCapacity(&ref_b);
 

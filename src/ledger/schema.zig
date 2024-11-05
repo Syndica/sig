@@ -36,7 +36,7 @@ pub const schema = struct {
     };
     /// Indicates which slots are rooted. A slot is "rooted" when consensus is finalized for that
     /// slot. It means the block from that slot is permanently included on-chain.
-    pub const roots: ColumnFamily = .{
+    pub const rooted_slots: ColumnFamily = .{
         .name = "roots",
         .Key = Slot,
         .Value = bool,
@@ -49,7 +49,7 @@ pub const schema = struct {
     };
     /// Tracks slots that we've received shreds for, but we haven't received any shreds for the
     /// parent slot. A slot's parent is the slot that was supposed to come immediately before it.
-    pub const orphans: ColumnFamily = .{
+    pub const orphan_slots: ColumnFamily = .{
         .name = "orphans",
         .Key = Slot,
         .Value = bool,

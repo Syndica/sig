@@ -101,8 +101,8 @@ pub const BlockstoreReader = struct {
     pub fn rootedSlotIterator(
         self: *Self,
         slot: Slot,
-    ) !BlockstoreDB.Iterator(schema.roots, .forward) {
-        return self.db.iterator(schema.roots, .forward, slot);
+    ) !BlockstoreDB.Iterator(schema.rooted_slots, .forward) {
+        return self.db.iterator(schema.rooted_slots, .forward, slot);
     }
 
     /// Determines if we can iterate from `starting_slot` to >= `ending_slot` by full slots
@@ -369,7 +369,7 @@ pub const BlockstoreReader = struct {
     ///
     /// Analogous to [get_first_available_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2556)
     pub fn getFirstAvailableBlock(self: *Self) !Slot {
-        var root_iterator = try self.db.iterator(schema.roots, .forward, try self.lowestSlotWithGenesis());
+        var root_iterator = try self.db.iterator(schema.rooted_slots, .forward, try self.lowestSlotWithGenesis());
         defer root_iterator.deinit();
         const first_root = try root_iterator.nextKey() orelse return 0;
         // If the first root is slot 0, it is genesis. Genesis is always complete, so it is correct
@@ -1218,7 +1218,7 @@ pub const BlockstoreReader = struct {
     /// agave handles DB errors with placeholder values, which seems like a mistake.
     /// this implementation instead returns errors.
     pub fn isRoot(self: *Self, slot: Slot) !bool {
-        return try self.db.get(self.allocator, schema.roots, slot) orelse false;
+        return try self.db.get(self.allocator, schema.rooted_slots, slot) orelse false;
     }
 
     /// Returns true if a slot is between the rooted slot bounds of the ledger, but has not itself
@@ -1230,10 +1230,10 @@ pub const BlockstoreReader = struct {
     /// agave handles DB errors with placeholder values, which seems like a mistake.
     /// this implementation instead returns errors.
     pub fn isSkipped(self: *Self, slot: Slot) !bool {
-        var iterator = try self.db.iterator(schema.roots, .forward, 0);
+        var iterator = try self.db.iterator(schema.rooted_slots, .forward, 0);
         defer iterator.deinit();
         const lowest_root = try iterator.nextKey() orelse 0;
-        return if (try self.db.get(self.allocator, schema.roots, slot)) |_|
+        return if (try self.db.get(self.allocator, schema.rooted_slots, slot)) |_|
             false
         else
             slot < self.max_root.load(.monotonic) and slot > lowest_root;
@@ -1726,7 +1726,7 @@ test "getRootedBlockTime" {
     // root it
     var write_batch2 = try db.initWriteBatch();
     defer write_batch2.deinit();
-    try write_batch2.put(schema.roots, 19, true);
+    try write_batch2.put(schema.rooted_slots, 19, true);
     try db.commit(write_batch2);
 
     // should succeeed
@@ -1819,7 +1819,7 @@ test "rootedSlotIterator" {
     defer write_batch.deinit();
     const roots: [3]Slot = .{ 2, 3, 4 };
     for (roots) |slot| {
-        try write_batch.put(schema.roots, slot, true);
+        try write_batch.put(schema.rooted_slots, slot, true);
     }
     try db.commit(write_batch);
 

@@ -1,8 +1,10 @@
 //! custom hashmap used for the index's map
 //! based on google's swissmap
 
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
+const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
 const accounts_db = sig.accounts_db;
 
 pub fn SwissMap(
@@ -508,7 +510,7 @@ test "swissmap resize" {
 
     try map.ensureTotalCapacity(100);
 
-    const ref = accounts_db.index.AccountRef.default();
+    const ref = accounts_db.index.AccountRef.DEFAULT;
     map.putAssumeCapacity(sig.core.Pubkey.ZEROES, ref);
 
     // this will resize the map with the key still in there
@@ -608,21 +610,21 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    const accounts = try allocator.alloc(accounts_db.index.AccountRef, n_accounts);
+    const account_refs = try allocator.alloc(accounts_db.index.AccountRef, n_accounts);
     const pubkeys = try allocator.alloc(sig.core.Pubkey, n_accounts);
-    for (0..n_accounts) |i| {
-        random.bytes(&pubkeys[i].data);
-        accounts[i] = accounts_db.index.AccountRef.default();
-        accounts[i].pubkey = pubkeys[i];
+    for (account_refs, pubkeys) |*account_ref, *pubkey| {
+        account_ref.* = accounts_db.index.AccountRef.DEFAULT;
+        random.bytes(&account_ref.pubkey.data);
+        pubkey.* = account_ref.pubkey;
     }
     random.shuffle(sig.core.Pubkey, pubkeys);
 
-    return .{ accounts, pubkeys };
+    return .{ account_refs, pubkeys };
 }
 
 pub const BenchmarkSwissMap = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const max_iterations = 100;
 
     pub const BenchArgs = struct {
         n_accounts: usize,
@@ -644,11 +646,20 @@ pub const BenchmarkSwissMap = struct {
         },
     };
 
-    pub fn swissmapReadWriteBenchmark(bench_args: BenchArgs) !sig.time.Duration {
-        const allocator = std.heap.c_allocator;
+    pub fn swissmapReadWriteBenchmark(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
+        read_time: u64,
+        write_time: u64,
+        read_speedup_vs_std: f32,
+        write_speedup_vs_std: f32,
+    } {
+        const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
         const n_accounts = bench_args.n_accounts;
 
-        const accounts, const pubkeys = try generateData(allocator, n_accounts);
+        const account_refs, const pubkeys = try generateData(allocator, n_accounts);
+        defer {
+            allocator.free(account_refs);
+            allocator.free(pubkeys);
+        }
 
         const write_time, const read_time = try benchGetOrPut(
             SwissMap(
@@ -658,7 +669,7 @@ pub const BenchmarkSwissMap = struct {
                 accounts_db.index.ShardedPubkeyRefMap.eql,
             ),
             allocator,
-            accounts,
+            account_refs,
             pubkeys,
             null,
         );
@@ -679,28 +690,21 @@ pub const BenchmarkSwissMap = struct {
         const std_write_time, const std_read_time = try benchGetOrPut(
             BenchHashMap(InnerT),
             allocator,
-            accounts,
+            account_refs,
             pubkeys,
             null,
         );
 
+        // NOTE: if (speed_up < 1.0) "swissmap is slower" else "swissmap is faster";
         const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos())) / @as(f32, @floatFromInt(write_time.asNanos()));
-        const write_faster_or_slower = if (write_speedup < 1.0) "slower" else "faster";
-        std.debug.print("\tWRITE: {} ({d:.2}x {s} than std)\n", .{
-            std.fmt.fmtDuration(write_time.asNanos()),
-            write_speedup,
-            write_faster_or_slower,
-        });
-
         const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
-        const read_faster_or_slower = if (read_speedup < 1.0) "slower" else "faster";
-        std.debug.print("\tREAD: {} ({d:.2}x {s} than std)\n", .{
-            std.fmt.fmtDuration(read_time.asNanos()),
-            read_speedup,
-            read_faster_or_slower,
-        });
 
-        return write_time;
+        return .{
+            .read_time = units.convertDuration(read_time),
+            .write_time = units.convertDuration(write_time),
+            .read_speedup_vs_std = read_speedup,
+            .write_speedup_vs_std = write_speedup,
+        };
     }
 };
 
@@ -712,6 +716,7 @@ fn benchGetOrPut(
     read_amount: ?usize,
 ) !struct { sig.time.Duration, sig.time.Duration } {
     var t = try T.initCapacity(allocator, accounts.len);
+    defer t.deinit();
 
     var timer = try sig.time.Timer.start();
     for (0..accounts.len) |i| {
@@ -760,19 +765,25 @@ pub fn BenchHashMap(T: type) type {
         //     }
         // }, false);
 
-        pub fn initCapacity(allocator: std.mem.Allocator, n: usize) !@This() {
-            var refs = T.init(allocator);
-            try refs.ensureTotalCapacity(@intCast(n));
-            return @This(){ .inner = refs };
+        const Self = @This();
+
+        pub fn deinit(self: *Self) void {
+            self.inner.deinit();
         }
 
-        pub fn write(self: *@This(), accounts: []accounts_db.index.AccountRef) !void {
+        pub fn initCapacity(allocator: std.mem.Allocator, n: usize) !Self {
+            var refs = T.init(allocator);
+            try refs.ensureTotalCapacity(@intCast(n));
+            return Self{ .inner = refs };
+        }
+
+        pub fn write(self: *Self, accounts: []accounts_db.index.AccountRef) !void {
             for (0..accounts.len) |i| {
                 self.inner.putAssumeCapacity(accounts[i].pubkey, accounts[i]);
             }
         }
 
-        pub fn read(self: *@This(), pubkey: *sig.core.Pubkey) !usize {
+        pub fn read(self: *Self, pubkey: *sig.core.Pubkey) !usize {
             if (self.inner.get(pubkey.*)) |acc| {
                 return 1 + @as(usize, @intCast(acc.offset));
             } else {
@@ -780,9 +791,15 @@ pub fn BenchHashMap(T: type) type {
             }
         }
 
-        pub fn getOrPutAssumeCapacity(self: *@This(), pubkey: sig.core.Pubkey) T.GetOrPutResult {
+        pub fn getOrPutAssumeCapacity(self: *Self, pubkey: sig.core.Pubkey) T.GetOrPutResult {
             const result = self.inner.getOrPutAssumeCapacity(pubkey);
             return result;
         }
     };
+}
+
+test "bench swissmap read/write" {
+    _ = try BenchmarkSwissMap.swissmapReadWriteBenchmark(.nanos, .{
+        .n_accounts = 1_000_000,
+    });
 }

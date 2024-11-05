@@ -1,6 +1,6 @@
 const std = @import("std");
-const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
 
 /// fork of stdlib bit_set `ArrayBitSet` to allow for
 /// dynamic sizing of bitsets and different types of masks
