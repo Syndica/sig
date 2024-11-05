@@ -28,8 +28,8 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
 
             // create and open the database
             const env = try ret(c.mdb_env_create, .{});
-            try result(c.mdb_env_set_maxdbs(env, column_families.len));
-            try result(c.mdb_env_open(env, @ptrCast(path), 0, 0o700));
+            try maybeError(c.mdb_env_set_maxdbs(env, column_families.len));
+            try maybeError(c.mdb_env_open(env, @ptrCast(path), 0, 0o700));
 
             // begin transaction to create column families aka "databases" in lmdb
             const txn = try ret(c.mdb_txn_begin, .{ env, null, 0 });
@@ -46,7 +46,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             }
 
             // persist column families
-            try result(c.mdb_txn_commit(txn));
+            try maybeError(c.mdb_txn_commit(txn));
 
             return .{
                 .allocator = allocator,
@@ -90,8 +90,8 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
 
             var key_val = toVal(key_bytes.data);
             var val_val = toVal(val_bytes.data);
-            try result(c.mdb_put(txn, self.dbi(cf), &key_val, &val_val, 0));
-            try result(c.mdb_txn_commit(txn));
+            try maybeError(c.mdb_put(txn, self.dbi(cf), &key_val, &val_val, 0));
+            try maybeError(c.mdb_txn_commit(txn));
         }
 
         pub fn get(
@@ -147,11 +147,11 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
             errdefer c.mdb_txn_abort(txn);
 
-            result(c.mdb_del(txn, self.dbi(cf), &key_val, &val_val)) catch |e| switch (e) {
+            maybeError(c.mdb_del(txn, self.dbi(cf), &key_val, &val_val)) catch |e| switch (e) {
                 error.MDB_NOTFOUND => {},
                 else => return e,
             };
-            try result(c.mdb_txn_commit(txn));
+            try maybeError(c.mdb_txn_commit(txn));
         }
 
         pub fn deleteFilesInRange(
@@ -179,7 +179,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         }
 
         pub fn commit(_: *Self, batch: WriteBatch) LmdbError!void {
-            try result(c.mdb_txn_commit(batch.txn));
+            try maybeError(c.mdb_txn_commit(batch.txn));
         }
 
         /// A write batch is a sequence of operations that execute atomically.
@@ -220,7 +220,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
 
                 var key_val = toVal(key_bytes.data);
                 var val_val = toVal(val_bytes.data);
-                try result(c.mdb_put(self.txn, self.dbi(cf), &key_val, &val_val, 0));
+                try maybeError(c.mdb_put(self.txn, self.dbi(cf), &key_val, &val_val, 0));
             }
 
             pub fn delete(
@@ -232,7 +232,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 defer key_bytes.deinit();
 
                 var key_val = toVal(key_bytes.data);
-                try result(c.mdb_del(self.txn, self.dbi(cf), &key_val, 0));
+                try maybeError(c.mdb_del(self.txn, self.dbi(cf), &key_val, 0));
             }
 
             pub fn deleteRange(
@@ -255,7 +255,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                     return;
 
                 while (std.mem.lessThan(u8, key, end_bytes.data)) {
-                    try result(c.mdb_cursor_del(cursor, 0));
+                    try maybeError(c.mdb_cursor_del(cursor, 0));
                     key, _ = try cursorGetRelative(cursor, .next) orelse return;
                 }
             }
@@ -396,7 +396,7 @@ fn ret(constructor: anytype, args: anytype) LmdbError!TypeToCreate(constructor) 
         .Int => 0,
         else => undefined,
     };
-    try result(@call(.auto, constructor, args ++ .{&maybe}));
+    try maybeError(@call(.auto, constructor, args ++ .{&maybe}));
     return switch (@typeInfo(Intermediate)) {
         .Optional => maybe.?,
         else => maybe,
@@ -423,7 +423,7 @@ fn cursorGet(
 ) LmdbError!?struct { []const u8, []const u8 } {
     var key_val = toVal(key);
     var val_val: c.MDB_val = undefined;
-    result(c.mdb_cursor_get(
+    maybeError(c.mdb_cursor_get(
         cursor,
         &key_val,
         &val_val,
@@ -441,7 +441,7 @@ fn cursorGetRelative(
 ) LmdbError!?struct { []const u8, []const u8 } {
     var key_val: c.MDB_val = undefined;
     var val_val: c.MDB_val = undefined;
-    result(c.mdb_cursor_get(
+    maybeError(c.mdb_cursor_get(
         cursor,
         &key_val,
         &val_val,
@@ -505,7 +505,8 @@ const CursorRelativeOperation = enum(c_uint) {
     prev_multiple = 18,
 };
 
-fn result(int: isize) LmdbError!void {
+/// Converts an error return code from LMDB into an error union
+fn maybeError(int: isize) LmdbError!void {
     return switch (int) {
         -30799 => error.MDB_KEYEXIST,
         -30798 => error.MDB_NOTFOUND,
