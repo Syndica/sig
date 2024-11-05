@@ -1872,6 +1872,9 @@ test "slotRangeConnected" {
     }
     try db.commit(write_batch);
 
+    var write_batch2 = try db.initWriteBatch();
+    defer write_batch2.deinit();
+
     const is_connected = try reader.slotRangeConnected(1, 3);
     try std.testing.expectEqual(true, is_connected);
 
@@ -1880,7 +1883,7 @@ test "slotRangeConnected" {
     defer slot_meta.deinit();
     // ensure isFull() is FALSE
     slot_meta.last_index = 1;
-    try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
+    try write_batch2.put(schema.slot_meta, slot_meta.slot, slot_meta);
 
     // this should still pass
     try std.testing.expectEqual(true, try reader.slotRangeConnected(1, 3));

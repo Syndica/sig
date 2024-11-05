@@ -241,6 +241,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 key: cf.Key,
                 value: cf.Value,
             ) anyerror!void {
+                std.debug.assert(!self.executed.*);
                 const k_bytes = try key_serializer.serializeAlloc(self.allocator, key);
                 errdefer self.allocator.free(k_bytes);
                 const v_bytes = try value_serializer.serializeAlloc(self.allocator, value);
@@ -256,6 +257,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 comptime cf: ColumnFamily,
                 key: cf.Key,
             ) anyerror!void {
+                std.debug.assert(!self.executed.*);
                 const k_bytes = try key_serializer.serializeAlloc(self.allocator, key);
                 errdefer self.allocator.free(k_bytes);
                 return try self.instructions.append(
@@ -270,6 +272,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 start: cf.Key,
                 end: cf.Key,
             ) anyerror!void {
+                std.debug.assert(!self.executed.*);
                 const start_bytes = try key_serializer.serializeAlloc(self.allocator, start);
                 errdefer self.allocator.free(start_bytes);
                 const end_bytes = try key_serializer.serializeAlloc(self.allocator, end);
