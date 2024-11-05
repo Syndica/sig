@@ -4,7 +4,7 @@ const Logger = sig.trace.Logger;
 
 // TODO: change to writer interface when logger has improved
 pub fn printTimeEstimate(
-    logger_: Logger,
+    logger: anytype,
     // timer should be started at the beginning of the loop
     timer: *sig.time.Timer,
     total: usize,
@@ -12,7 +12,6 @@ pub fn printTimeEstimate(
     comptime name: []const u8,
     other_info: ?[]const u8,
 ) void {
-    const logger = logger_.withScope(@src().fn_name);
     if (i == 0 or total == 0) return;
     if (i > total) {
         if (other_info) |info| {

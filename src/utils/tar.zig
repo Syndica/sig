@@ -133,7 +133,7 @@ pub fn parallelUntarToFileSystem(
                 if (n_files_estimate) |total_n_files| {
                     if (progress_timer.read().asNanos() > TAR_PROGRESS_UPDATES.asNanos()) {
                         printTimeEstimate(
-                            logger.unscoped(),
+                            logger,
                             &timer,
                             total_n_files,
                             file_count,

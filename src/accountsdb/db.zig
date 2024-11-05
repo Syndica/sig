@@ -578,7 +578,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger.unscoped(),
+                    self.logger.withScope(@src().fn_name),
                     &timer,
                     n_account_files,
                     file_count,
@@ -614,7 +614,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger.unscoped(),
+                    self.logger.withScope(@src().fn_name),
                     &timer,
                     total_n_accounts,
                     ref_count,
@@ -703,11 +703,12 @@ pub const AccountsDB = struct {
     /// combines multiple thread indexes into the given index.
     /// each bin is also sorted by pubkey.
     pub fn combineThreadIndexesMultiThread(
-        logger: Logger,
+        logger_: Logger,
         index: *AccountIndex,
         thread_dbs: []const AccountsDB,
         task: sig.utils.thread.TaskParams,
     ) !void {
+        const logger = logger_.withScope(@src().fn_name);
         const shard_start_index = task.start_index;
         const shard_end_index = task.end_index;
 
@@ -1077,7 +1078,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger.unscoped(),
+                    self.logger.withScope(@src().fn_name),
                     &timer,
                     shards.len,
                     count,
