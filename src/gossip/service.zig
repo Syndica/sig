@@ -1821,8 +1821,8 @@ pub const GossipService = struct {
                 .OverwroteExistingEntry => {},
 
                 // concerning
-                .IgnoredOldValue => self.logger.warn().logf("Ignored old value: {}", .{gossip_value}), // TODO: should this be a warning, or just info?
-                .IgnoredDuplicateValue => self.logger.warn().logf("Ignored old value: {}", .{gossip_value}), // TODO: should this be a warning, or just info?
+                .IgnoredOldValue => self.logger.warn().logf("DrainPushMessages: Ignored old value ({})", .{gossip_value}),
+                .IgnoredDuplicateValue => self.logger.warn().logf("DrainPushMessages: Ignored duplicate value ({})", .{gossip_value}),
 
                 // not possible to reach from `insert`.
                 .IgnoredTimeout => unreachable,
