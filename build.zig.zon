@@ -36,8 +36,8 @@
             .hash = "1220b27e10217b145f498f2af2bc34a4b04aa0b6f4866428fb379ee6580d1d097346",
         },
         .lsquic = .{
-            .url = "https://github.com/Syndica/lsquic/archive/acc73069a56845376708ddb78c6f04de53d4c83e.tar.gz",
-            .hash = "12206082b8e0394eb0245ac760501adb39b3bffbdca397f6c6031d910e2ff4267765",
+            .url = "https://github.com/Syndica/lsquic/archive/7c34f2472f390482dffada7a65b8231f6b5b3a3b.tar.gz",
+            .hash = "1220ff572d14b18d9774a298db0b8aeb046800039ccc8e10646992b074e26ea4c38a",
         },
         .xev = .{
             .url = "https://github.com/mitchellh/libxev/archive/b8d1d93e5c899b27abbaa7df23b496c3e6a178c7.tar.gz",

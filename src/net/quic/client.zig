@@ -154,7 +154,6 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
             var tick_complete: xev.Completion = undefined;
             self.tick_event.run(&loop, &tick_complete, 500, Self, self, onTick);
 
-            // TODO: figure out a better solution for this
             var packets_in_complete: xev.Completion = undefined;
             const read_buffer = try self.allocator.alloc(u8, 1500);
             defer self.allocator.free(read_buffer);
@@ -206,8 +205,6 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
             if (self.exit.load(.acquire)) {
                 xev_loop.stop();
             }
-
-            self.logger.info().logf("(demo.transaction_sender)    quic client active connections: {d}", .{self.connections.len});
 
             return .disarm;
         }
@@ -446,7 +443,7 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
                 _: ?*lsquic.lsquic_stream_t,
                 _: ?*lsquic.lsquic_stream_ctx_t,
             ) callconv(.C) void {
-                @panic("Uni-directional streams should never receive data");
+                @panic("uni-directional streams should never receive data");
             }
 
             fn onWrite(
@@ -496,8 +493,8 @@ fn initSslContext() *ssl.SSL_CTX {
     if (ssl.SSL_CTX_set_max_proto_version(ssl_ctx, ssl.TLS1_3_VERSION) == 0)
         @panic("SSL_CTX_set_max_proto_version failed\n");
 
-    const sigalg: u16 = ssl.SSL_SIGN_ED25519;
-    if (ssl.SSL_CTX_set_verify_algorithm_prefs(ssl_ctx, &sigalg, 1) == 0)
+    const signature_algs: []const u16 = &.{ssl.SSL_SIGN_ED25519};
+    if (ssl.SSL_CTX_set_verify_algorithm_prefs(ssl_ctx, signature_algs.ptr, 1) == 0)
         @panic("SSL_CTX_set_verify_algorithm_prefs failed\n");
 
     const pubkey, const cert = initX509Certificate();

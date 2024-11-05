@@ -322,7 +322,10 @@ pub const MockTransferService = struct {
         );
 
         const new_balance = try self.getBalance(pubkey);
-        if (new_balance != 0) return error.CloseAccountFailed;
+        if (new_balance != 0) {
+            self.logger.warn().logf("close account failed: account still has {d} lamports", .{new_balance});
+            return error.CloseAccountFailed;
+        }
     }
 
     /// Get the balance of a pubkey
