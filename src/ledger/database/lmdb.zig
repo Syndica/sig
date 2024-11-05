@@ -27,12 +27,12 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             const owned_path = try allocator.dupeZ(u8, path);
 
             // create and open the database
-            const env = try ret(c.mdb_env_create, .{});
+            const env = try returnOutput(c.mdb_env_create, .{});
             try maybeError(c.mdb_env_set_maxdbs(env, column_families.len));
             try maybeError(c.mdb_env_open(env, owned_path.ptr, 0, 0o700));
 
             // begin transaction to create column families aka "databases" in lmdb
-            const txn = try ret(c.mdb_txn_begin, .{ env, null, 0 });
+            const txn = try returnOutput(c.mdb_txn_begin, .{ env, null, 0 });
             errdefer c.mdb_txn_abort(txn);
 
             // allocate cf handles
@@ -42,7 +42,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             // save cf handles
             inline for (column_families, 0..) |cf, i| {
                 // open cf/database, creating if necessary
-                dbis[i] = try ret(c.mdb_dbi_open, .{ txn, cf.name.ptr, c.MDB_CREATE });
+                dbis[i] = try returnOutput(c.mdb_dbi_open, .{ txn, cf.name.ptr, c.MDB_CREATE });
             }
 
             // persist column families
@@ -66,10 +66,10 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         }
 
         pub fn count(self: *Self, comptime cf: ColumnFamily) LmdbOrAllocatorError!u64 {
-            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
+            const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
             defer c.mdb_txn_abort(txn);
 
-            const stat = try ret(c.mdb_stat, .{ txn, self.dbi(cf) });
+            const stat = try returnOutput(c.mdb_stat, .{ txn, self.dbi(cf) });
 
             return stat.ms_entries;
         }
@@ -85,7 +85,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             const val_bytes = try value_serializer.serializeToRef(self.allocator, value);
             defer val_bytes.deinit();
 
-            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
+            const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, 0 });
             errdefer c.mdb_txn_abort(txn);
 
             var key_val = toVal(key_bytes.data);
@@ -104,10 +104,10 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             defer key_bytes.deinit();
             var key_val = toVal(key_bytes.data);
 
-            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
+            const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
             defer c.mdb_txn_abort(txn);
 
-            const value = ret(c.mdb_get, .{ txn, self.dbi(cf), &key_val }) catch |e| switch (e) {
+            const value = returnOutput(c.mdb_get, .{ txn, self.dbi(cf), &key_val }) catch |e| switch (e) {
                 error.MDB_NOTFOUND => return null,
                 else => return e,
             };
@@ -120,10 +120,10 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             defer key_bytes.deinit();
             var key_val = toVal(key_bytes.data);
 
-            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
+            const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
             errdefer c.mdb_txn_abort(txn);
 
-            const item = ret(c.mdb_get, .{ txn, self.dbi(cf), &key_val }) catch |e| switch (e) {
+            const item = returnOutput(c.mdb_get, .{ txn, self.dbi(cf), &key_val }) catch |e| switch (e) {
                 error.MDB_NOTFOUND => return null,
                 else => return e,
             };
@@ -144,7 +144,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             var key_val = toVal(key_bytes.data);
             var val_val: c.MDB_val = undefined;
 
-            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
+            const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, 0 });
             errdefer c.mdb_txn_abort(txn);
 
             maybeError(c.mdb_del(txn, self.dbi(cf), &key_val, &val_val)) catch |e| switch (e) {
@@ -172,7 +172,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             executed.* = false;
             return .{
                 .allocator = self.allocator,
-                .txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 }),
+                .txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, 0 }),
                 .dbis = self.dbis,
                 .executed = executed,
             };
@@ -246,7 +246,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 const end_bytes = try key_serializer.serializeToRef(self.allocator, end);
                 defer end_bytes.deinit();
 
-                const cursor = try ret(c.mdb_cursor_open, .{ self.txn, self.dbi(cf) });
+                const cursor = try returnOutput(c.mdb_cursor_open, .{ self.txn, self.dbi(cf) });
                 defer c.mdb_cursor_close(cursor);
 
                 var key, _ = if (try cursorGet(cursor, start_bytes.data, .set_range)) |kv|
@@ -273,10 +273,10 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 null;
             defer if (maybe_start_bytes) |sb| sb.deinit();
 
-            const txn = try ret(c.mdb_txn_begin, .{ self.env, null, 0 });
+            const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, 0 });
             errdefer c.mdb_txn_abort(txn);
 
-            const cursor = try ret(c.mdb_cursor_open, .{ txn, self.dbi(cf) });
+            const cursor = try returnOutput(c.mdb_cursor_open, .{ txn, self.dbi(cf) });
             errdefer c.mdb_cursor_close(cursor);
 
             var start_operation: CursorRelativeOperation = .get_current;
@@ -398,29 +398,67 @@ fn resetTxnFree(ctx: *anyopaque, _: []u8, _: u8, _: usize) void {
     c.mdb_txn_abort(txn);
 }
 
-fn ret(constructor: anytype, args: anytype) LmdbError!TypeToCreate(constructor) {
-    const Intermediate = IntermediateType(constructor);
-    var maybe: IntermediateType(constructor) = switch (@typeInfo(Intermediate)) {
+/// Call an LMDB function and return its combined output as an error union.
+///
+/// This converts parameter-based outputs into return values, and converts error
+/// code integers into zig errors.
+///
+/// LMDB functions only return integers representing an error code. If the
+/// function actually needs to provide more data as an output, the caller needs
+/// to pass in a pointer as the final argument to the function. LMDB will write
+/// the output data to that pointer. This makes LMDB cumbersome to use because it
+/// requires you to have a few extra lines of code every time you call an LMDB
+/// function that has any outputs. This function implements this process for you,
+/// so you can get the output data as a normal return value.
+///
+/// To use it, pass in the LMDB function you'd like to call, and all of the
+/// arguments for that function *except the last*. The last argument is for the
+/// output, and will be provided by this function.
+///
+/// Without `returnOutput`:
+/// ```zig
+/// const maybe_env: ?*MDB_env = null;
+/// try maybeError(c.mdb_env_create(&maybe_env));
+/// const env = maybe_env.?;
+/// ```
+///
+/// With `returnOutput`:
+/// ```zig
+/// const env = try returnOutput(c.mdb_env_create, .{});
+/// ```
+fn returnOutput(fn_with_output: anytype, args: anytype) LmdbError!OutputType(fn_with_output) {
+    // create a local variable to hold the function's output.
+    const MaybeOutput = LastParamChild(fn_with_output);
+    var maybe_output: MaybeOutput = switch (@typeInfo(MaybeOutput)) {
         .Optional => null,
         .Int => 0,
         else => undefined,
     };
-    try maybeError(@call(.auto, constructor, args ++ .{&maybe}));
-    return switch (@typeInfo(Intermediate)) {
-        .Optional => maybe.?,
-        else => maybe,
+
+    // call the function, passing a pointer to the output variable.
+    // check the return code, and return an error if there was an error.
+    try maybeError(@call(.auto, fn_with_output, args ++ .{&maybe_output}));
+
+    // return the output value, unwrapping the optional if needed.
+    return switch (@typeInfo(MaybeOutput)) {
+        .Optional => maybe_output.?,
+        else => maybe_output,
     };
 }
 
-fn TypeToCreate(function: anytype) type {
-    const InnerType = IntermediateType(function);
+/// For an LMDB function that provides its output by writing to a pointer, this
+/// is the data type of the output.
+fn OutputType(fn_with_output: anytype) type {
+    const InnerType = LastParamChild(fn_with_output);
     return switch (@typeInfo(InnerType)) {
         .Optional => |o| o.child,
         else => InnerType,
     };
 }
 
-fn IntermediateType(function: anytype) type {
+/// Returns the child type of the last parameter of a function,
+/// assuming that parameter is a pointer.
+fn LastParamChild(function: anytype) type {
     const params = @typeInfo(@TypeOf(function)).Fn.params;
     return @typeInfo(params[params.len - 1].type.?).Pointer.child;
 }
