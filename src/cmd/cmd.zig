@@ -1152,7 +1152,7 @@ const AppBase = struct {
     const Self = @This();
 
     fn init(allocator: Allocator) !AppBase {
-        const logger = try spawnLogger();
+        const logger = (try spawnLogger()).withScope(@typeName(Self));
         errdefer logger.deinit();
 
         const metrics_registry = globalRegistry();
@@ -1160,17 +1160,17 @@ const AppBase = struct {
         const metrics_thread = try spawnMetrics(gpa_allocator, config.current.metrics_port);
         errdefer metrics_thread.detach();
 
-        const my_keypair = try getOrInitIdentity(allocator, logger);
+        const my_keypair = try getOrInitIdentity(allocator, logger.unscoped());
 
-        const entrypoints = try getEntrypoints(logger);
+        const entrypoints = try getEntrypoints(logger.unscoped());
         errdefer entrypoints.deinit();
 
-        const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
+        const ip_echo_data = try getMyDataFromIpEcho(logger.unscoped(), entrypoints.items);
         const my_port = config.current.gossip.port;
 
         return .{
             .closed = false,
-            .logger = logger.withScope(@typeName(AppBase)),
+            .logger = logger,
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
             .my_keypair = my_keypair,
