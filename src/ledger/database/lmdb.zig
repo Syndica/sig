@@ -18,18 +18,18 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         allocator: Allocator,
         env: *c.MDB_env,
         dbis: []const c.MDB_dbi,
-        path: []const u8,
+        path: [:0]const u8,
 
         const Self = @This();
 
         pub fn open(allocator: Allocator, logger: Logger, path: []const u8) anyerror!Self {
             logger.info().log("Initializing LMDB");
-            const owned_path = try allocator.dupe(u8, path);
+            const owned_path = try allocator.dupeZ(u8, path);
 
             // create and open the database
             const env = try ret(c.mdb_env_create, .{});
             try maybeError(c.mdb_env_set_maxdbs(env, column_families.len));
-            try maybeError(c.mdb_env_open(env, @ptrCast(path), 0, 0o700));
+            try maybeError(c.mdb_env_open(env, owned_path.ptr, 0, 0o700));
 
             // begin transaction to create column families aka "databases" in lmdb
             const txn = try ret(c.mdb_txn_begin, .{ env, null, 0 });

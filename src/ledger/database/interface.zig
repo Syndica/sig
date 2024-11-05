@@ -177,7 +177,7 @@ pub fn Database(comptime Impl: type) type {
 pub const IteratorDirection = enum { forward, reverse };
 
 pub const ColumnFamily = struct {
-    name: []const u8,
+    name: [:0]const u8,
     Key: type,
     Value: type,
 
