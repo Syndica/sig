@@ -396,7 +396,7 @@ pub const TurbineTree = struct {
             pub fn lt(_: void, lhs: Node, rhs: Node) bool {
                 if (lhs.stake > rhs.stake) return true;
                 if (lhs.stake < rhs.stake) return false;
-                return std.mem.lessThan(u8, &lhs.pubkey().data, &rhs.pubkey().data);
+                return !std.mem.lessThan(u8, &lhs.pubkey().data, &rhs.pubkey().data);
             }
         }.lt);
 
@@ -826,7 +826,51 @@ pub fn makeTestCluster(
     return .{ stakes, RwMux(GossipTable).init(gossip_table) };
 }
 
-test "AgaveEquivalence.getRetransmitChildren" {
+pub fn writeStakes(
+    allocator: std.mem.Allocator,
+    writer: std.fs.File.Writer,
+    staked_nodes: std.AutoArrayHashMap(Pubkey, u64),
+) !void {
+    const SNode = struct { Pubkey, u64 };
+    var entries = std.ArrayList(SNode).init(allocator);
+    defer entries.deinit();
+
+    for (staked_nodes.keys(), staked_nodes.values()) |pubkey, stake| {
+        try entries.append(.{ pubkey, stake });
+    }
+
+    std.mem.sortUnstable(SNode, entries.items, {}, struct {
+        pub fn lt(_: void, lhs: SNode, rhs: SNode) bool {
+            if (lhs[1] > rhs[1]) return true;
+            if (lhs[1] < rhs[1]) return false;
+            return !std.mem.lessThan(u8, &lhs[0].data, &rhs[0].data);
+        }
+    }.lt);
+
+    try std.fmt.format(writer, "STAKED_NODES: ", .{});
+    for (entries.items) |entry| {
+        try std.fmt.format(writer, "({s}, {}), ", .{ entry[0].string().slice(), entry[1] });
+    }
+    try std.fmt.format(writer, "\n", .{});
+}
+
+fn writeShuffledIndices(writer: std.fs.File.Writer, shuffled_indices: std.ArrayList(usize)) !void {
+    try std.fmt.format(writer, "SHUFFLED_INDICES: ", .{});
+    for (shuffled_indices.items) |index| {
+        try std.fmt.format(writer, "{}, ", .{index});
+    }
+    try std.fmt.format(writer, "\n", .{});
+}
+
+fn writeRetransmitPeers(writer: std.fs.File.Writer, i: usize, root_distance: usize, children: std.ArrayList(TurbineTree.Node)) !void {
+    try std.fmt.format(writer, "ITER: {}, ROOT_DISTANCE: {}, CHILDREN: ", .{ i, root_distance });
+    for (children.items) |child| {
+        try std.fmt.format(writer, "({s}, {}), ", .{ child.pubkey().string().slice(), child.stake });
+    }
+    try std.fmt.format(writer, "\n", .{});
+}
+
+test "agave-equivalence: turbine tree" {
     const my_keypair = try KeyPair.fromSecretKey(try SecretKey.fromBytes([_]u8{
         233, 236, 240, 63,  159, 199, 2,   210,
         8,   217, 34,  214, 242, 104, 123, 94,
@@ -842,15 +886,20 @@ test "AgaveEquivalence.getRetransmitChildren" {
     const my_contact_info = ContactInfo.init(std.testing.allocator, my_pubkey, 0, 0);
     const my_threadsafe_contact_info = ThreadSafeContactInfo.fromContactInfo(my_contact_info);
 
-    {
+    { // TEST 0
+        const file = try std.fs.cwd().createFile("../networking-demo/equivalence-test-0-sig.txt", .{ .read = true });
+        defer file.close();
+
+        // Create a seeded RNG
         var chacha = ChaChaRng.fromSeed([_]u8{0} ** 32);
         const random = chacha.random();
 
+        // Create a test cluster and save the staked nodes.
         var stakes, var gossip_table_rw = try makeTestCluster(
             std.testing.allocator,
             random,
             my_pubkey,
-            1,
+            20,
             1,
             20,
             201,
@@ -862,7 +911,9 @@ test "AgaveEquivalence.getRetransmitChildren" {
             const gossip_table: *GossipTable, _ = gossip_table_rw.writeWithLock();
             gossip_table.deinit();
         }
+        try writeStakes(std.testing.allocator, file.writer(), stakes);
 
+        // Create a TurbineTree instance
         var turbine_tree = try TurbineTree.initForRetransmit(
             std.testing.allocator,
             my_threadsafe_contact_info,
@@ -872,12 +923,26 @@ test "AgaveEquivalence.getRetransmitChildren" {
         );
         defer turbine_tree.deinit();
 
+        // Shuffle the nodes and save the shuffled indices.
         var weighted_shuffle = try turbine_tree.weighted_shuffle.clone();
         defer weighted_shuffle.deinit();
-
         var shuffled_iterator = weighted_shuffle.shuffle(chacha.random());
-
         const shuffled_indices = try shuffled_iterator.intoArrayList(std.testing.allocator);
         defer shuffled_indices.deinit();
+        try writeShuffledIndices(file.writer(), shuffled_indices);
+
+        // Generate retransmit children
+        for (0..1_000) |i| {
+            const slot_leader = Pubkey.initRandom(random);
+            const shred_id = ShredId{ .slot = random.int(u64), .index = random.int(u32), .shred_type = .data };
+            const root_distance, const children = try turbine_tree.getRetransmitChildren(
+                std.testing.allocator,
+                slot_leader,
+                shred_id,
+                TurbineTree.DATA_PLANE_FANOUT,
+            );
+            defer children.deinit();
+            try writeRetransmitPeers(file.writer(), i, root_distance, children);
+        }
     }
 }
