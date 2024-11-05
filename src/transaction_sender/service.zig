@@ -225,7 +225,7 @@ pub const Service = struct {
                 if (signature_status.err) |err| {
                     try self.transaction_pool.drop_signatures.append(signature);
                     self.metrics.failed_count.inc();
-                    self.logger.info().logf("(demo.transaction_sender)    transaction failed: error={} signature={}\n", .{ err, signature });
+                    self.logger.info().logf("(demo.transaction_sender)    transaction failed: error={} signature={}", .{ err, signature });
                     continue;
                 }
             }
@@ -233,21 +233,21 @@ pub const Service = struct {
             if (transaction_info.isExpired(block_height)) {
                 try self.transaction_pool.drop_signatures.append(signature);
                 self.metrics.expired_count.inc();
-                self.logger.info().logf("(demo.transaction_sender)    transaction expired: signature={}\n", .{signature});
+                self.logger.info().logf("(demo.transaction_sender)    transaction expired: signature={}", .{signature});
                 continue;
             }
 
             if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
                 try self.transaction_pool.drop_signatures.append(signature);
                 self.metrics.exceeded_max_retries_count.inc();
-                self.logger.info().logf("(demo.transaction_sender)    transaction exceeded max retries: signature={}\n", .{signature});
+                self.logger.info().logf("(demo.transaction_sender)    transaction exceeded max retries: signature={}", .{signature});
                 continue;
             }
 
             if (transaction_info.shouldRetry(self.config.retry_rate)) {
                 try self.transaction_pool.retry_signatures.append(signature);
                 self.metrics.retry_count.inc();
-                self.logger.info().logf("(demo.transaction_sender)    transaction retrying: signature={}\n", .{signature});
+                self.logger.info().logf("(demo.transaction_sender)    transaction retrying: signature={}", .{signature});
                 continue;
             }
         }
