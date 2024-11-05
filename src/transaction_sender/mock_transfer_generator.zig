@@ -16,7 +16,7 @@ const Duration = sig.time.Duration;
 
 const TRANSFER_FEE_LAMPORTS: u64 = 5000;
 const MAX_AIRDROP_LAMPORTS: u64 = 5e9;
-const MIN_LAMPORTS_FOR_RENT: u64 = 5e6; // This is a nonsense number but works
+const MIN_LAMPORTS_FOR_RENT: u64 = 1e6; // This is a nonsense number but works
 
 const MAX_RPC_RETRIES: u64 = 5;
 const MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION: Duration = Duration.fromSecs(30);
@@ -83,73 +83,65 @@ pub const MockTransferService = struct {
         var prng = std.Random.DefaultPrng.init(19);
         const random = prng.random();
 
-        self.logger.info().logf("(transaction_sender.MockTransferService) bank: {s}, alice: {s}", .{
+        if (n_lamports_per_tx < MIN_LAMPORTS_FOR_RENT) {
+            @panic("transaction amount is less than MIN_LAMPORTS_FOR_RENT");
+        }
+
+        self.logger.info().logf("(demo.mock_transfer_service) accounts: bank={s}, alice={s}", .{
             self.accounts.bank.pubkey,
             self.accounts.alice.pubkey,
         });
 
-        const required_bank_balance = if (n_lamports_per_tx > MIN_LAMPORTS_FOR_RENT)
-            n_transactions * (n_lamports_per_tx + TRANSFER_FEE_LAMPORTS)
-        else
-            n_transactions * (n_lamports_per_tx + TRANSFER_FEE_LAMPORTS) + MIN_LAMPORTS_FOR_RENT; // Add minumum rent for alice account
+        const required_bank_balance = n_transactions * (n_lamports_per_tx + TRANSFER_FEE_LAMPORTS);
 
         if (required_bank_balance > MAX_AIRDROP_LAMPORTS) {
             @panic("requested transfer amount exceeds MAX_AIRDROP_LAMPORTS");
         }
 
-        self.logger.info().logf("(transaction_sender.MockTransferService): : {} txs each transfers {} lamports", .{ n_transactions, n_lamports_per_tx });
-        const balances = try self.logBalances("(transaction_sender.MockTransferService) starting");
+        const balances = try self.getBalances(null);
         if (balances.bank < required_bank_balance) {
-            self.logger.info().log("(transaction_sender.MockTransferService) airdropping to bank");
+            self.logger.debug().log("airdropping to bank");
             try self.airdrop(self.accounts.bank.pubkey, MAX_AIRDROP_LAMPORTS);
         }
 
         if (balances.alice > 0) {
-            self.logger.info().log("(transaction_sender.MockTransferService) closing alice account");
+            self.logger.debug().log("closing alice's account");
             try self.closeAccount(random, self.accounts.alice.keypair);
         }
 
-        if (n_lamports_per_tx < MIN_LAMPORTS_FOR_RENT) {
-            self.logger.info().logf("(transaction_sender.MockTransferService) transferring minimum rent ({} lamports) to alice", .{MIN_LAMPORTS_FOR_RENT});
-            try self.sigTransferAndWait(
-                random,
-                self.accounts.bank.keypair,
-                self.accounts.alice.pubkey,
-                MIN_LAMPORTS_FOR_RENT,
-            );
-            self.logger.info().logf("(transaction_sender.MockTransferService) - SUCCESS - transferred {} lamports to alice", .{MIN_LAMPORTS_FOR_RENT});
-        }
+        _ = try self.getBalances("(demo.mock_transfer_service) initial balances");
 
         for (0..n_transactions) |tx_i| {
-            self.logger.info().logf("(transaction_sender.MockTransferService) (tx {}/{}) transferring {} lamports to alice", .{ tx_i, n_transactions, n_lamports_per_tx });
+            self.logger.info().logf("(demo.mock_transfer_service) transfering {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
             try self.sigTransferAndWait(
                 random,
                 self.accounts.bank.keypair,
                 self.accounts.alice.pubkey,
                 n_lamports_per_tx,
             );
-            self.logger.info().logf("(transaction_sender.MockTransferService) - SUCCESS - transferred {} lamports to alice", .{n_lamports_per_tx});
+            self.logger.info().logf("(demo.mock_transfer_service) SUCCESS - transferred {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
         }
 
-        _ = try self.logBalances("(transaction_sender.MockTransferService) exiting");
+        _ = try self.getBalances("(demo.mock_transfer_service) final balances");
 
-        // close alice account
         try self.closeAccount(random, self.accounts.alice.keypair);
 
         self.exit.store(false, .monotonic);
     }
 
     /// Wait for a signature to be confirmed, return true if confirmed, false if failed
-    pub fn waitForSignatureConfirmation(self: *MockTransferService, signature: Signature, max_wait: Duration) !bool {
+    pub fn waitForSignatureConfirmation(self: *MockTransferService, signature: Signature, max_wait: Duration, log: bool) !bool {
         const start = sig.time.Instant.now();
         var log_timer = try sig.time.Timer.start();
         while (start.elapsed().asNanos() < max_wait.asNanos()) {
             if (log_timer.read().asSecs() > 10) {
                 const time_remaining = max_wait.asSecs() - start.elapsed().asSecs();
-                self.logger.info().logf("(transaction_sender.MockTransferService) waiting for signature confirmation ({}s remaining): {s}", .{
-                    time_remaining,
-                    signature,
-                });
+                if (log) {
+                    self.logger.info().logf("(demo.mock_transfer_service) waiting for signature confirmation ({}s remaining): {s}", .{
+                        time_remaining,
+                        signature,
+                    });
+                }
                 log_timer.reset();
             }
             const signature_statuses_response = try self.rpc_client.getSignatureStatuses(
@@ -172,10 +164,10 @@ pub const MockTransferService = struct {
     pub fn rpcTransferAndWait(self: *MockTransferService, random: std.Random, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
         const from_pubkey = try Pubkey.fromPublicKey(&from_keypair.public_key);
         for (0..MAX_RPC_RETRIES) |_| {
-            self.logger.info().logf("(transaction_sender.MockTransferService) attempting transfer: from_pubkey={s} to_pubkey={s} amount={}", .{
+            self.logger.debug().logf("rpc transfer: amount={} from_pubkey={s} to_pubkey={s}", .{
+                lamports,
                 from_pubkey.string().slice(),
                 to_pubkey.string().slice(),
-                lamports,
             });
 
             const latest_blockhash, _ = blk: {
@@ -202,9 +194,7 @@ pub const MockTransferService = struct {
                 const response = try self.rpc_client.sendTransaction(self.allocator, transaction, .{});
                 defer response.deinit();
                 const signature_string = response.result() catch |err| {
-                    const data_str = try response.parsed.@"error".?.dataAsString(self.allocator);
-                    defer self.allocator.free(data_str);
-                    self.logger.info().logf("(transaction_sender.MockTransferService) {}: amount={} message={s} data={s}", .{ err, lamports, response.parsed.@"error".?.message, data_str });
+                    self.logger.debug().logf("rpc transfer failed with: {}", .{err});
                     return error.RpcTransferFailed;
                 };
                 break :blk try Signature.fromString(signature_string);
@@ -213,6 +203,7 @@ pub const MockTransferService = struct {
             const signature_confirmed = try self.waitForSignatureConfirmation(
                 signature,
                 MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION,
+                false,
             );
             if (signature_confirmed) return;
         }
@@ -262,6 +253,7 @@ pub const MockTransferService = struct {
                 null,
             );
             try self.sender.send(transaction_info);
+            self.logger.info().logf("(demo.mock_transfer_service) sent transaction: {s}", .{transaction_info.signature});
 
             const signature_confirmed = try self.waitForSignatureConfirmation(
                 transaction_info.signature,
@@ -269,6 +261,7 @@ pub const MockTransferService = struct {
                     MAX_SIG_WAIT_FOR_SIGNATURE_CONFIRMATION.asMillis(),
                     (last_valid_block_height - block_height) * 400,
                 )),
+                false,
             );
 
             if (signature_confirmed) return;
@@ -314,8 +307,8 @@ pub const MockTransferService = struct {
         const balance = try self.getBalance(pubkey);
         if (balance == 0) return;
 
-        self.logger.info().logf(
-            "(transaction_sender.MockTransferService) closing account: transfering {} from {s} to {s}",
+        self.logger.debug().logf(
+            "closing account: transfering {} from {s} to {s}",
             .{ balance - TRANSFER_FEE_LAMPORTS, pubkey, self.accounts.bank.pubkey },
         );
         try self.rpcTransferAndWait(
@@ -338,13 +331,15 @@ pub const MockTransferService = struct {
     }
 
     /// Log account balances with a message
-    pub fn logBalances(self: *MockTransferService, message: []const u8) !struct {
+    pub fn getBalances(self: *MockTransferService, maybe_message_prefix: ?[]const u8) !struct {
         bank: u64,
         alice: u64,
     } {
         const bank_balance = try self.getBalance(self.accounts.bank.pubkey);
         const alice_balance = try self.getBalance(self.accounts.alice.pubkey);
-        self.logger.info().logf("{s}: bank={}, alice={}", .{ message, bank_balance, alice_balance });
+        if (maybe_message_prefix) |message_prefix| {
+            self.logger.info().logf("{s}: bank={}, alice={}", .{ message_prefix, bank_balance, alice_balance });
+        }
         return .{ .bank = bank_balance, .alice = alice_balance };
     }
 
@@ -364,6 +359,7 @@ pub const MockTransferService = struct {
             const signature_confirmed = try self.waitForSignatureConfirmation(
                 signature,
                 MAX_RPC_WAIT_FOR_SIGNATURE_CONFIRMATION,
+                false,
             );
             if (signature_confirmed) {
                 return;

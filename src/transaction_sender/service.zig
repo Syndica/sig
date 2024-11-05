@@ -42,7 +42,7 @@ pub const Service = struct {
     metrics: Metrics,
     transaction_pool: TransactionPool,
     leader_info_rw: RwMux(LeaderInfo),
-    /// Channel used inside to move processed transactions to the socket sender.
+    /// Channel used inside to move processed transactions to quic
     send_channel: *Channel(Packet),
     /// Put transactions onto this channel to send them.
     input_channel: *Channel(TransactionInfo),
@@ -88,6 +88,7 @@ pub const Service = struct {
                 self.allocator,
                 self.send_channel,
                 self.exit,
+                self.logger,
             },
         );
 
@@ -120,7 +121,7 @@ pub const Service = struct {
             self.input_channel.len() != 0)
         {
             while (self.input_channel.receive()) |transaction| {
-                self.metrics.transactions_received_count.inc();
+                self.metrics.received_count.inc();
 
                 // If the transaction signature isn't in the batch or the pool, add the transaction.
                 if (!transaction_batch.contains(transaction.signature) and
@@ -169,13 +170,13 @@ pub const Service = struct {
             var timer = try Timer.start();
 
             try self.processTransactions(&rpc_client);
-            self.metrics.process_transactions_latency_millis.set(timer.lap().asMillis());
+            self.metrics.process_transactions_millis.set(timer.lap().asMillis());
 
             try self.retryTransactions();
-            self.metrics.retry_transactions_latency_millis.set(timer.lap().asMillis());
+            self.metrics.retry_transactions_millis.set(timer.lap().asMillis());
 
             self.transaction_pool.purge();
-            self.metrics.transactions_pending.set(self.transaction_pool.count());
+            self.metrics.pending_count.set(self.transaction_pool.count());
 
             self.metrics.log(self.logger);
         }
@@ -190,7 +191,7 @@ pub const Service = struct {
         );
         defer block_height_response.deinit();
         const block_height = try block_height_response.result();
-        self.metrics.rpc_block_height_latency_millis.set(block_height_timer.read().asMillis());
+        self.metrics.rpc_block_height_millis.set(block_height_timer.read().asMillis());
 
         // We need to hold a read lock until we are finished using the signatures and transactions, otherwise
         // the receiver thread could add new transactions and corrupt the underlying array
@@ -206,7 +207,7 @@ pub const Service = struct {
         );
         defer signature_statuses_response.deinit();
         const signature_statuses = try signature_statuses_response.result();
-        self.metrics.rpc_signature_statuses_latency_millis.set(signature_statuses_timer.read().asMillis());
+        self.metrics.rpc_signature_statuses_millis.set(signature_statuses_timer.read().asMillis());
 
         for (
             signature_statuses.value,
@@ -216,33 +217,37 @@ pub const Service = struct {
             if (maybe_signature_status) |signature_status| {
                 if (signature_status.confirmations == null) {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.metrics.transactions_rooted_count.inc();
+                    self.metrics.rooted_count.inc();
+                    self.logger.info().logf("(demo.transaction_sender)    transaction rooted: signature={}\n", .{signature});
                     continue;
                 }
 
                 if (signature_status.err) |err| {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.metrics.transactions_failed_count.inc();
-                    std.debug.print("transaction {} failed with error: {}\n", .{ signature, err });
+                    self.metrics.failed_count.inc();
+                    self.logger.info().logf("(demo.transaction_sender)    transaction failed: error={} signature={}\n", .{ err, signature });
                     continue;
                 }
             }
 
             if (transaction_info.isExpired(block_height)) {
                 try self.transaction_pool.drop_signatures.append(signature);
-                self.metrics.transactions_expired_count.inc();
+                self.metrics.expired_count.inc();
+                self.logger.info().logf("(demo.transaction_sender)    transaction expired: signature={}\n", .{signature});
                 continue;
             }
 
             if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
                 try self.transaction_pool.drop_signatures.append(signature);
-                self.metrics.transactions_exceeded_max_retries_count.inc();
+                self.metrics.exceeded_max_retries_count.inc();
+                self.logger.info().logf("(demo.transaction_sender)    transaction exceeded max retries: signature={}\n", .{signature});
                 continue;
             }
 
             if (transaction_info.shouldRetry(self.config.retry_rate)) {
                 try self.transaction_pool.retry_signatures.append(signature);
-                self.metrics.transactions_retry_count.inc();
+                self.metrics.retry_count.inc();
+                self.logger.info().logf("(demo.transaction_sender)    transaction retrying: signature={}\n", .{signature});
                 continue;
             }
         }
@@ -281,8 +286,8 @@ pub const Service = struct {
             defer leader_info_lg.unlock();
             break :blk try leader_info.getLeaderAddresses(self.allocator);
         };
-        self.metrics.get_leader_addresses_latency_millis.set(get_leader_addresses_timer.read().asMillis());
-        self.metrics.number_of_leaders_identified.set(leader_addresses.len);
+        self.metrics.get_leader_addresses_millis.set(get_leader_addresses_timer.read().asMillis());
+        self.metrics.leaders_identified_count.set(leader_addresses.len);
         return leader_addresses;
     }
 
@@ -299,7 +304,7 @@ pub const Service = struct {
 
         for (leader_addresses) |leader_address| {
             for (transactions) |tx| {
-                self.logger.info().logf("(transaction_sender.Service) sending transaction {} to leader at {}", .{ tx.signature, leader_address });
+                self.logger.info().logf("(demo.transaction_sender)    sending transaction to leader: address={} signature={}", .{ leader_address, tx.signature });
                 try self.send_channel.send(Packet.init(
                     leader_address.toEndpoint(),
                     tx.wire_transaction,
@@ -308,9 +313,13 @@ pub const Service = struct {
             }
         }
 
-        // TODO: update last_seen_time in order to not retry all transactions
+        const last_sent_time = Instant.now();
+        for (transactions) |tx_| {
+            var tx = tx_;
+            tx.last_sent_time = last_sent_time;
+        }
 
-        self.metrics.transactions_sent_count.add(transactions.len);
+        self.metrics.sent_count.add(transactions.len);
     }
 };
 
@@ -340,35 +349,37 @@ pub const Config = struct {
 };
 
 pub const Metrics = struct {
-    transactions_pending: *Gauge(u64),
-    transactions_received_count: *Counter,
-    transactions_retry_count: *Counter,
-    transactions_sent_count: *Counter,
-    transactions_rooted_count: *Counter,
-    transactions_failed_count: *Counter,
-    transactions_expired_count: *Counter,
-    transactions_exceeded_max_retries_count: *Counter,
-    number_of_leaders_identified: *Gauge(u64),
+    pending_count: *Gauge(u64),
+    received_count: *Counter,
+    retry_count: *Counter,
+    sent_count: *Counter,
+    rooted_count: *Counter,
+    failed_count: *Counter,
+    expired_count: *Counter,
+    exceeded_max_retries_count: *Counter,
+    leaders_identified_count: *Gauge(u64),
 
-    process_transactions_latency_millis: *Gauge(u64),
-    retry_transactions_latency_millis: *Gauge(u64),
-    get_leader_addresses_latency_millis: *Gauge(u64),
+    process_transactions_millis: *Gauge(u64),
+    retry_transactions_millis: *Gauge(u64),
+    get_leader_addresses_millis: *Gauge(u64),
 
-    rpc_block_height_latency_millis: *Gauge(u64),
-    rpc_signature_statuses_latency_millis: *Gauge(u64),
+    rpc_block_height_millis: *Gauge(u64),
+    rpc_signature_statuses_millis: *Gauge(u64),
+
+    pub const prefix = "transaction_sender";
 
     pub fn init() GetMetricError!Metrics {
         return globalRegistry().initStruct(Metrics);
     }
 
     pub fn log(self: *const Metrics, logger: Logger) void {
-        logger.info().logf("transaction-sender: {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
-            self.transactions_received_count.get(),
-            self.transactions_pending.get(),
-            self.transactions_rooted_count.get(),
-            self.transactions_failed_count.get(),
-            self.transactions_expired_count.get(),
-            self.transactions_exceeded_max_retries_count.get(),
+        logger.info().logf("(demo.transaction_sender)    {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
+            self.received_count.get(),
+            self.pending_count.get(),
+            self.rooted_count.get(),
+            self.failed_count.get(),
+            self.expired_count.get(),
+            self.exceeded_max_retries_count.get(),
         });
     }
 };
