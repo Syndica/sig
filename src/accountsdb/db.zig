@@ -460,7 +460,7 @@ pub const AccountsDB = struct {
         // allocate all the references in one shot with a wrapper allocator
         // without this large allocation, snapshot loading is very slow
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
-        const reference_allocator = self.account_index.reference_allocator; // TODO(fastload): fix
+        const reference_allocator = self.account_index.reference_allocator;
         const references_buf = try reference_allocator.allocator().alloc(AccountRef, n_accounts_estimate);
 
         var timer = try sig.time.Timer.start();

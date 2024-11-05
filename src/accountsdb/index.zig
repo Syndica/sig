@@ -15,7 +15,9 @@ pub const AccountRef = struct {
     pubkey: Pubkey,
     slot: Slot,
     location: AccountLocation,
+    // TODO(fastload): remove
     next_ptr: ?*AccountRef = null,
+    next_ref: ?u64 = null, // this points to the memory
 
     pub const DEFAULT: AccountRef = .{
         .pubkey = Pubkey.ZEROES,
@@ -47,7 +49,10 @@ pub const AccountIndex = struct {
     // this uses the reference_allocator to allocate a max number of references
     // which can be re-used throughout the life of the program (ie, manages the state of free/used AccountRefs)
     reference_allocator: *RecycleFBA(.{}),
-    // this is the allocator used to allocate bytes for the reference_allocator
+    // this is the underlying memory for the reference_allocator which we directly read from using
+    // account references
+    reference_memory: []u8,
+    // this is the allocator used to allocate bytes for the reference_allocator and reference_memory
     underlying_reference_allocator: ReferenceAllocator,
 
     pub const SlotRefMap = std.AutoHashMap(Slot, []AccountRef);
@@ -89,13 +94,16 @@ pub const AccountIndex = struct {
             },
             max_account_references * @sizeOf(AccountRef),
         );
+        // NOTE: since this is all pre-allocated, this is okay
+        const reference_memory = reference_allocator.fba_allocator.buffer;
 
         return .{
             .allocator = allocator,
             .pubkey_ref_map = try ShardedPubkeyRefMap.init(allocator, number_of_shards),
             .slot_reference_map = RwMux(SlotRefMap).init(SlotRefMap.init(allocator)),
-            .reference_allocator = reference_allocator,
             .underlying_reference_allocator = underlying_reference_allocator,
+            .reference_allocator = reference_allocator,
+            .reference_memory = reference_memory,
         };
     }
 
@@ -269,7 +277,9 @@ pub const AccountIndex = struct {
 };
 
 pub const AccountReferenceHead = struct {
+    // TODO(fastload): remove
     ref_ptr: *AccountRef,
+    ref_index: u64,
 
     const Self = @This();
 
