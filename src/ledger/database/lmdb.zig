@@ -44,7 +44,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 // open cf/database, creating if necessary
                 dbis[i] = try ret(c.mdb_dbi_open, .{
                     txn,
-                    @as([*c]const u8, @ptrCast(cf.name)),
+                    @as([*]const u8, @ptrCast(cf.name)),
                     MDB_CREATE,
                 });
             }
@@ -372,7 +372,7 @@ fn toVal(bytes: []const u8) c.MDB_val {
 }
 
 fn fromVal(value: c.MDB_val) []const u8 {
-    const ptr: [*c]u8 = @ptrCast(value.mv_data);
+    const ptr: [*]u8 = @ptrCast(value.mv_data);
     return ptr[0..value.mv_size];
 }
 
