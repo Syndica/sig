@@ -169,7 +169,7 @@ pub const PendingInsertShredsState = struct {
 
     pub fn shreds(self: *Self) ShredWorkingStore {
         return .{
-            .logger = self.logger.withScope(@typeName(WorkingShredStore)),
+            .logger = self.logger.withScope(@typeName(ShredWorkingStore)),
             .db = self.db,
             .just_inserted_shreds = &self.just_inserted_shreds,
         };
@@ -489,7 +489,7 @@ const ShredConflict = struct {
 };
 
 pub const ShredWorkingStore = struct {
-    logger: sig.trace.Logger,
+    logger: sig.trace.ScopedLogger(@typeName(Self)),
     db: *BlockstoreDB,
     just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
 
