@@ -42,11 +42,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             // save cf handles
             inline for (column_families, 0..) |cf, i| {
                 // open cf/database, creating if necessary
-                dbis[i] = try ret(c.mdb_dbi_open, .{
-                    txn,
-                    @as([*]const u8, @ptrCast(cf.name)),
-                    c.MDB_CREATE,
-                });
+                dbis[i] = try ret(c.mdb_dbi_open, .{ txn, cf.name.ptr, c.MDB_CREATE });
             }
 
             // persist column families
