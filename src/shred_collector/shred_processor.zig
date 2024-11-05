@@ -24,7 +24,7 @@ const VariantCounter = sig.prometheus.VariantCounter;
 pub fn runShredProcessor(
     allocator: Allocator,
     exit: *Atomic(bool),
-    logger: Logger,
+    logger_: Logger,
     registry: *Registry(.{}),
     // shred verifier --> me
     verified_shred_receiver: *Channel(Packet),
@@ -32,6 +32,7 @@ pub fn runShredProcessor(
     shred_inserter_: ShredInserter,
     leader_schedule: sig.core.leader_schedule.SlotLeaderProvider,
 ) !void {
+    const logger = logger_.withScope(@src().fn_name);
     var shred_inserter = shred_inserter_;
     var shreds: ArrayListUnmanaged(Shred) = .{};
     var is_repaired: ArrayListUnmanaged(bool) = .{};

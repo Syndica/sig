@@ -103,7 +103,7 @@ pub fn checkMerkleRootConsistency(
 /// agave: check_forward_chained_merkle_root_consistency
 pub fn checkForwardChainedMerkleRootConsistency(
     allocator: Allocator,
-    logger: Logger,
+    logger_: Logger,
     db: *BlockstoreDB,
     shred: CodeShred,
     erasure_meta: ErasureMeta,
@@ -111,6 +111,7 @@ pub fn checkForwardChainedMerkleRootConsistency(
     merkle_root_metas: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
     duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
 ) !bool {
+    const logger = logger_.withScope(@src().fn_name);
     std.debug.assert(erasure_meta.checkCodeShred(shred));
     const slot = shred.common.slot;
     const erasure_set_id = shred.common.erasureSetId();
@@ -192,13 +193,14 @@ pub fn checkForwardChainedMerkleRootConsistency(
 /// agave: check_backwards_chained_merkle_root_consistency
 pub fn checkBackwardsChainedMerkleRootConsistency(
     allocator: Allocator,
-    logger: Logger,
+    logger_: Logger,
     db: *BlockstoreDB,
     shred: Shred,
     shred_store: WorkingShredStore,
     erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)), // BTreeMap in agave
     duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
 ) !bool {
+    const logger = logger_.withScope(@src().fn_name);
     const slot = shred.commonHeader().slot;
     const erasure_set_id = shred.commonHeader().erasureSetId();
     const erasure_set_index = shred.commonHeader().erasure_set_index;

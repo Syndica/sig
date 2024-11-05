@@ -16,11 +16,12 @@ pub const PACKETS_PER_BATCH: usize = 64;
 pub fn readSocket(
     socket_: UdpSocket,
     incoming_channel: *Channel(Packet),
-    logger: Logger,
+    logger_: Logger,
     comptime needs_exit_order: bool,
     counter: *Atomic(if (needs_exit_order) usize else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
+    const logger = logger_.withScope(@src().fn_name);
     defer {
         logger.info().logf("leaving with: {}, {}, {}", .{ incoming_channel.len(), counter.load(.acquire), idx });
         if (needs_exit_order) {
@@ -51,11 +52,12 @@ pub fn readSocket(
 pub fn sendSocket(
     socket: UdpSocket,
     outgoing_channel: *Channel(Packet),
-    logger: Logger,
+    logger_: Logger,
     comptime needs_exit_order: bool,
     counter: *Atomic(if (needs_exit_order) usize else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
+    const logger = logger_.withScope(@src().fn_name);
     defer {
         if (needs_exit_order) {
             // exit the next service in the chain

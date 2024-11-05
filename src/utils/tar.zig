@@ -67,12 +67,13 @@ const Logger = @import("../trace/log.zig").Logger;
 
 pub fn parallelUntarToFileSystem(
     allocator: std.mem.Allocator,
-    logger: Logger,
+    logger_: Logger,
     dir: std.fs.Dir,
     reader: anytype,
     n_threads: usize,
     n_files_estimate: ?usize,
 ) !void {
+    const logger = logger_.withScope(@src().fn_name);
     var thread_pool = ThreadPool.init(.{
         .max_threads = @intCast(n_threads),
     });
@@ -132,7 +133,7 @@ pub fn parallelUntarToFileSystem(
                 if (n_files_estimate) |total_n_files| {
                     if (progress_timer.read().asNanos() > TAR_PROGRESS_UPDATES.asNanos()) {
                         printTimeEstimate(
-                            logger,
+                            logger.unscoped(),
                             &timer,
                             total_n_files,
                             file_count,

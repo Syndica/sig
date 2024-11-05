@@ -412,7 +412,7 @@ pub const GossipService = struct {
         gossip_value_allocator: std.mem.Allocator,
         packet: Packet,
         verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
-        logger: Logger,
+        logger: ScopedLogger(@typeName(VerifyMessageEntry)),
 
         pub fn callback(self: *VerifyMessageEntry) !void {
             const packet = self.packet;
@@ -468,7 +468,7 @@ pub const GossipService = struct {
                 .gossip_value_allocator = self.gossip_value_allocator,
                 .verified_incoming_channel = self.verified_incoming_channel,
                 .packet = undefined,
-                .logger = self.logger.unscoped(),
+                .logger = self.logger.withScope(@typeName(VerifyMessageEntry)),
             };
         }
 

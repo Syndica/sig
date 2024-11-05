@@ -331,7 +331,8 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     };
 }
 
-fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
+fn callRocks(logger_: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
+    const logger = logger_.withScope(@src().fn_name);
     var err_str: ?rocks.Data = null;
     return @call(.auto, func, args ++ .{&err_str}) catch |e| {
         logger.err().logf("{} - {s}", .{ e, err_str.? });

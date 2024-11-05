@@ -187,13 +187,14 @@ pub const ReturnHandler = struct {
 /// It's guaranteed to run at least once in order to not race initialization with
 /// the `exit` flag.
 pub fn runService(
-    logger: Logger,
+    logger_: Logger,
     exit: *Atomic(bool),
     maybe_name: ?[]const u8,
     config: RunConfig,
     function: anytype,
     args: anytype,
 ) !void {
+    const logger = logger_.withScope(@src().fn_name);
     var buf: [16]u8 = undefined;
     const name = maybe_name orelse try std.fmt.bufPrint(
         &buf,

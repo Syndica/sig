@@ -158,13 +158,14 @@ pub fn findPeersToDownloadFromAssumeCapacity(
 /// note: gossip_service must be running.
 pub fn downloadSnapshotsFromGossip(
     allocator: std.mem.Allocator,
-    logger: Logger,
+    logger_: Logger,
     // if null, then we trust any peer for snapshot download
     maybe_trusted_validators: ?[]const Pubkey,
     gossip_service: *GossipService,
     output_dir: std.fs.Dir,
     min_mb_per_sec: usize,
 ) !void {
+    const logger = logger_.withScope(@src().fn_name);
     logger
         .info()
         .logf("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
@@ -241,7 +242,7 @@ pub fn downloadSnapshotsFromGossip(
 
             downloadFile(
                 allocator,
-                logger,
+                logger.unscoped(),
                 snapshot_url,
                 output_dir,
                 snapshot_filename,
@@ -282,7 +283,7 @@ pub fn downloadSnapshotsFromGossip(
                 logger.info().logf("downloading inc_snapshot from: {s}", .{inc_snapshot_url});
                 _ = downloadFile(
                     allocator,
-                    logger,
+                    logger.unscoped(),
                     inc_snapshot_url,
                     output_dir,
                     inc_snapshot_filename,
@@ -425,12 +426,13 @@ pub fn setNoBody(self: curl.Easy, no_body: bool) !void {
 /// the main errors include {HeaderRequestFailed, NoContentLength, TooSlow} or a curl-related error
 pub fn downloadFile(
     allocator: std.mem.Allocator,
-    logger: Logger,
+    logger_: Logger,
     url: [:0]const u8,
     output_dir: std.fs.Dir,
     filename: []const u8,
     min_mb_per_second: ?usize,
 ) !void {
+    const logger = logger_.withScope(@src().fn_name);
     var easy = try curl.Easy.init(allocator, .{});
     defer easy.deinit();
 
@@ -452,7 +454,7 @@ pub fn downloadFile(
     // timeout will need to be larger
     easy.timeout_ms = std.time.ms_per_hour * 5; // 5 hours is probs too long but its ok
     var download_progress = try DownloadProgress.init(
-        logger,
+        logger.unscoped(),
         output_dir,
         filename,
         download_size,

@@ -876,7 +876,8 @@ fn shredCollector() !void {
 
 const GeyserWriter = sig.geyser.GeyserWriter;
 
-fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWriter {
+fn buildGeyserWriter(allocator: std.mem.Allocator, logger_: Logger) !?*GeyserWriter {
+    const logger = logger_.withScope(@src().fn_name);
     var geyser_writer: ?*GeyserWriter = null;
     if (config.current.geyser.enable) {
         logger.info().log("Starting GeyserWriter...");
@@ -1199,7 +1200,7 @@ const AppBase = struct {
 
 /// Initialize an instance of GossipService and configure with CLI arguments
 fn initGossip(
-    logger: Logger,
+    logger_: Logger,
     my_keypair: KeyPair,
     exit: *Atomic(usize),
     entrypoints: []const SocketAddr,
@@ -1207,6 +1208,7 @@ fn initGossip(
     gossip_host_ip: IpAddr,
     sockets: []const struct { tag: SocketTag, port: u16 },
 ) !GossipService {
+    const logger = logger_.withScope(@src().fn_name);
     const gossip_port: u16 = config.current.gossip.port;
     logger.info().logf("gossip host: {any}", .{gossip_host_ip});
     logger.info().logf("gossip port: {d}", .{gossip_port});
@@ -1225,7 +1227,7 @@ fn initGossip(
         my_keypair,
         entrypoints,
         exit,
-        logger,
+        logger.unscoped(),
     );
 }
 
@@ -1285,9 +1287,10 @@ fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
 /// determine our shred version and ip. in the solana-labs client, the shred version
 /// comes from the snapshot, and ip echo is only used to validate it.
 fn getMyDataFromIpEcho(
-    logger: Logger,
+    logger_: Logger,
     entrypoints: []SocketAddr,
 ) !struct { shred_version: u16, ip: IpAddr } {
+    const logger = logger_.withScope(@src().fn_name);
     var my_ip_from_entrypoint: ?IpAddr = null;
     const my_shred_version = loop: for (entrypoints) |entrypoint| {
         if (requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
@@ -1618,7 +1621,7 @@ fn getTrustedValidators(allocator: Allocator) !?std.ArrayList(Pubkey) {
 
 fn getOrDownloadSnapshots(
     allocator: Allocator,
-    logger: Logger,
+    logger_: Logger,
     gossip_service: ?*GossipService,
     // accounts_db_config: config.AccountsDBConfig,
     options: struct {
@@ -1629,6 +1632,7 @@ fn getOrDownloadSnapshots(
         min_snapshot_download_speed_mbs: usize,
     },
 ) !struct { AllSnapshotFields, SnapshotFiles } {
+    const logger = logger_.withScope(@src().fn_name);
     // arg parsing
     const snapshot_dir = options.snapshot_dir;
     const force_unpack_snapshot = options.force_unpack_snapshot;
