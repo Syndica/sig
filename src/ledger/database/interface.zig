@@ -207,8 +207,12 @@ fn serializer(endian: std.builtin.Endian) type {
     return struct {
         /// Returned slice is owned by the caller. Free with `allocator.free`.
         pub fn serializeAlloc(allocator: Allocator, item: anytype) ![]const u8 {
-            const buf = try allocator.alloc(u8, sig.bincode.sizeOf(item, .{}));
-            return sig.bincode.writeToSlice(buf, item, .{ .endian = endian });
+            if (@TypeOf(item) == []const u8 or @TypeOf(item) == []u8) {
+                return try allocator.dupe(u8, item);
+            } else {
+                const buf = try allocator.alloc(u8, sig.bincode.sizeOf(item, .{}));
+                return sig.bincode.writeToSlice(buf, item, .{ .endian = endian });
+            }
         }
 
         /// Returned data may or may not be owned by the caller.
