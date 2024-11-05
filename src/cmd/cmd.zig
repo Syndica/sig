@@ -1359,7 +1359,8 @@ fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     return socket_addr;
 }
 
-fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
+fn getEntrypoints(logger_: Logger) !std.ArrayList(SocketAddr) {
+    const logger = logger_.withScope(@src().fn_name);
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     errdefer entrypoints.deinit();
 
@@ -1380,7 +1381,7 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 
     for (config.current.gossip.entrypoints) |entrypoint| {
         const socket_addr = SocketAddr.parse(entrypoint) catch brk: {
-            break :brk try resolveSocketAddr(entrypoint, logger);
+            break :brk try resolveSocketAddr(entrypoint, logger.unscoped());
         };
 
         const gop = try entrypoint_set.getOrPut(socket_addr);
