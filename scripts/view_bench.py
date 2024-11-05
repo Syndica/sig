@@ -6,10 +6,10 @@ import numpy as np
 import random
 
 def random_color_generator():
-    # take [r, g, b] from colormap
-    # Dark2 chosen for visibility from
-    # https://matplotlib.org/stable/users/explain/colors/colormaps.html#qualitative
-    return plt.colormaps["Dark2"](random.random())[:3] 
+    r = random.randint(0, 255)
+    g = random.randint(0, 255)
+    b = random.randint(0, 255)
+    return (r / 255, g / 255, b / 255)
 
 def view_results(paths):
     path = paths[0]
@@ -40,8 +40,8 @@ def view_results(paths):
     for i in range(len(benchmark_names)):
         plt.clf()
         plt.title(benchmark_names[i], wrap=True)
-
         for df_i, df in enumerate(dfs):
+            label = paths[df_i]
             # remove the header and the benchmark name
             benchmark_runtimes = df.T[2:][i]
             benchmark_runtimes.replace('', np.nan, inplace=True)
@@ -51,7 +51,7 @@ def view_results(paths):
 
             color = colors[df_i]
             mean = np.mean(benchmark_runtimes) 
-            plt.scatter(benchmark_runtimes, np.zeros_like(benchmark_runtimes), color=color, label=paths[df_i])
+            plt.scatter(benchmark_runtimes, np.zeros_like(benchmark_runtimes), color=color, label=label)
 
             var = np.var(benchmark_runtimes)
             plt.errorbar(mean, 1, xerr=np.sqrt(var), fmt='o', color=color) # mean
