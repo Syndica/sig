@@ -120,7 +120,7 @@ pub const LedgerResultWriter = struct {
             } };
             try write_batch.put(schema.bank_hash, slot, data);
         }
-        try self.db.commit(write_batch);
+        try self.db.commit(&write_batch);
     }
 
     /// agave: set_roots
@@ -133,7 +133,7 @@ pub const LedgerResultWriter = struct {
             try write_batch.put(schema.rooted_slots, slot, true);
         }
 
-        try self.db.commit(write_batch);
+        try self.db.commit(&write_batch);
         _ = self.max_root.fetchMax(max_new_rooted_slot, .monotonic);
     }
 
@@ -296,7 +296,7 @@ pub const LedgerResultWriter = struct {
             try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
         }
 
-        try self.db.commit(write_batch);
+        try self.db.commit(&write_batch);
     }
 
     fn isRoot(self: *Self, slot: Slot) !bool {
@@ -375,7 +375,7 @@ test "scanAndFixRoots" {
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
     try write_batch.put(schema.slot_meta, slot_meta_2.slot, slot_meta_2);
     try write_batch.put(schema.slot_meta, slot_meta_3.slot, slot_meta_3);
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     const exit = std.atomic.Value(bool).init(false);
 
@@ -411,7 +411,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     var write_batch = try db.initWriteBatch();
     defer write_batch.deinit();
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     try std.testing.expectEqual(false, slot_meta_1.isConnected());
 
@@ -445,7 +445,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
         // connect the chain
         parent_slot = slot;
     }
-    try db.commit(write_batch2);
+    try db.commit(&write_batch2);
 
     try writer.setAndChainConnectedOnRootAndNextSlots(other_roots[0]);
 
@@ -504,7 +504,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     slot_meta_3.consecutive_received_from_0 = 1 + 1;
     try write_batch.put(schema.slot_meta, slot_meta_3.slot, slot_meta_3);
 
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     try writer.setAndChainConnectedOnRootAndNextSlots(1);
 

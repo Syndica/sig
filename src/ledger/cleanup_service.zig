@@ -213,7 +213,7 @@ pub fn purgeSlots(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !bool {
     writePurgeRange(&write_batch, from_slot, purge_to_slot) catch {
         did_purge = false;
     };
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     if (did_purge and from_slot == 0) {
         try purgeFilesInRange(db, from_slot, purge_to_slot);
@@ -373,7 +373,7 @@ test "findSlotsToClean" {
         defer write_batch.deinit();
         try write_batch.put(ledger.schema.schema.slot_meta, lowest_slot_meta.slot, lowest_slot_meta);
         try write_batch.put(ledger.schema.schema.slot_meta, highest_slot_meta.slot, highest_slot_meta);
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
     }
 
     const r = try findSlotsToClean(&reader, 0, 100);
@@ -436,7 +436,7 @@ test "purgeSlots" {
 
         try write_batch.put(schema.merkle_root_meta, merkle_root_meta, merkle_meta);
     }
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // purge the range [0, 5]
     const did_purge2 = try purgeSlots(&db, 0, 5);

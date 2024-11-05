@@ -217,7 +217,7 @@ pub const PendingInsertShredsState = struct {
         self.metrics.insert_working_sets_elapsed_us.add(commit_working_sets_timer.read().asMicros());
 
         var commit_timer = try Timer.start();
-        try self.db.commit(self.write_batch);
+        try self.db.commit(&self.write_batch);
         self.metrics.write_batch_elapsed_us.add(commit_timer.read().asMicros());
     }
 

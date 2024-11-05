@@ -163,7 +163,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             var batch = try self.initWriteBatch();
             errdefer batch.deinit();
             try batch.deleteRange(cf, start, end);
-            try self.commit(batch);
+            try self.commit(&batch);
         }
 
         pub fn initWriteBatch(self: *Self) anyerror!WriteBatch {
@@ -178,7 +178,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn commit(_: *Self, batch: WriteBatch) LmdbError!void {
+        pub fn commit(_: *Self, batch: *WriteBatch) LmdbError!void {
             try maybeError(c.mdb_txn_commit(batch.txn));
         }
 

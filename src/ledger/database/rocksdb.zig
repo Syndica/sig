@@ -180,7 +180,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn commit(self: *Self, batch: WriteBatch) Error!void {
+        pub fn commit(self: *Self, batch: *WriteBatch) Error!void {
             return callRocks(self.logger, rocks.DB.write, .{ &self.db, batch.inner });
         }
 

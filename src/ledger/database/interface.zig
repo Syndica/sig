@@ -98,8 +98,8 @@ pub fn Database(comptime Impl: type) type {
             return .{ .impl = try self.impl.initWriteBatch() };
         }
 
-        pub fn commit(self: *Self, batch: WriteBatch) anyerror!void {
-            return self.impl.commit(batch.impl);
+        pub fn commit(self: *Self, batch: *WriteBatch) anyerror!void {
+            return self.impl.commit(&batch.impl);
         }
 
         /// A write batch is a sequence of operations that execute atomically.
@@ -328,7 +328,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try db.get(allocator, cf2, 321));
             try std.testing.expectEqual(null, try db.get(allocator, cf2, 333));
 
-            try db.commit(batch);
+            try db.commit(&batch);
 
             try std.testing.expectEqual(null, try db.get(allocator, cf1, 0));
             try std.testing.expectEqual(Value1{ .hello = 100 }, try db.get(allocator, cf1, 123));
@@ -706,7 +706,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             var batch = try db.initWriteBatch();
             defer batch.deinit();
             try batch.deleteRange(cf1, 0, 100);
-            try db.commit(batch);
+            try db.commit(&batch);
 
             try std.testing.expectEqual(null, try db.get(allocator, cf1, 10));
             try std.testing.expectEqual(null, try db.get(allocator, cf1, 20));

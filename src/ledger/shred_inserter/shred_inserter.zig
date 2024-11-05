@@ -170,7 +170,7 @@ pub const ShredInserter = struct {
             self.metrics,
         );
         defer state.deinit();
-        var write_batch = state.write_batch;
+        const write_batch = &state.write_batch;
         const merkle_root_validator = MerkleRootValidator.init(&state);
 
         var get_lock_timer = try Timer.start();
@@ -192,7 +192,7 @@ pub const ShredInserter = struct {
                         data_shred,
                         &state,
                         merkle_root_validator,
-                        &write_batch,
+                        write_batch,
                         is_trusted,
                         leader_schedule,
                         shred_source,
@@ -223,7 +223,7 @@ pub const ShredInserter = struct {
                         code_shred,
                         &state,
                         merkle_root_validator,
-                        &write_batch,
+                        write_batch,
                         is_trusted,
                         shred_source,
                     );
@@ -277,7 +277,7 @@ pub const ShredInserter = struct {
                     shred.data,
                     &state,
                     merkle_root_validator,
-                    &write_batch,
+                    write_batch,
                     is_trusted,
                     leader_schedule,
                     .recovered,
@@ -311,7 +311,7 @@ pub const ShredInserter = struct {
         try handleChaining(
             allocator,
             &self.db,
-            &write_batch,
+            write_batch,
             &state.slot_meta_working_set,
         );
         self.metrics.chaining_elapsed_us.add(chaining_timer.read().asMicros());
@@ -1217,7 +1217,8 @@ test "insertShreds single shred" {
         schema.data_shred,
         .{ shred.commonHeader().slot, shred.commonHeader().index },
     );
-    defer stored_shred.?.deinit();
+    defer if (stored_shred) |s| s.deinit();
+    if (stored_shred == null) return error.Fail;
     try std.testing.expectEqualSlices(u8, shred.payload(), stored_shred.?.data);
 }
 
@@ -1371,7 +1372,7 @@ test "merkle root metas coding" {
                 working_merkle_root_meta.asRef().*,
             );
         }
-        try state.db.commit(write_batch);
+        try state.db.commit(&write_batch);
     }
 
     var insert_state = try PendingInsertShredsState.init(
@@ -1416,7 +1417,7 @@ test "merkle root metas coding" {
             try std.testing.expectEqual(original_meta.first_received_shred_type, .code);
         }
 
-        try state.db.commit(write_batch);
+        try state.db.commit(&write_batch);
     }
 
     insert_state.duplicate_shreds.clearRetainingCapacity();
@@ -1458,7 +1459,7 @@ test "merkle root metas coding" {
         try std.testing.expectEqual(merkle_root_meta.first_received_shred_index, this_index);
         try std.testing.expectEqual(merkle_root_meta.first_received_shred_type, .code);
 
-        try state.db.commit(write_batch);
+        try state.db.commit(&write_batch);
     }
 }
 

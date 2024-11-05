@@ -165,7 +165,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
         /// Atomicity may be violated if there is insufficient
         /// memory to complete a PUT.
-        pub fn commit(self: *Self, batch: WriteBatch) Allocator.Error!void {
+        pub fn commit(self: *Self, batch: *WriteBatch) Allocator.Error!void {
             self.transaction_lock.lock();
             defer self.transaction_lock.unlock();
 
