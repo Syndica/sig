@@ -46,14 +46,14 @@ pub const AccountIndex = struct {
     pubkey_ref_map: ShardedPubkeyRefMap,
     /// map from slot -> []AccountRef
     slot_reference_map: RwMux(SlotRefMap),
-    // this uses the reference_allocator to allocate a max number of references
-    // which can be re-used throughout the life of the program (ie, manages the state of free/used AccountRefs)
-    reference_allocator: *RecycleFBA(.{}),
-    // this is the underlying memory for the reference_allocator which we directly read from using
-    // account references
-    reference_memory: []u8,
-    // this is the allocator used to allocate bytes for the reference_allocator and reference_memory
-    underlying_reference_allocator: ReferenceAllocator,
+
+    /// this is the allocator used to allocate reference_memory
+    reference_allocator: ReferenceAllocator,
+    /// preallocated memory which is used by the reference_manager
+    /// NOTE: we only store this here to be able to free it in deinit
+    reference_memory: std.ArrayList([]AccountRef),
+    /// manages reference memory throughout the life of the program (ie, manages the state of free/used AccountRefs)
+    reference_manager: *sig.utils.allocators.RecycleBuffer(AccountRef, .{}),
 
     pub const SlotRefMap = std.AutoHashMap(Slot, []AccountRef);
     pub const AllocatorConfig = union(enum) {
@@ -70,9 +70,8 @@ pub const AccountIndex = struct {
         allocator_config: AllocatorConfig,
         /// number of shards for the pubkey_ref_map
         number_of_shards: usize,
-        max_account_references: u64,
     ) !Self {
-        const underlying_reference_allocator: ReferenceAllocator = switch (allocator_config) {
+        const reference_allocator: ReferenceAllocator = switch (allocator_config) {
             .Ram => |ram| blk: {
                 logger.info().logf("using ram memory for account index", .{});
                 break :blk .{ .ram = ram.allocator };
@@ -87,27 +86,20 @@ pub const AccountIndex = struct {
             },
         };
 
-        const reference_allocator = try RecycleFBA(.{}).create(
-            .{
-                .records_allocator = allocator,
-                .bytes_allocator = underlying_reference_allocator.get(),
-            },
-            max_account_references * @sizeOf(AccountRef),
-        );
-        // NOTE: since this is all pre-allocated, this is okay
-        const reference_memory = reference_allocator.fba_allocator.buffer;
+        const reference_memory = std.ArrayList([]AccountRef).init(allocator);
+        const reference_manager = try sig.utils.allocators.RecycleBuffer(AccountRef, .{}).create(allocator, &.{});
 
         return .{
             .allocator = allocator,
             .pubkey_ref_map = try ShardedPubkeyRefMap.init(allocator, number_of_shards),
             .slot_reference_map = RwMux(SlotRefMap).init(SlotRefMap.init(allocator)),
-            .underlying_reference_allocator = underlying_reference_allocator,
             .reference_allocator = reference_allocator,
             .reference_memory = reference_memory,
+            .reference_manager = reference_manager,
         };
     }
 
-    pub fn deinit(self: *Self, free_memory: bool) void {
+    pub fn deinit(self: *Self) void {
         self.pubkey_ref_map.deinit();
 
         {
@@ -116,11 +108,46 @@ pub const AccountIndex = struct {
             slot_reference_map.deinit();
         }
 
-        if (free_memory) {
-            self.reference_allocator.deinit();
-            self.allocator.destroy(self.reference_allocator);
+        self.reference_manager.deinit();
+        self.allocator.destroy(self.reference_manager);
+        for (self.reference_memory.items) |ref_block| {
+            self.reference_allocator.get().free(ref_block);
         }
-        self.underlying_reference_allocator.deinit();
+        self.reference_memory.deinit();
+        self.reference_allocator.deinit();
+    }
+
+    pub fn deinitLoadingThread(self: *Self) void {
+        self.pubkey_ref_map.deinit();
+        {
+            const slot_reference_map, var slot_reference_map_lg = self.slot_reference_map.writeWithLock();
+            defer slot_reference_map_lg.unlock();
+            slot_reference_map.deinit();
+        }
+
+        // // this is the main index's manager
+        // self.reference_manager.deinit();
+        // self.allocator.destroy(self.reference_manager);
+        // // dont free the references -- ownership is transferred to the main index
+        // for (self.reference_memory) |ref_block| {
+        //     self.reference_allocator.get().free(ref_block);
+        // }
+        // // the reference_allocator is the same as the main index's reference_allocator
+        // self.reference_allocator.deinit();
+
+        // the array list can be deinitialized, but the memory it holds not freed
+        self.reference_memory.deinit();
+    }
+
+    pub fn ensureReferenceCapacity(self: *Self, capacity: u64) !void {
+        if (self.reference_manager.capacity < capacity) {
+            const alloc_size = capacity - self.reference_manager.capacity;
+            const new_memory = try self.reference_allocator.get().alloc(AccountRef, alloc_size);
+            // track for deinit
+            try self.reference_memory.append(new_memory);
+            // add to manager
+            try self.reference_manager.append(new_memory);
+        }
     }
 
     pub const ReferenceParent = union(enum) {
@@ -279,7 +306,7 @@ pub const AccountIndex = struct {
 pub const AccountReferenceHead = struct {
     // TODO(fastload): remove
     ref_ptr: *AccountRef,
-    ref_index: u64,
+    ref_index: u64 = 0,
 
     const Self = @This();
 
@@ -531,8 +558,14 @@ pub const ReferenceAllocator = union(enum) {
 test "account index update/remove reference" {
     const allocator = std.testing.allocator;
 
-    var index = try AccountIndex.init(allocator, .noop, .{ .Ram = .{ .allocator = allocator } }, 8, 100);
-    defer index.deinit(true);
+    var index = try AccountIndex.init(
+        allocator,
+        .noop,
+        .{ .Ram = .{ .allocator = allocator } },
+        8,
+    );
+    defer index.deinit();
+    try index.ensureReferenceCapacity(100);
     try index.pubkey_ref_map.ensureTotalCapacityPerShard(100);
 
     // pubkey -> a

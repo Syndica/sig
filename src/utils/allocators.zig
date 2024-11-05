@@ -12,6 +12,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
     return struct {
         // recycling depot
         records: std.ArrayList(Record),
+        capacity: u64,
         // for thread safety
         mux: std.Thread.Mutex = .{},
 
@@ -19,31 +20,41 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
         const Self = @This();
 
         pub fn init(a: std.mem.Allocator, buffer: []T) !Self {
-            const records = std.ArrayList(Record).init(a);
+            var records = std.ArrayList(Record).init(a);
+            // NOTE: this approach allows us to add additional buffers if we run out of space
             try records.append(.{ .is_free = true, .buf = buffer });
             return .{
                 .records = records,
-                .buffer = buffer,
+                .capacity = buffer.len,
             };
         }
 
-        pub fn create(a: std.mem.Allocator, buffer: []T) !Self {
+        pub fn create(a: std.mem.Allocator, buffer: []T) !*Self {
             const self = try a.create(Self);
             self.* = try Self.init(a, buffer);
             return self;
         }
 
         pub fn deinit(self: *Self) void {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
             self.records.deinit();
         }
 
-        pub fn alloc(self: *Self, n: u64) !?[]T {
+        pub fn append(self: *Self, buf: []T) !void {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+            try self.records.append(.{ .is_free = true, .buf = buf });
+            self.capacity += buf.len;
+        }
+
+        pub fn alloc(self: *Self, n: u64) ![]T {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
             return self.allocUnsafe(n);
         }
 
-        pub fn allocUnsafe(self: *Self, n: u64) !?[]T {
+        pub fn allocUnsafe(self: *Self, n: u64) ![]T {
             // check for a buf to recycle
             var is_possible_to_recycle = false;
             for (self.records.items) |*record| {
@@ -60,7 +71,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
 
             if (is_possible_to_recycle) {
                 // they can try again later since recycle is possible
-                return null;
+                return error.AllocFailed;
             } else {
                 // try to collapse small record chunks and allocate again
                 var collapse_succeed = false;
@@ -99,7 +110,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
 
         /// frees the unused space of a buf.
         /// this is useful when a buf is initially overallocated and then resized.
-        pub fn tryRecycleUnusedSpace(self: *Self, buf: []T, used_len: u64) !void {
+        pub fn tryRecycleUnusedSpace(self: *Self, buf: []T, used_len: u64) !bool {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
             return self.tryRecycleUnusedSpaceUnsafe(buf, used_len);
