@@ -455,7 +455,5 @@ const SharedHashMap = struct {
 };
 
 comptime {
-    if (build_options.blockstore_db == .hashmap) {
-        _ = &database.interface.testDatabase(SharedHashMapDB);
-    }
+    _ = &database.interface.testDatabase(SharedHashMapDB);
 }
