@@ -104,7 +104,10 @@ pub fn LruCacheCustom(
             max_items: usize,
             deinit_context: DeinitContext,
         ) error{OutOfMemory}!Self {
-            const hashmap = if (K == []const u8) std.StringArrayHashMap(*Node).init(allocator) else std.AutoArrayHashMap(K, *Node).init(allocator);
+            const hashmap = if (K == []const u8)
+                std.StringArrayHashMap(*Node).init(allocator)
+            else
+                std.AutoArrayHashMap(K, *Node).init(allocator);
             var self = Self{
                 .allocator = allocator,
                 .hashmap = hashmap,
@@ -131,7 +134,11 @@ pub fn LruCacheCustom(
 
         /// Recycles an old node if LruCache capacity is full. If replaced, first element of tuple is replaced
         /// Entry (otherwise null) and second element of tuple is inserted Entry.
-        fn internalRecycleOrCreateNode(self: *Self, key: K, value: V) error{OutOfMemory}!struct { ?LruEntry, LruEntry } {
+        fn internalRecycleOrCreateNode(
+            self: *Self,
+            key: K,
+            value: V,
+        ) error{OutOfMemory}!struct { ?LruEntry, LruEntry } {
             if (self.dbl_link_list.len == self.max_items) {
                 const recycled_node = self.dbl_link_list.popFirst().?;
                 deinitFn(&recycled_node.data.value, self.deinit_context);
