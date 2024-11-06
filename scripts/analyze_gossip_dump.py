@@ -2,7 +2,7 @@ import csv
 import sys
 from dataclasses import asdict, dataclass
 from pprint import pprint
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 
 left_filename, right_filename = sys.argv[1:3]
 
