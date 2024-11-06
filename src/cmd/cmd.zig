@@ -267,12 +267,12 @@ pub fn run() !void {
         .value_name = "accounts_per_file_estimate",
     };
 
-    var max_number_of_accounts_option = cli.Option{
+    var prealloc_number_of_accounts_option = cli.Option{
         .long_name = "max-number-of-accounts",
         .help = "maximum number of accounts to store in the accounts db",
-        .value_ref = cli.mkRef(&config.current.accounts_db.max_number_of_accounts),
+        .value_ref = cli.mkRef(&config.current.accounts_db.prealloc_number_of_accounts),
         .required = false,
-        .value_name = "max_number_of_accounts",
+        .value_name = "prealloc_number_of_accounts",
     };
 
     // geyser options
@@ -404,7 +404,7 @@ pub fn run() !void {
                             &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
-                            &max_number_of_accounts_option,
+                            &prealloc_number_of_accounts_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -423,14 +423,14 @@ pub fn run() !void {
                     &cli.Command{
                         .name = "shred-collector",
                         .description = .{ .one_line = "Run the shred collector to collect and store shreds", .detailed = 
-                        \\ This command runs the shred collector without running the full validator 
+                        \\ This command runs the shred collector without running the full validator
                         \\ (mainly excluding the accounts-db setup).
                         \\
                         \\ NOTE: this means that this command *requires* a leader schedule to be provided
                         \\ (which would usually be derived from the accountsdb snapshot).
                         \\
                         \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well (
-                        \\ which is usually derived from the accountsdb snapshot). This can be done 
+                        \\ which is usually derived from the accountsdb snapshot). This can be done
                         \\ with `--test-repair-for-slot $(solana slot -u testnet)` for testnet or another `-u` for mainnet/devnet.
                         },
                         .options = &.{
@@ -501,7 +501,7 @@ pub fn run() !void {
                             &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
-                            &max_number_of_accounts_option,
+                            &prealloc_number_of_accounts_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -595,7 +595,7 @@ pub fn run() !void {
                         .description = .{
                             .one_line = "Test transaction sender service",
                             .detailed =
-                            \\Simulates a stream of transaction being sent to the transaction sender by 
+                            \\Simulates a stream of transaction being sent to the transaction sender by
                             \\running a mock transaction generator thread. For the moment this just sends
                             \\transfer transactions between to hard coded testnet accounts.
                             ,
@@ -1485,7 +1485,7 @@ fn loadSnapshot(
             .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
             .use_disk_index = config.current.accounts_db.use_disk_index,
             .lru_size = 10_000,
-            .max_number_of_accounts = config.current.accounts_db.max_number_of_accounts,
+            .prealloc_number_of_accounts = config.current.accounts_db.prealloc_number_of_accounts,
         },
         geyser_writer,
     );

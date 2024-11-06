@@ -2,6 +2,187 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
+pub fn RecycleBuffer(comptime T: type, config: struct {
+    /// If enabled, all operations will require an exclusive lock.
+    thread_safe: bool = !builtin.single_threaded,
+    max_collapse_tries: u32 = 5,
+    collapse_sleep_ms: u32 = 100,
+    min_split_size: u64 = 128,
+}) type {
+    std.debug.assert(config.min_split_size > 0);
+
+    return struct {
+        // recycling depot
+        records: std.ArrayList(Record),
+        capacity: u64,
+        // for thread safety
+        mux: std.Thread.Mutex = .{},
+
+        const Record = struct { is_free: bool, buf: []T };
+        const Self = @This();
+
+        pub fn init(a: std.mem.Allocator, buffer: []T) !Self {
+            var records = std.ArrayList(Record).init(a);
+            try records.ensureTotalCapacity(1_000); // arbitrary memory boost
+            if (buffer.len > 0) {
+                // NOTE: this approach allows us to add additional buffers if we run out of space
+                try records.append(.{ .is_free = true, .buf = buffer });
+            }
+            return .{
+                .records = records,
+                .capacity = buffer.len,
+            };
+        }
+
+        pub fn create(a: std.mem.Allocator, buffer: []T) !*Self {
+            const self = try a.create(Self);
+            self.* = try Self.init(a, buffer);
+            return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+            self.records.deinit();
+        }
+
+        pub fn append(self: *Self, buf: []T) !void {
+            if (buf.len == 0) return;
+
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+
+            try self.records.append(.{ .is_free = true, .buf = buf });
+            self.capacity += buf.len;
+        }
+
+        pub fn alloc(self: *Self, n: u64) !struct { []T, u64 } {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+            return self.allocUnsafe(n);
+        }
+
+        pub fn allocUnsafe(self: *Self, n: u64) !struct { []T, u64 } {
+            // this is used to index directly into the buffer's underlying data
+            var global_index: u64 = 0;
+            // check for a buf to recycle
+            var is_possible_to_recycle = false;
+            for (self.records.items) |*record| {
+                if (record.buf.len >= n) { // allocation is possible
+                    if (record.is_free) {
+                        record.is_free = false;
+                        const buf = record.buf[0..n]; // local copy because next line will likely change the record pointer
+                        _ = try self.tryRecycleUnusedSpaceUnsafe(record, n);
+                        return .{ buf, global_index };
+                    } else {
+                        is_possible_to_recycle = true;
+                    }
+                }
+                global_index += record.buf.len;
+            }
+
+            if (is_possible_to_recycle) {
+                // they can try again later since recycle is possible
+                return error.AllocFailed;
+            } else {
+                // try to collapse small record chunks and allocate again
+                var collapse_succeed = false;
+                for (0..config.max_collapse_tries) |_| {
+                    try self.collapse(); // !
+                    collapse_succeed = self.isPossibleToAllocate(n);
+                    if (collapse_succeed) {
+                        // exit here
+                        return self.allocUnsafe(n);
+                    } else {
+                        // sleep and try collapse again
+                        // NOTE: this assumes this method has been called with the lock held
+                        // if not, this will break
+                        if (config.thread_safe) self.mux.lock();
+                        defer if (config.thread_safe) self.mux.unlock();
+                        std.time.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
+                    }
+                }
+                // not enough memory to allocate and no possible recycles will be perma stuck.
+                // though its possible to recover from this, its very unlikely, so we panic
+                @panic("not enough memory, and collapse failed max times");
+            }
+        }
+
+        pub fn free(self: *Self, buf_ptr: [*]T) void {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+            for (self.records.items) |*record| {
+                if (record.buf.ptr == buf_ptr) {
+                    record.is_free = true;
+                    return;
+                }
+            }
+            @panic("attempt to free invalid buf");
+        }
+
+        /// frees the unused space of a buf.
+        /// this is useful when a buf is initially overallocated and then resized.
+        pub fn tryRecycleUnusedSpace(self: *Self, buf: []T, used_len: u64) !bool {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+
+            for (self.records.items) |*record| {
+                if (record.buf.ptr == buf.ptr) {
+                    return self.tryRecycleUnusedSpaceUnsafe(record, used_len);
+                }
+            }
+            @panic("attempt to recycle invalid buf");
+        }
+
+        pub fn tryRecycleUnusedSpaceUnsafe(self: *Self, record: *Record, used_len: u64) !bool {
+            const unused_len = record.buf.len -| used_len;
+            if (unused_len > config.min_split_size) {
+                // update the state of the record
+                const split_buf = record.buf[used_len..];
+                // NOTE: this record ptr is updated before the append which could invalidate the record ptr
+                record.buf = record.buf[0..used_len];
+                // add new unused record to the list
+                try self.records.append(.{ .is_free = true, .buf = split_buf });
+                return true;
+            } else {
+                // dont try to split if its too small
+                return false;
+            }
+        }
+
+        /// collapses adjacent free records into a single record
+        pub fn collapse(self: *Self) !void {
+            var new_records = std.ArrayList(Record).init(self.records.allocator);
+            var last_was_free = false;
+
+            for (self.records.items) |record| {
+                if (record.is_free) {
+                    if (last_was_free) {
+                        new_records.items[new_records.items.len - 1].buf.len += record.buf.len;
+                    } else {
+                        last_was_free = true;
+                        try new_records.append(record);
+                    }
+                } else {
+                    try new_records.append(record);
+                    last_was_free = false;
+                }
+            }
+            self.records.deinit();
+            self.records = new_records;
+        }
+
+        pub fn isPossibleToAllocate(self: *Self, n: u64) bool {
+            for (self.records.items) |*record| {
+                if (record.buf.len >= n) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+}
+
 pub fn RecycleFBA(config: struct {
     /// If enabled, all operations will require an exclusive lock.
     thread_safe: bool = !builtin.single_threaded,
