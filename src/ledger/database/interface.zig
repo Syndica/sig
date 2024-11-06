@@ -705,13 +705,13 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
 
             var batch = try db.initWriteBatch();
             defer batch.deinit();
-            try batch.deleteRange(cf1, 0, 100);
+            try batch.deleteRange(cf1, 15, 35);
             try db.commit(&batch);
 
-            try std.testing.expectEqual(null, try db.get(allocator, cf1, 10));
+            try std.testing.expect(null != try db.get(allocator, cf1, 10));
             try std.testing.expectEqual(null, try db.get(allocator, cf1, 20));
             try std.testing.expectEqual(null, try db.get(allocator, cf1, 30));
-            try std.testing.expectEqual(null, try db.get(allocator, cf1, 40));
+            try std.testing.expect(null != try db.get(allocator, cf1, 40));
         }
     };
 }
