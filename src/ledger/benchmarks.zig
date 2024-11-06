@@ -201,6 +201,62 @@ pub const BenchmarkLedger = struct {
         return duration;
     }
 
+    pub fn @"BlockstoreReader.getCodeShred"() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try TestState.init(allocator, @src(), .noop);
+        defer state.deinit();
+        var inserter = try state.shredInserter();
+        var reader = try state.reader();
+
+        const shreds_path = "agave.blockstore.bench_read.code_shreds.bin";
+        const shreds = try testShreds(std.heap.c_allocator, shreds_path);
+        defer deinitShreds(allocator, shreds);
+
+        const total_shreds = shreds.len;
+        _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
+
+        const slot: u32 = 1;
+
+        var rng = std.Random.DefaultPrng.init(100);
+
+        var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, total_shreds);
+        defer indices.deinit();
+        for (total_shreds) |_| {
+            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
+        }
+
+        var timer = try sig.time.Timer.start();
+        for (indices.items) |shred_index| {
+            _ = try reader.getCodeShred(slot, shred_index) orelse return error.MissingShred;
+        }
+        return timer.read();
+    }
+
+    pub fn @"BlockstoreReader.getCodeShredsForSlot"() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var state = try TestState.init(allocator, @src(), .noop);
+        defer state.deinit();
+        var inserter = try state.shredInserter();
+        var reader = try state.reader();
+
+        const shreds_path = "agave.blockstore.bench_read.code_shreds.bin";
+        const shreds = try testShreds(std.heap.c_allocator, shreds_path);
+        defer deinitShreds(allocator, shreds);
+
+        _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
+
+        const slot = 1;
+        const start_index = 0;
+
+        var timer = try sig.time.Timer.start();
+        const code_shreds = try reader.getCodeShredsForSlot(slot, start_index);
+        const duration = timer.read();
+        try std.testing.expect(code_shreds.items.len > 0);
+        return duration;
+    }
+
+    /// Benchmarks for LedgerResultWriter.
+    ///
     /// Analogous to [bench_write_transaction_status]https://github.com/anza-xyz/agave/blob/ff1b22007c34669768c5b676cac491f580b39e0b/ledger/benches/blockstore.rs#L206
     pub fn @"LedgerResultWriter.writeTransactionStatus"() !sig.time.Duration {
         const Signature = sig.core.Signature;
