@@ -420,7 +420,7 @@ pub const RetransmitServiceMetrics = struct {
         return self;
     }
 
-    pub fn maybeLog(self: *const RetransmitServiceMetrics, logger: Logger) void {
+    pub fn maybeLog(self: *RetransmitServiceMetrics, logger: Logger) void {
         if (self.logging_fields.last_log_instant.elapsed().asSecs() > 1) {
             logger.info().logf("(demo.retransmit_service) received={} retransmitted={} skipped={}:{}:{}", .{
                 self.shreds_received_count.get(),
@@ -429,6 +429,7 @@ pub const RetransmitServiceMetrics = struct {
                 self.shred_byte_filtered_count.get(),
                 self.shred_id_filtered_count.get(),
             });
+            self.logging_fields.last_log_instant = sig.time.Instant.now();
         }
     }
 };

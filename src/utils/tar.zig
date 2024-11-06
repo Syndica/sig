@@ -129,7 +129,7 @@ pub fn parallelUntarToFileSystem(
                             &timer,
                             total_n_files,
                             file_count,
-                            "untar",
+                            "(demo.load_snapshot)      untar",
                             null,
                         );
                         progress_timer.reset();

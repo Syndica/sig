@@ -2104,7 +2104,7 @@ pub const GossipMetrics = struct {
         };
 
         logging_fields.logger.info().logf(
-            "gossip: recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
+            "(demo.gossip)             recv: {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
                 current_stats.gossip_packets_received_total - logging_fields.last_logged_snapshot.gossip_packets_received_total,
                 current_stats.ping_messages_recv - logging_fields.last_logged_snapshot.ping_messages_recv,
@@ -2116,7 +2116,7 @@ pub const GossipMetrics = struct {
             },
         );
         logging_fields.logger.info().logf(
-            "gossip: sent: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
+            "(demo.gossip)             sent: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
                 current_stats.ping_messages_sent - logging_fields.last_logged_snapshot.ping_messages_sent,
                 current_stats.pong_messages_sent - logging_fields.last_logged_snapshot.pong_messages_sent,

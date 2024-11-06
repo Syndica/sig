@@ -49,7 +49,7 @@ Sig retransmit stage of turbine block propagation:
 
 
 <p>
-<img alt="Turbine Tree Diagram" src="imgs/turbine_tree.png" style="width: 800px; margin: auto;">
+<img alt="Turbine Retransmit" src="imgs/turbine-retransmit.png" style="width: 900px; margin: auto;">
 </p>
 
 ### Stake Overwrite Tests
