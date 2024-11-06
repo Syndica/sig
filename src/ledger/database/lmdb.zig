@@ -34,7 +34,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
 
             // begin transaction to create column families aka "databases" in lmdb
             const txn = try returnOutput(c.mdb_txn_begin, .{ env, null, 0 });
-            errdefer c.mdb_txn_abort(txn);
+            errdefer c.mdb_txn_reset(txn);
 
             // allocate cf handles
             const dbis = try allocator.alloc(c.MDB_dbi, column_families.len);
@@ -60,6 +60,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
         pub fn deinit(self: *Self) void {
             self.allocator.free(self.dbis);
             self.allocator.free(self.path);
+            c.mdb_env_close(self.env);
         }
 
         fn dbi(self: *Self, comptime cf: ColumnFamily) c.MDB_dbi {
@@ -87,7 +88,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             defer val_bytes.deinit();
 
             const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, 0 });
-            errdefer c.mdb_txn_abort(txn);
+            errdefer c.mdb_txn_reset(txn);
 
             var key_val = toVal(key_bytes.data);
             var val_val = toVal(val_bytes.data);
@@ -146,7 +147,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             var val_val: c.MDB_val = undefined;
 
             const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, 0 });
-            errdefer c.mdb_txn_abort(txn);
+            errdefer c.mdb_txn_reset(txn);
 
             maybeError(c.mdb_del(txn, self.dbi(cf), &key_val, &val_val)) catch |e| switch (e) {
                 error.MDB_NOTFOUND => {},
@@ -200,7 +201,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             executed: *bool,
 
             pub fn deinit(self: *WriteBatch) void {
-                if (!self.executed.*) c.mdb_txn_abort(self.txn);
+                if (!self.executed.*) c.mdb_txn_reset(self.txn);
                 self.allocator.destroy(self.executed);
             }
 
@@ -274,7 +275,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 null;
             defer if (maybe_start_bytes) |sb| sb.deinit();
 
-            const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, 0 });
+            const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
             errdefer c.mdb_txn_abort(txn);
 
             const cursor = try returnOutput(c.mdb_cursor_open, .{ txn, self.dbi(cf) });
