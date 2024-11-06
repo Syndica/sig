@@ -224,10 +224,10 @@ fn serializer(endian: std.builtin.Endian) type {
         /// Use this if the database backend accepts a pointer and immediately calls memcpy.
         pub fn serializeToRef(allocator: Allocator, item: anytype) !BytesRef {
             return if (@TypeOf(item) == []const u8 or @TypeOf(item) == []u8) .{
-                .allocator = null,
+                .deinitializer = null,
                 .data = item,
             } else .{
-                .allocator = allocator,
+                .deinitializer = BytesRef.Deinitializer.fromAllocator(allocator),
                 .data = try serializeAlloc(allocator, item),
             };
         }
@@ -249,12 +249,45 @@ fn serializer(endian: std.builtin.Endian) type {
 }
 
 pub const BytesRef = struct {
-    allocator: ?Allocator = null,
+    deinitializer: ?Deinitializer = null,
     data: []const u8,
 
     pub fn deinit(self: @This()) void {
-        if (self.allocator) |a| a.free(self.data);
+        if (self.deinitializer) |d| d.deinit(self.data);
     }
+
+    pub const Deinitializer = union(enum) {
+        allocator: Allocator,
+        generic: struct {
+            context: *anyopaque,
+            deinit: *const fn (*anyopaque, []const u8) void,
+        },
+
+        pub fn init(
+            context: anytype,
+            deinitFn: fn (@TypeOf(context), []const u8) void,
+        ) Deinitializer {
+            return .{ .generic = .{
+                .context = @alignCast(@ptrCast(context)),
+                .deinit = &struct {
+                    fn genericDeinit(ctx: *anyopaque, data: []const u8) void {
+                        deinitFn(@alignCast(@ptrCast(ctx)), data);
+                    }
+                }.genericDeinit,
+            } };
+        }
+
+        pub fn fromAllocator(allocator: Allocator) Deinitializer {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: Deinitializer, data: []const u8) void {
+            switch (self) {
+                .generic => |generic| generic.deinit(generic.context, data),
+                .allocator => |allocator| allocator.free(data),
+            }
+        }
+    };
 };
 
 /// Test cases that can be applied to any implementation of Database

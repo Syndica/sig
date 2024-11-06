@@ -131,7 +131,7 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             };
 
             return .{
-                .allocator = txnAborter(txn),
+                .deinitializer = txnAborter(txn),
                 .data = fromVal(item),
             };
         }
@@ -348,8 +348,8 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
                 pub fn nextBytes(self: *@This()) LmdbError!?[2]BytesRef {
                     const key, const val = try self.nextImpl() orelse return null;
                     return .{
-                        .{ .allocator = null, .data = key },
-                        .{ .allocator = null, .data = val },
+                        .{ .deinitializer = null, .data = key },
+                        .{ .deinitializer = null, .data = val },
                     };
                 }
 
@@ -374,29 +374,18 @@ fn fromVal(value: c.MDB_val) []const u8 {
     return ptr[0..value.mv_size];
 }
 
-/// Returns an `Allocator` that frees memory by aborting the transaction
-/// that owns the memory. It cannot allocate anything.
+/// Returns an `BytesRef.Deinitializer` that frees memory by aborting the transaction
+/// that owns the memory.
 ///
-/// This exists to be the Allocator used in a `BytesRef` instance
-///
-/// Calling `free` with any input will free all memory that was allocated
+/// Calling `deinit` with any input will free all memory that was allocated
 /// by the transaction. This means you cannot manage lifetimes of multiple
 /// items separately. Ideally you would only use this when you've only
 /// read exactly one item in the transaction.
-fn txnAborter(txn: *c.MDB_txn) Allocator {
-    const vtable = .{
-        .alloc = &sig.utils.allocators.noAlloc,
-        .resize = &Allocator.noResize,
-        .free = &resetTxnFree,
-    };
-    return .{
-        .ptr = @ptrCast(@alignCast(txn)),
-        .vtable = &vtable,
-    };
+fn txnAborter(txn: *c.MDB_txn) BytesRef.Deinitializer {
+    return BytesRef.Deinitializer.init(txn, resetTxnFree);
 }
 
-fn resetTxnFree(ctx: *anyopaque, _: []u8, _: u8, _: usize) void {
-    const txn: *c.MDB_txn = @ptrCast(@alignCast(ctx));
+fn resetTxnFree(txn: *c.MDB_txn, _: []const u8) void {
     c.mdb_txn_abort(txn);
 }
 

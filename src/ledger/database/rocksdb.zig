@@ -135,7 +135,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 .{ &self.db, self.cf_handles[cf.find(column_families)], key_bytes.data },
             ) orelse return null;
             return .{
-                .allocator = val_bytes.allocator,
+                .deinitializer = BytesRef.Deinitializer.fromAllocator(val_bytes.allocator),
                 .data = val_bytes.data,
             };
         }
@@ -314,8 +314,8 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 pub fn nextBytes(self: *@This()) Error!?[2]BytesRef {
                     const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
                     return if (entry) |kv| .{
-                        .{ .allocator = null, .data = kv[0].data },
-                        .{ .allocator = null, .data = kv[1].data },
+                        .{ .deinitializer = null, .data = kv[0].data },
+                        .{ .deinitializer = null, .data = kv[1].data },
                     } else null;
                 }
             };

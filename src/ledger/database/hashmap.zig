@@ -113,7 +113,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             const ret = try self.allocator.alloc(u8, val_bytes.len);
             @memcpy(ret, val_bytes);
             return .{
-                .allocator = self.allocator,
+                .deinitializer = BytesRef.Deinitializer.fromAllocator(self.allocator),
                 .data = ret,
             };
         }
@@ -375,8 +375,8 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 pub fn nextBytes(self: *@This()) error{}!?[2]BytesRef {
                     const index = self.nextIndex() orelse return null;
                     return .{
-                        .{ .allocator = null, .data = self.keys[index] },
-                        .{ .allocator = null, .data = self.vals[index] },
+                        .{ .deinitializer = null, .data = self.keys[index] },
+                        .{ .deinitializer = null, .data = self.vals[index] },
                     };
                 }
 

@@ -499,7 +499,7 @@ pub const ShredWorkingStore = struct {
     /// returned shred lifetime does not exceed this struct
     pub fn get(self: Self, id: ShredId) !?BytesRef {
         if (self.just_inserted_shreds.get(id)) |shred| {
-            return .{ .data = shred.payload(), .allocator = null };
+            return .{ .data = shred.payload(), .deinitializer = null };
         }
         return switch (id.shred_type) {
             .data => self.getFromDb(schema.data_shred, id),
