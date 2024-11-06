@@ -1,6 +1,5 @@
 import requests 
 import re 
-import json
 
 def get_frozen_abi_commit(commit):
     url_base = f"https://raw.githubusercontent.com/anza-xyz/agave/{commit}/"
