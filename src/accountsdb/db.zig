@@ -4211,9 +4211,6 @@ test "generate snapshot & update gossip snapshot hashes" {
     const queue_item_0 = queue.items[0]; // should be from the full generation
     const queue_item_1 = queue.items[1]; // should be from the incremental generation
 
-    // try std.testing.expect(try queue_item_0.verify(Pubkey.fromPublicKey(&my_keypair.public_key)));
-    // try std.testing.expect(try queue_item_1.verify(Pubkey.fromPublicKey(&my_keypair.public_key)));
-
     try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_0));
     try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_1));
 
@@ -4224,7 +4221,7 @@ test "generate snapshot & update gossip snapshot hashes" {
             .from = Pubkey.fromPublicKey(&my_keypair.public_key),
             .full = .{ .slot = full_slot, .hash = full_hash },
             .incremental = SnapshotHashes.IncrementalSnapshotsList.EMPTY,
-            .wallclock = queue_item_0.SnapshotHashes.wallclock,
+            .wallclock = 0, // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
         },
         queue_item_0.SnapshotHashes,
     );
@@ -4233,7 +4230,7 @@ test "generate snapshot & update gossip snapshot hashes" {
             .from = Pubkey.fromPublicKey(&my_keypair.public_key),
             .full = .{ .slot = full_slot, .hash = full_hash },
             .incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{ .slot = inc_slot, .hash = inc_hash }),
-            .wallclock = queue_item_1.SnapshotHashes.wallclock,
+            .wallclock = 0, // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
         },
         queue_item_1.SnapshotHashes,
     );
