@@ -16,6 +16,7 @@ const Timer = sig.time.Timer;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const BlockstoreInsertionMetrics = shred_inserter.shred_inserter.BlockstoreInsertionMetrics;
+const BytesRef = ledger.database.BytesRef;
 const CodeShred = ledger.shred.CodeShred;
 const ColumnFamily = ledger.database.ColumnFamily;
 const ErasureSetId = ledger.shred.ErasureSetId;
@@ -485,7 +486,7 @@ pub const PossibleDuplicateShred = union(enum) {
 
 const ShredConflict = struct {
     original: Shred,
-    conflict: []const u8,
+    conflict: BytesRef,
 };
 
 pub const ShredWorkingStore = struct {
@@ -495,13 +496,12 @@ pub const ShredWorkingStore = struct {
 
     const Self = @This();
 
-    // TODO consider lifetime -> return must inform a conditional deinit
-    pub fn get(self: Self, id: ShredId) !?[]const u8 {
+    /// returned shred lifetime does not exceed this struct
+    pub fn get(self: Self, id: ShredId) !?BytesRef {
         if (self.just_inserted_shreds.get(id)) |shred| {
-            return shred.payload(); // owned by map
+            return .{ .data = shred.payload(), .allocator = null };
         }
         return switch (id.shred_type) {
-            // owned by database
             .data => self.getFromDb(schema.data_shred, id),
             .code => self.getFromDb(schema.code_shred, id),
         };
@@ -539,9 +539,9 @@ pub const ShredWorkingStore = struct {
         } else null;
     }
 
-    fn getFromDb(self: Self, comptime cf: ColumnFamily, id: ShredId) !?[]const u8 {
+    fn getFromDb(self: Self, comptime cf: ColumnFamily, id: ShredId) !?BytesRef {
         return if (try self.db.getBytes(cf, .{ id.slot, @intCast(id.index) })) |s|
-            s.data
+            s
         else
             null;
     }

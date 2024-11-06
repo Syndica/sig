@@ -29,6 +29,7 @@ const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const BytesRef = ledger.database.BytesRef;
 const IndexMetaWorkingSetEntry = lib.working_state.IndexMetaWorkingSetEntry;
 const MerkleRootValidator = lib.merkle_root_checks.MerkleRootValidator;
 const PendingInsertShredsState = lib.working_state.PendingInsertShredsState;
@@ -382,6 +383,7 @@ pub const ShredInserter = struct {
 
         return .{
             .completed_data_set_infos = newly_completed_data_sets,
+            // TODO: ensure all duplicate shreds exceed lifetime of pending state
             .duplicate_shreds = state.duplicate_shreds,
         };
     }
@@ -521,7 +523,7 @@ pub const ShredInserter = struct {
             )) |conflicting_shred| {
                 // found the duplicate
                 self.db.put(schema.duplicate_slots, slot, .{
-                    .shred1 = conflicting_shred,
+                    .shred1 = conflicting_shred.data,
                     .shred2 = shred.payload,
                 }) catch |e| {
                     // TODO: only log a database error?
@@ -566,7 +568,7 @@ pub const ShredInserter = struct {
         _: CodeShred, // TODO: figure out why this is here. delete it or add what is missing.
         slot: Slot,
         erasure_meta: *const ErasureMeta,
-    ) !?[]const u8 { // TODO consider lifetime
+    ) !?BytesRef { // TODO consider lifetime
         // Search for the shred which set the initial erasure config, either inserted,
         // or in the current batch in just_inserted_shreds.
         const index: u32 = @intCast(erasure_meta.first_received_code_index);
@@ -728,7 +730,6 @@ pub const ShredInserter = struct {
                     .index = shred_index_u32,
                     .shred_type = .data,
                 };
-                // FIXME: leak - decide how to free shred
                 const maybe_shred = try shred_store.get(shred_id);
                 const ending_shred = if (maybe_shred) |s| s else {
                     self.logger.err().logf(&newlinesToSpaces(
@@ -739,8 +740,9 @@ pub const ShredInserter = struct {
                     ), .{ shred_id, slot_meta });
                     return false; // TODO: this is redundant
                 };
+                errdefer ending_shred.deinit();
                 const dupe = meta.DuplicateSlotProof{
-                    .shred1 = ending_shred,
+                    .shred1 = ending_shred.data,
                     .shred2 = shred.payload,
                 };
                 self.db.put(schema.duplicate_slots, slot, dupe) catch |e| {
@@ -1423,8 +1425,8 @@ test "merkle root metas coding" {
 
     for (insert_state.duplicate_shreds.items) |duplicate| {
         switch (duplicate) {
-            .Exists => |s| s.deinit(),
-            inline else => |sc| insert_state.allocator.free(sc.conflict),
+            .Exists => {},
+            inline else => |sc| sc.conflict.deinit(),
         }
     }
     insert_state.duplicate_shreds.clearRetainingCapacity();
