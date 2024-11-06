@@ -54,7 +54,10 @@ jobs:
           version: 0.13.0
 
       - name: test
-        run: zig build test -Denable-tsan=true
+        run: |
+          zig build test -Denable-tsan=true
+          zig build test -Denable-tsan=true -Dblockstore-db=lmdb -Dfilter=ledger
+          zig build test -Denable-tsan=true -Dblockstore-db=hashmap -Dfilter=ledger
 
   kcov_test:
     strategy:

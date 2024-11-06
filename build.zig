@@ -128,8 +128,11 @@ pub fn build(b: *Build) void {
     unit_tests_exe.root_module.addImport("httpz", httpz_mod);
     unit_tests_exe.root_module.addImport("zig-network", zig_network_module);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
-    unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod);
-    unit_tests_exe.root_module.addImport("lmdb", lmdb_mod);
+    switch (blockstore_db) {
+        .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .lmdb => unit_tests_exe.root_module.addImport("lmdb", lmdb_mod),
+        .hashmap => {},
+    }
     unit_tests_exe.root_module.addOptions("build-options", build_options);
     unit_tests_exe.linkLibC();
 

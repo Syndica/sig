@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const database = @import("lib.zig");
+const build_options = @import("build-options");
 
 const Allocator = std.mem.Allocator;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
@@ -454,5 +455,7 @@ const SharedHashMap = struct {
 };
 
 comptime {
-    _ = &database.interface.testDatabase(SharedHashMapDB);
+    if (build_options.blockstore_db == .hashmap) {
+        _ = &database.interface.testDatabase(SharedHashMapDB);
+    }
 }

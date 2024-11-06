@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("lmdb");
 const sig = @import("../../sig.zig");
 const database = @import("lib.zig");
+const build_options = @import("build-options");
 
 const Allocator = std.mem.Allocator;
 
@@ -634,5 +635,7 @@ pub const LmdbError = sig.utils.errors.LibcError || error{
 };
 
 comptime {
-    _ = &database.interface.testDatabase(LMDB);
+    if (build_options.blockstore_db == .lmdb) {
+        _ = &database.interface.testDatabase(LMDB);
+    }
 }
