@@ -870,7 +870,7 @@ fn writeRetransmitPeers(writer: std.fs.File.Writer, i: usize, root_distance: usi
     try std.fmt.format(writer, "\n", .{});
 }
 
-test "agave-equivalence: turbine tree" {
+pub fn runTurbineTreeBlackBoxTest() !void {
     const my_keypair = try KeyPair.fromSecretKey(try SecretKey.fromBytes([_]u8{
         233, 236, 240, 63,  159, 199, 2,   210,
         8,   217, 34,  214, 242, 104, 123, 94,
@@ -882,12 +882,12 @@ test "agave-equivalence: turbine tree" {
         191, 82,  231, 195, 46,  182, 188, 220,
     }));
 
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-    const my_contact_info = ContactInfo.init(std.testing.allocator, my_pubkey, 0, 0);
+    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_contact_info = ContactInfo.init(std.heap.c_allocator, my_pubkey, 0, 0);
     const my_threadsafe_contact_info = ThreadSafeContactInfo.fromContactInfo(my_contact_info);
 
     { // TEST 0
-        const file = try std.fs.cwd().createFile("../networking-demo/equivalence-test-0-sig.txt", .{ .read = true });
+        const file = try std.fs.cwd().createFile("demo/turbine-tree-black-box-test-0-sig.txt", .{ .read = true });
         defer file.close();
 
         // Create a seeded RNG
@@ -896,7 +896,7 @@ test "agave-equivalence: turbine tree" {
 
         // Create a test cluster and save the staked nodes.
         var stakes, var gossip_table_rw = try makeTestCluster(
-            std.testing.allocator,
+            std.heap.c_allocator,
             random,
             my_pubkey,
             20,
@@ -911,11 +911,11 @@ test "agave-equivalence: turbine tree" {
             const gossip_table: *GossipTable, _ = gossip_table_rw.writeWithLock();
             gossip_table.deinit();
         }
-        try writeStakes(std.testing.allocator, file.writer(), stakes);
+        try writeStakes(std.heap.c_allocator, file.writer(), stakes);
 
         // Create a TurbineTree instance
         var turbine_tree = try TurbineTree.initForRetransmit(
-            std.testing.allocator,
+            std.heap.c_allocator,
             my_threadsafe_contact_info,
             &gossip_table_rw,
             &stakes.unmanaged,
@@ -927,7 +927,7 @@ test "agave-equivalence: turbine tree" {
         var weighted_shuffle = try turbine_tree.weighted_shuffle.clone();
         defer weighted_shuffle.deinit();
         var shuffled_iterator = weighted_shuffle.shuffle(chacha.random());
-        const shuffled_indices = try shuffled_iterator.intoArrayList(std.testing.allocator);
+        const shuffled_indices = try shuffled_iterator.intoArrayList(std.heap.c_allocator);
         defer shuffled_indices.deinit();
         try writeShuffledIndices(file.writer(), shuffled_indices);
 
@@ -936,7 +936,7 @@ test "agave-equivalence: turbine tree" {
             const slot_leader = Pubkey.initRandom(random);
             const shred_id = ShredId{ .slot = random.int(u64), .index = random.int(u32), .shred_type = .data };
             const root_distance, const children = try turbine_tree.getRetransmitChildren(
-                std.testing.allocator,
+                std.heap.c_allocator,
                 slot_leader,
                 shred_id,
                 TurbineTree.DATA_PLANE_FANOUT,
@@ -946,3 +946,4 @@ test "agave-equivalence: turbine tree" {
         }
     }
 }
+// i4630PCO64mICktL

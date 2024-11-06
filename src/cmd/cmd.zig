@@ -529,6 +529,20 @@ pub fn run() !void {
                     },
 
                     &cli.Command{
+                        .name = "turbine-black-box",
+                        .description = .{
+                            .one_line = "Runs turbine tree black box test",
+                            .detailed = "",
+                        },
+                        .options = &.{},
+                        .target = .{
+                            .action = .{
+                                .exec = sig.turbine.turbine_tree.runTurbineTreeBlackBoxTest,
+                            },
+                        },
+                    },
+
+                    &cli.Command{
                         .name = "snapshot-validate",
                         .description = .{
                             .one_line = "Validates a snapshot",
