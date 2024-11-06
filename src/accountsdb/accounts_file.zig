@@ -234,8 +234,6 @@ pub const AccountFile = struct {
     slot: Slot,
     // number of bytes used
     length: usize,
-    // total bytes available
-    file_size: usize,
 
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
@@ -257,11 +255,10 @@ pub const AccountFile = struct {
             0,
         );
 
-        return Self{
+        return .{
             .memory = memory,
             .length = accounts_file_info.length,
             .id = accounts_file_info.id,
-            .file_size = file_size,
             .slot = slot,
         };
     }

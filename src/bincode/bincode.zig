@@ -65,7 +65,7 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
     };
 
     if (getConfig(T)) |type_config| {
-        if (comptime type_config.deserializer) |deserialize_fcn| {
+        if (type_config.deserializer) |deserialize_fcn| {
             return deserialize_fcn(allocator, reader, params);
         }
     }
@@ -518,72 +518,48 @@ pub fn writeFieldWithConfig(
 
 pub fn free(allocator: std.mem.Allocator, value: anytype) void {
     const T = @TypeOf(value);
+
+    if (getConfig(T)) |type_config| {
+        if (type_config.free) |freeFn| {
+            return freeFn(allocator, value);
+        }
+    }
+
     switch (@typeInfo(T)) {
-        .Array, .Vector => {
-            for (value) |element| {
-                bincode.free(allocator, element);
-            }
+        .Array, .Vector => for (value) |element| {
+            bincode.free(allocator, element);
         },
-        .Struct => |info| {
-            if (arrayListInfo(T)) |al_info| {
-                var copy = value;
-                for (copy.items) |item| {
+        .Struct => |info| inline for (info.fields) |field| {
+            comptime if (field.is_comptime) continue;
+            if (getFieldConfig(T, field)) |field_config| {
+                if (field_config.free) |freeFn| {
+                    freeFn(allocator, @field(value, field.name));
+                    continue;
+                }
+            }
+            bincode.free(allocator, @field(value, field.name));
+        },
+        .Optional => if (value) |v| {
+            bincode.free(allocator, v);
+        },
+        .ErrorUnion => if (value) |v| {
+            bincode.free(allocator, v);
+        } else |_| {},
+        .Union => switch (value) {
+            inline else => |payload| bincode.free(allocator, payload),
+        },
+        .Pointer => |info| switch (info.size) {
+            .Slice => {
+                for (value) |item| {
                     bincode.free(allocator, item);
                 }
-                switch (al_info.management) {
-                    .managed => copy.deinit(),
-                    .unmanaged => copy.deinit(allocator),
-                }
-            } else if (hashMapInfo(T)) |hm_info| {
-                var copy = value;
-                var iter = copy.iterator();
-                while (iter.next()) |item| {
-                    bincode.free(allocator, item.key_ptr.*);
-                    bincode.free(allocator, item.value_ptr.*);
-                }
-                switch (hm_info.management) {
-                    .managed => copy.deinit(),
-                    .unmanaged => copy.deinit(allocator),
-                }
-            } else inline for (info.fields) |field| {
-                if (getFieldConfig(T, field)) |field_config| {
-                    if (field_config.free) |freeFn| {
-                        freeFn(allocator, @field(value, field.name));
-                        continue;
-                    }
-                }
-
-                if (!field.is_comptime) {
-                    bincode.free(allocator, @field(value, field.name));
-                }
-            }
-        },
-        .Optional => {
-            if (value) |v| {
-                bincode.free(allocator, v);
-            }
-        },
-        .Union => |info| {
-            inline for (info.fields) |field| {
-                if (value == @field(T, field.name)) {
-                    return bincode.free(allocator, @field(value, field.name));
-                }
-            }
-        },
-        .Pointer => |info| {
-            switch (info.size) {
-                .Slice => {
-                    for (value) |item| {
-                        bincode.free(allocator, item);
-                    }
-                    allocator.free(value);
-                },
-                .One => {
-                    bincode.free(allocator, value.*);
-                    allocator.destroy(value);
-                },
-                else => unreachable,
-            }
+                allocator.free(value);
+            },
+            .One => {
+                bincode.free(allocator, value.*);
+                allocator.destroy(value);
+            },
+            else => unreachable,
         },
         else => {},
     }

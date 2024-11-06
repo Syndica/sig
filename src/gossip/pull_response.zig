@@ -88,7 +88,7 @@ test "gossip.pull_response: test filtering values works" {
 
     var lg = gossip_table_rw.write();
     for (0..100) |_| {
-        const gossip_value = try SignedGossipData.initRandom(random, &kp);
+        const gossip_value = SignedGossipData.initRandom(random, &kp);
         _ = try lg.mut().insert(gossip_value, 0);
     }
     lg.unlock();
@@ -115,14 +115,14 @@ test "gossip.pull_response: test filtering values works" {
     legacy_contact_info.id = id;
     // TODO: make this consistent across tests
     legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());
-    var gossip_value = try SignedGossipData.initSigned(.{
+    const gossip_value = SignedGossipData.initSigned(&kp, .{
         .LegacyContactInfo = legacy_contact_info,
-    }, &kp);
+    });
 
     // insert more values which the filters should be missing
     lg = gossip_table_rw.write();
     for (0..64) |_| {
-        const v2 = try SignedGossipData.initRandom(random, &kp);
+        const v2 = SignedGossipData.initRandom(random, &kp);
         _ = try lg.mut().insert(v2, 0);
     }
 

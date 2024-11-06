@@ -63,22 +63,11 @@ pub fn randomPongPacket(random: std.rand.Random, keypair: *const KeyPair, to_add
     return packet;
 }
 
-pub fn randomSignedGossipData(random: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !SignedGossipData {
-    var keypair = try KeyPair.create(null);
+pub fn randomSignedGossipData(random: std.rand.Random, must_pass_sign_verification: bool) !SignedGossipData {
+    const keypair = try KeyPair.create(null);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-
-    // will have random id
-    var value = try SignedGossipData.randomWithIndex(random, &keypair, 0);
-    value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key));
-    try value.sign(&keypair);
-
-    const should_pass_sig_verification = maybe_should_pass_sig_verification orelse random.boolean();
-    if (should_pass_sig_verification) {
-        value.data.setId(pubkey);
-        try value.sign(&keypair);
-    }
-
-    return value;
+    const lci = LegacyContactInfo.default(if (must_pass_sign_verification) pubkey else Pubkey.initRandom(random));
+    return SignedGossipData.initSigned(&keypair, .{ .LegacyContactInfo = lci });
 }
 
 pub fn randomPushMessage(
@@ -134,16 +123,8 @@ pub fn randomPullRequest(
     keypair: *const KeyPair,
     to_addr: EndPoint,
 ) !Packet {
-    const value = try SignedGossipData.initSigned(.{
-        .LegacyContactInfo = contact_info,
-    }, keypair);
-
-    return randomPullRequestWithContactInfo(
-        allocator,
-        random,
-        to_addr,
-        value,
-    );
+    const value = SignedGossipData.initSigned(keypair, .{ .LegacyContactInfo = contact_info });
+    return randomPullRequestWithContactInfo(allocator, random, to_addr, value);
 }
 
 pub fn randomPullRequestWithContactInfo(

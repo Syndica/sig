@@ -1420,7 +1420,7 @@ fn loadSnapshot(
     allocator: Allocator,
     logger: Logger,
     /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
-    gossip_service: ?*GossipService,
+    maybe_gossip_service: ?*GossipService,
     /// whether to validate the snapshot account data against the metadata
     validate_snapshot: bool,
     /// optional geyser to write snapshot data to
@@ -1437,7 +1437,7 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{
+    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, maybe_gossip_service, .{
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
@@ -1467,17 +1467,16 @@ fn loadSnapshot(
     };
     logger.info().logf("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
-    result.accounts_db = try AccountsDB.init(
-        allocator,
-        logger,
-        snapshot_dir,
-        .{
-            .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
-            .use_disk_index = config.current.accounts_db.use_disk_index,
-            .lru_size = 10_000,
-        },
-        geyser_writer,
-    );
+    result.accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = geyser_writer,
+        .gossip_view = if (maybe_gossip_service) |service| AccountsDB.GossipView.fromService(service) else null,
+        .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
+        .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
+        .lru_size = 10_000,
+    });
     errdefer result.accounts_db.deinit();
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(

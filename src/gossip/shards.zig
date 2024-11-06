@@ -122,11 +122,10 @@ test "GossipTableShards" {
 // test helper fcns
 fn newTestGossipVersionedData(random: std.rand.Random, gossip_table: *GossipTable) !GossipVersionedData {
     const keypair = try KeyPair.create(null);
-    var value = try SignedGossipData.initRandom(random, &keypair);
+    const value = SignedGossipData.initRandom(random, &keypair);
     _ = try gossip_table.insert(value, 0);
     const label = value.label();
-    const x = gossip_table.get(label).?;
-    return x;
+    return gossip_table.get(label).?;
 }
 
 fn checkMask(value: *const GossipVersionedData, mask: u64, mask_bits: u32) bool {
