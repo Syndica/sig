@@ -62,12 +62,12 @@ pub fn run(
         exit.store(false, .monotonic);
     }
     const num_retransmit_threads = maybe_num_retransmit_threads orelse try std.Thread.getCpuCount();
-    logger.info().logf("starting retransmit service: num_retransmit_sockets={} num_retransmit_threads={}", .{
+    logger.info().logf("(demo.retransmit_service) starting retransmit service: num_retransmit_sockets={} num_retransmit_threads={}", .{
         num_retransmit_sockets,
         num_retransmit_threads,
     });
 
-    var metrics = try RetransmitServiceMetrics.init();
+    var metrics = try RetransmitServiceMetrics.init(logger);
 
     var receive_to_retransmit_channel = try Channel(RetransmitShredInfo).init(allocator);
     defer receive_to_retransmit_channel.deinit();
@@ -217,7 +217,7 @@ fn receiveShreds(
         metrics.shreds_received_count.add(shreds.items.len);
         metrics.receive_shreds_nanos.set(receive_shreds_timer.read().asNanos());
 
-        metrics.log(logger);
+        metrics.maybeLog(logger);
     }
 }
 
@@ -402,22 +402,33 @@ pub const RetransmitServiceMetrics = struct {
     turbine_tree_get_children_nanos: *Gauge(u64),
     retransmit_shred_nanos: *Gauge(u64),
 
+    // logging info
+    logging_fields: struct {
+        logger: Logger,
+        last_log_instant: sig.time.Instant,
+    },
+
     // metrics prefix
     pub const prefix = "retransmit_service";
 
     const Gauge64 = Gauge(u64);
 
-    pub fn init() !RetransmitServiceMetrics {
-        return try globalRegistry().initStruct(RetransmitServiceMetrics);
+    pub fn init(logger: Logger) !RetransmitServiceMetrics {
+        var self: RetransmitServiceMetrics = undefined;
+        std.debug.assert(try globalRegistry().initFields(&self) == 1);
+        self.logging_fields = .{ .logger = logger, .last_log_instant = sig.time.Instant.now() };
+        return self;
     }
 
-    pub fn log(self: *const RetransmitServiceMetrics, logger: Logger) void {
-        logger.info().logf("retransmit-service: received={} retransmitted={} skipped={}:{}:{}", .{
-            self.shreds_received_count.get(),
-            self.shreds_sent_count.get(),
-            self.shred_byte_filtered_count.get() + self.shred_id_filtered_count.get(),
-            self.shred_byte_filtered_count.get(),
-            self.shred_id_filtered_count.get(),
-        });
+    pub fn maybeLog(self: *const RetransmitServiceMetrics, logger: Logger) void {
+        if (self.logging_fields.last_log_instant.elapsed().asSecs() > 1) {
+            logger.info().logf("(demo.retransmit_service) received={} retransmitted={} skipped={}:{}:{}", .{
+                self.shreds_received_count.get(),
+                self.shreds_sent_count.get(),
+                self.shred_byte_filtered_count.get() + self.shred_id_filtered_count.get(),
+                self.shred_byte_filtered_count.get(),
+                self.shred_id_filtered_count.get(),
+            });
+        }
     }
 };
