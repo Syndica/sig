@@ -1426,8 +1426,6 @@ fn loadSnapshot(
     /// optional geyser to write snapshot data to
     geyser_writer: ?*GeyserWriter,
 ) !*LoadedSnapshot {
-    const keypair = if (maybe_gossip_service) |gossip_service| gossip_service.my_keypair else try getOrInitIdentity(allocator, logger);
-
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
     result.allocator = allocator;
@@ -1473,9 +1471,8 @@ fn loadSnapshot(
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
-        .my_pubkey = Pubkey.fromPublicKey(&keypair.public_key),
-        .gossip_push_msg_queue = if (maybe_gossip_service) |gossip_service| &gossip_service.push_msg_queue_mux else null,
         .geyser_writer = geyser_writer,
+        .gossip_view = if (maybe_gossip_service) |service| AccountsDB.GossipView.fromService(service) else null,
         .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
         .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
         .lru_size = 10_000,
