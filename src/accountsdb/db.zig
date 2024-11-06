@@ -1031,11 +1031,10 @@ pub const AccountsDB = struct {
                 const ref_head = shard.getPtr(key).?;
 
                 // get the most recent state of the account
-                // const ref_ptr = ref_head.ref_ptr;
-                const ref_index = ref_head.ref_index;
+                const ref_ptr = ref_head.ref_ptr;
                 const max_slot_ref = switch (config) {
-                    .FullAccountHash => |full_config| self.slotListMaxWithinBoundsIndex(ref_index, full_config.min_slot, full_config.max_slot),
-                    .IncrementalAccountHash => |inc_config| self.slotListMaxWithinBoundsIndex(ref_index, inc_config.min_slot, inc_config.max_slot),
+                    .FullAccountHash => |full_config| slotListMaxWithinBounds(ref_ptr, full_config.min_slot, full_config.max_slot),
+                    .IncrementalAccountHash => |inc_config| slotListMaxWithinBounds(ref_ptr, inc_config.min_slot, inc_config.max_slot),
                 } orelse continue;
 
                 // read the account state
@@ -1794,11 +1793,17 @@ pub const AccountsDB = struct {
                     };
                     defer ref_lg.unlock();
 
-                    // TODO(fl): change to ptr_to index (which then uses the global index)
-                    _ = global_ref_index;
-                    const ptr_to_ref_field = switch (ref_parent) {
-                        .head => |head| &head.ref_ptr,
-                        .parent => |parent| &parent.next_ptr.?,
+                    const ptr_to_ref_field = blk: {
+                        switch (ref_parent) {
+                            .head => |head| {
+                                head.ref_index = global_ref_index + offset_index;
+                                break :blk &head.ref_ptr;
+                            },
+                            .parent => |parent| {
+                                parent.next_index = global_ref_index + offset_index;
+                                break :blk &parent.next_ptr.?;
+                            },
+                        }
                     };
 
                     // copy + update the values
@@ -2068,7 +2073,6 @@ pub const AccountsDB = struct {
     }
 
     /// gets an account given an associated pubkey. mut ref is required for locks.
-    /// TODO(fl): remove
     pub fn getAccount(self: *Self, pubkey: *const Pubkey) !Account {
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
         defer lock.unlock();
@@ -2080,7 +2084,8 @@ pub const AccountsDB = struct {
         return account;
     }
 
-    /// gets an account given an associated pubkey. mut ref is required for locks.
+    /// gets an account given an associated pubkey using the reference's index field.
+    /// mainly used for fast-loading support/testing.
     pub fn getAccountIndex(self: *Self, pubkey: *const Pubkey) !Account {
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
         defer lock.unlock();
@@ -2324,25 +2329,22 @@ pub const AccountsDB = struct {
         return .{ gop.value_ptr, bank_hash_stats_lg };
     }
 
+    /// NOTE: this method is mainly to test the fast-loading correctness, but is a still valid
+    /// way to retreive reference data
     pub fn slotListMaxWithinBoundsIndex(
         self: *Self,
         ref_index: u64,
         min_slot: ?Slot,
         max_slot: ?Slot,
     ) ?*AccountRef {
-        var index: u64 = ref_index;
+        var curr_index: u64 = ref_index;
         var biggest: ?*AccountRef = null;
         while (true) {
-            const ref = try self.account_index.getRef(index);
-            if (inBoundsIf(ref.slot, min_slot, max_slot) and (biggest == null or ref.slot > biggest.?.slot)) {
-                biggest = ref;
+            const curr = try self.account_index.getReferenceByIndex(curr_index);
+            if (inBoundsIf(curr.slot, min_slot, max_slot) and (biggest == null or curr.slot > biggest.?.slot)) {
+                biggest = curr;
             }
-
-            if (ref.next_index) |next_index| {
-                index = next_index;
-            } else {
-                break;
-            }
+            curr_index = curr.next_index orelse break;
         }
         return biggest;
     }
@@ -2353,16 +2355,12 @@ pub const AccountsDB = struct {
         max_slot: ?Slot,
     ) ?*AccountRef {
         var biggest: ?*AccountRef = null;
-        if (inBoundsIf(ref_ptr.slot, min_slot, max_slot)) {
-            biggest = ref_ptr;
-        }
-
         var curr = ref_ptr;
-        while (curr.next_ptr) |ref| {
-            if (inBoundsIf(ref.slot, min_slot, max_slot) and (biggest == null or ref.slot > biggest.?.slot)) {
-                biggest = ref;
+        while (true) {
+            if (inBoundsIf(curr.slot, min_slot, max_slot) and (biggest == null or curr.slot > biggest.?.slot)) {
+                biggest = curr;
             }
-            curr = ref;
+            curr = curr.next_ptr orelse break;
         }
         return biggest;
     }
@@ -4353,12 +4351,18 @@ pub const BenchmarkAccountsDB = struct {
 
         var timer = try sig.time.Timer.start();
 
+        // NOTE: both ways are valid
+        const ReadApproach = enum { pointer, index };
+        const read_approach = ReadApproach.pointer;
+
         const do_read_count = n_accounts;
         var i: usize = 0;
         while (i < do_read_count) : (i += 1) {
             const pubkey_idx = indexer.sample();
-            // const account = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
-            const account = try accounts_db.getAccountIndex(&pubkeys[pubkey_idx]);
+            const account = switch (read_approach) {
+                .pointer => try accounts_db.getAccount(&pubkeys[pubkey_idx]),
+                .index => try accounts_db.getAccountIndex(&pubkeys[pubkey_idx]),
+            };
             defer account.deinit(allocator);
             if (account.data.len != (pubkey_idx % 1_000)) {
                 std.debug.panic("account data len dnm {}: {} != {}", .{ pubkey_idx, account.data.len, (pubkey_idx % 1_000) });
