@@ -140,9 +140,11 @@ pub const Service = struct {
                     const leader_addresses = try self.getLeaderAddresses();
                     defer self.allocator.free(leader_addresses);
 
+                    self.logger.info().logf("(demo.transaction_sender)    attempting initial send of {} transactions", .{transaction_batch.count()});
                     try self.sendTransactions(transaction_batch.values(), leader_addresses);
                     last_batch_sent = Instant.now();
 
+                    self.logger.info().logf("(demo.transaction_sender)    adding {} transactions to transaction pool", .{transaction_batch.count()});
                     self.transaction_pool.addTransactions(transaction_batch.values()) catch {
                         self.logger.warn().log("Transaction pool is full, dropping transactions");
                     };
