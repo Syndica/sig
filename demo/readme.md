@@ -16,10 +16,10 @@ schedule)
 
 ## Gulfstream - sig/src/transaction_sender
 
-Sig transaction send service:
+At a high level the sig transaction send service:
 - read transactions from channel
 - send transactions to upcoming leaders via quic
-- add transactions to a transaction pool for monitoring and retries
+- adds transactions to a transaction pool for monitoring and retries
 - retry transactions until they are rooted, failed, expired, or exceeded max retries
 
 <br>
@@ -32,42 +32,75 @@ Sig transaction send service:
 
 ### Demonstration - Landing Transfer Transactions
 
-- Setup two accounts, a 'bank' and 'alice'
-- Ensure 'bank' has enough lamports to conver total transfer amount + transfer fees
-- Ensure 'alice' has zero lamports
-- Send 5_000_000 lamports to 'alice' over five transactions of 1_000_000 lamports each
-- Confirm that 'alice' has received 5_000_000 lamports
+- **Sending Mock Transactions**:
+    - Setup two accounts, a 'bank' and 'alice'
+    - Ensure 'bank' has enough lamports to conver total transfer amount + transfer fees
+    - Ensure 'alice' has zero lamports
+    - Send 5_000_000 lamports to 'alice' over five transactions of 1_000_000 lamports each
+    - Confirm that 'alice' has received 5_000_000 lamports
+    - **permalink**: TODO
 
-
+- **Gulfstream - Transaction Sender**
+    - the sig transaction sender is run as usual
+    - **permalink**: TODO
 <br>
 
 
 ## Turbine - sig/src/turbine
 
-Sig retransmit stage of turbine block propagation:
-- TODO
+At a high level the sig turbine retransmit stage:
+- reads verified shreds from a channel populated by the shred collector
+- runs deduplication of shreds for both the raw bytes and shred ids
+- groups shreds by slot to streamline retrieval of turbine trees and slot leaders
+- packages each shred into a RetransmitInfo struct containing the data required to compute turbine children
+- sends each RetransmitInfo struct along a channel to one of N retransmit threads
+- retransmit threads compute the turbine children and their addresses, sending new packets along a channel for transmission to the network
+
+<br>
 
 
 <p>
 <img alt="Turbine Retransmit" src="imgs/turbine-retransmit.png" style="width: 900px; margin: auto;">
 </p>
 
-### Stake Overwrite Tests
+### Demonstration - Retransmitting Shreds as a *Staked Validator 
 
-- testing with no stake we will never have children to retransmit to :(
-- manually overwriting **our** stake when build the turbine tree works to demonstrate retransmition of shreds 
-    - even though we are retransmitting to the wrong nodes this will have insignificant network effects
+- **Issue**: unstaked validators are *always leaf nodes on testnet
+    - a live demo won't show shred retransmission without stake 
+    - real stake would cause negative network effects as sig is incomplete
 
-### Equivalence Tests
+- **Solution**: manually override our validators stake when building the turbine tree 
+    - a live demo will show shred retransmission at both level 0 (root) and level 1 of the turbine tree
+    - we will retransmit to the wrong nodes, however, this will have insignificant network effects
+    - **permalinks**:
+        - sig (stake override): TODO
+    
+### Demonstration - Retransmitting to the Correct Validators
 
-- the above demonstrates that we can retransmit shreds to nodes, but how do we know that they are the **right** nodes
-- we can check that we produce the same children as agave if given the same staked nodes and gossip table state
-    - sig: https://github.com/Syndica/sig/blob/fc846a33faef9345fb363c4d5e0090484ff52a17/src/turbine/turbine_tree.zig#L873
-    - agave: https://github.com/Syndica/agave/blob/9cf843b2982fc03259f52fcd7cfa5c1c4d21fe0c/turbine/src/cluster_nodes.rs#L884
+- **Turbine Tree Determinism**: 
+    - the epoch staked nodes always make up the first `n` nodes of a turbine tree; hence
+    - the first `n` nodes of a turbine tree are **deterministic** amongst validators with respect to:
+        - epoch staked nodes
+        - shred id
+        - slot leader
+    - after the `nth` node, the turbine tree is **non-deterministic** as it depends on each validators internal gossip table
+    - **permalinks**:
+        - sig (seeding): TODO
+        - agave (seeding): https://github.com/Syndica/agave/blob/9cf843b2982fc03259f52fcd7cfa5c1c4d21fe0c/turbine/src/cluster_nodes.rs#L209
+        - sig (building): TODO
+        - agave (building): https://github.com/Syndica/agave/blob/9cf843b2982fc03259f52fcd7cfa5c1c4d21fe0c/turbine/src/cluster_nodes.rs#L280
+
+- **Black Box Approach**
+    - create a test cluster in both sig and agave, consisting of:
+        - a random set of staked nodes,
+        - a gossip table containing the staked nodes plus other random unstaked nodes
+    - create a TurbineTree (sig) / ClusterNodes\<Retransmit\> (agave) using the test cluster 
+    - sample N random shred ids and compute the retransmit children 
+    - confirm that the gerenated cluster info, and computed retransmit children are identical
+    - **permalinks**
+        - sig: TODO
+        - agave: https://github.com/Syndica/agave/blob/9cf843b2982fc03259f52fcd7cfa5c1c4d21fe0c/turbine/src/cluster_nodes.rs#L884
 
 ## TODO: 
-- create turbine diagrams
-- fill in turbine implementation details
-- clean up turbine logs
 - more load on transaction sender 
 - additional equivalence test case
