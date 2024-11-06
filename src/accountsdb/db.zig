@@ -2068,12 +2068,25 @@ pub const AccountsDB = struct {
     }
 
     /// gets an account given an associated pubkey. mut ref is required for locks.
+    /// TODO(fl): remove
     pub fn getAccount(self: *Self, pubkey: *const Pubkey) !Account {
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
         defer lock.unlock();
 
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
+        const account = try self.getAccountFromRef(max_ref);
+
+        return account;
+    }
+
+    /// gets an account given an associated pubkey. mut ref is required for locks.
+    pub fn getAccountIndex(self: *Self, pubkey: *const Pubkey) !Account {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
+        defer lock.unlock();
+
+        // NOTE: this will always be a safe unwrap since both bounds are null
+        const max_ref = self.slotListMaxWithinBoundsIndex(head_ref.ref_index, null, null).?;
         const account = try self.getAccountFromRef(max_ref);
 
         return account;
@@ -4345,7 +4358,8 @@ pub const BenchmarkAccountsDB = struct {
         var i: usize = 0;
         while (i < do_read_count) : (i += 1) {
             const pubkey_idx = indexer.sample();
-            const account = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
+            // const account = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
+            const account = try accounts_db.getAccountIndex(&pubkeys[pubkey_idx]);
             defer account.deinit(allocator);
             if (account.data.len != (pubkey_idx % 1_000)) {
                 std.debug.panic("account data len dnm {}: {} != {}", .{ pubkey_idx, account.data.len, (pubkey_idx % 1_000) });
