@@ -352,6 +352,7 @@ pub const AccountsDB = struct {
 
             // set the reference allocator to the main index:
             // 1) delete the old ptr so we dont leak
+            thread_db.account_index.reference_manager.deinit();
             per_thread_allocator.destroy(thread_db.account_index.reference_manager);
             // 2) set the new ptr to the main index
             thread_db.account_index.reference_manager = self.account_index.reference_manager;
