@@ -33,7 +33,6 @@ pub const LeaderInfo = struct {
     rpc_client: RpcClient,
     leader_schedule_cache: LeaderScheduleCache,
     leader_addresses_cache: std.AutoArrayHashMapUnmanaged(Pubkey, SocketAddr),
-    leader_addresses_cache_rpc: std.AutoArrayHashMapUnmanaged(Pubkey, SocketAddr),
     gossip_table_rw: *RwMux(GossipTable),
 
     pub fn init(
@@ -54,7 +53,6 @@ pub const LeaderInfo = struct {
             ),
             .leader_schedule_cache = LeaderScheduleCache.init(allocator, epoch_schedule),
             .leader_addresses_cache = .{},
-            .leader_addresses_cache_rpc = .{},
             .gossip_table_rw = gossip_table_rw,
         };
     }
@@ -96,19 +94,7 @@ pub const LeaderInfo = struct {
         for (unique_leaders) |leader| {
             const contact_info = gossip_table.getThreadSafeContactInfo(leader);
             if (contact_info == null or contact_info.?.tpu_addr == null) continue;
-
             try self.leader_addresses_cache.put(self.allocator, leader, contact_info.?.tpu_addr.?);
-        }
-
-        const cluster_nodes_response = try self.rpc_client.getClusterNodes(self.allocator);
-        defer cluster_nodes_response.deinit();
-        const cluster_nodes = try cluster_nodes_response.result();
-        self.leader_addresses_cache_rpc.clearRetainingCapacity();
-        for (cluster_nodes) |node| {
-            if (node.tpuQuic == null) continue;
-            const pubkey = try Pubkey.fromString(node.pubkey);
-            const tpu_address = try SocketAddr.parse(node.tpuQuic.?);
-            try self.leader_addresses_cache_rpc.put(self.allocator, pubkey, tpu_address);
         }
     }
 

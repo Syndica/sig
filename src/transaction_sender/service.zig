@@ -34,7 +34,7 @@ const globalRegistry = sig.prometheus.globalRegistry;
 /// The leader schedule and current slot are loaded via RPC calls to the cluster.
 /// The leader TPU addresses are loaded from the gossip table.
 /// TODO:
-/// - Add nonce handling
+/// - Add durable nonce handling
 /// - Remove RPC calls
 pub const Service = struct {
     allocator: std.mem.Allocator,
