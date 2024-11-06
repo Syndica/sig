@@ -105,14 +105,14 @@ fn handleChainingForSlot(
             // If the parent of `slot` is a newly inserted orphan, insert it into the orphans
             // column family
             if (prev_slot_meta.isOrphan()) {
-                try write_batch.put(schema.orphans, prev_slot, true);
+                try write_batch.put(schema.orphan_slots, prev_slot, true);
             }
         }
     };
 
     // At this point this slot has received a parent, so it's no longer an orphan
     if (was_orphan_slot) {
-        try write_batch.delete(schema.orphans, slot);
+        try write_batch.delete(schema.orphan_slots, slot);
     }
 
     // If this is a newly completed slot and the parent is connected, then the

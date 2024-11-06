@@ -3167,11 +3167,11 @@ test "init, exit, and deinit" {
     }
 }
 
-const fuzz_service = @import("./fuzz_service.zig");
+const fuzz_service = sig.gossip.fuzz_service;
 
 pub const BenchmarkGossipServiceGeneral = struct {
-    pub const min_iterations = 3;
-    pub const max_iterations = 5;
+    pub const min_iterations = 1;
+    pub const max_iterations = 1;
 
     pub const MessageCounts = struct {
         n_ping: usize,
@@ -3212,7 +3212,8 @@ pub const BenchmarkGossipServiceGeneral = struct {
     };
 
     pub fn benchmarkGossipService(bench_args: BenchmarkArgs) !sig.time.Duration {
-        const allocator = std.heap.c_allocator;
+        // TODO: this leaks
+        const allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.c_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
         const endpoint = address.toEndpoint();
@@ -3305,8 +3306,8 @@ pub const BenchmarkGossipServiceGeneral = struct {
 
 /// pull requests require some additional setup to work
 pub const BenchmarkGossipServicePullRequests = struct {
-    pub const min_iterations = 3;
-    pub const max_iterations = 5;
+    pub const min_iterations = 1;
+    pub const max_iterations = 1;
 
     pub const BenchmarkArgs = struct {
         name: []const u8 = "",
@@ -3328,7 +3329,8 @@ pub const BenchmarkGossipServicePullRequests = struct {
     };
 
     pub fn benchmarkPullRequests(bench_args: BenchmarkArgs) !sig.time.Duration {
-        const allocator = std.heap.c_allocator;
+        // TODO: this leaks
+        const allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.c_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
 
@@ -3428,3 +3430,22 @@ fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
     try contact_info.setSocket(.gossip, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));
     return contact_info;
 }
+
+// // TODO: re-enable these tests when leaks are fixed
+// test "benchmarkPullRequests" {
+//     _ = try BenchmarkGossipServicePullRequests.benchmarkPullRequests(.{
+//         .name = "1k_data_1k_pull_reqs",
+//         .n_data_populated = 10,
+//         .n_pull_requests = 2,
+//     });
+// }
+
+// test "benchmarkGossipService" {
+//     _ = try BenchmarkGossipServiceGeneral.benchmarkGossipService(.{
+//         .message_counts = .{
+//             .n_ping = 10,
+//             .n_push_message = 10,
+//             .n_pull_response = 10,
+//         },
+//     });
+// }

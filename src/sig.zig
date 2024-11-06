@@ -25,4 +25,5 @@ pub const TEST_DATA_DIR = "data/test-data/";
 /// ephemeral state produced by tests
 pub const TEST_STATE_DIR = "data/test-state/";
 pub const FUZZ_DATA_DIR = "data/fuzz-data/";
+pub const BENCHMARK_RESULTS_DIR = "results/";
 pub const GENESIS_DIR = "data/genesis-files/";
