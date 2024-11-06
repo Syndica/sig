@@ -7,14 +7,29 @@ import re
 
 MAX_LINE_LENGTH = 100
 
-arg_parser = argparse.ArgumentParser()
-arg_parser.add_argument("dirs", action="append")
-arg_parser.add_argument("--check", action="store_true")
-arg_parser.add_argument("-v", "--verbose", action="store_true")
-args = arg_parser.parse_args()
+
+def main():
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument("dirs", action="append")
+    arg_parser.add_argument("--check", action="store_true")
+    arg_parser.add_argument("-v", "--verbose", action="store_true")
+    args = arg_parser.parse_args()
+
+    files_to_check = get_files(args)
+
+    checks = [
+        unused_imports,
+        line_length,
+    ]
+    fails = 0
+    for check in checks:
+        print("Running check: ", check.__name__)
+        fails += check(args, files_to_check)
+    if fails:
+        exit(1)
 
 
-def get_files():
+def get_files(args):
     files_to_check = []
     dirs = [*args.dirs]
     while len(dirs) > 0:
@@ -30,19 +45,18 @@ def get_files():
     return files_to_check
 
 
-# Checks for unused imports in files.
-def unused_imports():
-    files_to_check = get_files()
+def unused_imports(args, files_to_check):
+    """Checks for unused imports in files."""
     import_line_regex = re.compile(
-        r'const\s+([a-zA-Z]+)\s+=\s+@import\("([a-zA-Z.]+)"\);'
+        r'const\s+([a-zA-Z0-9_]+)\s+=\s+(@import\("[a-zA-Z0-9_./]+"\))?[a-zA-Z0-9_.]*;'
     )
 
     total_lines_removed = 0
-    lines_removed = 0
 
     while True:
         lines_removed = 0
         for path in files_to_check:
+            # get all lines of code
             with open(path) as f:
                 orig_file = f.read()
             orig_lines = orig_file.split("\n")
@@ -103,11 +117,11 @@ def unused_imports():
         print("Total unused imports found:", total_lines_removed)
     else:
         print("Total unused imports removed:", total_lines_removed)
-    if total_lines_removed > 0:
-        exit(1)
+    
+    return total_lines_removed
 
 
-excluded_files = [
+files_excluded_from_line_length_check = [
     "src/accountsdb/accounts_file.zig",
     "src/accountsdb/bank.zig",
     "src/accountsdb/cache.zig",
@@ -232,15 +246,14 @@ excluded_files = [
 ]
 
 
-# Enforces rows to be at most 100 characters long.
-def row_size():
-    files_to_check = get_files()
+def line_length(args, files_to_check):
+    """Enforces lines of code to be at most 100 characters long."""
     unique_files = []
 
     lines_found = 0
 
     for path in files_to_check:
-        if path in excluded_files:
+        if path in files_excluded_from_line_length_check:
             continue
         with open(path) as f:
             lines = f.readlines()
@@ -258,15 +271,8 @@ def row_size():
     for file in unique_files:
         print(f'"{file}",')
 
-    if lines_found > 0:
-        exit(1)
+    return lines_found
 
 
-checks = [
-    unused_imports,
-    row_size,
-]
-
-for check in checks:
-    print("Running check: ", check.__name__)
-    check()
+if __name__ == '__main__':
+    main()
