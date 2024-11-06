@@ -34,7 +34,7 @@ jobs:
           python-version: "3.10"      
 
       - name: check style
-        run: python scripts/check_style.py --check src
+        run: python scripts/style.py --check src
 
   test:
     strategy:
