@@ -4012,7 +4012,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
 pub const BenchmarkAccountsDB = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 5;
+    pub const max_iterations = 200;
 
     pub const MemoryType = enum {
         ram,
@@ -4068,31 +4068,30 @@ pub const BenchmarkAccountsDB = struct {
             .name = "100k accounts (1_slot - ram index - disk accounts - lru disabled)",
         },
 
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .ram,
-            .lru_size = 1_000,
-            .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=1_000)",
-        },
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .ram,
-            .lru_size = 10_000,
-            .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=10_000)",
-        },
-
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .ram,
-            .lru_size = 100_000,
-            .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=100_000)",
-        },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .ram,
+        //     .lru_size = 1_000,
+        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=1_000)",
+        // },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .ram,
+        //     .lru_size = 10_000,
+        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=10_000)",
+        // },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .ram,
+        //     .lru_size = 100_000,
+        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=100_000)",
+        // },
 
         // // test accounts in ram
         // BenchArgs{
@@ -4110,21 +4109,21 @@ pub const BenchmarkAccountsDB = struct {
         //     .name = "10k accounts (10_slots - ram index - ram accounts)",
         // },
 
-        // // tests large number of accounts on disk
-        // BenchArgs{
-        //     .n_accounts = 10_000,
-        //     .slot_list_len = 10,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "10k accounts (10_slots - ram index - disk accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 500_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "500k accounts (1_slot - ram index - disk accounts)",
-        // },
+        // tests large number of accounts on disk
+        BenchArgs{
+            .n_accounts = 10_000,
+            .slot_list_len = 10,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "10k accounts (10_slots - ram index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 500_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "500k accounts (1_slot - ram index - disk accounts)",
+        },
         // BenchArgs{
         //     .n_accounts = 500_000,
         //     .slot_list_len = 3,
@@ -4132,13 +4131,13 @@ pub const BenchmarkAccountsDB = struct {
         //     .index = .ram,
         //     .name = "500k accounts (3_slot - ram index - disk accounts)",
         // },
-        // BenchArgs{
-        //     .n_accounts = 3_000_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "3M accounts (1_slot - ram index - disk accounts)",
-        // },
+        BenchArgs{
+            .n_accounts = 3_000_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "3M accounts (1_slot - ram index - disk accounts)",
+        },
         // BenchArgs{
         //     .n_accounts = 3_000_000,
         //     .slot_list_len = 3,

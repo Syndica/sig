@@ -9,6 +9,8 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
     collapse_sleep_ms: u32 = 100,
     min_split_size: u64 = 128,
 }) type {
+    std.debug.assert(config.min_split_size > 0);
+
     return struct {
         // recycling depot
         records: std.ArrayList(Record),
@@ -21,8 +23,10 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
 
         pub fn init(a: std.mem.Allocator, buffer: []T) !Self {
             var records = std.ArrayList(Record).init(a);
-            // NOTE: this approach allows us to add additional buffers if we run out of space
-            try records.append(.{ .is_free = true, .buf = buffer });
+            if (buffer.len > 0) {
+                // NOTE: this approach allows us to add additional buffers if we run out of space
+                try records.append(.{ .is_free = true, .buf = buffer });
+            }
             return .{
                 .records = records,
                 .capacity = buffer.len,
@@ -42,8 +46,11 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
         }
 
         pub fn append(self: *Self, buf: []T) !void {
+            if (buf.len == 0) return;
+
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
+
             try self.records.append(.{ .is_free = true, .buf = buf });
             self.capacity += buf.len;
         }
@@ -63,8 +70,9 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
                 if (record.buf.len >= n) { // allocation is possible
                     if (record.is_free) {
                         record.is_free = false;
-                        _ = try self.tryRecycleUnusedSpaceUnsafe(record.buf, n);
-                        return .{ record.buf[0..n], global_index };
+                        const buf = record.buf[0..n]; // local copy because next line will likely change the record pointer
+                        _ = try self.tryRecycleUnusedSpaceUnsafe(record, n);
+                        return .{ buf, global_index };
                     } else {
                         is_possible_to_recycle = true;
                     }
@@ -116,15 +124,24 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
         pub fn tryRecycleUnusedSpace(self: *Self, buf: []T, used_len: u64) !bool {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
-            return self.tryRecycleUnusedSpaceUnsafe(buf, used_len);
+
+            for (self.records.items) |*record| {
+                if (record.buf.ptr == buf.ptr) {
+                    return self.tryRecycleUnusedSpaceUnsafe(record, used_len);
+                }
+            }
+            @panic("attempt to recycle invalid buf");
         }
 
-        pub fn tryRecycleUnusedSpaceUnsafe(self: *Self, buf: []T, used_len: u64) !bool {
-            const unused_len = buf.len - used_len;
+        pub fn tryRecycleUnusedSpaceUnsafe(self: *Self, record: *Record, used_len: u64) !bool {
+            const unused_len = record.buf.len -| used_len;
             if (unused_len > config.min_split_size) {
-                // split the buf because its overallocated
-                const unused_buf = buf[used_len..];
-                try self.records.append(.{ .is_free = true, .buf = unused_buf });
+                // update the state of the record
+                const split_buf = record.buf[used_len..];
+                // NOTE: this record ptr is updated before the append which could invalidate the record ptr
+                record.buf = record.buf[0..used_len];
+                // add new unused record to the list
+                try self.records.append(.{ .is_free = true, .buf = split_buf });
                 return true;
             } else {
                 // dont try to split if its too small
