@@ -23,6 +23,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
 
         pub fn init(a: std.mem.Allocator, buffer: []T) !Self {
             var records = std.ArrayList(Record).init(a);
+            try records.ensureTotalCapacity(1_000); // arbitrary memory boost
             if (buffer.len > 0) {
                 // NOTE: this approach allows us to add additional buffers if we run out of space
                 try records.append(.{ .is_free = true, .buf = buffer });
