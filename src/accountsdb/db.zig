@@ -43,9 +43,9 @@ const AccountsCache = sig.accounts_db.cache.AccountsCache;
 const PubkeyShardCalculator = sig.accounts_db.index.PubkeyShardCalculator;
 const ShardedPubkeyRefMap = sig.accounts_db.index.ShardedPubkeyRefMap;
 const GeyserWriter = sig.geyser.GeyserWriter;
-
 const WeightedAliasSampler = sig.rand.WeightedAliasSampler;
 
+const computeMerkleRoot = sig.common.merkle_tree.computeMerkleRoot;
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
@@ -465,7 +465,7 @@ pub const AccountsDB = struct {
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
 
         const reference_manager = self.account_index.reference_manager;
-        const references_buf = try reference_manager.alloc(n_accounts_estimate);
+        const references_buf, const global_ref_index = try reference_manager.alloc(n_accounts_estimate);
 
         var timer = try sig.time.Timer.start();
         var progress_timer = try sig.time.Timer.start();
@@ -604,7 +604,7 @@ pub const AccountsDB = struct {
         // it will always be a search for a free spot, and not search for a match
         timer.reset();
         for (references_buf[0..n_accounts_total], 0..) |*ref, ref_count| {
-            _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
+            _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref, global_ref_index + ref_count);
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
@@ -735,7 +735,7 @@ pub const AccountsDB = struct {
 
                     // NOTE: we dont have to check for duplicates because the duplicate
                     // slots have already been handled in the prev step
-                    index.indexRefAssumeCapacity(thread_head_ref.ref_ptr);
+                    index.indexRefAssumeCapacity(thread_head_ref.ref_ptr, thread_head_ref.ref_index);
                 }
             }
 
@@ -787,8 +787,8 @@ pub const AccountsDB = struct {
     ) !struct { Hash, u64 } {
         var timer = try sig.time.Timer.start();
         // TODO: make cli arg
-        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
-        // const n_threads = 1;
+        // const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
+        const n_threads = 1;
 
         const hashes = try self.allocator.alloc(ArrayListUnmanaged(Hash), n_threads);
         defer {
@@ -833,8 +833,13 @@ pub const AccountsDB = struct {
         timer.reset();
 
         self.logger.info().logf("computing the merkle root over accounts...", .{});
-        var hash_tree = NestedHashTree{ .hashes = hashes };
-        const accounts_hash = try hash_tree.computeMerkleRoot(MERKLE_FANOUT);
+        const nested_hashes = try self.allocator.alloc([]Hash, n_threads);
+        defer self.allocator.free(nested_hashes);
+        for (nested_hashes, 0..) |*h, i| {
+            h.* = hashes[i].items;
+        }
+        const hash_tree = NestedHashTree{ .items = nested_hashes };
+        const accounts_hash = try computeMerkleRoot(&hash_tree, MERKLE_FANOUT);
         self.logger.debug().logf("computing the merkle root over accounts took {s}", .{timer.read()});
         timer.reset();
 
@@ -1026,10 +1031,11 @@ pub const AccountsDB = struct {
                 const ref_head = shard.getPtr(key).?;
 
                 // get the most recent state of the account
-                const ref_ptr = ref_head.ref_ptr;
+                // const ref_ptr = ref_head.ref_ptr;
+                const ref_index = ref_head.ref_index;
                 const max_slot_ref = switch (config) {
-                    .FullAccountHash => |full_config| slotListMaxWithinBounds(ref_ptr, full_config.min_slot, full_config.max_slot),
-                    .IncrementalAccountHash => |inc_config| slotListMaxWithinBounds(ref_ptr, inc_config.min_slot, inc_config.max_slot),
+                    .FullAccountHash => |full_config| self.slotListMaxWithinBoundsIndex(ref_index, full_config.min_slot, full_config.max_slot),
+                    .IncrementalAccountHash => |inc_config| self.slotListMaxWithinBoundsIndex(ref_index, inc_config.min_slot, inc_config.max_slot),
                 } orelse continue;
 
                 // read the account state
@@ -1772,7 +1778,7 @@ pub const AccountsDB = struct {
             }
 
             // update the references
-            const new_reference_block = try self.account_index.reference_manager.alloc(accounts_alive_count);
+            const new_reference_block, const global_ref_index = try self.account_index.reference_manager.alloc(accounts_alive_count);
             account_iter.reset();
             var offset_index: u64 = 0;
             for (is_alive_flags.items) |is_alive| {
@@ -1787,6 +1793,9 @@ pub const AccountsDB = struct {
                         error.SlotNotFound, error.PubkeyNotFound => unreachable,
                     };
                     defer ref_lg.unlock();
+
+                    // TODO(fl): change to ptr_to index (which then uses the global index)
+                    _ = global_ref_index;
                     const ptr_to_ref_field = switch (ref_parent) {
                         .head => |head| &head.ref_ptr,
                         .parent => |parent| &parent.next_ptr.?,
@@ -1800,6 +1809,8 @@ pub const AccountsDB = struct {
                         .file_id = new_file_id,
                     };
                     offset_index += 1;
+
+                    // update the linked-list to include the new ref_ptr
                     ptr_to_ref_field.* = new_ref_ptr;
                 }
             }
@@ -2130,7 +2141,7 @@ pub const AccountsDB = struct {
         defer self.allocator.free(shard_counts);
         @memset(shard_counts, 0);
 
-        const reference_buf = try self.account_index.reference_manager.alloc(n_accounts);
+        const reference_buf, const global_ref_index = try self.account_index.reference_manager.alloc(n_accounts);
         var references = std.ArrayListUnmanaged(AccountRef).initBuffer(reference_buf);
         try indexAndValidateAccountFile(
             account_file,
@@ -2174,8 +2185,8 @@ pub const AccountsDB = struct {
         try self.account_index.pubkey_ref_map.ensureTotalAdditionalCapacity(shard_counts);
         // index the accounts
         var accounts_dead_count: u64 = 0;
-        for (references.items) |*ref| {
-            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
+        for (references.items, 0..) |*ref, ref_count| {
+            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref, global_ref_index + ref_count);
             if (!was_inserted) {
                 accounts_dead_count += 1;
                 self.logger.warn().logf(
@@ -2255,7 +2266,7 @@ pub const AccountsDB = struct {
         try self.account_index.pubkey_ref_map.ensureTotalAdditionalCapacity(shard_counts);
 
         // index the accounts
-        const reference_buf = try self.account_index.reference_manager.alloc(accounts.len);
+        const reference_buf, const global_ref_index = try self.account_index.reference_manager.alloc(accounts.len);
         var accounts_dead_count: u64 = 0;
         for (0..accounts.len) |i| {
             reference_buf[i] = AccountRef{
@@ -2264,7 +2275,7 @@ pub const AccountsDB = struct {
                 .location = .{ .UnrootedMap = .{ .index = i } },
             };
 
-            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(&reference_buf[i]);
+            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(&reference_buf[i], global_ref_index + i);
             if (!was_inserted) {
                 self.logger.warn().logf(
                     "duplicate reference not inserted: slot: {d} pubkey: {s}",
@@ -2300,7 +2311,30 @@ pub const AccountsDB = struct {
         return .{ gop.value_ptr, bank_hash_stats_lg };
     }
 
-    pub inline fn slotListMaxWithinBounds(
+    pub fn slotListMaxWithinBoundsIndex(
+        self: *Self,
+        ref_index: u64,
+        min_slot: ?Slot,
+        max_slot: ?Slot,
+    ) ?*AccountRef {
+        var index: u64 = ref_index;
+        var biggest: ?*AccountRef = null;
+        while (true) {
+            const ref = try self.account_index.getRef(index);
+            if (inBoundsIf(ref.slot, min_slot, max_slot) and (biggest == null or ref.slot > biggest.?.slot)) {
+                biggest = ref;
+            }
+
+            if (ref.next_index) |next_index| {
+                index = next_index;
+            } else {
+                break;
+            }
+        }
+        return biggest;
+    }
+
+    pub fn slotListMaxWithinBounds(
         ref_ptr: *AccountRef,
         min_slot: ?Slot,
         max_slot: ?Slot,

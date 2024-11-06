@@ -48,13 +48,15 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
             self.capacity += buf.len;
         }
 
-        pub fn alloc(self: *Self, n: u64) ![]T {
+        pub fn alloc(self: *Self, n: u64) !struct { []T, u64 } {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
             return self.allocUnsafe(n);
         }
 
-        pub fn allocUnsafe(self: *Self, n: u64) ![]T {
+        pub fn allocUnsafe(self: *Self, n: u64) !struct { []T, u64 } {
+            // this is used to index directly into the buffer's underlying data
+            var global_index: u64 = 0;
             // check for a buf to recycle
             var is_possible_to_recycle = false;
             for (self.records.items) |*record| {
@@ -62,11 +64,12 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
                     if (record.is_free) {
                         record.is_free = false;
                         _ = try self.tryRecycleUnusedSpaceUnsafe(record.buf, n);
-                        return record.buf[0..n];
+                        return .{ record.buf[0..n], global_index };
                     } else {
                         is_possible_to_recycle = true;
                     }
                 }
+                global_index += record.buf.len;
             }
 
             if (is_possible_to_recycle) {

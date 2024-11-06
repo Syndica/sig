@@ -17,7 +17,7 @@ pub const AccountRef = struct {
     location: AccountLocation,
     // TODO(fastload): remove
     next_ptr: ?*AccountRef = null,
-    next_ref: ?u64 = null, // this points to the memory
+    next_index: ?u64 = null, // this points to the memory
 
     pub const DEFAULT: AccountRef = .{
         .pubkey = Pubkey.ZEROES,
@@ -44,13 +44,13 @@ pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
     /// map from Pubkey -> AccountRefHead
     pubkey_ref_map: ShardedPubkeyRefMap,
-    /// map from slot -> []AccountRef
+    /// map from Slot -> []AccountRef
     slot_reference_map: RwMux(SlotRefMap),
 
     /// this is the allocator used to allocate reference_memory
     reference_allocator: ReferenceAllocator,
     /// preallocated memory which is used by the reference_manager
-    /// NOTE: we only store this here to be able to free it in deinit
+    /// NOTE: we store this here to 1) read from a given index and 2) be able to free it on deinit
     reference_memory: std.ArrayList([]AccountRef),
     /// manages reference memory throughout the life of the program (ie, manages the state of free/used AccountRefs)
     reference_manager: *sig.utils.allocators.RecycleBuffer(AccountRef, .{}),
@@ -150,6 +150,126 @@ pub const AccountIndex = struct {
         }
     }
 
+    /// adds the reference to the index if there is not a duplicate (ie, the same slot).
+    /// returns if the reference was inserted.
+    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(self: *Self, account_ref: *AccountRef, global_index: u64) bool {
+        // NOTE: the lock on the shard also locks the reference map
+        const shard_map, var lock = self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
+        defer lock.unlock();
+
+        // init value if dne or append to end of the linked-list
+        const map_entry = shard_map.getOrPutAssumeCapacity(account_ref.pubkey);
+        if (!map_entry.found_existing) {
+            map_entry.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = global_index };
+            return true;
+        }
+
+        // traverse until you find the end
+        var curr_ref = map_entry.value_ptr.ref_ptr;
+        while (true) {
+            if (curr_ref.slot == account_ref.slot) {
+                // found a duplicate => dont do the insertion
+                return false;
+            }
+            const next_ptr = curr_ref.next_ptr orelse {
+                // end of the list => insert it here
+                curr_ref.next_ptr = account_ref; // TODO(fl): remove
+                curr_ref.next_index = global_index;
+                return true;
+            };
+            // keep traversing
+            curr_ref = next_ptr;
+        }
+    }
+
+    /// adds a reference to the index
+    /// NOTE: this should only be used when you know the reference does not exist
+    /// because we never want duplicate state references in the index
+    pub fn indexRefAssumeCapacity(self: *const Self, account_ref: *AccountRef, index: u64) void {
+        // NOTE: the lock on the shard also locks the reference map
+        const pubkey_ref_map, var lock = self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
+        defer lock.unlock();
+
+        // init value if dne or append to end of the linked-list
+        const map_entry = pubkey_ref_map.getOrPutAssumeCapacity(account_ref.pubkey);
+        if (!map_entry.found_existing) {
+            map_entry.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = index };
+            return;
+        }
+
+        // traverse until you find the end
+        var curr_ref = map_entry.value_ptr.ref_ptr;
+        if (@import("builtin").mode == .Debug and curr_ref.slot == account_ref.slot) {
+            std.debug.panic("duplicate slot in index: {any} {any}", .{ account_ref, curr_ref });
+        }
+        while (account_ref.next_ptr) |next_ref| {
+            // sanity check in debug mode
+            if (@import("builtin").mode == .Debug and next_ref.slot == account_ref.slot) {
+                std.debug.panic("duplicate slot in index: {any} {any}", .{ account_ref, next_ref });
+            }
+            curr_ref = next_ref;
+        }
+        curr_ref.next_ptr = account_ref;
+        curr_ref.next_index = index;
+    }
+
+    pub fn getRef(self: *Self, index: u64) !*AccountRef {
+        const nested_refs = sig.common.merkle_tree.NestedList(AccountRef){
+            .items = self.reference_memory.items,
+        };
+        return nested_refs.getValue(index);
+    }
+
+    pub fn updateReference(
+        self: *Self,
+        pubkey: *const Pubkey,
+        slot: Slot,
+        new_ref: *AccountRef,
+    ) GetAccountRefError!void {
+        const ref_parent, var lock = try self.getReferenceParent(pubkey, slot);
+        defer lock.unlock();
+
+        const ptr_to_ref_field = switch (ref_parent) {
+            .head => |head| &head.ref_ptr,
+            .parent => |parent| &parent.next_ptr.?,
+        };
+        // sanity checks
+        std.debug.assert(ptr_to_ref_field.*.slot == slot);
+        std.debug.assert(ptr_to_ref_field.*.pubkey.equals(pubkey));
+        // update
+        ptr_to_ref_field.* = new_ref;
+    }
+
+    pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
+        const pubkey_ref_map, var lock = self.pubkey_ref_map.getShard(pubkey).writeWithLock();
+        defer lock.unlock();
+
+        const head_ref = pubkey_ref_map.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
+        switch (head_ref.getParentRefOf(slot)) {
+            .null => return error.SlotNotFound,
+            .head => head_ref.ref_ptr = head_ref.ref_ptr.next_ptr orelse {
+                _ = pubkey_ref_map.remove(pubkey.*) catch |err| return switch (err) {
+                    error.KeyNotFound => error.PubkeyNotFound,
+                };
+                return;
+            },
+            .parent => |parent| parent.next_ptr = if (parent.next_ptr) |ref| ref.next_ptr else null,
+        }
+    }
+
+    pub fn exists(self: *Self, pubkey: *const Pubkey, slot: Slot) bool {
+        const head_ref, var lock = self.pubkey_ref_map.getRead(pubkey) orelse return false;
+        defer lock.unlock();
+
+        // find the slot in the reference list
+        var curr_ref: ?*AccountRef = head_ref.ref_ptr;
+        const does_exist = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
+            if (ref.slot == slot) break true;
+        } else false;
+
+        return does_exist;
+    }
+
     pub const ReferenceParent = union(enum) {
         head: *AccountReferenceHead,
         parent: *AccountRef,
@@ -189,117 +309,6 @@ pub const AccountIndex = struct {
         // to observe the `next_ptr` value, because they won't have the lock.
         slot_ref_copy.next_ptr = null;
         return slot_ref_copy;
-    }
-
-    pub fn exists(self: *Self, pubkey: *const Pubkey, slot: Slot) bool {
-        const head_ref, var lock = self.pubkey_ref_map.getRead(pubkey) orelse return false;
-        defer lock.unlock();
-
-        // find the slot in the reference list
-        var curr_ref: ?*AccountRef = head_ref.ref_ptr;
-        const does_exist = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
-            if (ref.slot == slot) break true;
-        } else false;
-
-        return does_exist;
-    }
-
-    /// adds the reference to the index if there is not a duplicate (ie, the same slot).
-    /// returns if the reference was inserted.
-    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(self: *Self, account_ref: *AccountRef) bool {
-        // NOTE: the lock on the shard also locks the reference map
-        const shard_map, var lock = self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
-        defer lock.unlock();
-
-        // init value if dne or append to end of the linked-list
-        const map_entry = shard_map.getOrPutAssumeCapacity(account_ref.pubkey);
-        if (!map_entry.found_existing) {
-            map_entry.value_ptr.* = .{ .ref_ptr = account_ref };
-            return true;
-        }
-
-        // traverse until you find the end
-        var curr_ref = map_entry.value_ptr.ref_ptr;
-        while (true) {
-            if (curr_ref.slot == account_ref.slot) {
-                // found a duplicate => dont do the insertion
-                return false;
-            }
-            const next_ptr = curr_ref.next_ptr orelse {
-                // end of the list => insert it here
-                curr_ref.next_ptr = account_ref;
-                return true;
-            };
-            // keep traversing
-            curr_ref = next_ptr;
-        }
-    }
-
-    /// adds a reference to the index
-    /// NOTE: this should only be used when you know the reference does not exist
-    /// because we never want duplicate state references in the index
-    pub fn indexRefAssumeCapacity(self: *const Self, account_ref: *AccountRef) void {
-        // NOTE: the lock on the shard also locks the reference map
-        const pubkey_ref_map, var lock = self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
-        defer lock.unlock();
-
-        // init value if dne or append to end of the linked-list
-        const map_entry = pubkey_ref_map.getOrPutAssumeCapacity(account_ref.pubkey);
-        if (!map_entry.found_existing) {
-            map_entry.value_ptr.* = .{ .ref_ptr = account_ref };
-            return;
-        }
-
-        // traverse until you find the end
-        var curr_ref = map_entry.value_ptr.ref_ptr;
-        if (@import("builtin").mode == .Debug and curr_ref.slot == account_ref.slot) {
-            std.debug.panic("duplicate slot in index: {any} {any}", .{ account_ref, curr_ref });
-        }
-        while (account_ref.next_ptr) |next_ref| {
-            // sanity check in debug mode
-            if (@import("builtin").mode == .Debug and next_ref.slot == account_ref.slot) {
-                std.debug.panic("duplicate slot in index: {any} {any}", .{ account_ref, next_ref });
-            }
-            curr_ref = next_ref;
-        }
-        curr_ref.next_ptr = account_ref;
-    }
-
-    pub fn updateReference(
-        self: *Self,
-        pubkey: *const Pubkey,
-        slot: Slot,
-        new_ref: *AccountRef,
-    ) GetAccountRefError!void {
-        const ref_parent, var lock = try self.getReferenceParent(pubkey, slot);
-        defer lock.unlock();
-
-        const ptr_to_ref_field = switch (ref_parent) {
-            .head => |head| &head.ref_ptr,
-            .parent => |parent| &parent.next_ptr.?,
-        };
-        // sanity checks
-        std.debug.assert(ptr_to_ref_field.*.slot == slot);
-        std.debug.assert(ptr_to_ref_field.*.pubkey.equals(pubkey));
-        // update
-        ptr_to_ref_field.* = new_ref;
-    }
-
-    pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
-        const pubkey_ref_map, var lock = self.pubkey_ref_map.getShard(pubkey).writeWithLock();
-        defer lock.unlock();
-
-        const head_ref = pubkey_ref_map.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
-        switch (head_ref.getParentRefOf(slot)) {
-            .null => return error.SlotNotFound,
-            .head => head_ref.ref_ptr = head_ref.ref_ptr.next_ptr orelse {
-                _ = pubkey_ref_map.remove(pubkey.*) catch |err| return switch (err) {
-                    error.KeyNotFound => error.PubkeyNotFound,
-                };
-                return;
-            },
-            .parent => |parent| parent.next_ptr = if (parent.next_ptr) |ref| ref.next_ptr else null,
-        }
     }
 };
 
@@ -570,11 +579,11 @@ test "account index update/remove reference" {
 
     // pubkey -> a
     var ref_a = AccountRef.DEFAULT;
-    index.indexRefAssumeCapacity(&ref_a);
+    index.indexRefAssumeCapacity(&ref_a, 0);
 
     var ref_b = AccountRef.DEFAULT;
     ref_b.slot = 1;
-    index.indexRefAssumeCapacity(&ref_b);
+    index.indexRefAssumeCapacity(&ref_b, 1);
 
     // make sure indexRef works
     {
