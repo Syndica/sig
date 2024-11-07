@@ -12,8 +12,12 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
     std.debug.assert(config.min_split_size > 0);
 
     return struct {
-        // recycling depot
+        // records are used to keep track of the memory blocks
         records: std.ArrayList(Record),
+        // memory holds blocks of memory ([]T) that can be allocated/deallocated
+        memory: std.ArrayList([]T),
+        // allocator used to alloc the memory blocks
+        memory_allocator: std.mem.Allocator,
         capacity: u64,
         // for thread safety
         mux: std.Thread.Mutex = .{},
@@ -21,38 +25,47 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
         const Record = struct { is_free: bool, buf: []T };
         const Self = @This();
 
-        pub fn init(a: std.mem.Allocator, buffer: []T) !Self {
-            var records = std.ArrayList(Record).init(a);
-            try records.ensureTotalCapacity(1_000); // arbitrary memory boost
-            if (buffer.len > 0) {
-                // NOTE: this approach allows us to add additional buffers if we run out of space
-                try records.append(.{ .is_free = true, .buf = buffer });
-            }
+        const AllocatorConfig = struct {
+            memory_allocator: std.mem.Allocator,
+            records_allocator: std.mem.Allocator,
+        };
+
+        pub fn init(allocator_config: AllocatorConfig) Self {
             return .{
-                .records = records,
-                .capacity = buffer.len,
+                .memory = std.ArrayList([]T).init(allocator_config.records_allocator),
+                .memory_allocator = allocator_config.memory_allocator,
+                .records = std.ArrayList(Record).init(allocator_config.records_allocator),
+                .capacity = 0,
             };
         }
 
-        pub fn create(a: std.mem.Allocator, buffer: []T) !*Self {
-            const self = try a.create(Self);
-            self.* = try Self.init(a, buffer);
+        pub fn create(allocator_config: AllocatorConfig) !*Self {
+            const self = try allocator_config.records_allocator.create(Self);
+            self.* = Self.init(allocator_config);
             return self;
         }
 
         pub fn deinit(self: *Self) void {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
+
+            for (self.memory.items) |block| {
+                self.memory_allocator.free(block);
+            }
+            self.memory.deinit();
             self.records.deinit();
         }
 
-        pub fn append(self: *Self, buf: []T) !void {
-            if (buf.len == 0) return;
+        /// append a block of N elements to the manager
+        pub fn append(self: *Self, n: u64) !void {
+            if (n == 0) return;
 
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
+            const buf = try self.memory_allocator.alloc(T, n);
             try self.records.append(.{ .is_free = true, .buf = buf });
+            try self.memory.append(buf);
             self.capacity += buf.len;
         }
 
