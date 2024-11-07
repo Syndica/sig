@@ -139,6 +139,59 @@ pub const AccountIndex = struct {
         self.reference_memory.deinit();
     }
 
+    pub fn saveStateToDisk(self: *Self, save_dir: std.fs.Dir) !void {
+        // write the pubkey_ref_map (populating this is very expensive)
+        var map_data_len: u64 = 0;
+        for (self.pubkey_ref_map.shards) |*shard_rw| {
+            const shard, var lock = shard_rw.readWithLock();
+            defer lock.unlock();
+            map_data_len += shard.unmanaged.memory.len;
+        }
+        const n_shards = self.pubkey_ref_map.numberOfShards();
+
+        const disk_allocator = DiskMemoryAllocator{ .dir = save_dir, .logger = .noop };
+        const map_memory = try disk_allocator.allocFilename(
+            "pubkey_ref_map",
+            // [shard0 length, shard0 data, shard1 length, shard1 data, ...]
+            @sizeOf(u64) + @sizeOf(u64) * n_shards + map_data_len,
+        );
+
+        // write each shard's data
+        var offset: u64 = 0;
+        for (self.pubkey_ref_map.shards) |*shard_rw| {
+            const shard, var lock = shard_rw.readWithLock();
+            defer lock.unlock();
+
+            const shard_memory = shard.unmanaged.memory;
+            std.mem.writeInt(u64, map_memory[offset..][0..@sizeOf(u64)], shard_memory.len, .little);
+            offset += @sizeOf(u64);
+
+            @memcpy(map_memory[offset..][0..shard_memory.len], shard_memory);
+            offset += shard_memory.len;
+        }
+
+        // write the reference memory
+        var total_refs: u64 = 0;
+        for (self.reference_memory.items) |refs| {
+            total_refs += refs.len;
+        }
+        // NOTE: we re-write this data even though it may exist on disk (using the disk index)
+        // to have consistent file naming to read from
+        const ref_memory = try disk_allocator.allocFilename("references", total_refs * @sizeOf(AccountRef));
+        offset = 0;
+        for (self.reference_memory.items) |refs| {
+            const ref_bytes = std.mem.asBytes(&refs);
+            @memcpy(ref_memory[offset..][0..ref_bytes.len], ref_bytes);
+            offset += ref_bytes.len;
+        }
+
+        // write the manager's memory
+        const records_size = sig.bincode.sizeOf(self.reference_manager.records, .{});
+        _ = records_size;
+        // const manager_memory = try disk_allocator.allocFilename("ref_manager", records_size);
+        // _ = try sig.bincode.writeToSlice(manager_memory, self.reference_manager.records.items, .{});
+    }
+
     pub fn ensureReferenceCapacity(self: *Self, capacity: u64) !void {
         if (self.reference_manager.capacity < capacity) {
             const alloc_size = capacity - self.reference_manager.capacity;
@@ -563,6 +616,28 @@ pub const ReferenceAllocator = union(enum) {
         }
     }
 };
+
+test "save account index state" {
+    const allocator = std.testing.allocator;
+    var save_dir = std.testing.tmpDir(.{});
+    defer save_dir.cleanup();
+
+    var index = try AccountIndex.init(
+        allocator,
+        .noop,
+        .{ .Ram = .{ .allocator = allocator } },
+        8,
+    );
+    defer index.deinit();
+    try index.ensureReferenceCapacity(100);
+    try index.pubkey_ref_map.ensureTotalCapacityPerShard(100);
+
+    // pubkey -> a
+    var ref_a = AccountRef.DEFAULT;
+    index.indexRefAssumeCapacity(&ref_a, 0);
+
+    try index.saveStateToDisk(save_dir.dir);
+}
 
 test "account index update/remove reference" {
     const allocator = std.testing.allocator;

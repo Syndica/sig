@@ -133,7 +133,6 @@ pub const AccountsDB = struct {
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
 
     pub const InitConfig = struct {
-        // TODO(fastload): change cli of this from max_ to prealloc_
         prealloc_number_of_accounts: u64,
         number_of_index_shards: u64,
         use_disk_index: bool,
