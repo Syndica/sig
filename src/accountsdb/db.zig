@@ -1257,7 +1257,6 @@ pub const AccountsDB = struct {
     pub fn createAccountFile(self: *Self, size: usize, slot: Slot) !struct {
         std.fs.File,
         FileId,
-        []u8,
     } {
         self.largest_file_id = self.largest_file_id.increment();
         const file_id = self.largest_file_id;
@@ -1274,16 +1273,7 @@ pub const AccountsDB = struct {
             try file.seekTo(0);
         }
 
-        const memory = try std.posix.mmap(
-            null,
-            size,
-            std.posix.PROT.READ | std.posix.PROT.WRITE,
-            std.posix.MAP{ .TYPE = .SHARED },
-            file.handle,
-            0,
-        );
-
-        return .{ file, file_id, memory };
+        return .{ file, file_id };
     }
 
     pub const ManagerLoopConfig = struct {
@@ -1500,18 +1490,28 @@ pub const AccountsDB = struct {
             self.metrics.flush_account_file_size.observe(account_size_in_file);
         }
 
-        const file, const file_id, const memory = try self.createAccountFile(size, slot);
+        const file, const file_id = try self.createAccountFile(size, slot);
         defer file.close();
 
         const offsets = try self.allocator.alloc(u64, accounts.len);
         defer self.allocator.free(offsets);
 
+        var file_size: usize = 0;
+        for (accounts) |account| file_size += account.getSizeInFile();
+
+        // TODO: could reset the buffer per-account, writing in the loop
+        var account_file_buf = try std.ArrayList(u8).initCapacity(self.allocator, file_size);
+        defer account_file_buf.deinit();
+        account_file_buf.items.len = file_size;
+
         var current_offset: u64 = 0;
         for (offsets, accounts, pubkeys) |*offset, account, pubkey| {
             offset.* = current_offset;
             // write the account to the file
-            current_offset += account.writeToBuf(&pubkey, memory[current_offset..]);
+            current_offset += account.writeToBuf(&pubkey, account_file_buf.items[current_offset..]);
         }
+
+        try file.writeAll(account_file_buf.items);
 
         var account_file = try AccountFile.init(file, .{
             .id = file_id,
@@ -1899,11 +1899,26 @@ pub const AccountsDB = struct {
             self.metrics.shrink_file_shrunk_by.observe(accounts_dead_size);
 
             // alloc account file for accounts
-            const new_file, const new_file_id, const new_memory = try self.createAccountFile(
+            const new_file, const new_file_id = try self.createAccountFile(
                 accounts_alive_size,
                 slot,
             );
             defer new_file.close();
+
+            var file_size: usize = 0;
+            account_iter.reset();
+            for (is_alive_flags.items) |is_alive| {
+                // SAFE: we know is_alive_flags is the same length as the account_iter
+                const account = account_iter.next().?;
+                if (is_alive) {
+                    file_size += account.getSizeInFile();
+                }
+            }
+
+            // TODO: could reset the buffer per-account, writing in the loop
+            var account_file_buf = try std.ArrayList(u8).initCapacity(self.allocator, file_size);
+            defer account_file_buf.deinit();
+            account_file_buf.items.len = file_size;
 
             // write the alive accounts
             var offsets = try std.ArrayList(u64).initCapacity(self.allocator, accounts_alive_count);
@@ -1916,9 +1931,11 @@ pub const AccountsDB = struct {
                 const account = account_iter.next().?;
                 if (is_alive) {
                     offsets.appendAssumeCapacity(offset);
-                    offset += account.writeToBuf(new_memory[offset..]);
+                    offset += account.writeToBuf(account_file_buf.items[offset..]);
                 }
             }
+
+            try new_file.writeAll(account_file_buf.items);
 
             {
                 // add file to map

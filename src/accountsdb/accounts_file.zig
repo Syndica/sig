@@ -108,19 +108,8 @@ pub const AccountInFile = struct {
             return offset;
         }
 
-        pub fn write(self: *const StorageInfo, writer: std.io.AnyWriter) !usize {
-            try writer.writeInt(u64, self.write_version_obsolete, .little);
-            try writer.writeInt(u64, self.data_len, .little);
-            try writer.writeAll(&self.pubkey.data);
-            return writeLength();
-        }
-
-        pub fn writeLength() usize {
+        pub fn writeToBufLen() usize {
             return @sizeOf(u64) + @sizeOf(u64) + @sizeOf(Pubkey);
-        }
-
-        comptime {
-            std.debug.assert(@sizeOf(StorageInfo) == writeLength());
         }
     };
 
@@ -148,21 +137,6 @@ pub const AccountInFile = struct {
             );
             offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
             return offset;
-        }
-
-        pub fn write(self: *const AccountInfo, writer: std.io.AnyWriter) !usize {
-            try writer.writeInt(u64, self.lamports, .little);
-            try writer.writeInt(Epoch, self.rent_epoch, .little);
-            try writer.writeAll(&self.pubkey.data);
-            try writer.writeInt(u8, @intFromBool(self.executable), .little);
-        }
-
-        pub fn writeLength() usize {
-            return @sizeOf(u64) + @sizeOf(Epoch) + @sizeOf(Pubkey) + @sizeOf(@intFromBool(bool));
-        }
-
-        comptime {
-            std.debug.assert(@sizeOf(AccountInfo) == writeLength());
         }
     };
 
