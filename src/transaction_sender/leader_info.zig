@@ -72,7 +72,7 @@ pub const LeaderInfo = struct {
             try leader_addresses.append(socket);
         }
 
-        self.logger.info().logf("(demo.transaction_sender)    identified {}/{} leaders", .{
+        self.logger.info().logf("(gulfstream_demo.transaction_sender)    identified {}/{} leaders", .{
             leader_addresses.items.len,
             self.config.max_leaders_to_send_to,
         });

@@ -53,6 +53,7 @@ pub fn run(
     num_retransmit_sockets: usize,
     maybe_num_retransmit_threads: ?usize,
     overwrite_stake_for_testing: bool,
+    exit_after_n_shreds: ?u64,
     exit: *AtomicBool,
     rand: Random,
     logger: Logger,
@@ -62,7 +63,7 @@ pub fn run(
         exit.store(false, .monotonic);
     }
     const num_retransmit_threads = maybe_num_retransmit_threads orelse try std.Thread.getCpuCount();
-    logger.info().logf("(demo.retransmit_service) starting retransmit service: num_retransmit_sockets={} num_retransmit_threads={}", .{
+    logger.info().logf("(turbine_demo.retransmit_service) starting retransmit service: num_retransmit_sockets={} num_retransmit_threads={}", .{
         num_retransmit_sockets,
         num_retransmit_threads,
     });
@@ -106,6 +107,7 @@ pub fn run(
             logger,
             &metrics,
             overwrite_stake_for_testing,
+            exit_after_n_shreds,
         },
     ));
 
@@ -156,6 +158,7 @@ fn receiveShreds(
     logger: Logger,
     metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
+    exit_after_n_shreds: ?u64,
 ) !void {
     var turbine_tree_cache = TurbineTreeCache.init(allocator);
     defer turbine_tree_cache.deinit();
@@ -218,6 +221,14 @@ fn receiveShreds(
         metrics.receive_shreds_nanos.set(receive_shreds_timer.read().asNanos());
 
         metrics.maybeLog(logger);
+
+        // Set exit after 50_000 shreds received for demo
+        if (exit_after_n_shreds) |n| {
+            if (metrics.shreds_received_count.get() > n) {
+                logger.info().logf("(turbine_demo.retransmit_service) exiting after {} shreds received", .{n});
+                exit.store(true, .release);
+            }
+        }
     }
 }
 
@@ -421,8 +432,8 @@ pub const RetransmitServiceMetrics = struct {
     }
 
     pub fn maybeLog(self: *RetransmitServiceMetrics, logger: Logger) void {
-        if (self.logging_fields.last_log_instant.elapsed().asSecs() > 1) {
-            logger.info().logf("(demo.retransmit_service) received={} retransmitted={} skipped={}:{}:{}", .{
+        if (self.logging_fields.last_log_instant.elapsed().asMillis() > 250) {
+            logger.info().logf("(turbine_demo.retransmit_service) received={} retransmitted={} skipped={}:{}:{}", .{
                 self.shreds_received_count.get(),
                 self.shreds_sent_count.get(),
                 self.shred_byte_filtered_count.get() + self.shred_id_filtered_count.get(),
