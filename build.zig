@@ -108,6 +108,7 @@ pub fn build(b: *Build) void {
     unit_tests_exe.root_module.addImport("base58-zig", base58_module);
 
     unit_tests_exe.root_module.addImport("curl", curl_mod);
+
     unit_tests_exe.root_module.addImport("httpz", httpz_mod);
     unit_tests_exe.root_module.addImport("zig-network", zig_network_module);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
