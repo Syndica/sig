@@ -945,5 +945,64 @@ pub fn runTurbineTreeBlackBoxTest() !void {
             try writeRetransmitPeers(file.writer(), i, root_distance, children);
         }
     }
+
+    { // TEST 1
+        const file = try std.fs.cwd().createFile("demo/turbine-tree-black-box-test-1-sig.txt", .{ .read = true });
+        defer file.close();
+
+        // Create a seeded RNG
+        var chacha = ChaChaRng.fromSeed([_]u8{0} ** 32);
+        const random = chacha.random();
+
+        // Create a test cluster and save the staked nodes.
+        var stakes, var gossip_table_rw = try makeTestCluster(
+            std.heap.c_allocator,
+            random,
+            my_pubkey,
+            20,
+            1,
+            20,
+            2201,
+            2001,
+            2799,
+        );
+        defer {
+            stakes.deinit();
+            const gossip_table: *GossipTable, _ = gossip_table_rw.writeWithLock();
+            gossip_table.deinit();
+        }
+        try writeStakes(std.heap.c_allocator, file.writer(), stakes);
+
+        // Create a TurbineTree instance
+        var turbine_tree = try TurbineTree.initForRetransmit(
+            std.heap.c_allocator,
+            my_threadsafe_contact_info,
+            &gossip_table_rw,
+            &stakes.unmanaged,
+            false,
+        );
+        defer turbine_tree.deinit();
+
+        // Shuffle the nodes and save the shuffled indices.
+        var weighted_shuffle = try turbine_tree.weighted_shuffle.clone();
+        defer weighted_shuffle.deinit();
+        var shuffled_iterator = weighted_shuffle.shuffle(chacha.random());
+        const shuffled_indices = try shuffled_iterator.intoArrayList(std.heap.c_allocator);
+        defer shuffled_indices.deinit();
+        try writeShuffledIndices(file.writer(), shuffled_indices);
+
+        // Generate retransmit children
+        for (0..1_000) |i| {
+            const slot_leader = Pubkey.initRandom(random);
+            const shred_id = ShredId{ .slot = random.int(u64), .index = random.int(u32), .shred_type = .data };
+            const root_distance, const children = try turbine_tree.getRetransmitChildren(
+                std.heap.c_allocator,
+                slot_leader,
+                shred_id,
+                TurbineTree.DATA_PLANE_FANOUT,
+            );
+            defer children.deinit();
+            try writeRetransmitPeers(file.writer(), i, root_distance, children);
+        }
+    }
 }
-// i4630PCO64mICktL

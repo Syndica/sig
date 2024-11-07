@@ -121,6 +121,14 @@ pub fn run() !void {
         .value_name = "Overwrite stake for testing",
     };
 
+    var turbine_exit_after_n_shreds = cli.Option{
+        .long_name = "exit-after-n-shreds",
+        .help = "Exit after n shreds for testing purposes",
+        .value_ref = cli.mkRef(&config.current.turbine.exit_after_n_shreds),
+        .required = false,
+        .value_name = "Exit after n shreds",
+    };
+
     var leader_schedule_option = cli.Option{
         .long_name = "leader-schedule",
         .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
@@ -422,6 +430,7 @@ pub fn run() !void {
                             &turbine_num_retransmit_sockets,
                             &turbine_num_retransmit_threads,
                             &turbine_overwrite_stake_for_testing,
+                            &turbine_exit_after_n_shreds,
                             // accounts-db
                             &snapshot_dir_option,
                             &use_disk_index_option,
@@ -724,6 +733,7 @@ fn gossip() !void {
 fn validator() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
+    errdefer app_base.shutdown();
     defer app_base.deinit();
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
@@ -738,7 +748,6 @@ fn validator() !void {
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
     defer {
-        app_base.shutdown();
         gossip_service.shutdown();
         service_manager.join();
         service_manager.deinit();
@@ -834,6 +843,7 @@ fn validator() !void {
         config.current.turbine.num_retransmit_sockets,
         config.current.turbine.num_retransmit_threads,
         config.current.turbine.overwrite_stake_for_testing,
+        config.current.turbine.exit_after_n_shreds,
         &app_base.exit,
         prng.random(),
         app_base.logger,
@@ -860,8 +870,11 @@ fn validator() !void {
     );
     defer shred_collector_manager.deinit();
 
-    service_manager.join();
+    // For demo, shutdown after retransmit service joins
     retransmit_service_handle.join();
+    app_base.shutdown();
+
+    service_manager.join();
     shred_collector_manager.join();
 }
 

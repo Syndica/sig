@@ -87,7 +87,7 @@ pub const MockTransferService = struct {
             @panic("transaction amount is less than MIN_LAMPORTS_FOR_RENT");
         }
 
-        self.logger.info().logf("(demo.mock_transfer_service) accounts: bank={s}, alice={s}", .{
+        self.logger.info().logf("(gulfstream_demo.mock_transfer_service) accounts: bank={s}, alice={s}", .{
             self.accounts.bank.pubkey,
             self.accounts.alice.pubkey,
         });
@@ -109,20 +109,20 @@ pub const MockTransferService = struct {
             try self.closeAccount(random, self.accounts.alice.keypair);
         }
 
-        _ = try self.getBalances("(demo.mock_transfer_service) initial balances");
+        _ = try self.getBalances("(gulfstream_demo.mock_transfer_service) initial balances");
 
         for (0..n_transactions) |tx_i| {
-            self.logger.info().logf("(demo.mock_transfer_service) transfering {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
+            self.logger.info().logf("(gulfstream_demo.mock_transfer_service) transfering {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
             try self.sigTransferAndWait(
                 random,
                 self.accounts.bank.keypair,
                 self.accounts.alice.pubkey,
                 n_lamports_per_tx,
             );
-            self.logger.info().logf("(demo.mock_transfer_service) SUCCESS - transferred {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
+            self.logger.info().logf("(gulfstream_demo.mock_transfer_service) SUCCESS - transferred {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
         }
 
-        _ = try self.getBalances("(demo.mock_transfer_service) final balances");
+        _ = try self.getBalances("(gulfstream_demo.mock_transfer_service) final balances");
 
         try self.closeAccount(random, self.accounts.alice.keypair);
 
@@ -137,7 +137,7 @@ pub const MockTransferService = struct {
             if (log_timer.read().asSecs() > 10) {
                 const time_remaining = max_wait.asSecs() - start.elapsed().asSecs();
                 if (log) {
-                    self.logger.info().logf("(demo.mock_transfer_service) waiting for signature confirmation ({}s remaining): {s}", .{
+                    self.logger.info().logf("(gulfstream_demo.mock_transfer_service) waiting for signature confirmation ({}s remaining): {s}", .{
                         time_remaining,
                         signature,
                     });
@@ -253,7 +253,7 @@ pub const MockTransferService = struct {
                 null,
             );
             try self.sender.send(transaction_info);
-            self.logger.info().logf("(demo.mock_transfer_service) sent transaction: {s}", .{transaction_info.signature});
+            self.logger.info().logf("(gulfstream_demo.mock_transfer_service) sent transaction: {s}", .{transaction_info.signature});
 
             const signature_confirmed = try self.waitForSignatureConfirmation(
                 transaction_info.signature,

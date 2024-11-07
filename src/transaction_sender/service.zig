@@ -140,11 +140,11 @@ pub const Service = struct {
                     const leader_addresses = try self.getLeaderAddresses();
                     defer self.allocator.free(leader_addresses);
 
-                    self.logger.info().logf("(demo.transaction_sender)    attempting initial send of {} transactions", .{transaction_batch.count()});
+                    self.logger.info().logf("(gulfstream_demo.transaction_sender)    attempting initial send of {} transactions", .{transaction_batch.count()});
                     try self.sendTransactions(transaction_batch.values(), leader_addresses);
                     last_batch_sent = Instant.now();
 
-                    self.logger.info().logf("(demo.transaction_sender)    adding {} transactions to transaction pool", .{transaction_batch.count()});
+                    self.logger.info().logf("(gulfstream_demo.transaction_sender)    adding {} transactions to transaction pool", .{transaction_batch.count()});
                     self.transaction_pool.addTransactions(transaction_batch.values()) catch {
                         self.logger.warn().log("Transaction pool is full, dropping transactions");
                     };
@@ -220,14 +220,14 @@ pub const Service = struct {
                 if (signature_status.confirmations == null) {
                     try self.transaction_pool.drop_signatures.append(signature);
                     self.metrics.rooted_count.inc();
-                    self.logger.info().logf("(demo.transaction_sender)    transaction rooted: signature={}\n", .{signature});
+                    self.logger.info().logf("(gulfstream_demo.transaction_sender)    transaction rooted: signature={}\n", .{signature});
                     continue;
                 }
 
                 if (signature_status.err) |err| {
                     try self.transaction_pool.drop_signatures.append(signature);
                     self.metrics.failed_count.inc();
-                    self.logger.info().logf("(demo.transaction_sender)    transaction failed: error={} signature={}", .{ err, signature });
+                    self.logger.info().logf("(gulfstream_demo.transaction_sender)    transaction failed: error={} signature={}", .{ err, signature });
                     continue;
                 }
             }
@@ -235,21 +235,21 @@ pub const Service = struct {
             if (transaction_info.isExpired(block_height)) {
                 try self.transaction_pool.drop_signatures.append(signature);
                 self.metrics.expired_count.inc();
-                self.logger.info().logf("(demo.transaction_sender)    transaction expired: signature={}", .{signature});
+                self.logger.info().logf("(gulfstream_demo.transaction_sender)    transaction expired: signature={}", .{signature});
                 continue;
             }
 
             if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
                 try self.transaction_pool.drop_signatures.append(signature);
                 self.metrics.exceeded_max_retries_count.inc();
-                self.logger.info().logf("(demo.transaction_sender)    transaction exceeded max retries: signature={}", .{signature});
+                self.logger.info().logf("(gulfstream_demo.transaction_sender)    transaction exceeded max retries: signature={}", .{signature});
                 continue;
             }
 
             if (transaction_info.shouldRetry(self.config.retry_rate)) {
                 try self.transaction_pool.retry_signatures.append(signature);
                 self.metrics.retry_count.inc();
-                self.logger.info().logf("(demo.transaction_sender)    transaction retrying: signature={}", .{signature});
+                self.logger.info().logf("(gulfstream_demo.transaction_sender)    transaction retrying: signature={}", .{signature});
                 continue;
             }
         }
@@ -306,7 +306,7 @@ pub const Service = struct {
 
         for (leader_addresses) |leader_address| {
             for (transactions) |tx| {
-                self.logger.info().logf("(demo.transaction_sender)    sending transaction to leader: address={} signature={}", .{ leader_address, tx.signature });
+                self.logger.info().logf("(gulfstream_demo.transaction_sender)    sending transaction to leader: address={} signature={}", .{ leader_address, tx.signature });
                 try self.send_channel.send(Packet.init(
                     leader_address.toEndpoint(),
                     tx.wire_transaction,
@@ -375,7 +375,7 @@ pub const Metrics = struct {
     }
 
     pub fn log(self: *const Metrics, logger: Logger) void {
-        logger.info().logf("(demo.transaction_sender)    {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
+        logger.info().logf("(gulfstream_demo.transaction_sender)    {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
             self.received_count.get(),
             self.pending_count.get(),
             self.rooted_count.get(),

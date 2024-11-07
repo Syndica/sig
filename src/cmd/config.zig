@@ -161,4 +161,5 @@ pub const TurbineConfig = struct {
     num_retransmit_threads: ?usize = null, // Default to number of CPUs
     // TODO: remove when no longer needed
     overwrite_stake_for_testing: bool = false,
+    exit_after_n_shreds: ?u64 = null,
 };
