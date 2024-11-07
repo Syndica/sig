@@ -59,22 +59,16 @@ pub const Error = struct {
 };
 
 fn serializeRequest(request: anytype, writer: anytype) !void {
-    try std.json.stringify(.{.{
-        .id = 1,
-        .jsonrpc = "2.0",
-        .method = @TypeOf(request).method,
-        .request = asTuple(request),
-    }}, .{}, writer);
+    try std.json.stringify(.{toRequest(request)}, .{}, writer);
 }
 
-fn serializeRequestAlloc(allocator: Allocator, request: anytype, method: []const u8) ![]const u8 {
+fn serializeRequestAlloc(allocator: Allocator, request: anytype) ![]const u8 {
     var buf = std.ArrayList(u8).init(allocator);
-    try std.json.stringifyAlloc(.{
-        .id = 1,
-        .jsonrpc = "2.0",
-        .method = method,
-        .params = asTuple(request),
-    }, .{ .emit_null_optional_fields = false }, buf.writer());
+    try std.json.stringifyAlloc(
+        toRequest(request),
+        .{ .emit_null_optional_fields = false },
+        buf.writer(),
+    );
     return buf.toOwnedSlice();
 }
 
@@ -84,6 +78,31 @@ pub fn asTuple(item: anytype) AsTuple(@TypeOf(item)) {
         tuple[i] = @field(item, field.name);
     }
     return tuple;
+}
+
+fn toRequest(request: anytype) Request(@TypeOf(request)) {
+    return .{
+        .id = 1,
+        .jsonrpc = "2.0",
+        .method = methodName(request),
+        .request = asTuple(request),
+    };
+}
+
+fn methodName(request: anytype) []const u8 {
+    const method_name = comptime blk: {
+        const struct_name = @typeName(@TypeOf(request));
+        var num_chars = 0;
+        for (struct_name) |char| {
+            num_chars += 1;
+            if (char == '.') num_chars = 0;
+        }
+        var method_name: [num_chars]u8 = undefined;
+        @memcpy(&method_name, struct_name[struct_name.len - num_chars .. struct_name.len]);
+        method_name[0] = method_name[0] + 0x20;
+        break :blk method_name;
+    };
+    return &method_name;
 }
 
 pub fn AsTuple(comptime Struct: type) type {
@@ -116,7 +135,7 @@ test "serializeRequest" {
     try signatures.append("signature1");
     try signatures.append("signature2");
 
-    const MyRequest = struct {
+    const GetAccountInfo = struct {
         pubkey: []const u8,
         num: u64,
         bool: bool,
@@ -128,7 +147,7 @@ test "serializeRequest" {
         const method = "getAccountInfo";
     };
 
-    const my_request = MyRequest{
+    const my_request = GetAccountInfo{
         .pubkey = "mypubkey",
         .num = 35,
         .bool = true,

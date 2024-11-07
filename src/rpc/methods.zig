@@ -22,7 +22,7 @@ pub const GetTransaction = struct {
         /// list. If jsonParsed is requested but a parser cannot be found, the instruction
         /// falls back to regular JSON encoding (accounts, data, and programIdIndex fields).
         encoding: ?enum { json, jsonParsed, base64, base58 },
-    },
+    } = null,
 
     pub const Response = struct {
         /// the slot this transaction was processed in
