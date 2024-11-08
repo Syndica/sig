@@ -144,6 +144,36 @@ pub fn requestIpEcho(
     return try bincode.read(allocator, IpEchoServerResponse, bufferStream.reader(), .{});
 }
 
+test "bincode IpEchoServerResponse" {
+    try @import("../sig.zig").bincode.testRoundTrip(
+        IpEchoServerResponse{
+            .address = try net.IpAddr.parse("123.0.23.2"),
+            .shred_version = .{ .value = 2405 },
+        },
+        &.{ 0, 0, 0, 0, 123, 0, 23, 2, 1, 101, 9 },
+    );
+}
+
+test "bincode IpEchoServerResponse IPv6" {
+    try @import("../sig.zig").bincode.testRoundTrip(
+        IpEchoServerResponse{
+            .address = try net.IpAddr.parse("2001:0db8:85a3:0000:0000:8a2e:0370:7334"),
+            .shred_version = .{ .value = 2405 },
+        },
+        &.{ 1, 0, 0, 0, 32, 1, 13, 184, 133, 163, 0, 0, 0, 0, 138, 46, 3, 112, 115, 52, 1, 101, 9 },
+    );
+}
+
+test "bincode IpEchoServerResponse null shred version" {
+    try @import("../sig.zig").bincode.testRoundTrip(
+        IpEchoServerResponse{
+            .address = try net.IpAddr.parse("123.0.23.2"),
+            .shred_version = null,
+        },
+        &.{ 0, 0, 0, 0, 123, 0, 23, 2, 0 },
+    );
+}
+
 // TODO: FIX ME
 // test "net.echo: Server works" {
 //     const port: u16 = 34333;
