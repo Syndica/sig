@@ -322,7 +322,7 @@ pub const AccountsDB = struct {
             defer fastload_dir.close();
 
             self.logger.info().log("saving account index state to disk...");
-            try self.account_index.saveStateToDisk(fastload_dir);
+            try self.account_index.saveToDisk(fastload_dir, self.logger);
         }
 
         if (validate) {

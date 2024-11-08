@@ -36,20 +36,7 @@ pub const AccountRef = struct {
             file_id: FileId,
             offset: u64,
 
-            pub const @"!bincode-config:file_id": sig.bincode.FieldConfig(FileId) = .{
-                .serializer = idSerializer,
-                .deserializer = idDeserializer,
-            };
-
-            fn idSerializer(writer: anytype, data: anytype, params: sig.bincode.Params) anyerror!void {
-                try sig.bincode.write(writer, @as(usize, data.toInt()), params);
-            }
-
-            fn idDeserializer(_: std.mem.Allocator, reader: anytype, params: sig.bincode.Params) anyerror!FileId {
-                const int = try sig.bincode.readInt(usize, reader, params);
-                if (int > std.math.maxInt(FileId.Int)) return error.IdOverflow;
-                return FileId.fromInt(@intCast(int));
-            }
+            const @"!bincode-config:file_id" = sig.bincode.file_id.FileIdConfig();
         },
         UnrootedMap: struct {
             index: u64,
@@ -151,6 +138,8 @@ pub const AccountIndex = struct {
     }
 
     pub fn loadFromDisk(self: *Self, dir: std.fs.Dir, logger: sig.trace.Logger) !void {
+        const scoped_logger = logger.withScope("load index state");
+
         // make sure all the appropriate file exist
         try dir.access("manager_memory", .{});
         try dir.access("manager_records", .{});
@@ -160,7 +149,7 @@ pub const AccountIndex = struct {
         std.debug.assert(self.reference_manager.capacity == 0);
 
         // load the manager
-        logger.info().log("loading manager memory");
+        scoped_logger.info().log("loading manager memory");
         const reference_file = try dir.openFile("manager_memory", .{});
         const references = try sig.bincode.read(
             self.reference_manager.memory_allocator,
@@ -171,7 +160,7 @@ pub const AccountIndex = struct {
         // free the slice of slices
         defer self.reference_manager.memory_allocator.free(references);
 
-        logger.info().log("organizing manager memory");
+        scoped_logger.info().log("organizing manager memory");
         const nested_refs = sig.common.merkle_tree.NestedList(AccountRef){ .items = references };
         for (references) |ref_block| {
             try self.reference_manager.memory.append(ref_block);
@@ -185,7 +174,7 @@ pub const AccountIndex = struct {
         }
 
         // load the records
-        logger.info().log("loading manager records");
+        scoped_logger.info().log("loading manager records");
         const records_file = try dir.openFile("manager_records", .{});
         const records = try sig.bincode.read(
             self.reference_manager.records.allocator,
@@ -199,7 +188,7 @@ pub const AccountIndex = struct {
         self.reference_manager.records = records;
 
         // load the pubkey_ref_map
-        logger.info().log("loading pubkey -> ref map");
+        scoped_logger.info().log("loading pubkey -> ref map");
         const map_file = try dir.openFile("pubkey_ref_map", .{});
         var map_reader = map_file.reader();
         for (self.pubkey_ref_map.shards) |*shard_rw| {
@@ -223,7 +212,10 @@ pub const AccountIndex = struct {
         }
     }
 
-    pub fn saveStateToDisk(self: *Self, dir: std.fs.Dir) !void {
+    pub fn saveToDisk(self: *Self, dir: std.fs.Dir, logger: sig.trace.Logger) !void {
+        const scoped_logger = logger.withScope("save index state");
+
+        scoped_logger.info().log("saving pubkey -> reference map");
         // write the pubkey_ref_map (populating this is very expensive)
         var shard_data_total: u64 = 0;
         for (self.pubkey_ref_map.shards) |*shard_rw| {
@@ -254,12 +246,14 @@ pub const AccountIndex = struct {
             offset += shard_memory.len;
         }
 
+        scoped_logger.info().log("saving reference manager memory");
         // TODO(fl): collapse [][]AccountRef into a single slice
         // const reference_size = @sizeOf(u64) + self.reference_manager.capacity * @sizeOf(AccountRef);
-        const reference_size = sig.bincode.sizeOf(self.reference_manager.memory.items, .{});
+        const reference_size = sig.bincode.sizeOf(self.reference_manager.memory.items, .{}); // NOTE: this is a slight overestimate
         const reference_memory = try disk_allocator.allocFilename("manager_memory", reference_size);
         _ = try sig.bincode.writeToSlice(reference_memory, self.reference_manager.memory.items, .{});
 
+        scoped_logger.info().log("saving reference manager records");
         const records_size = sig.bincode.sizeOf(self.reference_manager.records.items, .{});
         const records_memory = try disk_allocator.allocFilename("manager_records", records_size);
         _ = try sig.bincode.writeToSlice(records_memory, self.reference_manager.records.items, .{});
@@ -720,7 +714,7 @@ test "save and load account index state -- multi linked list" {
     index.indexRefAssumeCapacity(&ref_block[1], 1);
 
     // save the state
-    try index.saveStateToDisk(save_dir.dir);
+    try index.saveToDisk(save_dir.dir, .noop);
 
     var index2 = try AccountIndex.init(
         allocator,
@@ -766,7 +760,7 @@ test "save and load account index state" {
     index.indexRefAssumeCapacity(&ref_block[0], 0);
 
     // save the state
-    try index.saveStateToDisk(save_dir.dir);
+    try index.saveToDisk(save_dir.dir, .noop);
 
     var index2 = try AccountIndex.init(
         allocator,
