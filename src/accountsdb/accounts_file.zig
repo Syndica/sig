@@ -279,7 +279,7 @@ pub const AccountFile = struct {
         const memory = try std.posix.mmap(
             null,
             file_size,
-            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            std.posix.PROT.READ,
             std.posix.MAP{ .TYPE = .PRIVATE },
             file.handle,
             0,
