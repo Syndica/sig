@@ -496,6 +496,35 @@ pub fn SwissMapUnmanaged(
             }
             unreachable;
         }
+
+        pub fn setFromMemory(self: *Self, memory: []u8) void {
+            // from ensureTotalCapacity:
+            // memory.len === n_groups * (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State))
+            const n_groups = memory.len / (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State));
+
+            const group_size = n_groups * @sizeOf([GROUP_SIZE]KeyValue);
+            const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
+            const groups = group_ptr[0..n_groups];
+            const states_ptr: [*]@Vector(GROUP_SIZE, u8) = @alignCast(@ptrCast(memory.ptr + group_size));
+            const states = states_ptr[0..n_groups];
+
+            self._capacity = n_groups * GROUP_SIZE;
+            self.groups = groups;
+            self.states = states;
+            self.memory = memory;
+            self.bit_mask = n_groups - 1;
+
+            self._count = 0;
+            for (0..self.groups.len) |i| {
+                const state_vec = self.states[i];
+                for (0..GROUP_SIZE) |j| {
+                    const state: State = @bitCast(state_vec[j]);
+                    if (state.state == .occupied) {
+                        self._count += 1;
+                    }
+                }
+            }
+        }
     };
 }
 

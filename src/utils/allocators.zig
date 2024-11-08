@@ -22,7 +22,17 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
         // for thread safety
         mux: std.Thread.Mutex = .{},
 
-        const Record = struct { is_free: bool, buf: []T };
+        // NOTE: we use the global_index to support fast loading the state
+        pub const Record = struct {
+            is_free: bool,
+            buf: []T = &.{}, // TODO: fix (default only for bincode ser/deser)
+            global_index: u64,
+            len: u64,
+
+            pub const @"!bincode-config:buf": sig.bincode.FieldConfig([]T) = .{
+                .skip = true,
+            };
+        };
         const Self = @This();
 
         const AllocatorConfig = struct {
@@ -32,9 +42,9 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
 
         pub fn init(allocator_config: AllocatorConfig) Self {
             return .{
+                .records = std.ArrayList(Record).init(allocator_config.records_allocator),
                 .memory = std.ArrayList([]T).init(allocator_config.records_allocator),
                 .memory_allocator = allocator_config.memory_allocator,
-                .records = std.ArrayList(Record).init(allocator_config.records_allocator),
                 .capacity = 0,
             };
         }
@@ -64,7 +74,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
             defer if (config.thread_safe) self.mux.unlock();
 
             const buf = try self.memory_allocator.alloc(T, n);
-            try self.records.append(.{ .is_free = true, .buf = buf });
+            try self.records.append(.{ .is_free = true, .buf = buf, .global_index = self.capacity, .len = buf.len });
             try self.memory.append(buf);
             self.capacity += buf.len;
         }
@@ -155,7 +165,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
                 // NOTE: this record ptr is updated before the append which could invalidate the record ptr
                 record.buf = record.buf[0..used_len];
                 // add new unused record to the list
-                try self.records.append(.{ .is_free = true, .buf = split_buf });
+                try self.records.append(.{ .is_free = true, .buf = split_buf, .global_index = record.global_index + used_len, .len = split_buf.len });
                 return true;
             } else {
                 // dont try to split if its too small

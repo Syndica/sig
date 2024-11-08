@@ -797,6 +797,44 @@ test "bincode: custom field serialization" {
     try std.testing.expect(r.skip_me == 20);
 }
 
+test "bincode: test arraylist with ptr struct" {
+    var array = std.ArrayList(sig.accounts_db.index.AccountRef).init(std.testing.allocator);
+    defer array.deinit();
+
+    var ref = sig.accounts_db.index.AccountRef.DEFAULT;
+    ref.slot = 10;
+    try array.append(ref);
+
+    var buf: [1024]u8 = undefined;
+    const bytes = try writeToSlice(&buf, array, .{});
+    std.debug.print("bytes: {any}\n", .{bytes});
+    var array2 = try readFromSlice(std.testing.allocator, std.ArrayList(sig.accounts_db.index.AccountRef), bytes, .{});
+    defer array2.deinit();
+
+    try std.testing.expectEqualSlices(sig.accounts_db.index.AccountRef, array.items, array2.items);
+}
+
+test "bincode: test arraylist with ptr struct slice" {
+    var array = std.ArrayList([]sig.accounts_db.index.AccountRef).init(std.testing.allocator);
+    defer array.deinit();
+
+    var ref_buf: [1]sig.accounts_db.index.AccountRef = undefined;
+    var ref = sig.accounts_db.index.AccountRef.DEFAULT;
+    ref.slot = 10;
+    ref_buf[0] = ref;
+    try array.append(&ref_buf);
+
+    var buf: [1024]u8 = undefined;
+    const bytes = try writeToSlice(&buf, array, .{});
+    var array2 = try readFromSlice(std.testing.allocator, std.ArrayList([]sig.accounts_db.index.AccountRef), bytes, .{});
+    defer array2.deinit();
+
+    std.debug.print("array.items: {any}\n", .{array.items});
+    std.debug.print("array2.items: {any}\n", .{array2.items});
+
+    try std.testing.expectEqualSlices([]sig.accounts_db.index.AccountRef, array.items, array2.items);
+}
+
 test "bincode: test arraylist" {
     var array = std.ArrayList(u8).init(std.testing.allocator);
     defer array.deinit();
@@ -958,65 +996,6 @@ test "bincode: (legacy) serialize an array" {
         30, 40, // Second Foo
     }, buffer.items);
 }
-
-// TODO: Fix bincode.Option to use ? instead
-// test "bincode: decode arbitrary object" {
-//     const Mint = struct {
-//         authority: bincode.Option([32]u8),
-//         supply: u64,
-//         decimals: u8,
-//         is_initialized: bool,
-//         freeze_authority: bincode.Option([32]u8),
-//     };
-
-//     const bytes = [_]u8{
-//         1,   0,   0,   0,   83,  18,  223, 14,  150, 112, 155, 39,  143, 181,
-//         58,  12,  16,  228, 56,  110, 253, 193, 149, 16,  253, 81,  214, 206,
-//         246, 126, 227, 182, 123, 225, 246, 203, 1,   0,   0,   0,   0,   0,
-//         0,   0,   0,   1,   1,   0,   0,   0,   0,   0,   0,   83,  18,  223,
-//         14,  150, 112, 155, 39,  143, 181, 58,  12,  16,  228, 56,  110, 253,
-//         193, 149, 16,  253, 81,  214, 206, 246, 126, 227, 182, 123,
-//     };
-//     const mint = try bincode.readFromSlice(testing.allocator, Mint, &bytes, .{});
-//     defer bincode.free(testing.allocator, mint);
-
-//     try std.testing.expectEqual(@as(u64, 1), mint.supply);
-//     try std.testing.expectEqual(@as(u8, 0), mint.decimals);
-//     try std.testing.expectEqual(true, mint.is_initialized);
-//     try std.testing.expect(mint.authority == .some);
-//     try std.testing.expect(mint.freeze_authority == .some);
-// }
-
-// TODO: Fix bincode.Option to use ? instead
-// test "bincode: option serialize and deserialize" {
-//     const Mint = struct {
-//         authority: bincode.Option([32]u8),
-//         supply: u64,
-//         decimals: u8,
-//         is_initialized: bool,
-//         freeze_authority: bincode.Option([32]u8),
-//     };
-
-//     var buffer = std.ArrayList(u8).init(testing.allocator);
-//     defer buffer.deinit();
-
-//     const expected: Mint = .{
-//         .authority = bincode.Option([32]u8).from([_]u8{ 1, 2, 3, 4 } ** 8),
-//         .supply = 1,
-//         .decimals = 0,
-//         .is_initialized = true,
-//         .freeze_authority = bincode.Option([32]u8).from([_]u8{ 5, 6, 7, 8 } ** 8),
-//     };
-
-//     try bincode.write(buffer.writer(), expected, .{});
-
-//     try std.testing.expectEqual(@as(usize, 82), buffer.items.len);
-
-//     const actual = try bincode.readFromSlice(testing.allocator, Mint, buffer.items, .{});
-//     defer bincode.free(testing.allocator, actual);
-
-//     try std.testing.expectEqual(expected, actual);
-// }
 
 test "bincode: serialize and deserialize" {
     var buffer = std.ArrayList(u8).init(testing.allocator);

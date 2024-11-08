@@ -249,6 +249,14 @@ pub const AccountsDB = struct {
     ) !SnapshotFields {
         const snapshot_fields = try snapshot_fields_and_paths.collapse();
 
+        const load_index_state = true;
+        if (load_index_state) {
+            var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
+            defer fastload_dir.close();
+
+            // TODO:
+        }
+
         const load_duration = try self.loadFromSnapshot(
             snapshot_fields.accounts_db_fields,
             n_threads,
@@ -256,6 +264,14 @@ pub const AccountsDB = struct {
             accounts_per_file_estimate,
         );
         self.logger.info().logf("loaded from snapshot in {s}", .{load_duration});
+
+        const save_index_state = true;
+        if (save_index_state) {
+            var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
+            defer fastload_dir.close();
+
+            try self.account_index.saveStateToDisk(fastload_dir);
+        }
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.full;
