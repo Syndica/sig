@@ -38,11 +38,11 @@ At a high level the sig transaction send service:
     - Ensure 'alice' has zero lamports
     - Send 5_000_000 lamports to 'alice' over five transactions of 1_000_000 lamports each
     - Confirm that 'alice' has received 5_000_000 lamports
-    - permalink: https://github.com/Syndica/sig/blob/8bc6cbafcd631227fa0bf601dd466f0881c5480b/src/transaction_sender/mock_transfer_generator.zig#L55
+    - permalink: https://github.com/Syndica/sig/blob/81f2779de1a5b7127154579bd28770abbb9b030c/src/transaction_sender/mock_transfer_generator.zig#L55
 
 - **Gulfstream - Transaction Sender**
     - the sig transaction sender is run normally
-    - permalink: https://github.com/Syndica/sig/blob/8bc6cbafcd631227fa0bf601dd466f0881c5480b/src/transaction_sender/service.zig#L39
+    - permalink: https://github.com/Syndica/sig/blob/81f2779de1a5b7127154579bd28770abbb9b030c/src/transaction_sender/service.zig#L39
 <br>
 
 
@@ -72,7 +72,7 @@ At a high level the sig turbine retransmit stage:
 - **Solution**: manually override our validators stake when building the turbine tree 
     - a live demo will show shred retransmission at both level 0 (root) and level 1 of the turbine tree
     - we will retransmit to the wrong nodes, however, this will have insignificant network effects
-    - permalink: https://github.com/Syndica/sig/blob/8bc6cbafcd631227fa0bf601dd466f0881c5480b/src/turbine/turbine_tree.zig#L359
+    - permalink: https://github.com/Syndica/sig/blob/81f2779de1a5b7127154579bd28770abbb9b030c/src/turbine/turbine_tree.zig#L359
     
 ### Demonstration - Retransmitting to the Correct Validators
 
@@ -84,10 +84,10 @@ At a high level the sig turbine retransmit stage:
         - slot leader
     - after the `nth` node, the turbine tree is **non-deterministic** as it depends on each validators internal gossip table
     - permalinks:
-        - sig (seeding): https://github.com/Syndica/sig/blob/8bc6cbafcd631227fa0bf601dd466f0881c5480b/src/turbine/turbine_tree.zig#L250
-        - agave (seeding): https://github.com/Syndica/agave/blob/2b3853f3c40f9700db6728193fe10d97bbd5d356/turbine/src/cluster_nodes.rs#L209
-        - sig (building): https://github.com/Syndica/sig/blob/8bc6cbafcd631227fa0bf601dd466f0881c5480b/src/turbine/turbine_tree.zig#L139
-        - agave (building): https://github.com/Syndica/agave/blob/2b3853f3c40f9700db6728193fe10d97bbd5d356/turbine/src/cluster_nodes.rs#L280
+        - sig (seeding): https://github.com/Syndica/sig/blob/81f2779de1a5b7127154579bd28770abbb9b030c/src/turbine/turbine_tree.zig#L250
+        - agave (seeding): https://github.com/Syndica/agave/blob/cd3b807e452430bcf327df392f3d5eea1bb1cf8f/turbine/src/cluster_nodes.rs#L209
+        - sig (building): https://github.com/Syndica/sig/blob/81f2779de1a5b7127154579bd28770abbb9b030c/src/turbine/turbine_tree.zig#L139
+        - agave (building): https://github.com/Syndica/agave/blob/cd3b807e452430bcf327df392f3d5eea1bb1cf8f/turbine/src/cluster_nodes.rs#L280
 
 - **Black Box Approach**
     - create a test cluster in both sig and agave, consisting of:
@@ -97,5 +97,5 @@ At a high level the sig turbine retransmit stage:
     - sample N random shred ids and compute the retransmit children 
     - confirm that the gerenated cluster info, and computed retransmit children are identical
     - permalinks
-        - sig: https://github.com/Syndica/sig/blob/8bc6cbafcd631227fa0bf601dd466f0881c5480b/src/turbine/turbine_tree.zig#L873
-        - agave: https://github.com/Syndica/agave/blob/2b3853f3c40f9700db6728193fe10d97bbd5d356/turbine/src/cluster_nodes.rs#L883
+        - sig: https://github.com/Syndica/sig/blob/81f2779de1a5b7127154579bd28770abbb9b030c/src/turbine/turbine_tree.zig#L873
+        - agave: https://github.com/Syndica/agave/blob/cd3b807e452430bcf327df392f3d5eea1bb1cf8f/turbine/src/cluster_nodes.rs#L883

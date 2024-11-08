@@ -7,4 +7,4 @@
 # --exit-after-n-shreds:         exit after processing n shreds
 
 # start the validator with stake override enabled
-zig-out/bin/sig validator --network testnet --snapshot-metadata-only --overwrite-stake-for-testing --exit-after-n-shreds $1 --test-repair-for-slot $(solana -ut slot) 2>&1 | tee demo/turbine-retransmit-demo-$2.log | grep turbine_demo.
+zig-out/bin/sig validator --network testnet --snapshot-metadata-only --overwrite-stake-for-testing --exit-after-n-shreds $1 --test-repair-for-slot $(solana -ut slot) 2>&1 | tee demo/turbine-retransmit-demo.log | grep turbine_demo.
