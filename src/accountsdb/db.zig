@@ -4761,22 +4761,18 @@ pub const BenchmarkAccountsDB = struct {
                                 try file.seekTo(0);
                             }
 
-                            var memory = try std.posix.mmap(
-                                null,
-                                aligned_size,
-                                std.posix.PROT.READ | std.posix.PROT.WRITE,
-                                std.posix.MAP{ .TYPE = .SHARED }, // need it written to the file before it can be used
-                                file.handle,
-                                0,
-                            );
+                            const buf = try allocator.alloc(u8, aligned_size);
+                            defer allocator.free(buf);
 
                             var offset: usize = 0;
                             for (0..n_accounts) |i| {
                                 const account = try Account.initRandom(allocator, random, i % 1_000);
                                 defer allocator.free(account.data);
                                 var pubkey = pubkeys[i % n_accounts];
-                                offset += account.writeToBuf(&pubkey, memory[offset..]);
+                                offset += account.writeToBuf(&pubkey, buf[offset..]);
                             }
+
+                            try file.writeAll(buf);
 
                             break :blk try AccountFile.init(file, .{ .id = FileId.fromInt(@intCast(s)), .length = offset }, s);
                         };
