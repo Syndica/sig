@@ -1499,19 +1499,21 @@ pub const AccountsDB = struct {
         var file_size: usize = 0;
         for (accounts) |account| file_size += account.getSizeInFile();
 
-        // TODO: could reset the buffer per-account, writing in the loop
-        var account_file_buf = try std.ArrayList(u8).initCapacity(self.allocator, file_size);
+        var account_file_buf = std.ArrayList(u8).init(self.allocator);
         defer account_file_buf.deinit();
-        account_file_buf.items.len = file_size;
 
         var current_offset: u64 = 0;
         for (offsets, accounts, pubkeys) |*offset, account, pubkey| {
+            try account_file_buf.resize(account.getSizeInFile());
+
             offset.* = current_offset;
             // write the account to the file
-            current_offset += account.writeToBuf(&pubkey, account_file_buf.items[current_offset..]);
-        }
+            const bytes_written = account.writeToBuf(&pubkey, account_file_buf.items);
+            current_offset += bytes_written;
 
-        try file.writeAll(account_file_buf.items);
+            if (bytes_written != account.getSizeInFile()) unreachable;
+            try file.writeAll(account_file_buf.items);
+        }
 
         var account_file = try AccountFile.init(file, .{
             .id = file_id,
@@ -1915,10 +1917,8 @@ pub const AccountsDB = struct {
                 }
             }
 
-            // TODO: could reset the buffer per-account, writing in the loop
             var account_file_buf = try std.ArrayList(u8).initCapacity(self.allocator, file_size);
             defer account_file_buf.deinit();
-            account_file_buf.items.len = file_size;
 
             // write the alive accounts
             var offsets = try std.ArrayList(u64).initCapacity(self.allocator, accounts_alive_count);
@@ -1930,12 +1930,12 @@ pub const AccountsDB = struct {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
                 const account = account_iter.next().?;
                 if (is_alive) {
+                    try account_file_buf.resize(account.getSizeInFile());
                     offsets.appendAssumeCapacity(offset);
-                    offset += account.writeToBuf(account_file_buf.items[offset..]);
+                    offset += account.writeToBuf(account_file_buf.items);
+                    try new_file.writeAll(account_file_buf.items);
                 }
             }
-
-            try new_file.writeAll(account_file_buf.items);
 
             {
                 // add file to map
