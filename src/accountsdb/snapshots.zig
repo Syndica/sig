@@ -2291,15 +2291,12 @@ pub fn parallelUnpackZstdTarBall(
 ) !void {
     const file_stat = try file.stat();
     const file_size: u64 = @intCast(file_stat.size);
-    const memory = try std.posix.mmap(
-        null,
-        file_size,
-        std.posix.PROT.READ,
-        std.posix.MAP{ .TYPE = .SHARED },
-        file.handle,
-        0,
-    );
-    var tar_stream = try zstd.Reader.init(memory);
+
+    const file_data = try allocator.alloc(u8, file_size);
+    defer allocator.free(file_data);
+    if (try file.readAll(file_data) != file_size) unreachable;
+
+    var tar_stream = try zstd.Reader.init(file_data);
     defer tar_stream.deinit();
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
 
