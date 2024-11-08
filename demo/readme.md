@@ -1,5 +1,36 @@
 # Networking 
 
+## Running Demos with Dashboards
+
+- For starting up prometheus and grafana, checkout our guide [here](https://docs.syndica.io/sig/usage/metrics).
+- The relevant dashboards are **Transaction Sender Metrics** and **Turbine Metrics** which should be visible in Grafana after following the above
+
+### Gulf Stream: Mock Transfers
+
+An example of how to run the transaction sender with generated transfer transactions can be seen in the script below. Currently the mock transfer generator waits for each transaction to be rooted before sending another, this can be changed by calling `sigTransfer` instead of `sigTransferAndWait` [here](https://github.com/Syndica/sig/blob/1cc85773a70a0536ac5b4afd3899aff8c603c460/src/transaction_sender/mock_transfer_generator.zig#L116). Keep in mind that the test will exit once the mock transfer generator has exited, so if using `sigTransfer` a wait should be used after sending transfers or the folling [line](https://github.com/Syndica/sig/blob/1cc85773a70a0536ac5b4afd3899aff8c603c460/src/transaction_sender/mock_transfer_generator.zig#L129) removed.
+
+Since we do not have consenus we rely on some Rpc calls for signature validation, hence, the performance of the transaction sender is currently limited. 
+
+- script: ./demo/run_gulfstream_with_mock_transfer_generator.sh
+- dashboard: ./demo/misc/dashboard_gulfstream_demo.json
+- entrypoint: https://github.com/Syndica/sig/blob/1cc85773a70a0536ac5b4afd3899aff8c603c460/src/cmd/cmd.zig#L1187
+ 
+### Turbine: Stake Override
+
+An example of how the run the turbine retransmit stage with stake overriding can be seen in the script below. This first removes state from the previous run if present and then runs the sig validator with a few minor tweaks to spin up only the components required (i.e. skip account indexing). 
+
+- script: ./demo/run_turbine_retransmit_with_stake_override.sh \<exit-after-n-shreds\>
+- dashboard: ./demo/dashboard_turbine_demo.json
+- entrypoint: https://github.com/Syndica/sig/blob/1cc85773a70a0536ac5b4afd3899aff8c603c460/src/cmd/cmd.zig#L733
+
+### Turbine: Black Box
+
+An example of how to run the turbine tree black box can be seen in the script below. This runs both the sig and agave tests, printing results to a file each for validation, permalinks are provided below:
+
+- script: ./demo/run_turbine_tree_black_box_tests.sh
+- sig: https://github.com/Syndica/sig/blob/harnew/demo/src/turbine/turbine_tree.zig#L873
+- agave: https://github.com/Syndica/agave/blob/cd3b807e452430bcf327df392f3d5eea1bb1cf8f/turbine/src/cluster_nodes.rs#L883
+
 ## Milestones
 **Turbine**: Validator is able to forward shreds to other validators according to stake weight and other factors
 
