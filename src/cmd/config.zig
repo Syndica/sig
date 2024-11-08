@@ -142,6 +142,10 @@ pub const AccountsDBConfig = struct {
     /// the number of accounts supported will be max(this, accounts_per_file_estimate * number_of_account_files).
     /// NOTE: usually number_of_account_files is ~400K.
     prealloc_number_of_accounts: u64 = 0,
+    /// loads accounts-db from pre-existing state which has been saved with the `save_index` option
+    fastload: bool = false,
+    /// saves the accounts index to disk after loading to support fastloading
+    save_index: bool = false,
 };
 
 pub const GeyserConfig = struct {

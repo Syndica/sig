@@ -151,25 +151,33 @@ pub const AccountIndex = struct {
         // load the manager
         scoped_logger.info().log("loading manager memory");
         const reference_file = try dir.openFile("manager_memory", .{});
-        const references = try sig.bincode.read(
+        const size = (try reference_file.stat()).size;
+        const ref_memory = try std.posix.mmap(
+            null,
+            size,
+            std.posix.PROT.READ,
+            std.posix.MAP{ .TYPE = .PRIVATE },
+            reference_file.handle,
+            0,
+        );
+        defer std.posix.munmap(ref_memory);
+        const references = try sig.bincode.readFromSlice(
+            // NOTE: this still ensure reference memory is either on disk or ram
+            // even though the state we are loading from is on disk.
+            // with bincode this will only be one alloc!
             self.reference_manager.memory_allocator,
-            [][]AccountRef,
-            reference_file.reader(),
+            []AccountRef,
+            ref_memory,
             .{},
         );
-        // free the slice of slices
-        defer self.reference_manager.memory_allocator.free(references);
+        try self.reference_manager.memory.append(references);
+        self.reference_manager.capacity += references.len;
 
+        // update the pointers of the references
         scoped_logger.info().log("organizing manager memory");
-        const nested_refs = sig.common.merkle_tree.NestedList(AccountRef){ .items = references };
-        for (references) |ref_block| {
-            try self.reference_manager.memory.append(ref_block);
-            self.reference_manager.capacity += ref_block.len;
-            // update the pointers of the references
-            for (ref_block) |*ref| {
-                if (ref.next_index != null) {
-                    ref.next_ptr = nested_refs.getValue(ref.next_index.?);
-                }
+        for (references) |*ref| {
+            if (ref.next_index != null) {
+                ref.next_ptr = &references[ref.next_index.?];
             }
         }
 
@@ -183,7 +191,10 @@ pub const AccountIndex = struct {
             .{},
         );
         for (records.items) |*record| {
-            record.buf = nested_refs.getSlice(record.global_index, record.len);
+            record.buf = references[record.global_index..][0..record.len];
+            // NOTE: since we flattened the references memory list, all
+            // records have the same memory_index
+            record.memory_index = 0;
         }
         self.reference_manager.records = records;
 
@@ -207,7 +218,7 @@ pub const AccountIndex = struct {
             // update the pointers of the reference_heads
             var shard_iter = shard.iterator();
             while (shard_iter.next()) |entry| {
-                entry.value_ptr.ref_ptr = nested_refs.getValue(entry.value_ptr.ref_index);
+                entry.value_ptr.ref_ptr = &references[entry.value_ptr.ref_index];
             }
         }
     }
@@ -247,11 +258,18 @@ pub const AccountIndex = struct {
         }
 
         scoped_logger.info().log("saving reference manager memory");
-        // TODO(fl): collapse [][]AccountRef into a single slice
-        // const reference_size = @sizeOf(u64) + self.reference_manager.capacity * @sizeOf(AccountRef);
-        const reference_size = sig.bincode.sizeOf(self.reference_manager.memory.items, .{}); // NOTE: this is a slight overestimate
+        const reference_size = @sizeOf(u64) + self.reference_manager.capacity * @sizeOf(AccountRef);
         const reference_memory = try disk_allocator.allocFilename("manager_memory", reference_size);
-        _ = try sig.bincode.writeToSlice(reference_memory, self.reference_manager.memory.items, .{});
+        // collapse [][]AccountRef into a single slice
+        offset = 0;
+        std.mem.writeInt(u64, reference_memory[offset..][0..@sizeOf(u64)], self.reference_manager.capacity, .little);
+        offset += @sizeOf(u64);
+        for (self.reference_manager.memory.items) |ref_block| {
+            for (ref_block) |ref| {
+                const n = try sig.bincode.writeToSlice(reference_memory[offset..], ref, .{});
+                offset += n.len;
+            }
+        }
 
         scoped_logger.info().log("saving reference manager records");
         const records_size = sig.bincode.sizeOf(self.reference_manager.records.items, .{});
@@ -259,11 +277,8 @@ pub const AccountIndex = struct {
         _ = try sig.bincode.writeToSlice(records_memory, self.reference_manager.records.items, .{});
     }
 
-    pub fn ensureReferenceCapacity(self: *Self, capacity: u64) !void {
-        if (self.reference_manager.capacity < capacity) {
-            const block_size = capacity - self.reference_manager.capacity;
-            try self.reference_manager.append(block_size);
-        }
+    pub fn appendNReferences(self: *Self, n: u64) !void {
+        try self.reference_manager.append(n);
     }
 
     /// adds the reference to the index if there is not a duplicate (ie, the same slot).
@@ -693,7 +708,7 @@ test "save and load account index state -- multi linked list" {
     );
     defer index.deinit();
 
-    try index.ensureReferenceCapacity(10); // TODO: support when this is > capacity
+    try index.appendNReferences(10);
     try index.pubkey_ref_map.ensureTotalCapacityPerShard(10);
 
     const ref_block, _ = try index.reference_manager.alloc(2);
@@ -748,7 +763,7 @@ test "save and load account index state" {
         8,
     );
     defer index.deinit();
-    try index.ensureReferenceCapacity(1); // TODO: support when this is > capacity
+    try index.appendNReferences(1);
     try index.pubkey_ref_map.ensureTotalCapacityPerShard(100);
 
     const ref_block, _ = try index.reference_manager.alloc(1);
@@ -792,7 +807,7 @@ test "account index update/remove reference" {
         8,
     );
     defer index.deinit();
-    try index.ensureReferenceCapacity(100);
+    try index.appendNReferences(100);
     try index.pubkey_ref_map.ensureTotalCapacityPerShard(100);
 
     // pubkey -> a

@@ -161,7 +161,7 @@ pub const AccountsDB = struct {
         errdefer account_index.deinit();
 
         if (config.prealloc_number_of_accounts > 0) {
-            try account_index.ensureReferenceCapacity(config.prealloc_number_of_accounts);
+            try account_index.appendNReferences(config.prealloc_number_of_accounts);
         }
 
         // init accounts cache
@@ -296,16 +296,18 @@ pub const AccountsDB = struct {
         n_threads: u32,
         validate: bool,
         accounts_per_file_estimate: u64,
+        should_fastload: bool,
+        save_index_state: bool,
     ) !SnapshotFields {
         const snapshot_fields = try snapshot_fields_and_paths.collapse();
 
-        const should_fastload = true;
         if (should_fastload) {
+            var timer = try sig.time.Timer.start();
             var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
             defer fastload_dir.close();
             self.logger.info().log("fast loading accountsdb...");
-            // TODO:
             try self.fastload(fastload_dir, snapshot_fields.accounts_db_fields);
+            self.logger.info().logf("loaded from snapshot in {s}", .{timer.read()});
         } else {
             const load_duration = try self.loadFromSnapshot(
                 snapshot_fields.accounts_db_fields,
@@ -316,7 +318,7 @@ pub const AccountsDB = struct {
             self.logger.info().logf("loaded from snapshot in {s}", .{load_duration});
         }
 
-        const save_index_state = true;
+        // no need to re-save if we just loaded from a fastload
         if (!should_fastload and save_index_state) {
             var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
             defer fastload_dir.close();
@@ -377,7 +379,7 @@ pub const AccountsDB = struct {
 
         // prealloc the references
         const n_accounts_estimate = n_account_files * accounts_per_file_estimate;
-        try self.account_index.ensureReferenceCapacity(n_accounts_estimate);
+        try self.account_index.appendNReferences(n_accounts_estimate);
 
         var timer = try sig.time.Timer.start();
         // short path
@@ -532,8 +534,8 @@ pub const AccountsDB = struct {
         // without this large allocation, snapshot loading is very slow
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
 
-        const reference_manager = self.account_index.reference_manager;
         // TODO(fl): check this out
+        const reference_manager = self.account_index.reference_manager;
         const references_buf, const global_ref_index = try reference_manager.alloc(n_accounts_estimate);
 
         var timer = try sig.time.Timer.start();

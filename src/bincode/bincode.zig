@@ -604,6 +604,9 @@ pub fn FieldConfig(comptime T: type) type {
         free: ?FreeFunction = null,
         skip: bool = false,
         post_deserialize_fn: ?fn (self: *T) void = null,
+        /// NOTE: we use this default parameter here to avoid incorrect usage
+        /// of structs which should only have defaults on deserialization
+        default_value: ?T = null,
     };
 }
 
@@ -646,6 +649,13 @@ pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Ty
 
 pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField, comptime field_config: FieldConfig(field.type)) ?field.type {
     if (field_config.skip) {
+        // NOTE: this is **bincode specific** default value
+        // eg, a: ?u8 ... @!"bincode-config:a" = { skip = true, default_value = 5 }
+        if (field_config.default_value) |v| {
+            return v;
+        }
+        // NOTE: this is the default value of the **field**
+        // eg, a: ?u8 = 5
         if (field.default_value == null) {
             @compileError("┓\n|\n|--> Invalid config: cannot skip field '" ++ @typeName(field.type) ++ "." ++ field.name ++ "' deserialization if no default value set\n\n");
         }

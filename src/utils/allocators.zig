@@ -25,12 +25,16 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
         // NOTE: we use the global_index to support fast loading the state
         pub const Record = struct {
             is_free: bool,
-            buf: []T = &.{}, // TODO: fix (default only for bincode ser/deser)
+            buf: []T,
             global_index: u64,
             len: u64,
+            // NOTE: this is tracked for correct usage of collapse()
+            memory_index: u64,
 
+            /// NOTE: we dont want to re-write the buf memory (that exists in `memory` field) on save
             pub const @"!bincode-config:buf": sig.bincode.FieldConfig([]T) = .{
                 .skip = true,
+                .default_value = &.{},
             };
         };
         const Self = @This();
@@ -75,7 +79,13 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
 
             const buf = try self.memory_allocator.alloc(T, n);
             @memset(buf, T.DEFAULT);
-            try self.records.append(.{ .is_free = true, .buf = buf, .global_index = self.capacity, .len = buf.len });
+            try self.records.append(.{
+                .is_free = true,
+                .buf = buf,
+                .global_index = self.capacity,
+                .len = buf.len,
+                .memory_index = self.memory.items.len,
+            });
             try self.memory.append(buf);
             self.capacity += buf.len;
         }
@@ -169,7 +179,13 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
                 // NOTE: this record ptr is updated before the append which could invalidate the record ptr
                 record.buf = record.buf[0..used_len];
                 // add new unused record to the list
-                try self.records.append(.{ .is_free = true, .buf = split_buf, .global_index = record.global_index + used_len, .len = split_buf.len });
+                try self.records.append(.{
+                    .is_free = true,
+                    .buf = split_buf,
+                    .global_index = record.global_index + used_len,
+                    .len = split_buf.len,
+                    .memory_index = record.memory_index,
+                });
                 return true;
             } else {
                 // dont try to split if its too small
@@ -183,13 +199,16 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
         pub fn collapse(self: *Self) !void {
             var new_records = std.ArrayList(Record).init(self.records.allocator);
             var last_was_free = false;
+            var last_memory_index: u64 = 0;
 
             for (self.records.items) |record| {
                 if (record.is_free) {
-                    if (last_was_free) {
+                    // NOTE: only merge the records if they are from the same memory buffer
+                    if (last_was_free and record.memory_index == last_memory_index) {
                         new_records.items[new_records.items.len - 1].buf.len += record.buf.len;
                     } else {
                         last_was_free = true;
+                        last_memory_index = record.memory_index;
                         try new_records.append(record);
                     }
                 } else {

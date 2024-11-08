@@ -275,6 +275,22 @@ pub fn run() !void {
         .value_name = "prealloc_number_of_accounts",
     };
 
+    var fastload_option = cli.Option{
+        .long_name = "fastload",
+        .help = "fastload the accounts db",
+        .value_ref = cli.mkRef(&config.current.accounts_db.fastload),
+        .required = false,
+        .value_name = "fastload",
+    };
+
+    var save_index_option = cli.Option{
+        .long_name = "save-index",
+        .help = "save the account index to disk",
+        .value_ref = cli.mkRef(&config.current.accounts_db.save_index),
+        .required = false,
+        .value_name = "save_index",
+    };
+
     // geyser options
     var enable_geyser_option = cli.Option{
         .long_name = "enable-geyser",
@@ -405,6 +421,8 @@ pub fn run() !void {
                             &genesis_file_path,
                             &accounts_per_file_estimate,
                             &prealloc_number_of_accounts_option,
+                            &fastload_option,
+                            &save_index_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -502,6 +520,8 @@ pub fn run() !void {
                             &genesis_file_path,
                             &accounts_per_file_estimate,
                             &prealloc_number_of_accounts_option,
+                            &fastload_option,
+                            &save_index_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -580,6 +600,8 @@ pub fn run() !void {
                             &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
+                            &fastload_option,
+                            &save_index_option,
                             // general
                             &leader_schedule_option,
                             &network_option,
@@ -1497,6 +1519,8 @@ fn loadSnapshot(
         n_threads_snapshot_load,
         validate_snapshot,
         config.current.accounts_db.accounts_per_file_estimate,
+        config.current.accounts_db.fastload,
+        config.current.accounts_db.save_index,
     );
     errdefer snapshot_fields.deinit(allocator);
     result.snapshot_fields.was_collapsed = true;
