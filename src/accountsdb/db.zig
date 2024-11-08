@@ -237,6 +237,56 @@ pub const AccountsDB = struct {
         }
     }
 
+    pub fn fastload(
+        self: *Self,
+        dir: std.fs.Dir,
+        snapshot_manifest: AccountsDbFields,
+    ) !void {
+        var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
+        defer accounts_dir.close();
+
+        const n_account_files = snapshot_manifest.file_map.count();
+        self.logger.info().logf("found {d} account files", .{n_account_files});
+        std.debug.assert(n_account_files > 0);
+
+        const file_map, var file_map_lg = self.file_map.writeWithLock();
+        defer file_map_lg.unlock();
+        try file_map.ensureTotalCapacity(self.allocator, n_account_files);
+
+        self.logger.info().log("loading account files");
+        const file_info_map = snapshot_manifest.file_map;
+        for (file_info_map.keys(), file_info_map.values()) |slot, file_info| {
+            // read accounts file
+            var accounts_file = blk: {
+                const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id.toInt() });
+                const accounts_file = accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write }) catch |err| {
+                    self.logger.err().logf("Failed to open accounts/{s}: {s}", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    return err;
+                };
+                defer accounts_file.close();
+
+                break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
+                    self.logger.err().logf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    return err;
+                };
+            };
+            errdefer accounts_file.deinit();
+
+            // NOTE: no need to validate since we are fast loading
+
+            // track file
+            const file_id = file_info.id;
+            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
+            self.largest_file_id = FileId.max(self.largest_file_id, file_id);
+            _ = self.largest_rooted_slot.fetchMax(slot, .release);
+            self.largest_flushed_slot.store(self.largest_rooted_slot.load(.acquire), .release);
+        }
+
+        // NOTE: index loading was the most expensive part which we fastload here
+        self.logger.info().log("loading account index");
+        try self.account_index.loadFromDisk(dir, self.logger);
+    }
+
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *Self,
@@ -249,27 +299,29 @@ pub const AccountsDB = struct {
     ) !SnapshotFields {
         const snapshot_fields = try snapshot_fields_and_paths.collapse();
 
-        const load_index_state = true;
-        if (load_index_state) {
+        const should_fastload = true;
+        if (should_fastload) {
             var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
             defer fastload_dir.close();
-
+            self.logger.info().log("fast loading accountsdb...");
             // TODO:
+            try self.fastload(fastload_dir, snapshot_fields.accounts_db_fields);
+        } else {
+            const load_duration = try self.loadFromSnapshot(
+                snapshot_fields.accounts_db_fields,
+                n_threads,
+                allocator,
+                accounts_per_file_estimate,
+            );
+            self.logger.info().logf("loaded from snapshot in {s}", .{load_duration});
         }
 
-        const load_duration = try self.loadFromSnapshot(
-            snapshot_fields.accounts_db_fields,
-            n_threads,
-            allocator,
-            accounts_per_file_estimate,
-        );
-        self.logger.info().logf("loaded from snapshot in {s}", .{load_duration});
-
         const save_index_state = true;
-        if (save_index_state) {
+        if (!should_fastload and save_index_state) {
             var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
             defer fastload_dir.close();
 
+            self.logger.info().log("saving account index state to disk...");
             try self.account_index.saveStateToDisk(fastload_dir);
         }
 
@@ -481,6 +533,7 @@ pub const AccountsDB = struct {
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
 
         const reference_manager = self.account_index.reference_manager;
+        // TODO(fl): check this out
         const references_buf, const global_ref_index = try reference_manager.alloc(n_accounts_estimate);
 
         var timer = try sig.time.Timer.start();
@@ -803,8 +856,8 @@ pub const AccountsDB = struct {
     ) !struct { Hash, u64 } {
         var timer = try sig.time.Timer.start();
         // TODO: make cli arg
-        // const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
-        const n_threads = 1;
+        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
+        // const n_threads = 1;
 
         const hashes = try self.allocator.alloc(ArrayListUnmanaged(Hash), n_threads);
         defer {

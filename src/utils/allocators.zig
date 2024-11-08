@@ -74,6 +74,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
             defer if (config.thread_safe) self.mux.unlock();
 
             const buf = try self.memory_allocator.alloc(T, n);
+            @memset(buf, T.DEFAULT);
             try self.records.append(.{ .is_free = true, .buf = buf, .global_index = self.capacity, .len = buf.len });
             try self.memory.append(buf);
             self.capacity += buf.len;
@@ -86,6 +87,9 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
         }
 
         pub fn allocUnsafe(self: *Self, n: u64) !struct { []T, u64 } {
+            // this would never succeed
+            if (n > self.capacity) return error.AllocTooBig;
+
             // this is used to index directly into the buffer's underlying data
             var global_index: u64 = 0;
             // check for a buf to recycle
@@ -120,8 +124,8 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
                         // sleep and try collapse again
                         // NOTE: this assumes this method has been called with the lock held
                         // if not, this will break
-                        if (config.thread_safe) self.mux.lock();
-                        defer if (config.thread_safe) self.mux.unlock();
+                        if (config.thread_safe) self.mux.unlock();
+                        defer if (config.thread_safe) self.mux.lock();
                         std.time.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
                     }
                 }
@@ -174,6 +178,8 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
         }
 
         /// collapses adjacent free records into a single record
+        /// NOTE: this could collapse two separate buffers into one, which would lead to a segfault - so be careful!
+        /// TODO(fl): add a check to prevent this
         pub fn collapse(self: *Self) !void {
             var new_records = std.ArrayList(Record).init(self.records.allocator);
             var last_was_free = false;

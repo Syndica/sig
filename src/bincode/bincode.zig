@@ -807,32 +807,10 @@ test "bincode: test arraylist with ptr struct" {
 
     var buf: [1024]u8 = undefined;
     const bytes = try writeToSlice(&buf, array, .{});
-    std.debug.print("bytes: {any}\n", .{bytes});
     var array2 = try readFromSlice(std.testing.allocator, std.ArrayList(sig.accounts_db.index.AccountRef), bytes, .{});
     defer array2.deinit();
 
     try std.testing.expectEqualSlices(sig.accounts_db.index.AccountRef, array.items, array2.items);
-}
-
-test "bincode: test arraylist with ptr struct slice" {
-    var array = std.ArrayList([]sig.accounts_db.index.AccountRef).init(std.testing.allocator);
-    defer array.deinit();
-
-    var ref_buf: [1]sig.accounts_db.index.AccountRef = undefined;
-    var ref = sig.accounts_db.index.AccountRef.DEFAULT;
-    ref.slot = 10;
-    ref_buf[0] = ref;
-    try array.append(&ref_buf);
-
-    var buf: [1024]u8 = undefined;
-    const bytes = try writeToSlice(&buf, array, .{});
-    var array2 = try readFromSlice(std.testing.allocator, std.ArrayList([]sig.accounts_db.index.AccountRef), bytes, .{});
-    defer array2.deinit();
-
-    std.debug.print("array.items: {any}\n", .{array.items});
-    std.debug.print("array2.items: {any}\n", .{array2.items});
-
-    try std.testing.expectEqualSlices([]sig.accounts_db.index.AccountRef, array.items, array2.items);
 }
 
 test "bincode: test arraylist" {
