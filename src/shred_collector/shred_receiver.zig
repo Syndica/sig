@@ -96,15 +96,11 @@ pub const ShredReceiver = struct {
             for (receivers) |receiver| {
                 var packet_count: usize = 0;
                 while (receiver.receive()) |packet| {
-                    self.metrics.received_count.inc();
+                    self.metrics.incReceived(is_repair);
                     packet_count += 1;
                     try self.handlePacket(packet, response_sender, is_repair);
                 }
-                if (is_repair) {
-                    self.metrics.repair_batch_size.observe(packet_count);
-                } else {
-                    self.metrics.turbine_batch_size.observe(packet_count);
-                }
+                self.metrics.observeBatchSize(is_repair, packet_count);
             }
         }
     }
@@ -214,6 +210,8 @@ const RepairPing = union(enum) { Ping: Ping };
 
 pub const ShredReceiverMetrics = struct {
     received_count: *Counter,
+    turbine_received_count: *Counter,
+    repair_received_count: *Counter,
     satisfactory_shred_count: *Counter,
     valid_ping_count: *Counter,
     ping_deserialize_fail_count: *Counter,
@@ -225,6 +223,27 @@ pub const ShredReceiverMetrics = struct {
 
     pub const prefix = "shred_receiver";
     pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(2, -1, 8);
+
+    pub fn incReceived(self: *const ShredReceiverMetrics, is_repair: bool) void {
+        self.received_count.inc();
+        if (is_repair) {
+            self.repair_received_count.inc();
+        } else {
+            self.turbine_received_count.inc();
+        }
+    }
+
+    pub fn observeBatchSize(
+        self: *const ShredReceiverMetrics,
+        is_repair: bool,
+        packet_count: usize,
+    ) void {
+        if (is_repair) {
+            self.repair_batch_size.observe(packet_count);
+        } else {
+            self.turbine_batch_size.observe(packet_count);
+        }
+    }
 };
 
 /// Something about the shred was unexpected, so we will discard it.
