@@ -4,7 +4,7 @@ const database = @import("lib.zig");
 const build_options = @import("build-options");
 
 const Allocator = std.mem.Allocator;
-const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
+const RwLock = std.Thread.RwLock;
 
 const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
@@ -21,7 +21,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         maps: []SharedHashMap,
         /// shared lock is required to call locking map methods.
         /// exclusive lock is required to call non-locking map methods.
-        transaction_lock: DefaultRwLock = .{},
+        transaction_lock: *RwLock,
 
         const Self = @This();
 
@@ -32,6 +32,8 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         ) Allocator.Error!Self {
             logger.info().log("Initializing SharedHashMapDB");
             var maps = try allocator.alloc(SharedHashMap, column_families.len);
+            const lock = try allocator.create(RwLock);
+            lock.* = .{};
             errdefer {
                 for (maps) |*m| m.deinit();
                 allocator.free(maps);
@@ -39,7 +41,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             inline for (0..column_families.len) |i| {
                 maps[i] = try SharedHashMap.init(allocator);
             }
-            return .{ .allocator = allocator, .maps = maps };
+            return .{ .allocator = allocator, .maps = maps, .transaction_lock = lock };
         }
 
         pub fn deinit(self: *Self) void {
@@ -47,6 +49,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 map.deinit();
             }
             self.allocator.free(self.maps);
+            self.allocator.destroy(self.transaction_lock);
         }
 
         pub fn count(self: *Self, comptime cf: ColumnFamily) anyerror!u64 {
@@ -400,7 +403,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 const SharedHashMap = struct {
     allocator: Allocator,
     map: SortedMap([]const u8, []const u8),
-    lock: DefaultRwLock = .{},
+    lock: RwLock = .{},
 
     const Self = @This();
 
