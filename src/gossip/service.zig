@@ -1154,9 +1154,11 @@ pub const GossipService = struct {
 
         // update wallclock and sign
         self.my_contact_info.wallclock = now;
-        const my_contact_info_value = SignedGossipData.initSigned(&self.my_keypair, .{
-            .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
-        });
+        const my_contact_info_value = SignedGossipData.initSigned(
+            &self.my_keypair,
+            // safe to copy contact info since it is immediately serialized
+            .{ .ContactInfo = self.my_contact_info },
+        );
 
         if (num_peers != 0) {
             const my_shred_version = self.my_contact_info.shred_version;
