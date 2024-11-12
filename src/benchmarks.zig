@@ -418,9 +418,9 @@ pub fn benchmarkCSV(
 
                         if (j == runtime_info.fields.len - 1) {
                             // dont print trailing comma
-                            try writer_average.print("{d}, {d}, {any}, {any}", .{ f_max, f_min, f_mean, f_std_dev });
+                            try writer_average.print("{d}, {d}, {any}, {any}", .{ f_min, f_max, f_mean, f_std_dev });
                         } else {
-                            try writer_average.print("{d}, {d}, {any}, {any}, ", .{ f_max, f_min, f_mean, f_std_dev });
+                            try writer_average.print("{d}, {d}, {any}, {any}, ", .{ f_min, f_max, f_mean, f_std_dev });
                         }
                     }
                     try writer_average.print("\n", .{});
