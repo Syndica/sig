@@ -8,6 +8,7 @@ const RwLock = std.Thread.RwLock;
 
 const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
+const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 const IteratorDirection = database.interface.IteratorDirection;
 const Logger = sig.trace.Logger;
 const SortedMap = sig.utils.collections.SortedMap;
@@ -18,6 +19,7 @@ const value_serializer = database.interface.value_serializer;
 pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         allocator: Allocator,
+        disk_allocator: *DiskMemoryAllocator,
         maps: []SharedHashMap,
         /// shared lock is required to call locking map methods.
         /// exclusive lock is required to call non-locking map methods.
@@ -29,9 +31,21 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         pub fn open(
             allocator: Allocator,
             logger: Logger,
-            _: []const u8,
-        ) Allocator.Error!Self {
+            path: []const u8,
+        ) anyerror!Self {
             logger.info().log("Initializing SharedHashMapDB");
+
+            // must wipe, does not support reloading old state
+            const cwd = std.fs.cwd();
+            try cwd.deleteTree(path);
+            const dir = try cwd.makeOpenPath(path, .{});
+            const disk_allocator = try allocator.create(DiskMemoryAllocator);
+            disk_allocator.* = DiskMemoryAllocator{
+                .dir = dir,
+                .logger = logger,
+                .mmap_ratio = 1024,
+            };
+
             var maps = try allocator.alloc(SharedHashMap, column_families.len);
             const lock = try allocator.create(RwLock);
             lock.* = .{};
@@ -40,9 +54,14 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 allocator.free(maps);
             }
             inline for (0..column_families.len) |i| {
-                maps[i] = try SharedHashMap.init(allocator);
+                maps[i] = try SharedHashMap.init(disk_allocator.allocator());
             }
-            return .{ .allocator = allocator, .maps = maps, .transaction_lock = lock };
+            return .{
+                .allocator = allocator,
+                .disk_allocator = disk_allocator,
+                .maps = maps,
+                .transaction_lock = lock,
+            };
         }
 
         pub fn deinit(self: *Self) void {
