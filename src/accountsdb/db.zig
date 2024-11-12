@@ -41,7 +41,7 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
-const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
+const NestedHashTree = sig.utils.merkle_tree.NestedHashTree;
 
 const GeyserWriter = sig.geyser.GeyserWriter;
 
@@ -900,8 +900,13 @@ pub const AccountsDB = struct {
         timer.reset();
 
         self.logger.info().logf("computing the merkle root over accounts...", .{});
-        var hash_tree = NestedHashTree{ .hashes = hashes };
-        const accounts_hash = try hash_tree.computeMerkleRoot(MERKLE_FANOUT);
+        const nested_hashes = try self.allocator.alloc([]Hash, n_threads);
+        defer self.allocator.free(nested_hashes);
+        for (nested_hashes, 0..) |*h, i| {
+            h.* = hashes[i].items;
+        }
+        const hash_tree = NestedHashTree{ .items = nested_hashes };
+        const accounts_hash = try sig.utils.merkle_tree.computeMerkleRoot(&hash_tree, MERKLE_FANOUT);
         self.logger.debug().logf("computing the merkle root over accounts took {s}", .{timer.read()});
         timer.reset();
 
