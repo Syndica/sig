@@ -87,7 +87,11 @@ test "common.merkle_tree: test nested impl" {
     };
 
     const root = try computeMerkleRoot(&nested_hashes, 3);
-    const expected_root: [32]u8 = .{ 56, 239, 163, 39, 169, 252, 144, 195, 85, 228, 99, 82, 225, 185, 237, 141, 186, 90, 36, 220, 86, 140, 59, 47, 18, 172, 250, 231, 79, 178, 51, 100 };
+    const expected_root: [32]u8 = .{
+        56, 239, 163, 39,  169, 252, 144, 195, 85,  228, 99,
+        82, 225, 185, 237, 141, 186, 90,  36,  220, 86,  140,
+        59, 47,  18,  172, 250, 231, 79,  178, 51,  100,
+    };
     try std.testing.expect(std.mem.eql(u8, &expected_root, &root.data));
 }
 
@@ -112,6 +116,10 @@ test "common.merkle_tree: test nested impl deeper" {
     };
 
     const root = try computeMerkleRoot(&nested_hashes, 3);
-    const expected_root: [32]u8 = .{ 56, 239, 163, 39, 169, 252, 144, 195, 85, 228, 99, 82, 225, 185, 237, 141, 186, 90, 36, 220, 86, 140, 59, 47, 18, 172, 250, 231, 79, 178, 51, 100 };
+    const expected_root: [32]u8 = .{
+        56,  239, 163, 39,  169, 252, 144, 195, 85,  228, 99, 82, 225,
+        185, 237, 141, 186, 90,  36,  220, 86,  140, 59,  47, 18, 172,
+        250, 231, 79,  178, 51,  100,
+    };
     try std.testing.expect(std.mem.eql(u8, &expected_root, &root.data));
 }
