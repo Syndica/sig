@@ -7,8 +7,8 @@
 # --exit-after-n-shreds:         exit after processing n shreds
 
 # Refresh state from previous run if present
-[ -e "validator/accounts_db/accounts/"]   && echo "removing accounts"    && rm -rf validator/accounts_db/accounts/
-[ -e "validator/accounts_db/snapshots/"]  && echo "removing snapshots"   && rm -rf validator/accounts_db/snapshots/
+[ -e "validator/accounts_db/accounts/" ]   && echo "removing accounts"    && rm -rf validator/accounts_db/accounts/
+[ -e "validator/accounts_db/snapshots/" ]  && echo "removing snapshots"   && rm -rf validator/accounts_db/snapshots/
 [ -e "validator/blockstore/" ]            && echo "removing blockstore"  && rm -rf validator/blockstore/
 
 # start the validator with stake override enabled

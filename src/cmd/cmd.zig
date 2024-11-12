@@ -1563,18 +1563,7 @@ const LoadSnapshotOptions = struct {
 fn loadSnapshot(
     allocator: Allocator,
     logger: Logger,
-<<<<<<< HEAD
-    /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
-    maybe_gossip_service: ?*GossipService,
-    /// whether to validate the snapshot account data against the metadata
-    validate_snapshot: bool,
-    /// optional geyser to write snapshot data to
-    geyser_writer: ?*GeyserWriter,
-    /// whether to load only the metadata of the snapshot
-    metadata_only: bool,
-=======
     options: LoadSnapshotOptions,
->>>>>>> 4d80e5fe (Address PR comments)
 ) !*LoadedSnapshot {
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
@@ -1587,11 +1576,7 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-<<<<<<< HEAD
-    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, maybe_gossip_service, .{
-=======
     var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, options.gossip_service, .{
->>>>>>> 4d80e5fe (Address PR comments)
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
@@ -1625,8 +1610,8 @@ fn loadSnapshot(
         .allocator = allocator,
         .logger = logger,
         .snapshot_dir = snapshot_dir,
-        .geyser_writer = geyser_writer,
-        .gossip_view = if (maybe_gossip_service) |service| AccountsDB.GossipView.fromService(service) else null,
+        .geyser_writer = options.geyser_writer,
+        .gossip_view = if (options.gossip_service) |service| try AccountsDB.GossipView.fromService(service) else null,
         .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
         .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
         .lru_size = 10_000,
