@@ -22,20 +22,6 @@ pub fn NestedList(comptime T: type) type {
             unreachable;
         }
 
-        pub fn getSlice(self: *const Self, index: u64, length: u64) []T {
-            std.debug.assert(index < self.len());
-            var search_index: usize = 0;
-            for (self.items) |slice| {
-                if (search_index + slice.len > index) {
-                    const index_in_nested = index - search_index;
-                    return slice[index_in_nested..][0..length];
-                } else {
-                    search_index += slice.len;
-                }
-            }
-            unreachable;
-        }
-
         pub fn len(self: *const Self) u64 {
             var length: u64 = 0;
             for (self.items) |*slice| {
