@@ -13,6 +13,8 @@ const Registry = sig.prometheus.Registry;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 const VariantCounter = sig.prometheus.VariantCounter;
 
+const VerifiedMerkleRoots = sig.common.lru.LruCache(.non_locking, sig.core.Hash, void);
+
 /// Analogous to [run_shred_sigverify](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/turbine/src/sigverify_shreds.rs#L82)
 pub fn runShredVerifier(
     exit: *Atomic(bool),
@@ -24,6 +26,7 @@ pub fn runShredVerifier(
     leader_schedule: SlotLeaderProvider,
 ) !void {
     const metrics = try registry.initStruct(Metrics);
+    var verified_merkle_roots = try VerifiedMerkleRoots.init(std.heap.c_allocator, 1024);
     while (!exit.load(.acquire) or
         unverified_shred_receiver.len() != 0)
     {
@@ -31,7 +34,7 @@ pub fn runShredVerifier(
         while (unverified_shred_receiver.receive()) |packet| {
             packet_count += 1;
             metrics.received_count.inc();
-            if (verifyShred(&packet, leader_schedule)) |_| {
+            if (verifyShred(&packet, leader_schedule, &verified_merkle_roots, metrics)) |_| {
                 metrics.verified_count.inc();
                 try verified_shred_sender.send(packet);
             } else |err| {
@@ -46,16 +49,23 @@ pub fn runShredVerifier(
 fn verifyShred(
     packet: *const Packet,
     leader_schedule: SlotLeaderProvider,
+    verified_merkle_roots: *VerifiedMerkleRoots,
+    metrics: Metrics,
 ) ShredVerificationFailure!void {
     const shred = shred_layout.getShred(packet) orelse return error.insufficient_shred_size;
     const slot = shred_layout.getSlot(shred) orelse return error.slot_missing;
     const signature = shred_layout.getLeaderSignature(shred) orelse return error.signature_missing;
     const signed_data = shred_layout.merkleRoot(shred) orelse return error.signed_data_missing;
-    const leader = leader_schedule.call(slot) orelse return error.leader_unknown;
 
+    if (verified_merkle_roots.get(signed_data)) |_| {
+        return;
+    }
+    metrics.cache_miss_count.inc();
+    const leader = leader_schedule.call(slot) orelse return error.leader_unknown;
     const valid = signature.verify(leader, &signed_data.data) catch
         return error.failed_verification;
     if (!valid) return error.failed_verification;
+    verified_merkle_roots.insert(signed_data, {}) catch return error.failed_caching;
 }
 
 pub const ShredVerificationFailure = error{
@@ -65,11 +75,13 @@ pub const ShredVerificationFailure = error{
     signed_data_missing,
     leader_unknown,
     failed_verification,
+    failed_caching,
 };
 
 const Metrics = struct {
     received_count: *Counter,
     verified_count: *Counter,
+    cache_miss_count: *Counter,
     batch_size: *Histogram,
     fail: *VariantCounter(ShredVerificationFailure),
 
