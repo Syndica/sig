@@ -930,7 +930,7 @@ pub const AccountFileInfo = struct {
     /// amount of bytes used
     length: usize,
 
-    pub const @"!bincode-config:id" = bincode.file_id.FileIdConfig();
+    pub const @"!bincode-config:id" = FileId.BincodeConfig;
 
     /// Analogous to [AppendVecError](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L74)
     pub const ValidateError = error{
