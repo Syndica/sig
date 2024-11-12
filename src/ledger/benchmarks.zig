@@ -348,7 +348,7 @@ pub const BenchmarkLedgerSlow = struct {
             // connect the chain
             parent_slot = slot;
         }
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         var timer = try sig.time.Timer.start();
         const is_connected = try reader.slotRangeConnected(1, slot_per_epoch);
