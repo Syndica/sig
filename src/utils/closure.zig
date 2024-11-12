@@ -13,19 +13,25 @@ pub fn PointerClosure(comptime Input: type, comptime Output: type) type {
 
         const Self = @This();
 
-        pub fn init(state: anytype, getFn: fn (@TypeOf(state), Input) Output) Self {
-            return .{
-                .state = @alignCast(@ptrCast(state)),
-                .genericFn = struct {
-                    fn callGeneric(generic_state: *anyopaque, slot: Input) Output {
-                        return getFn(@alignCast(@ptrCast(generic_state)), slot);
-                    }
-                }.callGeneric,
+        pub fn init(state: anytype, func: anytype) Self {
+            const functions = struct {
+                fn call(generic_state: *anyopaque, input: Input) Output {
+                    return func(@alignCast(@ptrCast(generic_state)), input);
+                }
+                fn callNoParams(generic_state: *anyopaque, _: Input) Output {
+                    return func(@alignCast(@ptrCast(generic_state)));
+                }
             };
+            const genericFn = comptime switch (@typeInfo(@TypeOf(func)).Fn.params.len) {
+                1 => functions.callNoParams,
+                2 => functions.call,
+                else => @compileError("not supported"),
+            };
+            return .{ .state = @alignCast(@ptrCast(state)), .genericFn = &genericFn };
         }
 
-        pub fn call(self: Self, slot: Input) Output {
-            return self.genericFn(self.state, slot);
+        pub fn call(self: Self, input: Input) Output {
+            return self.genericFn(self.state, input);
         }
     };
 }

@@ -109,7 +109,10 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
             defer c.mdb_txn_abort(txn);
 
-            const value = returnOutput(c.mdb_get, .{ txn, self.dbi(cf), &key_val }) catch |e| switch (e) {
+            const value = returnOutput(
+                c.mdb_get,
+                .{ txn, self.dbi(cf), &key_val },
+            ) catch |e| switch (e) {
                 error.MDB_NOTFOUND => return null,
                 else => return e,
             };
@@ -125,14 +128,20 @@ pub fn LMDB(comptime column_families: []const ColumnFamily) type {
             const txn = try returnOutput(c.mdb_txn_begin, .{ self.env, null, c.MDB_RDONLY });
             errdefer c.mdb_txn_abort(txn);
 
-            const item = returnOutput(c.mdb_get, .{ txn, self.dbi(cf), &key_val }) catch |e| switch (e) {
+            const value = returnOutput(
+                c.mdb_get,
+                .{ txn, self.dbi(cf), &key_val },
+            ) catch |e| switch (e) {
                 error.MDB_NOTFOUND => return null,
                 else => return e,
             };
 
             return .{
-                .deinitializer = txnAborter(txn),
-                .data = fromVal(item),
+                .deinitializer = .{
+                    .closure = sig.utils.closure.PointerClosure([]const u8, void)
+                        .init(txn, c.mdb_txn_abort),
+                },
+                .data = fromVal(value),
             };
         }
 
@@ -372,21 +381,6 @@ fn toVal(bytes: []const u8) c.MDB_val {
 fn fromVal(value: c.MDB_val) []const u8 {
     const ptr: [*]u8 = @ptrCast(value.mv_data);
     return ptr[0..value.mv_size];
-}
-
-/// Returns an `BytesRef.Deinitializer` that frees memory by aborting the transaction
-/// that owns the memory.
-///
-/// Calling `deinit` with any input will free all memory that was allocated
-/// by the transaction. This means you cannot manage lifetimes of multiple
-/// items separately. Ideally you would only use this when you've only
-/// read exactly one item in the transaction.
-fn txnAborter(txn: *c.MDB_txn) BytesRef.Deinitializer {
-    return BytesRef.Deinitializer.init(txn, resetTxnFree);
-}
-
-fn resetTxnFree(txn: *c.MDB_txn, _: []const u8) void {
-    c.mdb_txn_abort(txn);
 }
 
 /// Call an LMDB function and return its combined output as an error union.
