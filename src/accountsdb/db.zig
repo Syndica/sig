@@ -698,18 +698,31 @@ pub const AccountsDB = struct {
         thread_dbs: []AccountsDB,
         n_threads: usize,
     ) !void {
-        var combine_indexes_wg: std.Thread.WaitGroup = .{};
-        defer combine_indexes_wg.wait();
-        try spawnThreadTasks(combineThreadIndexesMultiThread, .{
-            .wg = &combine_indexes_wg,
-            .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
-            .max_threads = n_threads,
-            .params = .{
+        if (n_threads == 1) {
+            try combineThreadIndexesMultiThread(
                 self.logger,
                 &self.account_index,
                 thread_dbs,
-            },
-        });
+                .{
+                    .start_index = 0,
+                    .end_index = self.account_index.pubkey_ref_map.numberOfShards(),
+                    .thread_id = 0,
+                },
+            );
+        } else {
+            var combine_indexes_wg: std.Thread.WaitGroup = .{};
+            defer combine_indexes_wg.wait();
+            try spawnThreadTasks(combineThreadIndexesMultiThread, .{
+                .wg = &combine_indexes_wg,
+                .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
+                .max_threads = n_threads,
+                .params = .{
+                    self.logger,
+                    &self.account_index,
+                    thread_dbs,
+                },
+            });
+        }
 
         // ensure enough capacity
         var ref_mem_capacity: u32 = 0;
