@@ -204,6 +204,7 @@ fn findSlotsToClean(
 /// analog to [`run_purge_with_stats`](https://github.com/anza-xyz/agave/blob/26692e666454d340a6691e2483194934e6a8ddfc/ledger/src/blockstore/blockstore_purge.rs#L202)
 pub fn purgeSlots(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !bool {
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
 
     // the methods used below are exclusive [from_slot, to_slot), so we add 1 to purge inclusive
     const purge_to_slot = to_slot + 1;
@@ -212,7 +213,7 @@ pub fn purgeSlots(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !bool {
     writePurgeRange(&write_batch, from_slot, purge_to_slot) catch {
         did_purge = false;
     };
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     if (did_purge and from_slot == 0) {
         try purgeFilesInRange(db, from_slot, purge_to_slot);
@@ -372,7 +373,7 @@ test "findSlotsToClean" {
         defer write_batch.deinit();
         try write_batch.put(ledger.schema.schema.slot_meta, lowest_slot_meta.slot, lowest_slot_meta);
         try write_batch.put(ledger.schema.schema.slot_meta, highest_slot_meta.slot, highest_slot_meta);
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
     }
 
     const r = try findSlotsToClean(&reader, 0, 100);
@@ -421,6 +422,7 @@ test "purgeSlots" {
 
     // write another type
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     for (0..roots.len + 1) |i| {
         const merkle_root_meta = sig.ledger.shred.ErasureSetId{
             .erasure_set_index = i,
@@ -434,7 +436,7 @@ test "purgeSlots" {
 
         try write_batch.put(schema.merkle_root_meta, merkle_root_meta, merkle_meta);
     }
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // purge the range [0, 5]
     const did_purge2 = try purgeSlots(&db, 0, 5);
