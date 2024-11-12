@@ -204,7 +204,7 @@ pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred
 
 pub fn saveShredsToFile(path: []const u8, shreds: []const Shred) !void {
     const file = try std.fs.cwd().createFile(path, .{});
-    for (shreds) |s| writeChunk(file.writer(), s.payload());
+    for (shreds) |s| try writeChunk(file.writer(), s.payload());
 }
 
 fn readChunk(allocator: Allocator, reader: anytype) !?[]const u8 {

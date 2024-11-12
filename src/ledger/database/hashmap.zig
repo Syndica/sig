@@ -1,9 +1,10 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const database = @import("lib.zig");
+const build_options = @import("build-options");
 
 const Allocator = std.mem.Allocator;
-const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
+const RwLock = std.Thread.RwLock;
 
 const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
@@ -20,16 +21,20 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         maps: []SharedHashMap,
         /// shared lock is required to call locking map methods.
         /// exclusive lock is required to call non-locking map methods.
-        transaction_lock: DefaultRwLock = .{},
+        /// to avoid deadlocks, always acquire the shared lock *before* acquiring the map lock.
+        transaction_lock: *RwLock,
 
         const Self = @This();
 
         pub fn open(
             allocator: Allocator,
-            _: Logger,
+            logger: Logger,
             _: []const u8,
         ) Allocator.Error!Self {
+            logger.info().log("Initializing SharedHashMapDB");
             var maps = try allocator.alloc(SharedHashMap, column_families.len);
+            const lock = try allocator.create(RwLock);
+            lock.* = .{};
             errdefer {
                 for (maps) |*m| m.deinit();
                 allocator.free(maps);
@@ -37,7 +42,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             inline for (0..column_families.len) |i| {
                 maps[i] = try SharedHashMap.init(allocator);
             }
-            return .{ .allocator = allocator, .maps = maps };
+            return .{ .allocator = allocator, .maps = maps, .transaction_lock = lock };
         }
 
         pub fn deinit(self: *Self) void {
@@ -45,6 +50,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 map.deinit();
             }
             self.allocator.free(self.maps);
+            self.allocator.destroy(self.transaction_lock);
         }
 
         pub fn count(self: *Self, comptime cf: ColumnFamily) anyerror!u64 {
@@ -111,7 +117,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             const ret = try self.allocator.alloc(u8, val_bytes.len);
             @memcpy(ret, val_bytes);
             return .{
-                .allocator = self.allocator,
+                .deinitializer = .{ .allocator = self.allocator },
                 .data = ret,
             };
         }
@@ -164,7 +170,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
         /// Atomicity may be violated if there is insufficient
         /// memory to complete a PUT.
-        pub fn commit(self: *Self, batch: WriteBatch) Allocator.Error!void {
+        pub fn commit(self: *Self, batch: *WriteBatch) Allocator.Error!void {
             self.transaction_lock.lock();
             defer self.transaction_lock.unlock();
 
@@ -178,9 +184,17 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                         const cf_index, const key = delete_ix;
                         self.maps[cf_index].delete(self.allocator, key);
                     },
-                    .delete_range => {
-                        // TODO: also add to database tests
-                        @panic("not implemented");
+                    .delete_range => |delete_range_ix| {
+                        const cf_index, const start, const end = delete_range_ix;
+                        const keys, _ = self.maps[cf_index].map.range(start, end);
+                        const to_delete = try batch.allocator.alloc([]const u8, keys.len);
+                        defer batch.allocator.free(to_delete);
+                        for (keys, 0..) |key, i| {
+                            to_delete[i] = key;
+                        }
+                        for (to_delete) |delete_key| {
+                            self.maps[cf_index].delete(self.allocator, delete_key);
+                        }
                     },
                 }
             }
@@ -232,6 +246,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 key: cf.Key,
                 value: cf.Value,
             ) anyerror!void {
+                std.debug.assert(!self.executed.*);
                 const k_bytes = try key_serializer.serializeAlloc(self.allocator, key);
                 errdefer self.allocator.free(k_bytes);
                 const v_bytes = try value_serializer.serializeAlloc(self.allocator, value);
@@ -247,6 +262,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 comptime cf: ColumnFamily,
                 key: cf.Key,
             ) anyerror!void {
+                std.debug.assert(!self.executed.*);
                 const k_bytes = try key_serializer.serializeAlloc(self.allocator, key);
                 errdefer self.allocator.free(k_bytes);
                 return try self.instructions.append(
@@ -261,12 +277,13 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 start: cf.Key,
                 end: cf.Key,
             ) anyerror!void {
+                std.debug.assert(!self.executed.*);
                 const start_bytes = try key_serializer.serializeAlloc(self.allocator, start);
                 errdefer self.allocator.free(start_bytes);
                 const end_bytes = try key_serializer.serializeAlloc(self.allocator, end);
                 errdefer self.allocator.free(end_bytes);
                 const cf_index = cf.find(column_families);
-                self.instructions.append(
+                try self.instructions.append(
                     self.allocator,
                     .{ .delete_range = .{ cf_index, start_bytes, end_bytes } },
                 );
@@ -282,10 +299,10 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             const shared_map = &self.maps[cf.find(column_families)];
             const map = &shared_map.map;
 
-            shared_map.lock.lockShared();
-            defer shared_map.lock.unlockShared();
             self.transaction_lock.lockShared();
             defer self.transaction_lock.unlockShared();
+            shared_map.lock.lockShared();
+            defer shared_map.lock.unlockShared();
 
             const keys, const vals = if (start) |start_| b: {
                 const search_bytes = try key_serializer.serializeAlloc(self.allocator, start_);
@@ -351,19 +368,19 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
                 pub fn nextKey(self: *@This()) anyerror!?cf.Key {
                     const index = self.nextIndex() orelse return null;
-                    return key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]);
+                    return try key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]);
                 }
 
                 pub fn nextValue(self: *@This()) anyerror!?cf.Value {
                     const index = self.nextIndex() orelse return null;
-                    return value_serializer.deserialize(cf.Value, self.allocator, self.vals[index]);
+                    return try value_serializer.deserialize(cf.Value, self.allocator, self.vals[index]);
                 }
 
                 pub fn nextBytes(self: *@This()) error{}!?[2]BytesRef {
                     const index = self.nextIndex() orelse return null;
                     return .{
-                        .{ .allocator = null, .data = self.keys[index] },
-                        .{ .allocator = null, .data = self.vals[index] },
+                        .{ .deinitializer = null, .data = self.keys[index] },
+                        .{ .deinitializer = null, .data = self.vals[index] },
                     };
                 }
 
@@ -387,7 +404,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 const SharedHashMap = struct {
     allocator: Allocator,
     map: SortedMap([]const u8, []const u8),
-    lock: DefaultRwLock = .{},
+    lock: RwLock = .{},
 
     const Self = @This();
 

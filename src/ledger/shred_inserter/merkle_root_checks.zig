@@ -210,10 +210,11 @@ pub const MerkleRootValidator = struct {
             );
             return true;
         };
+        errdefer other_shred.deinit();
 
         const older_shred, const newer_shred = switch (direction) {
-            .forward => .{ shred.payload(), other_shred },
-            .backward => .{ other_shred, shred.payload() },
+            .forward => .{ shred.payload(), other_shred.data },
+            .backward => .{ other_shred.data, shred.payload() },
         };
 
         const chained_merkle_root = shred_mod.layout.getChainedMerkleRoot(newer_shred);
@@ -252,6 +253,8 @@ pub const MerkleRootValidator = struct {
             try self.duplicate_shreds.append(.{
                 .ChainedMerkleRootConflict = .{ .original = shred, .conflict = other_shred },
             });
+        } else {
+            other_shred.deinit();
         }
 
         return false;
