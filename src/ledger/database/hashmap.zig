@@ -21,6 +21,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         maps: []SharedHashMap,
         /// shared lock is required to call locking map methods.
         /// exclusive lock is required to call non-locking map methods.
+        /// to avoid deadlocks, always acquire the shared lock *before* acquiring the map lock.
         transaction_lock: *RwLock,
 
         const Self = @This();
@@ -298,10 +299,10 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             const shared_map = &self.maps[cf.find(column_families)];
             const map = &shared_map.map;
 
-            shared_map.lock.lockShared();
-            defer shared_map.lock.unlockShared();
             self.transaction_lock.lockShared();
             defer self.transaction_lock.unlockShared();
+            shared_map.lock.lockShared();
+            defer shared_map.lock.unlockShared();
 
             const keys, const vals = if (start) |start_| b: {
                 const search_bytes = try key_serializer.serializeAlloc(self.allocator, start_);
