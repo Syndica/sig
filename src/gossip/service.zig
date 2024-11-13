@@ -196,7 +196,7 @@ pub const GossipService = struct {
         errdefer verified_incoming_channel.deinit();
 
         const thread_pool = try allocator.create(ThreadPool);
-        const n_threads: usize = @min(std.Thread.getCpuCount() catch 1, 8);
+        const n_threads: usize = @min(try std.Thread.getCpuCount(), 8);
         thread_pool.* = ThreadPool.init(.{
             .max_threads = @intCast(n_threads),
             .stack_size = 2 * 1024 * 1024,
