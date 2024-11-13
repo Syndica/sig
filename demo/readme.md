@@ -31,6 +31,11 @@ An example of how to run the turbine tree black box can be seen in the script be
 - sig: https://github.com/Syndica/sig/blob/harnew/demo/src/turbine/turbine_tree.zig#L873
 - agave: https://github.com/Syndica/agave/blob/cd3b807e452430bcf327df392f3d5eea1bb1cf8f/turbine/src/cluster_nodes.rs#L883
 
+Note: you will need to build the agave black box binary as follows
+- checkout https://github.com/Syndica/agave/tree/harnew/networking-demo 
+- cd turbine
+- cargo build --release
+
 ## Milestones
 **Turbine**: Validator is able to forward shreds to other validators according to stake weight and other factors
 
