@@ -3,7 +3,10 @@
 ## Running Demos with Dashboards
 
 - For starting up prometheus and grafana, checkout our guide [here](https://docs.syndica.io/sig/usage/metrics).
-- The relevant dashboards are **Transaction Sender Metrics** and **Turbine Metrics** which should be visible in Grafana after following the above
+- To login to grafana use:
+    - username: admin
+    - password: grafana
+- The relevant dashboards are **Gulf Stream** and **Turbine** which should be visible in Grafana after following the above
 
 ### Gulf Stream: Mock Transfers
 
