@@ -930,20 +930,7 @@ pub const AccountFileInfo = struct {
     /// amount of bytes used
     length: usize,
 
-    pub const @"!bincode-config:id": bincode.FieldConfig(FileId) = .{
-        .serializer = idSerializer,
-        .deserializer = idDeserializer,
-    };
-
-    fn idSerializer(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
-        try bincode.write(writer, @as(usize, data.toInt()), params);
-    }
-
-    fn idDeserializer(_: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!FileId {
-        const int = try bincode.readInt(usize, reader, params);
-        if (int > std.math.maxInt(FileId.Int)) return error.IdOverflow;
-        return FileId.fromInt(@intCast(int));
-    }
+    pub const @"!bincode-config:id" = FileId.BincodeConfig;
 
     /// Analogous to [AppendVecError](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L74)
     pub const ValidateError = error{
