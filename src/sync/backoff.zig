@@ -9,7 +9,7 @@ pub const Backoff = struct {
     pub fn snooze(_: *Backoff) void {
         switch (builtin.cpu.arch) {
             .aarch64 => asm volatile ("wfe" ::: "memory"),
-            else => std.atomic.spinLoopHint(),
+            else => std.Thread.yield() catch unreachable,
         }
     }
 

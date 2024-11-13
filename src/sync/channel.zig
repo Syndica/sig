@@ -163,13 +163,7 @@ pub fn Channel(T: type) type {
         }
 
         pub fn receive(channel: *Self) ?T {
-            while (true) {
-                if (channel.tryReceive()) |value| {
-                    return value;
-                } else {
-                    channel.parker.park();
-                }
-            }
+            return channel.tryReceive();
         }
 
         pub fn tryReceive(channel: *Self) ?T {
@@ -203,7 +197,7 @@ pub fn Channel(T: type) type {
 
                     // If the indicies are the same, the channel is empty and there's nothing to receive.
                     if (head >> SHIFT == tail >> SHIFT) {
-                        backoff.spin();
+                        backoff.snooze();
                         return null;
                     }
 

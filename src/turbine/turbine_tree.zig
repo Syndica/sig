@@ -216,6 +216,7 @@ pub const TurbineTree = struct {
     /// Get the root distance and retransmit children for the given slot leader and shred id.
     /// The retransmit children are calculated from the weighted shuffle of nodes using the
     /// slot leader and shred id as the seed for the shuffle.
+    const RetransmitServiceMetrics = sig.turbine.retransmit_service.RetransmitServiceMetrics;
     pub fn getRetransmitChildren(
         self: *const TurbineTree,
         children: *std.ArrayList(Node),
@@ -223,6 +224,7 @@ pub const TurbineTree = struct {
         slot_leader: Pubkey,
         shred_id: ShredId,
         fanout: usize,
+        maybe_metrics: ?*RetransmitServiceMetrics,
     ) !usize // root distance
     {
         if (slot_leader.equals(&self.my_pubkey)) {
@@ -231,13 +233,19 @@ pub const TurbineTree = struct {
 
         // Clone the weighted shuffle, and remove the slot leader as
         // it should not be included in the retransmit set
+        var timer = try sig.time.Timer.start();
         var weighted_shuffle = try self.weighted_shuffle.clone();
+        if (maybe_metrics) |metrics| {
+            metrics.ws_clone.set(timer.read().asNanos());
+        }
+
         defer weighted_shuffle.deinit();
         if (self.index.get(slot_leader)) |index| {
             weighted_shuffle.removeIndex(index);
         }
 
         // Shuffle the nodes and find my index
+        timer.reset();
         var my_index: usize = undefined;
         var found_my_index = false;
         var chacha = getSeededRng(slot_leader, shred_id);
@@ -253,14 +261,21 @@ pub const TurbineTree = struct {
                 }
             }
         }
+        if (maybe_metrics) |metrics| {
+            metrics.ws_shuffle.set(timer.read().asNanos());
+        }
 
         // Compute the retransmit children from the shuffled nodes
+        timer.reset();
         computeRetransmitChildren(
             children,
             fanout,
             my_index,
             shuffled_nodes.items,
         );
+        if (maybe_metrics) |metrics| {
+            metrics.ws_compute.set(timer.read().asNanos());
+        }
 
         // Compute the root distance
         const root_distance: usize = if (my_index == 0)
@@ -942,6 +957,7 @@ pub fn runTurbineTreeBlackBoxTest() !void {
                 slot_leader,
                 shred_id,
                 TurbineTree.DATA_PLANE_FANOUT,
+                null,
             );
             try writeRetransmitPeers(file.writer(), i, root_distance, children);
         }
@@ -1008,6 +1024,7 @@ pub fn runTurbineTreeBlackBoxTest() !void {
                 slot_leader,
                 shred_id,
                 TurbineTree.DATA_PLANE_FANOUT,
+                null,
             );
             defer children.deinit();
             try writeRetransmitPeers(file.writer(), i, root_distance, children);

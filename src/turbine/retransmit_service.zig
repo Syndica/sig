@@ -360,6 +360,7 @@ fn retransmitShreds(
             retransmit_info.slot_leader,
             retransmit_info.shred_id,
             TurbineTree.getDataPlaneFanout(),
+            metrics,
         );
         defer retransmit_info.turbine_tree.releaseUnsafe();
         metrics.turbine_tree_get_children_nanos.set(get_retransmit_children_timer.read().asNanos());
@@ -423,6 +424,10 @@ pub const RetransmitServiceMetrics = struct {
     turbine_tree_children_with_addresses: *Gauge(u64),
     turbine_tree_get_children_nanos: *Gauge(u64),
     retransmit_shred_nanos: *Gauge(u64),
+
+    ws_clone: *Gauge(u64),
+    ws_shuffle: *Gauge(u64),
+    ws_compute: *Gauge(u64),
 
     // logging info
     logging_fields: struct {
