@@ -515,7 +515,12 @@ test "RepairService sends repair request to gossip peer" {
     };
     try peer_socket.bind(peer_endpoint);
     try peer_socket.setReadTimeout(100_000);
-    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.acquire));
+    var peer_contact_info = ContactInfo.init(
+        allocator,
+        Pubkey.fromPublicKey(&peer_keypair.public_key),
+        wallclock,
+        my_shred_version.load(.acquire),
+    );
     try peer_contact_info.setSocket(.serve_repair, SocketAddr.fromEndpoint(&peer_endpoint));
     try peer_contact_info.setSocket(.turbine_recv, SocketAddr.fromEndpoint(&peer_endpoint));
     _ = try gossip.insert(SignedGossipData.initSigned(&peer_keypair, .{ .ContactInfo = peer_contact_info }), wallclock);
@@ -611,7 +616,8 @@ test "RepairPeerProvider selects correct peers" {
     var observed_peers = std.AutoHashMap(RepairPeer, void).init(allocator);
     defer observed_peers.deinit();
     for (0..10) |_| {
-        try observed_peers.put(try peers.getRandomPeer(13579) orelse unreachable, {});
+        const peer = (try peers.getRandomPeer(13579)).?;
+        try observed_peers.put(peer, {});
     }
 
     // assertions

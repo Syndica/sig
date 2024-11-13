@@ -707,7 +707,7 @@ pub const ThreadPool = struct {
             var num_threads: u32 = @as(Sync, @bitCast(thread_pool.sync.load(.monotonic))).spawned;
             while (num_threads > 0) : (num_threads -= 1) {
                 // Traverse the stack of registered threads on the thread pool
-                const target = self.target orelse thread_pool.threads.load(.acquire) orelse unreachable;
+                const target = self.target orelse thread_pool.threads.load(.acquire).?;
                 self.target = target.next;
 
                 // Try to steal from their queue first to avoid contention (the target steal's from queue last).

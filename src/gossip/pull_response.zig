@@ -35,7 +35,11 @@ pub fn filterSignedGossipDatas(
 
     var bloom = filter.filter;
 
-    var match_indexs = try gossip_table.getBitmaskMatches(allocator, filter.mask, filter.mask_bits);
+    var match_indexs = try gossip_table.getBitmaskMatches(
+        allocator,
+        filter.mask,
+        filter.mask_bits,
+    );
     defer match_indexs.deinit();
 
     const output_size = @min(max_number_values, match_indexs.items.len);

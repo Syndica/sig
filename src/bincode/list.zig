@@ -13,7 +13,8 @@ pub fn valueEncodedAsSlice(
             reader: anytype,
             params: bincode.Params,
         ) anyerror!T {
-            const len = (try bincode.readIntAsLength(usize, reader, params)) orelse return Error.SingleElementSliceInvalidLength;
+            const len = (try bincode.readIntAsLength(usize, reader, params)) orelse
+                return Error.SingleElementSliceInvalidLength;
             if (len != 1) return Error.SingleElementSliceInvalidLength;
             if (config.deserializer) |deserialize| {
                 return try deserialize(allocator, reader, params);

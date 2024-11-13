@@ -176,7 +176,12 @@ pub fn SortedMapCustom(
             if (self.count() != other.count()) return false;
             self.sort();
             other.sort();
-            for (self.inner.keys(), self.inner.values(), other.inner.keys(), other.inner.values()) |sk, sv, ok, ov| {
+            for (
+                self.inner.keys(),
+                self.inner.values(),
+                other.inner.keys(),
+                other.inner.values(),
+            ) |sk, sv, ok, ov| {
                 if (sk != ok or sv != ov) return false;
             }
             return true;

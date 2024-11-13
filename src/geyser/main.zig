@@ -109,7 +109,9 @@ pub fn main() !void {
     try cli.run(&cli_app, std.heap.c_allocator);
 }
 
-pub fn getOwnerFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(sig.core.Pubkey, void) {
+pub fn getOwnerFilters(
+    allocator: std.mem.Allocator,
+) !?std.AutoArrayHashMap(sig.core.Pubkey, void) {
     const owner_accounts_str = config.owner_accounts;
     if (owner_accounts_str.len == 0) {
         return null;
@@ -127,7 +129,9 @@ pub fn getOwnerFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(sig.
     return owner_pubkeys;
 }
 
-pub fn getAccountFilters(allocator: std.mem.Allocator) !?std.AutoArrayHashMap(sig.core.Pubkey, void) {
+pub fn getAccountFilters(
+    allocator: std.mem.Allocator,
+) !?std.AutoArrayHashMap(sig.core.Pubkey, void) {
     const accounts_str = config.accounts;
     if (accounts_str.len == 0) {
         return null;
@@ -203,15 +207,11 @@ pub fn csvDump() !void {
     defer reader.deinit();
 
     // preallocate memory for csv rows
-    const recycle_fba = try allocator.create(sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }));
-    recycle_fba.* = try sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }).init(.{
+    var recycle_fba = try sig.utils.allocators.RecycleFBA(.{ .thread_safe = true }).init(.{
         .records_allocator = allocator,
         .bytes_allocator = allocator,
     }, config.csv_buf_len);
-    defer {
-        recycle_fba.deinit();
-        allocator.destroy(recycle_fba);
-    }
+    defer recycle_fba.deinit();
 
     // setup thread to write to csv
     var io_channel = try sig.sync.Channel([]const u8).create(allocator);
@@ -220,7 +220,12 @@ pub fn csvDump() !void {
         allocator.destroy(io_channel);
     }
 
-    const io_handle = try std.Thread.spawn(.{}, csvDumpIOWriter, .{ &exit, csv_file, io_channel, recycle_fba });
+    const io_handle = try std.Thread.spawn(.{}, csvDumpIOWriter, .{
+        &exit,
+        csv_file,
+        io_channel,
+        &recycle_fba,
+    });
     defer io_handle.join();
     errdefer exit.store(true, .release);
 
@@ -232,8 +237,11 @@ pub fn csvDump() !void {
         switch (payload) {
             .AccountPayloadV1 => {},
             .EndOfSnapshotLoading => {
-                // NOTE: since accounts-db isnt hooked up to the rest to the validator (svm, consensus, etc.)
-                // valid account state is only from snapshots. we can safely exit here because no new accounts
+                // NOTE: since accounts-db isnt hooked up
+                // to the rest to the validator (svm, consensus, etc.),
+                // valid account state is only from snapshots.
+                //
+                // we can safely exit here because no new accounts
                 // are expected.
                 logger.info().log("recv end of snapshot loading signal");
                 exit.store(true, .monotonic);
@@ -277,7 +285,11 @@ pub fn csvDump() !void {
             }
 
             // build the csv row
-            const x = try std.fmt.bufPrint(csv_string[offset..], "{d};{s};{s};{any}\n", .{ account_payload.slot, pubkey, account.owner, account.data });
+            const x = try std.fmt.bufPrint(
+                csv_string[offset..],
+                "{d};{s};{s};{any}\n",
+                .{ account_payload.slot, pubkey, account.owner, account.data },
+            );
             offset += x.len;
         }
 
@@ -311,7 +323,9 @@ pub fn csvDumpIOWriter(
                 // start time estimate on first payload written
                 timer.reset();
             }
-            if (payloads_written % 1_000 == 0 or total_payloads_estimate - payloads_written < 1_000) {
+            if (payloads_written % 1_000 == 0 or
+                total_payloads_estimate - payloads_written < 1_000)
+            {
                 sig.time.estimate.printTimeEstimateStderr(
                     &timer,
                     total_payloads_estimate,

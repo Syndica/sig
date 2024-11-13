@@ -31,7 +31,10 @@ pub fn Base58Sized(decoded_size: usize) type {
             return result;
         }
 
-        pub fn encodeAlloc(data: [decoded_size]u8, allocator: Allocator) Allocator.Error![]const u8 {
+        pub fn encodeAlloc(
+            data: [decoded_size]u8,
+            allocator: Allocator,
+        ) Allocator.Error![]const u8 {
             const buf = try allocator.alloc(u8, max_encoded_size);
             const actual_size = encodeToSlice(data, buf[0..max_encoded_size]);
             return try allocator.realloc(buf, actual_size);

@@ -133,9 +133,11 @@ pub const Rewards = std.ArrayList(Reward);
 pub const Reward = struct {
     pubkey: []const u8,
     lamports: i64,
-    post_balance: u64, // Account balance in lamports after `lamports` was applied
+    /// Account balance in lamports after `lamports` was applied
+    post_balance: u64,
     reward_type: ?RewardType,
-    commission: ?u8, // Vote account commission when the reward was credited, only present for voting and staking rewards
+    /// Vote account commission when the reward was credited, only present for voting and staking rewards
+    commission: ?u8,
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
         allocator.free(self.pubkey);

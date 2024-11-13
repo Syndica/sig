@@ -336,7 +336,7 @@ pub const ShredInserter = struct {
                 .shred_type = .code,
             };
             // unreachable: Erasure meta was just created, initial shred must exist
-            const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
+            const shred = state.just_inserted_shreds.get(shred_id).?;
             // TODO: agave discards the result here. should we also?
             _ = try merkle_root_validator.checkForwardChaining(
                 shred.code,
@@ -365,7 +365,7 @@ pub const ShredInserter = struct {
                 .shred_type = merkle_root_meta.first_received_shred_type,
             };
             // unreachable: Merkle root meta was just created, initial shred must exist
-            const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
+            const shred = state.just_inserted_shreds.get(shred_id).?;
             // TODO: agave discards the result here. should we also?
             _ = try merkle_root_validator.checkBackwardChaining(shred, state.erasureMetas());
         }

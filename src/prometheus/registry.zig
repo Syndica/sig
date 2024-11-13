@@ -297,7 +297,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
 
             // Write each metric in key order
             for (keys) |key| {
-                var value = map.get(key) orelse unreachable;
+                var value = map.get(key).?;
                 try value.metric.write(allocator, writer, key);
             }
         }
