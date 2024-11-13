@@ -162,7 +162,10 @@ pub const AccountInFile = struct {
         }
     }
 
-    pub fn toOwnedAccount(self: *const Self, allocator: std.mem.Allocator) std.mem.Allocator.Error!Account {
+    pub fn toOwnedAccount(
+        self: *const Self,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!Account {
         const owned_data = try allocator.dupe(u8, self.data);
         return .{
             .data = owned_data,
@@ -289,7 +292,10 @@ pub const AccountFile = struct {
 
     /// get account without reading data (a lot faster if the data field isnt used anyway)
     /// (used when computing account hashes for snapshot validation)
-    pub fn getAccountHashAndLamports(self: *const Self, start_offset: usize) error{EOF}!struct { hash: *Hash, lamports: *u64 } {
+    pub fn getAccountHashAndLamports(
+        self: *const Self,
+        start_offset: usize,
+    ) error{EOF}!struct { hash: *Hash, lamports: *u64 } {
         var offset = start_offset;
 
         offset += @sizeOf(AccountInFile.StorageInfo);

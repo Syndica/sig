@@ -56,7 +56,10 @@ pub fn LruCacheCustom(
     return struct {
         mux: if (kind == .locking) Mutex else void,
         allocator: Allocator,
-        hashmap: if (K == []const u8) std.StringArrayHashMap(*Node) else std.AutoArrayHashMap(K, *Node),
+        hashmap: if (K == []const u8)
+            std.StringArrayHashMap(*Node)
+        else
+            std.AutoArrayHashMap(K, *Node),
         dbl_link_list: TailQueue(LruEntry),
         max_items: usize,
         len: usize = 0,
@@ -132,7 +135,8 @@ pub fn LruCacheCustom(
             self.hashmap.deinit();
         }
 
-        /// Recycles an old node if LruCache capacity is full. If replaced, first element of tuple is replaced
+        /// Recycles an old node if LruCache capacity is full.
+        /// If replaced, first element of tuple is replaced.
         /// Entry (otherwise null) and second element of tuple is inserted Entry.
         fn internalRecycleOrCreateNode(
             self: *Self,
@@ -170,11 +174,10 @@ pub fn LruCacheCustom(
                 return existing_node.data;
             }
 
-            const replaced_and_created_node = self.internalRecycleOrCreateNode(key, value) catch |e| {
+            const replaced_node = self.internalRecycleOrCreateNode(key, value) catch |e| {
                 std.debug.panic("recycle_or_create_node returned error: {any}", .{e});
             };
-            const new_lru_entry = replaced_and_created_node[1];
-            return new_lru_entry;
+            return replaced_node[1];
         }
 
         /// Inserts key/value if key doesn't exist, updates only value if it does.
@@ -261,8 +264,9 @@ pub fn LruCacheCustom(
             return null;
         }
 
-        /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
-        /// the key's value and returns the old value. Otherwise, `null` is returned.
+        /// Puts a key-value pair into cache. If the key already exists in the cache,
+        /// then it updates the key's value and returns the old value.
+        /// Otherwise, `null` is returned.
         pub fn put(self: *Self, key: K, value: V) ?V {
             if (kind == .locking) self.mux.lock();
             defer if (kind == .locking) self.mux.unlock();

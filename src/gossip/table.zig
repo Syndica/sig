@@ -579,6 +579,8 @@ pub const GossipTable = struct {
         try self.purged.insert(hash, now);
         self.shards.remove(entry_index, &hash);
 
+        const cursor_on_insertion = versioned_value.cursor_on_insertion;
+
         switch (versioned_value.value.data) {
             .ContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(entry_index);
@@ -591,22 +593,22 @@ pub const GossipTable = struct {
                 contact_info.deinit();
             },
             .Vote => {
-                const did_remove = self.votes.swapRemove(versioned_value.cursor_on_insertion);
+                const did_remove = self.votes.swapRemove(cursor_on_insertion);
                 std.debug.assert(did_remove);
             },
             .EpochSlots => {
-                const did_remove = self.epoch_slots.swapRemove(versioned_value.cursor_on_insertion);
+                const did_remove = self.epoch_slots.swapRemove(cursor_on_insertion);
                 std.debug.assert(did_remove);
             },
             .DuplicateShred => {
-                const did_remove = self.duplicate_shreds.swapRemove(versioned_value.cursor_on_insertion);
+                const did_remove = self.duplicate_shreds.swapRemove(cursor_on_insertion);
                 std.debug.assert(did_remove);
             },
             else => {},
         }
 
         {
-            const did_remove = self.entries.swapRemove(versioned_value.cursor_on_insertion);
+            const did_remove = self.entries.swapRemove(cursor_on_insertion);
             std.debug.assert(did_remove);
         }
 

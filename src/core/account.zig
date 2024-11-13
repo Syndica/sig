@@ -173,6 +173,11 @@ test "core.account: test account hash matches rust" {
         &pubkey.data,
     );
 
-    const expected_hash: [32]u8 = .{ 170, 75, 87, 73, 60, 156, 174, 14, 105, 6, 129, 108, 167, 156, 166, 213, 28, 4, 163, 187, 252, 155, 24, 253, 158, 13, 86, 100, 103, 89, 232, 28 };
+    const expected_hash: [32]u8 = .{
+        170, 75,  87,  73,  60,  156, 174, 14, 105,
+        6,   129, 108, 167, 156, 166, 213, 28, 4,
+        163, 187, 252, 155, 24,  253, 158, 13, 86,
+        100, 103, 89,  232, 28,
+    };
     try std.testing.expect(std.mem.eql(u8, &expected_hash, &hash.data));
 }

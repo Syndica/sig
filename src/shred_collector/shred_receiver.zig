@@ -136,7 +136,12 @@ pub const ShredReceiver = struct {
 
     /// Handle a ping message and returns the repair message.
     fn handlePing(self: *const Self, packet: *const Packet) !?Packet {
-        const repair_ping = bincode.readFromSlice(self.allocator, RepairPing, &packet.data, .{}) catch {
+        const repair_ping = bincode.readFromSlice(
+            self.allocator,
+            RepairPing,
+            &packet.data,
+            .{},
+        ) catch {
             self.metrics.ping_deserialize_fail_count.inc();
             return null;
         };

@@ -55,7 +55,11 @@ pub const EpochSchedule = extern struct {
             return .{ epoch, slot_index };
         } else {
             const normal_slot_index = slot -| self.first_normal_slot;
-            const normal_epoch_index = std.math.divTrunc(u64, normal_slot_index, self.slots_per_epoch) catch 0;
+            const normal_epoch_index = std.math.divTrunc(
+                u64,
+                normal_slot_index,
+                self.slots_per_epoch,
+            ) catch 0;
 
             const epoch = self.first_normal_epoch +| normal_epoch_index;
             const slot_index = std.math.rem(u64, normal_slot_index, self.slots_per_epoch) catch 0;
@@ -80,7 +84,11 @@ pub const EpochSchedule = extern struct {
         );
     }
 
-    pub fn custom(slots_per_epoch: u64, leader_schedule_slot_offset: u64, warmup: bool) !EpochSchedule {
+    pub fn custom(
+        slots_per_epoch: u64,
+        leader_schedule_slot_offset: u64,
+        warmup: bool,
+    ) !EpochSchedule {
         std.debug.assert(slots_per_epoch > MINIMUM_SLOTS_PER_EPOCH);
         var first_normal_epoch: Epoch = 0;
         var first_normal_slot: Slot = 0;

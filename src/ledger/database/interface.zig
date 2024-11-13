@@ -136,7 +136,12 @@ pub fn Database(comptime Impl: type) type {
                 return try self.impl.delete(cf, key);
             }
 
-            pub fn deleteRange(self: *WriteBatch, comptime cf: ColumnFamily, start: cf.Key, end: cf.Key) anyerror!void {
+            pub fn deleteRange(
+                self: *WriteBatch,
+                comptime cf: ColumnFamily,
+                start: cf.Key,
+                end: cf.Key,
+            ) anyerror!void {
                 return try self.impl.deleteRange(cf, start, end);
             }
         };

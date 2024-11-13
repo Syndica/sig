@@ -55,7 +55,14 @@ pub fn handleChaining(
     var new_chained_slots = AutoHashMap(u64, SlotMeta).init(allocator);
     defer deinitMapRecursive(&new_chained_slots);
     for (keys[0..keep_i]) |slot| {
-        try handleChainingForSlot(allocator, db, write_batch, working_set, &new_chained_slots, slot);
+        try handleChainingForSlot(
+            allocator,
+            db,
+            write_batch,
+            working_set,
+            &new_chained_slots,
+            slot,
+        );
     }
 
     // Write all the newly changed slots in new_chained_slots to the write_batch
