@@ -616,7 +616,8 @@ test "RepairPeerProvider selects correct peers" {
     var observed_peers = std.AutoHashMap(RepairPeer, void).init(allocator);
     defer observed_peers.deinit();
     for (0..10) |_| {
-        try observed_peers.put(try peers.getRandomPeer(13579).?, {});
+        const peer = (try peers.getRandomPeer(13579)).?;
+        try observed_peers.put(peer, {});
     }
 
     // assertions

@@ -1302,7 +1302,7 @@ test "merkle tree round trip" {
     try makeMerkleTree(&tree);
     const root = tree.items[tree.items.len - 1];
     for (0..size) |index| {
-        const owned_proof = try makeMerkleProof(allocator, index, size, tree.items).?;
+        const owned_proof = (try makeMerkleProof(allocator, index, size, tree.items)).?;
         defer owned_proof.deinit(allocator);
         for (nodes.items, 0..) |node, k| {
             if (k == index) {
