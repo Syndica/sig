@@ -15,6 +15,8 @@ pub const AccountRef = struct {
     slot: Slot,
     location: AccountLocation,
     next_ptr: ?*AccountRef = null,
+    // NOTE: we store this information to support fast loading
+    next_index: ?u64 = 0,
 
     pub const DEFAULT: AccountRef = .{
         .pubkey = Pubkey.ZEROES,
@@ -189,7 +191,7 @@ pub const AccountIndex = struct {
 
     /// adds the reference to the index if there is not a duplicate (ie, the same slot).
     /// returns if the reference was inserted.
-    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(self: *Self, account_ref: *AccountRef) bool {
+    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(self: *Self, account_ref: *AccountRef, index: u64) bool {
         // NOTE: the lock on the shard also locks the reference map
         const shard_map, var lock = self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
         defer lock.unlock();
@@ -197,7 +199,7 @@ pub const AccountIndex = struct {
         // init value if dne or append to end of the linked-list
         const map_entry = shard_map.getOrPutAssumeCapacity(account_ref.pubkey);
         if (!map_entry.found_existing) {
-            map_entry.value_ptr.* = .{ .ref_ptr = account_ref };
+            map_entry.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = index };
             return true;
         }
 
@@ -211,6 +213,7 @@ pub const AccountIndex = struct {
             const next_ptr = curr_ref.next_ptr orelse {
                 // end of the list => insert it here
                 curr_ref.next_ptr = account_ref;
+                curr_ref.next_index = index;
                 return true;
             };
             // keep traversing
@@ -221,7 +224,7 @@ pub const AccountIndex = struct {
     /// adds a reference to the index
     /// NOTE: this should only be used when you know the reference does not exist
     /// because we never want duplicate state references in the index
-    pub fn indexRefAssumeCapacity(self: *const Self, account_ref: *AccountRef) void {
+    pub fn indexRefAssumeCapacity(self: *const Self, account_ref: *AccountRef, index: u64) void {
         // NOTE: the lock on the shard also locks the reference map
         const pubkey_ref_map, var lock = self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
         defer lock.unlock();
@@ -229,7 +232,7 @@ pub const AccountIndex = struct {
         // init value if dne or append to end of the linked-list
         const map_entry = pubkey_ref_map.getOrPutAssumeCapacity(account_ref.pubkey);
         if (!map_entry.found_existing) {
-            map_entry.value_ptr.* = .{ .ref_ptr = account_ref };
+            map_entry.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = index };
             return;
         }
 
@@ -239,6 +242,7 @@ pub const AccountIndex = struct {
             curr_ref = next_ref;
         }
         curr_ref.next_ptr = account_ref;
+        curr_ref.next_index = index;
     }
 
     pub fn updateReference(
@@ -281,6 +285,8 @@ pub const AccountIndex = struct {
 
 pub const AccountReferenceHead = struct {
     ref_ptr: *AccountRef,
+    // NOTE: we store this information to support fast loading
+    ref_index: u64,
 
     const Self = @This();
 
@@ -540,11 +546,11 @@ test "account index update/remove reference" {
 
     // pubkey -> a
     var ref_a = AccountRef.DEFAULT;
-    index.indexRefAssumeCapacity(&ref_a);
+    index.indexRefAssumeCapacity(&ref_a, 0);
 
     var ref_b = AccountRef.DEFAULT;
     ref_b.slot = 1;
-    index.indexRefAssumeCapacity(&ref_b);
+    index.indexRefAssumeCapacity(&ref_b, 0);
 
     // make sure indexRef works
     {
