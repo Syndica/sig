@@ -3,7 +3,8 @@
 ## Running Demos
 
 ### Hardware Requirements
-- 
+
+Demonstrations have been run on `r6a.8xlarge` ec2 instance according to https://aws.amazon.com/blogs/database/run-solana-nodes-on-aws/
 
 
 ### Dashboard Setup
