@@ -120,6 +120,7 @@ pub const Service = struct {
         while (!self.exit.load(.monotonic) or
             self.input_channel.len() != 0)
         {
+            // TODO: Fix loop
             while (self.input_channel.receive()) |transaction| {
                 self.metrics.received_count.inc();
 

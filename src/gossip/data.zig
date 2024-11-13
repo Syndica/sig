@@ -117,8 +117,8 @@ pub const SignedGossipData = struct {
     }
 
     /// only used in tests
-    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Self {
-        return try initSigned(GossipData.initRandom(random), keypair);
+    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) Self {
+        return initSigned(keypair, GossipData.initRandom(random));
     }
 
     /// only used in tests
@@ -126,7 +126,7 @@ pub const SignedGossipData = struct {
         var data = GossipData.randomFromIndex(random, index);
         const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
         data.setId(pubkey);
-        return try initSigned(data, keypair);
+        return initSigned(keypair, data);
     }
 
     pub fn sign(self: *Self, keypair: *const KeyPair) !void {

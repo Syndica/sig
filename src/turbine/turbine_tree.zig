@@ -216,40 +216,42 @@ pub const TurbineTree = struct {
     /// Get the root distance and retransmit children for the given slot leader and shred id.
     /// The retransmit children are calculated from the weighted shuffle of nodes using the
     /// slot leader and shred id as the seed for the shuffle.
+    const RetransmitServiceMetrics = sig.turbine.retransmit_service.RetransmitServiceMetrics;
     pub fn getRetransmitChildren(
         self: *const TurbineTree,
-        allocator: std.mem.Allocator,
+        children: *std.ArrayList(Node),
+        shuffled_nodes: *std.ArrayList(Node),
         slot_leader: Pubkey,
         shred_id: ShredId,
         fanout: usize,
-    ) !struct {
-        usize, // root distance
-        std.ArrayList(Node), // children
-    } {
+        maybe_metrics: ?*RetransmitServiceMetrics,
+    ) !usize // root distance
+    {
         if (slot_leader.equals(&self.my_pubkey)) {
             return error.LoopBack;
         }
 
         // Clone the weighted shuffle, and remove the slot leader as
         // it should not be included in the retransmit set
+        var timer = try sig.time.Timer.start();
         var weighted_shuffle = try self.weighted_shuffle.clone();
+        if (maybe_metrics) |metrics| {
+            metrics.ws_clone.set(timer.read().asNanos());
+        }
+
         defer weighted_shuffle.deinit();
         if (self.index.get(slot_leader)) |index| {
             weighted_shuffle.removeIndex(index);
         }
 
         // Shuffle the nodes and find my index
-        var shuffled_nodes = try std.ArrayList(Node).initCapacity(
-            allocator,
-            self.nodes.items.len,
-        );
-        defer shuffled_nodes.deinit();
-
+        timer.reset();
         var my_index: usize = undefined;
         var found_my_index = false;
         var chacha = getSeededRng(slot_leader, shred_id);
         var shuffled_indexes = weighted_shuffle.shuffle(chacha.random());
 
+        try shuffled_nodes.ensureTotalCapacity(self.nodes.items.len);
         while (shuffled_indexes.next()) |index| {
             shuffled_nodes.appendAssumeCapacity(self.nodes.items[index]);
             if (!found_my_index) {
@@ -259,14 +261,21 @@ pub const TurbineTree = struct {
                 }
             }
         }
+        if (maybe_metrics) |metrics| {
+            metrics.ws_shuffle.set(timer.read().asNanos());
+        }
 
         // Compute the retransmit children from the shuffled nodes
-        const children = try computeRetransmitChildren(
-            allocator,
+        timer.reset();
+        computeRetransmitChildren(
+            children,
             fanout,
             my_index,
             shuffled_nodes.items,
         );
+        if (maybe_metrics) |metrics| {
+            metrics.ws_compute.set(timer.read().asNanos());
+        }
 
         // Compute the root distance
         const root_distance: usize = if (my_index == 0)
@@ -278,7 +287,7 @@ pub const TurbineTree = struct {
         else
             3;
 
-        return .{ root_distance, children };
+        return root_distance;
     }
 
     /// Create a seeded RNG for the given leader and shred id.
@@ -303,13 +312,11 @@ pub const TurbineTree = struct {
     // For example the node k in the 1st layer will retransmit to nodes:
     // fanout + k, 2*fanout + k, ..., fanout*fanout + k
     fn computeRetransmitChildren(
-        allocator: std.mem.Allocator,
+        children: *std.ArrayList(Node),
         fanout: usize,
         index: usize,
         nodes: []const Node,
-    ) !std.ArrayList(Node) {
-        var children = try std.ArrayList(Node).initCapacity(allocator, fanout);
-
+    ) void {
         const offset = (index -| 1) % fanout;
         const anchor = index - offset;
         const step = if (index == 0) 1 else fanout;
@@ -321,8 +328,6 @@ pub const TurbineTree = struct {
             curr += step;
             steps += 1;
         }
-
-        return children;
     }
 
     // Returns the parent node in the turbine broadcast tree.
@@ -473,7 +478,10 @@ const TestEnvironment = struct {
             );
             try contact_info.setSocket(.turbine_recv, SocketAddr.initRandom(random));
             _ = try gossip_table.insert(
-                SignedGossipData.init(.{ .ContactInfo = contact_info }),
+                SignedGossipData{
+                    .signature = .{},
+                    .data = .{ .ContactInfo = contact_info },
+                },
                 0,
             );
             if (i == 0) my_contact_info = ThreadSafeContactInfo.fromContactInfo(contact_info);
@@ -549,10 +557,11 @@ fn testCheckRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: 
     try std.testing.expectEqual(TurbineTree.computeRetransmitParent(fanout, 0, nodes), null);
 
     // Check that the retransmit and parent nodes are correct
+    var actual_peers = try std.ArrayList(TurbineTree.Node).initCapacity(allocator, TurbineTree.DATA_PLANE_FANOUT);
     for (node_expected_children, 0..) |expected_children, i| {
         // Check that the retransmit children for the ith node are correct
-        const actual_peers = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, nodes);
-        defer actual_peers.deinit();
+        actual_peers.clearRetainingCapacity();
+        TurbineTree.computeRetransmitChildren(&actual_peers, fanout, i, nodes);
         for (expected_children, actual_peers.items) |expected, actual| {
             try std.testing.expectEqual(expected.pubkey(), actual.pubkey());
         }
@@ -567,8 +576,8 @@ fn testCheckRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: 
 
     // Check that the remaining nodes have no children
     for (node_expected_children.len..nodes.len) |i| {
-        const actual_peers = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, nodes);
-        defer actual_peers.deinit();
+        actual_peers.clearRetainingCapacity();
+        TurbineTree.computeRetransmitChildren(&actual_peers, fanout, i, nodes);
         try std.testing.expectEqual(0, actual_peers.items.len);
     }
 }
@@ -587,10 +596,11 @@ fn testCheckRetransmitNodesRoundTrip(allocator: std.mem.Allocator, fanout: usize
     try std.testing.expectEqual(null, TurbineTree.computeRetransmitParent(fanout, 0, &nodes));
 
     // Check that each node is contained in its parents computed children
+    var children = try std.ArrayList(TurbineTree.Node).initCapacity(allocator, TurbineTree.DATA_PLANE_FANOUT);
     for (1..size) |i| {
         const parent = TurbineTree.computeRetransmitParent(fanout, i, &nodes).?;
-        const children = try TurbineTree.computeRetransmitChildren(allocator, fanout, index.get(parent).?, &nodes);
-        defer children.deinit();
+        children.clearRetainingCapacity();
+        TurbineTree.computeRetransmitChildren(&children, fanout, index.get(parent).?, &nodes);
         var node_i_in_children = false;
         for (children.items) |child| {
             if (child.pubkey().equals(&nodes[i].pubkey())) {
@@ -604,8 +614,8 @@ fn testCheckRetransmitNodesRoundTrip(allocator: std.mem.Allocator, fanout: usize
     // Check that the computed parent of each nodes child the parent
     for (0..size) |i| {
         const expected_parent_pubkey = nodes[i].pubkey();
-        const children = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, &nodes);
-        defer children.deinit();
+        children.clearRetainingCapacity();
+        TurbineTree.computeRetransmitChildren(&children, fanout, i, &nodes);
         for (children.items) |child| {
             const actual_parent_pubkey = TurbineTree.computeRetransmitParent(fanout, index.get(child.pubkey()).?, &nodes).?;
             try std.testing.expectEqual(expected_parent_pubkey, actual_parent_pubkey);
@@ -812,7 +822,7 @@ pub fn makeTestCluster(
             random.int(u16),
         ));
         _ = try gossip_table.insert(
-            SignedGossipData.init(.{ .ContactInfo = contact_info }),
+            .{ .signature = .{}, .data = .{ .ContactInfo = contact_info } },
             0,
         );
     }
@@ -932,16 +942,23 @@ pub fn runTurbineTreeBlackBoxTest() !void {
         try writeShuffledIndices(file.writer(), shuffled_indices);
 
         // Generate retransmit children
+        var children = try std.ArrayList(TurbineTree.Node).initCapacity(std.heap.c_allocator, TurbineTree.DATA_PLANE_FANOUT);
+        defer children.deinit();
+        var shuffled_nodes = std.ArrayList(TurbineTree.Node).init(std.heap.c_allocator);
+        defer shuffled_nodes.deinit();
         for (0..1_000) |i| {
             const slot_leader = Pubkey.initRandom(random);
             const shred_id = ShredId{ .slot = random.int(u64), .index = random.int(u32), .shred_type = .data };
-            const root_distance, const children = try turbine_tree.getRetransmitChildren(
-                std.heap.c_allocator,
+            children.clearRetainingCapacity();
+            shuffled_nodes.clearRetainingCapacity();
+            const root_distance = try turbine_tree.getRetransmitChildren(
+                &children,
+                &shuffled_nodes,
                 slot_leader,
                 shred_id,
                 TurbineTree.DATA_PLANE_FANOUT,
+                null,
             );
-            defer children.deinit();
             try writeRetransmitPeers(file.writer(), i, root_distance, children);
         }
     }
@@ -992,14 +1009,22 @@ pub fn runTurbineTreeBlackBoxTest() !void {
         try writeShuffledIndices(file.writer(), shuffled_indices);
 
         // Generate retransmit children
+        var children = try std.ArrayList(TurbineTree.Node).initCapacity(std.heap.c_allocator, TurbineTree.DATA_PLANE_FANOUT);
+        defer children.deinit();
+        var shuffled_nodes = std.ArrayList(TurbineTree.Node).init(std.heap.c_allocator);
+        defer shuffled_nodes.deinit();
         for (0..1_000) |i| {
             const slot_leader = Pubkey.initRandom(random);
             const shred_id = ShredId{ .slot = random.int(u64), .index = random.int(u32), .shred_type = .data };
-            const root_distance, const children = try turbine_tree.getRetransmitChildren(
-                std.heap.c_allocator,
+            children.clearRetainingCapacity();
+            shuffled_nodes.clearRetainingCapacity();
+            const root_distance = try turbine_tree.getRetransmitChildren(
+                &children,
+                &shuffled_nodes,
                 slot_leader,
                 shred_id,
                 TurbineTree.DATA_PLANE_FANOUT,
+                null,
             );
             defer children.deinit();
             try writeRetransmitPeers(file.writer(), i, root_distance, children);

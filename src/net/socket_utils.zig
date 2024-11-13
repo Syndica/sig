@@ -207,7 +207,7 @@ pub fn benchmarkChannelRecv(
 ) !void {
     var count: usize = 0;
     while (count < n_values_to_receive) {
-        if (channel.receive()) |i| {
+        if (channel.tryReceive()) |i| {
             std.mem.doNotOptimizeAway(i);
             count += 1;
         }

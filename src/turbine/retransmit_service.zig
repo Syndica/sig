@@ -181,7 +181,12 @@ fn receiveShreds(
         shreds.clearRetainingCapacity();
         try shreds.ensureTotalCapacity(receiver_len);
 
-        while (receiver.receive()) |packet| try shreds.append(packet);
+        // TODO: BUSY WAIT
+        while (receiver.tryReceive()) |packet| try shreds.append(packet);
+
+        if (shreds.items.len == 0) {
+            continue;
+        }
 
         const bytes_filter_saturated, const shred_id_filter_saturated = deduper.maybeReset(
             rand,
@@ -337,19 +342,26 @@ fn retransmitShreds(
     metrics: *RetransmitServiceMetrics,
     exit: *AtomicBool,
 ) !void {
+    var children = try std.ArrayList(TurbineTree.Node).initCapacity(allocator, TurbineTree.getDataPlaneFanout());
+    defer children.deinit();
+    var shuffled_nodes = std.ArrayList(TurbineTree.Node).init(allocator);
+    defer shuffled_nodes.deinit();
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
         const retransmit_info: RetransmitShredInfo = receiver.receive() orelse continue;
 
+        children.clearRetainingCapacity();
+        shuffled_nodes.clearRetainingCapacity();
         var get_retransmit_children_timer = try sig.time.Timer.start();
-        const level, const children = try retransmit_info.turbine_tree.getRetransmitChildren(
-            allocator,
+        const level = try retransmit_info.turbine_tree.getRetransmitChildren(
+            &children,
+            &shuffled_nodes,
             retransmit_info.slot_leader,
             retransmit_info.shred_id,
             TurbineTree.getDataPlaneFanout(),
+            metrics,
         );
-        defer children.deinit();
         defer retransmit_info.turbine_tree.releaseUnsafe();
         metrics.turbine_tree_get_children_nanos.set(get_retransmit_children_timer.read().asNanos());
 
@@ -412,6 +424,10 @@ pub const RetransmitServiceMetrics = struct {
     turbine_tree_children_with_addresses: *Gauge(u64),
     turbine_tree_get_children_nanos: *Gauge(u64),
     retransmit_shred_nanos: *Gauge(u64),
+
+    ws_clone: *Gauge(u64),
+    ws_shuffle: *Gauge(u64),
+    ws_compute: *Gauge(u64),
 
     // logging info
     logging_fields: struct {
