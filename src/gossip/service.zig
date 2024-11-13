@@ -196,7 +196,7 @@ pub const GossipService = struct {
         errdefer verified_incoming_channel.deinit();
 
         const thread_pool = try allocator.create(ThreadPool);
-        const n_threads: usize = @min(std.Thread.getCpuCount() catch 1, 8);
+        const n_threads: usize = @min(std.Thread.getCpuCount() catch 1, 1);
         thread_pool.* = ThreadPool.init(.{
             .max_threads = @intCast(n_threads),
             .stack_size = 2 * 1024 * 1024,
@@ -477,7 +477,6 @@ pub const GossipService = struct {
         {
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
-            std.time.sleep(1_000_00_0);
             var task_search_start_idx: usize = 0;
             while (self.packet_incoming_channel.receive()) |packet| {
                 defer self.metrics.gossip_packets_received_total.inc();
@@ -569,8 +568,9 @@ pub const GossipService = struct {
         while (self.counter.load(.acquire) != idx or
             self.verified_incoming_channel.len() != 0)
         {
+            // TODO: BUSY WAITING
             var msg_count: usize = 0;
-            while (self.verified_incoming_channel.receive()) |message| {
+            while (self.verified_incoming_channel.tryReceive()) |message| {
                 msg_count += 1;
                 switch (message.message) {
                     .PushMessage => |*push| {
@@ -674,10 +674,7 @@ pub const GossipService = struct {
                 }
                 if (msg_count > MAX_PROCESS_BATCH_SIZE) break;
             }
-            if (msg_count == 0) {
-                std.time.sleep(1_000_00_0);
-                continue;
-            }
+            if (msg_count == 0) continue;
 
             // track metrics
             self.metrics.gossip_packets_verified_total.add(msg_count);
@@ -2667,7 +2664,7 @@ test "handle pull request" {
     {
         const outgoing_packets = gossip_service.packet_outgoing_channel;
 
-        while (outgoing_packets.receive()) |response_packet| {
+        while (outgoing_packets.tryReceive()) |response_packet| {
             const message = try bincode.readFromSlice(
                 allocator,
                 GossipMessage,
@@ -2745,7 +2742,7 @@ test "test build prune messages and handle push messages" {
     }
 
     try gossip_service.handleBatchPushMessages(&msgs);
-    var packet = gossip_service.packet_outgoing_channel.receive() orelse return error.ChannelEmpty;
+    var packet = gossip_service.packet_outgoing_channel.tryReceive() orelse return error.ChannelEmpty;
     const message = try bincode.readFromSlice(
         allocator,
         GossipMessage,
@@ -3063,7 +3060,7 @@ test "test packet verification" {
 
     var msg_count: usize = 0;
     while (msg_count < 4) {
-        if (verified_channel.receive()) |msg| {
+        if (verified_channel.tryReceive()) |msg| {
             defer bincode.free(gossip_service.allocator, msg);
             try std.testing.expect(msg.message.PushMessage[0].equals(&id));
             msg_count += 1;
@@ -3150,7 +3147,7 @@ test "process contact info push packet" {
 
     // the ping message we sent, processed into a pong
     try std.testing.expectEqual(1, responder_channel.len());
-    _ = responder_channel.receive().?;
+    _ = responder_channel.tryReceive().?;
 
     // correct insertion into table
     var buf2: [100]ContactInfo = undefined;

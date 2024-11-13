@@ -4,6 +4,7 @@ const sig = @import("../sig.zig");
 const Backoff = @import("backoff.zig").Backoff;
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
+const Parker = @import("parker.zig").Parker;
 
 pub fn Channel(T: type) type {
     return struct {
@@ -11,6 +12,7 @@ pub fn Channel(T: type) type {
         tail: Position,
         closed: Atomic(bool) = Atomic(bool).init(false),
         allocator: Allocator,
+        parker: Parker = Parker.init(),
 
         const Self = @This();
         const BLOCK_CAP = 31;
@@ -100,6 +102,8 @@ pub fn Channel(T: type) type {
         }
 
         pub fn send(channel: *Self, value: T) !void {
+            defer channel.parker.unpark();
+
             var backoff: Backoff = .{};
             var tail = channel.tail.index.load(.acquire);
             var block = channel.tail.block.load(.acquire);
@@ -159,6 +163,16 @@ pub fn Channel(T: type) type {
         }
 
         pub fn receive(channel: *Self) ?T {
+            while (true) {
+                if (channel.tryReceive()) |value| {
+                    return value;
+                } else {
+                    channel.parker.park();
+                }
+            }
+        }
+
+        pub fn tryReceive(channel: *Self) ?T {
             var backoff: Backoff = .{};
             var head = channel.head.index.load(.acquire);
             var block = channel.head.block.load(.acquire);
@@ -189,6 +203,7 @@ pub fn Channel(T: type) type {
 
                     // If the indicies are the same, the channel is empty and there's nothing to receive.
                     if (head >> SHIFT == tail >> SHIFT) {
+                        backoff.spin();
                         return null;
                     }
 
@@ -328,11 +343,11 @@ test "smoke" {
     defer ch.deinit();
 
     try ch.send(7);
-    try expect(ch.receive() == 7);
+    try expect(ch.tryReceive() == 7);
 
     try ch.send(8);
-    try expect(ch.receive() == 8);
-    try expect(ch.receive() == null);
+    try expect(ch.tryReceive() == 8);
+    try expect(ch.tryReceive() == null);
 }
 
 test "len_empty_full" {
@@ -347,7 +362,7 @@ test "len_empty_full" {
     try expect(ch.len() == 1);
     try expect(!ch.isEmpty());
 
-    _ = ch.receive().?;
+    _ = ch.tryReceive().?;
 
     try expect(ch.len() == 0);
     try expect(ch.isEmpty());
@@ -365,7 +380,7 @@ test "len" {
     }
 
     for (0..50) |i| {
-        _ = ch.receive().?;
+        _ = ch.tryReceive().?;
         try expect(ch.len() == 50 - i - 1);
     }
 
@@ -385,7 +400,7 @@ test "spsc" {
         fn consumer(ch: *Channel(u64)) void {
             for (0..COUNT) |i| {
                 while (true) {
-                    if (ch.receive()) |x| {
+                    if (ch.tryReceive()) |x| {
                         std.debug.assert(x == i);
                         break;
                     }
@@ -418,7 +433,7 @@ test "mpmc" {
         fn consumer(ch: *Channel(u64), v: *[COUNT]Atomic(usize)) void {
             for (0..COUNT) |_| {
                 const n = while (true) {
-                    if (ch.receive()) |x| break x;
+                    if (ch.tryReceive()) |x| break x;
                 };
                 _ = v[n].fetchAdd(1, .seq_cst);
             }
@@ -460,7 +475,7 @@ const logger = std.log.scoped(.sync_channel_tests);
 fn testUsizeReceiver(chan: anytype, recv_count: usize) void {
     var count: usize = 0;
     while (count < recv_count) {
-        if (chan.receive()) |_| count += 1;
+        if (chan.tryReceive()) |_| count += 1;
     }
 }
 
@@ -490,7 +505,7 @@ fn testPacketSender(chan: anytype, total_send: usize) void {
 fn testPacketReceiver(chan: anytype, total_recv: usize) void {
     var count: usize = 0;
     while (count < total_recv) {
-        if (chan.receive()) |_| count += 1;
+        if (chan.tryReceive()) |_| count += 1;
     }
 }
 

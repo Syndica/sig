@@ -93,10 +93,9 @@ pub const ShredReceiver = struct {
         comptime is_repair: bool,
     ) !void {
         while (!self.exit.load(.acquire)) {
-            std.time.sleep(1_000_00_0);
             for (receivers) |receiver| {
                 var packet_count: usize = 0;
-                while (receiver.receive()) |packet| {
+                while (receiver.tryReceive()) |packet| {
                     self.metrics.received_count.inc();
                     packet_count += 1;
                     try self.handlePacket(packet, response_sender, is_repair);

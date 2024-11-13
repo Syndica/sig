@@ -41,7 +41,7 @@ pub fn runShredProcessor(
     while (!exit.load(.acquire) or
         verified_shred_receiver.len() != 0)
     {
-        std.time.sleep(1_000_00_0);
+        // TODO: Fix loop
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
         while (verified_shred_receiver.receive()) |packet| {

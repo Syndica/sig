@@ -181,10 +181,10 @@ fn receiveShreds(
         shreds.clearRetainingCapacity();
         try shreds.ensureTotalCapacity(receiver_len);
 
-        while (receiver.receive()) |packet| try shreds.append(packet);
+        // TODO: BUSY WAIT
+        while (receiver.tryReceive()) |packet| try shreds.append(packet);
 
         if (shreds.items.len == 0) {
-            std.time.sleep(1_000_00_0);
             continue;
         }
 
@@ -349,10 +349,7 @@ fn retransmitShreds(
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
-        const retransmit_info: RetransmitShredInfo = receiver.receive() orelse {
-            std.time.sleep(1_000_00_0);
-            continue;
-        };
+        const retransmit_info: RetransmitShredInfo = receiver.receive() orelse continue;
 
         children.clearRetainingCapacity();
         shuffled_nodes.clearRetainingCapacity();
