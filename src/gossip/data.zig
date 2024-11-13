@@ -150,9 +150,9 @@ pub const SignedGossipData = struct {
         /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
         keypair: *const KeyPair,
         index: usize,
-    ) Self {
+    ) !Self {
         var data = GossipData.randomFromIndex(random, index);
-        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+        const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
         data.setId(pubkey);
         return initSigned(keypair, data);
     }

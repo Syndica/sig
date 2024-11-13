@@ -1600,7 +1600,7 @@ fn loadSnapshot(
         .logger = logger.unscoped(),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = options.geyser_writer,
-        .gossip_view = if (options.gossip_service) |service| AccountsDB.GossipView.fromService(service) else null,
+        .gossip_view = if (options.gossip_service) |service| try AccountsDB.GossipView.fromService(service) else null,
         .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
         .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
         .lru_size = 10_000,

@@ -115,9 +115,9 @@ test "gossip.pull_response: test filtering values works" {
     const id = try Pubkey.fromPublicKey(&pk);
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.id = id;
-    // TODO: make this consistent across tests
     legacy_contact_info.wallclock = random.int(u64);
-    var gossip_value = SignedGossipData.initSigned(.{
+
+    var gossip_value = SignedGossipData.initSigned(&kp, .{
         .LegacyContactInfo = legacy_contact_info,
     });
 

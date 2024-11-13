@@ -65,7 +65,7 @@ pub fn randomPongPacket(random: std.rand.Random, keypair: *const KeyPair, to_add
 
 pub fn randomSignedGossipData(random: std.rand.Random, must_pass_sign_verification: bool) !SignedGossipData {
     const keypair = try KeyPair.create(null);
-    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
     const lci = LegacyContactInfo.default(if (must_pass_sign_verification) pubkey else Pubkey.initRandom(random));
     return SignedGossipData.initSigned(&keypair, .{ .LegacyContactInfo = lci });
 }

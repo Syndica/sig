@@ -152,9 +152,9 @@ pub const AccountsDB = struct {
         push_msg_queue: *sig.sync.Mux(std.ArrayList(sig.gossip.GossipData)),
 
         // TODO/NOTE: this will be more useful/nicer to use as a decl literal
-        pub fn fromService(gossip_service: *sig.gossip.GossipService) GossipView {
+        pub fn fromService(gossip_service: *sig.gossip.GossipService) !GossipView {
             return .{
-                .my_pubkey = Pubkey.fromPublicKey(&gossip_service.my_keypair.public_key),
+                .my_pubkey = try Pubkey.fromPublicKey(&gossip_service.my_keypair.public_key),
                 .push_msg_queue = &gossip_service.push_msg_queue_mux,
             };
         }
@@ -4183,7 +4183,7 @@ test "generate snapshot & update gossip snapshot hashes" {
         .logger = .noop,
         .snapshot_dir = tmp_snap_dir,
         .gossip_view = .{
-            .my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key),
+            .my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key),
             .push_msg_queue = &push_msg_queue_mux,
         },
         .geyser_writer = null,
@@ -4246,7 +4246,7 @@ test "generate snapshot & update gossip snapshot hashes" {
 
     try std.testing.expectEqualDeep(
         SnapshotHashes{
-            .from = Pubkey.fromPublicKey(&my_keypair.public_key),
+            .from = try Pubkey.fromPublicKey(&my_keypair.public_key),
             .full = .{ .slot = full_slot, .hash = full_hash },
             .incremental = SnapshotHashes.IncrementalSnapshotsList.EMPTY,
             .wallclock = 0, // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
@@ -4255,7 +4255,7 @@ test "generate snapshot & update gossip snapshot hashes" {
     );
     try std.testing.expectEqualDeep(
         SnapshotHashes{
-            .from = Pubkey.fromPublicKey(&my_keypair.public_key),
+            .from = try Pubkey.fromPublicKey(&my_keypair.public_key),
             .full = .{ .slot = full_slot, .hash = full_hash },
             .incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{ .slot = inc_slot, .hash = inc_hash }),
             .wallclock = 0, // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.

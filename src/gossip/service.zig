@@ -2364,7 +2364,7 @@ test "build messages startup and shutdown" {
 
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = SignedGossipData.randomWithIndex(random, &rand_keypair, 0); // contact info
+        var value = try SignedGossipData.randomWithIndex(random, &rand_keypair, 0); // contact info
         // make gossip valid
         value.data.LegacyContactInfo.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000);
         _ = try lg.mut().insert(value, getWallclockMs());
@@ -2410,7 +2410,7 @@ test "handling prune messages" {
     defer peers.deinit();
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        const value = SignedGossipData.randomWithIndex(prng.random(), &rand_keypair, 0); // contact info
+        const value = try SignedGossipData.randomWithIndex(prng.random(), &rand_keypair, 0); // contact info
         _ = try lg.mut().insert(value, getWallclockMs());
         try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
@@ -2484,7 +2484,7 @@ test "handling pull responses" {
     var gossip_values: [5]SignedGossipData = undefined;
     var kp = try KeyPair.create(null);
     for (0..5) |i| {
-        var value = SignedGossipData.randomWithIndex(prng.random(), &kp, 0);
+        var value = try SignedGossipData.randomWithIndex(prng.random(), &kp, 0);
         value.data.LegacyContactInfo.id = Pubkey.initRandom(prng.random());
         gossip_values[i] = value;
     }
@@ -2585,7 +2585,7 @@ test "handle old prune & pull request message" {
         .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
         .mask_bits = N_FILTER_BITS,
     };
-    const data = SignedGossipData.randomWithIndex(random, &rando_keypair, 2);
+    const data = try SignedGossipData.randomWithIndex(random, &rando_keypair, 2);
     try gossip_service.verified_incoming_channel.send(.{
         .from_endpoint = try EndPoint.parse("127.0.0.1:8000"),
         .message = .{ .PullRequest = .{ filter2, data } },
@@ -2636,7 +2636,7 @@ test "handle pull request" {
         while (!done) {
             count += 1;
             for (0..10) |_| {
-                var value = SignedGossipData.randomWithIndex(prng.random(), &(try KeyPair.create(null)), 0);
+                var value = try SignedGossipData.randomWithIndex(prng.random(), &(try KeyPair.create(null)), 0);
                 _ = try gossip_table.insert(value, getWallclockMs());
 
                 // make sure well get a response from the request
@@ -2659,15 +2659,13 @@ test "handle pull request" {
     const addr = SocketAddr.initRandom(prng.random());
 
     const ci = blk: {
-        const pubkey = Pubkey.fromPublicKey(&random_pubkey.public_key);
-
         var lci = LegacyContactInfo.initRandom(prng.random());
-        lci.id = pubkey;
+        lci.id = random_pubkey;
         lci.gossip = addr;
         lci.shred_version = 99;
 
         const unsigned_ci: GossipData = .{ .LegacyContactInfo = lci };
-        break :blk SignedGossipData.initSigned(&random_pubkey, unsigned_ci);
+        break :blk SignedGossipData.initSigned(&random_keypair, unsigned_ci);
     };
 
     {
@@ -2743,7 +2741,7 @@ test "test build prune messages and handle push messages" {
     var values = ArrayList(SignedGossipData).init(allocator);
     defer values.deinit();
     for (0..10) |_| {
-        var value = SignedGossipData.randomWithIndex(prng.random(), &my_keypair, 0);
+        var value = try SignedGossipData.randomWithIndex(prng.random(), &my_keypair, 0);
         value.data.LegacyContactInfo.id = Pubkey.initRandom(prng.random());
         try values.append(value);
     }
@@ -2837,7 +2835,7 @@ test "build pull requests" {
             const rando_keypair = try KeyPair.create(null);
 
             var lci = LegacyContactInfo.initRandom(prng.random());
-            lci.id = Pubkey.fromPublicKey(&rando_keypair.public_key);
+            lci.id = try Pubkey.fromPublicKey(&rando_keypair.public_key);
             lci.wallclock = now + 10 * i;
             lci.shred_version = contact_info.shred_version;
             const value = SignedGossipData.initSigned(&rando_keypair, .{ .LegacyContactInfo = lci });
@@ -2890,7 +2888,7 @@ test "test build push messages" {
     var lg = gossip_service.gossip_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
-        const value = SignedGossipData.randomWithIndex(prng.random(), &keypair, 0); // contact info
+        const value = try SignedGossipData.randomWithIndex(prng.random(), &keypair, 0); // contact info
         _ = try lg.mut().insert(value, getWallclockMs());
         try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
@@ -2970,7 +2968,7 @@ test "test large push messages" {
         defer lock_guard.unlock();
         for (0..2_000) |_| {
             var keypair = try KeyPair.create(null);
-            const value = SignedGossipData.randomWithIndex(prng.random(), &keypair, 0); // contact info
+            const value = try SignedGossipData.randomWithIndex(prng.random(), &keypair, 0); // contact info
             _ = try lock_guard.mut().insert(value, getWallclockMs());
             try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
         }
