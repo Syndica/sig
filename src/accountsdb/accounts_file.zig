@@ -19,6 +19,11 @@ pub const FileId = enum(Int) {
 
     pub const Int = u32;
 
+    pub const BincodeConfig = .{
+        .serializer = serialize,
+        .deserializer = deserialize,
+    };
+
     pub inline fn fromInt(int: u32) FileId {
         return @enumFromInt(int);
     }
@@ -48,6 +53,24 @@ pub const FileId = enum(Int) {
             writer,
             std.options.fmt_max_depth,
         );
+    }
+
+    fn serialize(
+        writer: anytype,
+        data: anytype,
+        params: sig.bincode.Params,
+    ) anyerror!void {
+        try sig.bincode.write(writer, @as(usize, data.toInt()), params);
+    }
+
+    fn deserialize(
+        _: std.mem.Allocator,
+        reader: anytype,
+        params: sig.bincode.Params,
+    ) anyerror!FileId {
+        const int = try sig.bincode.readInt(u64, reader, params);
+        if (int > std.math.maxInt(FileId.Int)) return error.IdOverflow;
+        return FileId.fromInt(@intCast(int));
     }
 };
 
