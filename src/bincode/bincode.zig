@@ -579,6 +579,9 @@ pub fn FieldConfig(comptime T: type) type {
         free: ?FreeFunction = null,
         skip: bool = false,
         post_deserialize_fn: ?fn (self: *T) void = null,
+        /// NOTE: we use this default parameter here to avoid incorrect usage
+        /// of structs which should only have defaults on deserialization
+        default_value: ?T = null,
     };
 }
 
@@ -621,12 +624,22 @@ pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Ty
 
 pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField, comptime field_config: FieldConfig(field.type)) ?field.type {
     if (field_config.skip) {
+        // NOTE: this is **bincode specific** default value
+        // eg, a: ?u8 ... @!"bincode-config:a" = { skip = true, default_value = 5 }
+        if (field_config.default_value) |v| {
+            return v;
+        }
+        // NOTE: this is the default value of the **field**
+        // eg, a: ?u8 = 5
         if (field.default_value == null) {
             @compileError("┓\n|\n|--> Invalid config: cannot skip field '" ++ @typeName(field.type) ++ "." ++ field.name ++ "' deserialization if no default value set\n\n");
         }
         const default_value: *align(1) const field.type = @ptrCast(field.default_value orelse return null);
         return default_value.*;
     } else {
+        if (field_config.default_value != null) {
+            @compileError("┓\n|\n|--> Invalid config: default value is only allowed when 'skip' is set to true\n\n");
+        }
         return null;
     }
 }
@@ -935,64 +948,19 @@ test "bincode: (legacy) serialize an array" {
     }, buffer.items);
 }
 
-// TODO: Fix bincode.Option to use ? instead
-// test "bincode: decode arbitrary object" {
-//     const Mint = struct {
-//         authority: bincode.Option([32]u8),
-//         supply: u64,
-//         decimals: u8,
-//         is_initialized: bool,
-//         freeze_authority: bincode.Option([32]u8),
-//     };
+test "default value" {
+    const FooBar = struct {
+        a: []u8,
 
-//     const bytes = [_]u8{
-//         1,   0,   0,   0,   83,  18,  223, 14,  150, 112, 155, 39,  143, 181,
-//         58,  12,  16,  228, 56,  110, 253, 193, 149, 16,  253, 81,  214, 206,
-//         246, 126, 227, 182, 123, 225, 246, 203, 1,   0,   0,   0,   0,   0,
-//         0,   0,   0,   1,   1,   0,   0,   0,   0,   0,   0,   83,  18,  223,
-//         14,  150, 112, 155, 39,  143, 181, 58,  12,  16,  228, 56,  110, 253,
-//         193, 149, 16,  253, 81,  214, 206, 246, 126, 227, 182, 123,
-//     };
-//     const mint = try bincode.readFromSlice(testing.allocator, Mint, &bytes, .{});
-//     defer bincode.free(testing.allocator, mint);
+        pub const @"!bincode-config:a": sig.bincode.FieldConfig([]u8) = .{
+            .skip = true,
+            .default_value = &.{},
+        };
+    };
 
-//     try std.testing.expectEqual(@as(u64, 1), mint.supply);
-//     try std.testing.expectEqual(@as(u8, 0), mint.decimals);
-//     try std.testing.expectEqual(true, mint.is_initialized);
-//     try std.testing.expect(mint.authority == .some);
-//     try std.testing.expect(mint.freeze_authority == .some);
-// }
-
-// TODO: Fix bincode.Option to use ? instead
-// test "bincode: option serialize and deserialize" {
-//     const Mint = struct {
-//         authority: bincode.Option([32]u8),
-//         supply: u64,
-//         decimals: u8,
-//         is_initialized: bool,
-//         freeze_authority: bincode.Option([32]u8),
-//     };
-
-//     var buffer = std.ArrayList(u8).init(testing.allocator);
-//     defer buffer.deinit();
-
-//     const expected: Mint = .{
-//         .authority = bincode.Option([32]u8).from([_]u8{ 1, 2, 3, 4 } ** 8),
-//         .supply = 1,
-//         .decimals = 0,
-//         .is_initialized = true,
-//         .freeze_authority = bincode.Option([32]u8).from([_]u8{ 5, 6, 7, 8 } ** 8),
-//     };
-
-//     try bincode.write(buffer.writer(), expected, .{});
-
-//     try std.testing.expectEqual(@as(usize, 82), buffer.items.len);
-
-//     const actual = try bincode.readFromSlice(testing.allocator, Mint, buffer.items, .{});
-//     defer bincode.free(testing.allocator, actual);
-
-//     try std.testing.expectEqual(expected, actual);
-// }
+    const fb = try bincode.readFromSlice(std.testing.allocator, FooBar, &.{}, .{});
+    std.debug.assert(fb.a.len == 0);
+}
 
 test "bincode: serialize and deserialize" {
     var buffer = std.ArrayList(u8).init(testing.allocator);
