@@ -442,8 +442,10 @@ pub const CompiledKeys = struct {
         self: *CompiledKeys,
         allocator: std.mem.Allocator,
     ) !struct { MessageHeader, []Pubkey } {
-        const num_account_keys = self.key_meta_map.count() - @intFromBool(self.maybe_payer == null);
-        var account_keys = try std.ArrayListUnmanaged(Pubkey).initCapacity(allocator, num_account_keys);
+        const account_keys_buf = try allocator.alloc(Pubkey, self.key_meta_map.count() -
+            @intFromBool(self.maybe_payer == null));
+        errdefer allocator.free(account_keys_buf);
+        var account_keys = std.ArrayListUnmanaged(Pubkey).initBuffer(account_keys_buf);
 
         var writable_signers_end: usize = 0;
         var readonly_signers_end: usize = 0;
@@ -475,7 +477,7 @@ pub const CompiledKeys = struct {
             } else unreachable;
         }
 
-        std.debug.assert(account_keys.items.len == num_account_keys);
+        std.debug.assert(account_keys.items.len == account_keys_buf.len);
 
         const header = MessageHeader{
             .num_required_signatures = @intCast(readonly_signers_end),
@@ -483,7 +485,7 @@ pub const CompiledKeys = struct {
             .num_readonly_unsigned_accounts = @intCast(account_keys.items.len - writable_non_signers_end),
         };
 
-        return .{ header, try account_keys.toOwnedSlice(allocator) };
+        return .{ header, account_keys_buf };
     }
 };
 
