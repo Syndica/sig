@@ -1,12 +1,19 @@
 # Networking 
 
-## Running Demos with Dashboards
+## Running Demos
 
-- For starting up prometheus and grafana, checkout our guide [here](https://docs.syndica.io/sig/usage/metrics).
-- To login to grafana use:
-    - username: admin
-    - password: grafana
+### Hardware Requirements
+- 
+
+
+### Dashboard Setup
+
+- For starting up prometheus and grafana, checkout our guide [here](../metrics/README.md)
 - The relevant dashboards are **Gulf Stream** and **Turbine** which should be visible in Grafana after following the above
+
+### Compiling 
+Run the following to compile sig in release
+`zig build -Doptimize=ReleaseSafe`
 
 ### Gulf Stream: Mock Transfers
 

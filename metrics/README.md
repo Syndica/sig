@@ -15,8 +15,9 @@ modify `/etc/hosts` to include the following line:
 
 ## Running 
 
-mac: `docker compose -f compose_mac.yaml up -d`
-linux: `docker compose -f compose_linux.yaml up -d`
+mac: `docker compose -f metrics/compose_mac.yaml up -d`
+
+linux: `docker compose -f metrics/compose_linux.yaml up -d`
 
 - grafana will be accessable on `localhost:3000`
   - note: `username: admin password: grafana`
@@ -26,8 +27,9 @@ need to also modify the prometheus `target` to point to the different port).
 
 ## Shutting down
 
-mac: `docker compose -f compose_mac.yaml down`
-linux: `docker compose -f compose_linux.yaml down`
+mac: `docker compose -f metrics/compose_mac.yaml down`
+
+linux: `docker compose -f metrics/compose_linux.yaml down`
 
 ## Compose sample
 ### Prometheus & Grafana
