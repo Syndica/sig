@@ -12,8 +12,15 @@ const AtomicBool = std.atomic.Value(bool);
 const Logger = sig.trace.log.Logger;
 const ChannelPrintLogger = sig.trace.log.ChannelPrintLogger;
 
-pub fn runClient(allocator: std.mem.Allocator, receiver: *Channel(Packet), exit: *AtomicBool, logger: Logger) !void {
-    if (lsquic.lsquic_global_init(lsquic.LSQUIC_GLOBAL_CLIENT) == 1) @panic("lsquic_global_init failed");
+pub fn runClient(
+    allocator: std.mem.Allocator,
+    receiver: *Channel(Packet),
+    exit: *AtomicBool,
+    logger: Logger,
+) !void {
+    if (lsquic.lsquic_global_init(
+        lsquic.LSQUIC_GLOBAL_CLIENT,
+    ) == 1) @panic("lsquic_global_init failed");
     var client: Client(20, 20) = undefined;
     try client.init(allocator, receiver, exit, logger);
     try client.run();
@@ -109,7 +116,13 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
 
         const Self = @This();
 
-        pub fn init(self: *Self, allocator: std.mem.Allocator, receiver: *Channel(Packet), exit: *AtomicBool, logger: Logger) !void {
+        pub fn init(
+            self: *Self,
+            allocator: std.mem.Allocator,
+            receiver: *Channel(Packet),
+            exit: *AtomicBool,
+            logger: Logger,
+        ) !void {
             self.* = .{
                 .allocator = allocator,
                 .receiver = receiver,
@@ -133,7 +146,10 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
                 .tick_event = try xev.Timer.init(),
             };
 
-            try self.socket.bind(.{ .address = .{ .ipv4 = network.Address.IPv4.any }, .port = 4444 });
+            try self.socket.bind(.{
+                .address = .{ .ipv4 = network.Address.IPv4.any },
+                .port = 4444,
+            });
 
             lsquic.lsquic_engine_init_settings(&self.lsquic_engine_settings, 0);
 
@@ -142,7 +158,12 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
             };
 
             var err_buf: [100]u8 = undefined;
-            if (lsquic.lsquic_engine_check_settings(self.lsquic_engine_api.ea_settings, 0, &err_buf, 100) == 1) {
+            if (lsquic.lsquic_engine_check_settings(
+                self.lsquic_engine_api.ea_settings,
+                0,
+                &err_buf,
+                100,
+            ) == 1) {
                 @panic("lsquic_engine_check_settings failed " ++ err_buf);
             }
         }
@@ -393,7 +414,8 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
                 _: ?*anyopaque,
                 maybe_lsquic_connection: ?*lsquic.lsquic_conn_t,
             ) callconv(.C) *lsquic.lsquic_conn_ctx_t {
-                const self: *Connection = @alignCast(@ptrCast(lsquic.lsquic_conn_get_ctx(maybe_lsquic_connection).?));
+                const conn_ctx = lsquic.lsquic_conn_get_ctx(maybe_lsquic_connection).?;
+                const self: *Connection = @alignCast(@ptrCast(conn_ctx));
 
                 self.client.logger.debug().logf("onNewConn: {s}", .{self.endpoint});
                 self.lsquic_connection = maybe_lsquic_connection.?;
@@ -403,16 +425,17 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
             }
 
             fn onConnClosed(maybe_lsquic_connection: ?*lsquic.lsquic_conn_t) callconv(.C) void {
-                const self: *Connection = @alignCast(@ptrCast(lsquic.lsquic_conn_get_ctx(maybe_lsquic_connection).?));
+                const conn_ctx = lsquic.lsquic_conn_get_ctx(maybe_lsquic_connection).?;
+                const conn: *Connection = @alignCast(@ptrCast(conn_ctx));
 
-                for (self.client.connections.constSlice(), 0..) |connection, i| {
-                    if (@intFromPtr(connection) == @intFromPtr(self)) {
-                        _ = self.client.connections.swapRemove(i);
+                for (conn.client.connections.constSlice(), 0..) |connection, i| {
+                    if (@intFromPtr(connection) == @intFromPtr(conn)) {
+                        _ = conn.client.connections.swapRemove(i);
                     }
                 }
 
                 lsquic.lsquic_conn_set_ctx(maybe_lsquic_connection, null);
-                self.client.allocator.destroy(self);
+                conn.client.allocator.destroy(conn);
             }
         };
 
@@ -426,9 +449,11 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
                 maybe_lsquic_stream: ?*lsquic.lsquic_stream_t,
             ) callconv(.C) *lsquic.lsquic_stream_ctx_t {
                 const lsquic_connection = lsquic.lsquic_stream_conn(maybe_lsquic_stream);
-                const connection: *Connection = @alignCast(@ptrCast(lsquic.lsquic_conn_get_ctx(lsquic_connection).?));
+                const conn_ctx = lsquic.lsquic_conn_get_ctx(lsquic_connection).?;
+                const connection: *Connection = @alignCast(@ptrCast(conn_ctx));
 
-                const stream = connection.client.allocator.create(Stream) catch @panic("OutOfMemory");
+                const stream = connection.client.allocator.create(Stream) catch
+                    @panic("OutOfMemory");
                 stream.* = .{
                     .lsquic_stream = maybe_lsquic_stream.?,
                     .connection = connection,
@@ -551,7 +576,12 @@ fn initX509Certificate() struct { *ssl.EVP_PKEY, *ssl.X509 } {
     @memcpy(cert_der[100..][0..32], &public_key);
     @memcpy(cert_der[132..], &cert_suffix);
 
-    const pkey = ssl.EVP_PKEY_new_raw_private_key(ssl.EVP_PKEY_ED25519, null, &private_key, 32) orelse {
+    const pkey = ssl.EVP_PKEY_new_raw_private_key(
+        ssl.EVP_PKEY_ED25519,
+        null,
+        &private_key,
+        32,
+    ) orelse {
         @panic("EVP_PKEY_new_raw_private_key failed");
     };
 

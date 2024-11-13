@@ -29,16 +29,17 @@ pub fn sendmsgPosix(
             .ALREADY => return error.FastOpenAlreadyInProgress,
             .BADF => unreachable, // always a race condition
             .CONNRESET => return error.ConnectionResetByPeer,
-            .DESTADDRREQ => unreachable, // The socket is not connection-mode, and no peer address is set.
+            .DESTADDRREQ => unreachable, // No peer address is set.
             .FAULT => unreachable, // An invalid user space address was specified for an argument.
             .INTR => continue,
             .INVAL => unreachable, // Invalid argument passed.
-            .ISCONN => unreachable, // connection-mode socket was connected already but a recipient was specified
+            // connection-mode socket was connected already but a recipient was specified
+            .ISCONN => unreachable,
             .MSGSIZE => return error.MessageTooBig,
             .NOBUFS => return error.SystemResources,
             .NOMEM => return error.SystemResources,
             .NOTSOCK => unreachable, // The file descriptor sockfd does not refer to a socket.
-            .OPNOTSUPP => unreachable, // Some bit in the flags argument is inappropriate for the socket type.
+            .OPNOTSUPP => unreachable, // Flags argument is inappropriate for the socket type.
             .PIPE => return error.BrokenPipe,
             .AFNOSUPPORT => return error.AddressFamilyNotSupported,
             .LOOP => return error.SymLinkLoop,
