@@ -1006,3 +1006,68 @@ pub fn runTurbineTreeBlackBoxTest() !void {
         }
     }
 }
+
+pub const BenchmarkTurbineTree = struct {
+    pub const min_iterations = 1;
+    pub const max_iterations = 1;
+
+    pub fn bench() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
+        var rng = std.Random.DefaultPrng.init(0);
+        const my_pubkey = Pubkey.initRandom(rng.random());
+        const my_contact_info = ContactInfo.init(allocator, my_pubkey, 0, 0);
+        const my_threadsafe_contact_info = ThreadSafeContactInfo.fromContactInfo(my_contact_info);
+
+        // Create a test cluster and save the staked nodes.
+        var stakes, var gossip_table_rw = try makeTestCluster(
+            allocator,
+            rng.random(),
+            my_pubkey,
+            20,
+            1,
+            20,
+            4000,
+            3000,
+            2000,
+        );
+        defer {
+            stakes.deinit();
+            const gossip_table: *GossipTable, _ = gossip_table_rw.writeWithLock();
+            gossip_table.deinit();
+        }
+
+        // Create a TurbineTree instance
+        var turbine_tree = try TurbineTree.initForRetransmit(
+            allocator,
+            my_threadsafe_contact_info,
+            &gossip_table_rw,
+            &stakes.unmanaged,
+            false,
+        );
+        defer turbine_tree.deinit();
+
+        const iterations = 100;
+
+        var shred_ids = try allocator.alloc(ShredId, iterations);
+        defer allocator.free(shred_ids);
+        var slot_leaders = try allocator.alloc(Pubkey, iterations);
+        defer allocator.free(slot_leaders);
+
+        for (0..iterations) |i| {
+            shred_ids[i] = ShredId{
+                .slot = i * 1234,
+                .index = @intCast(i),
+                .shred_type = .data,
+            };
+        }
+        for (0..iterations) |i| {
+            slot_leaders[i] = Pubkey.initRandom(rng.random());
+        }
+
+        var timer = try sig.time.Timer.start();
+        for (shred_ids, slot_leaders) |shred_id, slot_leader| {
+            _ = try turbine_tree.getRetransmitChildren(allocator, slot_leader, shred_id, 200);
+        }
+        return timer.read();
+    }
+};

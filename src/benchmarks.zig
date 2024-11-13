@@ -124,6 +124,15 @@ pub fn main() !void {
             .nanoseconds,
         );
     }
+
+    if (std.mem.startsWith(u8, filter, "turbine") or run_all_benchmarks) {
+        num_errors += try benchmark(
+            @import("turbine/turbine_tree.zig").BenchmarkTurbineTree,
+            max_time_per_bench,
+            .microseconds,
+        );
+    }
+
     if (num_errors != 0) {
         return error.CompletedWithErrors;
     }
