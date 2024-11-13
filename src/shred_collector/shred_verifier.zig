@@ -32,6 +32,7 @@ pub fn runShredVerifier(
     while (!exit.load(.acquire) or
         unverified_shred_receiver.len() != 0)
     {
+        std.time.sleep(1_000_00_0);
         var packet_count: usize = 0;
         while (unverified_shred_receiver.receive()) |packet| {
             packet_count += 1;

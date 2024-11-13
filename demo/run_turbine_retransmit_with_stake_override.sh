@@ -12,4 +12,4 @@
 [ -e "validator/blockstore/" ]            && echo "removing blockstore"  && rm -rf validator/blockstore/
 
 # start the validator with stake override enabled
-zig-out/bin/sig validator --network testnet --snapshot-metadata-only --overwrite-stake-for-testing --exit-after-n-shreds $1 --test-repair-for-slot $(solana -ut slot) 2>&1 | tee demo/turbine-retransmit-demo.log | grep turbine_demo.
+zig-out/bin/sig validator --network testnet --snapshot-metadata-only --overwrite-stake-for-testing --exit-after-n-shreds $1 --test-repair-for-slot $(solana -ut slot) --num-retransmit-sockets 1 --num-retransmit-threads 8 2>&1 | tee demo/turbine-retransmit-demo.log | grep turbine_demo.

@@ -477,6 +477,7 @@ pub const GossipService = struct {
         {
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
+            std.time.sleep(1_000_00_0);
             var task_search_start_idx: usize = 0;
             while (self.packet_incoming_channel.receive()) |packet| {
                 defer self.metrics.gossip_packets_received_total.inc();
@@ -673,7 +674,10 @@ pub const GossipService = struct {
                 }
                 if (msg_count > MAX_PROCESS_BATCH_SIZE) break;
             }
-            if (msg_count == 0) continue;
+            if (msg_count == 0) {
+                std.time.sleep(1_000_00_0);
+                continue;
+            }
 
             // track metrics
             self.metrics.gossip_packets_verified_total.add(msg_count);

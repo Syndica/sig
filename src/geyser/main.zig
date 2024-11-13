@@ -300,6 +300,7 @@ pub fn csvDumpIOWriter(
     errdefer exit.store(true, .monotonic);
 
     while (!exit.load(.monotonic)) {
+        std.time.sleep(1_000_00_0);
         while (io_channel.receive()) |csv_row| {
             // write to file
             try csv_file.writeAll(csv_row);

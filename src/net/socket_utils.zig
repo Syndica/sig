@@ -69,6 +69,7 @@ pub fn sendSocket(
     while (counter.load(.acquire) != exit_condition or
         outgoing_channel.len() != 0)
     {
+        std.time.sleep(1_000_00_0);
         while (outgoing_channel.receive()) |p| {
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                 logger.debug().logf("send_socket error: {s}", .{@errorName(e)});
