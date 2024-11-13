@@ -221,7 +221,10 @@ pub const GossipTable = struct {
                 .LegacyContactInfo => |*info| {
                     try self.shred_versions.put(info.id, info.shred_version);
                     const contact_info = try info.toContactInfo(self.allocator);
-                    var old_info = try self.converted_contact_infos.fetchPut(info.id, contact_info);
+                    var old_info = try self.converted_contact_infos.fetchPut(
+                        info.id,
+                        contact_info,
+                    );
                     old_info.?.value.deinit();
                 },
                 .Vote => {
@@ -230,12 +233,16 @@ pub const GossipTable = struct {
                     try self.votes.put(self.cursor, entry_index);
                 },
                 .EpochSlots => {
-                    const did_remove = self.epoch_slots.swapRemove(old_entry.cursor_on_insertion);
+                    const did_remove = self.epoch_slots.swapRemove(
+                        old_entry.cursor_on_insertion,
+                    );
                     std.debug.assert(did_remove);
                     try self.epoch_slots.put(self.cursor, entry_index);
                 },
                 .DuplicateShred => {
-                    const did_remove = self.duplicate_shreds.swapRemove(old_entry.cursor_on_insertion);
+                    const did_remove = self.duplicate_shreds.swapRemove(
+                        old_entry.cursor_on_insertion,
+                    );
                     std.debug.assert(did_remove);
                     try self.duplicate_shreds.put(self.cursor, entry_index);
                 },
@@ -364,7 +371,8 @@ pub const GossipTable = struct {
         if (self.store.get(label)) |v| {
             return ThreadSafeContactInfo.fromContactInfo(v.value.data.ContactInfo);
         } else {
-            return ThreadSafeContactInfo.fromContactInfo(self.converted_contact_infos.get(pubkey) orelse return null);
+            const contact_info = self.converted_contact_infos.get(pubkey) orelse return null;
+            return ThreadSafeContactInfo.fromContactInfo(contact_info);
         }
     }
 
@@ -501,7 +509,7 @@ pub const GossipTable = struct {
                 const value = &self.values[index];
                 if (value.timestamp_on_insertion >= self.minimum_insertion_timestamp) {
                     return switch (value.value.data) {
-                        .LegacyContactInfo => |*lci| self.converted_contact_infos.getPtr(lci.id) orelse unreachable,
+                        .LegacyContactInfo => |*lci| self.converted_contact_infos.getPtr(lci.id).?,
                         .ContactInfo => |*ci| ci,
                         else => unreachable,
                     };
@@ -523,7 +531,11 @@ pub const GossipTable = struct {
     }
 
     // ** helper functions **
-    pub fn checkMatchingShredVersion(self: *const Self, pubkey: Pubkey, expected_shred_version: u16) bool {
+    pub fn checkMatchingShredVersion(
+        self: *const Self,
+        pubkey: Pubkey,
+        expected_shred_version: u16,
+    ) bool {
         if (self.shred_versions.get(pubkey)) |pubkey_shred_version| {
             if (pubkey_shred_version == expected_shred_version) {
                 return true;
@@ -546,7 +558,11 @@ pub const GossipTable = struct {
     /// TODO: implement a safer approach to avoid dangling pointers, such as:
     ///  - removal buffer that is populated here and freed later
     ///  - reference counting for all gossip values
-    pub fn remove(self: *Self, label: GossipKey, now: u64) error{ LabelNotFound, OutOfMemory }!void {
+    pub fn remove(
+        self: *Self,
+        label: GossipKey,
+        now: u64,
+    ) error{ LabelNotFound, OutOfMemory }!void {
         const maybe_entry = self.store.getEntry(label);
         if (maybe_entry == null) return error.LabelNotFound;
 
@@ -579,6 +595,8 @@ pub const GossipTable = struct {
         try self.purged.insert(hash, now);
         self.shards.remove(entry_index, &hash);
 
+        const cursor_on_insertion = versioned_value.cursor_on_insertion;
+
         switch (versioned_value.value.data) {
             .ContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(entry_index);
@@ -591,22 +609,22 @@ pub const GossipTable = struct {
                 contact_info.deinit();
             },
             .Vote => {
-                const did_remove = self.votes.swapRemove(versioned_value.cursor_on_insertion);
+                const did_remove = self.votes.swapRemove(cursor_on_insertion);
                 std.debug.assert(did_remove);
             },
             .EpochSlots => {
-                const did_remove = self.epoch_slots.swapRemove(versioned_value.cursor_on_insertion);
+                const did_remove = self.epoch_slots.swapRemove(cursor_on_insertion);
                 std.debug.assert(did_remove);
             },
             .DuplicateShred => {
-                const did_remove = self.duplicate_shreds.swapRemove(versioned_value.cursor_on_insertion);
+                const did_remove = self.duplicate_shreds.swapRemove(cursor_on_insertion);
                 std.debug.assert(did_remove);
             },
             else => {},
         }
 
         {
-            const did_remove = self.entries.swapRemove(versioned_value.cursor_on_insertion);
+            const did_remove = self.entries.swapRemove(cursor_on_insertion);
             std.debug.assert(did_remove);
         }
 
@@ -836,7 +854,10 @@ pub const HashTimeQueue = struct {
 
         // remove values up to i
         if (i > 0) {
-            var new_queue = try std.ArrayList(HashAndTime).initCapacity(self.allocator, length - i);
+            var new_queue = try std.ArrayList(HashAndTime).initCapacity(
+                self.allocator,
+                length - i,
+            );
             new_queue.appendSliceAssumeCapacity(self.queue.items[i..length]);
 
             self.queue.deinit();

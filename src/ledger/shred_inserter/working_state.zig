@@ -560,7 +560,7 @@ pub fn isNewlyCompletedSlot(slot_meta: *const SlotMeta, backup_slot_meta: *const
     return slot_meta.isFull() and ( //
         backup_slot_meta.* == null or
         slot_meta.consecutive_received_from_0 !=
-        (backup_slot_meta.* orelse unreachable).consecutive_received_from_0);
+        (backup_slot_meta.*.?).consecutive_received_from_0);
     // TODO unreachable: explain or fix
 }
 

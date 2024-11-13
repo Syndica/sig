@@ -117,138 +117,82 @@ def unused_imports(args, files_to_check):
         print("Total unused imports found:", total_lines_removed)
     else:
         print("Total unused imports removed:", total_lines_removed)
-    
+
     return total_lines_removed
 
 
 files_excluded_from_line_length_check = [
-    "src/accountsdb/accounts_file.zig",
-    "src/accountsdb/bank.zig",
-    "src/accountsdb/cache.zig",
-    "src/accountsdb/db.zig",
-    "src/accountsdb/download.zig",
-    "src/accountsdb/fuzz_snapshot.zig",
-    "src/accountsdb/fuzz.zig",
-    "src/accountsdb/genesis_config.zig",
-    "src/accountsdb/index.zig",
-    "src/accountsdb/snapshots.zig",
-    "src/accountsdb/swiss_map.zig",
-    "src/accountsdb/sysvars.zig",
-    "src/benchmarks.zig",
-    "src/bincode/arraylist.zig",
-    "src/bincode/bincode.zig",
-    "src/bincode/bincode.zig",
-    "src/bincode/hashmap.zig",
-    "src/bincode/int.zig",
-    "src/bincode/list.zig",
-    "src/bincode/optional.zig",
-    "src/bincode/shortvec.zig",
-    "src/bincode/varint.zig",
-    "src/bloom/bit_set.zig",
-    "src/common/lru.zig",
-    "src/common/merkle_tree.zig",
-    "src/fuzz.zig",
-    "src/geyser/main.zig",
-    "src/gossip/service.zig",
-    "src/gossip/shards.zig",
-    "src/gossip/table.zig",
-    "src/ledger/benchmarks.zig",
-    "src/ledger/cleanup_service.zig",
-    "src/ledger/database/hashmap.zig",
-    "src/ledger/database/interface.zig",
-    "src/ledger/database/rocksdb.zig",
-    "src/ledger/meta.zig",
-    "src/ledger/reader.zig",
-    "src/ledger/reed_solomon_table.zig",
-    "src/ledger/reed_solomon.zig",
-    "src/ledger/result_writer.zig",
-    "src/ledger/schema.zig",
-    "src/ledger/shred_inserter/merkle_root_checks.zig",
-    "src/ledger/shred_inserter/recovery.zig",
-    "src/ledger/shred_inserter/shred_inserter.zig",
-    "src/ledger/shred_inserter/slot_chaining.zig",
-    "src/ledger/shred_inserter/working_state.zig",
-    "src/ledger/shred.zig",
-    "src/ledger/shredder.zig",
-    "src/ledger/test_shreds.zig",
-    "src/ledger/tests.zig",
-    "src/ledger/transaction_status.zig",
-    "src/net/echo.zig",
-    "src/net/net.zig",
-    "src/net/socket_utils.zig",
-    "src/prometheus/histogram.zig",
     "src/prometheus/metric.zig",
+    "src/prometheus/histogram.zig",
     "src/prometheus/registry.zig",
-    "src/rand/rand.zig",
-    "src/rpc/client.zig",
-    "src/rpc/client.zig",
-    "src/rpc/request.zig",
-    "src/rpc/request.zig",
-    "src/rpc/response.zig",
-    "src/shred_collector/repair_message.zig",
-    "src/shred_collector/repair_service.zig",
-    "src/shred_collector/service.zig",
-    "src/shred_collector/shred_processor.zig",
-    "src/shred_collector/shred_receiver.zig",
-    "src/shred_collector/shred_tracker.zig",
-    "src/shred_collector/shred_verifier.zig",
-    "src/sync/channel.zig",
-    "src/sync/channel.zig",
-    "src/sync/mux.zig",
-    "src/sync/once_cell.zig",
-    "src/sync/ref.zig",
-    "src/sync/ref.zig",
-    "src/sync/thread_pool.zig",
-    "src/sync/thread_pool.zig",
-    "src/tests.zig",
-    "src/time/time.zig",
-    "src/trace/log.zig",
-    "src/transaction_sender/leader_info.zig",
-    "src/transaction_sender/mock_transfer_generator.zig",
-    "src/transaction_sender/mock_transfer_generator.zig",
-    "src/transaction_sender/service.zig",
-    "src/transaction_sender/service.zig",
-    "src/transaction_sender/transaction_info.zig",
-    "src/transaction_sender/transaction_pool.zig",
-    "src/transaction_sender/transaction_pool.zig",
-    "src/utils/allocators.zig",
-    "src/utils/collections.zig",
-    "src/utils/fmt.zig",
-    "src/utils/fmt.zig",
-    "src/utils/tar.zig",
-    "src/utils/tar.zig",
-    "src/utils/thread.zig",
-    "src/utils/thread.zig",
-    "src/utils/types.zig",
-    "src/bloom/bit_vec.zig",
-    "src/bloom/bitvec.zig",
-    "src/bloom/bloom.zig",
-    "src/cmd/cmd.zig",
-    "src/cmd/config.zig",
     "src/cmd/helpers.zig",
-    "src/core/account.zig",
-    "src/core/epoch_schedule.zig",
-    "src/core/hard_forks.zig",
-    "src/core/leader_schedule.zig",
-    "src/core/shred.zig",
-    "src/core/transaction.zig",
-    "src/crypto/base58.zig",
     "src/geyser/core.zig",
-    "src/gossip/active_set.zig",
-    "src/gossip/data.zig",
-    "src/gossip/dump_service.zig",
-    "src/gossip/fuzz_service.zig",
-    "src/gossip/fuzz_table.zig",
-    "src/gossip/message.zig",
-    "src/gossip/ping_pong.zig",
+    "src/rpc/request.zig",
+    "src/bincode/shortvec.zig",
+    "src/ledger/database/rocksdb.zig",
+    "src/ledger/database/hashmap.zig",
+    "src/accountsdb/bank.zig",
+    "src/net/echo.zig",
+    "src/utils/types.zig",
+    "src/gossip/shards.zig",
+    "src/bloom/bitvec.zig",
+    "src/bincode/int.zig",
+    "src/ledger/benchmarks.zig",
+    "src/core/leader_schedule.zig",
+    "src/shred_collector/repair_message.zig",
     "src/gossip/pull_request.zig",
-    "src/gossip/pull_response.zig",
+    "src/bincode/arraylist.zig",
+    "src/utils/thread.zig",
+    "src/utils/allocators.zig",
+    "src/gossip/message.zig",
+    "src/bloom/bloom.zig",
+    "src/bloom/bit_vec.zig",
+    "src/ledger/result_writer.zig",
+    "src/time/time.zig",
+    "src/utils/tar.zig",
+    "src/utils/fmt.zig",
+    "src/gossip/fuzz_table.zig",
+    "src/bloom/bit_set.zig",
+    "src/accountsdb/sysvars.zig",
+    "src/ledger/shred_inserter/shred_inserter.zig",
+    "src/accountsdb/swiss_map.zig",
+    "src/ledger/shred_inserter/working_state.zig",
+    "src/accountsdb/fuzz_snapshot.zig",
+    "src/shred_collector/repair_service.zig",
+    "src/transaction_sender/service.zig",
+    "src/gossip/fuzz_service.zig",
+    "src/sync/thread_pool.zig",
+    "src/transaction_sender/transaction_pool.zig",
+    "src/gossip/ping_pong.zig",
+    "src/accountsdb/download.zig",
+    "src/accountsdb/fuzz.zig",
+    "src/ledger/reader.zig",
+    "src/rpc/client.zig",
+    "src/accountsdb/index.zig",
+    "src/ledger/cleanup_service.zig",
+    "src/ledger/reed_solomon.zig",
+    "src/benchmarks.zig",
+    "src/transaction_sender/mock_transfer_generator.zig",
+    "src/core/transaction.zig",
+    "src/net/net.zig",
+    "src/cmd/cmd.zig",
+    "src/bincode/bincode.zig",
+    "src/accountsdb/snapshots.zig",
+    "src/gossip/data.zig",
+    "src/gossip/service.zig",
+    "src/accountsdb/db.zig",
+    "src/rand/rand.zig",
+    "src/ledger/reed_solomon_table.zig",
+    "src/ledger/shred.zig",
+    "src/ledger/test_shreds.zig",
 ]
 
 
 def line_length(args, files_to_check):
     """Enforces lines of code to be at most 100 characters long."""
-    unique_files = []
+
+    # map relating file paths to the number of lines that are too long
+    unique_files = {}
 
     lines_found = 0
 
@@ -258,21 +202,28 @@ def line_length(args, files_to_check):
         with open(path) as f:
             lines = f.readlines()
         for i, line in enumerate(lines):
+            # ignore comments. these are lines where the first non-whitespace characters
+            # are "//"
+            if line.strip().startswith("//"):
+                continue
             if len(line) > MAX_LINE_LENGTH:
                 print(f"{path}:{i + 1} is too long: {len(line)}")
                 lines_found += 1
                 if path not in unique_files:
-                    unique_files.append(path)
+                    unique_files[path] = 1
+                else:
+                    unique_files[path] += 1
                 print(line)
 
     print("Files checked:", len(files_to_check))
     print("Lines found:", lines_found)
 
-    for file in unique_files:
-        print(f'"{file}",')
+    # sorted_files = sorted(unique_files.items(), key=lambda x: x[1])
+    # for file, num_lines in sorted_files:
+    #     print(f'"{file}",')
 
     return lines_found
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

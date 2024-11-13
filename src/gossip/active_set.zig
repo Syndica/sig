@@ -101,7 +101,10 @@ pub const ActiveSet = struct {
         origin: Pubkey,
         table: *const GossipTable,
     ) error{OutOfMemory}!std.ArrayList(EndPoint) {
-        var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(allocator, GOSSIP_PUSH_FANOUT);
+        var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(
+            allocator,
+            GOSSIP_PUSH_FANOUT,
+        );
         errdefer active_set_endpoints.deinit();
 
         var iter = self.peers.iterator();

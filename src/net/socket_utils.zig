@@ -23,7 +23,10 @@ pub fn readSocket(
     idx: if (needs_exit_order) usize else void,
 ) !void {
     defer {
-        logger.info().logf("leaving with: {}, {}, {}", .{ incoming_channel.len(), counter.load(.acquire), idx });
+        logger.info().logf(
+            "leaving with: {}, {}, {}",
+            .{ incoming_channel.len(), counter.load(.acquire), idx },
+        );
         if (needs_exit_order) {
             counter.store(idx + 1, .release);
         }
@@ -174,7 +177,11 @@ pub const BenchmarkPacketProcessing = struct {
             counter.store(true, .release);
             handle.join();
         }
-        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ &channel, n_packets });
+        var recv_handle = try std.Thread.spawn(
+            .{},
+            benchmarkChannelRecv,
+            .{ &channel, n_packets },
+        );
 
         var prng = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;

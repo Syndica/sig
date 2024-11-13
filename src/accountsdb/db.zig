@@ -1907,7 +1907,7 @@ pub const AccountsDB = struct {
                 // the queue if it deleted any accounts refs.
                 const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
                 defer dead_accounts_counter_lg.unlock();
-                const removed = dead_accounts_counter.fetchSwapRemove(slot) orelse unreachable;
+                const removed = dead_accounts_counter.fetchSwapRemove(slot).?;
                 std.debug.assert(removed.value == accounts_dead_count);
             }
         }
@@ -3150,7 +3150,7 @@ pub fn writeSnapshotTarWithFields(
     try snapgen.writeAccountsDirHeader(archive_writer_counted);
     const file_info_map = manifest.accounts_db_fields.file_map;
     for (file_info_map.keys(), file_info_map.values()) |file_slot, file_info| {
-        const account_file = file_map.getPtr(file_info.id) orelse unreachable;
+        const account_file = file_map.getPtr(file_info.id).?;
         std.debug.assert(account_file.id == file_info.id);
         std.debug.assert(account_file.length == file_info.length);
 
