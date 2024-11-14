@@ -236,7 +236,7 @@ pub fn downloadSnapshotsFromGossip(
 
             logger
                 .info()
-                .logf("downloading full_snapshot from: {s}", .{snapshot_url});
+                .logf("(turbine_demo.snapshot_download)  downloading full_snapshot from: {s}", .{snapshot_url});
 
             downloadFile(
                 allocator,
@@ -251,11 +251,11 @@ pub fn downloadSnapshotsFromGossip(
                     // downloadFile function
                     error.Unexpected => {},
                     error.TooSlow => {
-                        logger.info().logf("peer is too slow, skipping", .{});
+                        logger.info().logf("(turbine_demo.snapshot_download)  peer is too slow, skipping", .{});
                         try slow_peer_pubkeys.append(peer.contact_info.pubkey);
                     },
                     else => {
-                        logger.info().logf("failed to download full_snapshot: {s}", .{@errorName(err)});
+                        logger.info().logf("(turbine_demo.snapshot_download)  failed to download full_snapshot: {s}", .{@errorName(err)});
                     },
                 }
                 continue;
@@ -278,7 +278,7 @@ pub fn downloadSnapshotsFromGossip(
                 });
                 defer allocator.free(inc_snapshot_url);
 
-                logger.info().logf("downloading inc_snapshot from: {s}", .{inc_snapshot_url});
+                logger.info().logf("(turbine_demo.snapshot_download)  downloading inc_snapshot from: {s}", .{inc_snapshot_url});
                 _ = downloadFile(
                     allocator,
                     logger,
@@ -289,13 +289,13 @@ pub fn downloadSnapshotsFromGossip(
                     null,
                 ) catch |err| {
                     // failure here is ok (for now?)
-                    logger.warn().logf("failed to download inc_snapshot: {s}", .{@errorName(err)});
+                    logger.warn().logf("(turbine_demo.snapshot_download)  failed to download inc_snapshot: {s}", .{@errorName(err)});
                     return;
                 };
             }
 
             // success
-            logger.info().logf("snapshot downloaded finished", .{});
+            logger.info().logf("(turbine_demo.snapshot_download)  snapshot downloaded finished", .{});
             return;
         }
     }
@@ -409,7 +409,7 @@ const DownloadProgress = struct {
                 }
             }
 
-            self.logger.info().logf("[download progress]: {d}% done ({:.4}/s - {:.4}/{:.4}) (time left: {d})", .{
+            self.logger.info().logf("(turbine_demo.snapshot_download)  [download progress]: {d}% done ({:.4}/s - {:.4}/{:.4}) (time left: {d})", .{
                 self.total_read * 100 / download_total,
                 std.fmt.fmtIntSizeDec(self.bytes_read / elapsed_sec),
                 std.fmt.fmtIntSizeDec(download_now),

@@ -1026,7 +1026,6 @@ pub fn runTurbineTreeBlackBoxTest() !void {
                 TurbineTree.DATA_PLANE_FANOUT,
                 null,
             );
-            defer children.deinit();
             try writeRetransmitPeers(file.writer(), i, root_distance, children);
         }
     }
