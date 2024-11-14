@@ -38,7 +38,7 @@ An example of how the run the turbine retransmit stage with stake overriding can
 
 An example of how to run the turbine tree black box can be seen in the script below. This runs both the sig and agave tests, printing results to a file each for validation, permalinks are provided below:
 
-- script: ./demo/run_turbine_tree_black_box_tests.sh
+- script: ./demo/run_turbine_tree_black_box_tests.sh \<path-to-agave-dir\>
 - sig: https://github.com/Syndica/sig/blob/harnew/demo/src/turbine/turbine_tree.zig#L873
 - agave: https://github.com/Syndica/agave/blob/cd3b807e452430bcf327df392f3d5eea1bb1cf8f/turbine/src/cluster_nodes.rs#L883
 

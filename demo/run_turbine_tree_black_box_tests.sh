@@ -11,7 +11,7 @@ zig-out/bin/sig turbine-black-box
 
 # Run agave test 
 echo "Running agave turbine tree (cluster nodes) black box tests"
-../agave-fork/target/release/solana-turbine
+$1/target/release/solana-turbine
 
 # Compare diffs
 echo "diff demo/turbine-tree-black-box-test-0-sig.txt demo/turbine-tree-black-box-test-0-agave.txt"
