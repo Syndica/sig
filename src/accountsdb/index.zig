@@ -304,9 +304,16 @@ pub const AccountIndex = struct {
         const scoped_logger = logger.withScope("load index state");
 
         // make sure all the appropriate file exist
-        try dir.access("manager_memory", .{});
-        try dir.access("manager_records", .{});
-        try dir.access("pubkey_ref_map", .{});
+        {
+            errdefer scoped_logger.err().log(
+                \\\ missing fast load files make sure to run the initial load
+                \\\ with --save-index flag first
+            );
+
+            try dir.access("manager_memory", .{});
+            try dir.access("manager_records", .{});
+            try dir.access("pubkey_ref_map", .{});
+        }
 
         // manager must be empty
         std.debug.assert(self.reference_manager.capacity == 0);
