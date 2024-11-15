@@ -705,7 +705,7 @@ pub const failing = struct {
     }
 };
 
-test "recycle buffer : save and load" {
+test "recycle buffer: save and load" {
     const backing_allocator = std.testing.allocator;
     const X = struct {
         a: u8,
