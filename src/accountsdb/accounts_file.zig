@@ -40,6 +40,11 @@ pub const FileId = enum(Int) {
         return FileId.fromInt(@max(a.toInt(), b.toInt()));
     }
 
+    pub fn path(self: FileId, slot: Slot) std.BoundedArray(u8, 40) {
+        const file_path_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, self.toInt() });
+        return file_path_bounded;
+    }
+
     pub fn format(
         id: FileId,
         comptime fmt_str: []const u8,
