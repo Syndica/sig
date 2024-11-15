@@ -68,6 +68,84 @@ pub const ACCOUNT_INDEX_SHARDS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
+/// Used for obtaining cached reads
+pub const BufferPool = struct {
+    allocator: std.mem.Allocator,
+
+    snapshot_dir: std.fs.Dir,
+
+    /// max sum of all data.len
+    bytes_max: usize,
+    /// sum of all data.len where we start evicting
+    bytes_start_evicting: usize,
+    /// current sum of all data.len
+    bytes_current: std.atomic.Value(usize) = .{ .raw = 0 },
+
+    // TODO: seems pretty easy to implement something like S3FIFO with atomics...
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        bytes_start_evicting: usize,
+        bytes_max: usize,
+    ) BufferPool {
+        std.debug.assert(bytes_start_evicting >= bytes_max);
+        return .{
+            .allocator = allocator,
+            .bytes_start_evicting = bytes_start_evicting,
+            .bytes_max = bytes_max,
+        };
+    }
+
+    fn read(self: *BufferPool, slot: Slot, range_start: usize, range_end: usize) !CachedRead {
+        const file_id: FileId = undefined; // TODO
+
+        const file_path = file_id.path(slot);
+
+        const file = try self.snapshot_dir.openFile(file_path, .{});
+        defer file.close();
+
+        const cached_read = try CachedRead.create(self.allocator, range_end - range_start);
+        errdefer destroy(self, cached_read);
+
+        file.seekTo(range_start);
+        _ = try file.readAll(cached_read.data); // TOOD: check return?
+
+        return cached_read;
+    }
+
+    fn destroy(self: *BufferPool, cached_read: *CachedRead) void {
+        cached_read.destroy(self.allocator);
+    }
+};
+
+pub const CachedRead = struct {
+    rc: sig.sync.ReferenceCounter,
+    data: []u8,
+
+    fn create(allocator: std.mem.Allocator, len: usize) !*CachedRead {
+        const data = try allocator.alloc(u8, @sizeOf(CachedRead) + len);
+        return .{
+            .rc = .{ .raw = 0 },
+            .data = data,
+        };
+    }
+
+    fn destroy(self: *CachedRead, allocator: std.mem.Allocator) void {
+        allocator.free(@as([*]const u8, @ptrCast(self))[0 .. @sizeOf(CachedRead) + self.data.len]);
+    }
+
+    fn releaseOrDestroy(self: *CachedRead, bp: *BufferPool) void {
+        if (self.rc.release()) {
+            bp.destroy(self);
+        }
+    }
+
+    fn borrow(self: *CachedRead) *CachedRead {
+        self.rc.acquire();
+        return self;
+    }
+};
+
 /// database for accounts
 ///
 /// Analogous to [AccountsDb](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1363)
