@@ -135,7 +135,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
                     if (record.is_free) {
                         record.is_free = false;
                         const buf = record.buf[0..n]; // local copy because next line will likely change the record pointer
-                        _ = try self.tryRecycleUnusedSpaceWithRecord(record, n);
+                        _ = try self.tryRecycleUnusedSpaceWithRecordUnsafe(record, n);
                         return .{ buf, global_index };
                     } else {
                         is_possible_to_recycle = true;
@@ -181,13 +181,13 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
 
             for (self.records.items) |*record| {
                 if (record.buf.ptr == buf.ptr) {
-                    return self.tryRecycleUnusedSpaceWithRecord(record, used_len);
+                    return self.tryRecycleUnusedSpaceWithRecordUnsafe(record, used_len);
                 }
             }
             @panic("attempt to recycle invalid buf");
         }
 
-        fn tryRecycleUnusedSpaceWithRecord(self: *Self, record: *Record, used_len: u64) !bool {
+        fn tryRecycleUnusedSpaceWithRecordUnsafe(self: *Self, record: *Record, used_len: u64) !bool {
             const unused_len = record.buf.len -| used_len;
             if (unused_len > config.min_split_size) {
                 // update the state of the record
