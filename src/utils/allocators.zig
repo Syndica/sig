@@ -83,19 +83,22 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
+            try self.records.ensureUnusedCapacity(1);
+            try self.memory.ensureUnusedCapacity(1);
+
             const buf = try self.memory_allocator.alloc(T, n);
             // NOTE: we do this here so bincode serialization can work correctly
             // otherwise, we run into undefined memory which breaks bincode
             @memset(buf, T.DEFAULT);
 
-            try self.records.append(.{
+            self.records.appendAssumeCapacity(.{
                 .is_free = true,
                 .buf = buf,
                 .global_index = self.capacity,
                 .len = buf.len,
                 .memory_index = self.memory.items.len,
             });
-            try self.memory.append(buf);
+            self.memory.appendAssumeCapacity(buf);
             self.capacity += buf.len;
         }
 
