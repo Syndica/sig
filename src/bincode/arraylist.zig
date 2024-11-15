@@ -15,9 +15,7 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
     const S = struct {
         fn serialize(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
             try bincode.write(writer, data.items.len, params);
-            for (data.items) |item| {
-                try bincode.write(writer, item, params);
-            }
+            for (data.items) |item| try bincode.write(writer, item, params);
         }
 
         fn deserialize(
@@ -28,18 +26,18 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
             const len = (try readIntAsLength(usize, reader, params)) orelse return error.ArrayListTooBig;
 
             var data: List = try List.initCapacity(allocator, len);
-            errdefer bincode.free(allocator, data);
-            for (0..len) |_| {
-                data.appendAssumeCapacity(try bincode.read(allocator, list_info.Elem, reader, params));
-            }
+            errdefer free(allocator, data);
+
+            for (0..len) |_| data.appendAssumeCapacity(try bincode.read(allocator, list_info.Elem, reader, params));
             return data;
         }
 
         fn free(allocator: std.mem.Allocator, data: anytype) void {
-            if (list_info.management == .managed) {
-                data.deinit();
-            } else {
-                data.deinit(allocator);
+            var copy = data;
+            for (copy.items) |value| bincode.free(allocator, value);
+            switch (list_info.management) {
+                .managed => copy.deinit(),
+                .unmanaged => copy.deinit(allocator),
             }
         }
     };
@@ -78,6 +76,7 @@ pub fn defaultOnEofConfig(comptime List: type) bincode.FieldConfig(List) {
 
         fn free(allocator: std.mem.Allocator, data: anytype) void {
             var copy = data;
+            for (copy.items) |value| bincode.free(allocator, value);
             switch (al_info.management) {
                 .managed => copy.deinit(),
                 .unmanaged => copy.deinit(allocator),

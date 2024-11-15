@@ -76,7 +76,8 @@ pub const LeaderInfo = struct {
         }
 
         if (leader_addresses.items.len <= @divFloor(self.config.max_leaders_to_send_to, 2)) {
-            const gossip_table: *const GossipTable, var gossip_table_lg = self.gossip_table_rw.readWithLock();
+            const gossip_table: *const GossipTable, var gossip_table_lg =
+                self.gossip_table_rw.readWithLock();
             defer gossip_table_lg.unlock();
 
             var unique_leaders = try self.leader_schedule_cache.uniqueLeaders(self.allocator);
@@ -85,7 +86,11 @@ pub const LeaderInfo = struct {
             for (unique_leaders.keys()) |leader| {
                 const contact_info = gossip_table.getThreadSafeContactInfo(leader);
                 if (contact_info == null or contact_info.?.tpu_addr == null) continue;
-                try self.leader_addresses_cache.put(self.allocator, leader, contact_info.?.tpu_addr.?);
+                try self.leader_addresses_cache.put(
+                    self.allocator,
+                    leader,
+                    contact_info.?.tpu_addr.?,
+                );
             }
         }
 
@@ -99,7 +104,10 @@ pub const LeaderInfo = struct {
             self.leader_schedule_cache.epoch_schedule.getEpochAndSlotIndex(slot);
 
         const leader_schedule = self.getLeaderSchedule(slot) catch |e| {
-            self.logger.err().logf("Error getting leader schedule via rpc for slot {}: {}", .{ slot, e });
+            self.logger.err().logf(
+                "Error getting leader schedule via rpc for slot {}: {}",
+                .{ slot, e },
+            );
             return e;
         };
 

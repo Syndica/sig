@@ -89,6 +89,9 @@ pub const GossipDumpService = struct {
         // output results
         try file.writeAll("message_type,pubkey,hash,wallclock,gossip_addr,shred_version\n");
         try file.writeAll(data.buf[0..data.buf_len]);
-        self.logger.info().logf("gossip table size at {}s: {}", .{ now -| start_time, data.table_len });
+        self.logger.info().logf("gossip table size at {}s: {}", .{
+            now -| start_time,
+            data.table_len,
+        });
     }
 };

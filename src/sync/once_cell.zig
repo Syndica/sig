@@ -25,7 +25,11 @@ pub fn OnceCell(comptime T: type) type {
         /// Initializes the inner value and returns pointer to it.
         /// Returns error if it was already initialized.
         /// Blocks while other threads are in the process of initialization.
-        pub fn initialize(self: *Self, initLogic: anytype, init_args: anytype) error{AlreadyInitialized}!*T {
+        pub fn initialize(
+            self: *Self,
+            initLogic: anytype,
+            init_args: anytype,
+        ) error{AlreadyInitialized}!*T {
             if (!self.acquire()) return error.AlreadyInitialized;
             self.value = @call(.auto, initLogic, init_args);
             self.finished.store(true, .release);

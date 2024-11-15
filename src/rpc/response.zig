@@ -13,7 +13,10 @@ pub fn Response(comptime T: type) type {
         parsed: ParsedResponse(T),
         parse_options: std.json.ParseOptions,
 
-        pub fn init(allocator: std.mem.Allocator, parse_options: std.json.ParseOptions) !Response(T) {
+        pub fn init(
+            allocator: std.mem.Allocator,
+            parse_options: std.json.ParseOptions,
+        ) !Response(T) {
             const arena = try allocator.create(std.heap.ArenaAllocator);
             arena.* = std.heap.ArenaAllocator.init(allocator);
             return .{

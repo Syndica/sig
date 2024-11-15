@@ -29,6 +29,7 @@ const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const BytesRef = ledger.database.BytesRef;
 const IndexMetaWorkingSetEntry = lib.working_state.IndexMetaWorkingSetEntry;
 const MerkleRootValidator = lib.merkle_root_checks.MerkleRootValidator;
 const PendingInsertShredsState = lib.working_state.PendingInsertShredsState;
@@ -170,7 +171,7 @@ pub const ShredInserter = struct {
             self.metrics,
         );
         defer state.deinit();
-        var write_batch = state.write_batch;
+        const write_batch = &state.write_batch;
         const merkle_root_validator = MerkleRootValidator.init(&state);
 
         var get_lock_timer = try Timer.start();
@@ -192,7 +193,7 @@ pub const ShredInserter = struct {
                         data_shred,
                         &state,
                         merkle_root_validator,
-                        &write_batch,
+                        write_batch,
                         is_trusted,
                         leader_schedule,
                         shred_source,
@@ -223,7 +224,7 @@ pub const ShredInserter = struct {
                         code_shred,
                         &state,
                         merkle_root_validator,
-                        &write_batch,
+                        write_batch,
                         is_trusted,
                         shred_source,
                     );
@@ -277,7 +278,7 @@ pub const ShredInserter = struct {
                     shred.data,
                     &state,
                     merkle_root_validator,
-                    &write_batch,
+                    write_batch,
                     is_trusted,
                     leader_schedule,
                     .recovered,
@@ -311,7 +312,7 @@ pub const ShredInserter = struct {
         try handleChaining(
             allocator,
             &self.db,
-            &write_batch,
+            write_batch,
             &state.slot_meta_working_set,
         );
         self.metrics.chaining_elapsed_us.add(chaining_timer.read().asMicros());
@@ -335,7 +336,7 @@ pub const ShredInserter = struct {
                 .shred_type = .code,
             };
             // unreachable: Erasure meta was just created, initial shred must exist
-            const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
+            const shred = state.just_inserted_shreds.get(shred_id).?;
             // TODO: agave discards the result here. should we also?
             _ = try merkle_root_validator.checkForwardChaining(
                 shred.code,
@@ -364,7 +365,7 @@ pub const ShredInserter = struct {
                 .shred_type = merkle_root_meta.first_received_shred_type,
             };
             // unreachable: Merkle root meta was just created, initial shred must exist
-            const shred = state.just_inserted_shreds.get(shred_id) orelse unreachable;
+            const shred = state.just_inserted_shreds.get(shred_id).?;
             // TODO: agave discards the result here. should we also?
             _ = try merkle_root_validator.checkBackwardChaining(shred, state.erasureMetas());
         }
@@ -382,6 +383,7 @@ pub const ShredInserter = struct {
 
         return .{
             .completed_data_set_infos = newly_completed_data_sets,
+            // TODO: ensure all duplicate shreds exceed lifetime of pending state
             .duplicate_shreds = state.duplicate_shreds,
         };
     }
@@ -521,7 +523,7 @@ pub const ShredInserter = struct {
             )) |conflicting_shred| {
                 // found the duplicate
                 self.db.put(schema.duplicate_slots, slot, .{
-                    .shred1 = conflicting_shred,
+                    .shred1 = conflicting_shred.data,
                     .shred2 = shred.payload,
                 }) catch |e| {
                     // TODO: only log a database error?
@@ -566,7 +568,7 @@ pub const ShredInserter = struct {
         _: CodeShred, // TODO: figure out why this is here. delete it or add what is missing.
         slot: Slot,
         erasure_meta: *const ErasureMeta,
-    ) !?[]const u8 { // TODO consider lifetime
+    ) !?BytesRef { // TODO consider lifetime
         // Search for the shred which set the initial erasure config, either inserted,
         // or in the current batch in just_inserted_shreds.
         const index: u32 = @intCast(erasure_meta.first_received_code_index);
@@ -728,7 +730,6 @@ pub const ShredInserter = struct {
                     .index = shred_index_u32,
                     .shred_type = .data,
                 };
-                // FIXME: leak - decide how to free shred
                 const maybe_shred = try shred_store.get(shred_id);
                 const ending_shred = if (maybe_shred) |s| s else {
                     self.logger.err().logf(&newlinesToSpaces(
@@ -739,8 +740,9 @@ pub const ShredInserter = struct {
                     ), .{ shred_id, slot_meta });
                     return false; // TODO: this is redundant
                 };
+                errdefer ending_shred.deinit();
                 const dupe = meta.DuplicateSlotProof{
-                    .shred1 = ending_shred,
+                    .shred1 = ending_shred.data,
                     .shred2 = shred.payload,
                 };
                 self.db.put(schema.duplicate_slots, slot, dupe) catch |e| {
@@ -1217,7 +1219,8 @@ test "insertShreds single shred" {
         schema.data_shred,
         .{ shred.commonHeader().slot, shred.commonHeader().index },
     );
-    defer stored_shred.?.deinit();
+    defer if (stored_shred) |s| s.deinit();
+    if (stored_shred == null) return error.Fail;
     try std.testing.expectEqualSlices(u8, shred.payload(), stored_shred.?.data);
 }
 
@@ -1241,6 +1244,7 @@ test "insertShreds 100 shreds from mainnet" {
             schema.data_shred,
             .{ shred.commonHeader().slot, shred.commonHeader().index },
         );
+        defer if (bytes) |b| b.deinit();
         try std.testing.expectEqualSlices(u8, shred.payload(), bytes.?.data);
     }
 }
@@ -1371,7 +1375,7 @@ test "merkle root metas coding" {
                 working_merkle_root_meta.asRef().*,
             );
         }
-        try state.db.commit(write_batch);
+        try state.db.commit(&write_batch);
     }
 
     var insert_state = try PendingInsertShredsState.init(
@@ -1416,9 +1420,15 @@ test "merkle root metas coding" {
             try std.testing.expectEqual(original_meta.first_received_shred_type, .code);
         }
 
-        try state.db.commit(write_batch);
+        try state.db.commit(&write_batch);
     }
 
+    for (insert_state.duplicate_shreds.items) |duplicate| {
+        switch (duplicate) {
+            .Exists => {},
+            inline else => |sc| sc.conflict.deinit(),
+        }
+    }
     insert_state.duplicate_shreds.clearRetainingCapacity();
 
     { // third shred (different index, should succeed)
@@ -1458,7 +1468,7 @@ test "merkle root metas coding" {
         try std.testing.expectEqual(merkle_root_meta.first_received_shred_index, this_index);
         try std.testing.expectEqual(merkle_root_meta.first_received_shred_type, .code);
 
-        try state.db.commit(write_batch);
+        try state.db.commit(&write_batch);
     }
 }
 

@@ -930,20 +930,7 @@ pub const AccountFileInfo = struct {
     /// amount of bytes used
     length: usize,
 
-    pub const @"!bincode-config:id": bincode.FieldConfig(FileId) = .{
-        .serializer = idSerializer,
-        .deserializer = idDeserializer,
-    };
-
-    fn idSerializer(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
-        try bincode.write(writer, @as(usize, data.toInt()), params);
-    }
-
-    fn idDeserializer(_: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!FileId {
-        const int = try bincode.readInt(usize, reader, params);
-        if (int > std.math.maxInt(FileId.Int)) return error.IdOverflow;
-        return FileId.fromInt(@intCast(int));
-    }
+    pub const @"!bincode-config:id" = FileId.BincodeConfig;
 
     /// Analogous to [AppendVecError](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L74)
     pub const ValidateError = error{
@@ -1042,7 +1029,16 @@ pub const BankHashStats = struct {
     }
 };
 
-pub const SlotAndHash = struct { slot: Slot, hash: Hash };
+pub const SlotAndHash = struct {
+    slot: Slot,
+    hash: Hash,
+
+    pub fn equals(a: *const SlotAndHash, b: *const SlotAndHash) bool {
+        if (a.slot != b.slot) return false;
+        if (!a.hash.eql(b.hash)) return false;
+        return true;
+    }
+};
 
 /// Analogous to [AccountsDbFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L77)
 pub const AccountsDbFields = struct {
@@ -1453,9 +1449,7 @@ pub const BankSlotDelta = struct {
 pub const StatusCache = struct {
     bank_slot_deltas: []const BankSlotDelta,
 
-    pub fn default() @This() {
-        return .{ .bank_slot_deltas = &.{} };
-    }
+    pub const EMPTY: StatusCache = .{ .bank_slot_deltas = &.{} };
 
     pub fn initFromPath(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
         const status_cache_file = try std.fs.cwd().openFile(path, .{});

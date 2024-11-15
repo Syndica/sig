@@ -259,7 +259,8 @@ pub const DiskMemoryAllocator = struct {
         std.debug.assert(self.mmap_ratio != 0);
 
         const alignment = @as(usize, 1) << @intCast(log2_align);
-        std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
+        // the allocator interface shouldn't allow this (aside from the *Raw methods).
+        std.debug.assert(alignment <= std.mem.page_size);
 
         const file_aligned_size = alignedFileSize(size);
         const aligned_mmap_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
@@ -313,7 +314,8 @@ pub const DiskMemoryAllocator = struct {
         std.debug.assert(self.mmap_ratio != 0);
 
         const alignment = @as(usize, 1) << @intCast(log2_align);
-        std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
+        // the allocator interface shouldn't allow this (aside from the *Raw methods).
+        std.debug.assert(alignment <= std.mem.page_size);
 
         const old_file_aligned_size = alignedFileSize(buf.len);
         const new_file_aligned_size = alignedFileSize(new_size);
@@ -323,7 +325,8 @@ pub const DiskMemoryAllocator = struct {
         }
 
         const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
-        const metadata: Metadata = @bitCast(buf_ptr[old_file_aligned_size - @sizeOf(Metadata) ..][0..@sizeOf(Metadata)].*);
+        const offset = old_file_aligned_size - @sizeOf(Metadata);
+        const metadata: Metadata = @bitCast(buf_ptr[offset..][0..@sizeOf(Metadata)].*);
 
         if (new_file_aligned_size > metadata.mmap_size) {
             return false;
@@ -354,7 +357,8 @@ pub const DiskMemoryAllocator = struct {
         std.debug.assert(buf.len != 0); // should be ensured by the allocator interface
 
         const alignment = @as(usize, 1) << @intCast(log2_align);
-        std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
+        // the allocator interface shouldn't allow this (aside from the *Raw methods).
+        std.debug.assert(alignment <= std.mem.page_size);
 
         const file_aligned_size = alignedFileSize(buf.len);
         const mmap_aligned_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);

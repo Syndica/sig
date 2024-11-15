@@ -66,7 +66,10 @@ pub const SlotMeta = struct {
     }
 
     pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
-        var child_slots = try std.ArrayList(Slot).initCapacity(allocator, self.child_slots.items.len);
+        var child_slots = try std.ArrayList(Slot).initCapacity(
+            allocator,
+            self.child_slots.items.len,
+        );
         child_slots.appendSliceAssumeCapacity(self.child_slots.items);
         return .{
             .slot = self.slot,

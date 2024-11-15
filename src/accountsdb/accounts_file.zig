@@ -19,6 +19,11 @@ pub const FileId = enum(Int) {
 
     pub const Int = u32;
 
+    pub const BincodeConfig = .{
+        .serializer = serialize,
+        .deserializer = deserialize,
+    };
+
     pub inline fn fromInt(int: u32) FileId {
         return @enumFromInt(int);
     }
@@ -48,6 +53,24 @@ pub const FileId = enum(Int) {
             writer,
             std.options.fmt_max_depth,
         );
+    }
+
+    fn serialize(
+        writer: anytype,
+        data: anytype,
+        params: sig.bincode.Params,
+    ) anyerror!void {
+        try sig.bincode.write(writer, @as(usize, data.toInt()), params);
+    }
+
+    fn deserialize(
+        _: std.mem.Allocator,
+        reader: anytype,
+        params: sig.bincode.Params,
+    ) anyerror!FileId {
+        const int = try sig.bincode.readInt(u64, reader, params);
+        if (int > std.math.maxInt(FileId.Int)) return error.IdOverflow;
+        return FileId.fromInt(@intCast(int));
     }
 };
 
@@ -162,7 +185,10 @@ pub const AccountInFile = struct {
         }
     }
 
-    pub fn toOwnedAccount(self: *const Self, allocator: std.mem.Allocator) std.mem.Allocator.Error!Account {
+    pub fn toOwnedAccount(
+        self: *const Self,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!Account {
         const owned_data = try allocator.dupe(u8, self.data);
         return .{
             .data = owned_data,
@@ -234,8 +260,6 @@ pub const AccountFile = struct {
     slot: Slot,
     // number of bytes used
     length: usize,
-    // total bytes available
-    file_size: usize,
 
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
@@ -257,11 +281,10 @@ pub const AccountFile = struct {
             0,
         );
 
-        return Self{
+        return .{
             .memory = memory,
             .length = accounts_file_info.length,
             .id = accounts_file_info.id,
-            .file_size = file_size,
             .slot = slot,
         };
     }
@@ -292,7 +315,10 @@ pub const AccountFile = struct {
 
     /// get account without reading data (a lot faster if the data field isnt used anyway)
     /// (used when computing account hashes for snapshot validation)
-    pub fn getAccountHashAndLamports(self: *const Self, start_offset: usize) error{EOF}!struct { hash: *Hash, lamports: *u64 } {
+    pub fn getAccountHashAndLamports(
+        self: *const Self,
+        start_offset: usize,
+    ) error{EOF}!struct { hash: *Hash, lamports: *u64 } {
         var offset = start_offset;
 
         offset += @sizeOf(AccountInFile.StorageInfo);

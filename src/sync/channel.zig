@@ -539,7 +539,10 @@ pub const BenchmarkChannel = struct {
         const receivers_count = argss.n_receivers;
         var timer = try sig.time.Timer.start();
 
-        const allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.c_allocator;
+        const allocator = if (@import("builtin").is_test)
+            std.testing.allocator
+        else
+            std.heap.c_allocator;
         var channel = try Channel(usize).init(allocator);
         defer channel.deinit();
 
@@ -548,11 +551,17 @@ pub const BenchmarkChannel = struct {
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{ &channel, sends_per_sender });
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{
+                &channel,
+                sends_per_sender,
+            });
         }
 
         while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{ &channel, receives_per_receiver });
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{
+                &channel,
+                receives_per_receiver,
+            });
         }
 
         for (0..thread_handles.len) |i| {
@@ -583,11 +592,17 @@ pub const BenchmarkChannel = struct {
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketSender, .{ &channel, sends_per_sender });
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketSender, .{
+                &channel,
+                sends_per_sender,
+            });
         }
 
         while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketReceiver, .{ &channel, receives_per_receiver });
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketReceiver, .{
+                &channel,
+                receives_per_receiver,
+            });
         }
 
         for (0..thread_handles.len) |i| {

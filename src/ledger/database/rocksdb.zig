@@ -2,6 +2,7 @@ const std = @import("std");
 const rocks = @import("rocksdb");
 const sig = @import("../../sig.zig");
 const database = @import("lib.zig");
+const build_options = @import("build-options");
 
 const Allocator = std.mem.Allocator;
 
@@ -26,6 +27,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         const Self = @This();
 
         pub fn open(allocator: Allocator, logger: Logger, path: []const u8) Error!Self {
+            logger.info().log("Initializing RocksDB");
             const owned_path = try allocator.dupe(u8, path);
 
             // allocate cf descriptions
@@ -134,7 +136,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 .{ &self.db, self.cf_handles[cf.find(column_families)], key_bytes.data },
             ) orelse return null;
             return .{
-                .allocator = val_bytes.allocator,
+                .deinitializer = .{ .rocksdb = val_bytes.free },
                 .data = val_bytes.data,
             };
         }
@@ -180,7 +182,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn commit(self: *Self, batch: WriteBatch) Error!void {
+        pub fn commit(self: *Self, batch: *WriteBatch) Error!void {
             return callRocks(self.logger, rocks.DB.write, .{ &self.db, batch.inner });
         }
 
@@ -313,8 +315,8 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 pub fn nextBytes(self: *@This()) Error!?[2]BytesRef {
                     const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
                     return if (entry) |kv| .{
-                        .{ .allocator = null, .data = kv[0].data },
-                        .{ .allocator = null, .data = kv[1].data },
+                        .{ .deinitializer = null, .data = kv[0].data },
+                        .{ .deinitializer = null, .data = kv[1].data },
                     } else null;
                 }
             };
@@ -341,5 +343,7 @@ fn callRocks(logger: anytype, comptime func: anytype, args: anytype) ReturnType(
 }
 
 comptime {
-    _ = &database.interface.testDatabase(RocksDB);
+    if (build_options.blockstore_db == .rocksdb) {
+        _ = &database.interface.testDatabase(RocksDB);
+    }
 }

@@ -109,7 +109,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 defer put_count += 1;
                 const new_keypair = random.boolean();
 
-                var data = GossipData{
+                var data: GossipData = .{
                     .ContactInfo = try ContactInfo.initRandom(allocator, random, Pubkey.initRandom(random), 0, 0, 0),
                 };
 
@@ -120,8 +120,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
                     data.setId(pubkey);
-                    var signed_data = try SignedGossipData.initSigned(data, &keypair);
-                    signed_data.wallclockPtr().* = now;
+                    data.wallclockPtr().* = now;
+                    const signed_data = SignedGossipData.initSigned(&keypair, data);
 
                     // !
                     logger.debug().logf("putting pubkey: {}", .{pubkey});
@@ -143,18 +143,19 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     const pubkey = pubkeys.items[index];
 
                     data.setId(pubkey);
-                    var signed_data = try SignedGossipData.initSigned(data, &keypair);
-                    signed_data.wallclockPtr().* = now;
+                    data.wallclockPtr().* = now;
 
                     const should_overwrite = random.boolean();
                     if (should_overwrite) {
                         logger.debug().logf("overwriting pubkey: {}", .{pubkey});
-                        signed_data.wallclockPtr().* = now;
+                        data.wallclockPtr().* = now;
                     } else {
                         logger.debug().logf("writing old pubkey: {}", .{pubkey});
                         const other_insertion_time = insertion_times.items[index];
-                        signed_data.wallclockPtr().* = other_insertion_time -| random.intRangeAtMost(u64, 10, 100);
+                        data.wallclockPtr().* = other_insertion_time -| random.intRangeAtMost(u64, 10, 100);
                     }
+
+                    const signed_data = SignedGossipData.initSigned(&keypair, data);
 
                     // !
                     const result = try gossip_table.insert(signed_data, now);

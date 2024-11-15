@@ -414,8 +414,10 @@ pub const CompiledKeys = struct {
                 if (!account_meta_gopr.found_existing) {
                     account_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
                 }
-                account_meta_gopr.value_ptr.*.is_signer = account_meta_gopr.value_ptr.*.is_signer or account_meta.is_signer;
-                account_meta_gopr.value_ptr.*.is_writable = account_meta_gopr.value_ptr.*.is_writable or account_meta.is_writable;
+                account_meta_gopr.value_ptr.is_signer = account_meta_gopr.value_ptr.is_signer or
+                    account_meta.is_signer;
+                account_meta_gopr.value_ptr.is_writable = account_meta_gopr.value_ptr.is_writable or
+                    account_meta.is_writable;
             }
 
             if (maybe_payer) |payer| {
@@ -436,10 +438,13 @@ pub const CompiledKeys = struct {
 
     /// Creates message header and account keys from the compiled keys.
     /// Account keys memory is allocated and owned by the caller.
-    pub fn intoMessageHeaderAndAccountKeys(self: *CompiledKeys, allocator: std.mem.Allocator) !struct { MessageHeader, []Pubkey } {
-        const account_keys_buf = try allocator.alloc(Pubkey, self.key_meta_map.count() - @intFromBool(self.maybe_payer == null));
+    pub fn intoMessageHeaderAndAccountKeys(
+        self: *CompiledKeys,
+        allocator: std.mem.Allocator,
+    ) !struct { MessageHeader, []Pubkey } {
+        const account_keys_buf = try allocator.alloc(Pubkey, self.key_meta_map.count() -
+            @intFromBool(self.maybe_payer == null));
         errdefer allocator.free(account_keys_buf);
-
         var account_keys = std.ArrayListUnmanaged(Pubkey).initBuffer(account_keys_buf);
 
         var writable_signers_end: usize = 0;

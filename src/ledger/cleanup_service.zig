@@ -184,7 +184,6 @@ fn findSlotsToClean(
     // it guarantees num_slots >= 1 for the subsequent division.
     const num_slots = highest_slot - lowest_slot + 1;
     const mean_shreds_per_slot = num_shreds / num_slots;
-    // std.debug.print("num_shreds: {d}, num_slots: {d}, mean_shreds_per_slot: {d}\n", .{num_shreds, num_slots, mean_shreds_per_slot});
 
     if (num_shreds <= max_ledger_shreds) {
         return .{ .should_clean = false, .highest_slot_to_purge = 0, .total_shreds = num_shreds };
@@ -206,6 +205,7 @@ fn findSlotsToClean(
 /// analog to [`run_purge_with_stats`](https://github.com/anza-xyz/agave/blob/26692e666454d340a6691e2483194934e6a8ddfc/ledger/src/blockstore/blockstore_purge.rs#L202)
 pub fn purgeSlots(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !bool {
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
 
     // the methods used below are exclusive [from_slot, to_slot), so we add 1 to purge inclusive
     const purge_to_slot = to_slot + 1;
@@ -214,7 +214,7 @@ pub fn purgeSlots(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !bool {
     writePurgeRange(&write_batch, from_slot, purge_to_slot) catch {
         did_purge = false;
     };
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     if (did_purge and from_slot == 0) {
         try purgeFilesInRange(db, from_slot, purge_to_slot);
@@ -237,13 +237,26 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
     try purgeRangeWithCount(write_batch, schema.dead_slots, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.duplicate_slots, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.rooted_slots, from_slot, to_slot, &delete_count);
-    try purgeRangeWithCount(write_batch, schema.erasure_meta, .{ .slot = from_slot, .erasure_set_index = 0 }, .{ .slot = to_slot, .erasure_set_index = 0 }, &delete_count);
+    try purgeRangeWithCount(
+        write_batch,
+        schema.erasure_meta,
+        .{ .slot = from_slot, .erasure_set_index = 0 },
+        .{ .slot = to_slot, .erasure_set_index = 0 },
+        &delete_count,
+    );
     try purgeRangeWithCount(write_batch, schema.orphan_slots, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.index, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.data_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
     try purgeRangeWithCount(write_batch, schema.code_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
-    try purgeRangeWithCount(write_batch, schema.transaction_status, .{ Signature.default(), from_slot }, .{ Signature.default(), to_slot }, &delete_count);
-    // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason (permalink comment seems incorrect?)
+    try purgeRangeWithCount(
+        write_batch,
+        schema.transaction_status,
+        .{ Signature.default(), from_slot },
+        .{ Signature.default(), to_slot },
+        &delete_count,
+    );
+    // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason
+    // (permalink comment seems incorrect)
     // https://github.com/anza-xyz/agave/blob/da029625d180dd1d396d26b74a5c281b7786e8c9/ledger/src/blockstore_db.rs#L962
     try purgeRangeWithCount(
         write_batch,
@@ -252,7 +265,13 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
         .{ .slot = to_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.default() },
         &delete_count,
     );
-    try purgeRangeWithCount(write_batch, schema.transaction_memos, .{ Signature.default(), from_slot }, .{ Signature.default(), to_slot }, &delete_count);
+    try purgeRangeWithCount(
+        write_batch,
+        schema.transaction_memos,
+        .{ Signature.default(), from_slot },
+        .{ Signature.default(), to_slot },
+        &delete_count,
+    );
     try purgeRangeWithCount(write_batch, schema.transaction_status_index, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.rewards, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.blocktime, from_slot, to_slot, &delete_count);
@@ -260,7 +279,13 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
     try purgeRangeWithCount(write_batch, schema.block_height, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.bank_hash, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.optimistic_slots, from_slot, to_slot, &delete_count);
-    try purgeRangeWithCount(write_batch, schema.merkle_root_meta, .{ .slot = from_slot, .erasure_set_index = 0 }, .{ .slot = to_slot, .erasure_set_index = 0 }, &delete_count);
+    try purgeRangeWithCount(
+        write_batch,
+        schema.merkle_root_meta,
+        .{ .slot = from_slot, .erasure_set_index = 0 },
+        .{ .slot = to_slot, .erasure_set_index = 0 },
+        &delete_count,
+    );
     // slot is not indexed in this method, so this is a full purge
     // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back eventually
     try purgeRangeWithCount(write_batch, schema.program_costs, Pubkey.ZEROES, Pubkey.ZEROES, &delete_count);
@@ -294,13 +319,26 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
     try purgeFileRangeWithCount(db, schema.dead_slots, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.duplicate_slots, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.rooted_slots, from_slot, to_slot, &delete_count);
-    try purgeFileRangeWithCount(db, schema.erasure_meta, .{ .slot = from_slot, .erasure_set_index = 0 }, .{ .slot = to_slot, .erasure_set_index = 0 }, &delete_count);
+    try purgeFileRangeWithCount(
+        db,
+        schema.erasure_meta,
+        .{ .slot = from_slot, .erasure_set_index = 0 },
+        .{ .slot = to_slot, .erasure_set_index = 0 },
+        &delete_count,
+    );
     try purgeFileRangeWithCount(db, schema.orphan_slots, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.index, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.data_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
     try purgeFileRangeWithCount(db, schema.code_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
-    try purgeFileRangeWithCount(db, schema.transaction_status, .{ Signature.default(), from_slot }, .{ Signature.default(), to_slot }, &delete_count);
-    // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason (permalink comment seems incorrect?)
+    try purgeFileRangeWithCount(
+        db,
+        schema.transaction_status,
+        .{ Signature.default(), from_slot },
+        .{ Signature.default(), to_slot },
+        &delete_count,
+    );
+    // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason
+    // (permalink comment seems incorrect?)
     // https://github.com/anza-xyz/agave/blob/da029625d180dd1d396d26b74a5c281b7786e8c9/ledger/src/blockstore_db.rs#L962
     try purgeFileRangeWithCount(
         db,
@@ -309,7 +347,13 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
         .{ .slot = to_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.default() },
         &delete_count,
     );
-    try purgeFileRangeWithCount(db, schema.transaction_memos, .{ Signature.default(), from_slot }, .{ Signature.default(), to_slot }, &delete_count);
+    try purgeFileRangeWithCount(
+        db,
+        schema.transaction_memos,
+        .{ Signature.default(), from_slot },
+        .{ Signature.default(), to_slot },
+        &delete_count,
+    );
     try purgeFileRangeWithCount(db, schema.transaction_status_index, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.rewards, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.blocktime, from_slot, to_slot, &delete_count);
@@ -317,10 +361,22 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
     try purgeFileRangeWithCount(db, schema.block_height, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.bank_hash, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.optimistic_slots, from_slot, to_slot, &delete_count);
-    try purgeFileRangeWithCount(db, schema.merkle_root_meta, .{ .slot = from_slot, .erasure_set_index = 0 }, .{ .slot = to_slot, .erasure_set_index = 0 }, &delete_count);
+    try purgeFileRangeWithCount(
+        db,
+        schema.merkle_root_meta,
+        .{ .slot = from_slot, .erasure_set_index = 0 },
+        .{ .slot = to_slot, .erasure_set_index = 0 },
+        &delete_count,
+    );
     // slot is not indexed in this method, so this is a full purge
     // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back eventually
-    try purgeFileRangeWithCount(db, schema.program_costs, Pubkey.ZEROES, Pubkey.ZEROES, &delete_count);
+    try purgeFileRangeWithCount(
+        db,
+        schema.program_costs,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        &delete_count,
+    );
 
     // make sure we covered all the column families
     std.debug.assert(delete_count == ledger.schema.list.len);
@@ -372,9 +428,17 @@ test "findSlotsToClean" {
     {
         var write_batch = try db.initWriteBatch();
         defer write_batch.deinit();
-        try write_batch.put(ledger.schema.schema.slot_meta, lowest_slot_meta.slot, lowest_slot_meta);
-        try write_batch.put(ledger.schema.schema.slot_meta, highest_slot_meta.slot, highest_slot_meta);
-        try db.commit(write_batch);
+        try write_batch.put(
+            ledger.schema.schema.slot_meta,
+            lowest_slot_meta.slot,
+            lowest_slot_meta,
+        );
+        try write_batch.put(
+            ledger.schema.schema.slot_meta,
+            highest_slot_meta.slot,
+            highest_slot_meta,
+        );
+        try db.commit(&write_batch);
     }
 
     const r = try findSlotsToClean(&reader, 0, 100);
@@ -423,6 +487,7 @@ test "purgeSlots" {
 
     // write another type
     var write_batch = try db.initWriteBatch();
+    defer write_batch.deinit();
     for (0..roots.len + 1) |i| {
         const merkle_root_meta = sig.ledger.shred.ErasureSetId{
             .erasure_set_index = i,
@@ -436,7 +501,7 @@ test "purgeSlots" {
 
         try write_batch.put(schema.merkle_root_meta, merkle_root_meta, merkle_meta);
     }
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // purge the range [0, 5]
     const did_purge2 = try purgeSlots(&db, 0, 5);

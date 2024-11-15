@@ -28,7 +28,8 @@ const builtin = @import("builtin");
 /// This variable is `true` if an atomic reference-counter is used for `Arc`, `false` otherwise.
 ///
 /// If the target is single-threaded, `Arc` is optimized to a regular `Rc`.
-pub const atomic_arc = !builtin.single_threaded or (builtin.target.isWasm() and std.Target.wasm.featureSetHas(builtin.cpu.features, .atomics));
+pub const atomic_arc = !builtin.single_threaded or
+    (builtin.target.isWasm() and std.Target.wasm.featureSetHas(builtin.cpu.features, .atomics));
 
 /// A single threaded, strong reference to a reference-counted value.
 pub fn Rc(comptime T: type) type {
@@ -60,7 +61,10 @@ pub fn Rc(comptime T: type) type {
 
         /// Constructs a new `Rc` while giving you a `Weak` to the allocation,
         /// to allow you to construct a `T` which holds a weak pointer to itself.
-        pub fn initCyclic(alloc: std.mem.Allocator, comptime data_fn: fn (*Weak) T) error{OutOfMemory}!Self {
+        pub fn initCyclic(
+            alloc: std.mem.Allocator,
+            comptime data_fn: fn (*Weak) T,
+        ) error{OutOfMemory}!Self {
             const inner = try alloc.create(Inner);
             inner.* = Inner{ .strong = 0, .weak = 1, .value = undefined };
 
@@ -301,7 +305,10 @@ pub fn Arc(comptime T: type) type {
 
         /// Constructs a new `Arc` while giving you a `weak` to the allocation,
         /// to allow you to construct a `T` which holds a weak pointer to itself.
-        pub fn initCyclic(alloc: std.mem.Allocator, comptime data_fn: fn (*Weak) T) error{OutOfMemory}!Self {
+        pub fn initCyclic(
+            alloc: std.mem.Allocator,
+            comptime data_fn: fn (*Weak) T,
+        ) error{OutOfMemory}!Self {
             const inner = try alloc.create(Inner);
             inner.* = Inner{ .strong = 0, .weak = 1, .value = undefined };
 
@@ -464,7 +471,14 @@ pub fn Arc(comptime T: type) type {
                         return null;
                     }
 
-                    if (@cmpxchgStrong(usize, &ptr.strong, prev, prev + 1, .acquire, .monotonic) == null) {
+                    if (@cmpxchgStrong(
+                        usize,
+                        &ptr.strong,
+                        prev,
+                        prev + 1,
+                        .acquire,
+                        .monotonic,
+                    ) == null) {
                         return Arc(T){
                             .value = &ptr.value,
                             .alloc = self.alloc,

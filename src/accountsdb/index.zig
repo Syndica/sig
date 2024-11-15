@@ -54,9 +54,10 @@ pub const AccountIndex = struct {
 
     // TODO(fastload): change to []AccountRef
     pub const SlotRefMap = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
-    pub const AllocatorConfig = union(enum) {
-        Ram: struct { allocator: std.mem.Allocator },
-        Disk: struct { accountsdb_dir: std.fs.Dir },
+    pub const AllocatorConfig = union(Tag) {
+        pub const Tag = ReferenceAllocator.Tag;
+        ram: struct { allocator: std.mem.Allocator },
+        disk: struct { accountsdb_dir: std.fs.Dir },
     };
     pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
 
@@ -72,11 +73,11 @@ pub const AccountIndex = struct {
     ) !Self {
         const logger = logger_.withScope(@typeName((Self)));
         const reference_allocator: ReferenceAllocator = switch (allocator_config) {
-            .Ram => |ram| blk: {
+            .ram => |ram| blk: {
                 logger.info().logf("using ram memory for account index", .{});
                 break :blk .{ .ram = ram.allocator };
             },
-            .Disk => |disk| blk: {
+            .disk => |disk| blk: {
                 var index_dir = try disk.accountsdb_dir.makeOpenPath("index", .{});
                 errdefer index_dir.close();
                 const disk_allocator = try allocator.create(DiskMemoryAllocator);
@@ -230,14 +231,7 @@ pub const AccountIndex = struct {
 
         // traverse until you find the end
         var curr_ref = map_entry.value_ptr.ref_ptr;
-        if (@import("builtin").mode == .Debug and curr_ref.slot == account_ref.slot) {
-            std.debug.panic("duplicate slot in index: {any} {any}", .{ account_ref, curr_ref });
-        }
-        while (account_ref.next_ptr) |next_ref| {
-            // sanity check in debug mode
-            if (@import("builtin").mode == .Debug and next_ref.slot == account_ref.slot) {
-                std.debug.panic("duplicate slot in index: {any} {any}", .{ account_ref, next_ref });
-            }
+        while (curr_ref.next_ptr) |next_ref| {
             curr_ref = next_ref;
         }
         curr_ref.next_ptr = account_ref;
@@ -504,14 +498,15 @@ pub const PubkeyShardCalculator = struct {
     }
 };
 
-pub const ReferenceAllocator = union(enum) {
+pub const ReferenceAllocator = union(Tag) {
+    pub const Tag = enum { ram, disk };
     /// Used to AccountRef mmapped data on disk in ./index/bin (see see accountsdb/readme.md)
+    ram: std.mem.Allocator,
     disk: struct {
         dma: *DiskMemoryAllocator,
         // used for deinit() purposes
         ptr_allocator: std.mem.Allocator,
     },
-    ram: std.mem.Allocator,
 
     pub fn get(self: ReferenceAllocator) std.mem.Allocator {
         return switch (self) {
@@ -534,7 +529,7 @@ pub const ReferenceAllocator = union(enum) {
 test "account index update/remove reference" {
     const allocator = std.testing.allocator;
 
-    var index = try AccountIndex.init(allocator, .noop, .{ .Ram = .{ .allocator = allocator } }, 8, 100);
+    var index = try AccountIndex.init(allocator, .noop, .{ .ram = .{ .allocator = allocator } }, 8, 100);
     defer index.deinit(true);
     try index.pubkey_ref_map.ensureTotalCapacityPerShard(100);
 

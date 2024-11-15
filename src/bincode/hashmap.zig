@@ -33,8 +33,20 @@ pub fn hashMapFieldConfig(
 
             var iter = data.iterator();
             while (iter.next()) |entry| {
-                try writeFieldWithConfig(key_info, config.key, writer, entry.key_ptr.*, params);
-                try writeFieldWithConfig(value_info, config.value, writer, entry.value_ptr.*, params);
+                try writeFieldWithConfig(
+                    key_info,
+                    config.key,
+                    writer,
+                    entry.key_ptr.*,
+                    params,
+                );
+                try writeFieldWithConfig(
+                    value_info,
+                    config.value,
+                    writer,
+                    entry.value_ptr.*,
+                    params,
+                );
             }
         }
 
@@ -44,12 +56,15 @@ pub fn hashMapFieldConfig(
             params: Params,
         ) anyerror!HashMapType {
             const Size = if (hm_info.kind == .unordered) HashMapType.Size else usize;
-            const len = (try readIntAsLength(Size, reader, params)) orelse return error.HashMapTooBig;
+            const len = try readIntAsLength(Size, reader, params) orelse
+                return error.HashMapTooBig;
 
             var data: HashMapType = switch (hm_info.management) {
                 .managed => HashMapType.init(allocator),
                 .unmanaged => .{},
             };
+            errdefer free(allocator, data);
+
             switch (hm_info.management) {
                 .managed => try data.ensureTotalCapacity(len),
                 .unmanaged => try data.ensureTotalCapacity(allocator, len),
@@ -58,10 +73,22 @@ pub fn hashMapFieldConfig(
             const key_field = std.meta.fieldInfo(HashMapType.KV, .key);
             const value_field = std.meta.fieldInfo(HashMapType.KV, .value);
             for (0..len) |_| {
-                const key = try readFieldWithConfig(allocator, reader, params, key_field, config.key);
+                const key = try readFieldWithConfig(
+                    allocator,
+                    reader,
+                    params,
+                    key_field,
+                    config.key,
+                );
                 errdefer bincode.free(allocator, key);
 
-                const value = try readFieldWithConfig(allocator, reader, params, value_field, config.value);
+                const value = try readFieldWithConfig(
+                    allocator,
+                    reader,
+                    params,
+                    value_field,
+                    config.value,
+                );
                 errdefer bincode.free(allocator, value);
 
                 const gop = data.getOrPutAssumeCapacity(key);
@@ -74,10 +101,14 @@ pub fn hashMapFieldConfig(
 
         fn free(allocator: std.mem.Allocator, data: anytype) void {
             var copy = data;
-            if (hm_info.management == .managed) {
-                copy.deinit();
-            } else {
-                copy.deinit(allocator);
+            var iter = copy.iterator();
+            while (iter.next()) |entry| {
+                bincode.free(allocator, entry.key_ptr.*);
+                bincode.free(allocator, entry.value_ptr.*);
+            }
+            switch (hm_info.management) {
+                .managed => copy.deinit(),
+                .unmanaged => copy.deinit(allocator),
             }
         }
     };

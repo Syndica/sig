@@ -65,7 +65,10 @@ pub fn run() !void {
 
     var gossip_host_option = cli.Option{
         .long_name = "gossip-host",
-        .help = "IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1",
+        .help =
+        \\IPv4 address for the validator to advertise in gossip
+        \\ - default: get from --entrypoint, fallback to 127.0.0.1"
+        ,
         .value_ref = cli.mkRef(&config.current.gossip.host),
         .required = false,
         .value_name = "Gossip Host",
@@ -262,7 +265,11 @@ pub fn run() !void {
     var accounts_per_file_estimate = cli.Option{
         .long_name = "accounts-per-file-estimate",
         .short_alias = 'a',
-        .help = "number of accounts to estimate inside of account files (used for pre-allocation). Safer to set it larger than smaller (approx values we found work well testnet/devnet: 1_500, mainnet: 3_000).",
+        .help =
+        \\number of accounts to estimate inside of account files (used for pre-allocation).
+        \\Safer to set it larger than smaller.
+        \\(approx values we found work well testnet/devnet: 1_500, mainnet: 3_000)"
+        ,
         .value_ref = cli.mkRef(&config.current.accounts_db.accounts_per_file_estimate),
         .required = false,
         .value_name = "accounts_per_file_estimate",
@@ -421,9 +428,10 @@ pub fn run() !void {
                         \\ NOTE: this means that this command *requires* a leader schedule to be provided
                         \\ (which would usually be derived from the accountsdb snapshot).
                         \\
-                        \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well (
-                        \\ which is usually derived from the accountsdb snapshot). This can be done 
-                        \\ with `--test-repair-for-slot $(solana slot -u testnet)` for testnet or another `-u` for mainnet/devnet.
+                        \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well
+                        \\ (which is usually derived from the accountsdb snapshot).
+                        \\ This can be done with `--test-repair-for-slot $(solana slot -u testnet)`
+                        \\ for testnet or another `-u` for mainnet/devnet.
                         },
                         .options = &.{
                             // gossip
@@ -801,7 +809,8 @@ fn shredCollector() !void {
 
     // This is a sort of hack to get the epoch of the leader schedule and then insert into the cache
     const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
-    const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(start_slot); // first_slot is non null iff leader schedule is built from cli
+    // first_slot is non null iff leader schedule is built from cli
+    const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(start_slot);
     try leader_schedule_cache.put(leader_schedule_epoch, leader_schedule);
 
     const leader_provider = leader_schedule_cache.slotLeaderProvider();
@@ -1036,10 +1045,11 @@ fn printLeaderSchedule() !void {
                 return err;
             }
         };
-        _, const slot_index = loaded_snapshot.bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(loaded_snapshot.bank.bank_fields.slot);
+        const bank_fields = loaded_snapshot.bank.bank_fields;
+        _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
         break :b .{
-            loaded_snapshot.bank.bank_fields.slot - slot_index,
-            try loaded_snapshot.bank.bank_fields.leaderSchedule(allocator),
+            bank_fields.slot - slot_index,
+            try bank_fields.leaderSchedule(allocator),
         };
     };
 
@@ -1068,7 +1078,8 @@ pub fn testTransactionSenderService() !void {
     const allocator = gpa_allocator;
 
     // read genesis (used for leader schedule)
-    const genesis_file_path = try config.current.genesisFilePath() orelse @panic("No genesis file path found: use -g or -n");
+    const genesis_file_path = try config.current.genesisFilePath() orelse
+        @panic("No genesis file path found: use -g or -n");
     const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
@@ -1427,7 +1438,7 @@ fn loadSnapshot(
     allocator: Allocator,
     logger_: Logger,
     /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
-    gossip_service: ?*GossipService,
+    maybe_gossip_service: ?*GossipService,
     /// whether to validate the snapshot account data against the metadata
     validate_snapshot: bool,
     /// optional geyser to write snapshot data to
@@ -1445,7 +1456,7 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger.unscoped(), gossip_service, .{
+    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger.unscoped(), maybe_gossip_service, .{
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
@@ -1475,17 +1486,16 @@ fn loadSnapshot(
     };
     logger.info().logf("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
-    result.accounts_db = try AccountsDB.init(
-        allocator,
-        logger.unscoped(),
-        snapshot_dir,
-        .{
-            .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
-            .use_disk_index = config.current.accounts_db.use_disk_index,
-            .lru_size = 10_000,
-        },
-        geyser_writer,
-    );
+    result.accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger.unscoped(),
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = geyser_writer,
+        .gossip_view = if (maybe_gossip_service) |service| AccountsDB.GossipView.fromService(service) else null,
+        .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
+        .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
+        .lru_size = 10_000,
+    });
     errdefer result.accounts_db.deinit();
 
     var snapshot_fields = try result.accounts_db.loadWithDefaults(
@@ -1517,7 +1527,10 @@ fn loadSnapshot(
     // validate the status cache
     result.status_cache = readStatusCache(allocator, snapshot_dir) catch |err| {
         if (err == error.StatusCacheNotFound) {
-            logger.err().logf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
+            logger.err().logf(
+                "status-cache.bin not found - expecting {s}/snapshots/status-cache to exist",
+                .{snapshot_dir_str},
+            );
         }
         return err;
     };
@@ -1712,7 +1725,10 @@ fn getOrDownloadSnapshots(
         timer.reset();
         logger.info().logf("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
         {
-            const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
+            const archive_file = try snapshot_dir.openFile(
+                snapshot_files.full_snapshot.snapshotNameStr().constSlice(),
+                .{},
+            );
             defer archive_file.close();
             try parallelUnpackZstdTarBall(
                 allocator,

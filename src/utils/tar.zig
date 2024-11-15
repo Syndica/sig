@@ -29,14 +29,11 @@ pub const UnTarEntry = struct {
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
     file_name: []const u8,
-    filename_buf: []u8,
-    header_buf: []u8,
     contents: []u8,
 
     pub fn callback(self: *UnTarEntry) !void {
         defer {
-            self.allocator.free(self.filename_buf);
-            self.allocator.free(self.header_buf);
+            self.allocator.free(self.file_name);
             self.allocator.free(self.contents);
         }
 
@@ -93,8 +90,8 @@ pub fn parallelUntarToFileSystem(
     var file_count: usize = 0;
     const strip_components: u32 = 0;
     loop: while (true) {
-        const header_buf = try allocator.alloc(u8, 512);
-        switch (try reader.readAtLeast(header_buf, 512)) {
+        var header_buf: [512]u8 = undefined;
+        switch (try reader.readAtLeast(&header_buf, 512)) {
             0 => break,
             512 => {},
             else => |actual_size| std.debug.panic("Actual file size ({d}) too small for header (< 512).", .{actual_size}),
@@ -106,8 +103,8 @@ pub fn parallelUntarToFileSystem(
         const rounded_file_size = std.mem.alignForward(u64, file_size, 512);
         const pad_len = rounded_file_size - file_size;
 
-        var file_name_buf = try allocator.alloc(u8, 255);
-        const unstripped_file_name = try header.fullName(file_name_buf[0..255]);
+        var file_name_buffer: [255]u8 = undefined;
+        const unstripped_file_name = try header.fullName(&file_name_buffer);
 
         switch (header.kind()) {
             .directory => {
@@ -115,18 +112,14 @@ pub fn parallelUntarToFileSystem(
                 if (file_name.len != 0) {
                     try dir.makePath(file_name);
                 }
-                allocator.free(header_buf);
-                allocator.free(file_name_buf);
             },
             .normal => {
                 if (file_size == 0 and unstripped_file_name.len == 0) {
-                    allocator.free(header_buf);
-                    allocator.free(file_name_buf);
                     break :loop; // tar EOF
                 }
 
-                const file_name = try stripComponents(unstripped_file_name, strip_components);
-                if (std.fs.path.dirname(file_name)) |dir_name| {
+                const file_name_stripped = try stripComponents(unstripped_file_name, strip_components);
+                if (std.fs.path.dirname(file_name_stripped)) |dir_name| {
                     try dir.makePath(dir_name);
                 }
 
@@ -146,12 +139,17 @@ pub fn parallelUntarToFileSystem(
                 file_count += 1;
 
                 const contents = try allocator.alloc(u8, file_size);
+                errdefer allocator.free(contents);
+
                 const actual_contents_len = try reader.readAtLeast(contents, file_size);
                 if (actual_contents_len != file_size) {
                     std.debug.panic("Reported file ({d}) size does not match actual file size ({d})", .{ contents.len, actual_contents_len });
                 }
 
                 try reader.skipBytes(pad_len, .{});
+
+                const file_name = try allocator.dupe(u8, file_name_stripped);
+                errdefer comptime unreachable;
 
                 const task_ptr = &tasks[UnTarTask.awaitAndAcquireFirstAvailableTask(tasks, 0)];
                 task_ptr.result catch |err| logger.err().logf("UnTarTask encountered error: {s}", .{@errorName(err)});
@@ -160,8 +158,6 @@ pub fn parallelUntarToFileSystem(
                     .contents = contents,
                     .dir = dir,
                     .file_name = file_name,
-                    .filename_buf = file_name_buf,
-                    .header_buf = header_buf,
                 };
 
                 const batch = ThreadPool.Batch.from(&task_ptr.task);

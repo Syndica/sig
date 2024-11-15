@@ -10,11 +10,12 @@ with open(coverage_path, "r") as f:
     coverage = json.load(f)
 
 filtered_files = [
-    file_info for file_info in coverage["files"]
-    if "sig/" in file_info["file"]
+    file_info for file_info in coverage["files"] if "sig/" in file_info["file"]
 ]
 
-max_path_length = max(len(file_info["file"].split("sig/")[1]) for file_info in filtered_files)
+max_path_length = max(
+    len(file_info["file"].split("sig/")[1]) for file_info in filtered_files
+)
 filtered_files.sort(key=lambda x: float(x["percent_covered"]))
 
 output = ""

@@ -634,7 +634,7 @@ fn calculateMerkleRoot(start_index: usize, start_node: Hash, proof: MerkleProofE
     var index = start_index;
     var node = start_node;
     for (0..proof.len) |i| {
-        const other = proof.get(i) orelse unreachable;
+        const other = proof.get(i).?;
         node = if (index % 2 == 0)
             joinNodes(&node.data, other[0..])
         else
@@ -1302,7 +1302,7 @@ test "merkle tree round trip" {
     try makeMerkleTree(&tree);
     const root = tree.items[tree.items.len - 1];
     for (0..size) |index| {
-        const owned_proof = try makeMerkleProof(allocator, index, size, tree.items) orelse unreachable;
+        const owned_proof = (try makeMerkleProof(allocator, index, size, tree.items)).?;
         defer owned_proof.deinit(allocator);
         for (nodes.items, 0..) |node, k| {
             if (k == index) {

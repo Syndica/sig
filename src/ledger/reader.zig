@@ -1548,7 +1548,7 @@ test "getLatestOptimisticSlots" {
                 .timestamp = 10,
             },
         });
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         const get_hash, const ts = (try reader.getOptimisticSlot(1)).?;
         try std.testing.expectEqual(hash, get_hash);
@@ -1573,7 +1573,7 @@ test "getLatestOptimisticSlots" {
                 .timestamp = 100,
             },
         });
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         const get_hash, const ts = (try reader.getOptimisticSlot(10)).?;
         try std.testing.expectEqual(hash, get_hash);
@@ -1619,7 +1619,7 @@ test "getFirstDuplicateProof" {
         var write_batch = try db.initWriteBatch();
         defer write_batch.deinit();
         try write_batch.put(schema.duplicate_slots, 19, proof);
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         const slot, const proof2 = (try reader.getFirstDuplicateProof()).?;
         defer bincode.free(allocator, proof2);
@@ -1653,7 +1653,7 @@ test "isDead" {
         var write_batch = try db.initWriteBatch();
         defer write_batch.deinit();
         try write_batch.put(schema.dead_slots, 19, true);
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
     }
     try std.testing.expectEqual(try reader.isDead(19), true);
 
@@ -1661,7 +1661,7 @@ test "isDead" {
         var write_batch = try db.initWriteBatch();
         defer write_batch.deinit();
         try write_batch.put(schema.dead_slots, 19, false);
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
     }
     try std.testing.expectEqual(try reader.isDead(19), false);
 }
@@ -1688,7 +1688,7 @@ test "getBlockHeight" {
     var write_batch = try db.initWriteBatch();
     defer write_batch.deinit();
     try write_batch.put(schema.block_height, 19, 19);
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // should succeeed
     const height = try reader.getBlockHeight(19);
@@ -1717,7 +1717,7 @@ test "getRootedBlockTime" {
     var write_batch = try db.initWriteBatch();
     defer write_batch.deinit();
     try write_batch.put(schema.blocktime, 19, 19);
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // not rooted
     const r = reader.getRootedBlockTime(19);
@@ -1727,7 +1727,7 @@ test "getRootedBlockTime" {
     var write_batch2 = try db.initWriteBatch();
     defer write_batch2.deinit();
     try write_batch2.put(schema.rooted_slots, 19, true);
-    try db.commit(write_batch2);
+    try db.commit(&write_batch2);
 
     // should succeeed
     const time = try reader.getRootedBlockTime(19);
@@ -1781,7 +1781,7 @@ test "slotMetaIterator" {
 
         try slot_metas.append(slot_meta);
     }
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     var iter = try reader.slotMetaIterator(0);
     defer iter.deinit();
@@ -1821,7 +1821,7 @@ test "rootedSlotIterator" {
     for (roots) |slot| {
         try write_batch.put(schema.rooted_slots, slot, true);
     }
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     var iter = try reader.rootedSlotIterator(0);
     defer iter.deinit();
@@ -1871,7 +1871,10 @@ test "slotRangeConnected" {
         // connect the chain
         parent_slot = slot;
     }
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
+
+    var write_batch2 = try db.initWriteBatch();
+    defer write_batch2.deinit();
 
     const is_connected = try reader.slotRangeConnected(1, 3);
     try std.testing.expectEqual(true, is_connected);
@@ -1881,7 +1884,7 @@ test "slotRangeConnected" {
     defer slot_meta.deinit();
     // ensure isFull() is FALSE
     slot_meta.last_index = 1;
-    try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
+    try write_batch2.put(schema.slot_meta, slot_meta.slot, slot_meta);
 
     // this should still pass
     try std.testing.expectEqual(true, try reader.slotRangeConnected(1, 3));
@@ -1923,7 +1926,7 @@ test "highestSlot" {
             shred_slot,
             slot_meta,
         );
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         const highest_slot = (try reader.highestSlot()).?;
         try std.testing.expectEqual(slot_meta.slot, highest_slot);
@@ -1942,7 +1945,7 @@ test "highestSlot" {
             slot_meta2.slot,
             slot_meta2,
         );
-        try db.commit(write_batch);
+        try db.commit(&write_batch);
 
         const highest_slot = (try reader.highestSlot()).?;
         try std.testing.expectEqual(slot_meta2.slot, highest_slot);
@@ -1989,7 +1992,7 @@ test "lowestSlot" {
         shred_slot,
         slot_meta,
     );
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     const lowest_slot = try reader.lowestSlot();
     try std.testing.expectEqual(slot_meta.slot, lowest_slot);
@@ -2038,7 +2041,7 @@ test "isShredDuplicate" {
         .{ shred_slot, shred_index },
         shred_payload,
     );
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // should now be a duplicate
     const other_payload = (try reader.isShredDuplicate(shred)).?;
@@ -2099,7 +2102,7 @@ test "findMissingDataIndexes" {
         shred_slot,
         slot_meta,
     );
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     var indexes = try reader.findMissingDataIndexes(
         slot_meta.slot,
@@ -2163,13 +2166,14 @@ test "getCodeShred" {
         .{ shred_slot, shred_index },
         shred.payload(),
     );
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // correct data read
-    const read_bytes_ref = try reader.getCodeShred(shred_slot, shred_index) orelse {
+    const code_shred = try reader.getCodeShred(shred_slot, shred_index) orelse {
         return error.NullDataShred;
     };
-    try std.testing.expectEqualSlices(u8, shred.payload(), read_bytes_ref.data);
+    defer code_shred.deinit();
+    try std.testing.expectEqualSlices(u8, shred.payload(), code_shred.data);
 
     // incorrect slot
     if (try reader.getCodeShred(shred_slot + 10, shred_index) != null) {
@@ -2232,16 +2236,17 @@ test "getDataShred" {
         .{ shred_slot, shred_index },
         shred_payload,
     );
-    try db.commit(write_batch);
+    try db.commit(&write_batch);
 
     // correct data read
-    const read_bytes_ref = try reader.getDataShred(
+    const data_shred = try reader.getDataShred(
         shred_slot,
         shred_index,
     ) orelse {
         return error.NullDataShred;
     };
-    try std.testing.expectEqualSlices(u8, shred_payload, read_bytes_ref.data);
+    defer data_shred.deinit();
+    try std.testing.expectEqualSlices(u8, shred_payload, data_shred.data);
 
     // incorrect slot
     if (try reader.getDataShred(shred_slot + 10, shred_index) != null) {

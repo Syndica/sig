@@ -25,7 +25,11 @@ pub const AccountsCache = struct {
 
         /// Makes use of the fact that CachedAccount needs to live on the heap & shares its lifetime
         /// with .ref_count in order to allocate once instead of twice.
-        pub fn initCreate(allocator: std.mem.Allocator, account: Account, slot: Slot) error{OutOfMemory}!*CachedAccount {
+        pub fn initCreate(
+            allocator: std.mem.Allocator,
+            account: Account,
+            slot: Slot,
+        ) error{OutOfMemory}!*CachedAccount {
             const buf = try allocator.alignedAlloc(
                 u8,
                 @alignOf(CachedAccount),
