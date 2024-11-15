@@ -77,7 +77,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
         }
 
         /// append a block of N elements to the manager
-        pub fn append(self: *Self, n: u64) !void {
+        pub fn append(self: *Self, n: u64) std.mem.Allocator.Error!void {
             if (n == 0) return;
 
             if (config.thread_safe) self.mux.lock();
@@ -99,7 +99,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
             self.capacity += buf.len;
         }
 
-        pub fn alloc(self: *Self, n: u64) !struct { []T, u64 } {
+        pub fn alloc(self: *Self, n: u64) error{ AllocTooBig, AllocFailed }!struct { []T, u64 } {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
@@ -122,7 +122,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
             @panic("not enough memory, and collapse failed max times");
         }
 
-        pub fn allocUnsafe(self: *Self, n: u64) !struct { []T, u64 } {
+        pub fn allocUnsafe(self: *Self, n: u64) error{ AllocTooBig, AllocFailed, CollapseFailed }!struct { []T, u64 } {
             // this would never succeed
             if (n > self.capacity) return error.AllocTooBig;
 
