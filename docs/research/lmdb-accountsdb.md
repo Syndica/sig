@@ -49,6 +49,6 @@ LMDB seems to be amazing for sorted data. For some of our queries, sorting is he
 
 However, for most of our queries, sorting is not meaningful; pubkeys are the largest part of all of our keys, and they're completely unordered. This means that the final lookup of (Pubkey, Slot) -> Account-Data will never use lmdb's fast path.
 
-This meant eating the cost of n O(logn) lookup (or two) for almost every query, and when N in the real world is approaching a billion this is suddenly a big problem; performance degraded far beyond the point of usefulness when approaching 10 million keys in testing.
+This meant eating the cost of an O(logn) lookup (or two) for almost every query, and when N in the real world is approaching a billion this is suddenly a big problem; performance degraded far beyond the point of usefulness when approaching 10 million keys in testing.
 
 Because of this, we decided not to move forward with using LMDB. See #348 for more details.
