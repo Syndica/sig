@@ -95,7 +95,7 @@ pub const ServiceManager = struct {
             spawn_config,
             runService,
             .{
-                self.logger.withScope(name),
+                self.logger,
                 self.exit,
                 name,
                 run_config orelse self.default_run_config,
@@ -124,7 +124,7 @@ pub const ServiceManager = struct {
             spawn_config,
             runService,
             .{
-                self.logger.withScope(name),
+                self.logger,
                 self.exit,
                 name,
                 run_config orelse self.default_run_config,
@@ -187,7 +187,7 @@ pub const ReturnHandler = struct {
 /// It's guaranteed to run at least once in order to not race initialization with
 /// the `exit` flag.
 pub fn runService(
-    logger: anytype,
+    logger: ScopedLogger(@typeName(ServiceManager)),
     exit: *Atomic(bool),
     maybe_name: ?[]const u8,
     config: RunConfig,
