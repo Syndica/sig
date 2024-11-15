@@ -106,6 +106,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         const AllocError = error{
             AllocTooBig,
             AllocFailed,
+            AttemptedZeroAlloc,
             // NOTE: even though this doesnt get hit on `alloc`, zig isnt smart enough to know that
             CollapseFailed,
         } || std.mem.Allocator.Error;
@@ -113,6 +114,8 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         pub fn alloc(self: *Self, n: u64) AllocError!struct { []T, u64 } {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
+
+            if (n == 0) return error.AttemptedZeroAlloc;
 
             for (0..config.max_collapse_tries) |_| {
                 return self.allocUnsafe(n) catch |err| {
@@ -134,6 +137,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         }
 
         pub fn allocUnsafe(self: *Self, n: u64) AllocError!struct { []T, u64 } {
+            if (n == 0) return error.AttemptedZeroAlloc;
             // this would never succeed
             if (n > self.capacity) return error.AllocTooBig;
 
@@ -146,7 +150,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                     if (record.is_free) {
                         record.is_free = false;
                         const buf = record.buf[0..n]; // local copy because next line will likely change the record pointer
-                        _ = try self.tryRecycleUnusedSpaceWithRecordUnsafe(record, n);
+                        _ = self.tryRecycleUnusedSpaceWithRecordUnsafe(record, n);
                         return .{ buf, global_index };
                     } else {
                         is_possible_to_recycle = true;
@@ -186,7 +190,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
 
         /// frees the unused space of a buf.
         /// this is useful when a buf is initially overallocated and then resized.
-        pub fn tryRecycleUnusedSpace(self: *Self, buf_ptr: [*]T, used_len: u64) !bool {
+        pub fn tryRecycleUnusedSpace(self: *Self, buf_ptr: [*]T, used_len: u64) bool {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
@@ -198,7 +202,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             @panic("attempt to recycle invalid buf");
         }
 
-        fn tryRecycleUnusedSpaceWithRecordUnsafe(self: *Self, record: *Record, used_len: u64) std.mem.Allocator.Error!bool {
+        fn tryRecycleUnusedSpaceWithRecordUnsafe(self: *Self, record: *Record, used_len: u64) bool {
             const unused_len = record.buf.len -| used_len;
             if (unused_len > config.min_split_size) {
                 // update the state of the record
@@ -207,13 +211,14 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                 record.buf = record.buf[0..used_len];
                 record.len = used_len;
                 // add new unused record to the list
-                try self.records.append(.{
+                // NOTE: errors here are unreachable because if we hit OOM, were left in a bad state
+                self.records.append(.{
                     .is_free = true,
                     .buf = split_buf,
                     .global_index = record.global_index + used_len,
                     .len = split_buf.len,
                     .memory_index = record.memory_index,
-                });
+                }) catch unreachable;
                 return true;
             } else {
                 // dont try to split if its too small
