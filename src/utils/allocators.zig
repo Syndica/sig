@@ -223,28 +223,23 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         /// collapses adjacent free records into a single record.
         /// we use the memory_index to ensure we dont collapse two separate buffers
         /// into one, which would result in a segfault.
-        pub fn collapse(self: *Self) !void {
-            var new_records = std.ArrayList(Record).init(self.records.allocator);
-            var last_was_free = false;
-            var last_memory_index: u64 = 0;
+        pub fn collapse(self: *Self) void {
+            const records = &self.records;
+            var i: usize = 1;
+            while (i < records.items.len) {
+                const prev = records.items[i - 1];
+                const curr = records.items[i];
 
-            for (self.records.items) |record| {
-                if (record.is_free) {
-                    // NOTE: only merge the records if they are from the same memory buffer
-                    if (last_was_free and record.memory_index == last_memory_index) {
-                        new_records.items[new_records.items.len - 1].buf.len += record.buf.len;
-                    } else {
-                        last_was_free = true;
-                        last_memory_index = record.memory_index;
-                        try new_records.append(record);
-                    }
+                const both_free = prev.is_free and curr.is_free;
+                const shared_memory_index = prev.memory_index == curr.memory_index;
+
+                if (both_free and shared_memory_index) {
+                    records.items[i - 1].buf.len += curr.buf.len;
+                    records.orderedRemove(i);
                 } else {
-                    try new_records.append(record);
-                    last_was_free = false;
+                    i += 1;
                 }
             }
-            self.records.deinit();
-            self.records = new_records;
         }
 
         pub fn isPossibleToAllocate(self: *Self, n: u64) bool {
