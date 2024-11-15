@@ -175,12 +175,12 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
 
         /// frees the unused space of a buf.
         /// this is useful when a buf is initially overallocated and then resized.
-        pub fn tryRecycleUnusedSpace(self: *Self, buf: []T, used_len: u64) !bool {
+        pub fn tryRecycleUnusedSpace(self: *Self, buf_ptr: [*]T, used_len: u64) !bool {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
             for (self.records.items) |*record| {
-                if (record.buf.ptr == buf.ptr) {
+                if (record.buf.ptr == buf_ptr) {
                     return self.tryRecycleUnusedSpaceWithRecordUnsafe(record, used_len);
                 }
             }
@@ -717,7 +717,7 @@ test "recycle buffer: freeUnused" {
     defer allocator.free(bytes.ptr);
 
     // free the unused space
-    const did_recycle = try allocator.tryRecycleUnusedSpace(bytes, 50);
+    const did_recycle = try allocator.tryRecycleUnusedSpace(bytes.ptr, 50);
     try std.testing.expectEqual(true, did_recycle);
 
     // this should be ok now
