@@ -204,6 +204,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                 const split_buf = record.buf[used_len..];
                 // NOTE: this record ptr is updated before the append which could invalidate the record ptr
                 record.buf = record.buf[0..used_len];
+                record.len = used_len;
                 // add new unused record to the list
                 try self.records.append(.{
                     .is_free = true,
@@ -703,6 +704,54 @@ pub const failing = struct {
         };
     }
 };
+
+test "recycle buffer : save and load" {
+    const backing_allocator = std.testing.allocator;
+    const X = struct {
+        a: u8,
+        pub const DEFAULT = .{ .a = 0 };
+    };
+
+    var allocator = RecycleBuffer(X, X.DEFAULT, .{
+        .min_split_size = 10,
+    }).init(.{
+        .records_allocator = backing_allocator,
+        .memory_allocator = backing_allocator,
+    });
+    defer allocator.deinit();
+
+    // create 100 references
+    try allocator.append(100);
+    // [0] assume flattened memory
+    const references = allocator.memory.items[0];
+
+    // this will create two records, one len 20 and one len 80
+    _ = try allocator.alloc(20);
+
+    // bincode write to slice
+    const records_size = sig.bincode.sizeOf(allocator.records.items, .{});
+    const records_memory = try backing_allocator.alloc(u8, records_size);
+    defer backing_allocator.free(records_memory);
+    _ = try sig.bincode.writeToSlice(records_memory, allocator.records.items, .{});
+
+    // read from slice to records
+    const records = try sig.bincode.readFromSlice(
+        backing_allocator,
+        @TypeOf(allocator.records),
+        records_memory,
+        .{},
+    );
+    defer records.deinit();
+
+    for (records.items) |*record| {
+        record.buf = references[record.global_index..][0..record.len];
+    }
+
+    try std.testing.expectEqual(2, records.items.len);
+    for (records.items, allocator.records.items) |*record, *r| {
+        try std.testing.expectEqual(r.buf, record.buf);
+    }
+}
 
 test "recycle buffer: freeUnused" {
     const backing_allocator = std.testing.allocator;
