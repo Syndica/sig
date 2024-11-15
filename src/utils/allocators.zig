@@ -169,7 +169,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                 return error.AllocFailed;
             } else {
                 // try to collapse small record chunks and allocate again
-                try self.collapse();
+                self.collapse();
                 const collapse_succeed = self.isPossibleToAllocate(n);
                 if (collapse_succeed) {
                     // exit here
@@ -246,7 +246,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
 
                 if (both_free and shared_memory_index) {
                     records.items[i - 1].buf.len += curr.buf.len;
-                    records.orderedRemove(i);
+                    _ = records.orderedRemove(i);
                 } else {
                     i += 1;
                 }
@@ -782,7 +782,7 @@ test "recycle buffer: freeUnused" {
     defer allocator.free(bytes.ptr);
 
     // free the unused space
-    const did_recycle = try allocator.tryRecycleUnusedSpace(bytes.ptr, 50);
+    const did_recycle = allocator.tryRecycleUnusedSpace(bytes.ptr, 50);
     try std.testing.expectEqual(true, did_recycle);
 
     // this should be ok now
