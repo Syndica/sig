@@ -24,6 +24,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         memory: std.ArrayList([]T),
         // allocator used to alloc the memory blocks
         memory_allocator: std.mem.Allocator,
+        // total number of T elements we have in memory
         capacity: u64,
         // for thread safety
         mux: std.Thread.Mutex = .{},
