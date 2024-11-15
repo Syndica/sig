@@ -169,8 +169,8 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                 return error.AllocFailed;
             } else {
                 // try to collapse small record chunks and allocate again
-                self.collapse();
-                const collapse_succeed = self.isPossibleToAllocate(n);
+                self.collapseUnsafe();
+                const collapse_succeed = self.isPossibleToAllocateUnsafe(n);
                 if (collapse_succeed) {
                     // exit here
                     return self.allocUnsafe(n);
@@ -184,6 +184,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         pub fn free(self: *Self, buf_ptr: [*]T) void {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
+
             for (self.records.items) |*record| {
                 if (record.buf.ptr == buf_ptr) {
                     record.is_free = true;
@@ -234,7 +235,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         /// collapses adjacent free records into a single record.
         /// we use the memory_index to ensure we dont collapse two separate buffers
         /// into one, which would result in a segfault.
-        pub fn collapse(self: *Self) void {
+        pub fn collapseUnsafe(self: *Self) void {
             const records = &self.records;
             var i: usize = 1;
             while (i < records.items.len) {
@@ -253,7 +254,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             }
         }
 
-        pub fn isPossibleToAllocate(self: *Self, n: u64) bool {
+        pub fn isPossibleToAllocateUnsafe(self: *Self, n: u64) bool {
             for (self.records.items) |*record| {
                 if (record.buf.len >= n) {
                     return true;
