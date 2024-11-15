@@ -8,6 +8,11 @@ const sig = @import("../sig.zig");
 /// - record serialization is supported for fast loading this memory back
 /// - the global index is also returned on allocation to help with additional book-keeping
 /// NOTE: T needs to have a .DEFAULT field that is used to zero out the memory allocated in `append()`
+///
+/// when `alloc` returns error.AllocFailed the allocation failed and the caller should try again
+/// (after some records/buffers have been free'd/recycle'd).
+/// If the allocation size being too to be recycled after trying to collapse smaller records
+// (config.max_collapse_tries times) then we panic (or return error.CollapseFailed in allocUnsafe).
 pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
     /// If enabled, all operations will require an exclusive lock.
     thread_safe: bool = !builtin.single_threaded,
