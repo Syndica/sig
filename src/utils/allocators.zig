@@ -8,7 +8,7 @@ const sig = @import("../sig.zig");
 /// - record serialization is supported for fast loading this memory back
 /// - the global index is also returned on allocation to help with additional book-keeping
 /// NOTE: T needs to have a .DEFAULT field that is used to zero out the memory allocated in `append()`
-pub fn RecycleBuffer(comptime T: type, config: struct {
+pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
     /// If enabled, all operations will require an exclusive lock.
     thread_safe: bool = !builtin.single_threaded,
     max_collapse_tries: u32 = 5,
@@ -89,7 +89,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
             const buf = try self.memory_allocator.alloc(T, n);
             // NOTE: we do this here so bincode serialization can work correctly
             // otherwise, we run into undefined memory which breaks bincode
-            @memset(buf, T.DEFAULT);
+            @memset(buf, default_init);
 
             self.records.appendAssumeCapacity(.{
                 .is_free = true,
@@ -102,7 +102,14 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
             self.capacity += buf.len;
         }
 
-        pub fn alloc(self: *Self, n: u64) error{ AllocTooBig, AllocFailed }!struct { []T, u64 } {
+        const AllocError = error{
+            AllocTooBig,
+            AllocFailed,
+            // NOTE: even though this doesnt get hit on `alloc`, zig isnt smart enough to know that
+            CollapseFailed,
+        } || std.mem.Allocator.Error;
+
+        pub fn alloc(self: *Self, n: u64) AllocError!struct { []T, u64 } {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
@@ -122,10 +129,10 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
             }
             // not enough memory to allocate and no possible recycles will be perma stuck.
             // though its possible to recover from this, its very unlikely, so we panic
-            @panic("not enough memory, and collapse failed max times");
+            @panic("not enough memory and collapse failed max times");
         }
 
-        pub fn allocUnsafe(self: *Self, n: u64) error{ AllocTooBig, AllocFailed, CollapseFailed }!struct { []T, u64 } {
+        pub fn allocUnsafe(self: *Self, n: u64) AllocError!struct { []T, u64 } {
             // this would never succeed
             if (n > self.capacity) return error.AllocTooBig;
 
@@ -190,7 +197,7 @@ pub fn RecycleBuffer(comptime T: type, config: struct {
             @panic("attempt to recycle invalid buf");
         }
 
-        fn tryRecycleUnusedSpaceWithRecordUnsafe(self: *Self, record: *Record, used_len: u64) !bool {
+        fn tryRecycleUnusedSpaceWithRecordUnsafe(self: *Self, record: *Record, used_len: u64) std.mem.Allocator.Error!bool {
             const unused_len = record.buf.len -| used_len;
             if (unused_len > config.min_split_size) {
                 // update the state of the record
@@ -704,7 +711,7 @@ test "recycle buffer: freeUnused" {
         pub const DEFAULT = .{ .a = 0 };
     };
 
-    var allocator = RecycleBuffer(X, .{
+    var allocator = RecycleBuffer(X, X.DEFAULT, .{
         .min_split_size = 10,
     }).init(.{
         .records_allocator = backing_allocator,
