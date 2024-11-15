@@ -21,6 +21,46 @@ pub const BenchTimeUnit = enum {
     }
 };
 
+const Benchmark = enum {
+    all,
+    swissmap,
+    geyser,
+    accounts_db,
+    accounts_db_readwrite,
+    accounts_db_snapshot,
+    socket_utils,
+    gossip,
+    sync,
+    ledger,
+    bincode,
+};
+
+fn exitWithUsage() noreturn {
+    var stdout = std.io.getStdOut().writer();
+    stdout.writeAll(
+        \\ benchmark name [options]
+        \\
+        \\ Available Benchmarks:
+        \\  all
+        \\  swissmap
+        \\  geyser
+        \\  accounts_db
+        \\      accounts_db_readwrite
+        \\      accounts_db_snapshot
+        \\
+        \\  socket_utils
+        \\  gossip
+        \\  sync
+        \\  ledger
+        \\  bincode
+        \\
+        \\ Options:
+        \\  --help
+        \\    Prints this usage message
+    ) catch @panic("failed to print usage");
+    std.posix.exit(1);
+}
+
 /// to run gossip benchmarks:
 /// zig build benchmark -- gossip
 pub fn main() !void {
@@ -33,28 +73,37 @@ pub fn main() !void {
     defer std_logger.deinit();
     const logger = std_logger.logger();
 
-    if (builtin.mode == .Debug) logger.warn().log("warning: running benchmark in Debug mode");
+    if (builtin.mode == .Debug) logger.warn().log("running benchmark in Debug mode");
 
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
+    var maybe_filter: ?Benchmark = null;
+    // skip the benchmark argv[0]
     _ = cli_args.skip();
-
-    const maybe_filter = cli_args.next();
-    const filter = blk: {
-        if (maybe_filter) |filter| {
-            logger.info().logf("filtering benchmarks with prefix: {s}", .{filter});
-            break :blk filter;
-        } else {
-            logger.info().logf("no filter: running all benchmarks", .{});
-            break :blk "";
+    while (cli_args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--help")) {
+            exitWithUsage();
         }
-    };
+        maybe_filter = std.meta.stringToEnum(Benchmark, arg) orelse {
+            logger.err().logf("unknown benchmark: {s}", .{arg});
+            exitWithUsage();
+        };
+    }
+    if (maybe_filter == null) {
+        exitWithUsage();
+    }
+    const filter = maybe_filter.?;
+    if (filter == .all) {
+        logger.info().log("running all benchmarks");
+    } else {
+        logger.info().logf("running benchmark with filter: {s}", .{@tagName(filter)});
+    }
 
     const max_time_per_bench = Duration.fromSecs(5); // !!
-    const run_all_benchmarks = filter.len == 0;
+    const run_all_benchmarks = filter == .all;
 
-    if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
+    if (filter == .swissmap or run_all_benchmarks) {
         try benchmarkCSV(
             allocator,
             logger,
@@ -64,13 +113,13 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "accounts_db") or run_all_benchmarks) {
+    if (std.mem.startsWith(u8, @tagName(filter), "accounts_db") or run_all_benchmarks) {
         var run_all = false;
-        if (std.mem.eql(u8, "accounts_db", filter) or run_all_benchmarks) {
+        if (filter == .accounts_db or run_all_benchmarks) {
             run_all = true;
         }
 
-        if (std.mem.eql(u8, "accounts_db_readwrite", filter) or run_all) {
+        if (filter == .accounts_db_readwrite or run_all) {
             try benchmarkCSV(
                 allocator,
                 logger,
@@ -80,7 +129,7 @@ pub fn main() !void {
             );
         }
 
-        if (std.mem.eql(u8, "accounts_db_snapshot", filter) or run_all) blk: {
+        if (filter == .accounts_db_snapshot or run_all) blk: {
             // NOTE: for this benchmark you need to setup a snapshot in test-data/snapshot_bench
             // and run as a binary ./zig-out/bin/... so the open file limits are ok
             const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
@@ -100,7 +149,7 @@ pub fn main() !void {
         }
     }
 
-    if (std.mem.startsWith(u8, filter, "socket_utils") or run_all_benchmarks) {
+    if (filter == .socket_utils or run_all_benchmarks) {
         try benchmarkCSV(
             allocator,
             logger,
@@ -110,7 +159,7 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "gossip") or run_all_benchmarks) {
+    if (filter == .gossip or run_all_benchmarks) {
         try benchmarkCSV(
             allocator,
             logger,
@@ -127,7 +176,7 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "sync") or run_all_benchmarks) {
+    if (filter == .sync or run_all_benchmarks) {
         try benchmarkCSV(
             allocator,
             logger,
@@ -137,7 +186,7 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "ledger") or run_all_benchmarks) {
+    if (filter == .ledger or run_all_benchmarks) {
         try benchmarkCSV(
             allocator,
             logger,
@@ -154,7 +203,7 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "bincode") or run_all_benchmarks) {
+    if (filter == .bincode or run_all_benchmarks) {
         try benchmarkCSV(
             allocator,
             logger,
@@ -165,7 +214,7 @@ pub fn main() !void {
     }
 
     // NOTE: we dont support CSV output on this method so all results are printed as debug
-    if (std.mem.startsWith(u8, filter, "geyser") or run_all_benchmarks) {
+    if (filter == .geyser or run_all_benchmarks) {
         logger.debug().log("Geyser Streaming Benchmark:");
         try @import("geyser/lib.zig").benchmark.runBenchmark(logger);
     }
