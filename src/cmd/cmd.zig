@@ -828,20 +828,20 @@ fn validator() !void {
     var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
     defer retransmit_shred_channel.deinit();
 
-    const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.retransmit_service.run, .{
-        allocator,
-        my_contact_info,
-        snapshot.bank.bank_fields,
-        &leader_schedule_cache,
-        &gossip_service.gossip_table_rw,
-        &retransmit_shred_channel,
-        config.current.turbine.num_retransmit_sockets,
-        config.current.turbine.num_retransmit_threads,
-        config.current.turbine.overwrite_stake_for_testing,
-        &app_base.exit,
-        prng.random(),
-        app_base.logger,
-    });
+    const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.retransmit_service.run, .{.{
+        .allocator = allocator,
+        .my_contact_info = my_contact_info,
+        .bank_fields = snapshot.bank.bank_fields,
+        .leader_schedule_cache = &leader_schedule_cache,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .receiver = &retransmit_shred_channel,
+        .num_retransmit_sockets = config.current.turbine.num_retransmit_sockets,
+        .maybe_num_retransmit_threads = config.current.turbine.num_retransmit_threads,
+        .overwrite_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
+        .exit = &app_base.exit,
+        .rand = prng.random(),
+        .logger = app_base.logger,
+    }});
 
     // shred collector
     var shred_col_conf = config.current.shred_collector;

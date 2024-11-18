@@ -43,7 +43,7 @@ const DEDUPER_NUM_BITS: u64 = 637_534_199;
 ///    into RetransmitShredInfo's which are sent to a channel for further processing.
 /// 2. retransmitShreds: runs on N threads and receives RetransmitShredInfo's from the channel, computes the children to retransmit to
 ///    and then constructs and sends packets to the network.
-pub fn run(
+pub fn run(params: struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
     bank_fields: *const BankFields,
@@ -56,56 +56,56 @@ pub fn run(
     exit: *AtomicBool,
     rand: Random,
     logger: Logger,
-) !void {
+}) !void {
     errdefer {
-        logger.info().log("retransmit service failed");
-        exit.store(false, .monotonic);
+        params.logger.info().log("retransmit service failed");
+        params.exit.store(false, .monotonic);
     }
-    const num_retransmit_threads = maybe_num_retransmit_threads orelse try std.Thread.getCpuCount();
-    logger.info().logf("starting retransmit service: num_retransmit_sockets={} num_retransmit_threads={}", .{
-        num_retransmit_sockets,
+    const num_retransmit_threads = params.maybe_num_retransmit_threads orelse try std.Thread.getCpuCount();
+    params.logger.info().logf("starting retransmit service: num_retransmit_sockets={} num_retransmit_threads={}", .{
+        params.num_retransmit_sockets,
         num_retransmit_threads,
     });
 
     var metrics = try RetransmitServiceMetrics.init();
 
-    var receive_to_retransmit_channel = try Channel(RetransmitShredInfo).init(allocator);
+    var receive_to_retransmit_channel = try Channel(RetransmitShredInfo).init(params.allocator);
     defer receive_to_retransmit_channel.deinit();
 
-    var retransmit_to_socket_channel = try Channel(Packet).init(allocator);
+    var retransmit_to_socket_channel = try Channel(Packet).init(params.allocator);
     defer retransmit_to_socket_channel.deinit();
 
-    var retransmit_sockets: std.ArrayList(UdpSocket) = std.ArrayList(UdpSocket).init(allocator);
+    var retransmit_sockets: std.ArrayList(UdpSocket) = std.ArrayList(UdpSocket).init(params.allocator);
     defer {
         for (retransmit_sockets.items) |socket| socket.close();
         retransmit_sockets.deinit();
     }
 
-    for (0..num_retransmit_sockets) |_| {
+    for (0..params.num_retransmit_sockets) |_| {
         var socket = try UdpSocket.create(.ipv4, .udp);
         try socket.bind(try EndPoint.parse("0.0.0.0:0"));
         try retransmit_sockets.append(socket);
     }
 
-    var thread_handles = std.ArrayList(std.Thread).init(allocator);
+    var thread_handles = std.ArrayList(std.Thread).init(params.allocator);
     defer thread_handles.deinit();
 
     try thread_handles.append(try std.Thread.spawn(
         .{},
         receiveShreds,
         .{
-            allocator,
-            my_contact_info,
-            bank_fields,
-            leader_schedule_cache,
-            receiver,
+            params.allocator,
+            params.my_contact_info,
+            params.bank_fields,
+            params.leader_schedule_cache,
+            params.receiver,
             &receive_to_retransmit_channel,
-            gossip_table_rw,
-            rand,
-            exit,
-            logger,
+            params.gossip_table_rw,
+            params.rand,
+            params.exit,
+            params.logger,
             &metrics,
-            overwrite_stake_for_testing,
+            params.overwrite_stake_for_testing,
         },
     ));
 
@@ -114,11 +114,11 @@ pub fn run(
             .{},
             retransmitShreds,
             .{
-                allocator,
+                params.allocator,
                 &receive_to_retransmit_channel,
                 &retransmit_to_socket_channel,
                 &metrics,
-                exit,
+                params.exit,
             },
         ));
     }
@@ -130,9 +130,9 @@ pub fn run(
             .{
                 socket,
                 &retransmit_to_socket_channel,
-                logger,
+                params.logger,
                 false,
-                exit,
+                params.exit,
                 {},
             },
         ));
