@@ -447,7 +447,6 @@ pub fn run() !void {
                             // turbine
                             &turbine_num_retransmit_sockets,
                             &turbine_num_retransmit_threads,
-                            &turbine_overwrite_stake_for_testing,
                             // accounts-db
                             &snapshot_dir_option,
                             &use_disk_index_option,
@@ -462,7 +461,6 @@ pub fn run() !void {
                             &accounts_per_file_estimate,
                             &fastload_option,
                             &save_index_option,
-                            &snapshot_metadata_only,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -503,11 +501,14 @@ pub fn run() !void {
                             &turbine_recv_port_option,
                             &repair_port_option,
                             &test_repair_option,
+                            // turbine
+                            &turbine_overwrite_stake_for_testing,
                             // blockstore cleanup service
                             &max_shreds_option,
                             // general
                             &leader_schedule_option,
                             &network_option,
+                            &snapshot_metadata_only,
                         },
                         .target = .{
                             .action = .{
@@ -761,7 +762,6 @@ fn validator() !void {
         .gossip_service = gossip_service,
         .geyser_writer = geyser_writer,
         .validate_snapshot = true,
-        .metadata_only = config.current.accounts_db.snapshot_metadata_only,
     });
 
     // leader schedule
@@ -948,13 +948,39 @@ fn shredCollector() !void {
     });
     defer cleanup_service_handle.join();
 
+    const snapshot = try loadSnapshot(allocator, app_base.logger, .{
+        .gossip_service = gossip_service,
+        .geyser_writer = null,
+        .validate_snapshot = true,
+        .metadata_only = config.current.accounts_db.snapshot_metadata_only,
+    });
+
+    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+
+    const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+
     var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
     defer retransmit_shred_channel.deinit();
+
+    // retransmit service
+    const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.retransmit_service.run, .{.{
+        .allocator = allocator,
+        .my_contact_info = my_contact_info,
+        .bank_fields = snapshot.bank.bank_fields,
+        .leader_schedule_cache = &leader_schedule_cache,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .receiver = &retransmit_shred_channel,
+        .num_retransmit_sockets = config.current.turbine.num_retransmit_sockets,
+        .maybe_num_retransmit_threads = config.current.turbine.num_retransmit_threads,
+        .overwrite_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
+        .exit = &app_base.exit,
+        .rand = prng.random(),
+        .logger = app_base.logger,
+    }});
 
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
-    var prng = std.rand.DefaultPrng.init(91);
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
         .{
@@ -974,6 +1000,7 @@ fn shredCollector() !void {
     defer shred_collector_manager.deinit();
 
     gossip_manager.join();
+    retransmit_service_handle.join();
     shred_collector_manager.join();
 }
 
@@ -1497,7 +1524,7 @@ const LoadSnapshotOptions = struct {
     /// whether to validate the snapshot account data against the metadata
     validate_snapshot: bool,
     /// whether to load only the metadata of the snapshot
-    metadata_only: bool,
+    metadata_only: bool = false,
 };
 
 fn loadSnapshot(
