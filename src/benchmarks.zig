@@ -23,16 +23,16 @@ pub const BenchTimeUnit = enum {
 
 const Benchmark = enum {
     all,
-    swissmap,
-    geyser,
     accounts_db,
     accounts_db_readwrite,
     accounts_db_snapshot,
-    socket_utils,
-    gossip,
-    sync,
-    ledger,
     bincode,
+    geyser,
+    gossip,
+    ledger,
+    swissmap,
+    sync,
+    socket_utils,
 };
 
 fn exitWithUsage() noreturn {
@@ -41,22 +41,22 @@ fn exitWithUsage() noreturn {
         \\ benchmark name [options]
         \\
         \\ Available Benchmarks:
-        \\  all
-        \\  swissmap
-        \\  geyser
-        \\  accounts_db
-        \\      accounts_db_readwrite
-        \\      accounts_db_snapshot
         \\
-        \\  socket_utils
-        \\  gossip
-        \\  sync
-        \\  ledger
-        \\  bincode
+    ) catch @panic("failed to print usage");
+
+    inline for (std.meta.fields(Benchmark)) |field| {
+        stdout.print(
+            " {s}\n",
+            .{field.name},
+        ) catch @panic("failed to print usage");
+    }
+
+    stdout.writeAll(
         \\
         \\ Options:
         \\  --help
         \\    Prints this usage message
+        \\
     ) catch @panic("failed to print usage");
     std.posix.exit(1);
 }
