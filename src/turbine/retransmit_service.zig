@@ -16,6 +16,7 @@ const Slot = sig.core.Slot;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
+const Histogram = sig.prometheus.Histogram;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Duration = sig.time.Duration;
 const TurbineTree = sig.turbine.TurbineTree;
@@ -215,7 +216,7 @@ fn receiveShreds(
         }
 
         metrics.shreds_received_count.add(shreds.items.len);
-        metrics.receive_shreds_nanos.set(receive_shreds_timer.read().asNanos());
+        metrics.receive_shreds_nanos.observe(receive_shreds_timer.read().asNanos());
 
         metrics.log(logger);
     }
@@ -254,7 +255,7 @@ fn dedupAndGroupShredsBySlot(
             try result.put(shred_id.slot, new_slot_shreds);
         }
     }
-    metrics.dedup_and_group_shreds_nanos.set(dedup_and_group_shreds_timer.read().asNanos());
+    metrics.dedup_and_group_shreds_nanos.observe(dedup_and_group_shreds_timer.read().asNanos());
     return result;
 }
 
@@ -281,7 +282,7 @@ fn createAndSendRetransmitInfo(
             try leader_schedule_cache.put(epoch, try bank.leaderSchedule(allocator));
             break :blk leader_schedule_cache.slotLeader(slot) orelse @panic("failed to get slot leader");
         };
-        metrics.get_slot_leader_nanos.set(get_slot_leader_timer.read().asNanos());
+        metrics.get_slot_leader_nanos.observe(get_slot_leader_timer.read().asNanos());
 
         var get_turbine_tree_timer = try sig.time.Timer.start();
         const turbine_tree = if (try turbine_tree_cache.get(epoch)) |tree| tree else blk: {
@@ -297,7 +298,7 @@ fn createAndSendRetransmitInfo(
             break :blk turbine_tree;
         };
         defer turbine_tree.releaseUnsafe();
-        metrics.get_turbine_tree_nanos.set(get_turbine_tree_timer.read().asNanos());
+        metrics.get_turbine_tree_nanos.observe(get_turbine_tree_timer.read().asNanos());
 
         for (slot_shreds.items) |shred_id_and_packet| {
             try retransmit_shred_sender.send(.{
@@ -312,7 +313,7 @@ fn createAndSendRetransmitInfo(
             });
         }
     }
-    metrics.create_and_send_retransmit_info_nanos.set(create_and_send_retransmit_info_timer.read().asNanos());
+    metrics.create_and_send_retransmit_info_nanos.observe(create_and_send_retransmit_info_timer.read().asNanos());
 }
 
 /// Retransmit shreds to nodes in the network
@@ -340,7 +341,7 @@ fn retransmitShreds(
         );
         defer children.deinit();
         defer retransmit_info.turbine_tree.releaseUnsafe();
-        metrics.turbine_tree_get_children_nanos.set(get_retransmit_children_timer.read().asNanos());
+        metrics.turbine_tree_get_children_nanos.observe(get_retransmit_children_timer.read().asNanos());
 
         var children_with_addresses_count: usize = 0;
         for (children.items) |child| {
@@ -361,7 +362,7 @@ fn retransmitShreds(
         metrics.turbine_tree_level.set(level);
         metrics.turbine_tree_children.set(children.items.len);
         metrics.turbine_tree_children_with_addresses.set(children_with_addresses_count);
-        metrics.retransmit_shred_nanos.set(retransmit_shred_timer.read().asNanos());
+        metrics.retransmit_shred_nanos.observe(retransmit_shred_timer.read().asNanos());
     }
 }
 
@@ -382,30 +383,37 @@ pub const RetransmitServiceMetrics = struct {
     shreds_received_count: *Counter,
     shred_byte_filter_saturated: *Gauge(u64),
     shred_id_filter_saturated: *Gauge(u64),
-    receive_shreds_nanos: *Gauge(u64),
+    receive_shreds_nanos: *Histogram,
 
     // dedupAndGroupShredsBySlot
     shred_byte_filtered_count: *Counter,
     shred_id_filtered_count: *Counter,
-    dedup_and_group_shreds_nanos: *Gauge(u64),
+    dedup_and_group_shreds_nanos: *Histogram,
 
     // createAndSendRetransmitInfo
-    get_slot_leader_nanos: *Gauge(u64),
-    get_turbine_tree_nanos: *Gauge(u64),
-    create_and_send_retransmit_info_nanos: *Gauge(u64),
+    get_slot_leader_nanos: *Histogram,
+    get_turbine_tree_nanos: *Histogram,
+    create_and_send_retransmit_info_nanos: *Histogram,
 
     // retransmitShreds
     shreds_sent_count: *Counter,
     turbine_tree_level: *Gauge(u64),
     turbine_tree_children: *Gauge(u64),
     turbine_tree_children_with_addresses: *Gauge(u64),
-    turbine_tree_get_children_nanos: *Gauge(u64),
-    retransmit_shred_nanos: *Gauge(u64),
+    turbine_tree_get_children_nanos: *Histogram,
+    retransmit_shred_nanos: *Histogram,
 
     // metrics prefix
     pub const prefix = "retransmit_service";
 
-    const Gauge64 = Gauge(u64);
+    // histogram buckets
+    pub const histogram_buckets: [10]f64 = .{
+        10,   25,
+        50,   100,
+        250,  500,
+        1000, 2500,
+        5000, 10000,
+    };
 
     pub fn init() !RetransmitServiceMetrics {
         return try globalRegistry().initStruct(RetransmitServiceMetrics);
