@@ -18,6 +18,11 @@ const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
 const AtomicUsize = std.atomic.Value(usize);
 const ThreadPool = sig.sync.ThreadPool;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const SecretKey = std.crypto.sign.Ed25519.SecretKey;
+
+const uintLessThanRust = sig.rand.weighted_shuffle.uintLessThanRust;
+const intRangeLessThanRust = sig.rand.weighted_shuffle.intRangeLessThanRust;
 
 /// TurbineTreeCache
 /// Cache turbine trees and clear them once they are too old.
@@ -443,35 +448,35 @@ const TestEnvironment = struct {
     gossip_table_rw: RwMux(GossipTable),
     staked_nodes: std.AutoArrayHashMap(Pubkey, u64),
 
-    pub fn init(
+    pub fn init(params: struct {
         allocator: std.mem.Allocator,
         random: std.rand.Random,
         num_known_nodes: usize,
         num_unknown_staked_nodes: usize,
         known_nodes_unstaked_ratio: struct { u64, u64 },
-    ) !TestEnvironment {
-        var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(allocator);
+    }) !TestEnvironment {
+        var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
         errdefer staked_nodes.deinit();
 
         var gossip_table_tp = ThreadPool.init(.{});
         var gossip_table = try GossipTable.init(
-            allocator,
+            params.allocator,
             &gossip_table_tp,
         );
         errdefer gossip_table.deinit();
 
         // Add known nodes to the gossip table
         var my_contact_info: ThreadSafeContactInfo = undefined;
-        for (0..num_known_nodes) |i| {
+        for (0..params.num_known_nodes) |i| {
             var contact_info = try ContactInfo.initRandom(
-                allocator,
-                random,
-                Pubkey.initRandom(random),
+                params.allocator,
+                params.random,
+                Pubkey.initRandom(params.random),
                 0,
                 0,
                 0,
             );
-            try contact_info.setSocket(.turbine_recv, SocketAddr.initRandom(random));
+            try contact_info.setSocket(.turbine_recv, SocketAddr.initRandom(params.random));
             _ = try gossip_table.insert(
                 SignedGossipData.init(.{ .ContactInfo = contact_info }),
                 0,
@@ -480,25 +485,25 @@ const TestEnvironment = struct {
         }
 
         // Add stakes for the known nodes
-        const unstaked_numerator, const unstaked_denominator = known_nodes_unstaked_ratio;
+        const unstaked_numerator, const unstaked_denominator = params.known_nodes_unstaked_ratio;
         var contact_info_iterator = gossip_table.contactInfoIterator(0);
         while (contact_info_iterator.next()) |contact_info| {
             try staked_nodes.put(
                 contact_info.pubkey,
-                if (random.intRangeAtMost(u64, 1, unstaked_denominator) > unstaked_numerator)
-                    random.intRangeLessThan(u64, 0, 20)
+                if (params.random.intRangeAtMost(u64, 1, unstaked_denominator) > unstaked_numerator)
+                    params.random.intRangeLessThan(u64, 0, 20)
                 else
                     0,
             );
         }
 
         // Add unknown nodes with non-zero stakes
-        for (0..num_unknown_staked_nodes) |_| {
-            try staked_nodes.put(Pubkey.initRandom(random), random.intRangeLessThan(u64, 0, 20));
+        for (0..params.num_unknown_staked_nodes) |_| {
+            try staked_nodes.put(Pubkey.initRandom(params.random), params.random.intRangeLessThan(u64, 0, 20));
         }
 
         return .{
-            .allocator = allocator,
+            .allocator = params.allocator,
             .my_contact_info = my_contact_info,
             .gossip_table_tp = gossip_table_tp,
             .gossip_table_rw = RwMux(GossipTable).init(gossip_table),
@@ -619,13 +624,13 @@ test "agave: cluster nodes retransmit" {
     const rng = xrng.random();
 
     // Setup Environment
-    var env = try TestEnvironment.init(
-        allocator,
-        rng,
-        1_000,
-        100,
-        .{ 1, 7 },
-    );
+    var env = try TestEnvironment.init(.{
+        .allocator = allocator,
+        .random = rng,
+        .num_known_nodes = 1_000,
+        .num_unknown_staked_nodes = 100,
+        .known_nodes_unstaked_ratio = .{ 1, 7 },
+    });
     defer env.deinit();
 
     // Get Turbine Tree
@@ -766,13 +771,7 @@ test "agave-equivalence: get seeeded rng" {
     }
 }
 
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const SecretKey = std.crypto.sign.Ed25519.SecretKey;
-
-const uintLessThanRust = sig.rand.weighted_shuffle.uintLessThanRust;
-const intRangeLessThanRust = sig.rand.weighted_shuffle.intRangeLessThanRust;
-
-pub fn makeTestCluster(
+pub fn makeTestCluster(params: struct {
     allocator: std.mem.Allocator,
     random: std.rand.Random,
     my_pubkey: Pubkey,
@@ -782,34 +781,34 @@ pub fn makeTestCluster(
     num_staked_nodes: usize,
     num_staked_nodes_in_gossip_table: usize,
     num_unstaked_nodes_in_gossip_table: usize,
-) !struct {
+}) !struct {
     std.AutoArrayHashMap(Pubkey, u64),
     RwMux(GossipTable),
 } {
-    var stakes = std.AutoArrayHashMap(Pubkey, u64).init(allocator);
+    var stakes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
     errdefer stakes.deinit();
 
     var gossip_table_tp = ThreadPool.init(.{});
     var gossip_table = try GossipTable.init(
-        allocator,
+        params.allocator,
         &gossip_table_tp,
     );
     errdefer gossip_table.deinit();
 
-    for (0..num_staked_nodes - @intFromBool(my_stake > 0)) |_| {
+    for (0..params.num_staked_nodes - @intFromBool(params.my_stake > 0)) |_| {
         try stakes.put(
-            Pubkey.initRandom(random),
-            intRangeLessThanRust(u64, random, min_stake, max_stake),
+            Pubkey.initRandom(params.random),
+            intRangeLessThanRust(u64, params.random, params.min_stake, params.max_stake),
         );
     }
 
     var stakes_iter = stakes.iterator();
-    for (0..num_staked_nodes_in_gossip_table + num_unstaked_nodes_in_gossip_table) |i| {
-        const pubkey = if (i < num_staked_nodes_in_gossip_table) stakes_iter.next().?.key_ptr.* else Pubkey.initRandom(random);
-        var contact_info = ContactInfo.init(allocator, pubkey, 0, 0);
+    for (0..params.num_staked_nodes_in_gossip_table + params.num_unstaked_nodes_in_gossip_table) |i| {
+        const pubkey = if (i < params.num_staked_nodes_in_gossip_table) stakes_iter.next().?.key_ptr.* else Pubkey.initRandom(params.random);
+        var contact_info = ContactInfo.init(params.allocator, pubkey, 0, 0);
         try contact_info.setSocket(.turbine_recv, SocketAddr.init(
-            IpAddr.newIpv4(intRangeLessThanRust(u8, random, 128, 200), random.int(u8), random.int(u8), random.int(u8)),
-            random.int(u16),
+            IpAddr.newIpv4(intRangeLessThanRust(u8, params.random, 128, 200), params.random.int(u8), params.random.int(u8), params.random.int(u8)),
+            params.random.int(u16),
         ));
         _ = try gossip_table.insert(
             SignedGossipData.init(.{ .ContactInfo = contact_info }),
@@ -817,11 +816,11 @@ pub fn makeTestCluster(
         );
     }
 
-    if (my_stake > 0) {
-        try stakes.put(my_pubkey, my_stake);
+    if (params.my_stake > 0) {
+        try stakes.put(params.my_pubkey, params.my_stake);
     }
 
-    std.debug.assert(num_staked_nodes == stakes.count());
+    std.debug.assert(params.num_staked_nodes == stakes.count());
 
     return .{ stakes, RwMux(GossipTable).init(gossip_table) };
 }
@@ -870,7 +869,7 @@ fn writeRetransmitPeers(writer: std.fs.File.Writer, i: usize, root_distance: usi
     try std.fmt.format(writer, "\n", .{});
 }
 
-test "agave-equivalence: turbine tree" {
+pub fn runTurbineTreeBlackBoxTest() !void {
     const my_keypair = try KeyPair.fromSecretKey(try SecretKey.fromBytes([_]u8{
         233, 236, 240, 63,  159, 199, 2,   210,
         8,   217, 34,  214, 242, 104, 123, 94,
@@ -882,12 +881,12 @@ test "agave-equivalence: turbine tree" {
         191, 82,  231, 195, 46,  182, 188, 220,
     }));
 
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-    const my_contact_info = ContactInfo.init(std.testing.allocator, my_pubkey, 0, 0);
+    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_contact_info = ContactInfo.init(std.heap.c_allocator, my_pubkey, 0, 0);
     const my_threadsafe_contact_info = ThreadSafeContactInfo.fromContactInfo(my_contact_info);
 
     { // TEST 0
-        const file = try std.fs.cwd().createFile("../networking-demo/equivalence-test-0-sig.txt", .{ .read = true });
+        const file = try std.fs.cwd().createFile("demo/turbine-tree-black-box-test-0-sig.txt", .{ .read = true });
         defer file.close();
 
         // Create a seeded RNG
@@ -895,27 +894,27 @@ test "agave-equivalence: turbine tree" {
         const random = chacha.random();
 
         // Create a test cluster and save the staked nodes.
-        var stakes, var gossip_table_rw = try makeTestCluster(
-            std.testing.allocator,
-            random,
-            my_pubkey,
-            20,
-            1,
-            20,
-            201,
-            100,
-            200,
-        );
+        var stakes, var gossip_table_rw = try makeTestCluster(.{
+            .allocator = std.testing.allocator,
+            .random = random,
+            .my_pubkey = my_pubkey,
+            .my_stake = 20,
+            .min_stake = 1,
+            .max_stake = 20,
+            .num_staked_nodes = 201,
+            .num_staked_nodes_in_gossip_table = 100,
+            .num_unstaked_nodes_in_gossip_table = 200,
+        });
         defer {
             stakes.deinit();
             const gossip_table: *GossipTable, _ = gossip_table_rw.writeWithLock();
             gossip_table.deinit();
         }
-        try writeStakes(std.testing.allocator, file.writer(), stakes);
+        try writeStakes(std.heap.c_allocator, file.writer(), stakes);
 
         // Create a TurbineTree instance
         var turbine_tree = try TurbineTree.initForRetransmit(
-            std.testing.allocator,
+            std.heap.c_allocator,
             my_threadsafe_contact_info,
             &gossip_table_rw,
             &stakes.unmanaged,
@@ -927,21 +926,95 @@ test "agave-equivalence: turbine tree" {
         var weighted_shuffle = try turbine_tree.weighted_shuffle.clone();
         defer weighted_shuffle.deinit();
         var shuffled_iterator = weighted_shuffle.shuffle(chacha.random());
-        const shuffled_indices = try shuffled_iterator.intoArrayList(std.testing.allocator);
+        const shuffled_indices = try shuffled_iterator.intoArrayList(std.heap.c_allocator);
         defer shuffled_indices.deinit();
         try writeShuffledIndices(file.writer(), shuffled_indices);
 
         // Generate retransmit children
+        var children = try std.ArrayList(TurbineTree.Node).initCapacity(std.heap.c_allocator, TurbineTree.DATA_PLANE_FANOUT);
+        defer children.deinit();
+        var shuffled_nodes = std.ArrayList(TurbineTree.Node).init(std.heap.c_allocator);
+        defer shuffled_nodes.deinit();
         for (0..1_000) |i| {
             const slot_leader = Pubkey.initRandom(random);
             const shred_id = ShredId{ .slot = random.int(u64), .index = random.int(u32), .shred_type = .data };
-            const root_distance, const children = try turbine_tree.getRetransmitChildren(
-                std.testing.allocator,
+            children.clearRetainingCapacity();
+            shuffled_nodes.clearRetainingCapacity();
+            const root_distance = try turbine_tree.getRetransmitChildren(
+                &children,
+                &shuffled_nodes,
                 slot_leader,
                 shred_id,
                 TurbineTree.DATA_PLANE_FANOUT,
+                null,
             );
-            defer children.deinit();
+            try writeRetransmitPeers(file.writer(), i, root_distance, children);
+        }
+    }
+
+    { // TEST 1
+        const file = try std.fs.cwd().createFile("demo/turbine-tree-black-box-test-1-sig.txt", .{ .read = true });
+        defer file.close();
+
+        // Create a seeded RNG
+        var chacha = ChaChaRng.fromSeed([_]u8{0} ** 32);
+        const random = chacha.random();
+
+        // Create a test cluster and save the staked nodes.
+        var stakes, var gossip_table_rw = try makeTestCluster(
+            std.heap.c_allocator,
+            random,
+            my_pubkey,
+            20,
+            1,
+            20,
+            2201,
+            2001,
+            2799,
+        );
+        defer {
+            stakes.deinit();
+            const gossip_table: *GossipTable, _ = gossip_table_rw.writeWithLock();
+            gossip_table.deinit();
+        }
+        try writeStakes(std.heap.c_allocator, file.writer(), stakes);
+
+        // Create a TurbineTree instance
+        var turbine_tree = try TurbineTree.initForRetransmit(
+            std.heap.c_allocator,
+            my_threadsafe_contact_info,
+            &gossip_table_rw,
+            &stakes.unmanaged,
+            false,
+        );
+        defer turbine_tree.deinit();
+
+        // Shuffle the nodes and save the shuffled indices.
+        var weighted_shuffle = try turbine_tree.weighted_shuffle.clone();
+        defer weighted_shuffle.deinit();
+        var shuffled_iterator = weighted_shuffle.shuffle(chacha.random());
+        const shuffled_indices = try shuffled_iterator.intoArrayList(std.heap.c_allocator);
+        defer shuffled_indices.deinit();
+        try writeShuffledIndices(file.writer(), shuffled_indices);
+
+        // Generate retransmit children
+        var children = try std.ArrayList(TurbineTree.Node).initCapacity(std.heap.c_allocator, TurbineTree.DATA_PLANE_FANOUT);
+        defer children.deinit();
+        var shuffled_nodes = std.ArrayList(TurbineTree.Node).init(std.heap.c_allocator);
+        defer shuffled_nodes.deinit();
+        for (0..1_000) |i| {
+            const slot_leader = Pubkey.initRandom(random);
+            const shred_id = ShredId{ .slot = random.int(u64), .index = random.int(u32), .shred_type = .data };
+            children.clearRetainingCapacity();
+            shuffled_nodes.clearRetainingCapacity();
+            const root_distance = try turbine_tree.getRetransmitChildren(
+                &children,
+                &shuffled_nodes,
+                slot_leader,
+                shred_id,
+                TurbineTree.DATA_PLANE_FANOUT,
+                null,
+            );
             try writeRetransmitPeers(file.writer(), i, root_distance, children);
         }
     }

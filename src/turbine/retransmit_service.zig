@@ -61,7 +61,7 @@ pub fn run(params: struct {
         params.logger.info().log("retransmit service failed");
         params.exit.store(false, .monotonic);
     }
-    const num_retransmit_threads = params.maybe_num_retransmit_threads orelse try std.Thread.getCpuCount();
+    const num_retransmit_threads = params.maybe_num_retransmit_threads orelse @max(try std.Thread.getCpuCount(), 8);
     params.logger.info().logf("starting retransmit service: num_retransmit_sockets={} num_retransmit_threads={}", .{
         params.num_retransmit_sockets,
         num_retransmit_threads,
