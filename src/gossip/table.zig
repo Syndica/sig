@@ -464,14 +464,15 @@ pub const GossipTable = struct {
     pub fn getThreadSafeContactInfosMatchingShredVersion(
         self: Self,
         allocator: std.mem.Allocator,
-        my_contact_info: ThreadSafeContactInfo,
+        pubkey: Pubkey,
+        shred_version: u16,
         minumum_insertion_timestamp: u64,
     ) !std.ArrayList(ThreadSafeContactInfo) {
         var contact_info_iter = self.contactInfoIterator(minumum_insertion_timestamp);
         var peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(allocator, self.contact_infos.count());
 
         while (contact_info_iter.nextThreadSafe()) |contact_info| {
-            if (!contact_info.pubkey.equals(&my_contact_info.pubkey) and contact_info.shred_version == my_contact_info.shred_version) {
+            if (!contact_info.pubkey.equals(pubkey) and contact_info.shred_version == shred_version) {
                 peers.appendAssumeCapacity(contact_info);
             }
         }
