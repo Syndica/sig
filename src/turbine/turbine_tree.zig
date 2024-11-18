@@ -151,17 +151,17 @@ pub const TurbineTree = struct {
         const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
         defer gossip_table_lg.unlock();
 
-        const tvu_peers = try gossip_table.getThreadSafeContactInfosMatchingShredVersion(
+        const gossip_peers = try gossip_table.getThreadSafeContactInfosMatchingShredVersion(
             allocator,
             my_contact_info,
             0,
         );
-        defer tvu_peers.deinit();
+        defer gossip_peers.deinit();
 
         const nodes = try collectTvuAndStakedNodes(
             allocator,
             my_contact_info,
-            tvu_peers.items,
+            gossip_peers.items,
             staked_nodes,
             use_stake_hack_for_testing,
         );
