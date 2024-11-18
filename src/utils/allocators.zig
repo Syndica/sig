@@ -7,11 +7,10 @@ const sig = @import("../sig.zig");
 /// - additional memory blocks are supported (instead of using a fixed-buffer-allocator approach)
 /// - record serialization is supported for fast loading this memory back
 /// - the global index is also returned on allocation to help with additional book-keeping
-/// NOTE: T needs to have a .DEFAULT field that is used to zero out the memory allocated in `append()`
 ///
 /// when `alloc` returns error.AllocFailed the allocation failed and the caller should try again
 /// (after some records/buffers have been free'd/recycle'd).
-/// If the allocation size being too to be recycled after trying to collapse smaller records
+/// If the allocation size is too big to be recycled after trying to collapse smaller records
 /// (config.max_collapse_tries times) then we panic (or return error.CollapseFailed in allocUnsafe).
 pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
     /// If enabled, all operations will require an exclusive lock.
@@ -31,6 +30,9 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         memory_allocator: std.mem.Allocator,
         // total number of T elements we have in memory
         capacity: u64,
+        // the maximum contiguous capacity we have in memory
+        // NOTE: since we support multiple memory slices, this tells us the max single alloc size
+        max_continguous_capacity: u64,
         // for thread safety
         mux: std.Thread.Mutex = .{},
 
@@ -62,6 +64,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                 .memory = std.ArrayList([]T).init(allocator_config.records_allocator),
                 .memory_allocator = allocator_config.memory_allocator,
                 .capacity = 0,
+                .max_continguous_capacity = 0,
             };
         }
 
@@ -83,7 +86,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         }
 
         /// append a block of N elements to the manager
-        pub fn append(self: *Self, n: u64) std.mem.Allocator.Error!void {
+        pub fn expandCapacity(self: *Self, n: u64) std.mem.Allocator.Error!void {
             if (n == 0) return;
 
             if (config.thread_safe) self.mux.lock();
@@ -106,6 +109,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             });
             self.memory.appendAssumeCapacity(buf);
             self.capacity += buf.len;
+            self.max_continguous_capacity = @max(self.max_continguous_capacity, buf.len);
         }
 
         const AllocError = error{
@@ -128,8 +132,11 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                         error.CollapseFailed => {
                             if (config.thread_safe) self.mux.unlock();
                             defer if (config.thread_safe) self.mux.lock();
+                            // wait some time and try to collapse again.
                             std.time.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
-                            // try again -- will hit collapse again
+                            // NOTE: this is because there may be new free records
+                            // (which were free'd by some other consumer thread) which
+                            // can be collapsed and the alloc call will then succeed.
                             continue;
                         },
                         else => return err,
@@ -144,7 +151,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         pub fn allocUnsafe(self: *Self, n: u64) AllocError!struct { []T, u64 } {
             if (n == 0) return error.AttemptedZeroAlloc;
             // this would never succeed
-            if (n > self.capacity) return error.AllocTooBig;
+            if (n > self.max_continguous_capacity) return error.AllocTooBig;
 
             // this is used to index directly into the buffer's underlying data
             var global_index: u64 = 0;
@@ -728,7 +735,7 @@ test "recycle buffer: save and load" {
     defer allocator.deinit();
 
     // create 100 references
-    try allocator.append(100);
+    try allocator.expandCapacity(100);
     // [0] assume flattened memory
     const references = allocator.memory.items[0];
 
@@ -776,7 +783,7 @@ test "recycle buffer: freeUnused" {
     defer allocator.deinit();
 
     // append some memory
-    try allocator.append(100);
+    try allocator.expandCapacity(100);
 
     // alloc a slice of 100 bytes
     const bytes, _ = try allocator.alloc(100);
