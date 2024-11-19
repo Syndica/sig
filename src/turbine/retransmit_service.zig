@@ -17,7 +17,6 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
-const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Duration = sig.time.Duration;
 const TurbineTree = sig.turbine.TurbineTree;
 const TurbineTreeCache = sig.turbine.TurbineTreeCache;
@@ -61,7 +60,8 @@ pub fn run(params: struct {
         params.logger.info().log("retransmit service failed");
         params.exit.store(false, .monotonic);
     }
-    const num_retransmit_threads = params.maybe_num_retransmit_threads orelse @max(try std.Thread.getCpuCount(), 8);
+    const num_retransmit_threads = params.maybe_num_retransmit_threads orelse
+        @max(try std.Thread.getCpuCount(), 8);
     params.logger.info().logf("starting retransmit service: num_retransmit_threads={}", .{
         num_retransmit_threads,
     });
@@ -268,7 +268,8 @@ fn createAndSendRetransmitInfo(
         var get_slot_leader_timer = try sig.time.Timer.start();
         const slot_leader = if (leader_schedule_cache.slotLeader(slot)) |leader| leader else blk: {
             try leader_schedule_cache.put(epoch, try bank.leaderSchedule(allocator));
-            break :blk leader_schedule_cache.slotLeader(slot) orelse @panic("failed to get slot leader");
+            break :blk leader_schedule_cache.slotLeader(slot) orelse
+                @panic("failed to get slot leader");
         };
         metrics.get_slot_leader_nanos.observe(get_slot_leader_timer.read().asNanos());
 
@@ -301,7 +302,9 @@ fn createAndSendRetransmitInfo(
             });
         }
     }
-    metrics.create_and_send_retransmit_info_nanos.observe(create_and_send_retransmit_info_timer.read().asNanos());
+    metrics.create_and_send_retransmit_info_nanos.observe(
+        create_and_send_retransmit_info_timer.read().asNanos(),
+    );
 }
 
 /// Retransmit shreds to nodes in the network
@@ -315,7 +318,10 @@ fn retransmitShreds(
     metrics: *RetransmitServiceMetrics,
     exit: *AtomicBool,
 ) !void {
-    var children = try std.ArrayList(TurbineTree.Node).initCapacity(allocator, TurbineTree.getDataPlaneFanout());
+    var children = try std.ArrayList(TurbineTree.Node).initCapacity(
+        allocator,
+        TurbineTree.getDataPlaneFanout(),
+    );
     defer children.deinit();
     var shuffled_nodes = std.ArrayList(TurbineTree.Node).init(allocator);
     defer shuffled_nodes.deinit();
@@ -335,7 +341,9 @@ fn retransmitShreds(
             TurbineTree.getDataPlaneFanout(),
         );
 
-        metrics.turbine_tree_get_children_nanos.observe(get_retransmit_children_timer.read().asNanos());
+        metrics.turbine_tree_get_children_nanos.observe(
+            get_retransmit_children_timer.read().asNanos(),
+        );
 
         var children_with_addresses_count: usize = 0;
         for (children.items) |child| {

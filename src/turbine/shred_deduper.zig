@@ -30,7 +30,11 @@ pub fn ShredDeduper(comptime K: usize) type {
         const ShredIdFilter = Deduper(K, ShredIdFilterKey);
         const ShredIdFilterKey = struct { id: ShredId, index: usize };
 
-        pub fn init(allocator: std.mem.Allocator, rand: std.rand.Random, num_bits: u64) !ShredDeduper(K) {
+        pub fn init(
+            allocator: std.mem.Allocator,
+            rand: std.rand.Random,
+            num_bits: u64,
+        ) !ShredDeduper(K) {
             return .{
                 .byte_filter = try BytesFilter.init(allocator, rand, num_bits),
                 .shred_id_filter = try ShredIdFilter.init(allocator, rand, num_bits),
@@ -45,7 +49,12 @@ pub fn ShredDeduper(comptime K: usize) type {
         /// Reset the deduper filters if they are saturated or have reached their reset cycle.
         /// Return a tuple of booleans indicating whether the byte_filter and the shred_id_filter
         /// were saturated respectively.
-        pub fn maybeReset(self: *ShredDeduper(K), rand: std.rand.Random, false_positive_rate: f64, reset_cycle: Duration) struct { bool, bool } {
+        pub fn maybeReset(
+            self: *ShredDeduper(K),
+            rand: std.rand.Random,
+            false_positive_rate: f64,
+            reset_cycle: Duration,
+        ) struct { bool, bool } {
             const byte_filter_saturated = self.byte_filter
                 .maybeReset(rand, false_positive_rate, reset_cycle);
             const shred_id_filter_saturated = self.shred_id_filter
@@ -56,10 +65,16 @@ pub fn ShredDeduper(comptime K: usize) type {
         /// Deduplicate a shred based on its raw bytes and ShredId up to a maximum number of duplicates.
         /// Return a tuple of booleans, the first indicating whether the shred was a duplicated, and the second
         /// indicating if it was a shred id duplicate
-        pub fn dedup(self: *ShredDeduper(K), shred_id: *const ShredId, shred_bytes: []const u8, max_duplicate_count: usize) ShredDedupResult {
+        pub fn dedup(
+            self: *ShredDeduper(K),
+            shred_id: *const ShredId,
+            shred_bytes: []const u8,
+            max_duplicate_count: usize,
+        ) ShredDedupResult {
             if (self.byte_filter.dedup(&shred_bytes)) return .byte_duplicate;
             for (0..max_duplicate_count) |i| {
-                if (!self.shred_id_filter.dedup(&.{ .id = shred_id.*, .index = i })) return .not_duplicate;
+                if (!self.shred_id_filter.dedup(&.{ .id = shred_id.*, .index = i }))
+                    return .not_duplicate;
             }
             return .shred_id_duplicate;
         }
@@ -91,12 +106,22 @@ fn testDedupSeeded(
         var payload = [_]u8{0} ** 16;
         rng.bytes(&payload);
         const shred_id = ShredId{ .slot = slot, .index = index, .shred_type = .data };
-        if (.not_duplicate != deduper.dedup(&shred_id, &payload, max_duplicate_count)) dup_count += 1;
+        if (.not_duplicate != deduper.dedup(
+            &shred_id,
+            &payload,
+            max_duplicate_count,
+        )) dup_count += 1;
     }
 
     try std.testing.expectEqual(num_dups, dup_count);
-    try std.testing.expectEqual(bytes_popcount, deduper.byte_filter.masked_count.load(.monotonic));
-    try std.testing.expectEqual(shred_id_popcount, deduper.shred_id_filter.masked_count.load(.monotonic));
+    try std.testing.expectEqual(
+        bytes_popcount,
+        deduper.byte_filter.masked_count.load(.monotonic),
+    );
+    try std.testing.expectEqual(
+        shred_id_popcount,
+        deduper.shred_id_filter.masked_count.load(.monotonic),
+    );
 }
 
 test "agave: dedup seeded" {

@@ -35,8 +35,14 @@ pub const AHasher = struct {
                 switch (pointer.size) {
                     .Slice => self.hashSlice(pointer.child, data.*),
                     else => {
-                        std.debug.print("Unsupported pointer size: type={} pointer.size={}\n", .{ T, pointer.size });
-                        std.debug.panic("Unsupported pointer size: type={} pointer.size={}\n", .{ T, pointer.size });
+                        std.debug.print(
+                            "Unsupported pointer size: type={} pointer.size={}\n",
+                            .{ T, pointer.size },
+                        );
+                        std.debug.panic(
+                            "Unsupported pointer size: type={} pointer.size={}\n",
+                            .{ T, pointer.size },
+                        );
                     },
                 }
             },
@@ -94,14 +100,22 @@ pub const AHasher = struct {
             var parts = [2]u64{ 0, 0 };
             if (data.len >= 2) {
                 if (data.len >= 4) {
-                    parts = .{ @as(u64, readFirstInt(u32, data)), @as(u64, readLastInt(u32, data)) };
+                    parts = .{
+                        @as(u64, readFirstInt(u32, data)),
+                        @as(u64, readLastInt(u32, data)),
+                    };
                 } else {
-                    parts = .{ @as(u64, readFirstInt(u16, data)), @as(u64, data[data.len - 1]) };
+                    parts = .{
+                        @as(u64, readFirstInt(u16, data)),
+                        @as(u64, data[data.len - 1]),
+                    };
                 }
             } else if (data.len > 0) {
                 parts = .{ @as(u64, data[0]), @as(u64, data[0]) };
             }
-            self.largeUpdate(readFirstInt(u128, std.mem.asBytes(&parts[0]) ++ std.mem.asBytes(&parts[1])));
+            self.largeUpdate(
+                readFirstInt(u128, std.mem.asBytes(&parts[0]) ++ std.mem.asBytes(&parts[1])),
+            );
         }
     }
 };
@@ -174,7 +188,12 @@ test "AHasher.write" {
     }
     {
         var hasher = AHasher.fromSeed(random_state);
-        hasher.write(&[_]u8{ 21, 37, 138, 62, 157, 245, 23, 48, 98, 184, 127, 221, 73, 156, 24, 56 });
+        hasher.write(&[_]u8{
+            21,  37,  138, 62,
+            157, 245, 23,  48,
+            98,  184, 127, 221,
+            73,  156, 24,  56,
+        });
         try std.testing.expectEqual(15170204645034903865, hasher.finish());
     }
 }

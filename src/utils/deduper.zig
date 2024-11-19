@@ -51,7 +51,9 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
         ) bool {
             std.debug.assert(0.0 < false_positive_rate and false_positive_rate < 1.0);
             const saturated = self.falsePositiveRate() >= false_positive_rate;
-            if (saturated or self.last_reset_instant.elapsed().asNanos() >= reset_cycle.asNanos()) {
+            if (saturated or
+                self.last_reset_instant.elapsed().asNanos() >= reset_cycle.asNanos())
+            {
                 for (self.bits.items) |_bit| {
                     var bit = _bit;
                     bit = AtomicU64.init(0);
@@ -95,7 +97,13 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
 /// Test method from agave.
 /// Calculate the capacity of the deduper before exceeding the false positive rate.
 fn testGetCapacity(comptime K: usize, num_bits: u64, false_positive_rate: f64) u64 {
-    return @intFromFloat((@as(f64, @floatFromInt(num_bits)) * std.math.pow(f64, false_positive_rate, (1 / @as(f64, @floatFromInt(K))))));
+    return @intFromFloat(
+        (@as(f64, @floatFromInt(num_bits)) * std.math.pow(
+            f64,
+            false_positive_rate,
+            (1 / @as(f64, @floatFromInt(K))),
+        )),
+    );
 }
 
 /// Test method from agave.
@@ -161,9 +169,14 @@ fn testDedupSeeded(
     }
 
     try std.testing.expectEqual(num_dups, num_dups);
-    try std.testing.expectEqual(popcount, deduper.masked_count.load(.unordered)); // TODO: Find why this fails
+    try std.testing.expectEqual(
+        popcount,
+        deduper.masked_count.load(.unordered),
+    );
     try std.testing.expect(deduper.falsePositiveRate() < false_positive_rate);
-    try std.testing.expect(!deduper.maybeReset(rng, false_positive_rate, Duration.fromMillis(0)));
+    try std.testing.expect(
+        !deduper.maybeReset(rng, false_positive_rate, Duration.fromMillis(0)),
+    );
 }
 
 test "agave: dedup capacity" {

@@ -469,10 +469,15 @@ pub const GossipTable = struct {
         minumum_insertion_timestamp: u64,
     ) !std.ArrayList(ThreadSafeContactInfo) {
         var contact_info_iter = self.contactInfoIterator(minumum_insertion_timestamp);
-        var peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(allocator, self.contact_infos.count());
+        var peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(
+            allocator,
+            self.contact_infos.count(),
+        );
 
         while (contact_info_iter.nextThreadSafe()) |contact_info| {
-            if (!contact_info.pubkey.equals(pubkey) and contact_info.shred_version == shred_version) {
+            if (!contact_info.pubkey.equals(pubkey) and
+                contact_info.shred_version == shred_version)
+            {
                 peers.appendAssumeCapacity(contact_info);
             }
         }

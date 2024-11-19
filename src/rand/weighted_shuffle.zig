@@ -240,7 +240,10 @@ pub fn WeightedShuffle(comptime T: type) type {
                 return self.shuffle.zeros.swapRemove(index);
             }
 
-            pub fn intoArrayList(self: *Iterator, allocator: std.mem.Allocator) !std.ArrayList(usize) {
+            pub fn intoArrayList(
+                self: *Iterator,
+                allocator: std.mem.Allocator,
+            ) !std.ArrayList(usize) {
                 var list = std.ArrayList(usize).init(allocator);
                 while (self.next()) |k| {
                     try list.append(k);
@@ -295,7 +298,12 @@ pub fn uintLessThanRust(comptime T: type, random: std.Random, less_than: T) T {
     return intRangeLessThanRust(T, random, 0, less_than);
 }
 
-fn testShuffledIndicesMatchExpected(T: type, random: std.Random, shuffle: *WeightedShuffle(T), expected_slice: []const usize) !void {
+fn testShuffledIndicesMatchExpected(
+    T: type,
+    random: std.Random,
+    shuffle: *WeightedShuffle(T),
+    expected_slice: []const usize,
+) !void {
     var shuffle_cloned = try shuffle.clone();
     defer shuffle_cloned.deinit();
     var shuffled_iter = shuffle_cloned.shuffle(random);
@@ -304,7 +312,11 @@ fn testShuffledIndicesMatchExpected(T: type, random: std.Random, shuffle: *Weigh
     try std.testing.expectEqualSlices(usize, expected_slice, shuffled.items);
 }
 
-fn testWeightedShuffleSlow(allocator: std.mem.Allocator, random: std.Random, weights: []u64) !std.ArrayList(usize) {
+fn testWeightedShuffleSlow(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    weights: []u64,
+) !std.ArrayList(usize) {
     // Initialise high as sum of weights and zeros as indices of zero weights
     var high: u64 = 0;
     var zeros = try std.ArrayList(usize).initCapacity(allocator, weights.len);
@@ -382,7 +394,10 @@ test "agave: get tree size" {
         try std.testing.expectEqual(1 + 16 + 16 * 16, WeightedShuffle(u64).getTreeSize(count));
     }
     for (4097..65537) |count| {
-        try std.testing.expectEqual(1 + 16 + 16 * 16 + 16 * 16 * 16, WeightedShuffle(u64).getTreeSize(count));
+        try std.testing.expectEqual(
+            1 + 16 + 16 * 16 + 16 * 16 * 16,
+            WeightedShuffle(u64).getTreeSize(count),
+        );
     }
 }
 
@@ -503,7 +518,13 @@ test "agave: negative overflow" {
 }
 
 test "agave: hard coded" {
-    const weights = [_]i32{ 78, 70, 38, 27, 21, 0, 82, 42, 21, 77, 77, 0, 17, 4, 50, 96, 0, 83, 33, 16, 72 };
+    const weights = [_]i32{
+        78, 70, 38, 27, 21,
+        0,  82, 42, 21, 77,
+        77, 0,  17, 4,  50,
+        96, 0,  83, 33, 16,
+        72,
+    };
 
     const seed_a = [_]u8{48} ** 32;
     var shuffle_a = try WeightedShuffle(i32).init(std.testing.allocator, &weights);
@@ -595,7 +616,10 @@ test "agave: match slow" {
         // Get shuffled indices using the fast implementation
         const shuffled_fast = blk: {
             var chacha = ChaChaRng.fromSeed(seed);
-            var shuffle = try WeightedShuffle(u64).init(std.testing.allocator, weights.items);
+            var shuffle = try WeightedShuffle(u64).init(
+                std.testing.allocator,
+                weights.items,
+            );
             defer shuffle.deinit();
             var shuffle_iter = shuffle.shuffle(chacha.random());
             break :blk try shuffle_iter.intoArrayList(std.testing.allocator);
@@ -605,7 +629,11 @@ test "agave: match slow" {
         // Get shuffled indices using the slow implementation
         const shuffled_slow = blk: {
             var chacha = ChaChaRng.fromSeed(seed);
-            break :blk try testWeightedShuffleSlow(std.testing.allocator, chacha.random(), weights.items);
+            break :blk try testWeightedShuffleSlow(
+                std.testing.allocator,
+                chacha.random(),
+                weights.items,
+            );
         };
         defer shuffled_slow.deinit();
 
@@ -650,7 +678,11 @@ test "agave: paranoid" {
         // Get shuffled indices using the slow implementation
         const shuffled_slow = blk: {
             var chacha = ChaChaRng.fromSeed(seed);
-            break :blk try testWeightedShuffleSlow(std.testing.allocator, chacha.random(), weights.items);
+            break :blk try testWeightedShuffleSlow(
+                std.testing.allocator,
+                chacha.random(),
+                weights.items,
+            );
         };
         defer shuffled_slow.deinit();
 
