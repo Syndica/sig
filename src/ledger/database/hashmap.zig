@@ -9,6 +9,7 @@ const RwLock = std.Thread.RwLock;
 const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
 const IteratorDirection = database.interface.IteratorDirection;
+const Partitions = database.interface.Partitions;
 const Logger = sig.trace.Logger;
 const SortedMap = sig.utils.collections.SortedMap;
 
@@ -458,6 +459,16 @@ const SharedHashMap = struct {
     }
 };
 
+pub fn openPartitions(
+    comptime partitions: []const []const ColumnFamily,
+    allocator: Allocator,
+    logger: Logger,
+    path: []const u8,
+) Allocator.Error!Partitions(SharedHashMapDB, partitions) {
+    return try database.interface
+        .openPartitionsAsSeparateDatabases(SharedHashMapDB, partitions, allocator, logger, path);
+}
+
 comptime {
-    _ = &database.interface.testDatabase(SharedHashMapDB);
+    _ = &database.interface.testDatabase(SharedHashMapDB, openPartitions);
 }

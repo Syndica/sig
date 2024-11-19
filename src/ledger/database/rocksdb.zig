@@ -10,6 +10,8 @@ const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
 const IteratorDirection = database.interface.IteratorDirection;
 const Logger = sig.trace.Logger;
+const Partitions = database.interface.Partitions;
+const ReferenceCounter = sig.sync.ReferenceCounter;
 const ReturnType = sig.utils.types.ReturnType;
 
 const key_serializer = database.interface.key_serializer;
@@ -19,15 +21,16 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         allocator: Allocator,
         db: rocks.DB,
+        partition_rc: *ReferenceCounter,
         logger: Logger,
         cf_handles: []const rocks.ColumnFamilyHandle,
-        path: []const u8,
+        path: [:0]const u8,
 
         const Self = @This();
 
         pub fn open(allocator: Allocator, logger: Logger, path: []const u8) Error!Self {
             logger.info().log("Initializing RocksDB");
-            const owned_path = try allocator.dupe(u8, path);
+            const owned_path = try allocator.dupeZ(u8, path);
 
             // allocate cf descriptions
             const column_family_descriptions = try allocator
@@ -48,7 +51,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 rocks.DB.open,
                 .{
                     allocator,
-                    path,
+                    owned_path,
                     .{ .create_if_missing = true, .create_missing_column_families = true },
                     column_family_descriptions,
                 },
@@ -64,9 +67,13 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 cf_handles[i - 1] = cfs[i].handle;
             }
 
+            const partition_rc = try allocator.create(ReferenceCounter);
+            partition_rc.* = .{};
+
             return .{
                 .allocator = allocator,
                 .db = db,
+                .partition_rc = partition_rc,
                 .logger = logger,
                 .cf_handles = cf_handles,
                 .path = owned_path,
@@ -75,8 +82,11 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 
         pub fn deinit(self: *Self) void {
             self.allocator.free(self.cf_handles);
-            self.db.deinit();
             self.allocator.free(self.path);
+            if (self.partition_rc.release()) {
+                self.db.deinit();
+                self.allocator.destroy(self.partition_rc);
+            }
         }
 
         pub fn count(self: *Self, comptime cf: ColumnFamily) Allocator.Error!u64 {
@@ -320,17 +330,42 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 }
             };
         }
-
-        const Error = error{
-            RocksDBOpen,
-            RocksDBPut,
-            RocksDBGet,
-            RocksDBDelete,
-            RocksDBDeleteFilesInRange,
-            RocksDBIterator,
-            RocksDBWrite,
-        } || Allocator.Error;
     };
+}
+
+pub fn openPartitions(
+    comptime partitions: []const []const ColumnFamily,
+    allocator: Allocator,
+    logger: Logger,
+    path: []const u8,
+) Error!Partitions(RocksDB, partitions) {
+    comptime var all_cfs: []const ColumnFamily = &.{};
+    inline for (partitions) |partition| {
+        all_cfs = all_cfs ++ partition;
+    }
+    var master_db = try RocksDB(all_cfs).open(allocator, logger, path);
+    defer master_db.deinit();
+
+    var output: Partitions(RocksDB, partitions) = undefined;
+    var cfs_consumed: usize = 0;
+    inline for (partitions, 0..) |partition, i| {
+        const handles = try allocator.dupe(
+            rocks.ColumnFamilyHandle,
+            master_db.cf_handles[cfs_consumed..][0..partition.len],
+        );
+        errdefer allocator.free(handles);
+        _ = master_db.partition_rc.acquire();
+        output[i] = RocksDB(partition){
+            .allocator = allocator,
+            .db = master_db.db,
+            .partition_rc = master_db.partition_rc,
+            .logger = master_db.logger,
+            .cf_handles = handles,
+            .path = try allocator.dupeZ(u8, master_db.path),
+        };
+        cfs_consumed += partition.len;
+    }
+    return output;
 }
 
 fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
@@ -341,8 +376,18 @@ fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@
     };
 }
 
+const Error = error{
+    RocksDBOpen,
+    RocksDBPut,
+    RocksDBGet,
+    RocksDBDelete,
+    RocksDBDeleteFilesInRange,
+    RocksDBIterator,
+    RocksDBWrite,
+} || Allocator.Error;
+
 comptime {
     if (build_options.blockstore_db == .rocksdb) {
-        _ = &database.interface.testDatabase(RocksDB);
+        _ = &database.interface.testDatabase(RocksDB, openPartitions);
     }
 }

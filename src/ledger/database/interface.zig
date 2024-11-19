@@ -183,6 +183,56 @@ pub fn Database(comptime Impl: type) type {
     };
 }
 
+/// Opens a collection of databases, with one database for each "partition" of column families.
+pub fn openPartitionsAsSeparateDatabases(
+    comptime Impl: fn ([]const ColumnFamily) type,
+    comptime partitions: []const []const ColumnFamily,
+    allocator: Allocator,
+    logger: Logger,
+    path: []const u8,
+) !Partitions(Impl, partitions) {
+    var output: Partitions(Impl, partitions) = undefined;
+    inline for (partitions, 0..) |partition, i| {
+        const part_path = try std.fmt.allocPrint(allocator, "{s}.{}", .{ path, i });
+        defer allocator.free(part_path);
+        output[i] = try Impl(partition).open(
+            allocator,
+            logger,
+            part_path,
+        );
+    }
+    return output;
+}
+
+/// This is a helper function to make it easier to specify the return type from an
+/// `openPartitions` function.
+///
+/// This returns a data type which is a tuple. Each field within the tuple is a different
+/// variant of the generic type `Impl` (which is assumed to be a database implementation).
+/// Each variant of Impl corresponds to a partition in the `partitions` slice, with the
+/// type `Impl(partition)`.
+///
+/// ```zig
+/// const partition_a = &.{cf1, cf2};
+/// const partition_b = &.{cf3, cf4, cf5};
+///
+/// Partitions(RocksDB, &.{partition_a, partition_b})
+///     == struct { RocksDB(paritition_a), RocksDB(paritition_b) }
+/// ```
+pub fn Partitions(
+    comptime Impl: fn ([]const ColumnFamily) type,
+    comptime partitions: []const []const ColumnFamily,
+) type {
+    var info = @typeInfo(struct {}).Struct;
+    info.is_tuple = true;
+    for (partitions, 0..) |partition, i| {
+        var field = @typeInfo(struct { Impl(partition) }).Struct.fields[0];
+        field.name = std.fmt.comptimePrint("{}", .{i});
+        info.fields = info.fields ++ .{field};
+    }
+    return @Type(std.builtin.Type{ .Struct = info });
+}
+
 pub const IteratorDirection = enum { forward, reverse };
 
 pub const ColumnFamily = struct {
@@ -279,7 +329,7 @@ pub const BytesRef = struct {
 };
 
 /// Test cases that can be applied to any implementation of Database
-pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
+pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type, openPartitions: anytype) type {
     assertIsDatabase(Impl(&.{}));
 
     @setEvalBranchQuota(10_000);
@@ -355,6 +405,77 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(Value1{ .hello = 100 }, try db.get(allocator, cf1, 123));
             try std.testing.expectEqual(null, try db.get(allocator, cf2, 321));
             try std.testing.expectEqual(Value2{ .world = 666 }, try db.get(allocator, cf2, 133));
+        }
+
+        test "partitions" {
+            const allocator = std.testing.allocator;
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db1, var db2 = try openPartitions(
+                &.{ &.{cf1}, &.{cf2} },
+                allocator,
+                logger,
+                path,
+            );
+            defer db1.deinit();
+            defer db2.deinit();
+
+            try db1.put(cf1, 123, .{ .hello = 345 });
+            try db2.put(cf2, 432, .{ .world = 987 });
+
+            {
+                const got = try db1.get(allocator, cf1, 123);
+                try std.testing.expect(345 == got.?.hello);
+                const not = try db2.get(allocator, cf2, 123);
+                try std.testing.expect(null == not);
+                try db1.delete(cf1, 123);
+                const not_now = try db1.get(allocator, cf1, 123);
+                try std.testing.expect(null == not_now);
+            }
+            {
+                const got = try db2.get(allocator, cf2, 432);
+                try std.testing.expect(987 == got.?.world);
+                const not = try db1.get(allocator, cf1, 432);
+                try std.testing.expect(null == not);
+                try db2.delete(cf2, 432);
+                const not_now = try db2.get(allocator, cf2, 432);
+                try std.testing.expect(null == not_now);
+            }
+        }
+
+        test "partitions may simultaneously write" {
+            const allocator = std.testing.allocator;
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db1, var db2 = try openPartitions(
+                &.{ &.{cf1}, &.{cf2} },
+                allocator,
+                logger,
+                path,
+            );
+            defer db1.deinit();
+            defer db2.deinit();
+
+            var batch1 = try db1.initWriteBatch();
+            defer batch1.deinit();
+
+            var batch2 = try db2.initWriteBatch();
+            defer batch2.deinit();
+
+            try batch1.put(cf1, 1, .{ .hello = 2 });
+            try batch2.put(cf2, 3, .{ .world = 4 });
+            try batch1.put(cf1, 5, .{ .hello = 6 });
+
+            try std.testing.expect(null == try db1.get(allocator, cf1, 2));
+            try std.testing.expect(null == try db2.get(allocator, cf2, 4));
+            try std.testing.expect(null == try db1.get(allocator, cf1, 6));
+
+            try db2.commit(&batch2);
+            try db1.commit(&batch1);
+
+            try std.testing.expect(2 == (try db1.get(allocator, cf1, 1)).?.hello);
+            try std.testing.expect(4 == (try db2.get(allocator, cf2, 3)).?.world);
+            try std.testing.expect(6 == (try db1.get(allocator, cf1, 5)).?.hello);
         }
 
         test "iterator forward" {
