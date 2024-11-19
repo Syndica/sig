@@ -225,14 +225,13 @@ pub const TurbineTree = struct {
     /// slot leader and shred id as the seed for the shuffle.
     pub fn getRetransmitChildren(
         self: *const TurbineTree,
-        allocator: std.mem.Allocator,
+        children: *std.ArrayList(Node),
+        shuffled_nodes: *std.ArrayList(Node),
         slot_leader: Pubkey,
         shred_id: ShredId,
         fanout: usize,
-    ) !struct {
-        usize, // root distance
-        std.ArrayList(Node), // children
-    } {
+    ) !usize // root distance
+    {
         if (slot_leader.equals(&self.my_pubkey)) {
             return error.LoopBack;
         }
@@ -246,17 +245,11 @@ pub const TurbineTree = struct {
         }
 
         // Shuffle the nodes and find my index
-        var shuffled_nodes = try std.ArrayList(Node).initCapacity(
-            allocator,
-            self.nodes.items.len,
-        );
-        defer shuffled_nodes.deinit();
-
         var my_index: usize = undefined;
         var found_my_index = false;
         var chacha = getSeededRng(slot_leader, shred_id);
         var shuffled_indexes = weighted_shuffle.shuffle(chacha.random());
-
+        try shuffled_nodes.ensureTotalCapacity(self.nodes.items.len);
         while (shuffled_indexes.next()) |index| {
             shuffled_nodes.appendAssumeCapacity(self.nodes.items[index]);
             if (!found_my_index) {
@@ -268,8 +261,8 @@ pub const TurbineTree = struct {
         }
 
         // Compute the retransmit children from the shuffled nodes
-        const children = try computeRetransmitChildren(
-            allocator,
+        computeRetransmitChildren(
+            children,
             fanout,
             my_index,
             shuffled_nodes.items,
@@ -285,7 +278,7 @@ pub const TurbineTree = struct {
         else
             3;
 
-        return .{ root_distance, children };
+        return root_distance;
     }
 
     /// Create a seeded RNG for the given leader and shred id.
@@ -310,13 +303,11 @@ pub const TurbineTree = struct {
     // For example the node k in the 1st layer will retransmit to nodes:
     // fanout + k, 2*fanout + k, ..., fanout*fanout + k
     fn computeRetransmitChildren(
-        allocator: std.mem.Allocator,
+        children: *std.ArrayList(Node),
         fanout: usize,
         index: usize,
         nodes: []const Node,
-    ) !std.ArrayList(Node) {
-        var children = try std.ArrayList(Node).initCapacity(allocator, fanout);
-
+    ) void {
         const offset = (index -| 1) % fanout;
         const anchor = index - offset;
         const step = if (index == 0) 1 else fanout;
@@ -328,8 +319,6 @@ pub const TurbineTree = struct {
             curr += step;
             steps += 1;
         }
-
-        return children;
     }
 
     // Returns the parent node in the turbine broadcast tree.
@@ -556,10 +545,12 @@ fn testCheckRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: 
     try std.testing.expectEqual(TurbineTree.computeRetransmitParent(fanout, 0, nodes), null);
 
     // Check that the retransmit and parent nodes are correct
+    var actual_peers = try std.ArrayList(TurbineTree.Node).initCapacity(allocator, TurbineTree.DATA_PLANE_FANOUT);
+    defer actual_peers.deinit();
     for (node_expected_children, 0..) |expected_children, i| {
         // Check that the retransmit children for the ith node are correct
-        const actual_peers = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, nodes);
-        defer actual_peers.deinit();
+        actual_peers.clearRetainingCapacity();
+        TurbineTree.computeRetransmitChildren(&actual_peers, fanout, i, nodes);
         for (expected_children, actual_peers.items) |expected, actual| {
             try std.testing.expectEqual(expected.pubkey(), actual.pubkey());
         }
@@ -574,8 +565,8 @@ fn testCheckRetransmitNodes(allocator: std.mem.Allocator, fanout: usize, nodes: 
 
     // Check that the remaining nodes have no children
     for (node_expected_children.len..nodes.len) |i| {
-        const actual_peers = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, nodes);
-        defer actual_peers.deinit();
+        actual_peers.clearRetainingCapacity();
+        TurbineTree.computeRetransmitChildren(&actual_peers, fanout, i, nodes);
         try std.testing.expectEqual(0, actual_peers.items.len);
     }
 }
@@ -594,10 +585,12 @@ fn testCheckRetransmitNodesRoundTrip(allocator: std.mem.Allocator, fanout: usize
     try std.testing.expectEqual(null, TurbineTree.computeRetransmitParent(fanout, 0, &nodes));
 
     // Check that each node is contained in its parents computed children
+    var children = try std.ArrayList(TurbineTree.Node).initCapacity(allocator, TurbineTree.DATA_PLANE_FANOUT);
+    defer children.deinit();
     for (1..size) |i| {
         const parent = TurbineTree.computeRetransmitParent(fanout, i, &nodes).?;
-        const children = try TurbineTree.computeRetransmitChildren(allocator, fanout, index.get(parent).?, &nodes);
-        defer children.deinit();
+        children.clearRetainingCapacity();
+        TurbineTree.computeRetransmitChildren(&children, fanout, index.get(parent).?, &nodes);
         var node_i_in_children = false;
         for (children.items) |child| {
             if (child.pubkey().equals(&nodes[i].pubkey())) {
@@ -611,8 +604,8 @@ fn testCheckRetransmitNodesRoundTrip(allocator: std.mem.Allocator, fanout: usize
     // Check that the computed parent of each nodes child the parent
     for (0..size) |i| {
         const expected_parent_pubkey = nodes[i].pubkey();
-        const children = try TurbineTree.computeRetransmitChildren(allocator, fanout, i, &nodes);
-        defer children.deinit();
+        children.clearRetainingCapacity();
+        TurbineTree.computeRetransmitChildren(&children, fanout, i, &nodes);
         for (children.items) |child| {
             const actual_parent_pubkey = TurbineTree.computeRetransmitParent(fanout, index.get(child.pubkey()).?, &nodes).?;
             try std.testing.expectEqual(expected_parent_pubkey, actual_parent_pubkey);
@@ -963,17 +956,17 @@ pub fn runTurbineTreeBlackBoxTest() !void {
         const random = chacha.random();
 
         // Create a test cluster and save the staked nodes.
-        var stakes, var gossip_table_rw = try makeTestCluster(
-            std.heap.c_allocator,
-            random,
-            my_pubkey,
-            20,
-            1,
-            20,
-            2201,
-            2001,
-            2799,
-        );
+        var stakes, var gossip_table_rw = try makeTestCluster(.{
+            .allocator = std.heap.c_allocator,
+            .random = random,
+            .my_pubkey = my_pubkey,
+            .my_stake = 20,
+            .min_stake = 1,
+            .max_stake = 20,
+            .num_staked_nodes = 2201,
+            .num_staked_nodes_in_gossip_table = 2001,
+            .num_unstaked_nodes_in_gossip_table = 2799,
+        });
         defer {
             stakes.deinit();
             const gossip_table: *GossipTable, _ = gossip_table_rw.writeWithLock();

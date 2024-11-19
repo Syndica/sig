@@ -327,20 +327,26 @@ fn retransmitShreds(
     metrics: *RetransmitServiceMetrics,
     exit: *AtomicBool,
 ) !void {
+    var children = try std.ArrayList(TurbineTree.Node).initCapacity(allocator, TurbineTree.getDataPlaneFanout());
+    defer children.deinit();
+    var shuffled_nodes = std.ArrayList(TurbineTree.Node).init(allocator);
+    defer shuffled_nodes.deinit();
+
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
         const retransmit_info: RetransmitShredInfo = receiver.receive() orelse continue;
+        defer retransmit_info.turbine_tree.releaseUnsafe();
 
         var get_retransmit_children_timer = try sig.time.Timer.start();
-        const level, const children = try retransmit_info.turbine_tree.getRetransmitChildren(
-            allocator,
+        const level = try retransmit_info.turbine_tree.getRetransmitChildren(
+            &children,
+            &shuffled_nodes,
             retransmit_info.slot_leader,
             retransmit_info.shred_id,
             TurbineTree.getDataPlaneFanout(),
         );
-        defer children.deinit();
-        defer retransmit_info.turbine_tree.releaseUnsafe();
+
         metrics.turbine_tree_get_children_nanos.observe(get_retransmit_children_timer.read().asNanos());
 
         var children_with_addresses_count: usize = 0;
