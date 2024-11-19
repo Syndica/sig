@@ -102,14 +102,6 @@ pub fn run() !void {
         .value_name = "Turbine Port",
     };
 
-    var turbine_num_retransmit_sockets = cli.Option{
-        .long_name = "num-retransmit-sockets",
-        .help = "The number of retransmit sockets to use for the turbine service - default: 1",
-        .value_ref = cli.mkRef(&config.current.turbine.num_retransmit_sockets),
-        .required = false,
-        .value_name = "Number of turbine retransmit sockets",
-    };
-
     var turbine_num_retransmit_threads = cli.Option{
         .long_name = "num-retransmit-threads",
         .help = "The number of retransmit threads to use for the turbine service - default: cpu count",
@@ -445,7 +437,6 @@ pub fn run() !void {
                             // blockstore cleanup service
                             &max_shreds_option,
                             // turbine
-                            &turbine_num_retransmit_sockets,
                             &turbine_num_retransmit_threads,
                             // accounts-db
                             &snapshot_dir_option,
@@ -758,7 +749,7 @@ fn validator() !void {
     }
 
     // snapshot
-    const snapshot = try loadSnapshot(allocator, app_base.logger, .{
+    const snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = gossip_service,
         .geyser_writer = geyser_writer,
         .validate_snapshot = true,
@@ -835,12 +826,11 @@ fn validator() !void {
         .leader_schedule_cache = &leader_schedule_cache,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .receiver = &retransmit_shred_channel,
-        .num_retransmit_sockets = config.current.turbine.num_retransmit_sockets,
         .maybe_num_retransmit_threads = config.current.turbine.num_retransmit_threads,
         .overwrite_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
         .exit = &app_base.exit,
         .rand = prng.random(),
-        .logger = app_base.logger,
+        .logger = app_base.logger.unscoped(),
     }});
 
     // shred collector
@@ -948,7 +938,7 @@ fn shredCollector() !void {
     });
     defer cleanup_service_handle.join();
 
-    const snapshot = try loadSnapshot(allocator, app_base.logger, .{
+    const snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = gossip_service,
         .geyser_writer = null,
         .validate_snapshot = true,
@@ -970,12 +960,11 @@ fn shredCollector() !void {
         .leader_schedule_cache = &leader_schedule_cache,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .receiver = &retransmit_shred_channel,
-        .num_retransmit_sockets = config.current.turbine.num_retransmit_sockets,
         .maybe_num_retransmit_threads = config.current.turbine.num_retransmit_threads,
         .overwrite_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
         .exit = &app_base.exit,
         .rand = prng.random(),
-        .logger = app_base.logger,
+        .logger = app_base.logger.unscoped(),
     }});
 
     // shred collector
@@ -1072,7 +1061,7 @@ fn createSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const snapshot_result = try loadSnapshot(allocator, app_base.logger, .{
+    const snapshot_result = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = null,
         .geyser_writer = null,
         .validate_snapshot = false,
@@ -1127,7 +1116,7 @@ fn validateSnapshot() !void {
         }
     }
 
-    const snapshot_result = try loadSnapshot(allocator, app_base.logger, .{
+    const snapshot_result = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = null,
         .geyser_writer = geyser_writer,
         .validate_snapshot = true,
@@ -1147,7 +1136,7 @@ fn printLeaderSchedule() !void {
 
     const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
-        const loaded_snapshot = loadSnapshot(allocator, app_base.logger, .{
+        const loaded_snapshot = loadSnapshot(allocator, app_base.logger.unscoped(), .{
             .gossip_service = null,
             .geyser_writer = null,
             .validate_snapshot = true,
@@ -1544,7 +1533,7 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, options.gossip_service, .{
+    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger.unscoped(), options.gossip_service, .{
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
@@ -1595,6 +1584,8 @@ fn loadSnapshot(
             n_threads_snapshot_load,
             options.validate_snapshot,
             config.current.accounts_db.accounts_per_file_estimate,
+            config.current.accounts_db.fastload,
+            config.current.accounts_db.save_index,
         );
     }
     errdefer result.collapsed_snapshot_fields.deinit(allocator);
