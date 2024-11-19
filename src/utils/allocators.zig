@@ -2,6 +2,276 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
+/// very similar to RecycleFBA but with a few differences:
+/// - this uses an explicit T type and only returns slices of that type (instead of a generic u8)
+/// - additional memory blocks are supported (instead of using a fixed-buffer-allocator approach)
+/// - record serialization is supported for fast loading this memory back
+/// - the global index is also returned on allocation to help with additional book-keeping
+///
+/// when `alloc` returns error.AllocFailed the allocation failed and the caller should try again
+/// (after some records/buffers have been free'd/recycle'd).
+/// If the allocation size is too big to be recycled after trying to collapse smaller records
+/// (config.max_collapse_tries times) then we panic (or return error.CollapseFailed in allocUnsafe).
+pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
+    /// If enabled, all operations will require an exclusive lock.
+    thread_safe: bool = !builtin.single_threaded,
+    max_collapse_tries: u32 = 5,
+    collapse_sleep_ms: u32 = 100,
+    min_split_size: u64 = 128,
+}) type {
+    std.debug.assert(config.min_split_size > 0);
+
+    return struct {
+        // records are used to keep track of the memory blocks
+        records: std.ArrayList(Record),
+        // memory holds blocks of memory ([]T) that can be allocated/deallocated
+        memory: std.ArrayList([]T),
+        // allocator used to alloc the memory blocks
+        memory_allocator: std.mem.Allocator,
+        // total number of T elements we have in memory
+        capacity: u64,
+        // the maximum contiguous capacity we have in memory
+        // NOTE: since we support multiple memory slices, this tells us the max single alloc size
+        max_continguous_capacity: u64,
+        // for thread safety
+        mux: std.Thread.Mutex = .{},
+
+        // NOTE: we use the global_index to support fast loading the state
+        pub const Record = struct {
+            is_free: bool,
+            buf: []T,
+            global_index: u64,
+            len: u64,
+            // NOTE: this is tracked for correct usage of collapse()
+            memory_index: u64,
+
+            /// NOTE: we dont want to re-write the buf memory (that exists in `memory` field) on save
+            pub const @"!bincode-config:buf": sig.bincode.FieldConfig([]T) = .{
+                .skip = true,
+                .default_value = &.{},
+            };
+        };
+        const Self = @This();
+
+        const AllocatorConfig = struct {
+            memory_allocator: std.mem.Allocator,
+            records_allocator: std.mem.Allocator,
+        };
+
+        pub fn init(allocator_config: AllocatorConfig) Self {
+            return .{
+                .records = std.ArrayList(Record).init(allocator_config.records_allocator),
+                .memory = std.ArrayList([]T).init(allocator_config.records_allocator),
+                .memory_allocator = allocator_config.memory_allocator,
+                .capacity = 0,
+                .max_continguous_capacity = 0,
+            };
+        }
+
+        pub fn create(allocator_config: AllocatorConfig) !*Self {
+            const self = try allocator_config.records_allocator.create(Self);
+            self.* = Self.init(allocator_config);
+            return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+
+            for (self.memory.items) |block| {
+                self.memory_allocator.free(block);
+            }
+            self.memory.deinit();
+            self.records.deinit();
+        }
+
+        /// append a block of N elements to the manager
+        pub fn expandCapacity(self: *Self, n: u64) std.mem.Allocator.Error!void {
+            if (n == 0) return;
+
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+
+            try self.records.ensureUnusedCapacity(1);
+            try self.memory.ensureUnusedCapacity(1);
+
+            const buf = try self.memory_allocator.alloc(T, n);
+            // NOTE: we do this here so bincode serialization can work correctly
+            // otherwise, we run into undefined memory which breaks bincode
+            @memset(buf, default_init);
+
+            self.records.appendAssumeCapacity(.{
+                .is_free = true,
+                .buf = buf,
+                .global_index = self.capacity,
+                .len = buf.len,
+                .memory_index = self.memory.items.len,
+            });
+            self.memory.appendAssumeCapacity(buf);
+            self.capacity += buf.len;
+            self.max_continguous_capacity = @max(self.max_continguous_capacity, buf.len);
+        }
+
+        const AllocError = error{
+            AllocTooBig,
+            AllocFailed,
+            AttemptedZeroAlloc,
+            // NOTE: even though this doesnt get hit on `alloc`, zig isnt smart enough to know that
+            CollapseFailed,
+        } || std.mem.Allocator.Error;
+
+        pub fn alloc(self: *Self, n: u64) AllocError!struct { []T, u64 } {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+
+            if (n == 0) return error.AttemptedZeroAlloc;
+
+            for (0..config.max_collapse_tries) |_| {
+                return self.allocUnsafe(n) catch |err| {
+                    switch (err) {
+                        error.CollapseFailed => {
+                            if (config.thread_safe) self.mux.unlock();
+                            defer if (config.thread_safe) self.mux.lock();
+                            // wait some time and try to collapse again.
+                            std.time.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
+                            // NOTE: this is because there may be new free records
+                            // (which were free'd by some other consumer thread) which
+                            // can be collapsed and the alloc call will then succeed.
+                            continue;
+                        },
+                        else => return err,
+                    }
+                };
+            }
+            // not enough memory to allocate and no possible recycles will be perma stuck.
+            // though its possible to recover from this, its very unlikely, so we panic
+            @panic("not enough memory and collapse failed max times");
+        }
+
+        pub fn allocUnsafe(self: *Self, n: u64) AllocError!struct { []T, u64 } {
+            if (n == 0) return error.AttemptedZeroAlloc;
+            // this would never succeed
+            if (n > self.max_continguous_capacity) return error.AllocTooBig;
+
+            // this is used to index directly into the buffer's underlying data
+            var global_index: u64 = 0;
+            // check for a buf to recycle
+            var is_possible_to_recycle = false;
+            for (self.records.items) |*record| {
+                if (record.buf.len >= n) { // allocation is possible
+                    if (record.is_free) {
+                        record.is_free = false;
+                        const buf = record.buf[0..n]; // local copy because next line will likely change the record pointer
+                        _ = self.tryRecycleUnusedSpaceWithRecordUnsafe(record, n);
+                        return .{ buf, global_index };
+                    } else {
+                        is_possible_to_recycle = true;
+                    }
+                }
+                global_index += record.buf.len;
+            }
+
+            if (is_possible_to_recycle) {
+                // they can try again later since recycle is possible
+                return error.AllocFailed;
+            } else {
+                // try to collapse small record chunks and allocate again
+                self.collapseUnsafe();
+                const collapse_succeed = self.isPossibleToAllocateUnsafe(n);
+                if (collapse_succeed) {
+                    // exit here
+                    return self.allocUnsafe(n);
+                } else {
+                    // up to the caller but should sleep and try collapse/alloc again
+                    return error.CollapseFailed;
+                }
+            }
+        }
+
+        pub fn free(self: *Self, buf_ptr: [*]T) void {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+
+            for (self.records.items) |*record| {
+                if (record.buf.ptr == buf_ptr) {
+                    record.is_free = true;
+                    return;
+                }
+            }
+            @panic("attempt to free invalid buf");
+        }
+
+        /// frees the unused space of a buf.
+        /// this is useful when a buf is initially overallocated and then resized.
+        pub fn tryRecycleUnusedSpace(self: *Self, buf_ptr: [*]T, used_len: u64) bool {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+
+            for (self.records.items) |*record| {
+                if (record.buf.ptr == buf_ptr) {
+                    return self.tryRecycleUnusedSpaceWithRecordUnsafe(record, used_len);
+                }
+            }
+            @panic("attempt to recycle invalid buf");
+        }
+
+        fn tryRecycleUnusedSpaceWithRecordUnsafe(self: *Self, record: *Record, used_len: u64) bool {
+            const unused_len = record.buf.len -| used_len;
+            if (unused_len > config.min_split_size) {
+                // update the state of the record
+                const split_buf = record.buf[used_len..];
+                // NOTE: this record ptr is updated before the append which could invalidate the record ptr
+                record.buf = record.buf[0..used_len];
+                record.len = used_len;
+                // add new unused record to the list
+                // NOTE: errors here are unreachable because if we hit OOM, were left in a bad state
+                self.records.append(.{
+                    .is_free = true,
+                    .buf = split_buf,
+                    .global_index = record.global_index + used_len,
+                    .len = split_buf.len,
+                    .memory_index = record.memory_index,
+                }) catch unreachable;
+                return true;
+            } else {
+                // dont try to split if its too small
+                return false;
+            }
+        }
+
+        /// collapses adjacent free records into a single record.
+        /// we use the memory_index to ensure we dont collapse two separate buffers
+        /// into one, which would result in a segfault.
+        pub fn collapseUnsafe(self: *Self) void {
+            const records = &self.records;
+            var i: usize = 1;
+            while (i < records.items.len) {
+                const prev = records.items[i - 1];
+                const curr = records.items[i];
+
+                const both_free = prev.is_free and curr.is_free;
+                const shared_memory_index = prev.memory_index == curr.memory_index;
+
+                if (both_free and shared_memory_index) {
+                    records.items[i - 1].buf.len += curr.buf.len;
+                    _ = records.orderedRemove(i);
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        pub fn isPossibleToAllocateUnsafe(self: *Self, n: u64) bool {
+            for (self.records.items) |*record| {
+                if (record.buf.len >= n) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+}
+
 pub fn RecycleFBA(config: struct {
     /// If enabled, all operations will require an exclusive lock.
     thread_safe: bool = !builtin.single_threaded,
@@ -448,6 +718,88 @@ pub const failing = struct {
         };
     }
 };
+
+test "recycle buffer: save and load" {
+    const backing_allocator = std.testing.allocator;
+    const X = struct {
+        a: u8,
+        pub const DEFAULT = .{ .a = 0 };
+    };
+
+    var allocator = RecycleBuffer(X, X.DEFAULT, .{
+        .min_split_size = 10,
+    }).init(.{
+        .records_allocator = backing_allocator,
+        .memory_allocator = backing_allocator,
+    });
+    defer allocator.deinit();
+
+    // create 100 references
+    try allocator.expandCapacity(100);
+    // [0] assume flattened memory
+    const references = allocator.memory.items[0];
+
+    // this will create two records, one len 20 and one len 80
+    _ = try allocator.alloc(20);
+
+    // bincode write to slice
+    const records_size = sig.bincode.sizeOf(allocator.records.items, .{});
+    const records_memory = try backing_allocator.alloc(u8, records_size);
+    defer backing_allocator.free(records_memory);
+    _ = try sig.bincode.writeToSlice(records_memory, allocator.records.items, .{});
+
+    // read from slice to records
+    const records = try sig.bincode.readFromSlice(
+        backing_allocator,
+        @TypeOf(allocator.records),
+        records_memory,
+        .{},
+    );
+    defer records.deinit();
+
+    for (records.items) |*record| {
+        record.buf = references[record.global_index..][0..record.len];
+    }
+
+    try std.testing.expectEqual(2, records.items.len);
+    for (records.items, allocator.records.items) |*record, *r| {
+        try std.testing.expectEqual(r.buf, record.buf);
+    }
+}
+
+test "recycle buffer: freeUnused" {
+    const backing_allocator = std.testing.allocator;
+    const X = struct {
+        a: u8,
+        pub const DEFAULT = .{ .a = 0 };
+    };
+
+    var allocator = RecycleBuffer(X, X.DEFAULT, .{
+        .min_split_size = 10,
+    }).init(.{
+        .records_allocator = backing_allocator,
+        .memory_allocator = backing_allocator,
+    });
+    defer allocator.deinit();
+
+    // append some memory
+    try allocator.expandCapacity(100);
+
+    // alloc a slice of 100 bytes
+    const bytes, _ = try allocator.alloc(100);
+    defer allocator.free(bytes.ptr);
+
+    // free the unused space
+    const did_recycle = allocator.tryRecycleUnusedSpace(bytes.ptr, 50);
+    try std.testing.expectEqual(true, did_recycle);
+
+    // this should be ok now
+    const bytes2, _ = try allocator.alloc(50);
+    defer allocator.free(bytes2.ptr);
+
+    const expected_ptr: [*]X = @alignCast(@ptrCast(&bytes[50]));
+    try std.testing.expectEqual(expected_ptr, bytes2.ptr);
+}
 
 test "recycle allocator: tryCollapse" {
     const bytes_allocator = std.testing.allocator;
