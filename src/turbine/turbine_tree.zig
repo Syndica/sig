@@ -469,7 +469,7 @@ const TestEnvironment = struct {
             );
             try contact_info.setSocket(.turbine_recv, SocketAddr.initRandom(params.random));
             _ = try gossip_table.insert(
-                SignedGossipData.init(.{ .ContactInfo = contact_info }),
+                SignedGossipData{ .signature = .{}, .data = .{ .ContactInfo = contact_info } },
                 0,
             );
             if (i == 0) my_contact_info = ThreadSafeContactInfo.fromContactInfo(contact_info);
