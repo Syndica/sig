@@ -493,6 +493,7 @@ pub fn run() !void {
                             &repair_port_option,
                             &test_repair_option,
                             // turbine
+                            &turbine_num_retransmit_threads,
                             &turbine_overwrite_stake_for_testing,
                             // blockstore cleanup service
                             &max_shreds_option,
@@ -867,9 +868,6 @@ fn shredCollector() !void {
         app_base.deinit();
     }
 
-    const genesis_file_path = try config.current.genesisFilePath() orelse return error.GenesisPathNotProvided;
-    const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
-
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
 
@@ -883,16 +881,23 @@ fn shredCollector() !void {
         gossip_manager.deinit();
     }
 
+    const snapshot = try loadSnapshot(allocator, app_base.logger, .{
+        .gossip_service = gossip_service,
+        .geyser_writer = null,
+        .validate_snapshot = true,
+        .metadata_only = config.current.accounts_db.snapshot_metadata_only,
+    });
+
     // leader schedule
-    // NOTE: leader schedule is needed for the shred collector because we skip accounts-db setup
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, genesis_config.epoch_schedule);
-
-    // This is a sort of hack to get the epoch of the leader schedule and then insert into the cache
-    const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
-    // first_slot is non null iff leader schedule is built from cli
-    const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(start_slot);
-    try leader_schedule_cache.put(leader_schedule_epoch, leader_schedule);
-
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
+    if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
+        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
+    } else {
+        const schedule = try snapshot.bank.bank_fields.leaderSchedule(allocator);
+        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, schedule);
+    }
+    // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
+    // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
     const leader_provider = leader_schedule_cache.slotLeaderProvider();
 
     // blockstore
@@ -937,13 +942,6 @@ fn shredCollector() !void {
         &app_base.exit,
     });
     defer cleanup_service_handle.join();
-
-    const snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
-        .gossip_service = gossip_service,
-        .geyser_writer = null,
-        .validate_snapshot = true,
-        .metadata_only = config.current.accounts_db.snapshot_metadata_only,
-    });
 
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
