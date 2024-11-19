@@ -50,7 +50,11 @@ pub const AccountIndex = struct {
     /// this is the allocator used to allocate reference_memory
     reference_allocator: ReferenceAllocator,
     /// manages reference memory throughout the life of the program (ie, manages the state of free/used AccountRefs)
-    reference_manager: *sig.utils.allocators.RecycleBuffer(AccountRef, .{}),
+    reference_manager: *sig.utils.allocators.RecycleBuffer(
+        AccountRef,
+        AccountRef.DEFAULT,
+        .{},
+    ),
 
     pub const SlotRefMap = std.AutoHashMap(Slot, []AccountRef);
     pub const AllocatorConfig = union(Tag) {
@@ -84,7 +88,11 @@ pub const AccountIndex = struct {
             },
         };
 
-        const reference_manager = try sig.utils.allocators.RecycleBuffer(AccountRef, .{}).create(.{
+        const reference_manager = try sig.utils.allocators.RecycleBuffer(
+            AccountRef,
+            AccountRef.DEFAULT,
+            .{},
+        ).create(.{
             .memory_allocator = reference_allocator.get(),
             .records_allocator = allocator,
         });
@@ -131,8 +139,8 @@ pub const AccountIndex = struct {
         // self.reference_allocator.deinit();
     }
 
-    pub fn appendNReferences(self: *Self, n: u64) !void {
-        try self.reference_manager.append(n);
+    pub fn expandRefCapacity(self: *Self, n: u64) !void {
+        try self.reference_manager.expandCapacity(n);
     }
 
     pub const ReferenceParent = union(enum) {
@@ -541,7 +549,7 @@ test "account index update/remove reference" {
 
     var index = try AccountIndex.init(allocator, .noop, .{ .ram = .{ .allocator = allocator } }, 8);
     defer index.deinit();
-    try index.appendNReferences(100);
+    try index.expandRefCapacity(100);
     try index.pubkey_ref_map.ensureTotalCapacityPerShard(100);
 
     // pubkey -> a

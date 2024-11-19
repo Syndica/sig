@@ -336,7 +336,7 @@ pub const AccountsDB = struct {
 
         // prealloc the references
         const n_accounts_estimate = n_account_files * accounts_per_file_estimate;
-        try self.account_index.appendNReferences(n_accounts_estimate);
+        try self.account_index.expandRefCapacity(n_accounts_estimate);
 
         {
             const bhs, var bhs_lg = try self.getOrInitBankHashStats(snapshot_manifest.slot);
@@ -647,7 +647,7 @@ pub const AccountsDB = struct {
 
         // free extra memory, if we overallocated (very likely)
         if (n_accounts_total != references_buf.len) {
-            _ = try reference_manager.tryRecycleUnusedSpace(references_buf, n_accounts_total);
+            _ = reference_manager.tryRecycleUnusedSpace(references_buf.ptr, n_accounts_total);
         }
 
         // NOTE: this is good for debugging what to set `accounts_per_file_est` to
@@ -3556,7 +3556,7 @@ test "flushing slots works" {
     const random = prng.random();
     const n_accounts = 3;
 
-    try accounts_db.account_index.appendNReferences(n_accounts * 2);
+    try accounts_db.account_index.expandRefCapacity(n_accounts * 2);
 
     // we dont defer deinit to make sure that they are cleared on purge
     var pubkeys: [n_accounts]Pubkey = undefined;
@@ -3617,7 +3617,7 @@ test "purge accounts in cache works" {
     const random = prng.random();
     const n_accounts = 3;
 
-    try accounts_db.account_index.appendNReferences(n_accounts * 2);
+    try accounts_db.account_index.expandRefCapacity(n_accounts * 2);
 
     var pubkeys: [n_accounts]Pubkey = undefined;
     var accounts: [n_accounts]Account = undefined;
@@ -3683,7 +3683,7 @@ test "clean to shrink account file works with zero-lamports" {
     const random = prng.random();
     const n_accounts = 10;
 
-    try accounts_db.account_index.appendNReferences(200);
+    try accounts_db.account_index.expandRefCapacity(200);
 
     // generate the account file for slot 0
     var pubkeys: [n_accounts]Pubkey = undefined;
@@ -3769,7 +3769,7 @@ test "clean to shrink account file works" {
     const random = prng.random();
     const n_accounts = 10;
 
-    try accounts_db.account_index.appendNReferences(200);
+    try accounts_db.account_index.expandRefCapacity(200);
 
     // generate the account file for slot 0
     var pubkeys: [n_accounts]Pubkey = undefined;
@@ -3847,7 +3847,7 @@ test "full clean account file works" {
     const random = prng.random();
     const n_accounts = 3;
 
-    try accounts_db.account_index.appendNReferences(200);
+    try accounts_db.account_index.expandRefCapacity(200);
 
     // generate the account file for slot 0
     var pubkeys: [n_accounts]Pubkey = undefined;
@@ -3943,7 +3943,7 @@ test "shrink account file works" {
 
     const n_accounts = 10;
 
-    try accounts_db.account_index.appendNReferences(200);
+    try accounts_db.account_index.expandRefCapacity(200);
 
     // generate the account file for slot 0
     var pubkeys: [n_accounts]Pubkey = undefined;
@@ -4500,7 +4500,7 @@ pub const BenchmarkAccountsDB = struct {
         });
         defer accounts_db.deinit();
 
-        try accounts_db.account_index.appendNReferences(total_n_accounts);
+        try accounts_db.account_index.expandRefCapacity(total_n_accounts);
 
         var prng = std.Random.DefaultPrng.init(19);
         const random = prng.random();
