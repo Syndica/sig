@@ -19,6 +19,14 @@ pub const BenchTimeUnit = enum {
             .seconds => duration.asSecs(),
         };
     }
+
+    pub fn toString(self: BenchTimeUnit) []const u8 {
+        return switch (self) {
+            .nanos => "nanos",
+            .millis => "millis",
+            .seconds => "seconds",
+        };
+    }
 };
 
 const Benchmark = enum {
@@ -57,6 +65,9 @@ fn exitWithUsage() noreturn {
         \\  --help
         \\    Prints this usage message
         \\
+        \\  --telemetry=git_hash
+        \\    output benchmark results to results/output.txt
+        \\
     ) catch @panic("failed to print usage");
     std.posix.exit(1);
 }
@@ -78,18 +89,28 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
+    var maybe_telemetry: ?[]const u8 = null;
     var maybe_filter: ?Benchmark = null;
     // skip the benchmark argv[0]
     _ = cli_args.skip();
     while (cli_args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
             exitWithUsage();
+        } else if (std.mem.startsWith(u8, arg, "--telemetry=")) {
+            const commit_hash = std.mem.trim(u8, arg["--telemetry=".len..], &std.ascii.whitespace);
+            if (commit_hash.len == 0) @panic("--telemetry expected the current git commit hash");
+            maybe_telemetry = commit_hash;
+            continue;
         }
         maybe_filter = std.meta.stringToEnum(Benchmark, arg) orelse {
             logger.err().logf("unknown benchmark: {s}", .{arg});
             exitWithUsage();
         };
     }
+    const sending_telemetry = maybe_telemetry != null;
+    // if (sending_telemetry and builtin.mode != .ReleaseSafe) {
+    //     @panic("send telemetry is only supported in ReleaseSafe mode");
+    // }
     if (maybe_filter == null) {
         exitWithUsage();
     }
@@ -103,13 +124,27 @@ pub fn main() !void {
     const max_time_per_bench = Duration.fromSecs(5); // !!
     const run_all_benchmarks = filter == .all;
 
+    var maybe_metrics: ?std.ArrayList(Metric) = null;
+    if (sending_telemetry) {
+        maybe_metrics = std.ArrayList(Metric).init(allocator);
+    }
+    defer {
+        if (maybe_metrics) |metrics| {
+            for (metrics.items) |m| {
+                m.deinit();
+            }
+            metrics.deinit();
+        }
+    }
+
     if (filter == .swissmap or run_all_benchmarks) {
-        try benchmarkCSV(
+        try benchmark(
             allocator,
             logger,
             @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
             max_time_per_bench,
             .nanos,
+            &maybe_metrics,
         );
     }
 
@@ -120,12 +155,13 @@ pub fn main() !void {
         }
 
         if (filter == .accounts_db_readwrite or run_all) {
-            try benchmarkCSV(
+            try benchmark(
                 allocator,
                 logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
                 .millis,
+                &maybe_metrics,
             );
         }
 
@@ -139,77 +175,85 @@ pub fn main() !void {
             };
             snapshot_dir.close();
 
-            try benchmarkCSV(
+            try benchmark(
                 allocator,
                 logger,
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
                 .millis,
+                &maybe_metrics,
             );
         }
     }
 
     if (filter == .socket_utils or run_all_benchmarks) {
-        try benchmarkCSV(
+        try benchmark(
             allocator,
             logger,
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
             .millis,
+            &maybe_metrics,
         );
     }
 
     if (filter == .gossip or run_all_benchmarks) {
-        try benchmarkCSV(
+        try benchmark(
             allocator,
             logger,
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
             .millis,
+            &maybe_metrics,
         );
-        try benchmarkCSV(
+        try benchmark(
             allocator,
             logger,
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
             .millis,
+            &maybe_metrics,
         );
     }
 
     if (filter == .sync or run_all_benchmarks) {
-        try benchmarkCSV(
+        try benchmark(
             allocator,
             logger,
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
             .nanos,
+            &maybe_metrics,
         );
     }
 
     if (filter == .ledger or run_all_benchmarks) {
-        try benchmarkCSV(
+        try benchmark(
             allocator,
             logger,
             @import("ledger/benchmarks.zig").BenchmarkLedger,
             max_time_per_bench,
             .nanos,
+            &maybe_metrics,
         );
-        try benchmarkCSV(
+        try benchmark(
             allocator,
             logger,
             @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
             max_time_per_bench,
             .millis,
+            &maybe_metrics,
         );
     }
 
     if (filter == .bincode or run_all_benchmarks) {
-        try benchmarkCSV(
+        try benchmark(
             allocator,
             logger,
             @import("bincode/benchmarks.zig").BenchmarkEntry,
             max_time_per_bench,
             .nanos,
+            &maybe_metrics,
         );
     }
 
@@ -218,21 +262,28 @@ pub fn main() !void {
         logger.debug().log("Geyser Streaming Benchmark:");
         try @import("geyser/lib.zig").benchmark.runBenchmark(logger);
     }
+
+    // send the metrics to telemetry
+    if (maybe_telemetry) |commit_hash| {
+        // SAFE: maybe_metrics is always non-null if we are sending telemetry
+        sendTelemetry(allocator, commit_hash, try maybe_metrics.?.toOwnedSlice()) catch |err| {
+            logger.err().logf("sending telemetry failed: {s}", .{@errorName(err)});
+        };
+    }
 }
 
-/// src: https://github.com/Hejsil/zig-bench
-/// NOTE: we only support Nanos for now beacuse we also support floats which makes it harder to implement.
-pub fn benchmarkCSV(
+pub fn benchmark(
     allocator: std.mem.Allocator,
     logger: sig.trace.Logger,
     comptime B: type,
     max_time_per_benchmark: Duration,
     time_unit: BenchTimeUnit,
+    maybe_metrics: *?std.ArrayList(Metric),
 ) !void {
     const has_args = if (@hasDecl(B, "args")) true else false;
     const args = if (has_args) B.args else [_]void{{}};
-    const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10_000;
-    const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100_000;
+    const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10;
+    const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 5_000;
 
     const functions = comptime blk: {
         var res: []const Decl = &[_]Decl{};
@@ -424,6 +475,16 @@ pub fn benchmarkCSV(
 
                     // print column results
                     try writer_average.print("{s}, {d}, {d}, {d}, {d}\n", .{ arg_name, min, max, mean, std_dev });
+
+                    // collect the metric
+                    if (maybe_metrics.*) |*metrics| {
+                        const metric = Metric{
+                            .name = arg_name,
+                            .unit = time_unit.toString(),
+                            .value = mean,
+                        };
+                        try metrics.append(metric);
+                    }
                 },
                 else => {
                     // print column headers
@@ -470,6 +531,26 @@ pub fn benchmarkCSV(
                             try writer_average.print("{d}, {d}, {any}, {any}", .{ f_min, f_max, f_mean, f_std_dev });
                         } else {
                             try writer_average.print("{d}, {d}, {any}, {any}, ", .{ f_min, f_max, f_mean, f_std_dev });
+                        }
+
+                        // collect the metric
+                        if (maybe_metrics.*) |*metrics| {
+                            const fmt_size = std.fmt.count("{s}_{s}", .{ arg_name, field.name });
+                            const name_buf = try allocator.alloc(u8, fmt_size);
+                            const name = try std.fmt.bufPrint(name_buf, "{s}_{s}", .{ arg_name, field.name });
+                            const value = switch (@typeInfo(T)) {
+                                // in the float case we retain the last two decimal points by
+                                // multiplying by 100 and converting to an integer
+                                .Float => @as(u64, @intFromFloat(f_mean * 100)),
+                                else => f_mean,
+                            };
+                            const metric = Metric{
+                                .name = name,
+                                .unit = time_unit.toString(),
+                                .value = value,
+                                .maybe_alloc = allocator,
+                            };
+                            try metrics.append(metric);
                         }
                     }
                     try writer_average.print("\n", .{});
@@ -564,4 +645,64 @@ pub fn benchmarkCSV(
             try table.printstd();
         }
     }
+}
+
+const Metric = struct {
+    name: []const u8,
+    unit: []const u8,
+    value: u64,
+    // used to deallocate the metric name which
+    // may be on the heap due to runtime formatting
+    maybe_alloc: ?std.mem.Allocator = null,
+
+    pub fn deinit(self: Metric) void {
+        if (self.maybe_alloc) |alloc| {
+            alloc.free(self.name);
+        }
+    }
+};
+
+/// this metric struct is used in the json.stringify call
+/// which removes non-necessary fields from the `Metric` struct.
+const TelemetryMetric = struct {
+    name: []const u8,
+    unit: []const u8,
+    value: u64,
+};
+
+const MetricBatch = struct {
+    timestamp: u64,
+    metrics: []const TelemetryMetric,
+    attributes: struct {
+        git_repo: []const u8,
+        branch: []const u8,
+        git_commit: []const u8,
+    },
+};
+
+pub fn sendTelemetry(
+    allocator: std.mem.Allocator,
+    hash: []const u8,
+    metrics: []const Metric,
+) !void {
+    _ = hash;
+
+    var telemetry_metrics = try std.ArrayList(TelemetryMetric).initCapacity(allocator, metrics.len);
+    defer telemetry_metrics.deinit();
+    for (metrics) |m| telemetry_metrics.appendAssumeCapacity(.{
+        .name = m.name,
+        .unit = m.unit,
+        .value = m.value,
+    });
+
+    const payload = try std.json.stringifyAlloc(
+        allocator,
+        telemetry_metrics.items,
+        .{},
+    );
+    defer allocator.free(payload);
+
+    const output_path = "results/output.txt";
+    const output_file = try std.fs.cwd().createFile(output_path, .{});
+    try output_file.writeAll(payload);
 }
