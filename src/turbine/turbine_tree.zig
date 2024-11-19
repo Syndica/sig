@@ -168,11 +168,14 @@ pub const TurbineTree = struct {
 
         var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
         errdefer index.deinit();
-        for (nodes.items, 0..) |node, i| try index.put(node.pubkey(), i);
 
         var node_stakes = try std.ArrayList(u64).initCapacity(allocator, nodes.items.len);
         defer node_stakes.deinit();
-        for (nodes.items) |node| node_stakes.appendAssumeCapacity(node.stake);
+
+        for (nodes.items, 0..) |node, i| {
+            try index.put(node.pubkey(), i);
+            node_stakes.appendAssumeCapacity(node.stake);
+        }
 
         const weighted_shuffle = try WeightedShuffle.init(allocator, node_stakes.items);
 
