@@ -51,7 +51,6 @@ pub fn run(params: struct {
     leader_schedule_cache: *LeaderScheduleCache,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     receiver: *Channel(Packet),
-    num_retransmit_sockets: usize,
     maybe_num_retransmit_threads: ?usize,
     overwrite_stake_for_testing: bool,
     exit: *AtomicBool,
@@ -63,8 +62,7 @@ pub fn run(params: struct {
         params.exit.store(false, .monotonic);
     }
     const num_retransmit_threads = params.maybe_num_retransmit_threads orelse @max(try std.Thread.getCpuCount(), 8);
-    params.logger.info().logf("starting retransmit service: num_retransmit_sockets={} num_retransmit_threads={}", .{
-        params.num_retransmit_sockets,
+    params.logger.info().logf("starting retransmit service: num_retransmit_threads={}", .{
         num_retransmit_threads,
     });
 
@@ -76,17 +74,9 @@ pub fn run(params: struct {
     var retransmit_to_socket_channel = try Channel(Packet).init(params.allocator);
     defer retransmit_to_socket_channel.deinit();
 
-    var retransmit_sockets: std.ArrayList(UdpSocket) = std.ArrayList(UdpSocket).init(params.allocator);
-    defer {
-        for (retransmit_sockets.items) |socket| socket.close();
-        retransmit_sockets.deinit();
-    }
-
-    for (0..params.num_retransmit_sockets) |_| {
-        var socket = try UdpSocket.create(.ipv4, .udp);
-        try socket.bind(try EndPoint.parse("0.0.0.0:0"));
-        try retransmit_sockets.append(socket);
-    }
+    var retransmit_socket = try UdpSocket.create(.ipv4, .udp);
+    defer retransmit_socket.close();
+    try retransmit_socket.bind(try EndPoint.parse("0.0.0.0:0"));
 
     var thread_handles = std.ArrayList(std.Thread).init(params.allocator);
     defer thread_handles.deinit();
@@ -124,20 +114,18 @@ pub fn run(params: struct {
         ));
     }
 
-    for (retransmit_sockets.items) |socket| {
-        try thread_handles.append(try std.Thread.spawn(
-            .{},
-            socket_utils.sendSocket,
-            .{
-                socket,
-                &retransmit_to_socket_channel,
-                params.logger,
-                false,
-                params.exit,
-                {},
-            },
-        ));
-    }
+    try thread_handles.append(try std.Thread.spawn(
+        .{},
+        socket_utils.sendSocket,
+        .{
+            retransmit_socket,
+            &retransmit_to_socket_channel,
+            params.logger,
+            false,
+            params.exit,
+            {},
+        },
+    ));
 
     for (thread_handles.items) |thread| thread.join();
 }
