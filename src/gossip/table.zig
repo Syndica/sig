@@ -464,7 +464,7 @@ pub const GossipTable = struct {
     pub fn getThreadSafeContactInfosMatchingShredVersion(
         self: Self,
         allocator: std.mem.Allocator,
-        pubkey: Pubkey,
+        pubkey: *const Pubkey,
         shred_version: u16,
         minumum_insertion_timestamp: u64,
     ) !std.ArrayList(ThreadSafeContactInfo) {

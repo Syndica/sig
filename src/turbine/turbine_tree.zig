@@ -102,17 +102,15 @@ pub const TurbineTree = struct {
     /// the shuffle is deterministic but the node is not used for retransmit
     pub const MAX_NODES_PER_IP_ADDRESS: usize = 10;
 
+    /// A node in the TurbineTree
     /// Nodes in the TurbineTree may be identified by solely their
     /// pubkey if they are not in the gossip table or their contact info
     /// is not known
-    pub const NodeId = union(enum) {
-        contact_info: ThreadSafeContactInfo,
-        pubkey: Pubkey,
-    };
-
-    /// A node in the TurbineTree
     pub const Node = struct {
-        id: NodeId,
+        id: union(enum) {
+            contact_info: ThreadSafeContactInfo,
+            pubkey: Pubkey,
+        },
         stake: u64,
 
         pub fn pubkey(self: Node) Pubkey {
@@ -153,7 +151,8 @@ pub const TurbineTree = struct {
 
         const gossip_peers = try gossip_table.getThreadSafeContactInfosMatchingShredVersion(
             allocator,
-            my_contact_info,
+            &my_contact_info.pubkey,
+            my_contact_info.shred_version,
             0,
         );
         defer gossip_peers.deinit();
