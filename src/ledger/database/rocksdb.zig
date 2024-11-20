@@ -16,17 +16,21 @@ const ReturnType = sig.utils.types.ReturnType;
 const key_serializer = database.interface.key_serializer;
 const value_serializer = database.interface.value_serializer;
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE: []const u8 = "rocksdb";
+
 pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         allocator: Allocator,
         db: rocks.DB,
-        logger: ScopedLogger(@typeName(Self)),
+        logger: ScopedLogger(LOG_SCOPE),
         cf_handles: []const rocks.ColumnFamilyHandle,
         path: []const u8,
 
         const Self = @This();
 
-        pub fn open(allocator: Allocator, logger: Logger, path: []const u8) Error!Self {
+        pub fn open(allocator: Allocator, logger_: Logger, path: []const u8) Error!Self {
+            const logger = logger_.withScope(LOG_SCOPE);
             logger.info().log("Initializing RocksDB");
             const owned_path = try allocator.dupe(u8, path);
 
@@ -68,7 +72,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             return .{
                 .allocator = allocator,
                 .db = db,
-                .logger = logger.withScope(@typeName(Self)),
+                .logger = logger,
                 .cf_handles = cf_handles,
                 .path = owned_path,
             };
@@ -262,7 +266,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             defer if (start_bytes) |sb| sb.deinit();
             return .{
                 .allocator = self.allocator,
-                .logger = self.logger.unscoped(),
+                .logger = self.logger,
                 .inner = self.db.iterator(
                     self.cf_handles[cf.find(column_families)],
                     switch (direction) {
@@ -278,7 +282,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             return struct {
                 allocator: Allocator,
                 inner: rocks.Iterator,
-                logger: Logger,
+                logger: ScopedLogger(LOG_SCOPE),
 
                 /// Calling this will free all slices returned by the iterator
                 pub fn deinit(self: *@This()) void {
@@ -334,7 +338,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     };
 }
 
-fn callRocks(logger: anytype, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
+fn callRocks(logger: ScopedLogger(LOG_SCOPE), comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
     var err_str: ?rocks.Data = null;
     return @call(.auto, func, args ++ .{&err_str}) catch |e| {
         logger.err().logf("{} - {s}", .{ e, err_str.? });
