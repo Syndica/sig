@@ -332,6 +332,8 @@ fn retransmitShreds(
         const retransmit_info: RetransmitShredInfo = receiver.receive() orelse continue;
         defer retransmit_info.turbine_tree.releaseUnsafe();
 
+        children.clearRetainingCapacity();
+        shuffled_nodes.clearRetainingCapacity();
         var get_retransmit_children_timer = try sig.time.Timer.start();
         const level = try retransmit_info.turbine_tree.getRetransmitChildren(
             &children,
