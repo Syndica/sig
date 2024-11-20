@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 const types = @import("../rpc/types.zig");
 
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 const AtomicBool = std.atomic.Value(bool);
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Channel = sig.sync.Channel;
@@ -56,8 +57,10 @@ pub const MockTransferService = struct {
     sender: *Channel(TransactionInfo),
     rpc_client: RpcClient,
     exit: *AtomicBool,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(Self)),
     accounts: MockAccounts = MockAccounts.DEFAULT,
+
+    const Self = @This();
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -71,7 +74,7 @@ pub const MockTransferService = struct {
             .sender = sender,
             .rpc_client = rpc_client,
             .exit = exit,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(Self)),
         };
     }
 
