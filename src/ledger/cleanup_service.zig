@@ -440,9 +440,30 @@ test "findSlotsToClean" {
     }
 
     const r = try findSlotsToClean(&reader, 0, 100);
+    // TO RESOLVE: On first pass these passes, on second it fails
+    // because the livefiles generated in the procedding lines can now be retrieved
+    // after a second run
     try std.testing.expectEqual(false, r.should_clean);
     try std.testing.expectEqual(0, r.total_shreds);
     try std.testing.expectEqual(0, r.highest_slot_to_purge);
+
+    var data_shred = try ledger.shred.DataShred.zeroedForTest(allocator);
+    defer data_shred.deinit();
+    {
+        var write_batch = try db.initWriteBatch();
+        for (0..1000) |i| {
+            try write_batch.put(ledger.schema.schema.data_shred, .{ 19, i }, data_shred.payload);
+        }
+        try db.commit(&write_batch);
+    }
+
+    const r2 = try findSlotsToClean(&reader, 0, 100);
+    // TO RESOLVE: On first pass these fails, on second it passes
+    // because the livefiles generated in the procedding lines can now be retrieved
+    // after a second run
+    try std.testing.expectEqual(true, r2.should_clean);
+    try std.testing.expectEqual(0, r2.total_shreds);
+    try std.testing.expectEqual(100, r2.highest_slot_to_purge);
 }
 
 test "purgeSlots" {
