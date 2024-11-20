@@ -673,16 +673,6 @@ const JsonMetric = struct {
     value: u64,
 };
 
-const MetricBatch = struct {
-    timestamp: u64,
-    metrics: []const JsonMetric,
-    attributes: struct {
-        git_repo: []const u8,
-        branch: []const u8,
-        git_commit: []const u8,
-    },
-};
-
 pub fn saveMetricsJson(
     allocator: std.mem.Allocator,
     metrics: []const Metric,
