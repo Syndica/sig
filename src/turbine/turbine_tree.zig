@@ -68,6 +68,13 @@ pub const TurbineTreeCache = struct {
     }
 
     pub fn put(self: *TurbineTreeCache, epoch: Epoch, turbine_tree: *TurbineTree) !void {
+        for (self.cache.values()) |entry| {
+            if (!entry.alive(self.cache_entry_ttl)) {
+                entry.turbine_tree.releaseUnsafe();
+                self.cache.remove(entry);
+            }
+        }
+
         try self.cache.put(epoch, .{
             .created = Instant.now(),
             .turbine_tree = turbine_tree.acquireUnsafe(),
