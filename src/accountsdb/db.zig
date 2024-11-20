@@ -68,35 +68,128 @@ pub const ACCOUNT_INDEX_SHARDS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
-/// Used for obtaining cached reads
-pub const BufferPool = struct {
-    allocator: std.mem.Allocator,
+/// Implementation of https://s3fifo.com/
+/// does not store values (!)
+pub const S3_FIFO = struct {
+    const Fifo = std.fifo.LinearFifo(u32, .{.Slice});
+    // ~10% of objects
+    small: Fifo,
+    // ~90% of objects
+    main: Fifo,
+    // same size as main
+    ghost: Fifo,
 
-    snapshot_dir: std.fs.Dir,
+    pub fn init(allocator: std.mem.Allocator, small: usize, main: usize) !S3_FIFO {
+        if (small > main) unreachable;
 
-    /// max sum of all data.len
-    bytes_max: usize,
-    /// sum of all data.len where we start evicting
-    bytes_start_evicting: usize,
-    /// current sum of all data.len
-    bytes_current: std.atomic.Value(usize) = .{ .raw = 0 },
-
-    // TODO: seems pretty easy to implement something like S3FIFO with atomics...
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        bytes_start_evicting: usize,
-        bytes_max: usize,
-    ) BufferPool {
-        std.debug.assert(bytes_start_evicting >= bytes_max);
         return .{
-            .allocator = allocator,
-            .bytes_start_evicting = bytes_start_evicting,
-            .bytes_max = bytes_max,
+            .small = Fifo.initSlice(try allocator.alloc(u8, small)),
+            .main = Fifo.initSlice(try allocator.alloc(u8, main)),
+            .ghost = Fifo.initSlice(try allocator.alloc(u8, main)),
         };
     }
 
-    fn read(self: *BufferPool, slot: Slot, range_start: usize, range_end: usize) !CachedRead {
+    pub fn deinit(self: S3_FIFO, allocator: std.mem.Allocator) void {
+        allocator.free(self.small.buf);
+        allocator.free(self.main.buf);
+        allocator.free(self.ghost.buf);
+    }
+
+    pub fn insert(self: S3_FIFO, key: u32) void {
+        if (self.main.writableLength() == 0) self.evictMain();
+
+        const in_ghost = for (self.ghost.readableSlice(0)) |g| {
+            if (g == key) break true;
+        } else false;
+
+        if (in_ghost) {
+            if (self.main.writableLength() == 0) self.evictMain();
+            self.main.write(&.{key});
+        } else {
+            if (self.small.writableLength() == 0) self.evictSmall();
+            self.small.write(&.{key});
+        }
+    }
+
+    pub fn read(self: S3_FIFO, key: u32, freq: []const u2) void {
+        _ = self;
+        freq[key] +|= 1;
+        // noop - to be handled in BufferPool...
+    }
+
+    fn evictMain(self: S3_FIFO) void {
+        _ = self;
+        unreachable; // TODO
+    }
+
+    fn evictSmall(self: S3_FIFO) void {
+        _ = self;
+        unreachable; // TODO
+    }
+};
+
+/// Used for obtaining cached reads
+pub const BufferPool = struct {
+    /// arbitrarily chosen, iirc ~90% of accounts will be <= 512 bytes
+    const FRAME_SIZE = 512;
+    const Frame = [FRAME_SIZE]u8;
+    /// we can get away with a 32-bit index
+    const FrameIndex = u32;
+    const FileOffset = u32;
+    const FileIdFileOffset = struct {
+        file_id: FileId,
+
+        /// offset in the file from which the frame begin
+        /// always a multiple of FRAME_SIZE
+        file_offset: FileOffset,
+    };
+
+    allocator: std.mem.Allocator,
+    snapshot_dir: std.fs.Dir,
+
+    /// indexes of all free frames
+    free_list: std.ArrayList(FrameIndex),
+
+    /// for finding your wanted index
+    file_frames: std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex),
+
+    frames: []Frame,
+
+    /// ref count for the frame
+    frames_rc: []sig.sync.ReferenceCounter,
+
+    /// frequency for the S3_FIFO
+    /// Yes, really, only 0, 1, 2, 3.
+    /// Wonder if it would be faster to pack this.
+    frames_freq: []u2,
+
+    /// used for eviction to free less popular (rc=0) frames first
+    fifo: S3_FIFO,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        snapshot_dir: std.fs.Dir,
+        num_frames: u32,
+    ) !BufferPool {
+        // is std.mem.page_size necessary? Nope! But for something this large, might as well?
+        // sidenote, might as well just use the page allocator
+        const frames = try allocator.alignedAlloc(Frame, num_frames, std.mem.page_size);
+        const frames_rc = try allocator.alignedAlloc(sig.sync.ReferenceCounter, num_frames, std.mem.page_size);
+
+        const main_fifo_size = (num_frames * 100) / 90;
+        const small_fifo_size = num_frames * 100 - main_fifo_size;
+
+        return .{
+            .allocator = allocator,
+            .snapshot_dir = snapshot_dir,
+            .frames = frames,
+            .frames_rc = frames_rc,
+            .file_frames = .{},
+            .fifo = S3_FIFO.init(allocator, small_fifo_size, main_fifo_size),
+        };
+    }
+
+    fn read(self: *BufferPool, slot: FileId, range_start: usize, range_end: usize) !CachedRead {
         const file_id: FileId = undefined; // TODO
 
         const file_path = file_id.path(slot);
