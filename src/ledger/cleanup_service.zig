@@ -30,6 +30,9 @@ const DEFAULT_CLEANUP_SLOT_INTERVAL: u64 = 512;
 // a long wait incase a check occurs just before the interval has elapsed
 const LOOP_LIMITER = Duration.fromMillis(DEFAULT_CLEANUP_SLOT_INTERVAL * DEFAULT_MS_PER_SLOT / 10);
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE: []const u8 = "ledger.cleanup_service";
+
 pub fn run(
     logger_: sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
@@ -38,7 +41,7 @@ pub fn run(
     max_ledger_shreds: u64,
     exit: *AtomicBool,
 ) !void {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     var last_purge_slot: Slot = 0;
 
     logger.info().log("Starting blockstore cleanup service");
@@ -85,7 +88,7 @@ pub fn cleanBlockstore(
     last_purge_slot: u64,
     purge_interval: u64,
 ) !Slot {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     // // TODO: add back when max_root is implemented with consensus
     // const root = blockstore_reader.max_root.load(.acquire);
     // if (root - last_purge_slot <= purge_interval) return last_purge_slot;
