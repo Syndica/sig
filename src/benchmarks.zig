@@ -65,8 +65,8 @@ fn exitWithUsage() noreturn {
         \\  --help
         \\    Prints this usage message
         \\
-        \\  --telemetry=git_hash
-        \\    output benchmark results to results/output.txt
+        \\  --metrics
+        \\    save benchmark results to results/output.json
         \\
     ) catch @panic("failed to print usage");
     std.posix.exit(1);
@@ -89,17 +89,15 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
-    var maybe_telemetry: ?[]const u8 = null;
+    var collect_metrics: bool = false;
     var maybe_filter: ?Benchmark = null;
     // skip the benchmark argv[0]
     _ = cli_args.skip();
     while (cli_args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
             exitWithUsage();
-        } else if (std.mem.startsWith(u8, arg, "--telemetry=")) {
-            const commit_hash = std.mem.trim(u8, arg["--telemetry=".len..], &std.ascii.whitespace);
-            if (commit_hash.len == 0) @panic("--telemetry expected the current git commit hash");
-            maybe_telemetry = commit_hash;
+        } else if (std.mem.startsWith(u8, arg, "--metrics")) {
+            collect_metrics = true;
             continue;
         }
         maybe_filter = std.meta.stringToEnum(Benchmark, arg) orelse {
@@ -107,10 +105,9 @@ pub fn main() !void {
             exitWithUsage();
         };
     }
-    const sending_telemetry = maybe_telemetry != null;
-    // if (sending_telemetry and builtin.mode != .ReleaseSafe) {
-    //     @panic("send telemetry is only supported in ReleaseSafe mode");
-    // }
+    if (collect_metrics and builtin.mode != .ReleaseSafe) {
+        @panic("collecting metrics is only supported in ReleaseSafe mode");
+    }
     if (maybe_filter == null) {
         exitWithUsage();
     }
@@ -125,7 +122,7 @@ pub fn main() !void {
     const run_all_benchmarks = filter == .all;
 
     var maybe_metrics: ?std.ArrayList(Metric) = null;
-    if (sending_telemetry) {
+    if (collect_metrics) {
         maybe_metrics = std.ArrayList(Metric).init(allocator);
     }
     defer {
@@ -263,12 +260,13 @@ pub fn main() !void {
         try @import("geyser/lib.zig").benchmark.runBenchmark(logger);
     }
 
-    // send the metrics to telemetry
-    if (maybe_telemetry) |commit_hash| {
-        // SAFE: maybe_metrics is always non-null if we are sending telemetry
-        sendTelemetry(allocator, commit_hash, try maybe_metrics.?.toOwnedSlice()) catch |err| {
-            logger.err().logf("sending telemetry failed: {s}", .{@errorName(err)});
-        };
+    // save metrics
+    if (collect_metrics) {
+        try saveMetricsJson(
+            allocator,
+            try maybe_metrics.?.toOwnedSlice(),
+            "results/output.json",
+        );
     }
 }
 
@@ -664,7 +662,7 @@ const Metric = struct {
 
 /// this metric struct is used in the json.stringify call
 /// which removes non-necessary fields from the `Metric` struct.
-const TelemetryMetric = struct {
+const JsonMetric = struct {
     name: []const u8,
     unit: []const u8,
     value: u64,
@@ -672,7 +670,7 @@ const TelemetryMetric = struct {
 
 const MetricBatch = struct {
     timestamp: u64,
-    metrics: []const TelemetryMetric,
+    metrics: []const JsonMetric,
     attributes: struct {
         git_repo: []const u8,
         branch: []const u8,
@@ -680,16 +678,14 @@ const MetricBatch = struct {
     },
 };
 
-pub fn sendTelemetry(
+pub fn saveMetricsJson(
     allocator: std.mem.Allocator,
-    hash: []const u8,
     metrics: []const Metric,
+    output_path: []const u8,
 ) !void {
-    _ = hash;
-
-    var telemetry_metrics = try std.ArrayList(TelemetryMetric).initCapacity(allocator, metrics.len);
-    defer telemetry_metrics.deinit();
-    for (metrics) |m| telemetry_metrics.appendAssumeCapacity(.{
+    var json_metrics = try std.ArrayList(JsonMetric).initCapacity(allocator, metrics.len);
+    defer json_metrics.deinit();
+    for (metrics) |m| json_metrics.appendAssumeCapacity(.{
         .name = m.name,
         .unit = m.unit,
         .value = m.value,
@@ -697,12 +693,11 @@ pub fn sendTelemetry(
 
     const payload = try std.json.stringifyAlloc(
         allocator,
-        telemetry_metrics.items,
+        json_metrics.items,
         .{},
     );
     defer allocator.free(payload);
 
-    const output_path = "results/output.txt";
     const output_file = try std.fs.cwd().createFile(output_path, .{});
     try output_file.writeAll(payload);
 }

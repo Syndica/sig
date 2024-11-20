@@ -37,9 +37,13 @@ jobs:
           # What benchmark tool the output.txt came from
           tool: "customSmallerIsBetter"
           # Where the output from the benchmark tool is stored
-          output-file-path: results/output.txt
+          output-file-path: results/output.json
           # Where the previous data file is stored
           external-data-json-path: ./cache/benchmark-data.json
           # Workflow will fail when an alert happens
           fail-on-alert: true
+          # GitHub API token to make a commit comment
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Enable alert commit comment
+          comment-on-alert: true
       # Upload the updated cache file for the next job by actions/cache
