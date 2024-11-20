@@ -431,8 +431,8 @@ pub fn run() !void {
                         \\ NOTE: this means that this command *requires* a leader schedule to be provided
                         \\ (which would usually be derived from the accountsdb snapshot).
                         \\
-                        \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well 
-                        \\ (which is usually derived from the accountsdb snapshot). 
+                        \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well
+                        \\ (which is usually derived from the accountsdb snapshot).
                         \\ This can be done with `--test-repair-for-slot $(solana slot -u testnet)`
                         \\ for testnet or another `-u` for mainnet/devnet.
                         },

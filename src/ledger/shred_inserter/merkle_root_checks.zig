@@ -36,7 +36,7 @@ pub const MerkleRootValidator = struct {
     pub fn init(pending_state: *PendingInsertShredsState) Self {
         return .{
             .allocator = pending_state.allocator,
-            .logger = pending_state.logger.withScope(@typeName(Self)),
+            .logger = pending_state.logger,
             .shreds = pending_state.shreds(),
             .duplicate_shreds = pending_state.duplicateShreds(),
         };
