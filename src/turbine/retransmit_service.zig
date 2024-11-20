@@ -169,6 +169,8 @@ fn receiveShreds(
 
         while (receiver.receive()) |packet| try shreds.append(packet);
 
+        if (shreds.items.len == 0) continue;
+
         const bytes_filter_saturated, const shred_id_filter_saturated = deduper.maybeReset(
             rand,
             DEDUPER_FALSE_POSITIVE_RATE,
@@ -206,7 +208,7 @@ fn receiveShreds(
         metrics.shreds_received_count.add(shreds.items.len);
         metrics.receive_shreds_nanos.observe(receive_shreds_timer.read().asNanos());
 
-        metrics.log(logger);
+        metrics.maybeLog(logger);
     }
 }
 
@@ -407,6 +409,11 @@ pub const RetransmitServiceMetrics = struct {
     turbine_tree_get_children_nanos: *Histogram,
     retransmit_shred_nanos: *Histogram,
 
+    // logging info
+    logging_fields: struct {
+        last_log_instant: sig.time.Instant,
+    },
+
     // metrics prefix
     pub const prefix = "retransmit_service";
 
@@ -420,16 +427,22 @@ pub const RetransmitServiceMetrics = struct {
     };
 
     pub fn init() !RetransmitServiceMetrics {
-        return try globalRegistry().initStruct(RetransmitServiceMetrics);
+        var self: RetransmitServiceMetrics = undefined;
+        std.debug.assert(try globalRegistry().initFields(&self) == 1);
+        self.logging_fields = .{ .last_log_instant = sig.time.Instant.now() };
+        return self;
     }
 
-    pub fn log(self: *const RetransmitServiceMetrics, logger: Logger) void {
-        logger.info().logf("retransmit-service: received={} retransmitted={} skipped={}:{}:{}", .{
-            self.shreds_received_count.get(),
-            self.shreds_sent_count.get(),
-            self.shred_byte_filtered_count.get() + self.shred_id_filtered_count.get(),
-            self.shred_byte_filtered_count.get(),
-            self.shred_id_filtered_count.get(),
-        });
+    pub fn maybeLog(self: *RetransmitServiceMetrics, logger: Logger) void {
+        if (self.logging_fields.last_log_instant.elapsed().asMillis() > 250) {
+            logger.info().logf("turbine-retransmit: received={} retransmitted={} skipped={}:{}:{}", .{
+                self.shreds_received_count.get(),
+                self.shreds_sent_count.get(),
+                self.shred_byte_filtered_count.get() + self.shred_id_filtered_count.get(),
+                self.shred_byte_filtered_count.get(),
+                self.shred_id_filtered_count.get(),
+            });
+            self.logging_fields.last_log_instant = sig.time.Instant.now();
+        }
     }
 };

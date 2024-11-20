@@ -250,7 +250,7 @@ pub const TurbineTree = struct {
         var shuffled_indexes = weighted_shuffle.shuffle(chacha.random());
         try shuffled_nodes.ensureTotalCapacity(self.nodes.items.len);
         while (shuffled_indexes.next()) |index| {
-            std.debug.print("index={} shuffled_nodes.len={} self.nodes.len={}\n", .{ index, shuffled_nodes.items.len, self.nodes.items.len });
+            // std.debug.print("index={} shuffled_nodes.len={} self.nodes.len={}\n", .{ index, shuffled_nodes.items.len, self.nodes.items.len });
             shuffled_nodes.appendAssumeCapacity(self.nodes.items[index]);
             if (!found_my_index) {
                 if (self.nodes.items[index].pubkey().equals(&self.my_pubkey)) {
