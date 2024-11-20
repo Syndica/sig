@@ -331,8 +331,7 @@ const DownloadProgress = struct {
 
         return .{
             .logger = logger.withScope(@typeName(Self)),
-            .mmap = file_memory,
-            .download_size = download_size,
+            .file = file,
             .min_mb_per_second = min_mb_per_second,
             .progress_timer = try sig.time.Timer.start(),
         };
