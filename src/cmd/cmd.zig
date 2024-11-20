@@ -57,6 +57,9 @@ else
 
 const base58Encoder = base58.Encoder.init(.{});
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE = "cmd";
+
 pub fn run() !void {
     defer {
         // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
@@ -886,7 +889,7 @@ fn shredCollector() !void {
 const GeyserWriter = sig.geyser.GeyserWriter;
 
 fn buildGeyserWriter(allocator: std.mem.Allocator, logger_: Logger) !?*GeyserWriter {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     var geyser_writer: ?*GeyserWriter = null;
     if (config.current.geyser.enable) {
         logger.info().log("Starting GeyserWriter...");
@@ -1219,7 +1222,7 @@ fn initGossip(
     gossip_host_ip: IpAddr,
     sockets: []const struct { tag: SocketTag, port: u16 },
 ) !GossipService {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     const gossip_port: u16 = config.current.gossip.port;
     logger.info().logf("gossip host: {any}", .{gossip_host_ip});
     logger.info().logf("gossip port: {d}", .{gossip_port});
@@ -1301,7 +1304,7 @@ fn getMyDataFromIpEcho(
     logger_: Logger,
     entrypoints: []SocketAddr,
 ) !struct { shred_version: u16, ip: IpAddr } {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     var my_ip_from_entrypoint: ?IpAddr = null;
     const my_shred_version = loop: for (entrypoints) |entrypoint| {
         if (requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
@@ -1371,7 +1374,7 @@ fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
 }
 
 fn getEntrypoints(logger_: Logger) !std.ArrayList(SocketAddr) {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     errdefer entrypoints.deinit();
 
@@ -1646,7 +1649,7 @@ fn getOrDownloadSnapshots(
         min_snapshot_download_speed_mbs: usize,
     },
 ) !struct { AllSnapshotFields, SnapshotFiles } {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     // arg parsing
     const snapshot_dir = options.snapshot_dir;
     const force_unpack_snapshot = options.force_unpack_snapshot;

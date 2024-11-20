@@ -634,7 +634,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger.withScope(@src().fn_name),
+                    self.logger.withScope(@typeName(Self)),
                     &timer,
                     n_account_files,
                     file_count,
@@ -669,7 +669,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger.withScope(@src().fn_name),
+                    self.logger.withScope(@typeName(Self)),
                     &timer,
                     n_accounts_total,
                     ref_count,
@@ -763,7 +763,7 @@ pub const AccountsDB = struct {
         thread_dbs: []const AccountsDB,
         task: sig.utils.thread.TaskParams,
     ) !void {
-        const logger = logger_.withScope(@src().fn_name);
+        const logger = logger_.withScope(@typeName(Self));
         const shard_start_index = task.start_index;
         const shard_end_index = task.end_index;
 
@@ -1143,7 +1143,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger.withScope(@src().fn_name),
+                    self.logger.withScope(@typeName(Self)),
                     &timer,
                     shards.len,
                     count,

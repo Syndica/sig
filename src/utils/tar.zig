@@ -9,6 +9,9 @@ const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 /// Unpack tarball is related to accounts_db so we reuse it's progress bar
 const TAR_PROGRESS_UPDATES = @import("../accountsdb/db.zig").DB_LOG_RATE;
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE = "utils.tar";
+
 fn stripComponents(path: []const u8, count: u32) ![]const u8 {
     var i: usize = 0;
     var c = count;
@@ -70,7 +73,7 @@ pub fn parallelUntarToFileSystem(
     n_threads: usize,
     n_files_estimate: ?usize,
 ) !void {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     var thread_pool = ThreadPool.init(.{
         .max_threads = @intCast(n_threads),
     });

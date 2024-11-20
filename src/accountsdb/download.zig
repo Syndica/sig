@@ -14,6 +14,9 @@ const ScopedLogger = sig.trace.ScopedLogger;
 
 const DOWNLOAD_PROGRESS_UPDATES_NS = 6 * std.time.ns_per_s;
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE = "accountsdb.download";
+
 /// Analogous to [PeerSnapshotHash](https://github.com/anza-xyz/agave/blob/f868aa38097094e4fb78a885b6fb27ce0e43f5c7/validator/src/bootstrap.rs#L342)
 const PeerSnapshotHash = struct {
     contact_info: ThreadSafeContactInfo,
@@ -165,7 +168,7 @@ pub fn downloadSnapshotsFromGossip(
     output_dir: std.fs.Dir,
     min_mb_per_sec: usize,
 ) !void {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     logger
         .info()
         .logf("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
@@ -484,7 +487,7 @@ pub fn downloadFile(
     filename: []const u8,
     min_mb_per_second: ?usize,
 ) !void {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     var easy = try curl.Easy.init(allocator, .{});
     defer easy.deinit();
 

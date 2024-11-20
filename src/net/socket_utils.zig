@@ -14,6 +14,9 @@ const UdpSocket = @import("zig-network").Socket;
 pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE: []const u8 = "socket_utils";
+
 pub fn readSocket(
     socket_: UdpSocket,
     incoming_channel: *Channel(Packet),
@@ -22,7 +25,7 @@ pub fn readSocket(
     counter: *Atomic(if (needs_exit_order) usize else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     defer {
         logger.info().logf(
             "leaving with: {}, {}, {}",
@@ -61,7 +64,7 @@ pub fn sendSocket(
     counter: *Atomic(if (needs_exit_order) usize else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
-    const logger = logger_.withScope(@src().fn_name);
+    const logger = logger_.withScope(LOG_SCOPE);
     defer {
         if (needs_exit_order) {
             // exit the next service in the chain
