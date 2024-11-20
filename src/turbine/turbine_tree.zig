@@ -292,7 +292,7 @@ pub const TurbineTree = struct {
     /// The resulting RNG must be identical to the agave implementation
     /// to ensure that the weighted shuffle is deterministic.
     fn getSeededRng(leader: Pubkey, shred: ShredId) ChaChaRng {
-        const seed = shred.seed(leader);
+        const seed = shred.turbineWeightedSampleSeed(leader);
         return ChaChaRng.fromSeed(seed);
     }
 
