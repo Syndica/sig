@@ -44,7 +44,6 @@ const Slot = sig.core.Slot;
 
 const NestedHashTree = sig.utils.merkle_tree.NestedHashTree;
 const Logger = sig.trace.log.Logger;
-const ScopedLogger = sig.trace.log.ScopedLogger;
 
 const GeyserWriter = sig.geyser.GeyserWriter;
 
