@@ -476,10 +476,15 @@ pub fn benchmark(
 
                     // collect the metric
                     if (maybe_metrics.*) |*metrics| {
+                        const fmt_size = std.fmt.count("{s}({s})", .{ def.name, arg_name });
+                        const name_buf = try allocator.alloc(u8, fmt_size);
+                        const name = try std.fmt.bufPrint(name_buf, "{s}({s})", .{ def.name, arg_name });
+
                         const metric = Metric{
-                            .name = arg_name,
+                            .name = name,
                             .unit = time_unit.toString(),
                             .value = mean,
+                            .maybe_allocator = allocator,
                         };
                         try metrics.append(metric);
                     }
@@ -533,9 +538,9 @@ pub fn benchmark(
 
                         // collect the metric
                         if (maybe_metrics.*) |*metrics| {
-                            const fmt_size = std.fmt.count("{s}_{s}", .{ arg_name, field.name });
+                            const fmt_size = std.fmt.count("{s}({s})_{s}", .{ def.name, arg_name, field.name });
                             const name_buf = try allocator.alloc(u8, fmt_size);
-                            const name = try std.fmt.bufPrint(name_buf, "{s}_{s}", .{ arg_name, field.name });
+                            const name = try std.fmt.bufPrint(name_buf, "{s}({s})_{s}", .{ def.name, arg_name, field.name });
                             const value = switch (@typeInfo(T)) {
                                 // in the float case we retain the last two decimal points by
                                 // multiplying by 100 and converting to an integer
@@ -546,7 +551,7 @@ pub fn benchmark(
                                 .name = name,
                                 .unit = time_unit.toString(),
                                 .value = value,
-                                .maybe_alloc = allocator,
+                                .maybe_allocator = allocator,
                             };
                             try metrics.append(metric);
                         }
@@ -651,10 +656,10 @@ const Metric = struct {
     value: u64,
     // used to deallocate the metric name which
     // may be on the heap due to runtime formatting
-    maybe_alloc: ?std.mem.Allocator = null,
+    maybe_allocator: ?std.mem.Allocator = null,
 
     pub fn deinit(self: Metric) void {
-        if (self.maybe_alloc) |alloc| {
+        if (self.maybe_allocator) |alloc| {
             alloc.free(self.name);
         }
     }
