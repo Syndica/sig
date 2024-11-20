@@ -330,7 +330,7 @@ const DownloadProgress = struct {
         try file.setEndPos(download_size);
 
         return .{
-            .logger = logger,
+            .logger = logger.withScope(@typeName(Self)),
             .file = file,
             .min_mb_per_second = min_mb_per_second,
             .progress_timer = try sig.time.Timer.start(),
