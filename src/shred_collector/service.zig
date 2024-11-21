@@ -68,7 +68,7 @@ pub fn start(
 ) !ServiceManager {
     var service_manager = ServiceManager.init(
         deps.allocator,
-        deps.logger,
+        deps.logger.unscoped(),
         deps.exit,
         "shred collector",
         .{},
@@ -87,7 +87,7 @@ pub fn start(
         .allocator = deps.allocator,
         .keypair = deps.my_keypair,
         .exit = deps.exit,
-        .logger = deps.logger,
+        .logger = deps.logger.withScope(@typeName(ShredReceiver)),
         .repair_socket = repair_socket,
         .turbine_socket = turbine_socket,
         .unverified_shred_sender = unverified_shred_channel,
@@ -120,7 +120,7 @@ pub fn start(
     const shred_tracker = try arena.create(BasicShredTracker);
     shred_tracker.* = try BasicShredTracker.init(
         conf.start_slot,
-        deps.logger,
+        deps.logger.unscoped(),
         deps.registry,
     );
 
@@ -131,7 +131,7 @@ pub fn start(
         .{
             deps.allocator,
             deps.exit,
-            deps.logger,
+            deps.logger.unscoped(),
             deps.registry,
             verified_shred_channel,
             shred_tracker,
@@ -152,7 +152,7 @@ pub fn start(
     );
     const repair_requester = try RepairRequester.init(
         deps.allocator,
-        deps.logger,
+        deps.logger.unscoped(),
         deps.random,
         deps.registry,
         deps.my_keypair,
@@ -163,7 +163,7 @@ pub fn start(
     try service_manager.defers.deferCall(RepairService.deinit, .{repair_svc});
     repair_svc.* = try RepairService.init(
         deps.allocator,
-        deps.logger,
+        deps.logger.unscoped(),
         deps.exit,
         deps.registry,
         repair_requester,

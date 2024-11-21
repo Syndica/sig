@@ -43,6 +43,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
 const NestedHashTree = sig.utils.merkle_tree.NestedHashTree;
+const Logger = sig.trace.log.Logger;
 
 const GeyserWriter = sig.geyser.GeyserWriter;
 
@@ -54,8 +55,6 @@ const Histogram = sig.prometheus.histogram.Histogram;
 const WeightedAliasSampler = sig.rand.WeightedAliasSampler;
 
 const RwMux = sig.sync.RwMux;
-
-const Logger = sig.trace.log.Logger;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
@@ -634,7 +633,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger,
+                    self.logger.withScope(@typeName(Self)),
                     &timer,
                     n_account_files,
                     file_count,
@@ -672,7 +671,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger,
+                    self.logger.withScope(@typeName(Self)),
                     &timer,
                     n_accounts_total,
                     ref_count,
@@ -698,7 +697,7 @@ pub const AccountsDB = struct {
             .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
             .max_threads = n_threads,
             .params = .{
-                self.logger,
+                self.logger.unscoped(),
                 &self.account_index,
                 thread_dbs,
             },
@@ -761,11 +760,12 @@ pub const AccountsDB = struct {
     /// combines multiple thread indexes into the given index.
     /// each bin is also sorted by pubkey.
     pub fn combineThreadIndexesMultiThread(
-        logger: Logger,
+        logger_: Logger,
         index: *AccountIndex,
         thread_dbs: []const AccountsDB,
         task: sig.utils.thread.TaskParams,
     ) !void {
+        const logger = logger_.withScope(@typeName(Self));
         const shard_start_index = task.start_index;
         const shard_end_index = task.end_index;
 
@@ -1145,7 +1145,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger,
+                    self.logger.withScope(@typeName(Self)),
                     &timer,
                     shards.len,
                     count,

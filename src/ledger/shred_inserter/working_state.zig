@@ -76,7 +76,7 @@ const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 /// database and working sets.
 pub const PendingInsertShredsState = struct {
     allocator: Allocator,
-    logger: sig.trace.Logger,
+    logger: sig.trace.ScopedLogger(@typeName(Self)),
     db: *BlockstoreDB,
     write_batch: WriteBatch,
     just_inserted_shreds: AutoHashMap(ShredId, Shred),
@@ -100,7 +100,7 @@ pub const PendingInsertShredsState = struct {
         return .{
             .allocator = allocator,
             .db = db,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(Self)),
             .write_batch = try db.initWriteBatch(),
             .just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator), // TODO capacity = shreds.len
             .erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator),
@@ -170,7 +170,7 @@ pub const PendingInsertShredsState = struct {
 
     pub fn shreds(self: *Self) ShredWorkingStore {
         return .{
-            .logger = self.logger,
+            .logger = self.logger.withScope(@typeName(ShredWorkingStore)),
             .db = self.db,
             .just_inserted_shreds = &self.just_inserted_shreds,
         };
@@ -490,7 +490,7 @@ const ShredConflict = struct {
 };
 
 pub const ShredWorkingStore = struct {
-    logger: sig.trace.Logger,
+    logger: sig.trace.ScopedLogger(@typeName(Self)),
     db: *BlockstoreDB,
     just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
 

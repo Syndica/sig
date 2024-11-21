@@ -16,6 +16,7 @@ const RpcClient = sig.rpc.Client;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 const EpochSchedule = sig.core.epoch_schedule.EpochSchedule;
 const Logger = sig.trace.log.Logger;
+const ScopedLogger = sig.trace.log.ScopedLogger;
 const Config = sig.transaction_sender.service.Config;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 
@@ -29,11 +30,13 @@ const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 pub const LeaderInfo = struct {
     allocator: Allocator,
     config: Config,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(Self)),
     rpc_client: RpcClient,
     leader_schedule_cache: LeaderScheduleCache,
     leader_addresses_cache: std.AutoArrayHashMapUnmanaged(Pubkey, SocketAddr),
     gossip_table_rw: *RwMux(GossipTable),
+
+    const Self = @This();
 
     pub fn init(
         allocator: Allocator,
@@ -45,7 +48,7 @@ pub const LeaderInfo = struct {
         return .{
             .allocator = allocator,
             .config = config,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(Self)),
             .rpc_client = RpcClient.init(
                 allocator,
                 config.cluster,

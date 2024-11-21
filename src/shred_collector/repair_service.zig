@@ -19,6 +19,7 @@ const Gauge = sig.prometheus.Gauge;
 const GossipTable = sig.gossip.GossipTable;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 const LruCacheCustom = sig.utils.lru.LruCacheCustom;
 const MultiSlotReport = shred_collector.shred_tracker.MultiSlotReport;
 const Nonce = sig.core.Nonce;
@@ -48,7 +49,7 @@ pub const RepairService = struct {
     requester: RepairRequester,
     peer_provider: RepairPeerProvider,
     shred_tracker: *BasicShredTracker,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(Self)),
     exit: *Atomic(bool),
     last_big_request_timestamp_ms: i64 = 0,
     /// memory to re-use across iterations. initialized to empty
@@ -92,7 +93,7 @@ pub const RepairService = struct {
             .requester = requester,
             .peer_provider = peer_provider,
             .shred_tracker = shred_tracker,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
             .thread_pool = RequestBatchThreadPool.init(allocator, NUM_REQUESTER_THREADS),
@@ -247,7 +248,7 @@ pub const RepairService = struct {
 /// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
     allocator: Allocator,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(Self)),
     random: Random,
     keypair: *const KeyPair,
     sender: SocketThread,
@@ -274,7 +275,7 @@ pub const RepairRequester = struct {
         const sndr = try SocketThread.initSender(allocator, logger, udp_send_socket, exit);
         return .{
             .allocator = allocator,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(Self)),
             .random = random,
             .keypair = keypair,
             .sender = sndr,

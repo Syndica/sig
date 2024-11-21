@@ -6,14 +6,14 @@ const Atomic = std.atomic.Value;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipTable = sig.gossip.table.GossipTable;
 const Duration = sig.time.Duration;
-const Logger = sig.trace.log.Logger;
+const ScopedLogger = sig.trace.log.ScopedLogger;
 const RwMux = sig.sync.mux.RwMux;
 
 pub const DUMP_INTERVAL = Duration.fromSecs(10);
 
 pub const GossipDumpService = struct {
     allocator: Allocator,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(Self)),
     gossip_table_rw: *RwMux(GossipTable),
     counter: *Atomic(usize),
 

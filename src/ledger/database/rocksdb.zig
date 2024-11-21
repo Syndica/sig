@@ -10,22 +10,27 @@ const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
 const IteratorDirection = database.interface.IteratorDirection;
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 const ReturnType = sig.utils.types.ReturnType;
 
 const key_serializer = database.interface.key_serializer;
 const value_serializer = database.interface.value_serializer;
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE: []const u8 = "rocksdb";
+
 pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         allocator: Allocator,
         db: rocks.DB,
-        logger: Logger,
+        logger: ScopedLogger(LOG_SCOPE),
         cf_handles: []const rocks.ColumnFamilyHandle,
         path: []const u8,
 
         const Self = @This();
 
-        pub fn open(allocator: Allocator, logger: Logger, path: []const u8) Error!Self {
+        pub fn open(allocator: Allocator, logger_: Logger, path: []const u8) Error!Self {
+            const logger = logger_.withScope(LOG_SCOPE);
             logger.info().log("Initializing RocksDB");
             const owned_path = try allocator.dupe(u8, path);
 
@@ -277,7 +282,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             return struct {
                 allocator: Allocator,
                 inner: rocks.Iterator,
-                logger: Logger,
+                logger: ScopedLogger(LOG_SCOPE),
 
                 /// Calling this will free all slices returned by the iterator
                 pub fn deinit(self: *@This()) void {
@@ -333,7 +338,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     };
 }
 
-fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
+fn callRocks(logger: ScopedLogger(LOG_SCOPE), comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
     var err_str: ?rocks.Data = null;
     return @call(.auto, func, args ++ .{&err_str}) catch |e| {
         logger.err().logf("{} - {s}", .{ e, err_str.? });

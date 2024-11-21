@@ -477,7 +477,7 @@ pub fn RecycleFBA(config: struct {
 /// thread safe disk memory allocator
 pub const DiskMemoryAllocator = struct {
     dir: std.fs.Dir,
-    logger: sig.trace.Logger,
+    logger: sig.trace.ScopedLogger(@typeName(Self)),
     /// The amount of memory mmap'd for a particular allocation will be `file_size * mmap_ratio`.
     /// See `alignedFileSize` and its usages to understand the relationship between an allocation
     /// size, and the size of a file, and by extension, how this then relates to the allocated

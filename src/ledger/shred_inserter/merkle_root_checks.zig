@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 
 const ErasureSetId = sig.ledger.shred.ErasureSetId;
 const Hash = sig.core.Hash;
-const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 const Slot = sig.core.Slot;
 
 const CodeShred = ledger.shred.CodeShred;
@@ -27,7 +27,7 @@ const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 pub const MerkleRootValidator = struct {
     allocator: Allocator,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(Self)),
     shreds: ShredWorkingStore,
     duplicate_shreds: DuplicateShredsWorkingStore,
 
@@ -36,7 +36,7 @@ pub const MerkleRootValidator = struct {
     pub fn init(pending_state: *PendingInsertShredsState) Self {
         return .{
             .allocator = pending_state.allocator,
-            .logger = pending_state.logger,
+            .logger = pending_state.logger.withScope(@typeName(Self)),
             .shreds = pending_state.shreds(),
             .duplicate_shreds = pending_state.duplicateShreds(),
         };
@@ -88,9 +88,9 @@ pub const MerkleRootValidator = struct {
                 });
             } else {
                 self.logger.err().logf(&newlinesToSpaces(
-                    \\Shred {any} indiciated by merkle root meta {any} is 
-                    \\missing from blockstore. This should only happen in extreme cases where 
-                    \\blockstore cleanup has caught up to the root. Skipping the merkle root 
+                    \\Shred {any} indiciated by merkle root meta {any} is
+                    \\missing from blockstore. This should only happen in extreme cases where
+                    \\blockstore cleanup has caught up to the root. Skipping the merkle root
                     \\consistency check
                 ), .{ shred_id, merkle_root_meta });
                 return true;
