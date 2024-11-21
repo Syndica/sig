@@ -5,9 +5,9 @@ from dash import Dash, html, dcc, callback, Output, Input
 
 cached_timestamp = None
 cached_layout = None
+path = "results/metrics/"
 
 def server_layout():
-    path = "results/metrics/"
     layout = [
         html.H1(children='Sig: Benchmarks', style={'textAlign':'center'}),
     ]
@@ -66,4 +66,7 @@ app = Dash()
 app.layout = server_layout
 
 if __name__ == '__main__':
+    if not os.path.exists(path):
+        os.makedirs(path)
+
     app.run(debug=True, host='0.0.0.0')
