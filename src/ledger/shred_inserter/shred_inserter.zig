@@ -52,7 +52,7 @@ const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 pub const ShredInserter = struct {
     allocator: Allocator,
-    logger: sig.trace.Logger,
+    logger: sig.trace.ScopedLogger(@typeName(Self)),
     db: BlockstoreDB,
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
@@ -68,7 +68,7 @@ pub const ShredInserter = struct {
     ) GetMetricError!Self {
         return .{
             .allocator = allocator,
-            .logger = logger,
+            .logger = logger.withScope(@typeName(Self)),
             .db = db,
             .lock = .{},
             .max_root = Atomic(u64).init(0), // TODO read this from the database
@@ -166,7 +166,7 @@ pub const ShredInserter = struct {
         var total_timer = try Timer.start();
         var state = try PendingInsertShredsState.init(
             self.allocator,
-            self.logger,
+            self.logger.unscoped(),
             &self.db,
             self.metrics,
         );

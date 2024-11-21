@@ -30,20 +30,24 @@ const DEFAULT_CLEANUP_SLOT_INTERVAL: u64 = 512;
 // a long wait incase a check occurs just before the interval has elapsed
 const LOOP_LIMITER = Duration.fromMillis(DEFAULT_CLEANUP_SLOT_INTERVAL * DEFAULT_MS_PER_SLOT / 10);
 
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE: []const u8 = "ledger.cleanup_service";
+
 pub fn run(
-    logger: sig.trace.Logger,
+    logger_: sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
     db: *BlockstoreDB,
     lowest_cleanup_slot: *sig.sync.RwMux(Slot),
     max_ledger_shreds: u64,
     exit: *AtomicBool,
 ) !void {
+    const logger = logger_.withScope(LOG_SCOPE);
     var last_purge_slot: Slot = 0;
 
     logger.info().log("Starting blockstore cleanup service");
     while (!exit.load(.acquire)) {
         last_purge_slot = try cleanBlockstore(
-            logger,
+            logger.unscoped(),
             blockstore_reader,
             db,
             lowest_cleanup_slot,
@@ -76,7 +80,7 @@ pub fn run(
 ///
 /// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
 pub fn cleanBlockstore(
-    logger: sig.trace.Logger,
+    logger_: sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
     db: *BlockstoreDB,
     lowest_cleanup_slot: *sig.sync.RwMux(Slot),
@@ -84,6 +88,7 @@ pub fn cleanBlockstore(
     last_purge_slot: u64,
     purge_interval: u64,
 ) !Slot {
+    const logger = logger_.withScope(LOG_SCOPE);
     // // TODO: add back when max_root is implemented with consensus
     // const root = blockstore_reader.max_root.load(.acquire);
     // if (root - last_purge_slot <= purge_interval) return last_purge_slot;
