@@ -516,7 +516,7 @@ pub const AccountsDB = struct {
         // without this large allocation, snapshot loading is very slow
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
         const reference_manager = self.account_index.reference_manager;
-        const references_buf, _ = try reference_manager.alloc(n_accounts_estimate);
+        const references_buf, const ref_global_index = try reference_manager.alloc(n_accounts_estimate);
 
         var timer = try sig.time.Timer.start();
         var progress_timer = try sig.time.Timer.start();
@@ -664,7 +664,10 @@ pub const AccountsDB = struct {
         // it will always be a search for a free spot, and not search for a match
         timer.reset();
         for (references_buf[0..n_accounts_total], 0..) |*ref, ref_count| {
-            _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
+            _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(
+                ref,
+                ref_global_index + ref_count,
+            );
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
@@ -796,7 +799,7 @@ pub const AccountsDB = struct {
 
                     // NOTE: we dont have to check for duplicates because the duplicate
                     // slots have already been handled in the prev step
-                    index.indexRefAssumeCapacity(thread_head_ref.ref_ptr);
+                    index.indexRefAssumeCapacity(thread_head_ref.ref_ptr, thread_head_ref.ref_index);
                 }
             }
 
@@ -2204,7 +2207,7 @@ pub const AccountsDB = struct {
         defer self.allocator.free(shard_counts);
         @memset(shard_counts, 0);
 
-        const reference_buf, _ = try self.account_index.reference_manager.alloc(n_accounts);
+        const reference_buf, const ref_global_index = try self.account_index.reference_manager.alloc(n_accounts);
         var references = std.ArrayListUnmanaged(AccountRef).initBuffer(reference_buf);
 
         try indexAndValidateAccountFile(
@@ -2250,8 +2253,11 @@ pub const AccountsDB = struct {
 
         // compute how many account_references for each pubkey
         var accounts_dead_count: u64 = 0;
-        for (references.items) |*ref| {
-            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
+        for (references.items, 0..) |*ref, ref_count| {
+            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(
+                ref,
+                ref_global_index + ref_count,
+            );
             if (!was_inserted) {
                 accounts_dead_count += 1;
                 self.logger.warn().logf(
@@ -2332,8 +2338,8 @@ pub const AccountsDB = struct {
 
         // update index
         var accounts_dead_count: u64 = 0;
-        const reference_buf, _ = try self.account_index.reference_manager
-            .alloc(accounts.len);
+        const reference_buf, const global_ref_index = try self.account_index
+            .reference_manager.alloc(accounts.len);
 
         for (0..accounts.len) |i| {
             reference_buf[i] = AccountRef{
@@ -2343,7 +2349,10 @@ pub const AccountsDB = struct {
             };
 
             const was_inserted = self.account_index
-                .indexRefIfNotDuplicateSlotAssumeCapacity(&reference_buf[i]);
+                .indexRefIfNotDuplicateSlotAssumeCapacity(
+                &reference_buf[i],
+                global_ref_index + i,
+            );
             if (!was_inserted) {
                 self.logger.warn().logf(
                     "duplicate reference not inserted: slot: {d} pubkey: {s}",

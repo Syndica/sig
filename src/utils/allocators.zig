@@ -191,6 +191,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         pub fn free(self: *Self, buf_ptr: [*]T) void {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
+
             for (self.records.items) |*record| {
                 if (record.buf.ptr == buf_ptr) {
                     record.is_free = true;
