@@ -962,3 +962,113 @@ test "disk allocator large realloc" {
 
     page1[page1.len - 1] = 10;
 }
+
+test "fuzzDiskMemoryAllocator - past failures" {
+    const test_cases = [_]struct { usize, u16, usize }{
+        .{ 18813, 8, 2 },
+        .{ 40309, 8, 2 },
+        .{ 41790, 8, 2 },
+        .{ 47097, 8, 2 },
+        .{ 2952, 8, 10 },
+        .{ 6143, 8, 10 },
+        .{ 10455, 8, 10 },
+        .{ 10887, 8, 10 },
+        .{ 11639, 8, 10 },
+        .{ 79, 8, 100 },
+        .{ 13, 8, 1000 },
+        // .{ 0, 8, 10_000 }, // slow
+    };
+    for (test_cases) |case| {
+        const seed, const mmap_ratio, const iterations = case;
+        var rng = std.Random.DefaultPrng.init(seed);
+        try fuzzDiskMemoryAllocator(rng.random(), mmap_ratio, iterations, false);
+    }
+}
+
+test "fuzzDiskMemoryAllocator - manually execute 41790,8,2" {
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+    var dma = DiskMemoryAllocator{
+        .dir = dir.dir,
+        .logger = .noop,
+        .mmap_ratio = 8,
+    };
+    const allocator = dma.allocator();
+    var allocation = try dma.allocator().alloc(u8, 909300);
+    defer allocator.free(allocation);
+    allocation = try allocator.realloc(allocation, 278656);
+}
+
+pub fn runFuzzer(seed: u64, args: *std.process.ArgIterator) !void {
+    const max_actions = if (args.next()) |max_actions_str|
+        try std.fmt.parseInt(usize, max_actions_str, 10)
+    else
+        std.math.maxInt(usize);
+
+    const iterations = 10_000;
+    for (0..max_actions / iterations) |i| {
+        var rng = std.Random.DefaultPrng.init(seed +% i);
+        const random = rng.random();
+        const mmap_ratio: u16 = @intFromFloat(std.math.pow(f64, 2, 16 * random.float(f64)));
+        std.debug.print(
+            "seed: {}, mmap_ratio: {}, iterations: {}\n",
+            .{ seed +% i, mmap_ratio, iterations },
+        );
+        try fuzzDiskMemoryAllocator(random, mmap_ratio, iterations, false);
+    }
+}
+
+fn fuzzDiskMemoryAllocator(
+    random: std.Random,
+    mmap_ratio: u16,
+    iterations: usize,
+    comptime debug: bool,
+) std.mem.Allocator.Error!void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+
+    // disk allocator
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+    var dma = DiskMemoryAllocator{
+        .dir = dir.dir,
+        .logger = .noop,
+        .mmap_ratio = mmap_ratio,
+    };
+    const allocator = dma.allocator();
+
+    // all existing allocations from the allocator
+    var allocations = std.ArrayList([]u8).init(gpa.allocator());
+    defer {
+        for (allocations.items) |item| {
+            allocator.free(item);
+        }
+        allocations.deinit();
+    }
+
+    // take some random actions: alloc, realloc, or free
+    for (0..iterations) |_| {
+        const Options = enum { alloc, realloc, free };
+        const choice = if (allocations.items.len == 0) .alloc else random.enumValue(Options);
+        switch (choice) {
+            .alloc => {
+                const size = random.intRangeAtMost(usize, 1, 1_000_000);
+                if (debug) std.debug.print("alloc {}\n", .{size});
+                try allocations.append(try allocator.alloc(u8, size));
+            },
+            .realloc => {
+                const index = random.intRangeAtMost(usize, 0, allocations.items.len - 1);
+                const size = random.intRangeAtMost(usize, 1, 1_000_000);
+                if (debug) std.debug.print("realloc {} to {}\n", .{ index, size });
+                const new_data = try allocator.realloc(allocations.items[index], size);
+                @memset(new_data, 0x22);
+                allocations.items[index] = new_data;
+            },
+            .free => {
+                const index = random.intRangeAtMost(usize, 0, allocations.items.len - 1);
+                if (debug) std.debug.print("free {}\n", .{index});
+                const old_data = allocations.swapRemove(index);
+                allocator.free(old_data);
+            },
+        }
+    }
+}
