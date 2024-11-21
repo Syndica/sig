@@ -1,3 +1,4 @@
+const build_options = @import("build-options");
 const std = @import("std");
 const sig = @import("../sig.zig");
 const ledger = @import("lib.zig");
@@ -456,6 +457,7 @@ test "findSlotsToClean" {
         defer data_shred.deinit();
         {
             var write_batch = try db.initWriteBatch();
+            defer write_batch.deinit();
             for (0..1000) |i| {
                 try write_batch.put(ledger.schema.schema.data_shred, .{ 19, i }, data_shred.payload);
             }
@@ -463,25 +465,27 @@ test "findSlotsToClean" {
         }
     }
 
-    var db = try TestDB.reuseBlockstore(@src());
-    defer db.deinit();
+    if (build_options.blockstore_db == .rocksdb) {
+        var db = try TestDB.reuseBlockstore(@src());
+        defer db.deinit();
 
-    var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
+        var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
+        var max_root = std.atomic.Value(Slot).init(0);
 
-    var reader = try BlockstoreReader.init(
-        allocator,
-        logger,
-        db,
-        registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
+        var reader = try BlockstoreReader.init(
+            allocator,
+            logger,
+            db,
+            registry,
+            &lowest_cleanup_slot,
+            &max_root,
+        );
 
-    const r2 = try findSlotsToClean(&reader, 0, 100);
-    try std.testing.expectEqual(true, r2.should_clean);
-    try std.testing.expectEqual(1000, r2.total_shreds);
-    try std.testing.expectEqual(0, r2.highest_slot_to_purge);
+        const r2 = try findSlotsToClean(&reader, 0, 100);
+        try std.testing.expectEqual(true, r2.should_clean);
+        try std.testing.expectEqual(1000, r2.total_shreds);
+        try std.testing.expectEqual(0, r2.highest_slot_to_purge);
+    }
 }
 
 test "purgeSlots" {
