@@ -45,11 +45,12 @@ def server_layout():
         data = all_metrics[key]
         if len(data) == 0: continue
         title = data[0]["name"]
-        fig = px.scatter(
+        fig = px.line(
             x=[d['timestamp'] for d in data],
             y=[d['value'] for d in data],
             title=title,
             hover_data={"commit": [d['commit'] for d in data]},
+            markers=True,
         )
         fig.update_layout(
             xaxis_title="Timestamp",

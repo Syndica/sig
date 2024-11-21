@@ -1,3 +1,6 @@
+# pull the latest changes
+git pull
+
 git_commit=$(git rev-parse HEAD)
 timestamp=$(date +%s)
 result_dir="results/metrics"
