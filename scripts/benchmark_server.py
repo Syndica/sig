@@ -15,9 +15,9 @@ def server_layout():
     # hash all the files together
     latest_timestamp = 0
     for file_path in os.listdir(path):
-        # results/metrics/output-$timestamp-$git_commit.json
+        # results/metrics/output-$git_commit-$timestamp.json
         # parse file name
-        timestamp = int(file_path.split("-")[1])
+        timestamp = int(file_path.split("-")[2].split(".")[0])
         latest_timestamp = max(latest_timestamp, timestamp)
 
     if latest_timestamp == cached_timestamp:
@@ -25,13 +25,13 @@ def server_layout():
 
     # for each file in the directory
     all_metrics = {}
-    for file in os.listdir(path):
-        # results/metrics/output-$timestamp-$git_commit.json
-        # parse file name
-        timestamp = file.split("-")[1]
-        commit = file.split("-")[2].split(".")[0]
+    for file_path in os.listdir(path):
+        # results/metrics/output-$git_commit-$timestamp.json
+        # parse file_path name
+        commit = file_path.split("-")[1]
+        timestamp = file_path.split("-")[2].split(".")[0]
 
-        commit_metrics = json.load(open(path + file))
+        commit_metrics = json.load(open(path + file_path))
         for metric in commit_metrics:
             metric["timestamp"] = timestamp
             metric["commit"] = commit
