@@ -29,20 +29,32 @@ pub const AHasher = struct {
                 self.update(@intCast(data.*));
             },
             .Array => |array_info| {
-                self.hashSlice(array_info.child, data);
+                if (array_info.child != u8) {
+                    @compileError(std.fmt.comptimePrint(
+                        "Unsupported array type: type={} array_info.child={}\n",
+                        .{ T, array_info.child },
+                    ));
+                }
+                self.update(data.len);
+                self.write(@as([]const u8, data));
             },
             .Pointer => |pointer| {
                 switch (pointer.size) {
-                    .Slice => self.hashSlice(pointer.child, data.*),
+                    .Slice => {
+                        if (pointer.child != u8) {
+                            @compileError(std.fmt.comptimePrint(
+                                "Unsupported pointer type: type={} pointer.child={}\n",
+                                .{ T, pointer.child },
+                            ));
+                        }
+                        self.update(data.len);
+                        self.write(@as([]const u8, data.*));
+                    },
                     else => {
-                        std.debug.print(
+                        @compileError(std.fmt.comptimePrint(
                             "Unsupported pointer size: type={} pointer.size={}\n",
                             .{ T, pointer.size },
-                        );
-                        std.debug.panic(
-                            "Unsupported pointer size: type={} pointer.size={}\n",
-                            .{ T, pointer.size },
-                        );
+                        ));
                     },
                 }
             },
@@ -55,8 +67,10 @@ pub const AHasher = struct {
                 self.hash(u32, &@as(u32, @intFromEnum(data.*)));
             },
             else => {
-                std.debug.print("Unsupported type: type={} data={any}\n", .{ T, data });
-                std.debug.panic("Unsupported type: type={} data={any}\n", .{ T, data });
+                @compileError(std.fmt.comptimePrint(
+                    "Unsupported type: type={} data={any}\n",
+                    .{ T, data },
+                ));
             },
         }
     }
@@ -64,11 +78,6 @@ pub const AHasher = struct {
     pub fn finish(self: *const AHasher) u64 {
         const rot: u32 = @intCast(self.buffer & 63);
         return std.math.rotl(u64, foldedMultiply(self.buffer, self.pad), rot);
-    }
-
-    inline fn hashSlice(self: *AHasher, comptime T: type, data: []const T) void {
-        self.update(data.len);
-        self.write(@as([]const u8, data));
     }
 
     inline fn update(self: *AHasher, new_data: u64) void {
@@ -133,12 +142,12 @@ pub const AHashSeed = struct {
         0x3f84_d5b5_b547_0917,
     };
 
-    pub fn fromRng(rng: Random) AHashSeed {
+    pub fn initRandom(random: Random) AHashSeed {
         return AHashSeed.fromSeeds(
-            rng.int(u64),
-            rng.int(u64),
-            rng.int(u64),
-            rng.int(u64),
+            random.int(u64),
+            random.int(u64),
+            random.int(u64),
+            random.int(u64),
         );
     }
 

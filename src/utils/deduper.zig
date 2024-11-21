@@ -28,7 +28,7 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
             var bits = try std.ArrayList(AtomicU64).initCapacity(allocator, size);
             for (0..size) |_| bits.appendAssumeCapacity(AtomicU64.init(0));
             var state: [n_hashers]AHashSeed = undefined;
-            for (0..n_hashers) |i| state[i] = AHashSeed.fromRng(rand);
+            for (0..n_hashers) |i| state[i] = AHashSeed.initRandom(rand);
             return .{
                 .num_bits = num_bits,
                 .bits = bits,
@@ -58,7 +58,7 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
                     var bit = _bit;
                     bit = AtomicU64.init(0);
                 }
-                for (0..n_hashers) |i| self.state[i] = AHashSeed.fromRng(rand);
+                for (0..n_hashers) |i| self.state[i] = AHashSeed.initRandom(rand);
                 self.last_reset_instant = Instant.now();
                 self.masked_count = AtomicU64.init(0);
             }
