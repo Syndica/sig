@@ -26,22 +26,22 @@ pub const WeightedShuffle = weighted_shuffle.WeightedShuffle;
 /// 0. -> 1/6
 /// 1. -> 1/2
 /// 3. -> 1/3
-pub fn WeightedRandomSampler(comptime T: type) type {
+pub fn WeightedRandomSampler(comptime Uint: type) type {
     return struct {
         allocator: Allocator,
         random: Random,
-        cumulative_weights: []const T,
-        total: T,
+        cumulative_weights: []const Uint,
+        total: Uint,
 
         const Self = @This();
 
         pub fn init(
             allocator: Allocator,
             random: Random,
-            weights: []const T,
+            weights: []const Uint,
         ) Allocator.Error!Self {
-            var cumulative_weights: []T = try allocator.alloc(T, weights.len);
-            var total: T = 0;
+            var cumulative_weights: []Uint = try allocator.alloc(Uint, weights.len);
+            var total: Uint = 0;
             for (0..weights.len) |i| {
                 total += weights[i];
                 cumulative_weights[i] = total;
@@ -59,8 +59,8 @@ pub fn WeightedRandomSampler(comptime T: type) type {
         }
 
         /// Returns the index of the selected item
-        pub fn sample(self: *const Self) T {
-            const want = uintLessThanRust(T, self.random, self.total);
+        pub fn sample(self: *const Self) Uint {
+            const want = uintLessThanRust(Uint, self.random, self.total);
             var lower: usize = 0;
             var upper: usize = self.cumulative_weights.len - 1;
             var guess = upper / 2;

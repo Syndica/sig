@@ -10,14 +10,14 @@ const ChaChaRng = sig.rand.ChaChaRng(20);
 ///     weight.
 ///   - Zero weighted indices are shuffled and appear only at the end, after
 ///     non-zero weighted indices.
-pub fn WeightedShuffle(comptime T: type) type {
+pub fn WeightedShuffle(comptime Int: type) type {
     return struct {
         allocator: std.mem.Allocator,
         // Underlying array implementing the tree.
         // tree[i][j] is the sum of all weights in the j'th sub-tree of node i.
-        tree: std.ArrayListUnmanaged([FANOUT - 1]T),
+        tree: std.ArrayListUnmanaged([FANOUT - 1]Int),
         // Current sum of all weights, excluding already sampled ones.
-        weight: T,
+        weight: Int,
         // Indices of zero weighted entries.
         zeros: std.ArrayListUnmanaged(usize),
 
@@ -32,13 +32,13 @@ pub fn WeightedShuffle(comptime T: type) type {
         const Self = @This();
 
         /// If weights are negative or overflow the total sum they are treated as zero.
-        pub fn init(allocator: std.mem.Allocator, weights: []const T) !Self {
-            var tree = try std.ArrayListUnmanaged([FANOUT - 1]T).initCapacity(
+        pub fn init(allocator: std.mem.Allocator, weights: []const Int) !Self {
+            var tree = try std.ArrayListUnmanaged([FANOUT - 1]Int).initCapacity(
                 allocator,
                 getTreeSize(weights.len),
             );
-            for (0..tree.capacity) |_| tree.appendAssumeCapacity([_]T{0} ** (FANOUT - 1));
-            var sum: T = 0;
+            for (0..tree.capacity) |_| tree.appendAssumeCapacity([_]Int{0} ** (FANOUT - 1));
+            var sum: Int = 0;
             var zeros = try std.ArrayListUnmanaged(usize).initCapacity(
                 allocator,
                 0,
@@ -54,7 +54,7 @@ pub fn WeightedShuffle(comptime T: type) type {
                 } else if (weight == 0) {
                     try zeros.append(allocator, k);
                     continue;
-                } else if (std.math.maxInt(T) - sum < weight) {
+                } else if (std.math.maxInt(Int) - sum < weight) {
                     try zeros.append(allocator, k);
                     num_overflow += 1;
                     continue;
@@ -98,7 +98,7 @@ pub fn WeightedShuffle(comptime T: type) type {
         }
 
         // Removes given weight at the specified index
-        pub fn remove(self: *Self, index: usize, weight: T) void {
+        pub fn remove(self: *Self, index: usize, weight: Int) void {
             std.debug.assert(self.weight >= weight);
             self.weight -= weight;
             // Traverse the tree from the leaf node upwards to the root,
@@ -116,7 +116,7 @@ pub fn WeightedShuffle(comptime T: type) type {
 
         // Returns smallest index such that sum of weights[..=k] > val,
         // along with its respective weight.
-        pub fn search(self: *const Self, value: T) struct { usize, T } {
+        pub fn search(self: *const Self, value: Int) struct { usize, Int } {
             var val = value;
 
             std.debug.assert(val >= 0);
@@ -149,7 +149,7 @@ pub fn WeightedShuffle(comptime T: type) type {
             // Traverse the tree from the leaf node upwards to the root, while
             // maintaining the sum of weights of subtrees *not* containing the leaf node.
             var curr_index = self.tree.items.len + index; // leaf node
-            var weight: T = 0;
+            var weight: Int = 0;
             while (curr_index != 0) {
                 const offset = curr_index & BIT_MASK;
                 curr_index = (curr_index - 1) >> BIT_SHIFT; // parent node
@@ -190,7 +190,7 @@ pub fn WeightedShuffle(comptime T: type) type {
         /// The function is non-destructive and does not remove the weights from the internal state.
         pub fn first(self: *const Self, rng: std.Random) ?usize {
             if (self.weight > 0) {
-                const sample = uintLessThanRust(T, rng, self.weight);
+                const sample = uintLessThanRust(Int, rng, self.weight);
                 const index, _ = self.search(sample);
                 return index;
             }
@@ -228,7 +228,7 @@ pub fn WeightedShuffle(comptime T: type) type {
 
             pub fn next(self: *Iterator) ?usize {
                 if (self.shuffle.weight > 0) {
-                    const sample = uintLessThanRust(T, self.rng, self.shuffle.weight);
+                    const sample = uintLessThanRust(Int, self.rng, self.shuffle.weight);
                     const index, const weight = self.shuffle.search(sample);
                     self.shuffle.remove(index, weight);
                     self.index += 1;
