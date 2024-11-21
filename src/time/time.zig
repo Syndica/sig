@@ -570,6 +570,14 @@ pub const Instant = struct {
     pub fn elapsedSince(self: Instant, earlier: Instant) Duration {
         return Duration.fromNanos(self.inner.since(earlier.inner));
     }
+
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return try writer.print("{s}", .{std.fmt.fmtDuration(switch (@TypeOf(self.inner.timestamp)) {
+            u64 => self.inner.timestamp,
+            std.posix.timespec => @intCast(self.inner.timestamp.tv_sec * 1_000_000_000 + self.inner.timestamp.tv_nsec),
+            else => @compileError("Instant: unknown timestamp type"),
+        })});
+    }
 };
 
 pub const Timer = struct {
