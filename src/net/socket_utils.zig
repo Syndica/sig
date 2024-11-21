@@ -139,8 +139,8 @@ pub const SocketThread = struct {
 };
 
 pub const BenchmarkPacketProcessing = struct {
-    pub const min_iterations = 3;
-    pub const max_iterations = 5;
+    pub const min_iterations = 1;
+    pub const max_iterations = 20;
 
     pub const BenchmarkArgs = struct {
         n_packets: usize,
@@ -204,7 +204,7 @@ pub const BenchmarkPacketProcessing = struct {
         }
 
         recv_handle.join();
-        return sig.time.Duration.fromSecs(100);
+        return timer.read();
     }
 };
 

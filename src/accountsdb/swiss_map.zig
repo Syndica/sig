@@ -624,7 +624,7 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
 
 pub const BenchmarkSwissMap = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 100;
+    pub const max_iterations = 1_000;
 
     pub const BenchArgs = struct {
         n_accounts: usize,
@@ -632,14 +632,14 @@ pub const BenchmarkSwissMap = struct {
     };
 
     pub const args = [_]BenchArgs{
-        BenchArgs{
-            .n_accounts = 100_000,
-            .name = "100k accounts",
-        },
-        BenchArgs{
-            .n_accounts = 500_000,
-            .name = "500k accounts",
-        },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .name = "100k accounts",
+        // },
+        // BenchArgs{
+        //     .n_accounts = 500_000,
+        //     .name = "500k accounts",
+        // },
         BenchArgs{
             .n_accounts = 1_000_000,
             .name = "1m accounts",
@@ -649,8 +649,9 @@ pub const BenchmarkSwissMap = struct {
     pub fn swissmapReadWriteBenchmark(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
         read_time: u64,
         write_time: u64,
-        read_speedup_vs_std: f32,
-        write_speedup_vs_std: f32,
+        // // NOTE: these are useful for debugging, but not for CI/CD
+        // read_speedup_vs_std: f32,
+        // write_speedup_vs_std: f32,
     } {
         const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
         const n_accounts = bench_args.n_accounts;
@@ -674,36 +675,37 @@ pub const BenchmarkSwissMap = struct {
             null,
         );
 
-        // this is what we compare the swiss map to
-        // this type was the best one I could find
-        const InnerT = std.HashMap(sig.core.Pubkey, *accounts_db.index.AccountRef, struct {
-            pub fn hash(self: @This(), key: sig.core.Pubkey) u64 {
-                _ = self;
-                return accounts_db.index.ShardedPubkeyRefMap.hash(key);
-            }
-            pub fn eql(self: @This(), key1: sig.core.Pubkey, key2: sig.core.Pubkey) bool {
-                _ = self;
-                return accounts_db.index.ShardedPubkeyRefMap.eql(key1, key2);
-            }
-        }, std.hash_map.default_max_load_percentage);
+        // // NOTE : can uncomment this code to measure speedup vs std.HashMap
+        // // this is what we compare the swiss map to
+        // // this type was the best one I could find
+        // const InnerT = std.HashMap(sig.core.Pubkey, *accounts_db.index.AccountRef, struct {
+        //     pub fn hash(self: @This(), key: sig.core.Pubkey) u64 {
+        //         _ = self;
+        //         return accounts_db.index.ShardedPubkeyRefMap.hash(key);
+        //     }
+        //     pub fn eql(self: @This(), key1: sig.core.Pubkey, key2: sig.core.Pubkey) bool {
+        //         _ = self;
+        //         return accounts_db.index.ShardedPubkeyRefMap.eql(key1, key2);
+        //     }
+        // }, std.hash_map.default_max_load_percentage);
 
-        const std_write_time, const std_read_time = try benchGetOrPut(
-            BenchHashMap(InnerT),
-            allocator,
-            account_refs,
-            pubkeys,
-            null,
-        );
+        // const std_write_time, const std_read_time = try benchGetOrPut(
+        //     BenchHashMap(InnerT),
+        //     allocator,
+        //     account_refs,
+        //     pubkeys,
+        //     null,
+        // );
 
-        // NOTE: if (speed_up < 1.0) "swissmap is slower" else "swissmap is faster";
-        const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos())) / @as(f32, @floatFromInt(write_time.asNanos()));
-        const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
+        // // NOTE: if (speed_up < 1.0) "swissmap is slower" else "swissmap is faster";
+        // const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos())) / @as(f32, @floatFromInt(write_time.asNanos()));
+        // const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
 
         return .{
             .read_time = units.convertDuration(read_time),
             .write_time = units.convertDuration(write_time),
-            .read_speedup_vs_std = read_speedup,
-            .write_speedup_vs_std = write_speedup,
+            // .read_speedup_vs_std = read_speedup,
+            // .write_speedup_vs_std = write_speedup,
         };
     }
 };
