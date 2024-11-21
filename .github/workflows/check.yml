@@ -104,7 +104,6 @@ jobs:
         uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
-
       - name: benchmarks
         run: zig build -Doptimize=ReleaseSafe benchmark -- all
 
@@ -144,8 +143,6 @@ jobs:
         uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
-
-      # run benchmarks
       - name: benchmarks
         run: zig build -Doptimize=ReleaseSafe benchmark -- all --metrics
 
