@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - master
+      - 19/benchmarks-ci
 
 jobs:
   benchmark:
