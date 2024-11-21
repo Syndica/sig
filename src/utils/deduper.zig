@@ -74,9 +74,9 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
                 const hash: u64 = hasher.finish() % self.num_bits;
                 const mask: u64 = @as(u64, 1) << @truncate(hash);
                 const index = @as(usize, hash >> 6);
-                const old = self.bits.items[index].fetchOr(mask, .acquire);
+                const old = self.bits.items[index].fetchOr(mask, .monotonic);
                 if (old & mask == 0) {
-                    _ = self.masked_count.fetchAdd(1, .acquire);
+                    _ = self.masked_count.fetchAdd(1, .monotonic);
                     duplicate = false;
                 }
             }
@@ -85,7 +85,7 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
 
         /// False positive rate computed from the current popcount and num_bits.
         pub fn falsePositiveRate(self: *Deduper(n_hashers, T)) f64 {
-            const popcount = self.masked_count.load(.unordered);
+            const popcount = self.masked_count.load(.monotonic);
             const numerator: f64 = @floatFromInt(@min(popcount, self.num_bits));
             const denominator: f64 = @floatFromInt(self.num_bits);
             const ones_ratio = numerator / denominator;
