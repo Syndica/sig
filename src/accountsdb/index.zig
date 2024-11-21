@@ -15,7 +15,8 @@ pub const AccountRef = struct {
     slot: Slot,
     location: AccountLocation,
     next_ptr: ?*AccountRef = null,
-    // NOTE: we store this information to support fast loading
+    // NOTE: we store this information to support fast loading.
+    // NOTE: next_index is kept in sync to point to the same data as next_ptr.
     next_index: ?u64 = 0,
 
     pub const DEFAULT: AccountRef = .{
@@ -293,7 +294,8 @@ pub const AccountIndex = struct {
 
 pub const AccountReferenceHead = struct {
     ref_ptr: *AccountRef,
-    // NOTE: we store this information to support fast loading
+    // NOTE: we store this information to support fast loading.
+    // NOTE: next_index is kept in sync to point to the same data as next_ptr.
     ref_index: u64,
 
     const Self = @This();
