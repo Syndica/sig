@@ -83,9 +83,6 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             const live_files = try self.db.liveFiles(self.allocator);
             defer live_files.deinit();
             defer for (live_files.items) |file| {
-                // TODO when deleting the files on start on test, this does not leak
-                // But with changes to sig.ledger.tests.freshDir(path) to not delete for findSlotsToClean
-                // tests this now leaks. Why?.
                 self.allocator.free(file.column_family_name);
                 self.allocator.free(file.name);
                 self.allocator.free(file.start_key.?);

@@ -161,12 +161,7 @@ test "insert shreds and transaction statuses then get blocks" {
 /// deletes anything else that might exist here.
 pub fn freshDir(path: []const u8) !void {
     if (std.fs.cwd().access(path, .{})) |_| {
-        if (!std.mem.endsWith(u8, path, "test.findSlotsToClean")) {
-            // DEBUGGING. REMOVE BEFORE MERGING
-            // Temp fix, as it seems the loading of live files only works after the first run, so we don't delete
-            // the test data before subsequent run.
-            try std.fs.cwd().deleteTree(path);
-        }
+        try std.fs.cwd().deleteTree(path);
     } else |_| {}
     try std.fs.cwd().makePath(path);
 }
@@ -339,6 +334,12 @@ pub const TestDB = struct {
 
     pub fn init(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
         return try initCustom(std.testing.allocator, test_src);
+    }
+
+    pub fn reuseBlockstore(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
+        const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
+        try std.fs.cwd().makePath(path);
+        return try BlockstoreDB.open(std.testing.allocator, .noop, path);
     }
 
     pub fn initCustom(

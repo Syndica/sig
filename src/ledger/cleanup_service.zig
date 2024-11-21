@@ -396,10 +396,69 @@ const TestDB = ledger.tests.TestDB;
 
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
+    const logger = .noop;
 
-    var db = try TestDB.init(@src());
+    // Start a new scope so that the db instance can be dropped at the end of the scope
+    // This ensures that the memtable is flushed to disk, which is needed in other
+    // to retrive live files, in the rest of the test.
+    {
+        var db = try TestDB.init(@src());
+        defer db.deinit();
+
+        var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
+        var max_root = std.atomic.Value(Slot).init(0);
+
+        var reader = try BlockstoreReader.init(
+            allocator,
+            logger,
+            db,
+            registry,
+            &lowest_cleanup_slot,
+            &max_root,
+        );
+
+        // set highest and lowest slot by inserting slot_meta
+        var lowest_slot_meta = ledger.meta.SlotMeta.init(allocator, 10, null);
+        defer lowest_slot_meta.deinit();
+        lowest_slot_meta.received = 10;
+
+        var highest_slot_meta = ledger.meta.SlotMeta.init(allocator, 20, null);
+        defer highest_slot_meta.deinit();
+        highest_slot_meta.received = 20;
+
+        {
+            var write_batch = try db.initWriteBatch();
+            defer write_batch.deinit();
+            try write_batch.put(
+                ledger.schema.schema.slot_meta,
+                lowest_slot_meta.slot,
+                lowest_slot_meta,
+            );
+            try write_batch.put(
+                ledger.schema.schema.slot_meta,
+                highest_slot_meta.slot,
+                highest_slot_meta,
+            );
+            try db.commit(&write_batch);
+        }
+
+        const r = try findSlotsToClean(&reader, 0, 100);
+        try std.testing.expectEqual(false, r.should_clean);
+        try std.testing.expectEqual(0, r.total_shreds);
+        try std.testing.expectEqual(0, r.highest_slot_to_purge);
+        var data_shred = try ledger.shred.DataShred.zeroedForTest(allocator);
+        defer data_shred.deinit();
+        {
+            var write_batch = try db.initWriteBatch();
+            for (0..1000) |i| {
+                try write_batch.put(ledger.schema.schema.data_shred, .{ 19, i }, data_shred.payload);
+            }
+            try db.commit(&write_batch);
+        }
+    }
+
+    var db = try TestDB.reuseBlockstore(@src());
     defer db.deinit();
 
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
@@ -414,56 +473,10 @@ test "findSlotsToClean" {
         &max_root,
     );
 
-    // set highest and lowest slot by inserting slot_meta
-    var lowest_slot_meta = ledger.meta.SlotMeta.init(allocator, 10, null);
-    defer lowest_slot_meta.deinit();
-    lowest_slot_meta.received = 10;
-
-    var highest_slot_meta = ledger.meta.SlotMeta.init(allocator, 20, null);
-    defer highest_slot_meta.deinit();
-    highest_slot_meta.received = 20;
-
-    {
-        var write_batch = try db.initWriteBatch();
-        defer write_batch.deinit();
-        try write_batch.put(
-            ledger.schema.schema.slot_meta,
-            lowest_slot_meta.slot,
-            lowest_slot_meta,
-        );
-        try write_batch.put(
-            ledger.schema.schema.slot_meta,
-            highest_slot_meta.slot,
-            highest_slot_meta,
-        );
-        try db.commit(&write_batch);
-    }
-
-    const r = try findSlotsToClean(&reader, 0, 100);
-    // TO RESOLVE: On first pass these passes, on second it fails
-    // because the livefiles generated in the procedding lines can now be retrieved
-    // after a second run
-    try std.testing.expectEqual(false, r.should_clean);
-    try std.testing.expectEqual(0, r.total_shreds);
-    try std.testing.expectEqual(0, r.highest_slot_to_purge);
-
-    var data_shred = try ledger.shred.DataShred.zeroedForTest(allocator);
-    defer data_shred.deinit();
-    {
-        var write_batch = try db.initWriteBatch();
-        for (0..1000) |i| {
-            try write_batch.put(ledger.schema.schema.data_shred, .{ 19, i }, data_shred.payload);
-        }
-        try db.commit(&write_batch);
-    }
-
     const r2 = try findSlotsToClean(&reader, 0, 100);
-    // TO RESOLVE: On first pass these fails, on second it passes
-    // because the livefiles generated in the procedding lines can now be retrieved
-    // after a second run
     try std.testing.expectEqual(true, r2.should_clean);
-    try std.testing.expectEqual(0, r2.total_shreds);
-    try std.testing.expectEqual(100, r2.highest_slot_to_purge);
+    try std.testing.expectEqual(1000, r2.total_shreds);
+    try std.testing.expectEqual(0, r2.highest_slot_to_purge);
 }
 
 test "purgeSlots" {
