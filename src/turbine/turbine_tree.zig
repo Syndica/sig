@@ -291,9 +291,17 @@ pub const TurbineTree = struct {
     /// Create a seeded RNG for the given leader and shred id.
     /// The resulting RNG must be identical to the agave implementation
     /// to ensure that the weighted shuffle is deterministic.
-    fn getSeededRng(leader: Pubkey, shred: ShredId) ChaChaRng {
-        const seed = shred.turbineWeightedSampleSeed(leader);
-        return ChaChaRng.fromSeed(seed);
+    fn getSeededRng(leader: Pubkey, shred_id: ShredId) ChaChaRng {
+        var slot_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &slot_bytes, shred_id.slot, .little);
+        var index_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &index_bytes, shred_id.index, .little);
+        var shred_bytes: [1]u8 = undefined;
+        std.mem.writeInt(u8, &shred_bytes, @intFromEnum(shred_id.shred_type), .little);
+        const values: []const []const u8 = &.{ &slot_bytes, &shred_bytes, &index_bytes, &leader.data };
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        for (values) |val| hasher.update(val);
+        return ChaChaRng.fromSeed(hasher.finalResult());
     }
 
     // root     : [0]
