@@ -142,7 +142,7 @@ jobs:
           # What benchmark tool the output.txt came from
           tool: "customSmallerIsBetter"
           # Where the output from the benchmark tool is stored
-          output-file-path: results/output.txt
+          output-file-path: results/output.json
           # Where the previous data file is stored
           external-data-json-path: ./cache/benchmark-data.json
           # Workflow will fail when an alert happens
