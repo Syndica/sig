@@ -463,8 +463,17 @@ test "findSlotsToClean" {
             }
             try db.commit(&write_batch);
         }
+        // When implementation is not rocksdb, we do not need to flush memtable to disk to be able to assert.
+        if (build_options.blockstore_db != .rocksdb) {
+            const r2 = try findSlotsToClean(&reader, 0, 100);
+            try std.testing.expectEqual(true, r2.should_clean);
+            try std.testing.expectEqual(1000, r2.total_shreds);
+            try std.testing.expectEqual(0, r2.highest_slot_to_purge);
+        }
     }
 
+    // When implementation is rocksdb, we do need to flush memtable to disk, in the preceeding scope
+    // to be able to assert.
     if (build_options.blockstore_db == .rocksdb) {
         var db = try TestDB.reuseBlockstore(@src());
         defer db.deinit();
