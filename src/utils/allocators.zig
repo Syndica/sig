@@ -655,25 +655,29 @@ pub const DiskMemoryAllocator = struct {
     inline fn fileNameBounded(file_index: u32) FileNameFmtSpec.BoundedArray(struct { u32 }) {
         return FileNameFmtSpec.fmt(.{file_index});
     }
-
-    /// helper function which is simpler than the allocator interface
-    pub fn allocFilename(self: *const Self, file_name: []const u8, n: u64) ![]u8 {
-        const file = try self.dir.createFile(file_name, .{ .read = true, .truncate = true });
-        defer file.close();
-
-        try file.setEndPos(n);
-
-        const memory = std.posix.mmap(
-            null,
-            n,
-            std.posix.PROT.READ | std.posix.PROT.WRITE,
-            std.posix.MAP{ .TYPE = .SHARED },
-            file.handle,
-            0,
-        );
-        return memory;
-    }
 };
+
+pub fn createAndMmapFile(
+    dir: std.fs.Dir,
+    file_name: []const u8,
+    n: u64,
+) ![]align(std.mem.page_size) u8 {
+    const file = try dir.createFile(file_name, .{ .read = true, .truncate = true });
+    defer file.close();
+
+    try file.setEndPos(n);
+
+    const memory = std.posix.mmap(
+        null,
+        n,
+        std.posix.PROT.READ | std.posix.PROT.WRITE,
+        .{ .TYPE = .SHARED },
+        file.handle,
+        0,
+    );
+
+    return memory;
+}
 
 /// Namespace housing the different components for the stateless failing allocator.
 /// This allows easily importing everything related therein.

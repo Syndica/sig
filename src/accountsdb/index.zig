@@ -9,6 +9,8 @@ const RwMux = sig.sync.RwMux;
 const SwissMap = sig.accounts_db.swiss_map.SwissMap;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 
+const createAndMmapFile = sig.utils.allocators.createAndMmapFile;
+
 /// reference to an account (either in a file or in the unrooted_map)
 pub const AccountRef = struct {
     pubkey: Pubkey,
@@ -303,19 +305,12 @@ pub const AccountIndex = struct {
     pub fn loadFromDisk(self: *Self, dir: std.fs.Dir, logger: sig.trace.Logger) !void {
         const scoped_logger = logger.withScope("load index state");
 
-        // make sure all the appropriate file exist
-        try dir.access("manager_memory", .{});
-        try dir.access("manager_records", .{});
-        try dir.access("pubkey_ref_map", .{});
-
         // manager must be empty
         std.debug.assert(self.reference_manager.capacity == 0);
 
-        // load the manager
-        scoped_logger.info().log("loading manager memory");
-        const reference_file = try dir.openFile("manager_memory", .{});
+        const reference_file = try dir.openFile("index.bin", .{});
         const size = (try reference_file.stat()).size;
-        const ref_memory = try std.posix.mmap(
+        const index_memory = try std.posix.mmap(
             null,
             size,
             std.posix.PROT.READ,
@@ -323,14 +318,35 @@ pub const AccountIndex = struct {
             reference_file.handle,
             0,
         );
-        defer std.posix.munmap(ref_memory);
+        defer std.posix.munmap(index_memory);
+
+        var offset: u64 = 0;
+        const ref_map_size = std.mem.readInt(u64, index_memory[offset..][0..@sizeOf(u64)], .little);
+        offset += @sizeOf(u64);
+        const reference_size = std.mem.readInt(u64, index_memory[offset..][0..@sizeOf(u64)], .little);
+        offset += @sizeOf(u64);
+        const records_size = std.mem.readInt(u64, index_memory[offset..][0..@sizeOf(u64)], .little);
+        offset += @sizeOf(u64);
+
+        // [shard0 length, shard0 data, shard1 length, shard1 data, ...]
+        const map_memory = index_memory[offset..][0..ref_map_size];
+        offset += ref_map_size;
+        // [AccountRef, AccountRef, ...]
+        const reference_memory = index_memory[offset..][0..reference_size];
+        offset += reference_size;
+        // [Bincode(Record), Bincode(Record), ...]
+        const records_memory = index_memory[offset..][0..records_size];
+        offset += records_size;
+
+        // load the []AccountRef
+        scoped_logger.info().log("loading account references");
         const references = try sig.bincode.readFromSlice(
             // NOTE: this still ensure reference memory is either on disk or ram
             // even though the state we are loading from is on disk.
             // with bincode this will only be one alloc!
             self.reference_manager.memory_allocator,
             []AccountRef,
-            ref_memory,
+            reference_memory,
             .{},
         );
         try self.reference_manager.memory.append(references);
@@ -346,11 +362,10 @@ pub const AccountIndex = struct {
 
         // load the records
         scoped_logger.info().log("loading manager records");
-        const records_file = try dir.openFile("manager_records", .{});
-        const records = try sig.bincode.read(
+        const records = try sig.bincode.readFromSlice(
             self.reference_manager.records.allocator,
             @TypeOf(self.reference_manager.records),
-            records_file.reader(),
+            records_memory,
             .{},
         );
         for (records.items) |*record| {
@@ -363,18 +378,18 @@ pub const AccountIndex = struct {
 
         // load the pubkey_ref_map
         scoped_logger.info().log("loading pubkey -> ref map");
-        const map_file = try dir.openFile("pubkey_ref_map", .{});
-        var map_reader = map_file.reader();
+        offset = 0;
         for (self.pubkey_ref_map.shards) |*shard_rw| {
             const shard, var lock = shard_rw.writeWithLock();
             defer lock.unlock();
 
-            const shard_len = try map_reader.readInt(u64, .little);
+            const shard_len = std.mem.readInt(u64, map_memory[offset..][0..@sizeOf(u64)], .little);
+            offset += @sizeOf(u64);
             if (shard_len == 0) continue;
 
             const memory = try self.allocator.alloc(u8, shard_len);
-            const n = try map_reader.readAtLeast(memory, shard_len);
-            std.debug.assert(n == shard_len);
+            @memcpy(memory, map_memory[offset..][0..shard_len]);
+            offset += shard_len;
 
             // update the shard
             shard.deinit(); // NOTE: this shouldnt do anything but we keep for correctness
@@ -394,7 +409,6 @@ pub const AccountIndex = struct {
     pub fn saveToDisk(self: *Self, dir: std.fs.Dir, logger: sig.trace.Logger) !void {
         const scoped_logger = logger.withScope("save index state");
 
-        scoped_logger.info().log("saving pubkey -> reference map");
         // write the pubkey_ref_map (populating this is very expensive)
         var shard_data_total: u64 = 0;
         for (self.pubkey_ref_map.shards) |*shard_rw| {
@@ -404,15 +418,36 @@ pub const AccountIndex = struct {
         }
         const n_shards = self.pubkey_ref_map.numberOfShards();
 
-        const disk_allocator = DiskMemoryAllocator{ .dir = dir, .logger = .noop };
-        const map_memory = try disk_allocator.allocFilename(
-            "pubkey_ref_map",
-            // [shard0 length, shard0 data, shard1 length, shard1 data, ...]
-            @sizeOf(u64) * n_shards + shard_data_total,
+        // [shard0 length, shard0 data, shard1 length, shard1 data, ...]
+        const ref_map_size = @sizeOf(u64) * n_shards + shard_data_total;
+        // [AccountRef, AccountRef, ...]
+        const reference_size = @sizeOf(u64) + self.reference_manager.capacity * @sizeOf(AccountRef);
+        // [Bincode(Record), Bincode(Record), ...]
+        const records_size = sig.bincode.sizeOf(self.reference_manager.records.items, .{});
+        const index_memory = try createAndMmapFile(
+            dir,
+            "index.bin",
+            ref_map_size + reference_size + records_size + 3 * @sizeOf(u64),
         );
 
-        // write each shard's data
         var offset: u64 = 0;
+        std.mem.writeInt(u64, index_memory[offset..][0..@sizeOf(u64)], ref_map_size, .little);
+        offset += @sizeOf(u64);
+        std.mem.writeInt(u64, index_memory[offset..][0..@sizeOf(u64)], reference_size, .little);
+        offset += @sizeOf(u64);
+        std.mem.writeInt(u64, index_memory[offset..][0..@sizeOf(u64)], records_size, .little);
+        offset += @sizeOf(u64);
+
+        const map_memory = index_memory[offset..][0..ref_map_size];
+        offset += ref_map_size;
+        const reference_memory = index_memory[offset..][0..reference_size];
+        offset += reference_size;
+        const records_memory = index_memory[offset..][0..records_size];
+        offset += records_size;
+
+        // write each shard's data
+        scoped_logger.info().log("saving pubkey_ref_map memory");
+        offset = 0;
         for (self.pubkey_ref_map.shards) |*shard_rw| {
             const shard, var lock = shard_rw.readWithLock();
             defer lock.unlock();
@@ -425,12 +460,15 @@ pub const AccountIndex = struct {
             offset += shard_memory.len;
         }
 
-        scoped_logger.info().log("saving reference manager memory");
-        const reference_size = @sizeOf(u64) + self.reference_manager.capacity * @sizeOf(AccountRef);
-        const reference_memory = try disk_allocator.allocFilename("manager_memory", reference_size);
-        // collapse [][]AccountRef into a single slice
+        scoped_logger.info().log("saving account references");
         offset = 0;
-        std.mem.writeInt(u64, reference_memory[offset..][0..@sizeOf(u64)], self.reference_manager.capacity, .little);
+        // collapse [][]AccountRef into a single slice
+        std.mem.writeInt(
+            u64,
+            reference_memory[offset..][0..@sizeOf(u64)],
+            self.reference_manager.capacity,
+            .little,
+        );
         offset += @sizeOf(u64);
         for (self.reference_manager.memory.items) |ref_block| {
             for (ref_block) |ref| {
@@ -439,9 +477,7 @@ pub const AccountIndex = struct {
             }
         }
 
-        scoped_logger.info().log("saving reference manager records");
-        const records_size = sig.bincode.sizeOf(self.reference_manager.records.items, .{});
-        const records_memory = try disk_allocator.allocFilename("manager_records", records_size);
+        scoped_logger.info().log("saving reference_manager records");
         _ = try sig.bincode.writeToSlice(records_memory, self.reference_manager.records.items, .{});
     }
 };
