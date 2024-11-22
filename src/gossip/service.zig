@@ -734,6 +734,8 @@ pub const GossipService = struct {
                 self.metrics.handle_batch_pull_req_time.observe(elapsed);
 
                 for (pull_requests.items) |req| {
+                    // NOTE: the contact info (req.value) is inserted into the gossip table
+                    // so we only free the filter
                     bincode.free(self.gossip_value_allocator, req.filter);
                 }
                 pull_requests.clearRetainingCapacity();
