@@ -630,7 +630,7 @@ pub const GossipService = struct {
                         }
 
                         if (!should_process_value) {
-                            bincode.free(self.gossip_value_allocator, value.data);
+                            bincode.free(self.gossip_value_allocator, pull);
                             continue;
                         }
 
@@ -728,6 +728,9 @@ pub const GossipService = struct {
                 const elapsed = x_timer.read().asMillis();
                 self.metrics.handle_batch_pull_req_time.observe(elapsed);
 
+                for (pull_requests.items) |req| {
+                    bincode.free(self.gossip_value_allocator, req.filter);
+                }
                 pull_requests.clearRetainingCapacity();
             }
 
@@ -1279,7 +1282,14 @@ pub const GossipService = struct {
             var gossip_table: *GossipTable = gossip_table_lock.mut();
 
             for (pull_requests) |*req| {
-                _ = gossip_table.insert(req.value, now) catch {};
+                const result = gossip_table.insert(req.value, now) catch {
+                    @panic("gossip table insertion failed");
+                };
+                switch (result) {
+                    .InsertedNewEntry => {},
+                    .OverwroteExistingEntry => |x| x.deinit(self.gossip_value_allocator),
+                    .GossipTableFull, .IgnoredOldValue, .IgnoredDuplicateValue, .IgnoredTimeout => req.value.deinit(self.gossip_value_allocator),
+                }
                 gossip_table.updateRecordTimestamp(req.value.id(), now);
             }
         }
@@ -3463,15 +3473,15 @@ fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
     return contact_info;
 }
 
-// // TODO: re-enable these tests when leaks are fixed
-// test "benchmarkPullRequests" {
-//     _ = try BenchmarkGossipServicePullRequests.benchmarkPullRequests(.{
-//         .name = "1k_data_1k_pull_reqs",
-//         .n_data_populated = 10,
-//         .n_pull_requests = 2,
-//     });
-// }
+test "benchmarkPullRequests" {
+    _ = try BenchmarkGossipServicePullRequests.benchmarkPullRequests(.{
+        .name = "1k_data_1k_pull_reqs",
+        .n_data_populated = 10,
+        .n_pull_requests = 2,
+    });
+}
 
+// TODO: re-enable these tests when leaks are fixed
 // test "benchmarkGossipService" {
 //     _ = try BenchmarkGossipServiceGeneral.benchmarkGossipService(.{
 //         .message_counts = .{
