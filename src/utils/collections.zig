@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -196,7 +197,9 @@ pub fn SortedMapCustom(
         }
 
         pub fn fetchSwapRemove(self: *Self, key: K) ?Inner.KV {
-            return self.inner.fetchSwapRemove(key);
+            const item = self.inner.fetchSwapRemove(key);
+            self.resetMaxOnRemove(key);
+            return item;
         }
 
         pub fn getOrPut(self: *Self, key: K) !std.AutoArrayHashMap(K, V).GetOrPutResult {
@@ -219,7 +222,21 @@ pub fn SortedMapCustom(
         }
 
         pub fn remove(self: *Self, key: K) bool {
-            return self.inner.orderedRemove(key);
+            const item = self.inner.orderedRemove(key);
+            self.resetMaxOnRemove(key);
+            return item;
+        }
+
+        fn resetMaxOnRemove(self: *Self, removed_key: K) void {
+            if (self.max) |max| {
+                if (self.count() == 0) {
+                    self.max = null;
+                } else if (order(removed_key, max) == .eq) {
+                    self.sort();
+                    const sorted_keys = self.keys();
+                    self.max = sorted_keys[sorted_keys.len - 1];
+                }
+            }
         }
 
         pub fn contains(self: Self, key: K) bool {
