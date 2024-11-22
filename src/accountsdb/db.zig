@@ -4396,6 +4396,8 @@ pub const BenchmarkAccountsDB = struct {
         // },
 
         // tests large number of accounts on disk
+        // NOTE: the other tests are useful for understanding performance for but CI,
+        // these are the most useful as they are the most similar to production
         BenchArgs{
             .n_accounts = 10_000,
             .slot_list_len = 10,

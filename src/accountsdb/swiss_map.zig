@@ -632,14 +632,6 @@ pub const BenchmarkSwissMap = struct {
     };
 
     pub const args = [_]BenchArgs{
-        // BenchArgs{
-        //     .n_accounts = 100_000,
-        //     .name = "100k accounts",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 500_000,
-        //     .name = "500k accounts",
-        // },
         BenchArgs{
             .n_accounts = 1_000_000,
             .name = "1m accounts",
