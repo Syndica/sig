@@ -278,6 +278,22 @@ pub fn run() !void {
         .value_name = "accounts_per_file_estimate",
     };
 
+    var fastload_option = cli.Option{
+        .long_name = "fastload",
+        .help = "fastload the accounts db",
+        .value_ref = cli.mkRef(&config.current.accounts_db.fastload),
+        .required = false,
+        .value_name = "fastload",
+    };
+
+    var save_index_option = cli.Option{
+        .long_name = "save-index",
+        .help = "save the account index to disk",
+        .value_ref = cli.mkRef(&config.current.accounts_db.save_index),
+        .required = false,
+        .value_name = "save_index",
+    };
+
     // geyser options
     var enable_geyser_option = cli.Option{
         .long_name = "enable-geyser",
@@ -407,6 +423,8 @@ pub fn run() !void {
                             &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
+                            &fastload_option,
+                            &save_index_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -425,7 +443,7 @@ pub fn run() !void {
                     &cli.Command{
                         .name = "shred-collector",
                         .description = .{ .one_line = "Run the shred collector to collect and store shreds", .detailed = 
-                        \\ This command runs the shred collector without running the full validator 
+                        \\ This command runs the shred collector without running the full validator
                         \\ (mainly excluding the accounts-db setup).
                         \\
                         \\ NOTE: this means that this command *requires* a leader schedule to be provided
@@ -504,6 +522,8 @@ pub fn run() !void {
                             &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
+                            &fastload_option,
+                            &save_index_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -597,7 +617,7 @@ pub fn run() !void {
                         .description = .{
                             .one_line = "Test transaction sender service",
                             .detailed =
-                            \\Simulates a stream of transaction being sent to the transaction sender by 
+                            \\Simulates a stream of transaction being sent to the transaction sender by
                             \\running a mock transaction generator thread. For the moment this just sends
                             \\transfer transactions between to hard coded testnet accounts.
                             ,
@@ -1507,6 +1527,8 @@ fn loadSnapshot(
         n_threads_snapshot_load,
         validate_snapshot,
         config.current.accounts_db.accounts_per_file_estimate,
+        config.current.accounts_db.fastload,
+        config.current.accounts_db.save_index,
     );
     errdefer snapshot_fields.deinit(allocator);
     result.snapshot_fields.was_collapsed = true;
