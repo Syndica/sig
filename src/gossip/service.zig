@@ -1300,7 +1300,9 @@ pub const GossipService = struct {
                 switch (result) {
                     .InsertedNewEntry => {},
                     .OverwroteExistingEntry => |x| x.deinit(self.gossip_value_allocator),
-                    .GossipTableFull, .IgnoredOldValue, .IgnoredDuplicateValue, .IgnoredTimeout => req.value.deinit(self.gossip_value_allocator),
+                    .GossipTableFull, .IgnoredOldValue, .IgnoredDuplicateValue, .IgnoredTimeout => {
+                        req.value.deinit(self.gossip_value_allocator);
+                    },
                 }
                 gossip_table.updateRecordTimestamp(req.value.id(), now);
             }
