@@ -657,6 +657,28 @@ pub const DiskMemoryAllocator = struct {
     }
 };
 
+pub fn createAndMmapFile(
+    dir: std.fs.Dir,
+    file_name: []const u8,
+    n: u64,
+) ![]align(std.mem.page_size) u8 {
+    const file = try dir.createFile(file_name, .{ .read = true, .truncate = true });
+    defer file.close();
+
+    try file.setEndPos(n);
+
+    const memory = std.posix.mmap(
+        null,
+        n,
+        std.posix.PROT.READ | std.posix.PROT.WRITE,
+        .{ .TYPE = .SHARED },
+        file.handle,
+        0,
+    );
+
+    return memory;
+}
+
 /// Namespace housing the different components for the stateless failing allocator.
 /// This allows easily importing everything related therein.
 /// NOTE: we represent it in this way instead of as a struct like GPA, because
