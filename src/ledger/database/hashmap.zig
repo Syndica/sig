@@ -351,7 +351,8 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             }
 
             return .{
-                .allocator = self.disk_allocator,
+                .allocator = self.ram_allocator,
+                .storage_allocator = self.disk_allocator,
                 .keys = copied_keys,
                 .vals = copied_vals,
                 .cursor = switch (direction) {
@@ -365,6 +366,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         pub fn Iterator(cf: ColumnFamily, direction: IteratorDirection) type {
             return struct {
                 allocator: Allocator,
+                storage_allocator: Allocator,
                 keys: []const []const u8,
                 vals: []const []const u8,
                 cursor: usize = 0,
@@ -373,9 +375,9 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 pub fn deinit(self: *@This()) void {
                     inline for (.{ self.keys, self.vals }) |slices| {
                         for (slices) |slice| {
-                            self.allocator.free(slice);
+                            self.storage_allocator.free(slice);
                         }
-                        self.allocator.free(slices);
+                        self.storage_allocator.free(slices);
                     }
                 }
 
