@@ -429,6 +429,7 @@ pub const AccountIndex = struct {
             "index.bin",
             ref_map_size + reference_size + records_size + 3 * @sizeOf(u64),
         );
+        defer std.posix.munmap(index_memory);
 
         var offset: u64 = 0;
         std.mem.writeInt(u64, index_memory[offset..][0..@sizeOf(u64)], ref_map_size, .little);
