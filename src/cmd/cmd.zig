@@ -20,6 +20,7 @@ const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 const Network = config.Network;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.Pubkey;
@@ -55,6 +56,9 @@ else
     std.heap.c_allocator;
 
 const base58Encoder = base58.Encoder.init(.{});
+
+// The identifier for the scoped logger used in this file.
+const LOG_SCOPE = "cmd";
 
 pub fn run() !void {
     defer {
@@ -427,8 +431,8 @@ pub fn run() !void {
                         \\ NOTE: this means that this command *requires* a leader schedule to be provided
                         \\ (which would usually be derived from the accountsdb snapshot).
                         \\
-                        \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well 
-                        \\ (which is usually derived from the accountsdb snapshot). 
+                        \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well
+                        \\ (which is usually derived from the accountsdb snapshot).
                         \\ This can be done with `--test-repair-for-slot $(solana slot -u testnet)`
                         \\ for testnet or another `-u` for mainnet/devnet.
                         },
@@ -685,7 +689,7 @@ fn validator() !void {
         service_manager.deinit();
     }
 
-    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger);
+    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger.unscoped());
     defer {
         if (geyser_writer) |geyser| {
             geyser.deinit();
@@ -695,7 +699,7 @@ fn validator() !void {
 
     const snapshot = try loadSnapshot(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         gossip_service,
         true,
         geyser_writer,
@@ -716,12 +720,12 @@ fn validator() !void {
     // blockstore
     var blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         sig.VALIDATOR_DIR ++ "blockstore",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         app_base.metrics_registry,
         blockstore_db,
     );
@@ -739,7 +743,7 @@ fn validator() !void {
     defer allocator.destroy(blockstore_reader);
     blockstore_reader.* = try BlockstoreReader.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         blockstore_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
@@ -747,7 +751,7 @@ fn validator() !void {
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        app_base.logger,
+        app_base.logger.unscoped(),
         blockstore_reader,
         &blockstore_db,
         lowest_cleanup_slot,
@@ -764,7 +768,7 @@ fn validator() !void {
         shred_col_conf,
         ShredCollectorDependencies{
             .allocator = allocator,
-            .logger = app_base.logger,
+            .logger = app_base.logger.unscoped(),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
@@ -817,12 +821,12 @@ fn shredCollector() !void {
     // blockstore
     var blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         sig.VALIDATOR_DIR ++ "blockstore",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         app_base.metrics_registry,
         blockstore_db,
     );
@@ -840,7 +844,7 @@ fn shredCollector() !void {
     defer allocator.destroy(blockstore_reader);
     blockstore_reader.* = try BlockstoreReader.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         blockstore_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
@@ -848,7 +852,7 @@ fn shredCollector() !void {
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        app_base.logger,
+        app_base.logger.unscoped(),
         blockstore_reader,
         &blockstore_db,
         lowest_cleanup_slot,
@@ -865,7 +869,7 @@ fn shredCollector() !void {
         shred_col_conf,
         .{
             .allocator = allocator,
-            .logger = app_base.logger,
+            .logger = app_base.logger.unscoped(),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
@@ -884,7 +888,8 @@ fn shredCollector() !void {
 
 const GeyserWriter = sig.geyser.GeyserWriter;
 
-fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWriter {
+fn buildGeyserWriter(allocator: std.mem.Allocator, logger_: Logger) !?*GeyserWriter {
+    const logger = logger_.withScope(LOG_SCOPE);
     var geyser_writer: ?*GeyserWriter = null;
     if (config.current.geyser.enable) {
         logger.info().log("Starting GeyserWriter...");
@@ -925,7 +930,7 @@ fn printManifest() !void {
 
     var snapshots = try AllSnapshotFields.fromFiles(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         snapshot_dir,
         snapshot_file_info,
     );
@@ -951,7 +956,7 @@ fn createSnapshot() !void {
 
     const snapshot_result = try loadSnapshot(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         null,
         false,
         null,
@@ -997,7 +1002,7 @@ fn validateSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger);
+    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger.unscoped());
     defer {
         if (geyser_writer) |geyser| {
             geyser.deinit();
@@ -1007,7 +1012,7 @@ fn validateSnapshot() !void {
 
     const snapshot_result = try loadSnapshot(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         null,
         true,
         geyser_writer,
@@ -1028,7 +1033,7 @@ fn printLeaderSchedule() !void {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
         const loaded_snapshot = loadSnapshot(
             allocator,
-            app_base.logger,
+            app_base.logger.unscoped(),
             null,
             true,
             null,
@@ -1106,7 +1111,7 @@ pub fn testTransactionSenderService() !void {
     // this handles transactions and forwards them to leaders TPU ports
     var transaction_sender_service = try sig.transaction_sender.Service.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         .{ .cluster = cluster, .socket = SocketAddr.init(app_base.my_ip, 0) },
         transaction_channel,
         &gossip_service.gossip_table_rw,
@@ -1120,7 +1125,7 @@ pub fn testTransactionSenderService() !void {
     );
 
     // rpc is used to get blockhashes and other balance information
-    var rpc_client = sig.rpc.Client.init(allocator, cluster, .{ .logger = app_base.logger });
+    var rpc_client = sig.rpc.Client.init(allocator, cluster, .{ .logger = app_base.logger.unscoped() });
     defer rpc_client.deinit();
 
     // this sends mock txs to the transaction sender
@@ -1129,7 +1134,7 @@ pub fn testTransactionSenderService() !void {
         transaction_channel,
         rpc_client,
         &app_base.exit,
-        app_base.logger,
+        app_base.logger.unscoped(),
     );
     // send and confirm mock transactions
     try mock_transfer_service.run(
@@ -1149,7 +1154,7 @@ const AppBase = struct {
     counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     closed: bool,
-    logger: Logger,
+    logger: ScopedLogger(@typeName(Self)),
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
     my_keypair: KeyPair,
@@ -1158,8 +1163,10 @@ const AppBase = struct {
     my_ip: IpAddr,
     my_port: u16,
 
+    const Self = @This();
+
     fn init(allocator: Allocator) !AppBase {
-        const logger = try spawnLogger();
+        const logger = (try spawnLogger()).withScope(@typeName(Self));
         errdefer logger.deinit();
 
         const metrics_registry = globalRegistry();
@@ -1167,12 +1174,12 @@ const AppBase = struct {
         const metrics_thread = try spawnMetrics(gpa_allocator, config.current.metrics_port);
         errdefer metrics_thread.detach();
 
-        const my_keypair = try getOrInitIdentity(allocator, logger);
+        const my_keypair = try getOrInitIdentity(allocator, logger.unscoped());
 
-        const entrypoints = try getEntrypoints(logger);
+        const entrypoints = try getEntrypoints(logger.unscoped());
         errdefer entrypoints.deinit();
 
-        const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
+        const ip_echo_data = try getMyDataFromIpEcho(logger.unscoped(), entrypoints.items);
         const my_port = config.current.gossip.port;
 
         return .{
@@ -1207,7 +1214,7 @@ const AppBase = struct {
 
 /// Initialize an instance of GossipService and configure with CLI arguments
 fn initGossip(
-    logger: Logger,
+    logger_: Logger,
     my_keypair: KeyPair,
     exit: *Atomic(usize),
     entrypoints: []const SocketAddr,
@@ -1215,6 +1222,7 @@ fn initGossip(
     gossip_host_ip: IpAddr,
     sockets: []const struct { tag: SocketTag, port: u16 },
 ) !GossipService {
+    const logger = logger_.withScope(LOG_SCOPE);
     const gossip_port: u16 = config.current.gossip.port;
     logger.info().logf("gossip host: {any}", .{gossip_host_ip});
     logger.info().logf("gossip port: {d}", .{gossip_port});
@@ -1233,7 +1241,7 @@ fn initGossip(
         my_keypair,
         entrypoints,
         exit,
-        logger,
+        logger.unscoped(),
     );
 }
 
@@ -1255,7 +1263,7 @@ fn startGossip(
 
     var manager = sig.utils.service_manager.ServiceManager.init(
         allocator,
-        app_base.logger,
+        app_base.logger.unscoped(),
         &app_base.exit,
         "gossip",
         .{},
@@ -1270,7 +1278,7 @@ fn startGossip(
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints.items,
         &app_base.counter,
-        app_base.logger,
+        app_base.logger.unscoped(),
     );
     try manager.defers.deferCall(GossipService.deinit, .{service});
 
@@ -1293,9 +1301,10 @@ fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
 /// determine our shred version and ip. in the solana-labs client, the shred version
 /// comes from the snapshot, and ip echo is only used to validate it.
 fn getMyDataFromIpEcho(
-    logger: Logger,
+    logger_: Logger,
     entrypoints: []SocketAddr,
 ) !struct { shred_version: u16, ip: IpAddr } {
+    const logger = logger_.withScope(LOG_SCOPE);
     var my_ip_from_entrypoint: ?IpAddr = null;
     const my_shred_version = loop: for (entrypoints) |entrypoint| {
         if (requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
@@ -1364,7 +1373,8 @@ fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
     return socket_addr;
 }
 
-fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
+fn getEntrypoints(logger_: Logger) !std.ArrayList(SocketAddr) {
+    const logger = logger_.withScope(LOG_SCOPE);
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     errdefer entrypoints.deinit();
 
@@ -1385,7 +1395,7 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 
     for (config.current.gossip.entrypoints) |entrypoint| {
         const socket_addr = SocketAddr.parse(entrypoint) catch brk: {
-            break :brk try resolveSocketAddr(entrypoint, logger);
+            break :brk try resolveSocketAddr(entrypoint, logger.unscoped());
         };
 
         const gop = try entrypoint_set.getOrPut(socket_addr);
@@ -1429,7 +1439,7 @@ const LoadedSnapshot = struct {
 
 fn loadSnapshot(
     allocator: Allocator,
-    logger: Logger,
+    logger_: Logger,
     /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
     maybe_gossip_service: ?*GossipService,
     /// whether to validate the snapshot account data against the metadata
@@ -1437,6 +1447,7 @@ fn loadSnapshot(
     /// optional geyser to write snapshot data to
     geyser_writer: ?*GeyserWriter,
 ) !*LoadedSnapshot {
+    const logger = logger_.withScope(@typeName(@This()));
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
     result.allocator = allocator;
@@ -1448,7 +1459,7 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, maybe_gossip_service, .{
+    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger.unscoped(), maybe_gossip_service, .{
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
@@ -1480,7 +1491,7 @@ fn loadSnapshot(
 
     result.accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = logger.unscoped(),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = geyser_writer,
         .gossip_view = if (maybe_gossip_service) |service| AccountsDB.GossipView.fromService(service) else null,
@@ -1600,7 +1611,7 @@ fn downloadSnapshot() !void {
 
     try downloadSnapshotsFromGossip(
         gpa_allocator,
-        logger,
+        logger.unscoped(),
         if (trusted_validators) |trusted| trusted.items else null,
         &gossip_service,
         snapshot_dir,
@@ -1627,7 +1638,7 @@ fn getTrustedValidators(allocator: Allocator) !?std.ArrayList(Pubkey) {
 
 fn getOrDownloadSnapshots(
     allocator: Allocator,
-    logger: Logger,
+    logger_: Logger,
     gossip_service: ?*GossipService,
     // accounts_db_config: config.AccountsDBConfig,
     options: struct {
@@ -1638,6 +1649,7 @@ fn getOrDownloadSnapshots(
         min_snapshot_download_speed_mbs: usize,
     },
 ) !struct { AllSnapshotFields, SnapshotFiles } {
+    const logger = logger_.withScope(LOG_SCOPE);
     // arg parsing
     const snapshot_dir = options.snapshot_dir;
     const force_unpack_snapshot = options.force_unpack_snapshot;
@@ -1667,7 +1679,7 @@ fn getOrDownloadSnapshots(
         const min_mb_per_sec = options.min_snapshot_download_speed_mbs;
         try downloadSnapshotsFromGossip(
             allocator,
-            logger,
+            logger.unscoped(),
             if (trusted_validators) |trusted| trusted.items else null,
             gossip_service orelse return error.SnapshotsNotFoundAndNoGossipService,
             snapshot_dir,
@@ -1723,7 +1735,7 @@ fn getOrDownloadSnapshots(
             defer archive_file.close();
             try parallelUnpackZstdTarBall(
                 allocator,
-                logger,
+                logger.unscoped(),
                 archive_file,
                 snapshot_dir,
                 n_threads_snapshot_unpack,
@@ -1742,7 +1754,7 @@ fn getOrDownloadSnapshots(
 
             try parallelUnpackZstdTarBall(
                 allocator,
-                logger,
+                logger.unscoped(),
                 archive_file,
                 snapshot_dir,
                 n_threads_snapshot_unpack,
@@ -1756,7 +1768,7 @@ fn getOrDownloadSnapshots(
 
     timer.reset();
     logger.info().log("reading snapshot metadata...");
-    const snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+    const snapshots = try AllSnapshotFields.fromFiles(allocator, logger.unscoped(), snapshot_dir, snapshot_files);
     logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
     return .{ snapshots, snapshot_files };

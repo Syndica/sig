@@ -15,6 +15,9 @@ pub const AccountRef = struct {
     slot: Slot,
     location: AccountLocation,
     next_ptr: ?*AccountRef = null,
+    // NOTE: we store this information to support fast loading.
+    // NOTE: next_index is kept in sync to point to the same data as next_ptr.
+    next_index: ?u64 = 0,
 
     pub const DEFAULT: AccountRef = .{
         .pubkey = Pubkey.ZEROES,
@@ -66,11 +69,12 @@ pub const AccountIndex = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
+        logger_: sig.trace.Logger,
         allocator_config: AllocatorConfig,
         /// number of shards for the pubkey_ref_map
         number_of_shards: usize,
     ) !Self {
+        const logger = logger_.withScope(@typeName((Self)));
         const reference_allocator: ReferenceAllocator = switch (allocator_config) {
             .ram => |ram| blk: {
                 logger.info().logf("using ram memory for account index", .{});
@@ -80,7 +84,7 @@ pub const AccountIndex = struct {
                 var index_dir = try disk.accountsdb_dir.makeOpenPath("index", .{});
                 errdefer index_dir.close();
                 const disk_allocator = try allocator.create(DiskMemoryAllocator);
-                disk_allocator.* = .{ .dir = index_dir, .logger = logger };
+                disk_allocator.* = .{ .dir = index_dir, .logger = logger.withScope(@typeName(DiskMemoryAllocator)) };
                 logger.info().logf("using disk memory (@{s}) for account index", .{sig.utils.fmt.tryRealPath(index_dir, ".")});
                 break :blk .{ .disk = .{ .dma = disk_allocator, .ptr_allocator = allocator } };
             },
@@ -197,7 +201,7 @@ pub const AccountIndex = struct {
 
     /// adds the reference to the index if there is not a duplicate (ie, the same slot).
     /// returns if the reference was inserted.
-    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(self: *Self, account_ref: *AccountRef) bool {
+    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(self: *Self, account_ref: *AccountRef, index: u64) bool {
         // NOTE: the lock on the shard also locks the reference map
         const shard_map, var lock = self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
         defer lock.unlock();
@@ -205,7 +209,7 @@ pub const AccountIndex = struct {
         // init value if dne or append to end of the linked-list
         const map_entry = shard_map.getOrPutAssumeCapacity(account_ref.pubkey);
         if (!map_entry.found_existing) {
-            map_entry.value_ptr.* = .{ .ref_ptr = account_ref };
+            map_entry.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = index };
             return true;
         }
 
@@ -219,6 +223,7 @@ pub const AccountIndex = struct {
             const next_ptr = curr_ref.next_ptr orelse {
                 // end of the list => insert it here
                 curr_ref.next_ptr = account_ref;
+                curr_ref.next_index = index;
                 return true;
             };
             // keep traversing
@@ -229,7 +234,7 @@ pub const AccountIndex = struct {
     /// adds a reference to the index
     /// NOTE: this should only be used when you know the reference does not exist
     /// because we never want duplicate state references in the index
-    pub fn indexRefAssumeCapacity(self: *const Self, account_ref: *AccountRef) void {
+    pub fn indexRefAssumeCapacity(self: *const Self, account_ref: *AccountRef, index: u64) void {
         // NOTE: the lock on the shard also locks the reference map
         const pubkey_ref_map, var lock = self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
         defer lock.unlock();
@@ -237,7 +242,7 @@ pub const AccountIndex = struct {
         // init value if dne or append to end of the linked-list
         const map_entry = pubkey_ref_map.getOrPutAssumeCapacity(account_ref.pubkey);
         if (!map_entry.found_existing) {
-            map_entry.value_ptr.* = .{ .ref_ptr = account_ref };
+            map_entry.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = index };
             return;
         }
 
@@ -247,6 +252,7 @@ pub const AccountIndex = struct {
             curr_ref = next_ref;
         }
         curr_ref.next_ptr = account_ref;
+        curr_ref.next_index = index;
     }
 
     pub fn updateReference(
@@ -289,6 +295,9 @@ pub const AccountIndex = struct {
 
 pub const AccountReferenceHead = struct {
     ref_ptr: *AccountRef,
+    // NOTE: we store this information to support fast loading.
+    // NOTE: next_index is kept in sync to point to the same data as next_ptr.
+    ref_index: u64,
 
     const Self = @This();
 
@@ -548,11 +557,11 @@ test "account index update/remove reference" {
 
     // pubkey -> a
     var ref_a = AccountRef.DEFAULT;
-    index.indexRefAssumeCapacity(&ref_a);
+    index.indexRefAssumeCapacity(&ref_a, 0);
 
     var ref_b = AccountRef.DEFAULT;
     ref_b.slot = 1;
-    index.indexRefAssumeCapacity(&ref_b);
+    index.indexRefAssumeCapacity(&ref_b, 0);
 
     // make sure indexRef works
     {

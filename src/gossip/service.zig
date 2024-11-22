@@ -18,6 +18,7 @@ const UdpSocket = network.Socket;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Logger = sig.trace.log.Logger;
+const ScopedLogger = sig.trace.log.ScopedLogger;
 const Packet = sig.net.Packet;
 const EchoServer = sig.net.echo.Server;
 const SocketAddr = sig.net.SocketAddr;
@@ -164,7 +165,7 @@ pub const GossipService = struct {
     /// only be read by that thread, or it needs a synchronization mechanism.
     entrypoints: ArrayList(Entrypoint),
     ping_cache_rw: RwMux(*PingCache),
-    logger: Logger,
+    logger: ScopedLogger(@typeName(GossipService)),
     thread_pool: *ThreadPool,
     echo_server: EchoServer,
 
@@ -186,6 +187,7 @@ pub const GossipService = struct {
         counter: *Atomic(usize),
         logger: Logger,
     ) !Self {
+        const gossip_logger = logger.withScope(@typeName(GossipService));
         var packet_incoming_channel = try Channel(Packet).create(allocator);
         errdefer packet_incoming_channel.deinit();
 
@@ -201,7 +203,7 @@ pub const GossipService = struct {
             .max_threads = @intCast(n_threads),
             .stack_size = 2 * 1024 * 1024,
         });
-        logger.debug().logf("using n_threads in gossip: {}", .{n_threads});
+        gossip_logger.debug().logf("using n_threads in gossip: {}", .{n_threads});
 
         var gossip_table = try GossipTable.init(gossip_value_allocator, thread_pool);
         errdefer gossip_table.deinit();
@@ -226,7 +228,7 @@ pub const GossipService = struct {
             for (eps) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
         }
 
-        const metrics = try GossipMetrics.init(logger);
+        const metrics = try GossipMetrics.init(gossip_logger);
 
         const ping_cache_ptr = try allocator.create(PingCache);
         ping_cache_ptr.* = try PingCache.init(
@@ -259,7 +261,7 @@ pub const GossipService = struct {
             .entrypoints = entrypoint_list,
             .ping_cache_rw = RwMux(*PingCache).init(ping_cache_ptr),
             .echo_server = echo_server,
-            .logger = logger,
+            .logger = gossip_logger,
             .thread_pool = thread_pool,
             .metrics = metrics,
         };
@@ -342,7 +344,7 @@ pub const GossipService = struct {
     pub fn run(self: *Self, params: RunThreadsParams) !void {
         var manager = ServiceManager.init(
             self.allocator,
-            self.logger,
+            self.logger.unscoped(),
             &self.service_exit,
             "gossip",
             .{},
@@ -375,7 +377,7 @@ pub const GossipService = struct {
         try manager.spawn("gossip readSocket", socket_utils.readSocket, .{
             self.gossip_socket,
             self.packet_incoming_channel,
-            self.logger,
+            self.logger.unscoped(),
             true,
             self.counter,
         }, true);
@@ -390,7 +392,7 @@ pub const GossipService = struct {
         try manager.spawn("gossip sendSocket", socket_utils.sendSocket, .{
             self.gossip_socket,
             self.packet_outgoing_channel,
-            self.logger,
+            self.logger.unscoped(),
             true,
             self.counter,
         }, true);
@@ -398,7 +400,7 @@ pub const GossipService = struct {
         if (params.dump) {
             try manager.spawn("GossipDumpService", GossipDumpService.run, .{.{
                 .allocator = self.allocator,
-                .logger = self.logger,
+                .logger = self.logger.withScope(@typeName(GossipDumpService)),
                 .gossip_table_rw = &self.gossip_table_rw,
                 .counter = self.counter,
             }}, true);
@@ -410,7 +412,7 @@ pub const GossipService = struct {
         gossip_value_allocator: std.mem.Allocator,
         packet: Packet,
         verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
-        logger: Logger,
+        logger: ScopedLogger(@typeName(VerifyMessageEntry)),
 
         pub fn callback(self: *VerifyMessageEntry) !void {
             const packet = self.packet;
@@ -466,7 +468,7 @@ pub const GossipService = struct {
                 .gossip_value_allocator = self.gossip_value_allocator,
                 .verified_incoming_channel = self.verified_incoming_channel,
                 .packet = undefined,
-                .logger = self.logger,
+                .logger = self.logger.withScope(@typeName(VerifyMessageEntry)),
             };
         }
 
@@ -2023,7 +2025,8 @@ pub const GossipMetrics = struct {
 
     // logging details
     _logging_fields: struct {
-        logger: Logger,
+        // Scoping to GossipService instead of logging fields struct.
+        logger: ScopedLogger(@typeName(GossipService)),
         log_interval_micros: i64 = 10 * std.time.us_per_s,
         last_log: i64 = 0,
         last_logged_snapshot: StatsToLog = .{},
@@ -2060,7 +2063,7 @@ pub const GossipMetrics = struct {
         5000, 10000,
     };
 
-    pub fn init(logger: Logger) GetMetricError!Self {
+    pub fn init(logger: ScopedLogger(@typeName(GossipService))) GetMetricError!Self {
         var self: Self = undefined;
         const registry = globalRegistry();
         std.debug.assert(try registry.initFields(&self) == 1);

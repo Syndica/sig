@@ -20,7 +20,7 @@ pub fn SwissMap(
 
         pub const Unmanaged = SwissMapUnmanaged(Key, Value, hash_fn, eq_fn);
 
-        pub inline fn init(allocator: std.mem.Allocator) Self {
+        pub fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .allocator = allocator,
                 .unmanaged = Unmanaged.init(),
@@ -33,6 +33,13 @@ pub fn SwissMap(
             return .{
                 .allocator = allocator,
                 .unmanaged = unmanaged,
+            };
+        }
+
+        pub fn initFromMemory(allocator: std.mem.Allocator, memory: []u8) Self {
+            return .{
+                .allocator = allocator,
+                .unmanaged = Unmanaged.initFromMemory(memory),
             };
         }
 
@@ -136,7 +143,7 @@ pub fn SwissMapUnmanaged(
             value_ptr: *Value,
         };
 
-        pub inline fn init() Self {
+        pub fn init() Self {
             return Self{
                 .groups = undefined,
                 .states = undefined,
@@ -148,6 +155,39 @@ pub fn SwissMapUnmanaged(
         pub fn initCapacity(allocator: std.mem.Allocator, n: usize) std.mem.Allocator.Error!Self {
             var self = init(allocator);
             try self.ensureTotalCapacity(allocator, n);
+            return self;
+        }
+
+        pub fn initFromMemory(memory: []u8) Self {
+            var self = init();
+
+            // from ensureTotalCapacity:
+            // memory.len === n_groups * (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State))
+            const n_groups = memory.len / (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State));
+
+            const group_size = n_groups * @sizeOf([GROUP_SIZE]KeyValue);
+            const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
+            const groups = group_ptr[0..n_groups];
+            const states_ptr: [*]@Vector(GROUP_SIZE, u8) = @alignCast(@ptrCast(memory.ptr + group_size));
+            const states = states_ptr[0..n_groups];
+
+            self._capacity = n_groups * GROUP_SIZE;
+            self.groups = groups;
+            self.states = states;
+            self.memory = memory;
+            self.bit_mask = n_groups - 1;
+
+            self._count = 0;
+            for (0..self.groups.len) |i| {
+                const state_vec = self.states[i];
+                for (0..GROUP_SIZE) |j| {
+                    const state: State = @bitCast(state_vec[j]);
+                    if (state.state == .occupied) {
+                        self._count += 1;
+                    }
+                }
+            }
+
             return self;
         }
 
@@ -497,6 +537,27 @@ pub fn SwissMapUnmanaged(
             unreachable;
         }
     };
+}
+
+test "swissmap load from memory" {
+    const MapT = SwissMap(
+        sig.core.Pubkey,
+        accounts_db.index.AccountRef,
+        accounts_db.index.ShardedPubkeyRefMap.hash,
+        accounts_db.index.ShardedPubkeyRefMap.eql,
+    );
+    var map = MapT.init(std.testing.allocator);
+    defer map.deinit();
+
+    try map.ensureTotalCapacity(100);
+
+    const ref = accounts_db.index.AccountRef.DEFAULT;
+    map.putAssumeCapacity(sig.core.Pubkey.ZEROES, ref);
+
+    var map2 = MapT.initFromMemory(std.testing.allocator, map.unmanaged.memory);
+
+    const get_ref = map2.get(sig.core.Pubkey.ZEROES) orelse return error.MissingAccount;
+    try std.testing.expectEqual(ref, get_ref);
 }
 
 test "swissmap resize" {
