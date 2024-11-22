@@ -506,7 +506,7 @@ pub const BlockstoreReader = struct {
             .initCapacity(self.allocator, slot_transactions.items.len);
         errdefer {
             for (txns_with_statuses.items) |item| {
-                item.deinit(self.db.allocator);
+                item.deinit(self.allocator);
             }
             txns_with_statuses.deinit();
         }
@@ -666,7 +666,11 @@ pub const BlockstoreReader = struct {
 
         const max_root = self.max_root.load(.monotonic);
         var confirmed_unrooted_slots = AutoHashMap(Slot, void).init(self.allocator);
-        var iterator = AncestorIterator{ .db = &self.db, .next_slot = highest_confirmed_slot };
+        var iterator = AncestorIterator{
+            .allocator = self.allocator,
+            .db = &self.db,
+            .next_slot = highest_confirmed_slot,
+        };
         while (try iterator.next()) |slot| {
             if (slot <= max_root) break;
             try confirmed_unrooted_slots.put(slot, {});
@@ -744,7 +748,11 @@ pub const BlockstoreReader = struct {
         var confirmed_unrooted_slots = AutoHashMap(Slot, void).init(self.allocator);
         defer confirmed_unrooted_slots.deinit();
         const max_root = self.max_root.load(.monotonic);
-        var ancestor_iterator = AncestorIterator{ .db = &self.db, .next_slot = highest_slot };
+        var ancestor_iterator = AncestorIterator{
+            .allocator = self.allocator,
+            .db = &self.db,
+            .next_slot = highest_slot,
+        };
         while (try ancestor_iterator.next()) |slot| {
             if (slot <= max_root) break;
             try confirmed_unrooted_slots.put(slot, {});
@@ -1474,17 +1482,27 @@ const BlockstoreRpcApiMetrics = struct {
 };
 
 pub const AncestorIterator = struct {
+    allocator: Allocator,
     db: *BlockstoreDB,
     next_slot: ?Slot,
 
-    pub fn initExclusive(db: *BlockstoreDB, start_slot: Slot) !AncestorIterator {
-        var self = AncestorIterator.initInclusive(db, start_slot);
+    pub fn initExclusive(
+        allocator: Allocator,
+        db: *BlockstoreDB,
+        start_slot: Slot,
+    ) !AncestorIterator {
+        var self = AncestorIterator.initInclusive(allocator, db, start_slot);
         _ = try self.next();
         return self;
     }
 
-    pub fn initInclusive(db: *BlockstoreDB, start_slot: Slot) AncestorIterator {
+    pub fn initInclusive(
+        allocator: Allocator,
+        db: *BlockstoreDB,
+        start_slot: Slot,
+    ) AncestorIterator {
         return .{
+            .allocator = allocator,
             .db = db,
             .next_slot = start_slot,
         };
@@ -1494,7 +1512,7 @@ pub const AncestorIterator = struct {
         if (self.next_slot) |slot| {
             if (slot == 0) {
                 self.next_slot = null;
-            } else if (try self.db.get(self.db.allocator, schema.slot_meta, slot)) |slot_meta| {
+            } else if (try self.db.get(self.allocator, schema.slot_meta, slot)) |slot_meta| {
                 defer slot_meta.deinit();
                 self.next_slot = slot_meta.parent_slot;
             } else {
