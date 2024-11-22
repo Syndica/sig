@@ -479,12 +479,11 @@ pub fn benchmark(
                         const fmt_size = std.fmt.count("{s}({s})", .{ def.name, arg_name });
                         const name_buf = try allocator.alloc(u8, fmt_size);
                         const name = try std.fmt.bufPrint(name_buf, "{s}({s})", .{ def.name, arg_name });
-
                         const metric = Metric{
                             .name = name,
                             .unit = time_unit.toString(),
                             .value = mean,
-                            .maybe_allocator = allocator,
+                            .allocator = allocator,
                         };
                         try metrics.append(metric);
                     }
@@ -551,7 +550,7 @@ pub fn benchmark(
                                 .name = name,
                                 .unit = time_unit.toString(),
                                 .value = value,
-                                .maybe_allocator = allocator,
+                                .allocator = allocator,
                             };
                             try metrics.append(metric);
                         }
@@ -655,13 +654,11 @@ const Metric = struct {
     unit: []const u8,
     value: u64,
     // used to deallocate the metric name which
-    // may be on the heap due to runtime formatting
-    maybe_allocator: ?std.mem.Allocator = null,
+    // is on the heap due to runtime formatting
+    allocator: std.mem.Allocator,
 
     pub fn deinit(self: Metric) void {
-        if (self.maybe_allocator) |alloc| {
-            alloc.free(self.name);
-        }
+        self.allocator.free(self.name);
     }
 };
 
