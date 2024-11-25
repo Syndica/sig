@@ -1104,12 +1104,13 @@ fn fuzzAllocator(
                     .{ item_id_sequence, size },
                 );
                 const data = try subject.alloc(u8, size);
+                errdefer subject.free(data);
                 @memset(data, 0x22);
                 try allocations.append(.{ item_id_sequence, data });
                 item_id_sequence += 1;
             },
             .realloc => {
-                const index = params.random.intRangeAtMost(usize, 0, allocations.items.len - 1);
+                const index = params.random.intRangeLessThan(usize, 0, allocations.items.len);
                 const size = params.random.intRangeAtMost(usize, 1, 1_000_000);
                 const item_id, const item = allocations.items[index];
                 if (params.debug) std.debug.print(
@@ -1121,7 +1122,7 @@ fn fuzzAllocator(
                 allocations.items[index] = .{ item_id, new_data };
             },
             .free => {
-                const index = params.random.intRangeAtMost(usize, 0, allocations.items.len - 1);
+                const index = params.random.intRangeLessThan(usize, 0, allocations.items.len);
                 const item_id, const data = allocations.swapRemove(index);
                 if (params.debug) std.debug.print("allocator.free(item{});\n", .{item_id});
                 subject.free(data);
