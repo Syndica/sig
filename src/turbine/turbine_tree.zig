@@ -298,7 +298,12 @@ pub const TurbineTree = struct {
         std.mem.writeInt(u32, &index_bytes, shred_id.index, .little);
         var shred_bytes: [1]u8 = undefined;
         std.mem.writeInt(u8, &shred_bytes, @intFromEnum(shred_id.shred_type), .little);
-        const values: []const []const u8 = &.{ &slot_bytes, &shred_bytes, &index_bytes, &leader.data };
+        const values: []const []const u8 = &.{
+            &slot_bytes,
+            &shred_bytes,
+            &index_bytes,
+            &leader.data,
+        };
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         for (values) |val| hasher.update(val);
         return ChaChaRng.fromSeed(hasher.finalResult());

@@ -7,7 +7,6 @@ const Allocator = std.mem.Allocator;
 
 const BitFlags = sig.utils.bitflags.BitFlags;
 const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Signature = sig.core.Signature;

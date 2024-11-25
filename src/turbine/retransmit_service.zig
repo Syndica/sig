@@ -435,13 +435,16 @@ pub const RetransmitServiceMetrics = struct {
 
     pub fn maybeLog(self: *RetransmitServiceMetrics, logger: Logger) void {
         if (self.logging_fields.last_log_instant.elapsed().asMillis() > 250) {
-            logger.info().logf("turbine-retransmit: received={} retransmitted={} skipped={}:{}:{}", .{
-                self.shreds_received_count.get(),
-                self.shreds_sent_count.get(),
-                self.shred_byte_filtered_count.get() + self.shred_id_filtered_count.get(),
-                self.shred_byte_filtered_count.get(),
-                self.shred_id_filtered_count.get(),
-            });
+            logger.info().logf(
+                "turbine-retransmit: received={} retransmitted={} skipped={}:{}:{}",
+                .{
+                    self.shreds_received_count.get(),
+                    self.shreds_sent_count.get(),
+                    self.shred_byte_filtered_count.get() + self.shred_id_filtered_count.get(),
+                    self.shred_byte_filtered_count.get(),
+                    self.shred_id_filtered_count.get(),
+                },
+            );
             self.logging_fields.last_log_instant = sig.time.Instant.now();
         }
     }
