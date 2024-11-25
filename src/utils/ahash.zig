@@ -80,11 +80,11 @@ pub const AHasher = struct {
         return std.math.rotl(u64, foldedMultiply(self.buffer, self.pad), rot);
     }
 
-    inline fn update(self: *AHasher, new_data: u64) void {
+    fn update(self: *AHasher, new_data: u64) void {
         self.buffer = foldedMultiply(new_data ^ self.buffer, MULTIPLE);
     }
 
-    inline fn largeUpdate(self: *AHasher, new_data: u128) void {
+    fn largeUpdate(self: *AHasher, new_data: u128) void {
         const high: u64 = @intCast(new_data >> 64); // 0..0[0..64]
         const low: u64 = @intCast((new_data << 64) >> 64); // 0..0[64..127]
         const combined = foldedMultiply(low ^ self.extra_keys[0], high ^ self.extra_keys[1]);
