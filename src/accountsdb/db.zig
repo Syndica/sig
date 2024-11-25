@@ -130,6 +130,7 @@ pub const AccountsDB = struct {
     /// Used to potentially skip the first `computeAccountHashesAndLamports`.
     first_snapshot_load_info: RwMux(?SnapshotGenerationInfo),
     /// Represents the largest slot info used to generate a full snapshot, and optionally an incremental snapshot relative to it, which currently exists.
+    /// It also protects access to the snapshot archive files it refers to - as in, the caller who has a lock on this has a lock on the snapshot archives.
     latest_snapshot_gen_info: RwMux(?SnapshotGenerationInfo),
 
     // TODO: populate this during snapshot load
@@ -1016,6 +1017,9 @@ pub const AccountsDB = struct {
         self: *Self,
         params: ValidateLoadFromSnapshotParams,
     ) !void {
+        const maybe_latest_snapshot_info: *?SnapshotGenerationInfo, var latest_snapshot_info_lg = self.latest_snapshot_gen_info.writeWithLock();
+        defer latest_snapshot_info_lg.unlock();
+
         const maybe_first_snapshot_info: *?SnapshotGenerationInfo, var first_snapshot_info_lg = self.first_snapshot_load_info.writeWithLock();
         defer first_snapshot_info_lg.unlock();
 
@@ -1047,6 +1051,11 @@ pub const AccountsDB = struct {
             return error.IncorrectTotalLamports;
         }
 
+        if (maybe_latest_snapshot_info.*) |latest_snapshot_info| {
+            std.debug.assert(latest_snapshot_info.full.slot == params.full_slot);
+            std.debug.assert(latest_snapshot_info.full.hash.eql(accounts_hash));
+            std.debug.assert(latest_snapshot_info.full.capitalization == total_lamports);
+        }
         maybe_first_snapshot_info.* = .{
             .full = .{
                 .slot = params.full_slot,
@@ -1086,12 +1095,19 @@ pub const AccountsDB = struct {
                 return error.IncorrectAccountsDeltaHash;
             }
 
+            if (p_maybe_first_inc.*) |first_inc| {
+                std.debug.assert(first_inc.slot == inc_slot);
+                std.debug.assert(first_inc.hash.eql(accounts_delta_hash));
+                std.debug.assert(first_inc.capitalization == incremental_lamports);
+            }
             p_maybe_first_inc.* = .{
                 .slot = inc_slot,
                 .hash = accounts_delta_hash,
                 .capitalization = incremental_lamports,
             };
         }
+
+        maybe_latest_snapshot_info.* = maybe_first_snapshot_info.*;
     }
 
     /// multithread entrypoint for getHashesFromIndex
