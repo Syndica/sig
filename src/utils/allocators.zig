@@ -532,7 +532,7 @@ pub const DiskMemoryAllocator = struct {
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
         std.debug.assert(alignment <= std.mem.page_size);
 
-        const file_aligned_size = alignedFileSize(requested_size + @sizeOf(Metadata));
+        const file_aligned_size = alignedFileSize(requested_size);
         const aligned_mmap_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
 
         const file_index = self.count.fetchAdd(1, .monotonic);
@@ -588,8 +588,8 @@ pub const DiskMemoryAllocator = struct {
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
         std.debug.assert(alignment <= std.mem.page_size);
 
-        const old_file_aligned_size = alignedFileSize(buf.len + @sizeOf(Metadata));
-        const new_file_aligned_size = alignedFileSize(requested_size + @sizeOf(Metadata));
+        const old_file_aligned_size = alignedFileSize(buf.len);
+        const new_file_aligned_size = alignedFileSize(requested_size);
 
         if (new_file_aligned_size == old_file_aligned_size) {
             return true;
@@ -642,7 +642,7 @@ pub const DiskMemoryAllocator = struct {
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
         std.debug.assert(alignment <= std.mem.page_size);
 
-        const file_aligned_size = alignedFileSize(buf.len + @sizeOf(Metadata));
+        const file_aligned_size = alignedFileSize(buf.len);
 
         const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
         const metadata_start = file_aligned_size - @sizeOf(Metadata);
