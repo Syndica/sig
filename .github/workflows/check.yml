@@ -151,4 +151,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # Enable alert commit comment
           comment-on-alert: true
-      # Upload the updated cache file for the next job by actions/cache
+          # Upload the updated cache file for the next job by actions/cache
+          # only when running on the main branch
+          save-data-file: ${{ github.ref == "refs/heads/main" }}
