@@ -1,21 +1,21 @@
-# benchmarks 
+# benchmarks
 
-- run all benchmarks: `./zig-out/bin/benchmark` 
+- run all benchmarks: `./zig-out/bin/benchmark`
 - filter specific cases: `./zig-out/bin/benchmark accounts_db_readwrite`
 - benchmark results are written to csv in `results/`
     - this includes the average stats and the raw runtimes
 
 ### dev note
 
-if you want to support multiple return values, you need to include BenchTimeUnits as the first parameter 
+if you want to support multiple return values, you need to include BenchTimeUnits as the first parameter
 to know what time unit we are expecting.
 
 ### example output
 
 #### average stats
 ```
-benchmark, read_time_min, read_time_max, read_time_mean, read_time_variance, benchmark, write_time_min, write_time_max, write_time_mean, write_time_variance, 
-readWriteAccounts(100k accounts (1_slot - ram index - ram accounts)), 172156041, 158767959, 162868245, 15183799545214, 303852750, 286908417, 292925858, 39820330697776, 
+benchmark, read_time_min, read_time_max, read_time_mean, read_time_variance, benchmark, write_time_min, write_time_max, write_time_mean, write_time_variance,
+readWriteAccounts(100k accounts (1_slot - ram index - ram accounts)), 172156041, 158767959, 162868245, 15183799545214, 303852750, 286908417, 292925858, 39820330697776,
 readWriteAccounts(100k accounts (1_slot - disk index - ram accounts)), 165480250, 156170500, 160821658, 7611019088428, 319935833, 286708833, 304248199, 113169780175088,
 ```
 
@@ -48,3 +48,9 @@ python scripts/view_bench.py readWriteAccounts_runtimes.csv readWriteAccounts_ru
 ![example_benchmark_viz](imgs/bench_eg.png)
 - each point on y-axis=0 is a runtime
 - the point on y-axis=1 is the mean with the bar surrounding it being the standard deviation
+
+# tracking benchmarks overtime
+
+two main scripts are used
+- `scripts/collect_benchmarks.sh` is periodically called using a cron job to run the benchmarks on new git commits
+- `scripts/benchmark_server.py` is run as a server to visualize the results over time

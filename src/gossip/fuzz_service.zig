@@ -241,6 +241,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var counter = Atomic(usize).init(0);
 
+    // find leaks
+    var gpa_gossip_alloc = std.heap.GeneralPurposeAllocator(.{
+        .safety = true,
+    }){};
+    defer _ = gpa_gossip_alloc.deinit();
+    const gossip_alloc = gpa_gossip_alloc.allocator();
+
     var gossip_client, const packet_channel, var handle = blk: {
         if (fuzz_sig) {
             // this is who we blast messages at
@@ -250,8 +257,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             var client_contact_info = ContactInfo.init(allocator, client_pubkey, 0, 19);
             try client_contact_info.setSocket(.gossip, client_address);
             var gossip_service_client = try GossipService.init(
-                allocator,
-                allocator,
+                gossip_alloc,
+                gossip_alloc,
                 client_contact_info,
                 client_keypair,
                 null, // we will only recv packets
@@ -334,6 +341,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     std.debug.print("\t=> shutting down...\n", .{});
     counter.store(1, .release);
     handle.join();
+
+    gossip_client.shutdown();
     gossip_client.deinit();
     std.debug.print("\t=> done.\n", .{});
 }
