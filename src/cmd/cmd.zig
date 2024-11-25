@@ -881,7 +881,7 @@ fn shredCollector() !void {
         gossip_manager.deinit();
     }
 
-    const snapshot = try loadSnapshot(allocator, app_base.logger, .{
+    const snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = gossip_service,
         .geyser_writer = null,
         .validate_snapshot = true,
