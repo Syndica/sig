@@ -138,6 +138,10 @@ pub const AccountsDBConfig = struct {
     force_new_snapshot_download: bool = false,
     /// estimate of the number of accounts per file (used for preallocation)
     accounts_per_file_estimate: u64 = 1_500,
+    /// loads accounts-db from pre-existing state which has been saved with the `save_index` option
+    fastload: bool = false,
+    /// saves the accounts index to disk after loading to support fastloading
+    save_index: bool = false,
 };
 
 pub const GeyserConfig = struct {
