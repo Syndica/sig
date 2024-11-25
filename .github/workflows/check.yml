@@ -110,7 +110,7 @@ jobs:
       - name: run gossip
         run: bash scripts/gossip_test.sh 120 # in seconds
 
-  benchmark:
+  benchmarks:
     strategy:
       matrix:
         os: [ubuntu-latest]
