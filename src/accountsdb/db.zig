@@ -68,6 +68,20 @@ pub const ACCOUNT_INDEX_SHARDS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
+const FramesMetadata = struct {
+    /// ref count for the frame
+    rc: []sig.sync.ReferenceCounter,
+
+    /// frequency for the S3_FIFO
+    /// Yes, really, only 0, 1, 2, 3.
+    /// Wonder if it would be faster to pack this.
+    freq: []u2,
+
+    in_queue: []InQueue,
+};
+
+const InQueue = enum(u2) { none, small, main, ghost };
+
 /// Implementation of https://s3fifo.com/
 /// does not store values (!)
 pub const S3_FIFO = struct {
@@ -95,36 +109,83 @@ pub const S3_FIFO = struct {
         allocator.free(self.ghost.buf);
     }
 
-    pub fn insert(self: S3_FIFO, key: u32) void {
-        if (self.main.writableLength() == 0) self.evictMain();
-
-        const in_ghost = for (self.ghost.readableSlice(0)) |g| {
-            if (g == key) break true;
-        } else false;
-
-        if (in_ghost) {
-            if (self.main.writableLength() == 0) self.evictMain();
-            self.main.write(&.{key});
-        } else {
-            if (self.small.writableLength() == 0) self.evictSmall();
-            self.small.write(&.{key});
+    // we don't actually "read" here; again, this cache does not actually store data
+    pub fn read(self: S3_FIFO, key: u32, metadata: FramesMetadata) void {
+        switch (metadata.in_queue[key]) {
+            .small | .main => {
+                metadata.freq[key] +|= 1;
+            },
+            else => {
+                self.insert(key, metadata);
+            },
         }
     }
 
-    pub fn read(self: S3_FIFO, key: u32, freq: []const u2) void {
-        _ = self;
-        freq[key] +|= 1;
-        // noop - to be handled in BufferPool...
+    fn insert(self: S3_FIFO, key: u32, metadata: FramesMetadata) void {
+        switch (metadata.in_queue[key]) {
+            .ghost => {
+                if (self.main.writableLength() == 0) self.evictMain();
+                metadata.in_queue[key] = .main;
+                self.main.write(&.{key});
+            },
+            else => {
+                if (self.small.writableLength() == 0) self.evictSmall();
+                metadata.in_queue[key] = .small;
+                self.small.write(&.{key});
+            },
+        }
     }
 
-    fn evictMain(self: S3_FIFO) void {
-        _ = self;
-        unreachable; // TODO
+    fn cacheSize(self: S3_FIFO) usize {
+        return self.main.buf.len;
     }
 
-    fn evictSmall(self: S3_FIFO) void {
-        _ = self;
-        unreachable; // TODO
+    fn evict(self: S3_FIFO) void {
+        if (self.small.count > self.cacheSize() / 10) {
+            self.evictSmall();
+        } else {
+            self.evictMain();
+        }
+    }
+
+    fn evictSmall(self: S3_FIFO, metadata: FramesMetadata) void {
+        var evicted = false;
+
+        while (!evicted and self.small.count > 0) {
+            const tail = self.small.buf[self.small.head + self.small.count];
+            if (metadata.freq[tail] > 1) {
+                metadata.in_queue[tail] = .main;
+                self.main.write(&.{tail});
+                if (self.main.writableLength() == 0) self.evictMain();
+            } else {
+                metadata.in_queue[tail] = .ghost;
+                self.ghost.write(&.{tail});
+                evicted = true;
+            }
+
+            // remove tail
+            self.small.count -= 1;
+        }
+    }
+
+    fn evictMain(self: S3_FIFO, metadata: FramesMetadata) void {
+        var evicted = false;
+
+        while (!evicted and self.main.count > 0) {
+            const tail = self.main.buf[self.main.head + self.main.count];
+            if (metadata.freq[tail] > 0) {
+                // insert tail to head
+                std.debug.assert(self.main.writableLength() > 0);
+                std.mem.copyBackwards(u8, self.main.buf[self.main.head + 1 ..], self.main.buf[self.main.head..]);
+                self.main.buf[self.main.head] = tail;
+
+                metadata.freq[tail] -= 1;
+            } else {
+                // remove tail
+                self.main.count -= 1;
+                evicted = true;
+            }
+        }
     }
 };
 
@@ -154,14 +215,7 @@ pub const BufferPool = struct {
     file_frames: std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex),
 
     frames: []Frame,
-
-    /// ref count for the frame
-    frames_rc: []sig.sync.ReferenceCounter,
-
-    /// frequency for the S3_FIFO
-    /// Yes, really, only 0, 1, 2, 3.
-    /// Wonder if it would be faster to pack this.
-    frames_freq: []u2,
+    frames_metadata: []FramesMetadata,
 
     /// used for eviction to free less popular (rc=0) frames first
     fifo: S3_FIFO,
@@ -174,7 +228,12 @@ pub const BufferPool = struct {
         // is std.mem.page_size necessary? Nope! But for something this large, might as well?
         // sidenote, might as well just use the page allocator
         const frames = try allocator.alignedAlloc(Frame, num_frames, std.mem.page_size);
-        const frames_rc = try allocator.alignedAlloc(sig.sync.ReferenceCounter, num_frames, std.mem.page_size);
+
+        const frames_metadata = FramesMetadata{
+            .rc = try allocator.alignedAlloc(sig.sync.ReferenceCounter, num_frames, std.mem.page_size),
+            .freq = try allocator.alignedAlloc(u2, num_frames, std.mem.page_size),
+            .in_queue = try allocator.alignedAlloc(InQueue, num_frames, std.mem.page_size),
+        };
 
         const main_fifo_size = (num_frames * 100) / 90;
         const small_fifo_size = num_frames * 100 - main_fifo_size;
@@ -183,7 +242,7 @@ pub const BufferPool = struct {
             .allocator = allocator,
             .snapshot_dir = snapshot_dir,
             .frames = frames,
-            .frames_rc = frames_rc,
+            .frames_metadata = frames_metadata,
             .file_frames = .{},
             .fifo = S3_FIFO.init(allocator, small_fifo_size, main_fifo_size),
         };
