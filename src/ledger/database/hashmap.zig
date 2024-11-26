@@ -9,6 +9,7 @@ const RwLock = std.Thread.RwLock;
 const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
+const BatchAllocator = sig.utils.allocators.BatchAllocator;
 const IteratorDirection = database.interface.IteratorDirection;
 const Logger = sig.trace.Logger;
 const SortedMap = sig.utils.collections.SortedMap;
@@ -20,6 +21,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         ram_allocator: Allocator,
         disk_allocator: Allocator,
+        batch_allocator_state: *BatchAllocator,
         disk_allocator_state: *DiskMemoryAllocator,
         maps: []SharedHashMap,
         /// shared lock is required to call locking map methods.
@@ -37,12 +39,19 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             logger.info().log("Initializing SharedHashMapDB");
             const actual_path = try std.fmt.allocPrint(allocator, "{s}/hashmapdb", .{path});
             defer allocator.free(actual_path);
+
             const disk_allocator = try allocator.create(DiskMemoryAllocator);
             disk_allocator.* = DiskMemoryAllocator{
                 .dir = try std.fs.cwd().makeOpenPath(actual_path, .{}),
                 .logger = logger.withScope(@typeName(DiskMemoryAllocator)),
                 .mmap_ratio = 8,
             };
+            const batch_allocator = try allocator.create(BatchAllocator);
+            batch_allocator.* = BatchAllocator{
+                .backing_allocator = std.testing.allocator,
+                .batch_size = 1 << 30,
+            };
+
             var maps = try allocator.alloc(SharedHashMap, column_families.len);
             const lock = try allocator.create(RwLock);
             lock.* = .{};
@@ -55,8 +64,9 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             }
             return .{
                 .ram_allocator = allocator,
-                .disk_allocator = disk_allocator.allocator(),
+                .disk_allocator = batch_allocator.allocator(),
                 .disk_allocator_state = disk_allocator,
+                .batch_allocator_state = batch_allocator,
                 .maps = maps,
                 .transaction_lock = lock,
             };
