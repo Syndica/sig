@@ -405,96 +405,71 @@ test "findSlotsToClean" {
     const registry = sig.prometheus.globalRegistry();
     const logger = .noop;
 
-    // Start a new scope so that the db instance can be dropped at the end of the scope
-    // This ensures that the memtable is flushed to disk, which is needed in other
-    // to retrive live files, in the rest of the test.
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    // set highest and lowest slot by inserting slot_meta
+    var lowest_slot_meta = ledger.meta.SlotMeta.init(allocator, 10, null);
+    defer lowest_slot_meta.deinit();
+    lowest_slot_meta.received = 10;
+
+    var highest_slot_meta = ledger.meta.SlotMeta.init(allocator, 20, null);
+    defer highest_slot_meta.deinit();
+    highest_slot_meta.received = 20;
+
     {
-        var db = try TestDB.init(@src());
-        defer db.deinit();
-
-        var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
-        var max_root = std.atomic.Value(Slot).init(0);
-
-        var reader = try BlockstoreReader.init(
-            allocator,
-            logger,
-            db,
-            registry,
-            &lowest_cleanup_slot,
-            &max_root,
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        try write_batch.put(
+            ledger.schema.schema.slot_meta,
+            lowest_slot_meta.slot,
+            lowest_slot_meta,
         );
-
-        // set highest and lowest slot by inserting slot_meta
-        var lowest_slot_meta = ledger.meta.SlotMeta.init(allocator, 10, null);
-        defer lowest_slot_meta.deinit();
-        lowest_slot_meta.received = 10;
-
-        var highest_slot_meta = ledger.meta.SlotMeta.init(allocator, 20, null);
-        defer highest_slot_meta.deinit();
-        highest_slot_meta.received = 20;
-
-        {
-            var write_batch = try db.initWriteBatch();
-            defer write_batch.deinit();
-            try write_batch.put(
-                ledger.schema.schema.slot_meta,
-                lowest_slot_meta.slot,
-                lowest_slot_meta,
-            );
-            try write_batch.put(
-                ledger.schema.schema.slot_meta,
-                highest_slot_meta.slot,
-                highest_slot_meta,
-            );
-            try db.commit(&write_batch);
-        }
-
-        const r = try findSlotsToClean(&reader, 0, 100);
-        try std.testing.expectEqual(false, r.should_clean);
-        try std.testing.expectEqual(0, r.total_shreds);
-        try std.testing.expectEqual(0, r.highest_slot_to_purge);
-        var data_shred = try ledger.shred.DataShred.zeroedForTest(allocator);
-        defer data_shred.deinit();
-        {
-            var write_batch = try db.initWriteBatch();
-            defer write_batch.deinit();
-            for (0..1000) |i| {
-                try write_batch.put(ledger.schema.schema.data_shred, .{ 19, i }, data_shred.payload);
-            }
-            try db.commit(&write_batch);
-        }
-        // When implementation is not rocksdb, we do not need to flush memtable to disk to be able to assert.
-        if (build_options.blockstore_db != .rocksdb) {
-            const r2 = try findSlotsToClean(&reader, 0, 100);
-            try std.testing.expectEqual(true, r2.should_clean);
-            try std.testing.expectEqual(1000, r2.total_shreds);
-            try std.testing.expectEqual(0, r2.highest_slot_to_purge);
-        }
+        try write_batch.put(
+            ledger.schema.schema.slot_meta,
+            highest_slot_meta.slot,
+            highest_slot_meta,
+        );
+        try db.commit(&write_batch);
     }
 
-    // When implementation is rocksdb, we do need to flush memtable to disk, in the preceeding scope
-    // to be able to assert.
+    const r = try findSlotsToClean(&reader, 0, 100);
+    try std.testing.expectEqual(false, r.should_clean);
+    try std.testing.expectEqual(0, r.total_shreds);
+    try std.testing.expectEqual(0, r.highest_slot_to_purge);
+    var data_shred = try ledger.shred.DataShred.zeroedForTest(allocator);
+    defer data_shred.deinit();
+    {
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        for (0..1000) |i| {
+            try write_batch.put(ledger.schema.schema.data_shred, .{ 19, i }, data_shred.payload);
+        }
+        try db.commit(&write_batch);
+    }
+    // When implementation is rocksdb, we need to flush memtable to disk to be able to assert.
+    // We do that by deiniting the current db, which triggers the flushing.
     if (build_options.blockstore_db == .rocksdb) {
-        var db = try TestDB.reuseBlockstore(@src());
-        defer db.deinit();
-
-        var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
-        var max_root = std.atomic.Value(Slot).init(0);
-
-        var reader = try BlockstoreReader.init(
-            allocator,
-            logger,
-            db,
-            registry,
-            &lowest_cleanup_slot,
-            &max_root,
-        );
-
-        const r2 = try findSlotsToClean(&reader, 0, 100);
-        try std.testing.expectEqual(true, r2.should_clean);
-        try std.testing.expectEqual(1000, r2.total_shreds);
-        try std.testing.expectEqual(0, r2.highest_slot_to_purge);
+        db.deinit();
+        db = try TestDB.reuseBlockstore(@src());
+        reader.db = db;
     }
+    const r2 = try findSlotsToClean(&reader, 0, 100);
+    try std.testing.expectEqual(true, r2.should_clean);
+    try std.testing.expectEqual(1000, r2.total_shreds);
+    try std.testing.expectEqual(0, r2.highest_slot_to_purge);
 }
 
 test "purgeSlots" {
