@@ -1050,6 +1050,7 @@ pub fn runFuzzer(seed: u64, args: *std.process.ArgIterator) !void {
             .debug = debug,
         }, mmap_ratio);
     }
+    if (gpa.deinit() == .leak) return error.Leaked;
 }
 
 fn fuzzDiskMemoryAllocator(config: AllocatorFuzzParams, mmap_ratio: u16) !void {
