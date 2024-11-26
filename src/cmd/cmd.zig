@@ -524,6 +524,7 @@ pub fn run() !void {
                             &accounts_per_file_estimate,
                             &fastload_option,
                             &save_index_option,
+                            &network_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
