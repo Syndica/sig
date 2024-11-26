@@ -1559,6 +1559,10 @@ fn downloadSnapshot() !void {
         app_base.deinit();
     }
 
+    if (app_base.entrypoints.items.len == 0) {
+        @panic("cannot download a snapshot with no entrypoints");
+    }
+
     const gossip_service, var service_manager =
         try startGossip(gpa_allocator, &app_base, &.{});
     defer {
