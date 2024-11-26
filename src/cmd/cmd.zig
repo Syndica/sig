@@ -808,7 +808,10 @@ fn validator() !void {
 fn shredCollector() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
-    defer app_base.deinit();
+    defer {
+        if (!app_base.closed) app_base.shutdown();
+        app_base.deinit();
+    }
 
     const genesis_file_path = try config.current.genesisFilePath() orelse return error.GenesisPathNotProvided;
     const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
@@ -821,7 +824,7 @@ fn shredCollector() !void {
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
     defer {
-        app_base.shutdown();
+        if (!app_base.closed) app_base.shutdown();
         gossip_service.shutdown();
         gossip_manager.deinit();
     }
