@@ -36,7 +36,7 @@ pub fn runShredProcessor(
     leader_schedule: sig.core.leader_schedule.SlotLeaderProvider,
 ) !void {
     const logger = logger_.withScope(LOG_SCOPE);
-    // var shred_inserter = shred_inserter_;
+    var shred_inserter = shred_inserter_;
     var shreds: ArrayListUnmanaged(Shred) = .{};
     var is_repaired: ArrayListUnmanaged(bool) = .{};
     var error_context: ErrorContext = .{};
@@ -66,15 +66,13 @@ pub fn runShredProcessor(
         }
         metrics.insertion_batch_size.observe(shreds.items.len);
         metrics.passed_to_inserter_count.add(shreds.items.len);
-        _ = shred_inserter_;
-        _ = leader_schedule;
-        // _ = try shred_inserter.insertShreds(
-        //     shreds.items,
-        //     is_repaired.items,
-        //     leader_schedule,
-        //     false,
-        //     null,
-        // );
+        _ = try shred_inserter.insertShreds(
+            shreds.items,
+            is_repaired.items,
+            leader_schedule,
+            false,
+            null,
+        );
     }
 }
 
