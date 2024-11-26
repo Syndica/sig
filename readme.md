@@ -40,6 +40,9 @@ src/
 ├─ benchmarks.zig 
 ```
 
+## 📖 Docs
+
+[https://syndica.github.io/sig/](https://syndica.github.io/sig/)
 
 ## 📋 Setup
 

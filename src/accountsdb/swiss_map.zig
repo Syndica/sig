@@ -20,7 +20,7 @@ pub fn SwissMap(
 
         pub const Unmanaged = SwissMapUnmanaged(Key, Value, hash_fn, eq_fn);
 
-        pub inline fn init(allocator: std.mem.Allocator) Self {
+        pub fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .allocator = allocator,
                 .unmanaged = Unmanaged.init(),
@@ -33,6 +33,13 @@ pub fn SwissMap(
             return .{
                 .allocator = allocator,
                 .unmanaged = unmanaged,
+            };
+        }
+
+        pub fn initFromMemory(allocator: std.mem.Allocator, memory: []u8) Self {
+            return .{
+                .allocator = allocator,
+                .unmanaged = Unmanaged.initFromMemory(memory),
             };
         }
 
@@ -136,7 +143,7 @@ pub fn SwissMapUnmanaged(
             value_ptr: *Value,
         };
 
-        pub inline fn init() Self {
+        pub fn init() Self {
             return Self{
                 .groups = undefined,
                 .states = undefined,
@@ -148,6 +155,39 @@ pub fn SwissMapUnmanaged(
         pub fn initCapacity(allocator: std.mem.Allocator, n: usize) std.mem.Allocator.Error!Self {
             var self = init(allocator);
             try self.ensureTotalCapacity(allocator, n);
+            return self;
+        }
+
+        pub fn initFromMemory(memory: []u8) Self {
+            var self = init();
+
+            // from ensureTotalCapacity:
+            // memory.len === n_groups * (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State))
+            const n_groups = memory.len / (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State));
+
+            const group_size = n_groups * @sizeOf([GROUP_SIZE]KeyValue);
+            const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
+            const groups = group_ptr[0..n_groups];
+            const states_ptr: [*]@Vector(GROUP_SIZE, u8) = @alignCast(@ptrCast(memory.ptr + group_size));
+            const states = states_ptr[0..n_groups];
+
+            self._capacity = n_groups * GROUP_SIZE;
+            self.groups = groups;
+            self.states = states;
+            self.memory = memory;
+            self.bit_mask = n_groups - 1;
+
+            self._count = 0;
+            for (0..self.groups.len) |i| {
+                const state_vec = self.states[i];
+                for (0..GROUP_SIZE) |j| {
+                    const state: State = @bitCast(state_vec[j]);
+                    if (state.state == .occupied) {
+                        self._count += 1;
+                    }
+                }
+            }
+
             return self;
         }
 
@@ -499,6 +539,27 @@ pub fn SwissMapUnmanaged(
     };
 }
 
+test "swissmap load from memory" {
+    const MapT = SwissMap(
+        sig.core.Pubkey,
+        accounts_db.index.AccountRef,
+        accounts_db.index.ShardedPubkeyRefMap.hash,
+        accounts_db.index.ShardedPubkeyRefMap.eql,
+    );
+    var map = MapT.init(std.testing.allocator);
+    defer map.deinit();
+
+    try map.ensureTotalCapacity(100);
+
+    const ref = accounts_db.index.AccountRef.DEFAULT;
+    map.putAssumeCapacity(sig.core.Pubkey.ZEROES, ref);
+
+    var map2 = MapT.initFromMemory(std.testing.allocator, map.unmanaged.memory);
+
+    const get_ref = map2.get(sig.core.Pubkey.ZEROES) orelse return error.MissingAccount;
+    try std.testing.expectEqual(ref, get_ref);
+}
+
 test "swissmap resize" {
     var map = SwissMap(
         sig.core.Pubkey,
@@ -624,7 +685,7 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
 
 pub const BenchmarkSwissMap = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 100;
+    pub const max_iterations = 1_000;
 
     pub const BenchArgs = struct {
         n_accounts: usize,
@@ -632,14 +693,6 @@ pub const BenchmarkSwissMap = struct {
     };
 
     pub const args = [_]BenchArgs{
-        BenchArgs{
-            .n_accounts = 100_000,
-            .name = "100k accounts",
-        },
-        BenchArgs{
-            .n_accounts = 500_000,
-            .name = "500k accounts",
-        },
         BenchArgs{
             .n_accounts = 1_000_000,
             .name = "1m accounts",
@@ -649,8 +702,9 @@ pub const BenchmarkSwissMap = struct {
     pub fn swissmapReadWriteBenchmark(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
         read_time: u64,
         write_time: u64,
-        read_speedup_vs_std: f32,
-        write_speedup_vs_std: f32,
+        // // NOTE: these are useful for debugging, but not for CI/CD
+        // read_speedup_vs_std: f32,
+        // write_speedup_vs_std: f32,
     } {
         const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
         const n_accounts = bench_args.n_accounts;
@@ -674,36 +728,37 @@ pub const BenchmarkSwissMap = struct {
             null,
         );
 
-        // this is what we compare the swiss map to
-        // this type was the best one I could find
-        const InnerT = std.HashMap(sig.core.Pubkey, *accounts_db.index.AccountRef, struct {
-            pub fn hash(self: @This(), key: sig.core.Pubkey) u64 {
-                _ = self;
-                return accounts_db.index.ShardedPubkeyRefMap.hash(key);
-            }
-            pub fn eql(self: @This(), key1: sig.core.Pubkey, key2: sig.core.Pubkey) bool {
-                _ = self;
-                return accounts_db.index.ShardedPubkeyRefMap.eql(key1, key2);
-            }
-        }, std.hash_map.default_max_load_percentage);
+        // // NOTE : can uncomment this code to measure speedup vs std.HashMap
+        // // this is what we compare the swiss map to
+        // // this type was the best one I could find
+        // const InnerT = std.HashMap(sig.core.Pubkey, *accounts_db.index.AccountRef, struct {
+        //     pub fn hash(self: @This(), key: sig.core.Pubkey) u64 {
+        //         _ = self;
+        //         return accounts_db.index.ShardedPubkeyRefMap.hash(key);
+        //     }
+        //     pub fn eql(self: @This(), key1: sig.core.Pubkey, key2: sig.core.Pubkey) bool {
+        //         _ = self;
+        //         return accounts_db.index.ShardedPubkeyRefMap.eql(key1, key2);
+        //     }
+        // }, std.hash_map.default_max_load_percentage);
 
-        const std_write_time, const std_read_time = try benchGetOrPut(
-            BenchHashMap(InnerT),
-            allocator,
-            account_refs,
-            pubkeys,
-            null,
-        );
+        // const std_write_time, const std_read_time = try benchGetOrPut(
+        //     BenchHashMap(InnerT),
+        //     allocator,
+        //     account_refs,
+        //     pubkeys,
+        //     null,
+        // );
 
-        // NOTE: if (speed_up < 1.0) "swissmap is slower" else "swissmap is faster";
-        const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos())) / @as(f32, @floatFromInt(write_time.asNanos()));
-        const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
+        // // NOTE: if (speed_up < 1.0) "swissmap is slower" else "swissmap is faster";
+        // const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos())) / @as(f32, @floatFromInt(write_time.asNanos()));
+        // const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
 
         return .{
             .read_time = units.convertDuration(read_time),
             .write_time = units.convertDuration(write_time),
-            .read_speedup_vs_std = read_speedup,
-            .write_speedup_vs_std = write_speedup,
+            // .read_speedup_vs_std = read_speedup,
+            // .write_speedup_vs_std = write_speedup,
         };
     }
 };

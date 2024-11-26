@@ -278,6 +278,22 @@ pub fn run() !void {
         .value_name = "accounts_per_file_estimate",
     };
 
+    var fastload_option = cli.Option{
+        .long_name = "fastload",
+        .help = "fastload the accounts db",
+        .value_ref = cli.mkRef(&config.current.accounts_db.fastload),
+        .required = false,
+        .value_name = "fastload",
+    };
+
+    var save_index_option = cli.Option{
+        .long_name = "save-index",
+        .help = "save the account index to disk",
+        .value_ref = cli.mkRef(&config.current.accounts_db.save_index),
+        .required = false,
+        .value_name = "save_index",
+    };
+
     // geyser options
     var enable_geyser_option = cli.Option{
         .long_name = "enable-geyser",
@@ -407,6 +423,8 @@ pub fn run() !void {
                             &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
+                            &fastload_option,
+                            &save_index_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -425,7 +443,7 @@ pub fn run() !void {
                     &cli.Command{
                         .name = "shred-collector",
                         .description = .{ .one_line = "Run the shred collector to collect and store shreds", .detailed = 
-                        \\ This command runs the shred collector without running the full validator 
+                        \\ This command runs the shred collector without running the full validator
                         \\ (mainly excluding the accounts-db setup).
                         \\
                         \\ NOTE: this means that this command *requires* a leader schedule to be provided
@@ -504,6 +522,8 @@ pub fn run() !void {
                             &number_of_index_shards_option,
                             &genesis_file_path,
                             &accounts_per_file_estimate,
+                            &fastload_option,
+                            &save_index_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -597,7 +617,7 @@ pub fn run() !void {
                         .description = .{
                             .one_line = "Test transaction sender service",
                             .detailed =
-                            \\Simulates a stream of transaction being sent to the transaction sender by 
+                            \\Simulates a stream of transaction being sent to the transaction sender by
                             \\running a mock transaction generator thread. For the moment this just sends
                             \\transfer transactions between to hard coded testnet accounts.
                             ,
@@ -1212,39 +1232,6 @@ const AppBase = struct {
     }
 };
 
-/// Initialize an instance of GossipService and configure with CLI arguments
-fn initGossip(
-    logger_: Logger,
-    my_keypair: KeyPair,
-    exit: *Atomic(usize),
-    entrypoints: []const SocketAddr,
-    shred_version: u16,
-    gossip_host_ip: IpAddr,
-    sockets: []const struct { tag: SocketTag, port: u16 },
-) !GossipService {
-    const logger = logger_.withScope(LOG_SCOPE);
-    const gossip_port: u16 = config.current.gossip.port;
-    logger.info().logf("gossip host: {any}", .{gossip_host_ip});
-    logger.info().logf("gossip port: {d}", .{gossip_port});
-
-    // setup contact info
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-    var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
-    try contact_info.setSocket(.gossip, SocketAddr.init(gossip_host_ip, gossip_port));
-    for (sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(gossip_host_ip, s.port));
-    contact_info.shred_version = shred_version;
-
-    return try GossipService.init(
-        gpa_allocator,
-        gossip_value_gpa_allocator,
-        contact_info,
-        my_keypair,
-        entrypoints,
-        exit,
-        logger.unscoped(),
-    );
-}
-
 fn startGossip(
     allocator: Allocator,
     app_base: *AppBase,
@@ -1288,14 +1275,6 @@ fn startGossip(
     }, &manager);
 
     return .{ service, manager };
-}
-
-fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
-    const gossip_config = config.current.gossip;
-    return gossip_service.run(.{
-        .spy_node = gossip_config.spy_node,
-        .dump = gossip_config.dump,
-    });
 }
 
 /// determine our shred version and ip. in the solana-labs client, the shred version
@@ -1507,6 +1486,8 @@ fn loadSnapshot(
         n_threads_snapshot_load,
         validate_snapshot,
         config.current.accounts_db.accounts_per_file_estimate,
+        config.current.accounts_db.fastload,
+        config.current.accounts_db.save_index,
     );
     errdefer snapshot_fields.deinit(allocator);
     result.snapshot_fields.was_collapsed = true;
@@ -1569,35 +1550,17 @@ fn readStatusCache(allocator: Allocator, snapshot_dir: std.fs.Dir) !StatusCache 
 
 /// entrypoint to download snapshot
 fn downloadSnapshot() !void {
-    const logger = try spawnLogger();
-    defer logger.deinit();
+    var app_base = try AppBase.init(gpa_allocator);
+    errdefer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
-    var counter = std.atomic.Value(usize).init(0);
-    const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
-    const entrypoints = try getEntrypoints(logger);
-    defer entrypoints.deinit();
-
-    const my_data = try getMyDataFromIpEcho(logger, entrypoints.items);
-
-    var gossip_service = try initGossip(
-        .noop,
-        my_keypair,
-        &counter,
-        entrypoints.items,
-        my_data.shred_version,
-        my_data.ip,
-        &.{},
-    );
-    defer gossip_service.deinit();
-
-    const handle = try std.Thread.spawn(
-        .{},
-        runGossipWithConfigValues,
-        .{&gossip_service},
-    );
+    const gossip_service, var service_manager =
+        try startGossip(gpa_allocator, &app_base, &.{});
     defer {
         gossip_service.shutdown();
-        handle.join();
+        service_manager.deinit();
     }
 
     const trusted_validators = try getTrustedValidators(gpa_allocator);
@@ -1611,9 +1574,9 @@ fn downloadSnapshot() !void {
 
     try downloadSnapshotsFromGossip(
         gpa_allocator,
-        logger.unscoped(),
+        app_base.logger.unscoped(),
         if (trusted_validators) |trusted| trusted.items else null,
-        &gossip_service,
+        gossip_service,
         snapshot_dir,
         @intCast(min_mb_per_sec),
     );

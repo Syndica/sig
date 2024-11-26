@@ -278,16 +278,36 @@ pub const AccountsDB = struct {
         n_threads: u32,
         validate: bool,
         accounts_per_file_estimate: u64,
+        should_fastload: bool,
+        save_index: bool,
     ) !SnapshotFields {
         const snapshot_fields = try snapshot_fields_and_paths.collapse();
 
-        const load_duration = try self.loadFromSnapshot(
-            snapshot_fields.accounts_db_fields,
-            n_threads,
-            allocator,
-            accounts_per_file_estimate,
-        );
-        self.logger.info().logf("loaded from snapshot in {s}", .{load_duration});
+        if (should_fastload) {
+            var timer = try sig.time.Timer.start();
+            var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
+            defer fastload_dir.close();
+            self.logger.info().log("fast loading accountsdb...");
+            try self.fastload(fastload_dir, snapshot_fields.accounts_db_fields);
+            self.logger.info().logf("loaded from snapshot in {s}", .{timer.read()});
+        } else {
+            const load_duration = try self.loadFromSnapshot(
+                snapshot_fields.accounts_db_fields,
+                n_threads,
+                allocator,
+                accounts_per_file_estimate,
+            );
+            self.logger.info().logf("loaded from snapshot in {s}", .{load_duration});
+        }
+
+        // no need to re-save if we just loaded from a fastload
+        if (!should_fastload and save_index) {
+            var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
+            defer fastload_dir.close();
+
+            self.logger.info().log("saving account index state to disk...");
+            try self.account_index.saveToDisk(fastload_dir, self.logger);
+        }
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.full;
@@ -307,6 +327,56 @@ pub const AccountsDB = struct {
         }
 
         return snapshot_fields;
+    }
+
+    pub fn fastload(
+        self: *Self,
+        dir: std.fs.Dir,
+        snapshot_manifest: AccountsDbFields,
+    ) !void {
+        var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
+        defer accounts_dir.close();
+
+        const n_account_files = snapshot_manifest.file_map.count();
+        self.logger.info().logf("found {d} account files", .{n_account_files});
+        std.debug.assert(n_account_files > 0);
+
+        const file_map, var file_map_lg = self.file_map.writeWithLock();
+        defer file_map_lg.unlock();
+        try file_map.ensureTotalCapacity(self.allocator, n_account_files);
+
+        self.logger.info().log("loading account files");
+        const file_info_map = snapshot_manifest.file_map;
+        for (file_info_map.keys(), file_info_map.values()) |slot, file_info| {
+            // read accounts file
+            var accounts_file = blk: {
+                const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id.toInt() });
+                const accounts_file = accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write }) catch |err| {
+                    self.logger.err().logf("Failed to open accounts/{s}: {s}", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    return err;
+                };
+                defer accounts_file.close();
+
+                break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
+                    self.logger.err().logf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    return err;
+                };
+            };
+            errdefer accounts_file.deinit();
+
+            // NOTE: no need to validate since we are fast loading
+
+            // track file
+            const file_id = file_info.id;
+            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
+            self.largest_file_id = FileId.max(self.largest_file_id, file_id);
+            _ = self.largest_rooted_slot.fetchMax(slot, .release);
+            self.largest_flushed_slot.store(self.largest_rooted_slot.load(.acquire), .release);
+        }
+
+        // NOTE: index loading was the most expensive part which we fastload here
+        self.logger.info().log("loading account index");
+        try self.account_index.loadFromDisk(dir, self.logger);
     }
 
     /// loads the account files and generates the account index from a snapshot
@@ -4125,7 +4195,7 @@ test "generate snapshot & update gossip snapshot hashes" {
 
     // pretend `all_snapshot_fields`/`snap_files` refers to `tmp_snap_dir`, even though the archive file isn't actually in there, just the unpacked contents.
     // TODO: this is not nice, make sure the API for loading from archives outside of the snapshot dir is improved.
-    _ = try accounts_db.loadWithDefaults(allocator, &all_snapshot_fields, 1, true, 1500);
+    _ = try accounts_db.loadWithDefaults(allocator, &all_snapshot_fields, 1, true, 1500, false, false);
 
     var bank_fields = try BankFields.initRandom(allocator, random, 128);
     defer bank_fields.deinit(allocator);
@@ -4308,8 +4378,8 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 };
 
 pub const BenchmarkAccountsDB = struct {
-    pub const min_iterations = 1;
-    pub const max_iterations = 5;
+    pub const min_iterations = 3;
+    pub const max_iterations = 10;
 
     pub const MemoryType = AccountIndex.AllocatorConfig.Tag;
 
@@ -4332,61 +4402,61 @@ pub const BenchmarkAccountsDB = struct {
     };
 
     pub const args = [_]BenchArgs{
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .ram,
-            .index = .ram,
-            .name = "100k accounts (1_slot - ram index - ram accounts - lru disabled)",
-        },
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .ram,
-            .index = .disk,
-            .name = "100k accounts (1_slot - disk index - ram accounts - lru disabled)",
-        },
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .disk,
-            .name = "100k accounts (1_slot - disk index - disk accounts - lru disabled)",
-        },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .ram,
+        //     .index = .ram,
+        //     .name = "100k accounts (1_slot - ram index - ram accounts - lru disabled)",
+        // },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .ram,
+        //     .index = .disk,
+        //     .name = "100k accounts (1_slot - disk index - ram accounts - lru disabled)",
+        // },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .disk,
+        //     .name = "100k accounts (1_slot - disk index - disk accounts - lru disabled)",
+        // },
 
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .ram,
-            .name = "100k accounts (1_slot - ram index - disk accounts - lru disabled)",
-        },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .ram,
+        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru disabled)",
+        // },
 
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .ram,
-            .lru_size = 1_000,
-            .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=1_000)",
-        },
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .ram,
-            .lru_size = 10_000,
-            .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=10_000)",
-        },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .ram,
+        //     .lru_size = 1_000,
+        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=1_000)",
+        // },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .ram,
+        //     .lru_size = 10_000,
+        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=10_000)",
+        // },
 
-        BenchArgs{
-            .n_accounts = 100_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .ram,
-            .lru_size = 100_000,
-            .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=100_000)",
-        },
+        // BenchArgs{
+        //     .n_accounts = 100_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .ram,
+        //     .lru_size = 100_000,
+        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=100_000)",
+        // },
 
         // // test accounts in ram
         // BenchArgs{
@@ -4404,21 +4474,24 @@ pub const BenchmarkAccountsDB = struct {
         //     .name = "10k accounts (10_slots - ram index - ram accounts)",
         // },
 
-        // // tests large number of accounts on disk
-        // BenchArgs{
-        //     .n_accounts = 10_000,
-        //     .slot_list_len = 10,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "10k accounts (10_slots - ram index - disk accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 500_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "500k accounts (1_slot - ram index - disk accounts)",
-        // },
+        // tests large number of accounts on disk
+        // NOTE: the other tests are useful for understanding performance for but CI,
+        // these are the most useful as they are the most similar to production
+        BenchArgs{
+            .n_accounts = 10_000,
+            .slot_list_len = 10,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "10k accounts (10_slots - ram index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 500_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "500k accounts (1_slot - ram index - disk accounts)",
+        },
+
         // BenchArgs{
         //     .n_accounts = 500_000,
         //     .slot_list_len = 3,
