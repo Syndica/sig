@@ -258,10 +258,8 @@ pub fn hashToU64(hash: *const Hash) u64 {
 
 test "building pull filters" {
     const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
-    const ThreadPool = sig.sync.ThreadPool;
 
-    var tp = ThreadPool.init(.{});
-    var gossip_table = try GossipTable.init(std.testing.allocator, &tp);
+    var gossip_table = try GossipTable.init(std.testing.allocator);
     defer gossip_table.deinit();
 
     // insert a some value

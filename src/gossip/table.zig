@@ -15,7 +15,6 @@ const GossipKey = sig.gossip.data.GossipKey;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ContactInfo = sig.gossip.data.ContactInfo;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
-const ThreadPool = sig.sync.ThreadPool;
 const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.Pubkey;
 const SocketAddr = sig.net.SocketAddr;
@@ -77,11 +76,10 @@ pub const GossipTable = struct {
 
     // NOTE: this allocator is used to free any memory allocated by the bincode library
     allocator: std.mem.Allocator,
-    thread_pool: *ThreadPool,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, thread_pool: *ThreadPool) !Self {
+    pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
             .store = AutoArrayHashMap(GossipKey, GossipVersionedData).init(allocator),
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
@@ -95,7 +93,6 @@ pub const GossipTable = struct {
             .shards = try GossipTableShards.init(allocator),
             .purged = HashTimeQueue.init(allocator),
             .allocator = allocator,
-            .thread_pool = thread_pool,
         };
     }
 
@@ -909,13 +906,8 @@ test "remove old values" {
 
     var prng = std.rand.DefaultPrng.init(91);
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     for (0..5) |_| {
         const value = SignedGossipData.initSigned(
@@ -943,13 +935,8 @@ test "insert and remove value" {
 
     var prng = std.rand.DefaultPrng.init(91);
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     const value = SignedGossipData.initSigned(
         &keypair,
@@ -966,13 +953,8 @@ test "trim pruned values" {
 
     var prng = std.rand.DefaultPrng.init(91);
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     const N_VALUES = 10;
     const N_TRIM_VALUES = 5;
@@ -1039,13 +1021,8 @@ test "gossip.HashTimeQueue: trim pruned values" {
     };
     var value = SignedGossipData.initSigned(&keypair, data);
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     // timestamp = 100
     _ = try table.insert(value, 100);
@@ -1075,13 +1052,8 @@ test "insert and get" {
     const random = prng.random();
     var value = SignedGossipData.initRandom(random, &keypair);
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     _ = try table.insert(value, 0);
 
@@ -1099,13 +1071,8 @@ test "insert and get contact_info" {
         .LegacyContactInfo = legacy_contact_info,
     });
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     // test insertion
     const result = try table.insert(gossip_value, 0);

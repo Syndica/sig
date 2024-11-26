@@ -12,13 +12,11 @@ const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipData = sig.gossip.data.GossipData;
 const GossipKey = sig.gossip.data.GossipKey;
 const Signature = sig.core.Signature;
-const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const Duration = sig.time.Duration;
 const StandardErrLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
 
 const TRIM_INTERVAL = Duration.fromSecs(2);
-const MAX_N_THREADS = 2;
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const maybe_max_actions_string = args.next();
@@ -48,21 +46,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const random = prng.random();
 
     // init gossip table
-    // MAX: 2 threads
-    const n_threads = @min(@as(u32, @truncate(std.Thread.getCpuCount() catch 1)), MAX_N_THREADS);
-    const thread_pool = try allocator.create(ThreadPool);
-    defer {
-        thread_pool.shutdown();
-        thread_pool.deinit();
-        allocator.destroy(thread_pool);
-    }
-    thread_pool.* = ThreadPool.init(.{
-        .max_threads = n_threads,
-        .stack_size = 2 * 1024 * 1024,
-    });
-
     const gossip_table = try allocator.create(GossipTable);
-    gossip_table.* = try GossipTable.init(allocator, thread_pool);
+    gossip_table.* = try GossipTable.init(allocator);
     defer {
         gossip_table.deinit();
         allocator.destroy(gossip_table);
