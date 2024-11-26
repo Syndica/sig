@@ -2,6 +2,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
+const Allocator = std.mem.Allocator;
+const Atomic = std.atomic.Value;
+const FixedBufferAllocator = std.heap.FixedBufferAllocator;
+const Mutex = std.Thread.Mutex;
+
+const log2 = std.math.log2;
+
 /// very similar to RecycleFBA but with a few differences:
 /// - this uses an explicit T type and only returns slices of that type (instead of a generic u8)
 /// - additional memory blocks are supported (instead of using a fixed-buffer-allocator approach)
@@ -513,6 +520,181 @@ pub fn RecycleFBA(config: struct {
         }
     };
 }
+
+/// Always allocates from the backing allocator in batches at least as large as batch_size.
+pub const BatchAllocator = struct {
+    backing_allocator: Allocator,
+    batch_size: usize,
+    last_batch: Atomic(?*Batch) = Atomic(?*Batch).init(null),
+    new_batch_lock: std.Thread.RwLock = .{},
+    new_batch_waiters: Atomic(usize) = Atomic(usize).init(0),
+    new_batch_wait_lock: std.Thread.RwLock = .{},
+
+    const Self = @This();
+
+    const Batch = struct {
+        ptr: [*]u8,
+        len: usize,
+        fba: FixedBufferAllocator,
+        num_allocs: Atomic(usize),
+
+        const DONE = 1 << (@bitSizeOf(usize) - 1);
+
+        pub fn deinit(self: *Batch, backing_allocator: Allocator) void {
+            backing_allocator.rawFree(
+                self.ptr[0..self.len],
+                log2(@alignOf(Batch)),
+                @returnAddress(),
+            );
+        }
+    };
+
+    /// only after all the allocated data has been freed.
+    pub fn deinit(self: *BatchAllocator) void {
+        if (self.last_batch.load(.acquire)) |batch| {
+            batch.deinit(self.backing_allocator);
+        }
+    }
+
+    pub fn allocator(self: *BatchAllocator) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = Allocator.noResize,
+                .free = free,
+            },
+        };
+    }
+
+    fn alloc(
+        ctx: *anyopaque,
+        requested_len: usize,
+        log2_ptr_align: u8,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
+        const len_with_offset = requested_len + @sizeOf(usize);
+        const ptr_align_with_offset = @max(log2_ptr_align, log2(@alignOf(usize)));
+
+        while (true) {
+            // try to allocate from a prior batch
+            if (self.tryAllocOldBatch(len_with_offset, ptr_align_with_offset, ret_addr)) |success| {
+                return success;
+            }
+
+            // existing batch is not suitable. create a new one
+            if (self.tryAllocNewBatch(len_with_offset, ptr_align_with_offset, ret_addr)) |success| {
+                return success;
+            }
+        }
+    }
+
+    fn tryAllocOldBatch(
+        self: *Self,
+        len_with_offset: usize,
+        ptr_align_with_offset: u8,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        self.new_batch_lock.lockShared();
+        defer self.new_batch_lock.unlockShared();
+
+        if (self.last_batch.load(.monotonic)) |batch| {
+            _ = batch.num_allocs.fetchAdd(1, .monotonic);
+            if (batch.fba.threadSafeAllocator()
+                .rawAlloc(len_with_offset, ptr_align_with_offset, ret_addr)) |ptr|
+            {
+                writeBatchPtr(batch, ptr[0..len_with_offset]);
+                return ptr;
+            } else {
+                _ = batch.num_allocs.fetchSub(1, .monotonic);
+            }
+        }
+        return null;
+    }
+
+    fn tryAllocNewBatch(
+        self: *Self,
+        len_with_offset: usize,
+        ptr_align_with_offset: u8,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        // only one thread should do this at a time.
+        // other threads should wait until the first one finishes.
+        if (self.new_batch_waiters.fetchAdd(1, .monotonic) > 0) {
+            _ = self.new_batch_waiters.fetchSub(1, .monotonic);
+            std.atomic.spinLoopHint();
+            return null;
+        }
+        defer _ = self.new_batch_waiters.fetchSub(1, .monotonic);
+        self.new_batch_lock.lock();
+        defer self.new_batch_lock.unlock();
+
+        // create batch
+        const padding = @max(@as(usize, 1) << @intCast(ptr_align_with_offset), @sizeOf(Batch));
+        const batch_size = @max(self.batch_size, len_with_offset + padding);
+        const batch_slice = self.backing_allocator
+            .alignedAlloc(u8, @alignOf(Batch), batch_size) catch return null;
+        const new_batch: *Batch = @ptrCast(batch_slice.ptr);
+        new_batch.* = Batch{
+            .ptr = batch_slice.ptr,
+            .len = batch_size,
+            .fba = FixedBufferAllocator.init(batch_slice[@sizeOf(Batch)..]),
+            .num_allocs = Atomic(usize).init(1),
+        };
+
+        // use new batch for allocation
+        const ptr = new_batch.fba.threadSafeAllocator()
+            .rawAlloc(len_with_offset, ptr_align_with_offset, ret_addr) orelse unreachable;
+        writeBatchPtr(new_batch, ptr[0..len_with_offset]);
+
+        if (len_with_offset >= self.batch_size) {
+            // this batch won't be useful for any other allocations
+            _ = new_batch.num_allocs.fetchOr(Batch.DONE, .monotonic);
+        } else {
+            // make new batch available to future allocations, and mark old batch as done
+            if (self.last_batch.swap(new_batch, .monotonic)) |old_batch| {
+                if (0 == old_batch.num_allocs.fetchOr(Batch.DONE, .monotonic)) {
+                    // free old batch since all allocations are freed
+                    old_batch.deinit(self.backing_allocator);
+                }
+            }
+        }
+
+        return ptr;
+    }
+
+    fn writeBatchPtr(batch: *Batch, slice_with_batch: []u8) void {
+        const batch_int = @intFromPtr(batch);
+        const batch_ptr_bytes: [@sizeOf(usize)]u8 = @bitCast(batch_int);
+        @memcpy(
+            slice_with_batch[slice_with_batch.len - @sizeOf(usize) .. slice_with_batch.len],
+            &batch_ptr_bytes,
+        );
+    }
+
+    fn free(
+        ctx: *anyopaque,
+        buf: []u8,
+        log2_buf_align: u8,
+        return_address: usize,
+    ) void {
+        const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
+        const ptr_align = @max(log2_buf_align, log2(@alignOf(usize)));
+        const full_buf = buf.ptr[0 .. buf.len + @sizeOf(usize)];
+        const batch = getBatch(buf);
+        batch.fba.threadSafeAllocator().rawFree(full_buf, ptr_align, return_address);
+        if (Batch.DONE + 1 == batch.num_allocs.fetchSub(1, .monotonic)) {
+            batch.deinit(self.backing_allocator);
+        }
+    }
+
+    fn getBatch(allocated_slice: []u8) *Batch {
+        const batch_ptr_bytes = allocated_slice.ptr[allocated_slice.len..][0..@sizeOf(usize)].*;
+        const batch_int: usize = @bitCast(batch_ptr_bytes);
+        return @ptrFromInt(batch_int);
+    }
+};
 
 /// thread safe disk memory allocator
 pub const DiskMemoryAllocator = struct {
@@ -1066,29 +1248,95 @@ test "fuzzDiskMemoryAllocator - past failures" {
     }
 }
 
+test "fuzzBatchAllocator - past failures" {
+    const test_cases = [_]struct { usize, usize, usize }{
+        // .{ 0, 10, 32457527 },
+        // .{ 13, 10, 1315344 },
+        // .{ 44, 10, 122063 },
+        // .{ 200, 10, 1439666 },
+        // .{ 1139, 3, 240 },
+        // .{ 144, 10, 293 },
+        // .{ 12, 10000, 1067751 },
+        // 1, iterations: 5, batch_size: 1433431
+    };
+    const debug = true;
+    for (test_cases) |case| {
+        const seed, const iterations, const batch_size = case;
+        var rng = std.Random.DefaultPrng.init(seed);
+        if (debug) std.debug.print(
+            "\n>>> Test Case: {}, {}, {}\n",
+            .{ seed, iterations, batch_size },
+        );
+        try fuzzBatchAllocator(.{
+            .allocator = std.testing.allocator,
+            .random = rng.random(),
+            .iterations = iterations,
+            .debug = debug,
+        }, batch_size);
+    }
+}
+
+test "adhoc" {
+    var batch_allocator = BatchAllocator{
+        .backing_allocator = std.testing.allocator,
+        .batch_size = 1433431,
+    };
+    defer batch_allocator.deinit();
+    const allocator = batch_allocator.allocator();
+    const item0 = try allocator.alloc(u8, 747105);
+    const item1 = try allocator.alloc(u8, 746217);
+    allocator.free(item0);
+    allocator.free(item1);
+}
+
+/// args "[allocator] [max_actions]"
 pub fn runFuzzer(seed: u64, args: *std.process.ArgIterator) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const max_actions = if (args.next()) |max_actions_str|
-        try std.fmt.parseInt(usize, max_actions_str, 10)
-    else
-        std.math.maxInt(usize);
+
+    // parse args
+    const Fuzzable = enum { all, disk, batch };
+    var to_fuzz: Fuzzable = .all;
+    var max_actions: usize = std.math.maxInt(usize);
+    if (args.next()) |next_arg| {
+        if (std.meta.stringToEnum(Fuzzable, next_arg)) |fuzzable| {
+            to_fuzz = fuzzable;
+            if (args.next()) |max_actions_str| {
+                max_actions = try std.fmt.parseInt(usize, max_actions_str, 10);
+            }
+        } else {
+            max_actions = try std.fmt.parseInt(usize, next_arg, 10);
+        }
+    }
 
     const debug = false;
     const iterations = 10_000;
     for (0..max_actions / iterations) |i| {
         var rng = std.Random.DefaultPrng.init(seed +% i);
         const random = rng.random();
-        const mmap_ratio: u16 = @intFromFloat(std.math.pow(f64, 2, 16 * random.float(f64)));
-        std.debug.print(
-            "seed: {}, iterations: {}, mmap_ratio: {}\n",
-            .{ seed +% i, iterations, mmap_ratio },
-        );
-        try fuzzDiskMemoryAllocator(.{
+        const config = .{
             .allocator = gpa.allocator(),
             .random = random,
             .iterations = iterations,
             .debug = debug,
-        }, mmap_ratio);
+        };
+
+        if (to_fuzz == .all or to_fuzz == .disk) {
+            const mmap_ratio: u16 = randomLog2(random, u16, 16);
+            std.debug.print(
+                "DiskMemoryAllocator | seed: {}, iterations: {}, mmap_ratio: {}\n",
+                .{ seed +% i, iterations, mmap_ratio },
+            );
+            try fuzzDiskMemoryAllocator(config, mmap_ratio);
+        }
+
+        if (to_fuzz == .all or to_fuzz == .batch) {
+            const batch_size: usize = randomLog2(random, usize, 10) * 1_000_000;
+            std.debug.print(
+                "BatchAllocator | seed: {}, iterations: {}, batch_size: {}\n",
+                .{ seed +% i, iterations, batch_size },
+            );
+            try fuzzBatchAllocator(config, batch_size);
+        }
     }
     if (gpa.deinit() == .leak) return error.Leaked;
 }
@@ -1104,6 +1352,31 @@ fn fuzzDiskMemoryAllocator(config: AllocatorFuzzParams, mmap_ratio: u16) !void {
     try fuzzAllocator(config, disk_memory_allocator.allocator());
 }
 
+fn fuzzBatchAllocator(config: AllocatorFuzzParams, batch_size: usize) !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    {
+        var batch_allocator = BatchAllocator{
+            .backing_allocator = gpa.allocator(),
+            .batch_size = batch_size,
+        };
+        defer batch_allocator.deinit();
+        if (config.debug) {
+            std.debug.print(
+                \\var batch_allocator = BatchAllocator{{
+                \\    .backing_allocator = std.testing.allocator,
+                \\    .batch_size = {},
+                \\}};
+                \\defer batch_allocator.deinit();
+                \\const allocator = batch_allocator.allocator();
+                \\
+            , .{batch_size});
+        }
+        try fuzzAllocatorMultiThreaded(1, config, batch_allocator.allocator());
+        // try fuzzAllocator(config, batch_allocator.allocator());
+    }
+    if (gpa.detectLeaks()) return error.Leaked;
+}
+
 const AllocatorFuzzParams = struct {
     /// Used for bookkeeping during the test. This allocator will *not* be fuzzed.
     allocator: std.mem.Allocator,
@@ -1114,6 +1387,21 @@ const AllocatorFuzzParams = struct {
     /// Set true to print code that runs this specific test case.
     debug: bool,
 };
+
+/// Randomly takes actions with the allocator: alloc, realloc, or free
+fn fuzzAllocatorMultiThreaded(
+    comptime num_threads: usize,
+    params: AllocatorFuzzParams,
+    /// The allocator being tested.
+    subject: std.mem.Allocator,
+) !void {
+    var threads: [num_threads - 1]std.Thread = undefined;
+    for (0..num_threads - 1) |i| {
+        threads[i] = try std.Thread.spawn(.{}, fuzzAllocator, .{ params, subject });
+    }
+    try fuzzAllocator(params, subject);
+    for (threads) |t| t.join();
+}
 
 /// Randomly takes actions with the allocator: alloc, realloc, or free
 fn fuzzAllocator(
@@ -1130,6 +1418,7 @@ fn fuzzAllocator(
             subject.free(item);
         }
         allocations.deinit();
+        if (params.debug) std.debug.print("done\n", .{});
     }
 
     // take some random actions: alloc, realloc, or free
@@ -1139,7 +1428,7 @@ fn fuzzAllocator(
         const choice = if (allocations.items.len == 0) .alloc else params.random.enumValue(Options);
         switch (choice) {
             .alloc => {
-                const size = params.random.intRangeAtMost(usize, 1, 1_000_000);
+                const size = randomLog2(params.random, usize, 20);
                 if (params.debug) std.debug.print(
                     "var item{} = try allocator.alloc(u8, {});\n",
                     .{ item_id_sequence, size },
@@ -1152,7 +1441,7 @@ fn fuzzAllocator(
             },
             .realloc => {
                 const index = params.random.intRangeLessThan(usize, 0, allocations.items.len);
-                const size = params.random.intRangeAtMost(usize, 1, 1_000_000);
+                const size = randomLog2(params.random, usize, 20);
                 const item_id, const item = allocations.items[index];
                 if (params.debug) std.debug.print(
                     "item{} = try allocator.realloc(item{}, {});\n",
@@ -1170,4 +1459,12 @@ fn fuzzAllocator(
             },
         }
     }
+}
+
+fn randomLog2(random: std.Random, T: type, max_pow2: u64) T {
+    return @intFromFloat(std.math.pow(
+        f64,
+        2,
+        @as(f64, @floatFromInt(max_pow2)) * random.float(f64),
+    ));
 }
