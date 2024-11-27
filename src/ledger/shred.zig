@@ -1063,6 +1063,15 @@ pub const layout = struct {
     const OFFSET_OF_ERASURE_SET_INDEX: usize =
         OFFSET_OF_SHRED_INDEX + SIZE_OF_INDEX + SIZE_OF_VERSION;
 
+    pub fn getShredId(packet: *const Packet) !ShredId {
+        const shred = getShred(packet) orelse return error.InvalidShred;
+        return .{
+            .slot = getSlot(shred) orelse return error.InvalidShred,
+            .index = getIndex(shred) orelse return error.InvalidShred,
+            .shred_type = getShredVariant(shred).?.shred_type,
+        };
+    }
+
     pub fn getShred(packet: *const Packet) ?[]const u8 {
         if (getShredSize(packet) > packet.data.len) return null;
         return packet.data[0..getShredSize(packet)];

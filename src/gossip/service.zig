@@ -132,8 +132,8 @@ pub const GossipService = struct {
 
     // note: this contact info should not change
     gossip_socket: UdpSocket,
-    /// This contact info is mutated by the buildMessages thread, so it must
-    /// only be read by that thread, or it needs a synchronization mechanism.
+    /// This contact info is mutated by the buildMessages thread (specifically, .shred_version and .wallclock),
+    /// so it must only be read by that thread, or it needs a synchronization mechanism.
     my_contact_info: ContactInfo,
     my_keypair: KeyPair,
     my_pubkey: Pubkey,
