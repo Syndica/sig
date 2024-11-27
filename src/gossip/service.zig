@@ -3291,7 +3291,6 @@ pub const BenchmarkGossipServiceGeneral = struct {
         );
         defer {
             gossip_service.metrics.reset();
-            gossip_service.shutdown();
             gossip_service.deinit();
             allocator.destroy(gossip_service);
         }
@@ -3401,7 +3400,6 @@ pub const BenchmarkGossipServicePullRequests = struct {
         );
         defer {
             gossip_service.metrics.reset();
-            gossip_service.shutdown();
             gossip_service.deinit();
             allocator.destroy(gossip_service);
         }

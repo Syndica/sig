@@ -710,6 +710,7 @@ fn gossip() !void {
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
+        gpa_allocator.destroy(gossip_service);
     }
 
     // block forever
@@ -739,6 +740,7 @@ fn validator() !void {
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
+        allocator.destroy(gossip_service);
     }
 
     const geyser_writer = try buildGeyserWriter(allocator, app_base.logger.unscoped());
@@ -878,6 +880,7 @@ fn shredCollector() !void {
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
+        allocator.destroy(gossip_service);
     }
 
     const snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
@@ -1190,6 +1193,7 @@ pub fn testTransactionSenderService() !void {
     const gossip_service = try startGossip(allocator, &app_base, &.{});
     defer {
         gossip_service.deinit();
+        allocator.destroy(gossip_service);
     }
 
     // define cluster of where to land transactions
@@ -1642,7 +1646,11 @@ fn downloadSnapshot() !void {
         @panic("cannot download a snapshot with no entrypoints");
     }
     const gossip_service = try startGossip(gpa_allocator, &app_base, &.{});
-    defer gossip_service.shutdown();
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+        gpa_allocator.destroy(gossip_service);
+    }
 
     const trusted_validators = try getTrustedValidators(gpa_allocator);
     defer if (trusted_validators) |*tvs| tvs.deinit();
