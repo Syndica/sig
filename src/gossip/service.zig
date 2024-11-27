@@ -3432,16 +3432,14 @@ pub const BenchmarkGossipServicePullRequests = struct {
         const random = prng.random();
 
         {
-            var ping_cache_rw = gossip_service.ping_cache_rw;
-            var ping_cache_lock = ping_cache_rw.write();
-            var ping_cache: *PingCache = ping_cache_lock.mut();
+            var ping_cache: *PingCache, var lock = gossip_service.ping_cache_rw.writeWithLock();
+            defer lock.unlock();
             ping_cache._setPong(recv_pubkey, recv_address);
-            ping_cache_lock.unlock();
         }
 
         {
-            var table_lock = gossip_service.gossip_table_rw.write();
-            var table: *GossipTable = table_lock.mut();
+            var table, var lock = gossip_service.gossip_table_rw.writeWithLock();
+            defer lock.unlock();
             // insert contact info of pull request
             _ = try table.insert(signed_contact_info_recv, now);
             // insert all other values
@@ -3449,7 +3447,6 @@ pub const BenchmarkGossipServicePullRequests = struct {
                 const value = SignedGossipData.initRandom(random, &recv_keypair);
                 _ = try table.insert(value, now);
             }
-            table_lock.unlock();
         }
 
         const outgoing_channel = gossip_service.packet_incoming_channel;

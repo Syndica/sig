@@ -460,7 +460,6 @@ pub const TurbineTree = struct {
 const TestEnvironment = struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
-    gossip_table_tp: ThreadPool,
     gossip_table_rw: RwMux(GossipTable),
     staked_nodes: std.AutoArrayHashMap(Pubkey, u64),
 
@@ -474,11 +473,7 @@ const TestEnvironment = struct {
         var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
         errdefer staked_nodes.deinit();
 
-        var gossip_table_tp = ThreadPool.init(.{});
-        var gossip_table = try GossipTable.init(
-            params.allocator,
-            &gossip_table_tp,
-        );
+        var gossip_table = try GossipTable.init(params.allocator);
         errdefer gossip_table.deinit();
 
         // Add known nodes to the gossip table
@@ -528,7 +523,6 @@ const TestEnvironment = struct {
         return .{
             .allocator = params.allocator,
             .my_contact_info = my_contact_info,
-            .gossip_table_tp = gossip_table_tp,
             .gossip_table_rw = RwMux(GossipTable).init(gossip_table),
             .staked_nodes = staked_nodes,
         };
