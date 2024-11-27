@@ -103,7 +103,8 @@ pub const LeaderInfo = struct {
     }
 
     fn updateLeaderAddressesCache(self: *LeaderInfo) !void {
-        const gossip_table: *const GossipTable, var gossip_table_lg = self.gossip_table_rw.readWithLock();
+        const gossip_table: *const GossipTable, var gossip_table_lg =
+            self.gossip_table_rw.readWithLock();
         defer gossip_table_lg.unlock();
 
         const unique_leaders = try self.leader_schedule_cache.uniqueLeaders(self.allocator);
@@ -111,8 +112,13 @@ pub const LeaderInfo = struct {
 
         for (unique_leaders) |leader| {
             const contact_info = gossip_table.getThreadSafeContactInfo(leader);
-            if (contact_info == null or contact_info.?.tpu_quic_addr == null) continue;
-            try self.leader_addresses_cache.put(self.allocator, leader, contact_info.?.tpu_quic_addr.?);
+            if (contact_info == null or
+                contact_info.?.tpu_quic_addr == null) continue;
+            try self.leader_addresses_cache.put(
+                self.allocator,
+                leader,
+                contact_info.?.tpu_quic_addr.?,
+            );
         }
     }
 

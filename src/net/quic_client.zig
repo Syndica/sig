@@ -10,7 +10,6 @@ const Packet = sig.net.Packet;
 const Channel = sig.sync.Channel;
 const AtomicBool = std.atomic.Value(bool);
 const Logger = sig.trace.log.Logger;
-const ChannelPrintLogger = sig.trace.log.ChannelPrintLogger;
 
 pub fn runClient(
     allocator: std.mem.Allocator,
