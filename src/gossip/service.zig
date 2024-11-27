@@ -630,7 +630,7 @@ pub const GossipService = struct {
                         }
 
                         if (!should_process_value) {
-                            bincode.free(self.gossip_value_allocator, value.data);
+                            bincode.free(self.gossip_value_allocator, pull.*);
                             continue;
                         }
 
@@ -708,6 +708,11 @@ pub const GossipService = struct {
                 const elapsed = x_timer.read().asMillis();
                 self.metrics.handle_batch_push_time.observe(elapsed);
 
+                for (push_messages.items) |push| {
+                    // NOTE: this just frees the slice of values, not the values themselves
+                    // (which were either inserted into the store, or freed)
+                    self.gossip_value_allocator.free(push.gossip_values);
+                }
                 push_messages.clearRetainingCapacity();
             }
 
@@ -728,6 +733,11 @@ pub const GossipService = struct {
                 const elapsed = x_timer.read().asMillis();
                 self.metrics.handle_batch_pull_req_time.observe(elapsed);
 
+                for (pull_requests.items) |req| {
+                    // NOTE: the contact info (req.value) is inserted into the gossip table
+                    // so we only free the filter
+                    bincode.free(self.gossip_value_allocator, req.filter);
+                }
                 pull_requests.clearRetainingCapacity();
             }
 
@@ -739,6 +749,11 @@ pub const GossipService = struct {
                 const elapsed = x_timer.read().asMillis();
                 self.metrics.handle_batch_pull_resp_time.observe(elapsed);
 
+                for (pull_responses.items) |*pull| {
+                    // NOTE: this just frees the slice of values, not the values themselves
+                    // (which were either inserted into the store, or freed)
+                    self.gossip_value_allocator.free(pull.gossip_values);
+                }
                 pull_responses.clearRetainingCapacity();
             }
 
@@ -1279,7 +1294,16 @@ pub const GossipService = struct {
             var gossip_table: *GossipTable = gossip_table_lock.mut();
 
             for (pull_requests) |*req| {
-                _ = gossip_table.insert(req.value, now) catch {};
+                const result = gossip_table.insert(req.value, now) catch {
+                    @panic("gossip table insertion failed");
+                };
+                switch (result) {
+                    .InsertedNewEntry => {},
+                    .OverwroteExistingEntry => |x| x.deinit(self.gossip_value_allocator),
+                    .GossipTableFull, .IgnoredOldValue, .IgnoredDuplicateValue, .IgnoredTimeout => {
+                        req.value.deinit(self.gossip_value_allocator);
+                    },
+                }
                 gossip_table.updateRecordTimestamp(req.value.id(), now);
             }
         }
@@ -2523,9 +2547,7 @@ test "handle old prune & pull request message" {
 
     // send a pull request message
     const N_FILTER_BITS = 1;
-    var bloom = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
-    defer bloom.deinit();
-
+    const bloom = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
     const filter: GossipPullFilter = .{
         .filter = bloom,
         // this is why we wanted atleast one hash_bit == 1
@@ -2539,7 +2561,6 @@ test "handle old prune & pull request message" {
         ci.shred_version = 100;
         break :ci .{ .LegacyContactInfo = ci };
     });
-
     try gossip_service.verified_incoming_channel.send(.{
         .from_endpoint = try EndPoint.parse("127.0.0.1:8000"),
         .message = .{ .PullRequest = .{ filter, ci } },
@@ -2547,9 +2568,7 @@ test "handle old prune & pull request message" {
 
     // DIFFERENT GOSSIP DATA (NOT A LEGACY CONTACT INFO)
     // NOTE: need fresh bloom filter because it gets deinit
-    var bloom2 = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
-    defer bloom2.deinit();
-
+    const bloom2 = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
     const filter2 = GossipPullFilter{
         .filter = bloom2,
         // this is why we wanted atleast one hash_bit == 1
@@ -3110,7 +3129,6 @@ test "process contact info push packet" {
     const gossip_data: GossipData = .{ .LegacyContactInfo = legacy_contact_info };
     const gossip_value = SignedGossipData.initSigned(&kp, gossip_data);
     const heap_values = try allocator.dupe(SignedGossipData, &.{gossip_value});
-    defer allocator.free(heap_values);
 
     // packet
     const msg: GossipMessage = .{ .PushMessage = .{ id, heap_values } };
@@ -3244,7 +3262,6 @@ pub const BenchmarkGossipServiceGeneral = struct {
     };
 
     pub fn benchmarkGossipService(bench_args: BenchmarkArgs) !sig.time.Duration {
-        // TODO: this leaks
         const allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.c_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
@@ -3361,7 +3378,6 @@ pub const BenchmarkGossipServicePullRequests = struct {
     };
 
     pub fn benchmarkPullRequests(bench_args: BenchmarkArgs) !sig.time.Duration {
-        // TODO: this leaks
         const allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.c_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
@@ -3463,21 +3479,20 @@ fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
     return contact_info;
 }
 
-// // TODO: re-enable these tests when leaks are fixed
-// test "benchmarkPullRequests" {
-//     _ = try BenchmarkGossipServicePullRequests.benchmarkPullRequests(.{
-//         .name = "1k_data_1k_pull_reqs",
-//         .n_data_populated = 10,
-//         .n_pull_requests = 2,
-//     });
-// }
+test "benchmarkPullRequests" {
+    _ = try BenchmarkGossipServicePullRequests.benchmarkPullRequests(.{
+        .name = "1k_data_1k_pull_reqs",
+        .n_data_populated = 10,
+        .n_pull_requests = 2,
+    });
+}
 
-// test "benchmarkGossipService" {
-//     _ = try BenchmarkGossipServiceGeneral.benchmarkGossipService(.{
-//         .message_counts = .{
-//             .n_ping = 10,
-//             .n_push_message = 10,
-//             .n_pull_response = 10,
-//         },
-//     });
-// }
+test "benchmarkGossipService" {
+    _ = try BenchmarkGossipServiceGeneral.benchmarkGossipService(.{
+        .message_counts = .{
+            .n_ping = 10,
+            .n_push_message = 10,
+            .n_pull_response = 10,
+        },
+    });
+}
