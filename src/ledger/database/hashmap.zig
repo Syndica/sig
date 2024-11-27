@@ -48,7 +48,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             };
             const batch_allocator = try allocator.create(BatchAllocator);
             batch_allocator.* = BatchAllocator{
-                .backing_allocator = std.testing.allocator,
+                .backing_allocator = disk_allocator.allocator(),
                 .batch_size = 1 << 30,
             };
 
@@ -60,7 +60,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 allocator.free(maps);
             }
             inline for (0..column_families.len) |i| {
-                maps[i] = try SharedHashMap.init(disk_allocator.allocator());
+                maps[i] = try SharedHashMap.init(batch_allocator.allocator());
             }
             return .{
                 .ram_allocator = allocator,
@@ -78,7 +78,9 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             }
             self.ram_allocator.free(self.maps);
             self.ram_allocator.destroy(self.transaction_lock);
+            self.batch_allocator_state.deinit();
             self.disk_allocator_state.dir.close();
+            self.ram_allocator.destroy(self.batch_allocator_state);
             self.ram_allocator.destroy(self.disk_allocator_state);
         }
 
