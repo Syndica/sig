@@ -239,8 +239,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
     try fuzz_contact_info.setSocket(.gossip, fuzz_address);
 
-    var counter = Atomic(usize).init(0);
-
     // find leaks
     var gpa_gossip_alloc = std.heap.GeneralPurposeAllocator(.{
         .safety = true,
@@ -248,7 +246,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer _ = gpa_gossip_alloc.deinit();
     const gossip_alloc = gpa_gossip_alloc.allocator();
 
-    var gossip_client, const packet_channel, var handle = blk: {
+    var gossip_client, const packet_channel, const handle = blk: {
         if (fuzz_sig) {
             // this is who we blast messages at
             var client_keypair = try KeyPair.create(null);
@@ -262,7 +260,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 client_contact_info,
                 client_keypair,
                 null, // we will only recv packets
-                &counter,
                 .noop, // no logs
             );
 
@@ -279,7 +276,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 fuzz_contact_info,
                 fuzz_keypair,
                 (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
-                &counter,
                 .noop, // no logs
             );
 
@@ -301,7 +297,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 fuzz_contact_info,
                 fuzz_keypair,
                 (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
-                &counter,
                 .noop, // no logs
             );
 
@@ -339,8 +334,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     // cleanup
     std.debug.print("\t=> shutting down...\n", .{});
-    counter.store(1, .release);
-    handle.join();
+    // TODO: fix in later PR
+    _ = handle;
+    // handle.join();
 
     gossip_client.shutdown();
     gossip_client.deinit();

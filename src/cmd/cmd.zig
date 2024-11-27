@@ -706,22 +706,24 @@ fn gossip() !void {
         app_base.deinit();
     }
 
-    const gossip_service, var service_manager =
-        try startGossip(gpa_allocator, &app_base, &.{});
+    const gossip_service = try startGossip(gpa_allocator, &app_base, &.{});
     defer {
         gossip_service.shutdown();
-        service_manager.deinit();
+        gossip_service.deinit();
     }
 
-    // block until we're all done
-    service_manager.join();
+    // block forever
+    gossip_service.service_manager.join();
 }
 
 /// entrypoint to run a full solana validator
 fn validator() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
-    defer app_base.deinit();
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
@@ -730,15 +732,13 @@ fn validator() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var gossip_service, var service_manager = try startGossip(allocator, &app_base, &.{
+    var gossip_service = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
     defer {
-        app_base.shutdown();
         gossip_service.shutdown();
-        service_manager.join();
-        service_manager.deinit();
+        gossip_service.deinit();
     }
 
     const geyser_writer = try buildGeyserWriter(allocator, app_base.logger.unscoped());
@@ -855,8 +855,8 @@ fn validator() !void {
     );
     defer shred_collector_manager.deinit();
 
-    service_manager.join();
     retransmit_service_handle.join();
+    gossip_service.service_manager.join();
     shred_collector_manager.join();
 }
 
@@ -871,14 +871,13 @@ fn shredCollector() !void {
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
 
-    var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
+    var gossip_service = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
     defer {
-        if (!app_base.closed) app_base.shutdown();
         gossip_service.shutdown();
-        gossip_manager.deinit();
+        gossip_service.deinit();
     }
 
     const snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
@@ -986,8 +985,8 @@ fn shredCollector() !void {
     );
     defer shred_collector_manager.deinit();
 
-    gossip_manager.join();
     retransmit_service_handle.join();
+    gossip_service.service_manager.join();
     shred_collector_manager.join();
 }
 
@@ -1188,11 +1187,9 @@ pub fn testTransactionSenderService() !void {
     const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
-    const gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
+    const gossip_service = try startGossip(allocator, &app_base, &.{});
     defer {
-        if (!app_base.closed) app_base.shutdown(); // we call this here to set exit to true
-        gossip_service.shutdown();
-        gossip_manager.deinit();
+        gossip_service.deinit();
     }
 
     // define cluster of where to land transactions
@@ -1244,16 +1241,15 @@ pub fn testTransactionSenderService() !void {
         config.current.test_transaction_sender.n_lamports_per_transaction,
     );
 
+    gossip_service.shutdown();
     app_base.shutdown();
     transaction_sender_handle.join();
-    gossip_manager.join();
 }
 
 /// State that typically needs to be initialized at the start of the app,
 /// and deinitialized only when the app exits.
 const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     closed: bool,
     logger: ScopedLogger(@typeName(Self)),
@@ -1301,8 +1297,6 @@ const AppBase = struct {
     pub fn shutdown(self: *AppBase) void {
         std.debug.assert(!self.closed);
         defer self.closed = true;
-
-        self.counter.store(1, .release);
         self.exit.store(true, .release);
     }
 
@@ -1319,7 +1313,7 @@ fn startGossip(
     app_base: *AppBase,
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
-) !struct { *GossipService, sig.utils.service_manager.ServiceManager } {
+) !*GossipService {
     app_base.logger.info().logf("gossip host: {any}", .{app_base.my_ip});
     app_base.logger.info().logf("gossip port: {d}", .{app_base.my_port});
 
@@ -1330,32 +1324,21 @@ fn startGossip(
     for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));
     contact_info.shred_version = app_base.shred_version;
 
-    var manager = sig.utils.service_manager.ServiceManager.init(
-        allocator,
-        app_base.logger.unscoped(),
-        &app_base.exit,
-        "gossip",
-        .{},
-        .{},
-    );
-
     const service = try GossipService.create(
         gpa_allocator,
         gossip_value_gpa_allocator,
         contact_info,
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints.items,
-        &app_base.counter,
         app_base.logger.unscoped(),
     );
-    try manager.defers.deferCall(GossipService.deinit, .{service});
 
     try service.start(.{
         .spy_node = config.current.gossip.spy_node,
         .dump = config.current.gossip.dump,
-    }, &manager);
+    });
 
-    return .{ service, manager };
+    return service;
 }
 
 /// determine our shred version and ip. in the solana-labs client, the shred version
@@ -1658,13 +1641,8 @@ fn downloadSnapshot() !void {
     if (app_base.entrypoints.items.len == 0) {
         @panic("cannot download a snapshot with no entrypoints");
     }
-
-    const gossip_service, var service_manager =
-        try startGossip(gpa_allocator, &app_base, &.{});
-    defer {
-        gossip_service.shutdown();
-        service_manager.deinit();
-    }
+    const gossip_service = try startGossip(gpa_allocator, &app_base, &.{});
+    defer gossip_service.shutdown();
 
     const trusted_validators = try getTrustedValidators(gpa_allocator);
     defer if (trusted_validators) |*tvs| tvs.deinit();
