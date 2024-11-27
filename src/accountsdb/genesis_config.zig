@@ -12,7 +12,6 @@ const EpochSchedule = sig.core.EpochSchedule;
 
 pub const UnixTimestamp = i64;
 pub const String = std.ArrayList(u8);
-pub const MINIMUM_SLOTS_PER_EPOCH: u64 = 32;
 
 pub const RustDuration = struct {
     secs: u64,
