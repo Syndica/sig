@@ -409,6 +409,7 @@ pub const AccountIndex = struct {
     pub fn saveToDisk(self: *Self, dir: std.fs.Dir, logger: sig.trace.Logger) !void {
         const scoped_logger = logger.withScope("save index state");
 
+        scoped_logger.info().log("saving pubkey -> reference map");
         // write the pubkey_ref_map (populating this is very expensive)
         var shard_data_total: u64 = 0;
         for (self.pubkey_ref_map.shards) |*shard_rw| {
