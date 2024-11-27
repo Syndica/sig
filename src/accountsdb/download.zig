@@ -538,7 +538,6 @@ pub fn downloadFile(
     }
 }
 
-const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 
@@ -546,8 +545,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 test "accounts_db.download: test remove untrusted peers" {
     const allocator = std.testing.allocator;
-    var thread_pool = ThreadPool.init(.{});
-    var table = try GossipTable.init(allocator, &thread_pool);
+    var table = try GossipTable.init(allocator);
     defer table.deinit();
 
     var prng = std.rand.DefaultPrng.init(0);
@@ -623,8 +621,7 @@ test "accounts_db.download: test remove untrusted peers" {
 
 test "accounts_db.download: test finding peers" {
     const allocator = std.testing.allocator;
-    var thread_pool = ThreadPool.init(.{});
-    var table = try GossipTable.init(allocator, &thread_pool);
+    var table = try GossipTable.init(allocator);
     defer table.deinit();
 
     var prng = std.rand.DefaultPrng.init(0);

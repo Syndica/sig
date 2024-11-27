@@ -1339,8 +1339,7 @@ fn startGossip(
         .{},
     );
 
-    const service = try manager.arena.allocator().create(GossipService);
-    service.* = try GossipService.init(
+    const service = try GossipService.create(
         gpa_allocator,
         gossip_value_gpa_allocator,
         contact_info,
