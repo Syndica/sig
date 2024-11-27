@@ -1290,9 +1290,9 @@ pub fn runFuzzer(seed: u64, args: *std.process.ArgIterator) !void {
         }
 
         if (to_fuzz == .all or to_fuzz == .batch) {
-            const batch_size: usize = randomLog2(random, usize, 10) * 1_000_000;
+            const batch_size: usize = randomLog2(random, usize, 30);
             std.debug.print(
-                "BatchAllocator | seed: {}, iterations: {}, batch_size: {}\n",
+                "BatchAllocator      | seed: {}, iterations: {}, batch_size: {}\n",
                 .{ seed +% i, iterations, batch_size },
             );
             try fuzzBatchAllocator(config, batch_size);
