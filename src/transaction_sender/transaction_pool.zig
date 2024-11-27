@@ -63,7 +63,7 @@ pub const TransactionPool = struct {
         return .{ pending_transactions.keys(), pending_transactions.values(), pending_transactions_lg };
     }
 
-    pub fn readRetryTransactionsWithLock(self: *TransactionPool, allocator: Allocator) !struct { []const TransactionInfo, RwMux(PendingTransactions).RLockGuard } {
+    pub fn readRetryTransactionsWithLock(self: *TransactionPool, allocator: Allocator) !struct { []TransactionInfo, RwMux(PendingTransactions).RLockGuard } {
         const pending_transactions: *const PendingTransactions, const pending_transactions_lg = self.pending_transactions_rw.readWithLock();
         var retry_transactions = try allocator.alloc(TransactionInfo, self.retry_signatures.items.len);
         for (self.retry_signatures.items, 0..) |signature, i| {

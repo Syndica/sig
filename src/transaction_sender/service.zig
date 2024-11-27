@@ -86,14 +86,12 @@ pub const Service = struct {
     pub fn run(self: *Service) !void {
         const send_socket_handle = try std.Thread.spawn(
             .{},
-            sig.net.quic.runClient,
+            sig.net.quic_client.runClient,
             .{
                 self.allocator,
                 self.send_channel,
-                self.logger.unscoped(),
-                false,
                 self.exit,
-                self.logger,
+                self.logger.unscoped(),
             },
         );
 
@@ -223,14 +221,14 @@ pub const Service = struct {
                 if (signature_status.confirmations == null) {
                     try self.transaction_pool.drop_signatures.append(signature);
                     self.metrics.rooted_count.inc();
-                    self.logger.info().logf("(demo.transaction_sender)    transaction rooted: signature={}\n", .{signature});
+                    self.logger.info().logf("transaction rooted: signature={}\n", .{signature});
                     continue;
                 }
 
                 if (signature_status.err) |err| {
                     try self.transaction_pool.drop_signatures.append(signature);
                     self.metrics.failed_count.inc();
-                    self.logger.info().logf("(demo.transaction_sender)    transaction failed: error={} signature={}\n", .{ err, signature });
+                    self.logger.info().logf("transaction failed: error={} signature={}\n", .{ err, signature });
                     continue;
                 }
             }
@@ -238,21 +236,21 @@ pub const Service = struct {
             if (transaction_info.isExpired(block_height)) {
                 try self.transaction_pool.drop_signatures.append(signature);
                 self.metrics.expired_count.inc();
-                self.logger.info().logf("(demo.transaction_sender)    transaction expired: signature={}\n", .{signature});
+                self.logger.info().logf("transaction expired: signature={}\n", .{signature});
                 continue;
             }
 
             if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
                 try self.transaction_pool.drop_signatures.append(signature);
                 self.metrics.exceeded_max_retries_count.inc();
-                self.logger.info().logf("(demo.transaction_sender)    transaction exceeded max retries: signature={}\n", .{signature});
+                self.logger.info().logf("transaction exceeded max retries: signature={}\n", .{signature});
                 continue;
             }
 
             if (transaction_info.shouldRetry(self.config.retry_rate)) {
                 try self.transaction_pool.retry_signatures.append(signature);
                 self.metrics.retry_count.inc();
-                self.logger.info().logf("(demo.transaction_sender)    transaction retrying: signature={}\n", .{signature});
+                self.logger.info().logf("transaction retrying: signature={}\n", .{signature});
                 continue;
             }
         }
@@ -297,9 +295,11 @@ pub const Service = struct {
     }
 
     /// Sends transactions to the next N leaders TPU addresses
+    ///
+    /// Updates the last_sent_time for each transaction.
     fn sendTransactions(
         self: *Service,
-        transactions: []const TransactionInfo,
+        transactions: []TransactionInfo,
         leader_addresses: []const SocketAddr,
     ) !void {
         if (leader_addresses.len == 0) {
@@ -309,7 +309,7 @@ pub const Service = struct {
 
         for (leader_addresses) |leader_address| {
             for (transactions) |tx| {
-                self.logger.info().logf("(demo.transaction_sender)    sending transaction to leader: address={} signature={}", .{ leader_address, tx.signature });
+                self.logger.info().logf("sending transaction to leader: address={} signature={}", .{ leader_address, tx.signature });
                 try self.send_channel.send(Packet.init(
                     leader_address.toEndpoint(),
                     tx.wire_transaction,
@@ -319,8 +319,7 @@ pub const Service = struct {
         }
 
         const last_sent_time = Instant.now();
-        for (transactions) |tx_| {
-            var tx = tx_;
+        for (transactions) |*tx| {
             tx.last_sent_time = last_sent_time;
         }
 
@@ -378,7 +377,7 @@ pub const Metrics = struct {
     }
 
     pub fn log(self: *const Metrics, logger: Logger) void {
-        logger.info().logf("(demo.transaction_sender)    {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
+        logger.info().logf("{} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
             self.received_count.get(),
             self.pending_count.get(),
             self.rooted_count.get(),

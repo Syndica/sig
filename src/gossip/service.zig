@@ -224,30 +224,27 @@ pub const GossipService = struct {
         var verified_incoming_channel = try Channel(GossipMessageWithEndpoint).create(allocator);
         errdefer verified_incoming_channel.deinit();
 
-        const thread_pool = try allocator.create(ThreadPool);
-        const n_threads: usize = @min(std.Thread.getCpuCount() catch 1, 8);
-        thread_pool.* = ThreadPool.init(.{
-            .max_threads = @intCast(n_threads),
-            .stack_size = 2 * 1024 * 1024,
-        });
-        gossip_logger.debug().logf("using n_threads in gossip: {}", .{n_threads});
-
-        var gossip_table = try GossipTable.init(gossip_value_allocator, thread_pool);
-        errdefer gossip_table.deinit();
-
-        const gossip_table_rw = RwMux(GossipTable).init(gossip_table);
-        const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
-        const my_shred_version = my_contact_info.shred_version;
-        const active_set = ActiveSet.init(allocator);
-
-        // bind the socket
+        // setup the socket (bind with read-timeout)
         const gossip_address = my_contact_info.getSocket(.gossip) orelse return error.GossipAddrUnspecified;
         var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
         gossip_socket.bindToPort(gossip_address.port()) catch return error.SocketBindFailed;
         gossip_socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT_US) catch return error.SocketSetTimeoutFailed; // 1 second
 
         // setup the threadpool for processing messages
+        const n_threads: usize = @min(std.Thread.getCpuCount() catch 1, 8);
+        const thread_pool = ThreadPool.init(.{
+            .max_threads = @intCast(n_threads),
+            .stack_size = 2 * 1024 * 1024,
+        });
         gossip_logger.debug().logf("using n_threads in gossip: {}", .{n_threads});
+
+        // setup the table
+        var gossip_table = try GossipTable.init(gossip_value_allocator);
+        errdefer gossip_table.deinit();
+        const gossip_table_rw = RwMux(GossipTable).init(gossip_table);
+
+        // setup the active set for push messages
+        const active_set = ActiveSet.init(allocator);
 
         // setup entrypoints
         var entrypoints = ArrayList(Entrypoint).init(allocator);
@@ -266,6 +263,8 @@ pub const GossipService = struct {
             PING_CACHE_CAPACITY,
         );
 
+        const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+        const my_shred_version = my_contact_info.shred_version;
         const failed_pull_hashes = HashTimeQueue.init(allocator);
         const metrics = try GossipMetrics.init(gossip_logger);
 
@@ -1435,10 +1434,6 @@ pub const GossipService = struct {
 
             const endpoint_str = try endpointToString(self.allocator, ping_message.from_endpoint);
             defer endpoint_str.deinit();
-            // self.logger.debug()
-            //     .field("from_endpoint", endpoint_str.items)
-            //     .field("from_pubkey", ping_message.ping.from.string().slice())
-            //     .log("gossip: recv ping");
 
             try self.packet_outgoing_channel.send(packet);
             self.metrics.pong_messages_sent.add(1);
@@ -1729,12 +1724,6 @@ pub const GossipService = struct {
             );
             prune_data.sign(&self.my_keypair) catch return error.SignatureError;
             const msg = GossipMessage{ .PruneMessage = .{ self.my_pubkey, prune_data } };
-
-            // self.logger
-            //     .debug()
-            //     .field("n_pruned_origins", prune_size)
-            //     .field("to_addr", from_pubkey.string().slice())
-            //     .log("gossip: send prune_message");
 
             var packet = Packet.default();
             const written_slice = bincode.writeToSlice(&packet.data, msg, bincode.Params{}) catch unreachable;

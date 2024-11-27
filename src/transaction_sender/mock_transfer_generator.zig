@@ -90,7 +90,7 @@ pub const MockTransferService = struct {
             @panic("transaction amount is less than MIN_LAMPORTS_FOR_RENT");
         }
 
-        self.logger.info().logf("(demo.mock_transfer_service) accounts: bank={s}, alice={s}", .{
+        self.logger.info().logf("accounts: bank={s}, alice={s}", .{
             self.accounts.bank.pubkey,
             self.accounts.alice.pubkey,
         });
@@ -112,20 +112,20 @@ pub const MockTransferService = struct {
             try self.closeAccount(random, self.accounts.alice.keypair);
         }
 
-        _ = try self.getBalances("(demo.mock_transfer_service) initial balances");
+        _ = try self.getBalances("initial balances");
 
         for (0..n_transactions) |tx_i| {
-            self.logger.info().logf("(demo.mock_transfer_service) transfering {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
+            self.logger.info().logf("transfering {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
             try self.sigTransferAndWait(
                 random,
                 self.accounts.bank.keypair,
                 self.accounts.alice.pubkey,
                 n_lamports_per_tx,
             );
-            self.logger.info().logf("(demo.mock_transfer_service) SUCCESS - transferred {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
+            self.logger.info().logf("SUCCESS - transferred {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
         }
 
-        _ = try self.getBalances("(demo.mock_transfer_service) final balances");
+        _ = try self.getBalances("final balances");
 
         try self.closeAccount(random, self.accounts.alice.keypair);
 
@@ -140,7 +140,7 @@ pub const MockTransferService = struct {
             if (log_timer.read().asSecs() > 10) {
                 const time_remaining = max_wait.asSecs() - start.elapsed().asSecs();
                 if (log) {
-                    self.logger.info().logf("(demo.mock_transfer_service) waiting for signature confirmation ({}s remaining): {s}", .{
+                    self.logger.info().logf("waiting for signature confirmation ({}s remaining): {s}", .{
                         time_remaining,
                         signature,
                     });
@@ -256,7 +256,7 @@ pub const MockTransferService = struct {
                 null,
             );
             try self.sender.send(transaction_info);
-            self.logger.info().logf("(demo.mock_transfer_service) sent transaction: {s}", .{transaction_info.signature});
+            self.logger.info().logf("sent transaction: {s}", .{transaction_info.signature});
 
             const signature_confirmed = try self.waitForSignatureConfirmation(
                 transaction_info.signature,
@@ -337,13 +337,13 @@ pub const MockTransferService = struct {
     }
 
     /// Log account balances with a message
-    pub fn getBalances(self: *MockTransferService, maybe_message_prefix: ?[]const u8) !struct {
+    pub fn getBalances(self: *MockTransferService, maybe_log_prefix: ?[]const u8) !struct {
         bank: u64,
         alice: u64,
     } {
         const bank_balance = try self.getBalance(self.accounts.bank.pubkey);
         const alice_balance = try self.getBalance(self.accounts.alice.pubkey);
-        if (maybe_message_prefix) |message_prefix| {
+        if (maybe_log_prefix) |message_prefix| {
             self.logger.info().logf("{s}: bank={}, alice={}", .{ message_prefix, bank_balance, alice_balance });
         }
         return .{ .bank = bank_balance, .alice = alice_balance };

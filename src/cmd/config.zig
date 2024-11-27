@@ -23,7 +23,7 @@ pub const Config = struct {
     log_level: LogLevel = .debug,
     metrics_port: u16 = 12345,
 
-    pub fn genesisFilePath(self: Config) !?[]const u8 {
+    pub fn genesisFilePath(self: Config) error{UnknownNetwork}!?[]const u8 {
         return if (self.genesis_file_path) |provided_path|
             provided_path
         else if (try self.gossip.getNetwork()) |n| switch (n) {

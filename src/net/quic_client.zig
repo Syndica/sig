@@ -3,8 +3,8 @@ const std = @import("std");
 const network = @import("zig-network");
 const xev = @import("xev");
 const ssl = @import("ssl");
-const sig = @import("../../sig.zig");
-const send_posix = @import("send_posix.zig");
+const sig = @import("../sig.zig");
+const send_msg = @import("send_msg.zig");
 
 const Packet = sig.net.Packet;
 const Channel = sig.sync.Channel;
@@ -18,64 +18,18 @@ pub fn runClient(
     exit: *AtomicBool,
     logger: Logger,
 ) !void {
-    if (lsquic.lsquic_global_init(
-        lsquic.LSQUIC_GLOBAL_CLIENT,
-    ) == 1) @panic("lsquic_global_init failed");
-    var client: Client(20, 20) = undefined;
-    try client.init(allocator, receiver, exit, logger);
+    var client = try Client(20, 20).create(allocator, receiver, exit, logger);
     try client.run();
+    defer {
+        client.deinit();
+        allocator.destroy(client);
+    }
 }
 
-pub fn runTestClient() !void {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
-    const gpa_allocator = gpa_state.allocator();
-    // defer _ = gpa_state.deinit();
-
-    var send_channel = try sig.sync.Channel(sig.net.Packet).init(gpa_allocator);
-    defer send_channel.deinit();
-
-    const test_address = try network.EndPoint.parse("127.0.0.1:1033");
-    var test_packet: Packet = .{
-        .addr = test_address,
-        .data = .{0xaa} ** sig.net.PACKET_DATA_SIZE,
-        .size = 30,
-    };
-
-    const logger = (try ChannelPrintLogger.init(.{
-        .allocator = gpa_allocator,
-        .max_level = .debug,
-        .max_buffer = 1 << 20,
-    })).logger();
-
-    var exit = AtomicBool.init(false);
-    var client_handle = try std.Thread.spawn(
-        .{},
-        runClient,
-        .{
-            gpa_allocator,
-            &send_channel,
-            &exit,
-            logger,
-        },
-    );
-
-    for (0..10) |i| {
-        test_packet.data[0] = @intCast(i);
-        try send_channel.send(test_packet);
-        std.time.sleep(1_000_000_000);
-    }
-
-    for (0..10) |i| {
-        test_packet.data[0] = @intCast(10 + i);
-        try send_channel.send(test_packet);
-        std.time.sleep(5_000_000_000);
-    }
-
-    exit.store(true, .release);
-    client_handle.join();
-}
-
-pub fn Client(comptime max_connections: usize, comptime max_streams_per_connection: usize) type {
+pub fn Client(
+    comptime max_connections: usize,
+    comptime max_streams_per_connection: usize,
+) type {
     return struct {
         allocator: std.mem.Allocator,
         receiver: *Channel(Packet),
@@ -84,14 +38,11 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
         exit: *AtomicBool,
         logger: Logger,
 
-        // SSL
         ssl_ctx: *ssl.SSL_CTX,
 
-        // XEV
         packets_in_event: xev.UDP,
         tick_event: xev.Timer,
 
-        // LSQUIC
         lsquic_engine: *lsquic.lsquic_engine,
         lsquic_engine_api: lsquic.lsquic_engine_api,
         lsquic_engine_settings: lsquic.lsquic_engine_settings,
@@ -116,6 +67,17 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
 
         const Self = @This();
 
+        pub fn create(
+            allocator: std.mem.Allocator,
+            receiver: *Channel(Packet),
+            exit: *AtomicBool,
+            logger: Logger,
+        ) !*Self {
+            const self = try allocator.create(Self);
+            try self.init(allocator, receiver, exit, logger);
+            return self;
+        }
+
         pub fn init(
             self: *Self,
             allocator: std.mem.Allocator,
@@ -123,6 +85,10 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
             exit: *AtomicBool,
             logger: Logger,
         ) !void {
+            if (lsquic.lsquic_global_init(
+                lsquic.LSQUIC_GLOBAL_CLIENT,
+            ) == 1) @panic("lsquic_global_init failed");
+
             self.* = .{
                 .allocator = allocator,
                 .receiver = receiver,
@@ -176,6 +142,8 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
             self.tick_event.run(&loop, &tick_complete, 500, Self, self, onTick);
 
             var packets_in_complete: xev.Completion = undefined;
+            // 1500 is the interface's MTU, so we'll never receive more bytes than that
+            // from UDP.
             const read_buffer = try self.allocator.alloc(u8, 1500);
             defer self.allocator.free(read_buffer);
             var state: xev.UDP.State = undefined;
@@ -190,6 +158,11 @@ pub fn Client(comptime max_connections: usize, comptime max_streams_per_connecti
             );
 
             try loop.run(.until_done);
+        }
+
+        fn deinit(self: *Self) void {
+            _ = self;
+            lsquic.lsquic_global_cleanup();
         }
 
         fn onTick(
@@ -597,7 +570,7 @@ fn packetsOut(
     specs: ?[*]const lsquic.lsquic_out_spec,
     n_specs: u32,
 ) callconv(.C) i32 {
-    var msg: send_posix.msghdr_const = undefined;
+    var msg: send_msg.msghdr_const = undefined;
     const socket: *network.Socket = @alignCast(@ptrCast(ctx.?));
 
     for (specs.?[0..n_specs]) |spec| {
@@ -608,7 +581,7 @@ fn packetsOut(
         msg.flags = 0;
         msg.control = null;
         msg.controllen = 0;
-        _ = send_posix.sendmsgPosix(socket.internal, &msg, 0) catch |err| {
+        _ = send_msg.sendmsgPosix(socket.internal, &msg, 0) catch |err| {
             std.debug.panic("sendmsgPosix failed with: {s}", .{@errorName(err)});
         };
     }

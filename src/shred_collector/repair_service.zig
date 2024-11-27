@@ -518,7 +518,7 @@ test "RepairService sends repair request to gossip peer" {
     try peer_socket.setReadTimeout(100_000);
     var peer_contact_info = ContactInfo.init(
         allocator,
-        Pubkey.fromPublicKey(&peer_keypair.public_key),
+        try Pubkey.fromPublicKey(&peer_keypair.public_key),
         wallclock,
         my_shred_version.load(.acquire),
     );

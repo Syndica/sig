@@ -50,7 +50,9 @@ const gpa_allocator = if (builtin.mode == .Debug)
 else
     std.heap.c_allocator;
 
-var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{
+    .stack_trace_frames = 100,
+}) = .{};
 const gossip_value_gpa_allocator = if (builtin.mode == .Debug)
     gossip_value_gpa.allocator()
 else
@@ -536,21 +538,6 @@ pub fn run() !void {
                             },
                         },
                     },
-
-                    &cli.Command{
-                        .name = "quic-client",
-                        .description = .{
-                            .one_line = "Runs Quic demo client",
-                            .detailed = "",
-                        },
-                        .options = &.{},
-                        .target = .{
-                            .action = .{
-                                .exec = sig.net.quic.runTestClient,
-                            },
-                        },
-                    },
-
                     &cli.Command{
                         .name = "snapshot-validate",
                         .description = .{
@@ -1187,26 +1174,6 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?struct { Slot, LeaderSchedul
     else
         null;
 }
-
-const bank_kp: KeyPair = .{
-    .public_key = .{ .bytes = .{
-        239, 10,  4,   236, 219, 237, 69,
-        197, 199, 60,  117, 184, 223, 215,
-        132, 73,  93,  248, 200, 254, 212,
-        239, 251, 120, 223, 25,  201, 196,
-        20,  58,  163, 62,
-    } },
-    .secret_key = .{ .bytes = .{
-        208, 26,  255, 64,  164, 52,  99,  120, 92,
-        227, 25,  240, 222, 245, 70,  77,  171, 89,
-        129, 64,  110, 73,  159, 230, 38,  212, 150,
-        202, 57,  157, 151, 175, 239, 10,  4,   236,
-        219, 237, 69,  197, 199, 60,  117, 184, 223,
-        215, 132, 73,  93,  248, 200, 254, 212, 239,
-        251, 120, 223, 25,  201, 196, 20,  58,  163,
-        62,
-    } },
-};
 
 pub fn testTransactionSenderService() !void {
     var app_base = try AppBase.init(gpa_allocator);
