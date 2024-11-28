@@ -47,6 +47,9 @@ pub fn build(b: *Build) void {
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
 
+    const lmdb_dep = b.dependency("lmdb", dep_opts);
+    const lmdb_mod = lmdb_dep.module("lmdb");
+
     const pretty_table_dep = b.dependency("prettytable", dep_opts);
     const pretty_table_mod = pretty_table_dep.module("prettytable");
 
@@ -62,6 +65,7 @@ pub fn build(b: *Build) void {
     sig_mod.addImport("curl", curl_mod);
     switch (blockstore_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
+        .lmdb => sig_mod.addImport("lmdb", lmdb_mod),
         .hashmap => {},
     }
     sig_mod.addOptions("build-options", build_options);
@@ -83,6 +87,7 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("zstd", zstd_mod);
     switch (blockstore_db) {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .lmdb => sig_exe.root_module.addImport("lmdb", lmdb_mod),
         .hashmap => {},
     }
     sig_exe.root_module.addOptions("build-options", build_options);
@@ -125,6 +130,7 @@ pub fn build(b: *Build) void {
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
     switch (blockstore_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .lmdb => unit_tests_exe.root_module.addImport("lmdb", lmdb_mod),
         .hashmap => {},
     }
     unit_tests_exe.root_module.addOptions("build-options", build_options);
@@ -170,6 +176,7 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
     switch (blockstore_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .lmdb => benchmark_exe.root_module.addImport("lmdb", lmdb_mod),
         .hashmap => {},
     }
     benchmark_exe.root_module.addOptions("build-options", build_options);
@@ -219,5 +226,6 @@ fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
 
 const BlockstoreDB = enum {
     rocksdb,
+    lmdb,
     hashmap,
 };

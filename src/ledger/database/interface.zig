@@ -268,11 +268,13 @@ pub const BytesRef = struct {
     pub const Deinitializer = union(enum) {
         allocator: Allocator,
         rocksdb: *const fn (?*anyopaque) callconv(.C) void,
+        closure: sig.utils.closure.PointerClosure([]const u8, void),
 
         pub fn deinit(self: Deinitializer, data: []const u8) void {
             switch (self) {
                 .allocator => |allocator| allocator.free(data),
                 .rocksdb => |func| func(@ptrCast(@constCast(data))),
+                .closure => |closure| closure.call(data),
             }
         }
     };

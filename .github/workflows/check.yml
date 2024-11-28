@@ -56,6 +56,7 @@ jobs:
       - name: test
         run: |
           zig build test -Denable-tsan=true
+          zig build test -Denable-tsan=true -Dblockstore-db=lmdb -Dfilter=ledger
           zig build test -Denable-tsan=true -Dblockstore-db=hashmap -Dfilter=ledger
 
   kcov_test:
