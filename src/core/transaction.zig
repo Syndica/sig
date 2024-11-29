@@ -534,7 +534,7 @@ pub fn buildTransferTansaction(
     lamports: u64,
     recent_blockhash: Hash,
 ) !Transaction {
-    const from_pubkey = try Pubkey.fromPublicKey(&from_keypair.public_key);
+    const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
     const transfer_instruction = try transfer(
         allocator,
         from_pubkey,

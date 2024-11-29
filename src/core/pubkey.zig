@@ -22,8 +22,8 @@ pub const Pubkey = extern struct {
         return .{ .data = bytes[0..size].* };
     }
 
-    pub fn fromPublicKey(public_key: *const std.crypto.sign.Ed25519.PublicKey) !Self {
-        return Self.fromBytes(&public_key.bytes);
+    pub fn fromPublicKey(public_key: *const std.crypto.sign.Ed25519.PublicKey) Self {
+        return .{ .data = public_key.bytes };
     }
 
     pub fn initRandom(random: std.Random) Self {

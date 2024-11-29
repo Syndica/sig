@@ -1326,7 +1326,7 @@ fn startGossip(
     app_base.logger.info().logf("gossip port: {d}", .{app_base.my_port});
 
     // setup contact info
-    const my_pubkey = try Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
     var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
     try contact_info.setSocket(.gossip, SocketAddr.init(app_base.my_ip, app_base.my_port));
     for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));

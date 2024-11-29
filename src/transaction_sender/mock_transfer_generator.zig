@@ -32,7 +32,7 @@ pub const KeypairAndPubkey = struct {
     pub fn init(keypair: KeyPair) KeypairAndPubkey {
         return .{
             .keypair = keypair,
-            .pubkey = try Pubkey.fromPublicKey(&keypair.public_key),
+            .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
         };
     }
 };
@@ -165,7 +165,7 @@ pub const MockTransferService = struct {
 
     /// Transfer lamports via rpc from one account to another, retries transaction 5 times
     pub fn rpcTransferAndWait(self: *MockTransferService, random: std.Random, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
-        const from_pubkey = try Pubkey.fromPublicKey(&from_keypair.public_key);
+        const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
         for (0..MAX_RPC_RETRIES) |_| {
             self.logger.debug().logf("rpc transfer: amount={} from_pubkey={s} to_pubkey={s}", .{
                 lamports,
@@ -306,7 +306,7 @@ pub const MockTransferService = struct {
 
     /// Closes an account by transferring all SOL to the bank (using rpc methods)
     pub fn closeAccount(self: *MockTransferService, random: std.Random, keypair: KeyPair) !void {
-        const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
+        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         const balance = try self.getBalance(pubkey);
         if (balance == 0) return;
 

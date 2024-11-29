@@ -112,7 +112,7 @@ test "gossip.pull_response: test filtering values works" {
 
     // corresponding value
     const pk = kp.public_key;
-    const id = try Pubkey.fromPublicKey(&pk);
+    const id = Pubkey.fromPublicKey(&pk);
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.id = id;
     legacy_contact_info.wallclock = random.int(u64);

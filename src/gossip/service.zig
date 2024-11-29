@@ -263,7 +263,7 @@ pub const GossipService = struct {
             PING_CACHE_CAPACITY,
         );
 
-        const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+        const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
         const my_shred_version = my_contact_info.shred_version;
         const failed_pull_hashes = HashTimeQueue.init(allocator);
         const metrics = try GossipMetrics.init(gossip_logger);
@@ -2235,7 +2235,7 @@ test "handle pong messages" {
     const allocator = std.testing.allocator;
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
+    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     const contact_info = try localhostTestContactInfo(pubkey);
 
     var counter = Atomic(usize).init(0);
@@ -2260,7 +2260,7 @@ test "handle pong messages" {
 
     // send out a ping to the endpoint
     const other_keypair = try KeyPair.create(null);
-    const other_pubkey = try Pubkey.fromPublicKey(&other_keypair.public_key);
+    const other_pubkey = Pubkey.fromPublicKey(&other_keypair.public_key);
     const pubkey_and_addr = sig.gossip.ping_pong.PubkeyAndSocketAddr{
         .pubkey = other_pubkey,
         .socket_addr = SocketAddr.fromEndpoint(endpoint),
@@ -2305,7 +2305,7 @@ test "handle pong messages" {
 test "build messages startup and shutdown" {
     const allocator = std.testing.allocator;
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var test_logger = TestingLogger.init(
@@ -2370,7 +2370,7 @@ test "handling prune messages" {
 
     const allocator = std.testing.allocator;
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2446,7 +2446,7 @@ test "handling pull responses" {
 
     var prng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    var my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2512,7 +2512,7 @@ test "handle old prune & pull request message" {
     const random = prng.random();
 
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
@@ -2591,7 +2591,7 @@ test "handle pull request" {
 
     var prng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
@@ -2643,7 +2643,7 @@ test "handle pull request" {
 
     // make sure we get a response by setting a valid pong response
     var random_keypair = try KeyPair.create([_]u8{22} ** 32);
-    const random_pubkey = try Pubkey.fromPublicKey(&random_keypair.public_key);
+    const random_pubkey = Pubkey.fromPublicKey(&random_keypair.public_key);
 
     const addr = SocketAddr.initRandom(prng.random());
 
@@ -2704,7 +2704,7 @@ test "test build prune messages and handle push messages" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2786,7 +2786,7 @@ test "build pull requests" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2824,7 +2824,7 @@ test "build pull requests" {
             const rando_keypair = try KeyPair.create(null);
 
             var lci = LegacyContactInfo.initRandom(prng.random());
-            lci.id = try Pubkey.fromPublicKey(&rando_keypair.public_key);
+            lci.id = Pubkey.fromPublicKey(&rando_keypair.public_key);
             lci.wallclock = now + 10 * i;
             lci.shred_version = contact_info.shred_version;
             const value = SignedGossipData.initSigned(&rando_keypair, .{ .LegacyContactInfo = lci });
@@ -2848,7 +2848,7 @@ test "test build push messages" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2924,7 +2924,7 @@ test "test large push messages" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2982,7 +2982,7 @@ test "test large push messages" {
 test "test packet verification" {
     const allocator = std.testing.allocator;
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    const id = try Pubkey.fromPublicKey(&keypair.public_key);
+    const id = Pubkey.fromPublicKey(&keypair.public_key);
     const contact_info = try localhostTestContactInfo(id);
 
     // noop for this case because this tests error failed verification
@@ -3063,7 +3063,7 @@ test "test packet verification" {
 
     // send it with a SignedGossipData which hash a slice
     {
-        const rand_pubkey = try Pubkey.fromPublicKey(&rand_keypair.public_key);
+        const rand_pubkey = Pubkey.fromPublicKey(&rand_keypair.public_key);
         var dshred = sig.gossip.data.DuplicateShred.initRandom(prng.random());
         var chunk: [32]u8 = .{1} ** 32;
         dshred.chunk = &chunk;
@@ -3102,7 +3102,7 @@ test "process contact info push packet" {
     const allocator = std.testing.allocator;
 
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var test_logger = TestingLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -3128,7 +3128,7 @@ test "process contact info push packet" {
     const responder_channel = gossip_service.packet_outgoing_channel;
 
     const kp = try KeyPair.create(null);
-    const id = try Pubkey.fromPublicKey(&kp.public_key);
+    const id = Pubkey.fromPublicKey(&kp.public_key);
 
     var packet_handle = try Thread.spawn(
         .{},
@@ -3282,7 +3282,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
         const endpoint = address.toEndpoint();
 
-        const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
+        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
         try contact_info.setSocket(.gossip, address);
 
@@ -3397,7 +3397,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
 
-        const pubkey = try Pubkey.fromPublicKey(&keypair.public_key);
+        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
         try contact_info.setSocket(.gossip, address);
 
@@ -3423,7 +3423,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         // setup recv peer
         const recv_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8889);
         var recv_keypair = try KeyPair.create(null);
-        const recv_pubkey = try Pubkey.fromPublicKey(&recv_keypair.public_key);
+        const recv_pubkey = Pubkey.fromPublicKey(&recv_keypair.public_key);
 
         var contact_info_recv = ContactInfo.init(allocator, recv_pubkey, 0, 19);
         try contact_info_recv.setSocket(.gossip, recv_address);
