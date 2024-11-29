@@ -1,8 +1,20 @@
-# Transaction Sender Service
+# Transaction Sender (Gulf Stream)
 
-- The transaction sender is responsible for sending transactions to the leader's TPU for incorporation into the ledger. It must have up to date information about who the current and future leaders are so that it can successfuly get transactions onto the ledger before they expire. 
+<!-- **Milestone**: Validator is able to forward transactions to other validators TPU port for processing (according to leader schedule) -->
 
+- Gulfstream can be thought of as Solana's mechanism for moving transactions from the edge of the network into the transaction processing unit of a leader validator. 
+- Validators make use of a leader schedule identify upcoming leaders and forward transactions to their TPU port using the quic protocol. 
+- The TPU info for leaders is discovered over gossip.
+
+<br>
+
+- The transaction sender module implements the forwarding of transactions to leader validators in sig.
 - The transaction sender receives transaction information from a channel, sends the transactions to the leader TPU addresses and then adds the transactions to a pool where they are retried until they are either expired, failed, or rooted. 
+
+<br>
+
+- Since sig does not currently have consensus or proof of stake implemented, we rely on rpc calls to get the current slot and check the status of pending transactions.
+
 
 <p>
 <img alt="Transaction Sender Service Diagram" src="imgs/transaction-sender-service.png" style="width: 800px; margin: auto;">
