@@ -256,7 +256,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             const client_pubkey = Pubkey.fromPublicKey(&client_keypair.public_key);
             var client_contact_info = ContactInfo.init(allocator, client_pubkey, 0, 19);
             try client_contact_info.setSocket(.gossip, client_address);
-            var gossip_service_client = try GossipService.init(
+            const gossip_service_client = try GossipService.create(
                 gossip_alloc,
                 gossip_alloc,
                 client_contact_info,
@@ -267,13 +267,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
 
             const client_handle = try std.Thread.spawn(.{}, GossipService.run, .{
-                &gossip_service_client, .{
+                gossip_service_client, .{
                     .spy_node = true,
                     .dump = false,
                 },
             });
             // this is used to respond to pings
-            var gossip_service_fuzzer = try GossipService.init(
+            const gossip_service_fuzzer = try GossipService.create(
                 allocator,
                 allocator,
                 fuzz_contact_info,
@@ -286,7 +286,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             // this is mainly used to just send packets through the fuzzer
             // but we also want to respond to pings so we need to run the full gossip service
             const fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{
-                &gossip_service_fuzzer, .{
+                gossip_service_fuzzer, .{
                     .spy_node = true,
                     .dump = false,
                 },
@@ -295,7 +295,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             break :blk .{ gossip_service_client, gossip_service_client.packet_incoming_channel, client_handle };
         } else {
-            var gossip_service_fuzzer = try GossipService.init(
+            const gossip_service_fuzzer = try GossipService.create(
                 allocator,
                 allocator,
                 fuzz_contact_info,
@@ -308,7 +308,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             // this is mainly used to just send packets through the fuzzer
             // but we also want to respond to pings so we need to run the full gossip service
             const fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{
-                &gossip_service_fuzzer, .{
+                gossip_service_fuzzer, .{
                     .spy_node = true,
                     .dump = false,
                 },

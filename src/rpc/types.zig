@@ -82,7 +82,24 @@ pub const EpochInfo = struct {
     transactionCount: u64,
 };
 
-// TODO: EpochSchedule
+pub const EpochSchedule = struct {
+    /// The maximum number of slots in each epoch.
+    slotsPerEpoch: u64,
+    /// A number of slots before beginning of an epoch to calculate
+    /// a leader schedule for that epoch.
+    leaderScheduleSlotOffset: u64,
+    /// Whether epochs start short and grow.
+    warmup: bool,
+    /// The first epoch after the warmup period.
+    ///
+    /// Basically: `log2(slots_per_epoch) - log2(MINIMUM_SLOTS_PER_EPOCH)`.
+    firstNormalEpoch: u64,
+    /// The first slot after the warmup period.
+    ///
+    /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
+    firstNormalSlot: u64,
+};
+
 // TODO: FeeForMessage
 // TODO: FirstAvailableBlock
 // TODO: GenesisHash
