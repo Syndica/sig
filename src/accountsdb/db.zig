@@ -318,7 +318,7 @@ pub const AccountsDB = struct {
                     .accounts_hash = snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
                     .capitalization = full_snapshot.bank_fields.capitalization,
                 },
-                .expected_incremental = if (snapshot_fields.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+                .expected_incremental = if (snapshot_fields.bank_extra.snapshot_persistence) |inc_persistence| .{
                     .accounts_hash = inc_persistence.incremental_hash,
                     .capitalization = inc_persistence.incremental_capitalization,
                 } else null,
@@ -2645,8 +2645,10 @@ pub const AccountsDB = struct {
                 .rooted_slots = .{},
                 .rooted_slot_hashes = .{},
             },
-            .lamports_per_signature = params.lamports_per_signature,
-            .bank_fields_inc = .{}, // default to null for full snapshot,
+            .bank_extra = .{
+                .lamports_per_signature = params.lamports_per_signature,
+                // default to null for full snapshot,
+            },
         };
 
         // main snapshot writing logic
@@ -2871,8 +2873,8 @@ pub const AccountsDB = struct {
                 .rooted_slots = .{},
                 .rooted_slot_hashes = .{},
             },
-            .lamports_per_signature = params.lamports_per_signature,
-            .bank_fields_inc = .{
+            .bank_extra = .{
+                .lamports_per_signature = params.lamports_per_signature,
                 .snapshot_persistence = snap_persistence,
                 // TODO: the other fields default to null, but this may not always be correct.
             },
@@ -3197,7 +3199,7 @@ fn testWriteSnapshotFull(
     const snapshot_gen_info = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
         .bank_fields = &snap_fields.bank_fields,
-        .lamports_per_signature = snap_fields.lamports_per_signature,
+        .lamports_per_signature = snap_fields.bank_extra.lamports_per_signature,
         .old_snapshot_action = .ignore_old,
         .deprecated_stored_meta_write_version = snap_fields.accounts_db_fields.stored_meta_write_version,
     });
@@ -3236,7 +3238,7 @@ fn testWriteSnapshotIncremental(
     const snapshot_gen_info = try accounts_db.generateIncrementalSnapshot(.{
         .target_slot = slot,
         .bank_fields = &snap_fields.bank_fields,
-        .lamports_per_signature = snap_fields.lamports_per_signature,
+        .lamports_per_signature = snap_fields.bank_extra.lamports_per_signature,
         .old_snapshot_action = .delete_old,
         .deprecated_stored_meta_write_version = snap_fields.accounts_db_fields.stored_meta_write_version,
     });
@@ -3506,7 +3508,7 @@ test "load and validate from test snapshot" {
             .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
             .capitalization = snapshots.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+        .expected_incremental = if (snapshots.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
             .accounts_hash = inc_persistence.incremental_hash,
             .capitalization = inc_persistence.incremental_capitalization,
         } else null,
@@ -3529,7 +3531,7 @@ test "load and validate from test snapshot using disk index" {
             .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
             .capitalization = snapshots.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+        .expected_incremental = if (snapshots.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
             .accounts_hash = inc_persistence.incremental_hash,
             .capitalization = inc_persistence.incremental_capitalization,
         } else null,
@@ -3552,7 +3554,7 @@ test "load and validate from test snapshot parallel" {
             .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
             .capitalization = snapshots.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+        .expected_incremental = if (snapshots.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
             .accounts_hash = inc_persistence.incremental_hash,
             .capitalization = inc_persistence.incremental_capitalization,
         } else null,
@@ -4223,7 +4225,7 @@ test "generate snapshot & update gossip snapshot hashes" {
     try std.testing.expectEqual(all_snapshot_fields.full.accounts_db_fields.bank_hash_info.accounts_hash, full_gen_result.hash);
     try std.testing.expectEqual(all_snapshot_fields.full.bank_fields.capitalization, full_gen_result.capitalization);
 
-    try std.testing.expectEqual(all_snapshot_fields.incremental.?.bank_fields_inc.snapshot_persistence.?, inc_gen_result);
+    try std.testing.expectEqual(all_snapshot_fields.incremental.?.bank_extra.snapshot_persistence.?, inc_gen_result);
 
     try std.testing.expectEqual(full_slot, inc_gen_result.full_slot);
     try std.testing.expectEqual(full_gen_result.hash, inc_gen_result.full_hash);
@@ -4364,7 +4366,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .accounts_hash = snapshot.accounts_db_fields.bank_hash_info.accounts_hash,
                 .capitalization = full_snapshot.bank_fields.capitalization,
             },
-            .expected_incremental = if (snapshot.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+            .expected_incremental = if (snapshot.bank_extra.snapshot_persistence) |inc_persistence| .{
                 .accounts_hash = inc_persistence.incremental_hash,
                 .capitalization = inc_persistence.incremental_capitalization,
             } else null,
