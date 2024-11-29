@@ -332,6 +332,7 @@ const AcceptConnectionError = error{
     BlockedByFirewall,
     NetworkSubsystemFailed,
 } || std.posix.UnexpectedError;
+
 fn acceptConnection(
     tcp_server: *std.net.Server,
     logger: ScopedLogger,
