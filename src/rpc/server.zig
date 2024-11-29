@@ -97,9 +97,12 @@ pub const Server = struct {
     }
 
     /// Calls `acceptAndServeConnection` in a loop until `exit.load(.acquire)`.
-    pub fn serve(server: *Server, exit: *std.atomic.Value(bool)) !void {
+    pub fn serve(
+        server: *Server,
+        exit: *std.atomic.Value(bool),
+    ) AcceptAndServeConnectionError!void {
         while (!exit.load(.acquire)) {
-            _ = try server.acceptAndServeConnection();
+            try server.acceptAndServeConnection();
         }
     }
 
@@ -115,19 +118,8 @@ pub const Server = struct {
         server.wait_group.start();
         errdefer server.wait_group.finish();
 
-        const hct_buffer = try server.allocator.alignedAlloc(
-            u8,
-            @alignOf(HandleConnectionTask),
-            HandleConnectionTask.initBufferSize(server.read_buffer_size),
-        );
-        errdefer server.allocator.free(hct_buffer);
-
-        const new_hct = try HandleConnectionTask.initBufferAndReceiveHead(
-            hct_buffer,
-            server,
-            conn,
-        );
-        errdefer new_hct.http_server.connection.stream.close();
+        const new_hct = try HandleConnectionTask.createAndReceiveHead(server, conn);
+        errdefer new_hct.destroyAndClose();
 
         server.thread_pool.schedule(ThreadPool.Batch.from(&new_hct.task));
     }
@@ -138,6 +130,43 @@ const HandleConnectionTask = struct {
     server: *Server,
     http_server: std.http.Server,
     request: std.http.Server.Request,
+
+    fn createAndReceiveHead(
+        server: *Server,
+        conn: std.net.Server.Connection,
+    ) (std.http.Server.ReceiveHeadError || std.mem.Allocator.Error)!*HandleConnectionTask {
+        const allocator = server.allocator;
+
+        const hct_buf_align = @alignOf(HandleConnectionTask);
+        const hct_buf_size = initBufferSize(server.read_buffer_size);
+
+        const hct_buffer = try allocator.alignedAlloc(u8, hct_buf_align, hct_buf_size);
+        errdefer server.allocator.free(hct_buffer);
+
+        const hct: *HandleConnectionTask = std.mem.bytesAsValue(
+            HandleConnectionTask,
+            hct_buffer[0..@sizeOf(HandleConnectionTask)],
+        );
+        hct.* = .{
+            .task = .{ .callback = callback },
+            .server = server,
+            .http_server = std.http.Server.init(conn, getReadBuffer(server.read_buffer_size, hct)),
+            .request = try hct.http_server.receiveHead(),
+        };
+
+        return hct;
+    }
+
+    /// Does not release the connection.
+    fn destroyAndClose(hct: *HandleConnectionTask) void {
+        const allocator = hct.server.allocator;
+
+        const full_buffer = getFullBuffer(hct.server.read_buffer_size, hct);
+        defer allocator.free(full_buffer);
+
+        const connection = hct.http_server.connection;
+        defer connection.stream.close();
+    }
 
     fn initBufferSize(read_buffer_size: usize) usize {
         return @sizeOf(HandleConnectionTask) + read_buffer_size;
@@ -158,35 +187,12 @@ const HandleConnectionTask = struct {
         return getFullBuffer(read_buffer_size, hct)[@sizeOf(HandleConnectionTask)..];
     }
 
-    fn initBufferAndReceiveHead(
-        /// Must be `.len == initBufferSize(server.read_buffer_size)`.
-        buffer: []align(@alignOf(HandleConnectionTask)) u8,
-        server: *Server,
-        conn: std.net.Server.Connection,
-    ) std.http.Server.ReceiveHeadError!*HandleConnectionTask {
-        std.debug.assert(buffer.len == initBufferSize(server.read_buffer_size));
-
-        const hct: *HandleConnectionTask = std.mem.bytesAsValue(
-            HandleConnectionTask,
-            buffer[0..@sizeOf(HandleConnectionTask)],
-        );
-        hct.* = .{
-            .task = .{ .callback = callback },
-            .server = server,
-            .http_server = std.http.Server.init(conn, getReadBuffer(server.read_buffer_size, hct)),
-            .request = try hct.http_server.receiveHead(),
-        };
-
-        return hct;
-    }
-
     fn callback(task: *ThreadPool.Task) void {
         const hct: *HandleConnectionTask = @fieldParentPtr("task", task);
+        defer hct.destroyAndClose();
+
         const server = hct.server;
         const logger = server.logger;
-
-        const full_buffer = getFullBuffer(hct.server.read_buffer_size, hct);
-        defer hct.server.allocator.free(full_buffer);
 
         const wait_group = &server.wait_group;
         defer wait_group.finish();
@@ -194,8 +200,8 @@ const HandleConnectionTask = struct {
         handleRequest(
             logger,
             &hct.request,
-            hct.server.snapshot_dir,
-            hct.server.latest_snapshot_gen_info,
+            server.snapshot_dir,
+            server.latest_snapshot_gen_info,
         ) catch |err| {
             if (@errorReturnTrace()) |stack_trace| {
                 logger.err().logf("{s}\n{}", .{ @errorName(err), stack_trace });
