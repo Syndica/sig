@@ -73,80 +73,6 @@ pub fn stakeHistoryRandom(
     return stake_history;
 }
 
-pub const StakeDelegations = std.AutoArrayHashMapUnmanaged(Pubkey, Delegation);
-
-pub fn stakeDelegationsRandom(
-    random: std.Random,
-    allocator: std.mem.Allocator,
-    max_list_entries: usize,
-) std.mem.Allocator.Error!StakeDelegations {
-    var stake_delegations = std.AutoArrayHashMap(Pubkey, Delegation).init(allocator);
-    errdefer stake_delegations.deinit();
-
-    try sig.rand.fillHashmapWithRng(&stake_delegations, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(rand: std.Random) !Pubkey {
-            return Pubkey.initRandom(rand);
-        }
-        pub fn randomValue(rand: std.Random) !Delegation {
-            return Delegation.initRandom(rand);
-        }
-    });
-
-    return stake_delegations.unmanaged;
-}
-
-/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186)
-pub const Stakes = struct {
-    /// vote accounts
-    vote_accounts: VoteAccounts,
-
-    /// stake_delegations
-    stake_delegations: StakeDelegations,
-
-    /// unused
-    unused: u64,
-
-    /// current epoch, used to calculate current stake
-    epoch: Epoch,
-
-    /// history of staking levels
-    stake_history: StakeHistory,
-
-    pub fn deinit(stakes: Stakes, allocator: std.mem.Allocator) void {
-        stakes.vote_accounts.deinit(allocator);
-
-        var stake_delegations = stakes.stake_delegations;
-        stake_delegations.deinit(allocator);
-
-        allocator.free(stakes.stake_history);
-    }
-
-    pub fn initRandom(
-        allocator: std.mem.Allocator,
-        /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
-        /// for commentary on the runtime of this function.
-        random: std.Random,
-        max_list_entries: usize,
-    ) std.mem.Allocator.Error!Stakes {
-        const vote_accounts = try VoteAccounts.initRandom(random, allocator, max_list_entries);
-        errdefer vote_accounts.deinit(allocator);
-
-        var stake_delegations = try stakeDelegationsRandom(random, allocator, max_list_entries);
-        errdefer stake_delegations.deinit(allocator);
-
-        var stake_history = try stakeHistoryRandom(random, allocator, max_list_entries);
-        errdefer stake_history.deinit(allocator);
-
-        return .{
-            .vote_accounts = vote_accounts,
-            .stake_delegations = stake_delegations,
-            .unused = random.int(u64),
-            .epoch = random.int(Epoch),
-            .stake_history = stake_history,
-        };
-    }
-};
-
 /// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/vote/src/vote_account.rs#L44)
 pub const VoteAccounts = struct {
     vote_accounts: std.AutoArrayHashMapUnmanaged(Pubkey, StakeAndVoteAccount),
@@ -308,7 +234,7 @@ test "deserialize VoteState.node_pubkey" {
     try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
 }
 
-/// Analogous to [Delegation](https://github.com/anza-xyz/agave/blob/f807911531359e0ae4cfcaf371bd3843ec52f1c6/sdk/program/src/stake/state.rs#L587)
+/// Analogous to [Delegation](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L607)
 pub const Delegation = struct {
     /// to whom the stake is delegated
     voter_pubkey: Pubkey,
@@ -318,9 +244,8 @@ pub const Delegation = struct {
     activation_epoch: Epoch,
     /// epoch the stake was deactivated, std::Epoch::MAX if not deactivated
     deactivation_epoch: Epoch,
-    /// how much stake we can activate per-epoch as a fraction of currently effective stake
-    /// depreciated!
-    warmup_cooldown_rate: f64,
+    /// DEPRECATED: since 1.16.7
+    deprecated_warmup_cooldown_rate: f64,
 
     pub fn initRandom(random: std.Random) Delegation {
         return .{
@@ -328,7 +253,7 @@ pub const Delegation = struct {
             .stake = random.int(u64),
             .activation_epoch = random.int(Epoch),
             .deactivation_epoch = random.int(Epoch),
-            .warmup_cooldown_rate = random.float(f64),
+            .deprecated_warmup_cooldown_rate = random.float(f64),
         };
     }
 };
@@ -535,7 +460,7 @@ pub const HardForks = struct {
     }
 };
 
-/// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L14)
+/// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L14)
 pub const NodeVoteAccounts = struct {
     vote_accounts: []const Pubkey,
     total_stake: u64,
@@ -559,6 +484,7 @@ pub const NodeVoteAccounts = struct {
     }
 };
 
+/// Analogous to [NodeIdToVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L9)
 pub const NodeIdToVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, NodeVoteAccounts);
 
 pub fn nodeIdToVoteAccountsMapDeinit(map: NodeIdToVoteAccountsMap, allocator: std.mem.Allocator) void {
@@ -570,8 +496,8 @@ pub fn nodeIdToVoteAccountsMapDeinit(map: NodeIdToVoteAccountsMap, allocator: st
 }
 
 pub fn nodeIdToVoteAccountsMapRandom(
-    random: std.Random,
     allocator: std.mem.Allocator,
+    random: std.Random,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!NodeIdToVoteAccountsMap {
     var node_id_to_vote_accounts = NodeIdToVoteAccountsMap.Managed.init(allocator);
@@ -596,11 +522,12 @@ pub fn nodeIdToVoteAccountsMapRandom(
     return node_id_to_vote_accounts.unmanaged;
 }
 
+/// Analogous to [EpochAuthorizedVoters](https://github.com/anza-xyz/agave/blob/42df56cac041077e471655579d6189a389c53882/runtime/src/epoch_stakes.rs#L10)
 pub const EpochAuthorizedVoters = std.AutoArrayHashMapUnmanaged(Pubkey, Pubkey);
 
 pub fn epochAuthorizedVotersRandom(
-    random: std.Random,
     allocator: std.mem.Allocator,
+    random: std.Random,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!EpochAuthorizedVoters {
     var epoch_authorized_voters = EpochAuthorizedVoters.Managed.init(allocator);
@@ -620,7 +547,7 @@ pub fn epochAuthorizedVotersRandom(
 
 /// Analogous to [EpochStakes](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L22)
 pub const EpochStakes = struct {
-    stakes: Stakes,
+    stakes: Stakes(Delegation),
     total_stake: u64,
     node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
     epoch_authorized_voters: EpochAuthorizedVoters,
@@ -640,13 +567,22 @@ pub const EpochStakes = struct {
         random: std.Random,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!EpochStakes {
-        var result_stakes = try Stakes.initRandom(allocator, random, max_list_entries);
+        var result_stakes = try Stakes(Delegation).initRandom(
+            allocator,
+            random,
+            max_list_entries,
+            struct {
+                pub fn randomValue(rand: std.Random) !Delegation {
+                    return Delegation.initRandom(rand);
+                }
+            },
+        );
         errdefer result_stakes.deinit(allocator);
 
-        const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(random, allocator, max_list_entries);
+        const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(allocator, random, max_list_entries);
         errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
 
-        var epoch_authorized_voters = try epochAuthorizedVotersRandom(random, allocator, max_list_entries);
+        var epoch_authorized_voters = try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
         errdefer epoch_authorized_voters.deinit(allocator);
 
         return .{
@@ -705,21 +641,320 @@ pub const RewardType = enum {
     Voting,
 };
 
-/// Analogous to [StartBlockHeightAndRewards](https://github.com/anza-xyz/agave/blob/034cd7396a1db2db21a3305b259a17a5fdea312c/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L60)
-pub const StartBlockHeightAndRewards = struct {
-    /// the block height of the parent of the slot at which rewards distribution began
-    parent_start_block_height: u64,
-    /// calculated epoch rewards pending distribution
-    calculated_epoch_stake_rewards: std.ArrayList(StakeReward),
+/// Analogous to [Authorized](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L362)
+pub const Authorized = struct {
+    staker: Pubkey,
+    withdrawer: Pubkey,
+
+    pub fn initRandom(random: std.Random) Authorized {
+        return .{
+            .staker = Pubkey.initRandom(random),
+            .withdrawer = Pubkey.initRandom(random),
+        };
+    }
 };
 
-/// Analogous to [EpochRewardStatus](https://github.com/anza-xyz/agave/blob/034cd7396a1db2db21a3305b259a17a5fdea312c/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L70)
-pub const EpochRewardStatus = union(enum) {
-    Active: StartBlockHeightAndRewards,
-    Inactive: void,
+/// Analogous to [Lockup](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L273)
+pub const Lockup = struct {
+    /// UnixTimestamp at which this stake will allow withdrawal, unless the
+    ///   transaction is signed by the custodian
+    unix_timestamp: UnixTimestamp,
+    /// epoch height at which this stake will allow withdrawal, unless the
+    ///   transaction is signed by the custodian
+    epoch: Epoch,
+    /// custodian signature on a transaction exempts the operation from
+    ///  lockup constraints
+    custodian: Pubkey,
 
-    pub fn default() @This() {
-        return @This().Inactive;
+    pub fn initRandom(random: std.Random) Lockup {
+        return .{
+            .unix_timestamp = random.int(UnixTimestamp),
+            .epoch = random.int(Epoch),
+            .custodian = Pubkey.initRandom(random),
+        };
+    }
+};
+
+/// Analogous to [StakeStateV2](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L145)
+pub const StakeStateV2 = union(enum) {
+    uninitialized,
+    initialized: Meta,
+    stake: struct { Meta, Stake, StakeFlags },
+    rewards_pool,
+
+    pub const Meta = struct {
+        rent_exempt_reserve: u64,
+        authorized: Authorized,
+        lockup: Lockup,
+
+        pub fn initRandom(random: std.Random) Meta {
+            return .{
+                .rent_exempt_reserve = random.int(u64),
+                .authorized = Authorized.initRandom(random),
+                .lockup = Lockup.initRandom(random),
+            };
+        }
+    };
+
+    /// Analogous to [Stake](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L918)
+    pub const Stake = struct {
+        delegation: Delegation,
+        /// Credits observed is credits from vote account state when delegated or redeemed.
+        credits_observed: u64,
+
+        pub fn initRandom(random: std.Random) Stake {
+            return .{
+                .delegation = Delegation.initRandom(random),
+                .credits_observed = random.int(u64),
+            };
+        }
+    };
+
+    /// Analogous to [StakeFlags](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/stake_flags.rs#L12)
+    pub const StakeFlags = enum(u8) {
+        empty = 0,
+        _,
+
+        pub fn initRandom(random: std.Random) StakeFlags {
+            return @enumFromInt(random.int(u8));
+        }
+    };
+
+    pub fn initRandom(random: std.Random) StakeStateV2 {
+        return switch (random.enumValue(@typeInfo(StakeStateV2).Union.tag_type.?)) {
+            inline .uninitialized, .rewards_pool => |tag| tag,
+            .initialized => .{ .initialized = Meta.initRandom(random) },
+            .stake => .{ .stake = .{
+                Meta.initRandom(random),
+                Stake.initRandom(random),
+                StakeFlags.initRandom(random),
+            } },
+        };
+    }
+};
+
+/// Analagous to [StakeAccount<Delegation>](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/stake_account.rs#L20).
+/// NOTE: basically identical to all other `StakeAccount<T>` in terms of actual representation, it just uses `T` as part of phantom data
+/// to be able to distinguish distinct "categories" of `StakeAccount`s.
+pub const DelegationStakeAccount = struct {
+    account: Account,
+    stake_state: StakeStateV2,
+
+    pub fn initRandom(
+        allocator: std.mem.Allocator,
+        random: std.Random,
+        max_list_entries: usize,
+    ) std.mem.Allocator.Error!DelegationStakeAccount {
+        const account = try Account.initRandom(
+            allocator,
+            random,
+            random.uintAtMost(usize, max_list_entries),
+        );
+        errdefer account.deinit(allocator);
+
+        const stake_state = StakeStateV2.initRandom(random);
+
+        return .{
+            .account = account,
+            .stake_state = stake_state,
+        };
+    }
+};
+
+/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186)
+pub fn Stakes(comptime StakeDelegationElem: type) type {
+    return struct {
+        /// vote accounts
+        vote_accounts: VoteAccounts,
+        /// stake_delegations
+        stake_delegations: StakeDelegations,
+        /// unused
+        unused: u64,
+        /// current epoch, used to calculate current stake
+        epoch: Epoch,
+        /// history of staking levels
+        stake_history: StakeHistory,
+        const Self = @This();
+
+        pub const StakeDelegations = std.AutoArrayHashMapUnmanaged(Pubkey, StakeDelegationElem);
+
+        pub fn deinit(stakes: Self, allocator: std.mem.Allocator) void {
+            stakes.vote_accounts.deinit(allocator);
+
+            var stake_delegations = stakes.stake_delegations;
+            stake_delegations.deinit(allocator);
+
+            allocator.free(stakes.stake_history);
+        }
+
+        pub fn initRandom(
+            allocator: std.mem.Allocator,
+            /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
+            /// for commentary on the runtime of this function.
+            random: std.Random,
+            max_list_entries: usize,
+            /// Expected to provide methods & fields/decls:
+            /// * `fn randomValue(delegation_ctx, random: std.Random) StakeDelegationElem`.
+            ///
+            /// Also see `sig.rand.fillHashmapWithRng`.
+            delegation_ctx: anytype,
+        ) std.mem.Allocator.Error!Self {
+            const vote_accounts = try VoteAccounts.initRandom(random, allocator, max_list_entries);
+            errdefer vote_accounts.deinit(allocator);
+
+            var stake_delegations = StakeDelegations.Managed.init(allocator);
+            errdefer stake_delegations.deinit();
+
+            try sig.rand.fillHashmapWithRng(
+                &stake_delegations,
+                random,
+                random.uintAtMost(usize, max_list_entries),
+                struct {
+                    pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
+                        return Pubkey.initRandom(rand);
+                    }
+                    pub fn randomValue(ctx: @This(), rand: std.Random) !StakeDelegationElem {
+                        return ctx.delegation_ctx.randomValue(rand);
+                    }
+
+                    delegation_ctx: @TypeOf(delegation_ctx),
+                }{ .delegation_ctx = delegation_ctx },
+            );
+
+            var stake_history = try stakeHistoryRandom(random, allocator, max_list_entries);
+            errdefer stake_history.deinit(allocator);
+
+            return .{
+                .vote_accounts = vote_accounts,
+                .stake_delegations = stake_delegations.unmanaged,
+                .unused = random.int(u64),
+                .epoch = random.int(Epoch),
+                .stake_history = stake_history,
+            };
+        }
+    };
+}
+
+/// Analogous to [SerdeStakesToStakeFormat](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/stakes/serde_stakes.rs#L17)
+pub const SerdeStakesToStakeFormat = union(enum) {
+    stake: Stakes(Delegation),
+    account: Stakes(DelegationStakeAccount),
+
+    pub fn deinit(self: *const SerdeStakesToStakeFormat, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            inline .stake, .account => |payload| payload.deinit(allocator),
+        }
+    }
+
+    pub fn initRandom(
+        allocator: std.mem.Allocator,
+        random: std.Random,
+        max_list_entries: usize,
+    ) std.mem.Allocator.Error!SerdeStakesToStakeFormat {
+        return switch (random.enumValue(@typeInfo(SerdeStakesToStakeFormat).Union.tag_type.?)) {
+            .stake => .{ .stake = try Stakes(Delegation).initRandom(
+                allocator,
+                random,
+                max_list_entries,
+                struct {
+                    pub fn randomValue(rand: std.Random) !Delegation {
+                        return Delegation.initRandom(rand);
+                    }
+                },
+            ) },
+            .account => .{ .account = blk: {
+                const DelegationStakeAccountCtx = struct {
+                    allocator: std.mem.Allocator,
+                    max_list_entries: usize,
+
+                    pub fn randomValue(
+                        ctx: @This(),
+                        rand: std.Random,
+                    ) !DelegationStakeAccount {
+                        return DelegationStakeAccount.initRandom(
+                            ctx.allocator,
+                            rand,
+                            ctx.max_list_entries,
+                        );
+                    }
+                };
+                break :blk try Stakes(DelegationStakeAccount).initRandom(
+                    allocator,
+                    random,
+                    max_list_entries,
+                    DelegationStakeAccountCtx{
+                        .allocator = allocator,
+                        .max_list_entries = max_list_entries,
+                    },
+                );
+            } },
+        };
+    }
+};
+
+/// Analogous to [VersionedEpochStake](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L137)
+pub const VersionedEpochStake = union(enum(u32)) {
+    current: Current,
+
+    pub fn deinit(ves: VersionedEpochStake, allocator: std.mem.Allocator) void {
+        switch (ves) {
+            .current => |current| current.deinit(allocator),
+        }
+    }
+
+    pub const Current = struct {
+        stakes: SerdeStakesToStakeFormat,
+        total_stake: u64,
+        node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
+        epoch_authorized_voters: EpochAuthorizedVoters,
+
+        pub fn deinit(current: Current, allocator: std.mem.Allocator) void {
+            current.stakes.deinit(allocator);
+            nodeIdToVoteAccountsMapDeinit(current.node_id_to_vote_accounts, allocator);
+            var epoch_authorized_voters = current.epoch_authorized_voters;
+            epoch_authorized_voters.deinit(allocator);
+        }
+
+        pub fn initRandom(
+            allocator: std.mem.Allocator,
+            random: std.Random,
+            max_list_entries: usize,
+        ) std.mem.Allocator.Error!Current {
+            const stakes = try SerdeStakesToStakeFormat.initRandom(
+                allocator,
+                random,
+                max_list_entries,
+            );
+            errdefer stakes.deinit(allocator);
+
+            const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(
+                allocator,
+                random,
+                max_list_entries,
+            );
+            errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
+
+            var epoch_authorized_voters = try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
+            errdefer epoch_authorized_voters.deinit(allocator);
+
+            return .{
+                .stakes = stakes,
+                .total_stake = random.int(u64),
+                .node_id_to_vote_accounts = node_id_to_vote_accounts,
+                .epoch_authorized_voters = epoch_authorized_voters,
+            };
+        }
+    };
+
+    pub fn initRandom(
+        allocator: std.mem.Allocator,
+        random: std.Random,
+        max_list_entries: usize,
+    ) std.mem.Allocator.Error!VersionedEpochStake {
+        comptime std.debug.assert(@typeInfo(VersionedEpochStake).Union.fields.len == 1); // randomly generate the tag otherwise
+        return .{
+            .current = try Current.initRandom(allocator, random, max_list_entries),
+        };
     }
 };
 
@@ -796,7 +1031,7 @@ pub const BankFields = struct {
     rent_collector: RentCollector,
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
-    stakes: Stakes,
+    stakes: Stakes(Delegation),
     unused_accounts: UnusedAccounts, // required for deserialization
     epoch_stakes: EpochStakeMap,
     is_delta: bool,
@@ -816,18 +1051,6 @@ pub const BankFields = struct {
         epochStakeMapDeinit(bank_fields.epoch_stakes, allocator);
     }
 
-    pub const Incremental = struct {
-        snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
-        epoch_accounts_hash: ?Hash = null,
-        epoch_reward_status: ?EpochRewardStatus = null,
-
-        // TODO: do a thorough review on this, this seems to work by chance with the test data, but I don't trust it yet
-
-        pub const @"!bincode-config:snapshot_persistence" = bincode.optional.defaultToNullOnEof(BankIncrementalSnapshotPersistence, .{ .encode_optional = true });
-        pub const @"!bincode-config:epoch_accounts_hash" = bincode.optional.defaultToNullOnEof(Hash, .{ .encode_optional = true });
-        pub const @"!bincode-config:epoch_reward_status" = bincode.optional.defaultToNullOnEof(EpochRewardStatus, .{ .encode_optional = false });
-    };
-
     pub fn initRandom(
         allocator: std.mem.Allocator,
         /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
@@ -844,7 +1067,11 @@ pub const BankFields = struct {
         const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
         errdefer hard_forks.deinit(allocator);
 
-        const stakes = try Stakes.initRandom(allocator, random, max_list_entries);
+        const stakes = try Stakes(Delegation).initRandom(allocator, random, max_list_entries, struct {
+            pub fn randomValue(rand: std.Random) !Delegation {
+                return Delegation.initRandom(rand);
+            }
+        });
         errdefer stakes.deinit(allocator);
 
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
@@ -919,6 +1146,219 @@ pub const BankFields = struct {
                 slots_in_epoch,
                 staked_nodes,
             ),
+        };
+    }
+};
+
+/// Analogous to https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/serde_snapshot.rs#L396
+pub const ExtraFields = struct {
+    lamports_per_signature: u64,
+    snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
+    epoch_accounts_hash: ?Hash = null,
+    versioned_epoch_stakes: VersionedEpochStakesMap = .{},
+    accounts_lt_hash: ?AccountsLtHash = null,
+
+    pub fn deinit(incremental: *const ExtraFields, allocator: std.mem.Allocator) void {
+        var versioned_epoch_stakes = incremental.versioned_epoch_stakes;
+        versioned_epoch_stakes.deinit(allocator);
+    }
+
+    pub const VersionedEpochStakesMap = std.AutoArrayHashMapUnmanaged(u64, VersionedEpochStake);
+
+    /// TODO: Investigate this `LtHash` business:
+    /// * [The field](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/serde_snapshot.rs#L406)
+    /// * [The serde wrapper hack](https://github.com/anza-xyz/agave/blob/81b615fa9d21ff8dc7df00985deeef118930979e/runtime/src/serde_snapshot/types.rs#L7-L11)
+    /// * [Lattice Hash](https://github.com/anza-xyz/agave/blob/81b615fa9d21ff8dc7df00985deeef118930979e/lattice-hash/src/lt_hash.rs#L12-L15)
+    pub const ACCOUNTS_LATTICE_HASH_LEN = 1024;
+    pub const AccountsLtHash = [ACCOUNTS_LATTICE_HASH_LEN]u16;
+
+    pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
+        .deserializer = deserialize,
+        .serializer = serialize,
+    };
+
+    pub fn initRandom(
+        allocator: std.mem.Allocator,
+        random: std.Random,
+        max_list_entries: usize,
+    ) std.mem.Allocator.Error!ExtraFields {
+        const non_eof_count = random.uintLessThan(usize, @typeInfo(ExtraFields).Struct.fields.len);
+
+        const lamports_per_signature = if (non_eof_count >= 1) random.int(u64) else 0;
+
+        const snapshot_persistence: ?BankIncrementalSnapshotPersistence = if (non_eof_count >= 2) .{
+            .full_slot = random.int(Slot),
+            .full_hash = Hash.initRandom(random),
+            .full_capitalization = random.int(u64),
+            .incremental_hash = Hash.initRandom(random),
+            .incremental_capitalization = random.int(u64),
+        } else null;
+
+        const epoch_accounts_hash = if (non_eof_count >= 3) Hash.initRandom(random) else null;
+
+        var versioned_epoch_stakes = VersionedEpochStakesMap.Managed.init(allocator);
+        errdefer versioned_epoch_stakes.deinit();
+        errdefer for (versioned_epoch_stakes.values()) |a| a.deinit(allocator);
+        if (non_eof_count >= 4) {
+            const VesMapRngCtx = struct {
+                allocator: std.mem.Allocator,
+                max_list_entries: usize,
+                pub fn randomKey(_: @This(), rand: std.Random) !u64 {
+                    return rand.int(u64);
+                }
+                pub fn randomValue(ctx: @This(), rand: std.Random) !VersionedEpochStake {
+                    return VersionedEpochStake.initRandom(
+                        ctx.allocator,
+                        rand,
+                        ctx.max_list_entries,
+                    );
+                }
+            };
+            try sig.rand.fillHashmapWithRng(
+                &versioned_epoch_stakes,
+                random,
+                random.uintAtMost(usize, max_list_entries),
+                VesMapRngCtx{
+                    .allocator = allocator,
+                    .max_list_entries = max_list_entries,
+                },
+            );
+        }
+
+        const accounts_lt_hash = if (non_eof_count >= 5) blk: {
+            var accounts_lt_hash: ExtraFields.AccountsLtHash = undefined;
+            random.bytes(std.mem.asBytes(&accounts_lt_hash));
+            break :blk accounts_lt_hash;
+        } else null;
+
+        return .{
+            .lamports_per_signature = lamports_per_signature,
+            .snapshot_persistence = snapshot_persistence,
+            .epoch_accounts_hash = epoch_accounts_hash,
+            .versioned_epoch_stakes = versioned_epoch_stakes.unmanaged,
+            .accounts_lt_hash = accounts_lt_hash,
+        };
+    }
+
+    fn serialize(
+        writer: anytype,
+        data: anytype,
+        params: bincode.Params,
+    ) anyerror!void {
+        comptime if (@TypeOf(data) != ExtraFields) unreachable;
+        const FieldTag = std.meta.FieldEnum(ExtraFields);
+        const fields = @typeInfo(ExtraFields).Struct.fields;
+        // scan from the end to the beginning for all eof values; any
+        // eof values are discarded, and not included in the subsequent
+        // iteration which actually outputs the values.
+        inline for (0 + 1..fields.len + 1) |reverse_i| {
+            const i = fields.len - reverse_i;
+            const last_field = fields[i];
+            const value = @field(data, last_field.name);
+            const is_eof_value = switch (@field(FieldTag, last_field.name)) {
+                .lamports_per_signature => value == 0,
+                .snapshot_persistence => value == null,
+                .epoch_accounts_hash => value == null,
+                .versioned_epoch_stakes => value.count() == 0,
+                .accounts_lt_hash => value == null,
+            };
+
+            if (is_eof_value) {
+                inline for (fields[0 .. i + 1]) |field| {
+                    try bincode.write(writer, @field(data, field.name), params);
+                }
+                return;
+            }
+        }
+    }
+
+    fn deserialize(
+        allocator: std.mem.Allocator,
+        reader: anytype,
+        params: bincode.Params,
+    ) anyerror!ExtraFields {
+        const unreachable_allocator = sig.utils.allocators.failing.allocator(.{
+            .alloc = .assert,
+            .resize = .assert,
+            .free = .assert,
+        });
+
+        var eof = false;
+
+        const lamports_per_signature = bincode.readInt(
+            u64,
+            reader,
+            params,
+        ) catch |err| switch (err) {
+            else => |e| return e,
+            error.EndOfStream => blk: {
+                eof = true;
+                break :blk 0;
+            },
+        };
+
+        const snapshot_persistence = if (eof) null else bincode.read(
+            unreachable_allocator,
+            ?BankIncrementalSnapshotPersistence,
+            reader,
+            params,
+        ) catch |err| switch (err) {
+            else => |e| return e,
+            error.EndOfStream => blk: {
+                eof = true;
+                break :blk null;
+            },
+        };
+
+        const epoch_accounts_hash = if (eof) null else bincode.read(
+            unreachable_allocator,
+            ?Hash,
+            reader,
+            params,
+        ) catch |err| switch (err) {
+            else => |e| return e,
+            error.EndOfStream => blk: {
+                eof = true;
+                break :blk null;
+            },
+        };
+
+        const hmDeserialize = comptime bincode.hashmap.hashMapFieldConfig(
+            VersionedEpochStakesMap,
+            .{},
+        ).deserializer.?;
+        var versioned_epoch_stakes = if (eof) VersionedEpochStakesMap{} else hmDeserialize(
+            allocator,
+            reader,
+            params,
+        ) catch |err| switch (err) {
+            else => |e| return e,
+            error.EndOfStream => blk: {
+                eof = true;
+                break :blk VersionedEpochStakesMap{};
+            },
+        };
+        errdefer versioned_epoch_stakes.deinit(allocator);
+
+        const accounts_lt_hash = if (eof) null else bincode.read(
+            unreachable_allocator,
+            ?AccountsLtHash,
+            reader,
+            params,
+        ) catch |err| switch (err) {
+            else => |e| return e,
+            error.EndOfStream => blk: {
+                eof = true;
+                break :blk null;
+            },
+        };
+
+        return .{
+            .lamports_per_signature = lamports_per_signature,
+            .snapshot_persistence = snapshot_persistence,
+            .epoch_accounts_hash = epoch_accounts_hash,
+            .versioned_epoch_stakes = versioned_epoch_stakes,
+            .accounts_lt_hash = accounts_lt_hash,
         };
     }
 };
@@ -1077,11 +1517,14 @@ pub const AccountsDbFields = struct {
 pub const SnapshotFields = struct {
     bank_fields: BankFields,
     accounts_db_fields: AccountsDbFields,
-    lamports_per_signature: u64,
-    /// incremental snapshot fields (to accompany added to bank_fields)
-    bank_fields_inc: BankFields.Incremental = .{},
+    /// incremental snapshot fields.
+    bank_extra: ExtraFields,
 
-    pub const @"!bincode-config:lamports_per_signature" = bincode.int.defaultOnEof(u64, 0);
+    pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
+        self.bank_fields.deinit(allocator);
+        self.accounts_db_fields.deinit(allocator);
+        self.bank_extra.deinit(allocator);
+    }
 
     pub fn readFromFilePath(
         allocator: std.mem.Allocator,
@@ -1115,10 +1558,6 @@ pub const SnapshotFields = struct {
         reader: anytype,
     ) !SnapshotFields {
         return try bincode.read(allocator, SnapshotFields, reader, .{});
-    }
-
-    pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
-        bincode.free(allocator, self);
     }
 };
 
@@ -1979,6 +2418,6 @@ test "parse incremental snapshot fields" {
     var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
     defer snapshot_fields.deinit(allocator);
 
-    try std.testing.expectEqual(snapshot_fields.lamports_per_signature, 5000);
-    try std.testing.expectEqual(snapshot_fields.bank_fields_inc.snapshot_persistence.?.full_slot, 10);
+    try std.testing.expectEqual(snapshot_fields.bank_extra.lamports_per_signature, 5000);
+    try std.testing.expectEqual(snapshot_fields.bank_extra.snapshot_persistence.?.full_slot, 10);
 }
