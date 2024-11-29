@@ -687,7 +687,7 @@ fn identity() !void {
     defer logger.deinit();
     const keypair = try getOrInitIdentity(gpa_allocator, logger);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-    try std.io.getStdOut().writer().print("Identity: {s}\n", .{pubkey.string().constSlice()});
+    try std.io.getStdOut().writer().print("Identity: {s}\n", .{pubkey});
 }
 
 /// entrypoint to run only gossip
