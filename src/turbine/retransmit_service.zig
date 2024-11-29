@@ -121,9 +121,7 @@ pub fn run(params: struct {
             retransmit_socket,
             &retransmit_to_socket_channel,
             params.logger,
-            false,
-            params.exit,
-            {},
+            .{ .unordered = params.exit },
         },
     ));
 
