@@ -337,6 +337,8 @@ pub const MockTransferService = struct {
     }
 
     /// Log account balances with a message
+    ///
+    /// When `maybe_log_prefix` is null, no log is emitted.
     pub fn getBalances(self: *MockTransferService, maybe_log_prefix: ?[]const u8) !struct {
         bank: u64,
         alice: u64,
