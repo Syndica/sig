@@ -1012,7 +1012,8 @@ pub const AccountsDB = struct {
     };
 
     /// Validates accountsdb against some snapshot info - if used, it must
-    /// be after loading the snapshot(s) whose information is supplied.
+    /// be after loading the snapshot(s) whose information is supplied,
+    /// and before mutating accountsdb.
     pub fn validateLoadFromSnapshot(
         self: *Self,
         params: ValidateLoadFromSnapshotParams,
@@ -1052,6 +1053,11 @@ pub const AccountsDB = struct {
         }
 
         if (maybe_latest_snapshot_info.*) |latest_snapshot_info| {
+            // ASSERTION: nothing has changed if we previously successfully
+            // verified a load from the snapshot; ie, calling this function
+            // after calling it once should not produce any mutations.
+            // The assertion may also trip if any mutations to accountsdb
+            // have occurred since the first call to this function.
             std.debug.assert(latest_snapshot_info.full.slot == params.full_slot);
             std.debug.assert(latest_snapshot_info.full.hash.eql(accounts_hash));
             std.debug.assert(latest_snapshot_info.full.capitalization == total_lamports);
@@ -1095,6 +1101,8 @@ pub const AccountsDB = struct {
                 return error.IncorrectAccountsDeltaHash;
             }
 
+            // ASSERTION: same idea as the previous assertion, but applied to
+            // the incremental snapshot info.
             if (p_maybe_first_inc.*) |first_inc| {
                 std.debug.assert(first_inc.slot == inc_slot);
                 std.debug.assert(first_inc.hash.eql(accounts_delta_hash));
