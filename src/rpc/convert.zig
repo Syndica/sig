@@ -8,55 +8,83 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const GetTransaction = rpc.methods.GetTransaction;
 
-pub fn Request(comptime MethodRequest: type) type {
+pub fn Response(comptime Method: type) type {
     return struct {
+        arena: *std.heap.ArenaAllocator,
         id: u64,
         jsonrpc: []const u8,
-        method: []const u8,
-        params: AsTuple(MethodRequest),
-    };
-}
+        payload: union(enum) {
+            result: Method.Response,
+            err: Error,
+        },
 
-pub const RawRequest = struct {
-    id: u64,
-    jsonrpc: []const u8,
-    method: []const u8,
-    params: []const u8,
-};
+        pub fn deinit(self: Response(Method)) void {
+            const allocator = self.arena.child_allocator;
+            self.arena.deinit();
+            allocator.destroy(self.arena);
+        }
 
-pub const RawResponse = struct {
-    id: u64,
-    jsonrpc: []const u8,
-    result: ?[]const u8,
-    @"error": ?Error,
-};
-
-pub fn Response(comptime MethodResponse: type) type {
-    return struct {
-        id: u64,
-        jsonrpc: []const u8,
-        method: []const u8,
-        result: MethodResponse,
+        pub fn result(self: Response(Method)) !Method.Response {
+            return switch (self.payload) {
+                .result => |r| r,
+                .err => error.RpcRequestFailed,
+            };
+        }
     };
 }
 
 pub const Error = struct {
     code: i64,
     message: []const u8,
+    data: ?std.json.Value = null,
+
+    // TODO: Replace data with structured data
+    pub fn dataAsString(self: *const Error, allocator: std.mem.Allocator) ![]const u8 {
+        return std.json.stringifyAlloc(allocator, self.data.?, .{});
+    }
 };
 
-pub fn serializeRequest(request: anytype, writer: anytype) !void {
-    try std.json.stringify(.{toRequest(request)}, .{}, writer);
+pub fn serializeRequest(allocator: Allocator, request: anytype) ![]const u8 {
+    return try std.json.stringifyAlloc(
+        allocator,
+        .{
+            .id = 1,
+            .jsonrpc = "2.0",
+            .method = methodName(request),
+            .params = asTuple(request),
+        },
+        .{ .emit_null_optional_fields = false },
+    );
 }
 
-pub fn serializeRequestAlloc(allocator: Allocator, request: anytype) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
-    try std.json.stringifyAlloc(
-        toRequest(request),
-        .{ .emit_null_optional_fields = false },
-        buf.writer(),
+pub fn deserializeResponse(
+    allocator: Allocator,
+    Method: type,
+    response: []const u8,
+) !Response(Method) {
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+    const raw_response = try std.json.parseFromSliceLeaky(
+        struct {
+            id: u64,
+            jsonrpc: []const u8,
+            result: ?Method.Response = null,
+            @"error": ?Error = null,
+        },
+        allocator,
+        response,
+        .{},
     );
-    return buf.toOwnedSlice();
+    return .{
+        .arena = arena,
+        .id = raw_response.id,
+        .jsonrpc = raw_response.jsonrpc,
+        .payload = if (raw_response.@"error") |err| .{
+            .err = err,
+        } else .{
+            .result = raw_response.result orelse return error.MalformedResponse,
+        },
+    };
 }
 
 fn asTuple(item: anytype) AsTuple(@TypeOf(item)) {
@@ -65,15 +93,6 @@ fn asTuple(item: anytype) AsTuple(@TypeOf(item)) {
         tuple[i] = @field(item, field.name);
     }
     return tuple;
-}
-
-fn toRequest(request: anytype) Request(@TypeOf(request)) {
-    return .{
-        .id = 1,
-        .jsonrpc = "2.0",
-        .method = methodName(request),
-        .request = asTuple(request),
-    };
 }
 
 fn methodName(request: anytype) []const u8 {
@@ -146,7 +165,7 @@ test "serializeRequest" {
 
     const expected = "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"getAccountInfo\",\"params\":" ++
         "[\"mypubkey\",35,true,[\"signature1\",\"signature2\"],{\"key\":\"non-default\"}]}";
-    const actual = try serializeRequestAlloc(allocator, my_request, "getAccountInfo");
+    const actual = try serializeRequest(allocator, my_request);
     defer allocator.free(actual);
 
     try std.testing.expectEqualSlices(u8, expected, actual);

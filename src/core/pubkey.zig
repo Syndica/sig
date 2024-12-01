@@ -54,6 +54,10 @@ pub const Pubkey = extern struct {
     ) !void {
         return base58.format(self.data, writer);
     }
+
+    pub fn jsonStringify(self: Self, write_stream: anytype) !void {
+        try write_stream.write(base58.encode(self.data).slice());
+    }
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };

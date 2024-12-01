@@ -148,9 +148,7 @@ pub const ClusterType = union(enum(u8)) {
     Testnet,
     Devnet,
     LocalHost,
-    Custom: struct {
-        url: []const u8,
-    },
+    Custom: struct { url: []const u8 },
 };
 
 pub const RpcVersionInfo = struct {

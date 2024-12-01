@@ -2,8 +2,48 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 
+const types = rpc.types;
+
+const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
+
+pub const GetAccountInfo = struct {
+    pubkey: Pubkey,
+    config: ?Config = null,
+
+    pub const Params = struct { Pubkey, ?Config };
+
+    pub const Config = struct {
+        commitment: ?types.Commitment = null,
+        minContextSlot: ?u64 = null,
+        encoding: ?[]const u8 = null,
+        dataSlice: ?DataSlice = null,
+
+        pub const DataSlice = struct {
+            offset: usize,
+            length: usize,
+        };
+    };
+
+    pub const Response = struct {
+        context: types.Context,
+        value: ?Value,
+
+        pub const Value = struct {
+            data: []const u8,
+            executable: bool,
+            lamports: u64,
+            owner: []const u8,
+            rentEpoch: u64,
+            space: u64,
+        };
+    };
+};
+
+pub const GetBalance = struct {
+    pubkey: Pubkey,
+};
 
 pub const GetTransaction = struct {
     /// Transaction signature, as base-58 encoded string

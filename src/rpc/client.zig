@@ -1,20 +1,26 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 const base58 = @import("base58-zig");
+const sig = @import("../sig.zig");
+const rpc = @import("lib.zig");
 
-const types = sig.rpc.types;
+const types = rpc.types;
+const methods = rpc.methods;
 
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
-const Request = sig.rpc.Request;
-const Response = sig.rpc.Response;
+const Request = rpc.Request;
+const Response = rpc.Response;
 const Logger = sig.trace.log.Logger;
 const ScopedLogger = sig.trace.log.ScopedLogger;
 const Transaction = sig.core.transaction.Transaction;
-const ClusterType = sig.rpc.ClusterType;
+const ClusterType = rpc.ClusterType;
+
+const RpcClient = rpc.client_ng.RpcClient;
 
 pub const Client = struct {
+    client: RpcClient,
+
     http_endpoint: []const u8,
     http_client: std.http.Client,
     max_retries: usize,
@@ -22,10 +28,7 @@ pub const Client = struct {
 
     const Self = @This();
 
-    pub const Options = struct {
-        max_retries: usize = 0,
-        logger: Logger = .noop,
-    };
+    pub const Options = RpcClient.Options;
 
     pub fn init(allocator: std.mem.Allocator, cluster_type: ClusterType, options: Options) Client {
         const http_endpoint = switch (cluster_type) {
@@ -37,6 +40,7 @@ pub const Client = struct {
         };
 
         var client: Client = .{
+            .client = RpcClient.init(allocator, cluster_type, options),
             .http_endpoint = http_endpoint,
             .http_client = std.http.Client{ .allocator = allocator },
             .max_retries = options.max_retries,
@@ -61,24 +65,16 @@ pub const Client = struct {
         self.logger.info().logf("RPC version: {s}", .{version.@"solana-core"});
     }
 
-    pub const GetAccountInfoConfig = struct {
-        commitment: ?types.Commitment = null,
-        minContextSlot: ?u64 = null,
-        encoding: ?[]const u8 = null,
-        dataSlice: ?DataSlice = null,
-
-        const DataSlice = struct {
-            offset: usize,
-            length: usize,
-        };
-    };
-
-    pub fn getAccountInfo(self: *Client, allocator: std.mem.Allocator, pubkey: Pubkey, config: GetAccountInfoConfig) !Response(types.AccountInfo) {
-        var request = try Request.init(allocator, "getAccountInfo");
-        defer request.deinit();
-        try request.addParameter(pubkey.string().slice());
-        try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.AccountInfo, request, .{});
+    pub fn getAccountInfo(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        pubkey: Pubkey,
+        config: methods.GetAccountInfo.Config,
+    ) !rpc.convert.Response(rpc.methods.GetAccountInfo) {
+        return try self.client.fetch(allocator, rpc.methods.GetAccountInfo{
+            .pubkey = pubkey,
+            .config = config,
+        });
     }
 
     pub const GetBalanceConfig = struct {
@@ -414,13 +410,15 @@ pub const Client = struct {
     }
 };
 
+const GetAccountInfo = rpc.methods.GetAccountInfo;
+
 test "getAccountInfo: null value" {
     const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
+    var client = RpcClient.init(allocator, .Testnet, .{});
     defer client.deinit();
     // random pubkey that should not exist
     const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWn");
-    const response = try client.getAccountInfo(allocator, pubkey, .{});
+    const response = try client.fetch(allocator, GetAccountInfo{ .pubkey = pubkey });
     defer response.deinit();
     const x = try response.result();
 
