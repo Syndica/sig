@@ -1755,9 +1755,9 @@ pub const AccountsDB = struct {
             }
         }
 
+        self.logger.info().logf("deleting {} slots ...", .{delete_queue.items.len});
         for (delete_queue.items) |account_file| {
             const slot = account_file.slot;
-            self.logger.info().logf("deleting slot: {}...", .{slot});
             account_file.deinit();
 
             // delete file from disk
@@ -1913,6 +1913,7 @@ pub const AccountsDB = struct {
             }
 
             // update the references
+            try self.account_index.expandRefCapacity(accounts_alive_count);
             const new_reference_block, _ = try self.account_index
                 .reference_manager.alloc(accounts_alive_count);
 
@@ -2408,6 +2409,7 @@ pub const AccountsDB = struct {
 
         // update index
         var accounts_dead_count: u64 = 0;
+        try self.account_index.expandRefCapacity(accounts.len);
         const reference_buf, const global_ref_index = try self.account_index
             .reference_manager.alloc(accounts.len);
 
