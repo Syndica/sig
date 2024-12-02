@@ -1,8 +1,8 @@
 # fuzzing documentation
 
-supported components: 
-- gossip 
-- accountsdb 
+supported components:
+- gossip
+- accountsdb
 
 main code paths:
 - `fuzz.zig` <- main entrypoint
@@ -20,39 +20,32 @@ kcov will give you coverage information on what was and was not fuzzed
 
 ![](imgs/2024-07-10-09-39-57.png)
 
-## gossip 
+## gossip
 
 ### service
 
-gossip supports two types of fuzzing 
-- *option1*: sending fuzz packets to an arbitrary endpoint
-- *option2*: sending fuzz packets directly to a sig client
+gossip service fuzzing sends packets directly to a sig client
 
-![](imgs/2024-07-10-09-33-37.png)
-
-example commands: 
+example commands:
 ```bash
-#                                 <seed>  <n_messages>  <to_endpoint>    (option1)
-./zig-out/bin/fuzz gossip_service 10      4_000         127.0.0.1:8001
-
 #                                 <seed>  <n_messages> (option2)
 ./zig-out/bin/fuzz gossip_service 10      4_000
 
 #                                 (run with random seed for inf)
-./zig-out/bin/fuzz gossip_service 
+./zig-out/bin/fuzz gossip_service
 ```
 
 ### table
 
 you can also fuzz the `GossipTable` (see `src/gossip/table.zig`) for reads/writes/trims/remove-old-labels using the following:
 
-example commands: 
+example commands:
 ```bash
 #                               <seed>  <n_messages>
 ./zig-out/bin/fuzz gossip_table 10      4_000
 
 #                               (run with random seed for inf)
-./zig-out/bin/fuzz gossip_table 
+./zig-out/bin/fuzz gossip_table
 ```
 
 ## accounts-db
@@ -63,7 +56,7 @@ the fuzzer does a few things
 
 the goal was to makes sure accounts-db was thread-safe for parallel access while also flushing/cleaning/purging
 
-example command: 
+example command:
 ```bash
 #                             <seed>  <n_messages>
 ./zig-out/bin/fuzz accountsdb 10      4_000
@@ -71,7 +64,7 @@ example command:
 ./zig-out/bin/fuzz accountsdb
 ```
 
-## running with kcov 
+## running with kcov
 
 commands to run:
 - `bash scripts/kcov_fuzz_gossip_service.sh`
