@@ -15,7 +15,7 @@ pub const GossipDumpService = struct {
     allocator: Allocator,
     logger: ScopedLogger(@typeName(Self)),
     gossip_table_rw: *RwMux(GossipTable),
-    counter: *Atomic(usize),
+    counter: *Atomic(u64),
 
     const Self = @This();
 
