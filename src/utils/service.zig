@@ -129,7 +129,7 @@ pub const ServiceManager = struct {
                 name,
                 run_config orelse self.default_run_config,
                 function,
-                args ++ .{(self.threads.items.len + 1)},
+                args ++ .{@as(u64, @intCast(self.threads.items.len + 1))},
             },
         );
 
