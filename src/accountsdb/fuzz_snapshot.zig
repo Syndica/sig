@@ -5,15 +5,12 @@ const bincode = sig.bincode;
 
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
-const Account = sig.core.Account;
 const SnapshotFields = sig.accounts_db.SnapshotFields;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const ExtraFields = sig.accounts_db.snapshots.ExtraFields;
 const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
-const StakeReward = sig.accounts_db.snapshots.StakeReward;
 
 const MAX_FUZZ_TIME_NS = std.time.ns_per_s * 100_000;
 
