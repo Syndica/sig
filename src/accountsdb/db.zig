@@ -4275,7 +4275,7 @@ test "generate snapshot & update gossip snapshot hashes" {
 
     // pretend `all_snapshot_fields`/`snap_files` refers to `tmp_snap_dir`, even though the archive file isn't actually in there, just the unpacked contents.
     // TODO: this is not nice, make sure the API for loading from archives outside of the snapshot dir is improved.
-    _ = try accounts_db.loadWithDefaults(allocator, &all_snapshot_fields, 1, true, 1500, false, false);
+    _ = try accounts_db.loadWithDefaults(allocator, &all_snapshot_fields, 1, true, 300, false, false);
 
     var bank_fields = try BankFields.initRandom(allocator, random, 128);
     defer bank_fields.deinit(allocator);

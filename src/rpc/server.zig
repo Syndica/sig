@@ -462,7 +462,7 @@ test Server {
         .lru_size = null,
     });
     defer accountsdb.deinit();
-    _ = try accountsdb.loadWithDefaults(allocator, &all_snap_fields, 1, true, 1500, false, false);
+    _ = try accountsdb.loadWithDefaults(allocator, &all_snap_fields, 1, true, 300, false, false);
 
     var thread_pool = sig.sync.ThreadPool.init(.{ .max_threads = 1 });
     defer {
