@@ -36,7 +36,8 @@ pub const TransactionPool = struct {
     }
 
     pub fn deinit(self: *TransactionPool) void {
-        const pending_transactions: *PendingTransactions, var pending_transactions_lg = self.pending_transactions_rw.writeWithLock();
+        const pending_transactions: *PendingTransactions, var pending_transactions_lg =
+            self.pending_transactions_rw.writeWithLock();
         defer pending_transactions_lg.unlock();
         pending_transactions.deinit();
         self.retry_signatures.deinit();
@@ -44,13 +45,15 @@ pub const TransactionPool = struct {
     }
 
     pub fn count(self: *TransactionPool) usize {
-        const pending_transactions: *const PendingTransactions, var pending_transactions_lg = self.pending_transactions_rw.readWithLock();
+        const pending_transactions: *const PendingTransactions, var pending_transactions_lg =
+            self.pending_transactions_rw.readWithLock();
         defer pending_transactions_lg.unlock();
         return pending_transactions.count();
     }
 
     pub fn contains(self: *TransactionPool, signature: Signature) bool {
-        const pending_transactions: *const PendingTransactions, var pending_transactions_lg = self.pending_transactions_rw.readWithLock();
+        const pending_transactions: *const PendingTransactions, var pending_transactions_lg =
+            self.pending_transactions_rw.readWithLock();
         defer pending_transactions_lg.unlock();
         return pending_transactions.contains(signature);
     }
@@ -60,7 +63,7 @@ pub const TransactionPool = struct {
         return .{ pending_transactions.keys(), pending_transactions.values(), pending_transactions_lg };
     }
 
-    pub fn readRetryTransactionsWithLock(self: *TransactionPool, allocator: Allocator) !struct { []const TransactionInfo, RwMux(PendingTransactions).RLockGuard } {
+    pub fn readRetryTransactionsWithLock(self: *TransactionPool, allocator: Allocator) !struct { []TransactionInfo, RwMux(PendingTransactions).RLockGuard } {
         const pending_transactions: *const PendingTransactions, const pending_transactions_lg = self.pending_transactions_rw.readWithLock();
         var retry_transactions = try allocator.alloc(TransactionInfo, self.retry_signatures.items.len);
         for (self.retry_signatures.items, 0..) |signature, i| {
@@ -75,8 +78,9 @@ pub const TransactionPool = struct {
         return self.retry_signatures.items.len > 0;
     }
 
-    pub fn addTransactions(self: *TransactionPool, transactions: []TransactionInfo) !void {
-        const pending_transactions: *PendingTransactions, var pending_transactions_lg = self.pending_transactions_rw.writeWithLock();
+    pub fn addTransactions(self: *TransactionPool, transactions: []const TransactionInfo) !void {
+        const pending_transactions: *PendingTransactions, var pending_transactions_lg =
+            self.pending_transactions_rw.writeWithLock();
         defer pending_transactions_lg.unlock();
         for (transactions) |transaction| {
             if (pending_transactions.count() >= self.max_transactions) {
