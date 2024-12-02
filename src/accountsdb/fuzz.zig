@@ -318,7 +318,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 &snapshot_fields,
                 1,
                 true,
-                1_500,
+                300,
                 false,
                 false,
             );
