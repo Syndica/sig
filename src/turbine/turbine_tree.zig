@@ -954,7 +954,7 @@ pub fn runTurbineTreeBlackBoxTest() !void {
         191, 82,  231, 195, 46,  182, 188, 220,
     }));
 
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const my_contact_info = ContactInfo.init(std.heap.c_allocator, my_pubkey, 0, 0);
     const my_threadsafe_contact_info = ThreadSafeContactInfo.fromContactInfo(my_contact_info);
 

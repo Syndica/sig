@@ -115,9 +115,9 @@ test "gossip.pull_response: test filtering values works" {
     const id = Pubkey.fromPublicKey(&pk);
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.id = id;
-    // TODO: make this consistent across tests
-    legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());
-    const gossip_value = SignedGossipData.initSigned(&kp, .{
+    legacy_contact_info.wallclock = random.int(u64);
+
+    var gossip_value = SignedGossipData.initSigned(&kp, .{
         .LegacyContactInfo = legacy_contact_info,
     });
 
@@ -128,7 +128,7 @@ test "gossip.pull_response: test filtering values works" {
         _ = try lg.mut().insert(v2, 0);
     }
 
-    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
+    const maybe_failing_seed: u64 = random.int(u64);
     var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
     var values = try filterSignedGossipDatas(
         maybe_failing_prng.random(),

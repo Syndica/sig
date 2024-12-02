@@ -239,7 +239,12 @@ pub const Message = struct {
         .instructions = &.{},
     };
 
-    pub fn init(allocator: std.mem.Allocator, instructions: []const Instruction, payer: Pubkey, recent_blockhash: Hash) !Message {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        instructions: []const Instruction,
+        payer: Pubkey,
+        recent_blockhash: Hash,
+    ) !Message {
         var compiled_keys = try CompiledKeys.init(allocator, instructions, payer);
         defer compiled_keys.deinit();
         const header, const account_keys = try compiled_keys.intoMessageHeaderAndAccountKeys(allocator);
@@ -335,7 +340,11 @@ pub const Instruction = struct {
     accounts: []AccountMeta,
     data: []u8,
 
-    pub fn initSystemInstruction(allocator: std.mem.Allocator, data: SystemInstruction, accounts: []AccountMeta) !Instruction {
+    pub fn initSystemInstruction(
+        allocator: std.mem.Allocator,
+        data: SystemInstruction,
+        accounts: []AccountMeta,
+    ) !Instruction {
         return .{
             .program_id = SYSTEM_PROGRAM_ID,
             .accounts = accounts,
@@ -425,8 +434,8 @@ pub const CompiledKeys = struct {
                 if (!payer_meta_gopr.found_existing) {
                     payer_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
                 }
-                payer_meta_gopr.value_ptr.*.is_signer = true;
-                payer_meta_gopr.value_ptr.*.is_writable = true;
+                payer_meta_gopr.value_ptr.is_signer = true;
+                payer_meta_gopr.value_ptr.is_writable = true;
             }
         }
         return .{ .maybe_payer = maybe_payer, .key_meta_map = key_meta_map };
@@ -550,14 +559,27 @@ pub fn buildTransferTansaction(
     };
 }
 
-pub fn transfer(allocator: std.mem.Allocator, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64) !Instruction {
+pub fn transfer(
+    allocator: std.mem.Allocator,
+    from_pubkey: Pubkey,
+    to_pubkey: Pubkey,
+    lamports: u64,
+) !Instruction {
     var account_metas = try allocator.alloc(AccountMeta, 2);
     account_metas[0] = AccountMeta.newMutable(from_pubkey, true);
     account_metas[1] = AccountMeta.newMutable(to_pubkey, false);
-    return try Instruction.initSystemInstruction(allocator, SystemInstruction{ .Transfer = .{ .lamports = lamports } }, account_metas);
+    return try Instruction.initSystemInstruction(
+        allocator,
+        .{ .Transfer = .{ .lamports = lamports } },
+        account_metas,
+    );
 }
 
-pub fn compileInstruction(allocator: std.mem.Allocator, instruction: Instruction, account_keys: []const Pubkey) !CompiledInstruction {
+pub fn compileInstruction(
+    allocator: std.mem.Allocator,
+    instruction: Instruction,
+    account_keys: []const Pubkey,
+) !CompiledInstruction {
     const program_id_index = indexOf(Pubkey, account_keys, instruction.program_id).?;
     var accounts = try allocator.alloc(u8, instruction.accounts.len);
     for (instruction.accounts, 0..) |account, i| {
@@ -570,7 +592,11 @@ pub fn compileInstruction(allocator: std.mem.Allocator, instruction: Instruction
     };
 }
 
-pub fn compileInstructions(allocator: std.mem.Allocator, instructions: []const Instruction, account_keys: []const Pubkey) ![]CompiledInstruction {
+pub fn compileInstructions(
+    allocator: std.mem.Allocator,
+    instructions: []const Instruction,
+    account_keys: []const Pubkey,
+) ![]CompiledInstruction {
     var compiled_instructions = try allocator.alloc(CompiledInstruction, instructions.len);
     for (instructions, 0..) |instruction, i| {
         compiled_instructions[i] = try compileInstruction(allocator, instruction, account_keys);

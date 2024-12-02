@@ -30,6 +30,7 @@ const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getOrInitIdentity = helpers.getOrInitIdentity;
@@ -49,7 +50,9 @@ const gpa_allocator = if (builtin.mode == .Debug)
 else
     std.heap.c_allocator;
 
-var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{
+    .stack_trace_frames = 100,
+}) = .{};
 const gossip_value_gpa_allocator = if (builtin.mode == .Debug)
     gossip_value_gpa.allocator()
 else
@@ -63,7 +66,7 @@ const LOG_SCOPE = "cmd";
 pub fn run() !void {
     defer {
         // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
-        _ = gossip_value_gpa.deinit();
+        // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
     }
 
     var gossip_host_option = cli.Option{
@@ -535,7 +538,6 @@ pub fn run() !void {
                             },
                         },
                     },
-
                     &cli.Command{
                         .name = "snapshot-validate",
                         .description = .{
@@ -1197,7 +1199,7 @@ pub fn testTransactionSenderService() !void {
     }
 
     // define cluster of where to land transactions
-    const cluster: sig.rpc.ClusterType = if (try config.current.gossip.getNetwork()) |n| switch (n) {
+    const cluster: ClusterType = if (try config.current.gossip.getNetwork()) |n| switch (n) {
         .mainnet => .MainnetBeta,
         .devnet => .Devnet,
         .testnet => .Testnet,
@@ -1552,7 +1554,7 @@ fn loadSnapshot(
         .logger = logger.unscoped(),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = options.geyser_writer,
-        .gossip_view = if (options.gossip_service) |service| AccountsDB.GossipView.fromService(service) else null,
+        .gossip_view = if (options.gossip_service) |service| try AccountsDB.GossipView.fromService(service) else null,
         .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
         .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
         .lru_size = 10_000,

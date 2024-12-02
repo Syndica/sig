@@ -666,7 +666,6 @@ const TestPeerGenerator = struct {
         const serve_repair_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8003);
         const shred_version = if (peer_type == .WrongShredVersion) self.shred_version + 1 else self.shred_version;
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-
         var contact_info = ContactInfo.init(self.allocator, pubkey, wallclock, shred_version);
         if (peer_type != .MissingServeRepairPort) {
             try contact_info.setSocket(.serve_repair, serve_repair_addr);
