@@ -22,7 +22,7 @@ pub fn readSocket(
     incoming_channel: *Channel(Packet),
     logger_: Logger,
     comptime needs_exit_order: bool,
-    counter: *Atomic(if (needs_exit_order) usize else bool),
+    counter: *Atomic(if (needs_exit_order) u64 else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
     const logger = logger_.withScope(LOG_SCOPE);
@@ -61,7 +61,7 @@ pub fn sendSocket(
     outgoing_channel: *Channel(Packet),
     logger_: Logger,
     comptime needs_exit_order: bool,
-    counter: *Atomic(if (needs_exit_order) usize else bool),
+    counter: *Atomic(if (needs_exit_order) u64 else bool),
     idx: if (needs_exit_order) usize else void,
 ) !void {
     const logger = logger_.withScope(LOG_SCOPE);
