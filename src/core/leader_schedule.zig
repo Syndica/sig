@@ -63,19 +63,22 @@ pub const LeaderScheduleCache = struct {
         return if (leader_schedules.get(epoch)) |schedule| schedule.slot_leaders[slot_index] else null;
     }
 
-    pub fn uniqueLeaders(self: *Self, allocator: std.mem.Allocator) !std.AutoArrayHashMap(Pubkey, void) {
+    pub fn uniqueLeaders(self: *Self, allocator: std.mem.Allocator) ![]const Pubkey {
         const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
         defer leader_schedules_lg.unlock();
 
         var unique_leaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
-
+        defer unique_leaders.deinit();
         for (leader_schedules.values()) |leader_schedule| {
             for (leader_schedule.slot_leaders) |leader| {
                 try unique_leaders.put(leader, {});
             }
         }
 
-        return unique_leaders;
+        const unqiue_list = try allocator.alloc(Pubkey, unique_leaders.count());
+        @memcpy(unqiue_list, unique_leaders.keys());
+
+        return unqiue_list;
     }
 };
 

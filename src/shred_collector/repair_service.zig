@@ -492,7 +492,7 @@ test "RepairService sends repair request to gossip peer" {
     const keypair = try KeyPair.create(null);
     const my_shred_version = Atomic(u16).init(random.int(u16));
     const wallclock = 100;
-    var gossip = try GossipTable.init(allocator, undefined);
+    var gossip = try GossipTable.init(allocator);
     defer gossip.deinit();
     var test_logger = TestLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
 
@@ -579,7 +579,7 @@ test "RepairPeerProvider selects correct peers" {
     // my details
     const keypair = KeyPair.create(null) catch unreachable;
     const my_shred_version = Atomic(u16).init(random.int(u16));
-    var gossip = try GossipTable.init(allocator, undefined);
+    var gossip = try GossipTable.init(allocator);
     defer gossip.deinit();
 
     // peers
@@ -666,7 +666,6 @@ const TestPeerGenerator = struct {
         const serve_repair_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8003);
         const shred_version = if (peer_type == .WrongShredVersion) self.shred_version + 1 else self.shred_version;
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-
         var contact_info = ContactInfo.init(self.allocator, pubkey, wallclock, shred_version);
         if (peer_type != .MissingServeRepairPort) {
             try contact_info.setSocket(.serve_repair, serve_repair_addr);

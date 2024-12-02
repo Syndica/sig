@@ -12,6 +12,7 @@ pub const Config = struct {
     shred_collector: ShredCollectorConfig = shred_collector_defaults,
     accounts_db: AccountsDBConfig = .{},
     geyser: GeyserConfig = .{},
+    turbine: TurbineConfig = .{},
 
     test_transaction_sender: TestTransactionSenderConfig = .{},
 
@@ -142,6 +143,8 @@ pub const AccountsDBConfig = struct {
     fastload: bool = false,
     /// saves the accounts index to disk after loading to support fastloading
     save_index: bool = false,
+    /// only load snapshot metadata when starting up
+    snapshot_metadata_only: bool = false,
 };
 
 pub const GeyserConfig = struct {
@@ -153,6 +156,12 @@ pub const GeyserConfig = struct {
 const LogConfig = struct {};
 
 const TestTransactionSenderConfig = struct {
-    n_transactions: u64 = 1,
-    n_lamports_per_transaction: u64 = 1e9,
+    n_transactions: u64 = 3,
+    n_lamports_per_transaction: u64 = 1e7,
+};
+
+pub const TurbineConfig = struct {
+    num_retransmit_threads: ?usize = null, // Default to number of CPUs
+    // TODO: remove when no longer needed
+    overwrite_stake_for_testing: bool = false,
 };

@@ -33,7 +33,7 @@ pub const Balance = struct {
 };
 
 pub const BlockCommitment = struct {
-    commitment: ?[]const u64,
+    commitment: ?[]const u64 = null,
     totalStake: u64,
 };
 
@@ -46,31 +46,31 @@ pub const RpcContactInfo = struct {
     /// Pubkey of the node as a base-58 string
     pubkey: []const u8,
     /// Gossip port
-    gossip: ?[]const u8,
+    gossip: ?[]const u8 = null,
     /// Tvu UDP port
-    tvu: ?[]const u8,
+    tvu: ?[]const u8 = null,
     /// Tpu UDP port
-    tpu: ?[]const u8,
+    tpu: ?[]const u8 = null,
     /// Tpu QUIC port
-    tpuQuic: ?[]const u8,
+    tpuQuic: ?[]const u8 = null,
     /// Tpu UDP forwards port
-    tpuForwards: ?[]const u8,
+    tpuForwards: ?[]const u8 = null,
     /// Tpu QUIC forwards port
-    tpuForwardsQuic: ?[]const u8,
+    tpuForwardsQuic: ?[]const u8 = null,
     /// Tpu UDP vote port
-    tpuVote: ?[]const u8,
+    tpuVote: ?[]const u8 = null,
     /// Server repair UDP port
-    serveRepair: ?[]const u8,
+    serveRepair: ?[]const u8 = null,
     /// JSON RPC port
-    rpc: ?[]const u8,
+    rpc: ?[]const u8 = null,
     /// WebSocket PubSub port
-    pubsub: ?[]const u8,
+    pubsub: ?[]const u8 = null,
     /// Software version
-    version: ?[]const u8,
+    version: ?[]const u8 = null,
     /// First 4 bytes of the FeatureSet identifier
-    featureSet: ?u32,
+    featureSet: ?u32 = null,
     /// Shred version
-    shredVersion: ?u16,
+    shredVersion: ?u16 = null,
 };
 
 pub const EpochInfo = struct {
@@ -82,7 +82,24 @@ pub const EpochInfo = struct {
     transactionCount: u64,
 };
 
-// TODO: EpochSchedule
+pub const EpochSchedule = struct {
+    /// The maximum number of slots in each epoch.
+    slotsPerEpoch: u64,
+    /// A number of slots before beginning of an epoch to calculate
+    /// a leader schedule for that epoch.
+    leaderScheduleSlotOffset: u64,
+    /// Whether epochs start short and grow.
+    warmup: bool,
+    /// The first epoch after the warmup period.
+    ///
+    /// Basically: `log2(slots_per_epoch) - log2(MINIMUM_SLOTS_PER_EPOCH)`.
+    firstNormalEpoch: u64,
+    /// The first slot after the warmup period.
+    ///
+    /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
+    firstNormalSlot: u64,
+};
+
 // TODO: FeeForMessage
 // TODO: FirstAvailableBlock
 // TODO: GenesisHash
@@ -120,27 +137,17 @@ pub const SignatureStatuses = struct {
 
     pub const TransactionStatus = struct {
         slot: u64,
-        confirmations: ?usize,
-        err: ?TransactionError,
-        confirmationStatus: ?[]const u8,
+        confirmations: ?usize = null,
+        err: ?TransactionError = null,
+        confirmationStatus: ?[]const u8 = null,
     };
-};
-
-pub const ClusterType = union(enum(u8)) {
-    MainnetBeta,
-    Testnet,
-    Devnet,
-    LocalHost,
-    Custom: struct {
-        url: []const u8,
-    },
 };
 
 pub const RpcVersionInfo = struct {
     // TODO: figure out how to support "solana_core" and "feature_set"
     // rn to correctly parse the json response we need to have '-' in the field name
     @"solana-core": []const u8,
-    @"feature-set": ?u32,
+    @"feature-set": ?u32 = null,
 };
 
 pub const Signature = []const u8;

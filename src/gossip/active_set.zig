@@ -134,9 +134,7 @@ pub const ActiveSet = struct {
 test "init/denit" {
     const alloc = std.testing.allocator;
 
-    const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(alloc, &tp);
+    var table = try GossipTable.init(alloc);
     defer table.deinit();
 
     // insert some contacts

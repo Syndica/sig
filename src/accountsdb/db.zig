@@ -152,7 +152,7 @@ pub const AccountsDB = struct {
         push_msg_queue: *sig.sync.Mux(std.ArrayList(sig.gossip.GossipData)),
 
         // TODO/NOTE: this will be more useful/nicer to use as a decl literal
-        pub fn fromService(gossip_service: *sig.gossip.GossipService) GossipView {
+        pub fn fromService(gossip_service: *sig.gossip.GossipService) !GossipView {
             return .{
                 .my_pubkey = Pubkey.fromPublicKey(&gossip_service.my_keypair.public_key),
                 .push_msg_queue = &gossip_service.push_msg_queue_mux,

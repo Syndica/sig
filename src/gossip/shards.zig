@@ -151,9 +151,7 @@ fn filterGossipVersionedDatas(
 }
 
 test "gossip.gossip_shards: test shard find" {
-    const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-    var tp = ThreadPool.init(.{});
-    var gossip_table = try GossipTable.init(std.testing.allocator, &tp);
+    var gossip_table = try GossipTable.init(std.testing.allocator);
     defer gossip_table.deinit();
 
     // gen ranndom values
