@@ -3136,7 +3136,9 @@ test "process contact info push packet" {
     const gossip_value = SignedGossipData.initSigned(&kp, gossip_data);
     const heap_values = try allocator.dupe(SignedGossipData, &.{gossip_value});
 
-    // packet
+    var valid_messages_sent: u64 = 0;
+
+    // push message
     const msg: GossipMessage = .{ .PushMessage = .{ id, heap_values } };
     const peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
     const message: GossipMessageWithEndpoint = .{
@@ -3144,6 +3146,7 @@ test "process contact info push packet" {
         .from_endpoint = peer,
     };
     try verified_channel.send(message);
+    valid_messages_sent += 1;
 
     // ping
     const ping_msg: GossipMessageWithEndpoint = .{
@@ -3151,6 +3154,7 @@ test "process contact info push packet" {
         .from_endpoint = peer,
     };
     try verified_channel.send(ping_msg);
+    valid_messages_sent += 1;
 
     // send pull request with own pubkey
     const erroneous_pull_request_msg: GossipMessageWithEndpoint = .{
@@ -3166,24 +3170,28 @@ test "process contact info push packet" {
     };
     try verified_channel.send(erroneous_pull_request_msg);
 
+    // wait for all processing to be done
+    while (gossip_service.metrics.gossip_packets_processed_total.get() != valid_messages_sent) {
+        std.time.sleep(std.time.ns_per_ms * 100);
+    }
+
+    // the ping message we sent, processed into a pong
+    try std.testing.expectEqual(1, responder_channel.len());
+    const out_packet = responder_channel.receive().?;
+    const out_msg = try bincode.readFromSlice(std.testing.allocator, GossipMessage, &out_packet.data, .{});
+    defer bincode.free(std.testing.allocator, out_msg);
+    try std.testing.expect(out_msg == .PongMessage);
+
     // close everything up before looking at the output channel in order to
     // not race with work services are doing
     gossip_service.shutdown();
     packet_handle.join();
 
-    // the ping message we sent, processed into a pong
-    const out_packet = responder_channel.receive().?;
-    try std.testing.expectEqual(0, responder_channel.len()); // no more messages
-    const out_msg = try bincode.readFromSlice(std.testing.allocator, GossipMessage, &out_packet.data, .{});
-    defer bincode.free(std.testing.allocator, out_msg);
-    try std.testing.expect(out_msg == .PongMessage);
-
-    // correct insertion into table
+    // correct insertion into table (from push message)
     var buf2: [100]ContactInfo = undefined;
     {
         var lg = gossip_service.gossip_table_rw.read();
         defer lg.unlock();
-
         const res = lg.get().getContactInfos(&buf2, 0);
         try std.testing.expect(res.len == 1);
     }
