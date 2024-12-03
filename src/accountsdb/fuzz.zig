@@ -104,6 +104,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     });
     defer accounts_db.deinit();
 
+    // prealloc some references to use throught the fuzz
+    try accounts_db.account_index.expandRefCapacity(1_000_000);
+
     var exit = std.atomic.Value(bool).init(false);
     const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{
         &accounts_db, AccountsDB.ManagerLoopConfig{

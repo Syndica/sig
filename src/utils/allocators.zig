@@ -87,10 +87,14 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
 
         /// append a block of N elements to the manager
         pub fn expandCapacity(self: *Self, n: u64) std.mem.Allocator.Error!void {
-            if (n == 0) return;
-
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
+
+            return self.expandCapacityUnsafe(n);
+        }
+
+        pub fn expandCapacityUnsafe(self: *Self, n: u64) std.mem.Allocator.Error!void {
+            if (n == 0) return;
 
             try self.records.ensureUnusedCapacity(1);
             try self.memory.ensureUnusedCapacity(1);
@@ -143,6 +147,46 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                     }
                 };
             }
+            // not enough memory to allocate and no possible recycles will be perma stuck.
+            // though its possible to recover from this, its very unlikely, so we panic
+            @panic("not enough memory and collapse failed max times");
+        }
+
+        /// same as alloc but if the alloc fails due to not having enough free records (error.AllocFailed),
+        /// it expands the records to max(min_split_size, n) and retrys (which should always succeed)
+        pub fn allocOrExpand(self: *Self, n: u64) AllocError!struct { []T, u64 } {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+
+            if (n == 0) return error.AttemptedZeroAlloc;
+
+            for (0..config.max_collapse_tries) |_| {
+                return self.allocUnsafe(n) catch |err| {
+                    switch (err) {
+                        error.CollapseFailed => {
+                            if (config.thread_safe) self.mux.unlock();
+                            defer if (config.thread_safe) self.mux.lock();
+                            // wait some time and try to collapse again.
+                            std.time.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
+                            // NOTE: this is because there may be new free records
+                            // (which were free'd by some other consumer thread) which
+                            // can be collapsed and the alloc call will then succeed.
+                            continue;
+                        },
+                        error.AllocFailed => {
+                            // if allocation failed, then expand the capacity and try again
+                            try self.expandCapacity(@max(
+                                config.min_split_size,
+                                n,
+                            ));
+                            // the next alloc call will succeed
+                            continue;
+                        },
+                        else => return err,
+                    }
+                };
+            }
+
             // not enough memory to allocate and no possible recycles will be perma stuck.
             // though its possible to recover from this, its very unlikely, so we panic
             @panic("not enough memory and collapse failed max times");
