@@ -87,6 +87,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         pub fn count(self: *Self, comptime cf: ColumnFamily) Allocator.Error!u64 {
             const live_files = try self.db.liveFiles(self.allocator);
             defer live_files.deinit();
+            defer for (live_files.items) |file| file.deinit();
 
             var sum: u64 = 0;
             for (live_files.items) |live_file| {

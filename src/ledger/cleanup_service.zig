@@ -1,3 +1,4 @@
+const build_options = @import("build-options");
 const std = @import("std");
 const sig = @import("../sig.zig");
 const ledger = @import("lib.zig");
@@ -401,8 +402,8 @@ const TestDB = ledger.tests.TestDB;
 
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
+    const logger = .noop;
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -448,6 +449,27 @@ test "findSlotsToClean" {
     try std.testing.expectEqual(false, r.should_clean);
     try std.testing.expectEqual(0, r.total_shreds);
     try std.testing.expectEqual(0, r.highest_slot_to_purge);
+    var data_shred = try ledger.shred.DataShred.zeroedForTest(allocator);
+    defer data_shred.deinit();
+    {
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        for (0..1000) |i| {
+            try write_batch.put(ledger.schema.schema.data_shred, .{ 19, i }, data_shred.payload);
+        }
+        try db.commit(&write_batch);
+    }
+    // When implementation is rocksdb, we need to flush memtable to disk to be able to assert.
+    // We do that by deiniting the current db, which triggers the flushing.
+    if (build_options.blockstore_db == .rocksdb) {
+        db.deinit();
+        db = try TestDB.reuseBlockstore(@src());
+        reader.db = db;
+    }
+    const r2 = try findSlotsToClean(&reader, 0, 100);
+    try std.testing.expectEqual(true, r2.should_clean);
+    try std.testing.expectEqual(1000, r2.total_shreds);
+    try std.testing.expectEqual(0, r2.highest_slot_to_purge);
 }
 
 test "purgeSlots" {
