@@ -2539,14 +2539,13 @@ test "handle old prune & pull request message" {
         allocator.destroy(gossip_service);
     }
 
+    const handle = try std.Thread.spawn(.{}, GossipService.run, .{ gossip_service, .{} });
+
     const prune_pubkey = Pubkey.initRandom(random);
     const prune_data = PruneData.init(prune_pubkey, &.{}, my_pubkey, 0);
     const message = .{
         .PruneMessage = .{ prune_pubkey, prune_data },
     };
-
-    const handle = try std.Thread.spawn(.{}, GossipService.run, .{ gossip_service, .{} });
-
     try gossip_service.verified_incoming_channel.send(.{
         .from_endpoint = try EndPoint.parse("127.0.0.1:8000"),
         .message = message,
@@ -2587,6 +2586,20 @@ test "handle old prune & pull request message" {
         .from_endpoint = try EndPoint.parse("127.0.0.1:8000"),
         .message = .{ .PullRequest = .{ filter2, data } },
     });
+
+    // wait for all processing to be done
+    const MAX_N_SLEEPS = 100;
+    var i: u64 = 0;
+    while (gossip_service.metrics.pull_requests_dropped.get() != 2) {
+        std.time.sleep(std.time.ns_per_ms * 100);
+        if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
+        i += 1;
+    }
+    while (gossip_service.metrics.prune_messages_dropped.get() != 1) {
+        std.time.sleep(std.time.ns_per_ms * 100);
+        if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
+        i += 1;
+    }
 
     gossip_service.shutdown();
     handle.join();
@@ -3171,8 +3184,12 @@ test "process contact info push packet" {
     try verified_channel.send(erroneous_pull_request_msg);
 
     // wait for all processing to be done
+    const MAX_N_SLEEPS = 100;
+    var i: u64 = 0;
     while (gossip_service.metrics.gossip_packets_processed_total.get() != valid_messages_sent) {
         std.time.sleep(std.time.ns_per_ms * 100);
+        if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
+        i += 1;
     }
 
     // the ping message we sent, processed into a pong
