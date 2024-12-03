@@ -10,7 +10,7 @@ const Packet = sig.net.Packet;
 const Channel = sig.sync.Channel;
 const AtomicBool = std.atomic.Value(bool);
 const Logger = sig.trace.log.Logger;
-const ExitCondition = sig.net.socket_utils.ExitCondition;
+const ExitCondition = sig.sync.ExitCondition;
 
 pub fn runClient(
     allocator: std.mem.Allocator,

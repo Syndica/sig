@@ -8,6 +8,7 @@ const Packet = sig.net.Packet;
 const PACKET_DATA_SIZE = sig.net.PACKET_DATA_SIZE;
 const Channel = sig.sync.Channel;
 const Logger = sig.trace.Logger;
+const ExitCondition = sig.sync.ExitCondition;
 
 const UdpSocket = @import("zig-network").Socket;
 
@@ -71,40 +72,6 @@ pub fn sendSocket(
         }
     }
 }
-
-pub const ExitCondition = union(enum) {
-    unordered: *Atomic(bool),
-    ordered: struct {
-        exit_counter: *Atomic(u64),
-        exit_index: u64,
-    },
-
-    pub fn setExit(self: ExitCondition) void {
-        switch (self) {
-            .unordered => |e| e.store(true, .release),
-            .ordered => |e| e.exit_counter.store(e.exit_index + 1, .release),
-        }
-    }
-
-    pub fn shouldRun(self: ExitCondition) bool {
-        return !self.shouldExit();
-    }
-
-    pub fn shouldExit(self: ExitCondition) bool {
-        switch (self) {
-            .unordered => |e| return e.load(.acquire),
-            .ordered => |e| return e.exit_counter.load(.acquire) >= e.exit_index,
-        }
-    }
-
-    pub fn afterExit(self: ExitCondition) void {
-        switch (self) {
-            .unordered => {},
-            // continue the exit process by incrementing the exit_counter
-            .ordered => |e| e.exit_counter.store(e.exit_index + 1, .release),
-        }
-    }
-};
 
 /// A thread that is dedicated to either sending or receiving data over a socket.
 /// The included channel can be used communicate with that thread.

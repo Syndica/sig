@@ -8,7 +8,7 @@ const GossipTable = sig.gossip.table.GossipTable;
 const Duration = sig.time.Duration;
 const ScopedLogger = sig.trace.log.ScopedLogger;
 const RwMux = sig.sync.mux.RwMux;
-const ExitCondition = sig.net.socket_utils.ExitCondition;
+const ExitCondition = sig.sync.ExitCondition;
 
 pub const DUMP_INTERVAL = Duration.fromSecs(10);
 

@@ -53,7 +53,7 @@ const PingCache = sig.gossip.ping_pong.PingCache;
 const PingAndSocketAddr = sig.gossip.ping_pong.PingAndSocketAddr;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Duration = sig.time.Duration;
-const ExitCondition = sig.net.socket_utils.ExitCondition;
+const ExitCondition = sig.sync.ExitCondition;
 
 const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
@@ -379,7 +379,7 @@ pub const GossipService = struct {
     ) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
         // NOTE: this is stack copied on each spawn() call below so we can modify it without
         // affecting other threads
-        var exit_condition = sig.net.socket_utils.ExitCondition{
+        var exit_condition = sig.sync.ExitCondition{
             .ordered = .{
                 .exit_counter = self.exit_counter,
                 .exit_index = 1,
