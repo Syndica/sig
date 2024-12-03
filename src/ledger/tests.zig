@@ -336,6 +336,12 @@ pub const TestDB = struct {
         return try initCustom(std.testing.allocator, test_src);
     }
 
+    pub fn reuseBlockstore(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
+        const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
+        try std.fs.cwd().makePath(path);
+        return try BlockstoreDB.open(std.testing.allocator, .noop, path);
+    }
+
     pub fn initCustom(
         allocator: Allocator,
         comptime test_src: std.builtin.SourceLocation,
