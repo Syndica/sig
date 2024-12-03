@@ -3172,8 +3172,11 @@ test "process contact info push packet" {
     packet_handle.join();
 
     // the ping message we sent, processed into a pong
-    try std.testing.expectEqual(1, responder_channel.len());
-    _ = responder_channel.receive().?;
+    const out_packet = responder_channel.receive().?;
+    try std.testing.expectEqual(0, responder_channel.len()); // no more messages
+    const out_msg = try bincode.readFromSlice(std.testing.allocator, GossipMessage, &out_packet.data, .{});
+    defer bincode.free(std.testing.allocator, out_msg);
+    try std.testing.expect(out_msg == .PongMessage);
 
     // correct insertion into table
     var buf2: [100]ContactInfo = undefined;
