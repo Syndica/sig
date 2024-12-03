@@ -34,7 +34,7 @@ pub fn readSocket(
     var socket = socket_;
     try socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
-    while (!exit.shouldExit()) {
+    while (exit.shouldRun()) {
         var packet: Packet = Packet.default();
         const recv_meta = socket.receiveFrom(&packet.data) catch |err| switch (err) {
             error.WouldBlock => continue,
@@ -56,13 +56,13 @@ pub fn sendSocket(
 ) !void {
     const logger = logger_.withScope(LOG_SCOPE);
     defer {
+        // empty the channel
+        while (outgoing_channel.receive()) |_| {}
         exit.afterExit();
         logger.debug().log("sendSocket loop closed");
     }
 
-    while (!exit.shouldExit() or
-        outgoing_channel.len() != 0)
-    {
+    while (exit.shouldRun()) {
         while (outgoing_channel.receive()) |p| {
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                 logger.debug().logf("send_socket error: {s}", .{@errorName(e)});

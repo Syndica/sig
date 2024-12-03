@@ -471,6 +471,8 @@ pub const GossipService = struct {
     /// Verified GossipMessagemessages are then sent to the verified_channel.
     fn verifyPackets(self: *Self, exit_condition: ExitCondition) !void {
         defer {
+            // empty the channel
+            while (self.packet_incoming_channel.receive()) |_| {}
             // trigger the next service in the chain to close
             exit_condition.afterExit();
             self.logger.debug().log("verifyPackets loop closed");
@@ -490,8 +492,7 @@ pub const GossipService = struct {
         }
 
         // loop until the previous service closes and triggers us to close
-        // and the packet_incoming_channel isn't empty, in order to not lose messages.
-        while (exit_condition.shouldRun() or self.packet_incoming_channel.len() != 0) {
+        while (exit_condition.shouldRun()) {
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
             var task_search_start_idx: usize = 0;
@@ -547,6 +548,10 @@ pub const GossipService = struct {
     /// main logic for recieving and processing gossip messages.
     pub fn processMessages(self: *Self, seed: u64, exit_condition: ExitCondition) !void {
         defer {
+            // empty the channel and release the memory
+            while (self.verified_incoming_channel.receive()) |message| {
+                bincode.free(self.gossip_value_allocator, message.message);
+            }
             // even if we fail, trigger the next thread to close
             exit_condition.afterExit();
             self.logger.debug().log("processMessages loop closed");
@@ -582,7 +587,7 @@ pub const GossipService = struct {
         // keep waiting for new data until,
         // - `exit` isn't set,
         // - there isn't any data to process in the input channel, in order to block the join until we've finished
-        while (exit_condition.shouldRun() or self.verified_incoming_channel.len() != 0) {
+        while (exit_condition.shouldRun()) {
             var msg_count: usize = 0;
             while (self.verified_incoming_channel.receive()) |message| {
                 msg_count += 1;

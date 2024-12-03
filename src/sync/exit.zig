@@ -1,5 +1,5 @@
 const std = @import("std");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 pub const ExitCondition = union(enum) {
     unordered: *Atomic(bool),
