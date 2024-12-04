@@ -733,34 +733,6 @@ pub const StakeStateV2 = union(enum) {
     }
 };
 
-/// Analagous to [StakeAccount<Delegation>](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/stake_account.rs#L20).
-/// NOTE: basically identical to all other `StakeAccount<T>` in terms of actual representation, it just uses `T` as part of phantom data
-/// to be able to distinguish distinct "categories" of `StakeAccount`s.
-pub const DelegationStakeAccount = struct {
-    account: Account,
-    stake_state: StakeStateV2,
-
-    pub fn initRandom(
-        allocator: std.mem.Allocator,
-        random: std.Random,
-        max_list_entries: usize,
-    ) std.mem.Allocator.Error!DelegationStakeAccount {
-        const account = try Account.initRandom(
-            allocator,
-            random,
-            random.uintAtMost(usize, max_list_entries),
-        );
-        errdefer account.deinit(allocator);
-
-        const stake_state = StakeStateV2.initRandom(random);
-
-        return .{
-            .account = account,
-            .stake_state = stake_state,
-        };
-    }
-};
-
 /// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186)
 pub fn Stakes(comptime StakeDelegationElem: type) type {
     return struct {
