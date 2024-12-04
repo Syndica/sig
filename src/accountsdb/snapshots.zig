@@ -675,6 +675,20 @@ pub const Lockup = struct {
     }
 };
 
+/// Analogous to [Stake](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L918)
+pub const Stake = struct {
+    delegation: Delegation,
+    /// Credits observed is credits from vote account state when delegated or redeemed.
+    credits_observed: u64,
+
+    pub fn initRandom(random: std.Random) Stake {
+        return .{
+            .delegation = Delegation.initRandom(random),
+            .credits_observed = random.int(u64),
+        };
+    }
+};
+
 /// Analogous to [StakeStateV2](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L145)
 pub const StakeStateV2 = union(enum) {
     uninitialized,
@@ -692,20 +706,6 @@ pub const StakeStateV2 = union(enum) {
                 .rent_exempt_reserve = random.int(u64),
                 .authorized = Authorized.initRandom(random),
                 .lockup = Lockup.initRandom(random),
-            };
-        }
-    };
-
-    /// Analogous to [Stake](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L918)
-    pub const Stake = struct {
-        delegation: Delegation,
-        /// Credits observed is credits from vote account state when delegated or redeemed.
-        credits_observed: u64,
-
-        pub fn initRandom(random: std.Random) Stake {
-            return .{
-                .delegation = Delegation.initRandom(random),
-                .credits_observed = random.int(u64),
             };
         }
     };
@@ -835,63 +835,6 @@ pub fn Stakes(comptime StakeDelegationElem: type) type {
     };
 }
 
-/// Analogous to [SerdeStakesToStakeFormat](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/stakes/serde_stakes.rs#L17)
-pub const SerdeStakesToStakeFormat = union(enum) {
-    stake: Stakes(Delegation),
-    account: Stakes(DelegationStakeAccount),
-
-    pub fn deinit(self: *const SerdeStakesToStakeFormat, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            inline .stake, .account => |payload| payload.deinit(allocator),
-        }
-    }
-
-    pub fn initRandom(
-        allocator: std.mem.Allocator,
-        random: std.Random,
-        max_list_entries: usize,
-    ) std.mem.Allocator.Error!SerdeStakesToStakeFormat {
-        return switch (random.enumValue(@typeInfo(SerdeStakesToStakeFormat).Union.tag_type.?)) {
-            .stake => .{ .stake = try Stakes(Delegation).initRandom(
-                allocator,
-                random,
-                max_list_entries,
-                struct {
-                    pub fn randomValue(rand: std.Random) !Delegation {
-                        return Delegation.initRandom(rand);
-                    }
-                },
-            ) },
-            .account => .{ .account = blk: {
-                const DelegationStakeAccountCtx = struct {
-                    allocator: std.mem.Allocator,
-                    max_list_entries: usize,
-
-                    pub fn randomValue(
-                        ctx: @This(),
-                        rand: std.Random,
-                    ) !DelegationStakeAccount {
-                        return DelegationStakeAccount.initRandom(
-                            ctx.allocator,
-                            rand,
-                            ctx.max_list_entries,
-                        );
-                    }
-                };
-                break :blk try Stakes(DelegationStakeAccount).initRandom(
-                    allocator,
-                    random,
-                    max_list_entries,
-                    DelegationStakeAccountCtx{
-                        .allocator = allocator,
-                        .max_list_entries = max_list_entries,
-                    },
-                );
-            } },
-        };
-    }
-};
-
 /// Analogous to [VersionedEpochStake](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L137)
 pub const VersionedEpochStake = union(enum(u32)) {
     current: Current,
@@ -903,7 +846,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
     }
 
     pub const Current = struct {
-        stakes: SerdeStakesToStakeFormat,
+        stakes: Stakes(Stake),
         total_stake: u64,
         node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
         epoch_authorized_voters: EpochAuthorizedVoters,
@@ -920,10 +863,15 @@ pub const VersionedEpochStake = union(enum(u32)) {
             random: std.Random,
             max_list_entries: usize,
         ) std.mem.Allocator.Error!Current {
-            const stakes = try SerdeStakesToStakeFormat.initRandom(
+            const stakes = try Stakes(Stake).initRandom(
                 allocator,
                 random,
                 max_list_entries,
+                struct {
+                    pub fn randomValue(rand: std.Random) !Stake {
+                        return Stake.initRandom(rand);
+                    }
+                },
             );
             errdefer stakes.deinit(allocator);
 
@@ -999,8 +947,7 @@ pub fn epochStakeMapRandom(
     return epoch_stakes.unmanaged;
 }
 
-/// Analogous to most of the fields of [Bank](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L718)
-/// and [BankFieldsToDeserialize](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L459)
+/// Analogous to [DeserializableVersionedBank](https://github.com/anza-xyz/agave/blob/9c899a72414993dc005f11afb5df10752b10810b/runtime/src/serde_snapshot.rs#L134).
 pub const BankFields = struct {
     blockhash_queue: BlockhashQueue,
     ancestors: Ancestors,
@@ -1158,8 +1105,9 @@ pub const ExtraFields = struct {
     versioned_epoch_stakes: VersionedEpochStakesMap = .{},
     accounts_lt_hash: ?AccountsLtHash = null,
 
-    pub fn deinit(incremental: *const ExtraFields, allocator: std.mem.Allocator) void {
-        var versioned_epoch_stakes = incremental.versioned_epoch_stakes;
+    pub fn deinit(extra: *const ExtraFields, allocator: std.mem.Allocator) void {
+        var versioned_epoch_stakes = extra.versioned_epoch_stakes;
+        for (versioned_epoch_stakes.values()) |ves| ves.deinit(allocator);
         versioned_epoch_stakes.deinit(allocator);
     }
 
@@ -1173,8 +1121,9 @@ pub const ExtraFields = struct {
     pub const AccountsLtHash = [ACCOUNTS_LATTICE_HASH_LEN]u16;
 
     pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
-        .deserializer = deserialize,
-        .serializer = serialize,
+        .deserializer = bincodeRead,
+        .serializer = bincodeWrite,
+        .free = bincodeFree,
     };
 
     pub fn initRandom(
@@ -1240,44 +1189,12 @@ pub const ExtraFields = struct {
         };
     }
 
-    fn serialize(
-        writer: anytype,
-        data: anytype,
-        params: bincode.Params,
-    ) anyerror!void {
-        comptime if (@TypeOf(data) != ExtraFields) unreachable;
-        const FieldTag = std.meta.FieldEnum(ExtraFields);
-        const fields = @typeInfo(ExtraFields).Struct.fields;
-        // scan from the end to the beginning for all eof values; any
-        // eof values are discarded, and not included in the subsequent
-        // iteration which actually outputs the values.
-        inline for (0 + 1..fields.len + 1) |reverse_i| {
-            const i = fields.len - reverse_i;
-            const last_field = fields[i];
-            const value = @field(data, last_field.name);
-            const is_eof_value = switch (@field(FieldTag, last_field.name)) {
-                .lamports_per_signature => value == 0,
-                .snapshot_persistence => value == null,
-                .epoch_accounts_hash => value == null,
-                .versioned_epoch_stakes => value.count() == 0,
-                .accounts_lt_hash => value == null,
-            };
-
-            if (is_eof_value) {
-                inline for (fields[0 .. i + 1]) |field| {
-                    try bincode.write(writer, @field(data, field.name), params);
-                }
-                return;
-            }
-        }
-    }
-
-    fn deserialize(
+    fn bincodeRead(
         allocator: std.mem.Allocator,
         reader: anytype,
         params: bincode.Params,
-    ) anyerror!ExtraFields {
-        const unreachable_allocator = sig.utils.allocators.failing.allocator(.{
+    ) !ExtraFields {
+        const assert_allocator = sig.utils.allocators.failing.allocator(.{
             .alloc = .assert,
             .resize = .assert,
             .free = .assert,
@@ -1298,7 +1215,7 @@ pub const ExtraFields = struct {
         };
 
         const snapshot_persistence = if (eof) null else bincode.read(
-            unreachable_allocator,
+            assert_allocator,
             ?BankIncrementalSnapshotPersistence,
             reader,
             params,
@@ -1311,7 +1228,7 @@ pub const ExtraFields = struct {
         };
 
         const epoch_accounts_hash = if (eof) null else bincode.read(
-            unreachable_allocator,
+            assert_allocator,
             ?Hash,
             reader,
             params,
@@ -1341,7 +1258,7 @@ pub const ExtraFields = struct {
         errdefer versioned_epoch_stakes.deinit(allocator);
 
         const accounts_lt_hash = if (eof) null else bincode.read(
-            unreachable_allocator,
+            assert_allocator,
             ?AccountsLtHash,
             reader,
             params,
@@ -1360,6 +1277,43 @@ pub const ExtraFields = struct {
             .versioned_epoch_stakes = versioned_epoch_stakes,
             .accounts_lt_hash = accounts_lt_hash,
         };
+    }
+
+    fn bincodeWrite(
+        writer: anytype,
+        data: anytype,
+        params: bincode.Params,
+    ) !void {
+        comptime if (@TypeOf(data) != ExtraFields) unreachable;
+        const FieldTag = std.meta.FieldEnum(ExtraFields);
+        const fields = @typeInfo(ExtraFields).Struct.fields;
+        // scan from the end to the beginning for all eof values; any
+        // eof values are discarded, and not included in the subsequent
+        // iteration which actually outputs the values.
+        inline for (0 + 1..fields.len + 1) |reverse_i| {
+            const i = fields.len - reverse_i;
+            const last_field = fields[i];
+            const value = @field(data, last_field.name);
+            const is_eof_value = switch (@field(FieldTag, last_field.name)) {
+                .lamports_per_signature => value == 0,
+                .snapshot_persistence => value == null,
+                .epoch_accounts_hash => value == null,
+                .versioned_epoch_stakes => value.count() == 0,
+                .accounts_lt_hash => value == null,
+            };
+
+            if (is_eof_value) {
+                inline for (fields[0 .. i + 1]) |field| {
+                    try bincode.write(writer, @field(data, field.name), params);
+                }
+                return;
+            }
+        }
+    }
+
+    fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
+        comptime if (@TypeOf(data) == ExtraFields) unreachable;
+        data.deinit(allocator);
     }
 };
 
