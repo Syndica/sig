@@ -1,7 +1,7 @@
 const std = @import("std");
 const zig_network = @import("zig-network");
 const sig = @import("../sig.zig");
-const shred_collector = @import("lib.zig");
+const shred_networking = @import("lib.zig");
 
 const bincode = sig.bincode;
 
@@ -12,7 +12,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = zig_network.Socket;
 
-const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
+const BasicShredTracker = shred_networking.shred_tracker.BasicShredTracker;
 const ContactInfo = sig.gossip.ContactInfo;
 const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
@@ -21,7 +21,7 @@ const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 const LruCacheCustom = sig.utils.lru.LruCacheCustom;
-const MultiSlotReport = shred_collector.shred_tracker.MultiSlotReport;
+const MultiSlotReport = shred_networking.shred_tracker.MultiSlotReport;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
@@ -32,10 +32,10 @@ const SocketAddr = sig.net.SocketAddr;
 const SocketThread = sig.net.SocketThread;
 const Slot = sig.core.Slot;
 
-const RepairRequest = shred_collector.repair_message.RepairRequest;
-const RepairMessage = shred_collector.repair_message.RepairMessage;
+const RepairRequest = shred_networking.repair_message.RepairRequest;
+const RepairMessage = shred_networking.repair_message.RepairMessage;
 
-const serializeRepairRequest = shred_collector.repair_message.serializeRepairRequest;
+const serializeRepairRequest = shred_networking.repair_message.serializeRepairRequest;
 
 const NUM_REQUESTER_THREADS = 4;
 

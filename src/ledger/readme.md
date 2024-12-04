@@ -57,7 +57,7 @@ For more information on Shreds, see the spec [here](https://github.com/solana-fo
 
 The ShredCollector is responsible for gathering and storing shreds from the network. While it is not a direct 
 part of the ledger, the ledger plays a crucial role in supporting its operations. As such, the ShredCollector 
-is implemented in its own module, ie: [`shred_collector`](../shred_collector), separate from the ledger module.
+is implemented in its own module, ie: [`shred_networking`](../shred_networking), separate from the ledger module.
 
 Understanding how the ShredCollector interacts with components from the ledger can help sheds light on key elements of the 
 ledger’s architecture. 
@@ -72,7 +72,7 @@ graph TD
     D --> E[BlockstoreReader]
 ```
 
-![ShredCollector Component](./imgs/shred_collector_component.png)
+![ShredCollector Component](./imgs/shred_networking_component.png)
 
 - The **ShredCollector** utilizes:
   - The **ShredInserter** to insert shreds received from the network via Gossip.
