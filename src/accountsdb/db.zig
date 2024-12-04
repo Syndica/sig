@@ -68,6 +68,7 @@ pub const ACCOUNT_INDEX_SHARDS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
+// TODO - I think all of these fields should be atomic...
 const FramesMetadata = struct {
     /// ref count for the frame
     rc: []sig.sync.ReferenceCounter,
@@ -78,6 +79,9 @@ const FramesMetadata = struct {
     freq: []u2,
 
     in_queue: []InQueue,
+
+    /// 0..=512
+    size: []u16,
 };
 
 const InQueue = enum(u2) { none, small, main, ghost };
@@ -85,7 +89,7 @@ const InQueue = enum(u2) { none, small, main, ghost };
 /// Implementation of https://s3fifo.com/
 /// does not store values (!)
 pub const S3_FIFO = struct {
-    const Fifo = std.fifo.LinearFifo(u32, .{.Slice});
+    const Fifo = std.fifo.LinearFifo(u32, .Slice);
     // ~10% of objects
     small: Fifo,
     // ~90% of objects
@@ -97,9 +101,9 @@ pub const S3_FIFO = struct {
         if (small > main) unreachable;
 
         return .{
-            .small = Fifo.initSlice(try allocator.alloc(u8, small)),
-            .main = Fifo.initSlice(try allocator.alloc(u8, main)),
-            .ghost = Fifo.initSlice(try allocator.alloc(u8, main)),
+            .small = Fifo.init(try allocator.alloc(u32, small)),
+            .main = Fifo.init(try allocator.alloc(u32, main)),
+            .ghost = Fifo.init(try allocator.alloc(u32, main)),
         };
     }
 
@@ -191,8 +195,9 @@ pub const S3_FIFO = struct {
 
 /// Used for obtaining cached reads
 pub const BufferPool = struct {
-    /// arbitrarily chosen, iirc ~90% of accounts will be <= 512 bytes
+    /// arbitrarily chosen, I believe >95% of accounts will be <= 512 bytes
     const FRAME_SIZE = 512;
+    const INVALID_FRAME = std.math.maxInt(FrameIndex);
     const Frame = [FRAME_SIZE]u8;
     /// we can get away with a 32-bit index
     const FrameIndex = u32;
@@ -205,17 +210,21 @@ pub const BufferPool = struct {
         file_offset: FileOffset,
     };
 
+    // /// holds indeces for returned CachedReads
+    // indeces_allocator: sig.utils.allocators.RecycleFBA(.{}),
+
     allocator: std.mem.Allocator,
     snapshot_dir: std.fs.Dir,
 
     /// indexes of all free frames
-    free_list: std.ArrayList(FrameIndex),
+    /// free frames have a refcount of 0 *and* have been evicted
+    free_list: std.ArrayListUnmanaged(FrameIndex),
 
     /// for finding your wanted index
     file_frames: std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex),
 
     frames: []Frame,
-    frames_metadata: []FramesMetadata,
+    frames_metadata: FramesMetadata,
 
     /// used for eviction to free less popular (rc=0) frames first
     fifo: S3_FIFO,
@@ -227,40 +236,105 @@ pub const BufferPool = struct {
     ) !BufferPool {
         // is std.mem.page_size necessary? Nope! But for something this large, might as well?
         // sidenote, might as well just use the page allocator
-        const frames = try allocator.alignedAlloc(Frame, num_frames, std.mem.page_size);
+        const frames = try allocator.alignedAlloc(Frame, std.mem.page_size, num_frames);
 
         const frames_metadata = FramesMetadata{
-            .rc = try allocator.alignedAlloc(sig.sync.ReferenceCounter, num_frames, std.mem.page_size),
-            .freq = try allocator.alignedAlloc(u2, num_frames, std.mem.page_size),
-            .in_queue = try allocator.alignedAlloc(InQueue, num_frames, std.mem.page_size),
+            .rc = try allocator.alignedAlloc(sig.sync.ReferenceCounter, std.mem.page_size, num_frames),
+            .freq = try allocator.alignedAlloc(u2, std.mem.page_size, num_frames),
+            .in_queue = try allocator.alignedAlloc(InQueue, std.mem.page_size, num_frames),
+            .size = try allocator.alignedAlloc(u16, std.mem.page_size, num_frames),
         };
 
-        const main_fifo_size = (num_frames * 100) / 90;
-        const small_fifo_size = num_frames * 100 - main_fifo_size;
+        @memset(frames_metadata.rc, .{ .state = .{ .raw = std.math.maxInt(u64) } });
+
+        var free_list = try std.ArrayListUnmanaged(FrameIndex).initCapacity(allocator, num_frames);
+        for (0..num_frames) |i| free_list.appendAssumeCapacity(@intCast(i));
+
+        const main_fifo_size = (num_frames * 90) / 100;
+        const small_fifo_size = num_frames - main_fifo_size;
 
         return .{
             .allocator = allocator,
             .snapshot_dir = snapshot_dir,
             .frames = frames,
             .frames_metadata = frames_metadata,
+            .free_list = free_list,
             .file_frames = .{},
-            .fifo = S3_FIFO.init(allocator, small_fifo_size, main_fifo_size),
+            .fifo = try S3_FIFO.init(allocator, small_fifo_size, main_fifo_size),
         };
     }
 
-    fn read(self: *BufferPool, slot: FileId, range_start: usize, range_end: usize) !CachedRead {
-        const file_id: FileId = undefined; // TODO
+    pub fn deinit(self: *BufferPool, allocator: std.mem.Allocator) void {
+        // NOTE: this check itself is racy, but should never happen
+        for (self.frames_metadata.rc) |rc| {
+            if (rc.state.raw != 0) @panic("BufferPool deinitialised with alive handles");
+        }
 
+        allocator.free(self.frames);
+        allocator.free(self.frames_metadata.freq);
+        allocator.free(self.frames_metadata.in_queue);
+        allocator.free(self.frames_metadata.rc);
+        allocator.free(self.frames_metadata.size);
+        self.free_list.deinit(allocator);
+        self.fifo.deinit(allocator);
+    }
+
+    // TODO: add read-nonblocking, which should return a completion and do reads in parallel
+    fn read_blocking(
+        self: *BufferPool,
+        // TODO: should probably get rid of this hot-path small allocation
+        cached_read_allocator: std.mem.Allocator,
+        slot: Slot,
+        file_id: FileId,
+        range_start: u32,
+        range_end: u32,
+    ) !CachedRead {
         const file_path = file_id.path(slot);
 
-        const file = try self.snapshot_dir.openFile(file_path, .{});
+        const file = try self.snapshot_dir.openFile(file_path.constSlice(), .{});
         defer file.close();
 
-        const cached_read = try CachedRead.create(self.allocator, range_end - range_start);
-        errdefer destroy(self, cached_read);
+        const n_indeces = ((range_end - 1) / FRAME_SIZE) - (range_start / FRAME_SIZE) + 1;
 
-        file.seekTo(range_start);
-        _ = try file.readAll(cached_read.data); // TOOD: check return?
+        const indeces = try cached_read_allocator.alloc(FrameIndex, n_indeces);
+        for (indeces) |*idx| idx.* = INVALID_FRAME;
+
+        // lookup frame mappings
+        for (0.., indeces) |i, *idx| {
+            const file_offset: u32 = @intCast((i * FRAME_SIZE) + (range_start / FRAME_SIZE));
+
+            const maybe_frame_idx = self.file_frames.get(FileIdFileOffset{
+                .file_id = file_id,
+                .file_offset = file_offset,
+            });
+
+            if (maybe_frame_idx) |frame_idx| idx.* = frame_idx;
+        }
+
+        // seek to first frame (offset rounds down to frame size)
+        try file.seekBy(@intCast((range_start / FRAME_SIZE) * FRAME_SIZE));
+
+        // fill in invalid frames with file data, replacing invalid frames with
+        // fresh ones.
+        for (indeces) |*idx| {
+            if (idx.* != INVALID_FRAME) continue;
+            idx.* = self.free_list.popOrNull() orelse unreachable; // TODO - call eviction
+            _ = try file.read(&self.frames[idx.*]); // TODO: check return
+            try file.seekBy(FRAME_SIZE);
+        }
+
+        const cached_read = CachedRead{
+            .bp = self,
+            .indeces = indeces,
+            .start_offset = (range_start % FRAME_SIZE),
+            .end_offset = range_end - range_start - 1,
+        };
+        errdefer cached_read.destroy(cached_read_allocator);
+
+        for (cached_read.indeces) |idx| {
+            // TODO: should probably be atomic... this doesn't work with the RC api
+            self.frames_metadata.rc[idx] = .{ .state = .{ .raw = 1 } };
+        }
 
         return cached_read;
     }
@@ -270,31 +344,93 @@ pub const BufferPool = struct {
     }
 };
 
+test "BufferPool read_blocking" {
+    const allocator = std.testing.allocator;
+
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
+    defer snapshot_dir.close();
+
+    var bp = try BufferPool.init(allocator, snapshot_dir, 2048); // 2048 frames = 1MiB
+    defer bp.deinit(allocator);
+    // 301285806.3771301 - slot.fileid
+
+    var read = try bp.read_blocking(
+        allocator,
+        @as(Slot, 301285806),
+        FileId.fromInt(3771301),
+        0,
+        1000,
+    );
+
+    defer read.release();
+}
+
+/// slice-ish d\atatype
+/// view over one or more buffers owned by the BufferPool
+/// Trivially copyable, however make sure to use .borrow() and .release()
+/// appropriately.
 pub const CachedRead = struct {
-    rc: sig.sync.ReferenceCounter,
-    data: []u8,
+    const Reader = std.io.GenericReader(CachedRead, void, readBytes);
 
-    fn create(allocator: std.mem.Allocator, len: usize) !*CachedRead {
-        const data = try allocator.alloc(u8, @sizeOf(CachedRead) + len);
-        return .{
-            .rc = .{ .raw = 0 },
-            .data = data,
-        };
+    bp: *BufferPool,
+    indeces: []const BufferPool.FrameIndex,
+    start_offset: u32,
+    end_offset: u32,
+
+    pub fn readByte(self: CachedRead, idx: usize) u8 {
+        const offset = idx + self.start_offset;
+
+        if (offset < self.start_offset) unreachable;
+        if (offset >= self.end_offset) unreachable;
+        return self.indeces[offset / BufferPool.FRAME_SIZE][offset % BufferPool.FRAME_SIZE];
     }
 
-    fn destroy(self: *CachedRead, allocator: std.mem.Allocator) void {
-        allocator.free(@as([*]const u8, @ptrCast(self))[0 .. @sizeOf(CachedRead) + self.data.len]);
-    }
-
-    fn releaseOrDestroy(self: *CachedRead, bp: *BufferPool) void {
-        if (self.rc.release()) {
-            bp.destroy(self);
+    pub fn readBytes(self: CachedRead, buffer: []u8) usize {
+        for (0.., buffer) |idx, *byte| {
+            byte.* = self.readByte(idx);
         }
     }
 
-    fn borrow(self: *CachedRead) *CachedRead {
-        self.rc.acquire();
+    pub fn reader(self: CachedRead) Reader {
+        return .{ .context = self };
+    }
+
+    pub fn len(self: CachedRead) u32 {
+        self.end_offset - self.start_offset;
+    }
+
+    pub fn release(self: CachedRead) void {
+        for (self.indeces) |frame_index| {
+            if (frame_index == BufferPool.INVALID_FRAME) unreachable;
+
+            if (self.bp.frames_metadata.rc[frame_index].release()) {
+                // self.destroy(self.bp.allocator);
+            }
+        }
+        self.destroy(self.bp.allocator);
+    }
+
+    pub fn borrow(self: CachedRead) CachedRead {
+        for (self.indeces) |frame_index| {
+            if (frame_index == BufferPool.INVALID_FRAME) unreachable;
+
+            if (!self.bp.frames_metadata.rc[frame_index].acquire()) {
+                @panic("attempted borrow on dead read frame");
+            }
+        }
         return self;
+    }
+
+    fn destroy(self: CachedRead, allocator: std.mem.Allocator) void {
+        // TODO: can do atomically
+        for (self.indeces) |frame_index| {
+            if (frame_index == BufferPool.INVALID_FRAME) unreachable;
+
+            self.bp.frames_metadata.freq[frame_index] = 0;
+            self.bp.frames_metadata.size[frame_index] = 0;
+            self.bp.frames_metadata.in_queue[frame_index] = .none;
+        }
+        allocator.free(self.indeces);
     }
 };
 
