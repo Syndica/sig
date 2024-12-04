@@ -61,19 +61,20 @@ fn writer(db: *BlockstoreDB, count: u32) !void {
 }
 
 fn deleter(db: *BlockstoreDB, count: u32) !void {
+    std.time.sleep(15 * std.time.ns_per_s);
     for (0..count) |c| {
         var batch = try db.initWriteBatch();
         defer batch.deinit();
         const start = (c -| @as(u32, 500));
         const end = (c -| @as(u32, 10));
-        std.debug.print("Deleting. Start:{} End: {}\n", .{start, end});
+        // std.debug.print("Deleting. Start:{} End: {}\n", .{start, end});
         try batch.deleteRange(ledger.schema.schema.slot_meta, start, end);
         try db.commit(&batch);
-        // std.time.sleep(0.5 * std.time.ns_per_s);
     }
 }
 
 fn reader(db: *BlockstoreDB, count: u32) !void {
+    std.time.sleep(10 * std.time.ns_per_s);
     for (0..count) |c| {
         const read = try db.get(db.allocator, ledger.schema.schema.slot_meta, c);
         if (read) |_| {
