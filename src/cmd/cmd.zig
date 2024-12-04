@@ -1016,7 +1016,7 @@ fn printManifest() !void {
     );
     defer snapshots.deinit(allocator);
 
-    _ = try snapshots.collapse();
+    _ = try snapshots.collapse(allocator);
 
     // TODO: support better inspection of snapshots (maybe dump to a file as json?)
     std.debug.print("full snapshots: {any}\n", .{snapshots.full.bank_fields});
@@ -1496,7 +1496,7 @@ fn loadSnapshot(
     errdefer result.accounts_db.deinit();
 
     if (options.metadata_only) {
-        result.collapsed_snapshot_fields = try result.snapshot_fields.collapse();
+        result.collapsed_snapshot_fields = try result.snapshot_fields.collapse(allocator);
     } else {
         result.collapsed_snapshot_fields = try result.accounts_db.loadWithDefaults(
             allocator,

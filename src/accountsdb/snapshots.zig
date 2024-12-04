@@ -1504,7 +1504,7 @@ pub const AccountsDbFields = struct {
     pub const @"!bincode-config:rooted_slots" = bincode.arraylist.defaultOnEofConfig(std.ArrayListUnmanaged(Slot));
     pub const @"!bincode-config:rooted_slot_hashes" = bincode.arraylist.defaultOnEofConfig(std.ArrayListUnmanaged(SlotAndHash));
 
-    pub const FileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
+    pub const FileMap = std.AutoArrayHashMapUnmanaged(Slot, AccountFileInfo);
 
     pub fn deinit(fields: AccountsDbFields, allocator: std.mem.Allocator) void {
         bincode.free(allocator, fields);
@@ -2216,7 +2216,11 @@ pub const AllSnapshotFields = struct {
     /// this will 1) modify the incremental snapshot account map
     /// and 2) the returned snapshot heap fields will still point to the incremental snapshot
     /// (so be sure not to deinit it while still using the returned snapshot)
-    pub fn collapse(self: *Self) !SnapshotFields {
+    pub fn collapse(
+        self: *Self,
+        /// Should be the same allocator passed to `fromFiles`, or otherwise to allocate `Self`.
+        allocator: std.mem.Allocator,
+    ) !SnapshotFields {
         // nothing to collapse
         if (self.incremental == null)
             return self.full;
@@ -2231,13 +2235,12 @@ pub const AllSnapshotFields = struct {
         const storages_map = &self.incremental.?.accounts_db_fields.file_map;
 
         // TODO: use a better allocator
-        const allocator = storages_map.allocator;
         var slots_to_remove = std.ArrayList(Slot).init(allocator);
         defer slots_to_remove.deinit();
 
         // make sure theres no overlap in slots between full and incremental and combine
         var storages_entry_iter = storages_map.iterator();
-        while (storages_entry_iter.next()) |*incremental_entry| {
+        while (storages_entry_iter.next()) |incremental_entry| {
             const slot = incremental_entry.key_ptr.*;
 
             // only keep slots > full snapshot slot
@@ -2246,7 +2249,7 @@ pub const AllSnapshotFields = struct {
                 continue;
             }
 
-            const slot_entry = try self.full.accounts_db_fields.file_map.getOrPut(slot);
+            const slot_entry = try self.full.accounts_db_fields.file_map.getOrPut(allocator, slot);
             if (slot_entry.found_existing) {
                 std.debug.panic("invalid incremental snapshot: slot {d} is in both full and incremental snapshots\n", .{slot});
             } else {
@@ -2272,7 +2275,7 @@ pub const AllSnapshotFields = struct {
         } else {
             self.full.deinit(allocator);
             if (self.incremental) |*inc| {
-                inc.accounts_db_fields.file_map.deinit();
+                inc.accounts_db_fields.file_map.deinit(allocator);
                 bincode.free(allocator, inc.bank_fields);
                 bincode.free(allocator, inc.accounts_db_fields.rooted_slots);
                 bincode.free(allocator, inc.accounts_db_fields.rooted_slot_hashes);
