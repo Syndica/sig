@@ -2619,8 +2619,6 @@ pub const AccountsDB = struct {
 
             if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
                 bank_hash_stats.accumulate(other_stats);
-            } else {
-                self.logger.warn().logf("No bank hash stats for slot {}.", .{account_file.slot});
             }
 
             serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
@@ -2836,8 +2834,6 @@ pub const AccountsDB = struct {
 
                 if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
                     bank_hash_stats.accumulate(other_stats);
-                } else {
-                    self.logger.warn().logf("No bank hash stats for slot {}.", .{account_file.slot});
                 }
 
                 serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
