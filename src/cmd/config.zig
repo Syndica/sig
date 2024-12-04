@@ -2,14 +2,14 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const ACCOUNT_INDEX_SHARDS = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS;
-const ShredCollectorConfig = sig.shred_collector.ShredCollectorConfig;
+const ShredCollectorConfig = sig.shred_networking.ShredCollectorConfig;
 const IpAddr = sig.net.IpAddr;
 const LogLevel = sig.trace.Level;
 
 pub const Config = struct {
     identity: IdentityConfig = .{},
     gossip: GossipConfig = .{},
-    shred_collector: ShredCollectorConfig = shred_collector_defaults,
+    shred_networking: ShredCollectorConfig = shred_networking_defaults,
     accounts_db: AccountsDBConfig = .{},
     geyser: GeyserConfig = .{},
     turbine: TurbineConfig = .{},
@@ -113,7 +113,7 @@ pub const Network = enum {
     }
 };
 
-const shred_collector_defaults = ShredCollectorConfig{
+const shred_networking_defaults = ShredCollectorConfig{
     .turbine_recv_port = 8002,
     .repair_port = 8003,
     .start_slot = null,
