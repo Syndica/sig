@@ -607,13 +607,22 @@ pub const BankIncrementalSnapshotPersistence = struct {
     /// capitalization of the accounts in the incremental snapshot slot range
     incremental_capitalization: u64,
 
-    pub fn default() @This() {
+    pub const ZEROES: BankIncrementalSnapshotPersistence = .{
+        .full_slot = 0,
+        .full_hash = Hash.ZEROES,
+        .full_capitalization = 0,
+        .incremental_hash = Hash.ZEROES,
+        .incremental_capitalization = 0,
+    };
+
+    pub fn initRandom(random: std.Random) BankIncrementalSnapshotPersistence {
+        const full_capitalization = random.int(u64);
         return .{
-            .full_slot = 0,
-            .full_hash = Hash.ZEROES,
-            .full_capitalization = 0,
-            .incremental_hash = Hash.ZEROES,
-            .incremental_capitalization = 0,
+            .full_slot = random.int(Slot),
+            .full_hash = Hash.initRandom(random),
+            .full_capitalization = full_capitalization,
+            .incremental_hash = Hash.initRandom(random),
+            .incremental_capitalization = random.uintAtMost(u64, full_capitalization),
         };
     }
 };
@@ -1072,10 +1081,18 @@ pub const BankFields = struct {
 /// Analogous to https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/serde_snapshot.rs#L396
 pub const ExtraFields = struct {
     lamports_per_signature: u64,
-    snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
-    epoch_accounts_hash: ?Hash = null,
-    versioned_epoch_stakes: VersionedEpochStakesMap = .{},
-    accounts_lt_hash: ?AccountsLtHash = null,
+    snapshot_persistence: ?BankIncrementalSnapshotPersistence,
+    epoch_accounts_hash: ?Hash,
+    versioned_epoch_stakes: VersionedEpochStakesMap,
+    accounts_lt_hash: ?AccountsLtHash,
+
+    pub const INIT_EOF: ExtraFields = .{
+        .lamports_per_signature = 0,
+        .snapshot_persistence = null,
+        .epoch_accounts_hash = null,
+        .versioned_epoch_stakes = .{},
+        .accounts_lt_hash = null,
+    };
 
     pub fn deinit(extra: *const ExtraFields, allocator: std.mem.Allocator) void {
         var versioned_epoch_stakes = extra.versioned_epoch_stakes;

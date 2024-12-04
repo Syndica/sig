@@ -2646,6 +2646,10 @@ pub const AccountsDB = struct {
             .bank_extra = .{
                 .lamports_per_signature = params.lamports_per_signature,
                 // default to null for full snapshot,
+                .snapshot_persistence = null,
+                .epoch_accounts_hash = null,
+                .versioned_epoch_stakes = .{},
+                .accounts_lt_hash = null,
             },
         };
 
@@ -2872,7 +2876,10 @@ pub const AccountsDB = struct {
             .bank_extra = .{
                 .lamports_per_signature = params.lamports_per_signature,
                 .snapshot_persistence = snap_persistence,
-                // TODO: the other fields default to null, but this may not always be correct.
+                // TODO: the other fields default to empty/null, but this may not always be correct.
+                .epoch_accounts_hash = null,
+                .versioned_epoch_stakes = .{},
+                .accounts_lt_hash = null,
             },
         };
 
