@@ -24,7 +24,7 @@ const ScopedLogger = sig.trace.ScopedLogger;
 const Network = config.Network;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.Pubkey;
-const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
+const ShredCollectorDependencies = sig.shred_networking.ShredCollectorDependencies;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
@@ -92,7 +92,7 @@ pub fn run() !void {
     var repair_port_option = cli.Option{
         .long_name = "repair-port",
         .help = "The port to run shred repair listener - default: 8002",
-        .value_ref = cli.mkRef(&config.current.shred_collector.repair_port),
+        .value_ref = cli.mkRef(&config.current.shred_networking.repair_port),
         .required = false,
         .value_name = "Repair Port",
     };
@@ -100,7 +100,7 @@ pub fn run() !void {
     var turbine_recv_port_option = cli.Option{
         .long_name = "turbine-port",
         .help = "The port to run turbine shred listener (aka TVU port) - default: 8003",
-        .value_ref = cli.mkRef(&config.current.shred_collector.turbine_recv_port),
+        .value_ref = cli.mkRef(&config.current.shred_networking.turbine_recv_port),
         .required = false,
         .value_name = "Turbine Port",
     };
@@ -141,7 +141,7 @@ pub fn run() !void {
     var test_repair_option = cli.Option{
         .long_name = "test-repair-for-slot",
         .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
-        .value_ref = cli.mkRef(&config.current.shred_collector.start_slot),
+        .value_ref = cli.mkRef(&config.current.shred_networking.start_slot),
         .required = false,
         .value_name = "slot number",
     };
@@ -728,8 +728,8 @@ fn validator() !void {
         app_base.deinit();
     }
 
-    const repair_port: u16 = config.current.shred_collector.repair_port;
-    const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
+    const repair_port: u16 = config.current.shred_networking.repair_port;
+    const turbine_recv_port: u16 = config.current.shred_networking.turbine_recv_port;
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
@@ -822,9 +822,9 @@ fn validator() !void {
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
     // shred collector
-    var shred_col_conf = config.current.shred_collector;
+    var shred_col_conf = config.current.shred_networking;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
-    var shred_collector_manager = try sig.shred_collector.start(
+    var shred_networking_manager = try sig.shred_networking.start(
         shred_col_conf,
         ShredCollectorDependencies{
             .allocator = allocator,
@@ -844,10 +844,10 @@ fn validator() !void {
             .bank_fields = snapshot.bank.bank_fields,
         },
     );
-    defer shred_collector_manager.deinit();
+    defer shred_networking_manager.deinit();
 
     gossip_service.service_manager.join();
-    shred_collector_manager.join();
+    shred_networking_manager.join();
 }
 
 fn shredCollector() !void {
@@ -858,8 +858,8 @@ fn shredCollector() !void {
         app_base.deinit();
     }
 
-    const repair_port: u16 = config.current.shred_collector.repair_port;
-    const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
+    const repair_port: u16 = config.current.shred_networking.repair_port;
+    const turbine_recv_port: u16 = config.current.shred_networking.turbine_recv_port;
 
     var gossip_service = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
@@ -938,9 +938,9 @@ fn shredCollector() !void {
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
     // shred collector
-    var shred_col_conf = config.current.shred_collector;
+    var shred_col_conf = config.current.shred_networking;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
-    var shred_collector_manager = try sig.shred_collector.start(
+    var shred_networking_manager = try sig.shred_networking.start(
         shred_col_conf,
         .{
             .allocator = allocator,
@@ -960,10 +960,10 @@ fn shredCollector() !void {
             .bank_fields = snapshot.bank.bank_fields,
         },
     );
-    defer shred_collector_manager.deinit();
+    defer shred_networking_manager.deinit();
 
     gossip_service.service_manager.join();
-    shred_collector_manager.join();
+    shred_networking_manager.join();
 }
 
 const GeyserWriter = sig.geyser.GeyserWriter;
