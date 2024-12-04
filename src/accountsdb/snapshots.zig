@@ -1120,62 +1120,52 @@ pub const ExtraFields = struct {
         random: std.Random,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!ExtraFields {
-        const non_eof_count = random.uintLessThan(usize, @typeInfo(ExtraFields).Struct.fields.len);
+        var extra_fields: ExtraFields = INIT_EOF;
+        errdefer extra_fields.deinit(allocator);
 
-        const lamports_per_signature = if (non_eof_count >= 1) random.int(u64) else 0;
+        const FieldTag = std.meta.FieldEnum(ExtraFields);
+        const field_infos = @typeInfo(ExtraFields).Struct.fields;
 
-        const snapshot_persistence: ?BankIncrementalSnapshotPersistence = if (non_eof_count >= 2) .{
-            .full_slot = random.int(Slot),
-            .full_hash = Hash.initRandom(random),
-            .full_capitalization = random.int(u64),
-            .incremental_hash = Hash.initRandom(random),
-            .incremental_capitalization = random.int(u64),
-        } else null;
+        const NonEofCount = std.math.IntFittingRange(0, field_infos.len);
+        const non_eof_count = random.uintLessThan(NonEofCount, field_infos.len);
 
-        const epoch_accounts_hash = if (non_eof_count >= 3) Hash.initRandom(random) else null;
+        inline for (field_infos, 0..) |field, i| runtime_continue: {
+            if (i != non_eof_count) break :runtime_continue;
+            const field_ptr = &@field(extra_fields, field.name);
+            switch (@field(FieldTag, field.name)) {
+                .lamports_per_signature,
+                => field_ptr.* = random.int(u64),
 
-        var versioned_epoch_stakes = VersionedEpochStakesMap.Managed.init(allocator);
-        errdefer versioned_epoch_stakes.deinit();
-        errdefer for (versioned_epoch_stakes.values()) |a| a.deinit(allocator);
-        if (non_eof_count >= 4) {
-            const VesMapRngCtx = struct {
-                allocator: std.mem.Allocator,
-                max_list_entries: usize,
-                pub fn randomKey(_: @This(), rand: std.Random) !u64 {
-                    return rand.int(u64);
-                }
-                pub fn randomValue(ctx: @This(), rand: std.Random) !VersionedEpochStake {
-                    return VersionedEpochStake.initRandom(
-                        ctx.allocator,
-                        rand,
-                        ctx.max_list_entries,
-                    );
-                }
-            };
-            try sig.rand.fillHashmapWithRng(
-                &versioned_epoch_stakes,
-                random,
-                random.uintAtMost(usize, max_list_entries),
-                VesMapRngCtx{
-                    .allocator = allocator,
-                    .max_list_entries = max_list_entries,
+                .snapshot_persistence,
+                => field_ptr.* = BankIncrementalSnapshotPersistence.initRandom(random),
+
+                .epoch_accounts_hash,
+                => field_ptr.* = Hash.initRandom(random),
+
+                .versioned_epoch_stakes,
+                => {
+                    const entry_count = random.uintAtMost(usize, max_list_entries);
+                    try field_ptr.ensureTotalCapacity(allocator, entry_count);
+                    for (0..entry_count) |_| {
+                        const ves = try VersionedEpochStake.initRandom(
+                            allocator,
+                            random,
+                            max_list_entries,
+                        );
+                        field_ptr.putAssumeCapacity(random.int(u64), ves);
+                    }
                 },
-            );
+
+                .accounts_lt_hash,
+                => field_ptr.* = hash: {
+                    var hash: AccountsLtHash = undefined;
+                    random.bytes(std.mem.asBytes(&hash));
+                    break :hash hash;
+                },
+            }
         }
 
-        const accounts_lt_hash = if (non_eof_count >= 5) blk: {
-            var accounts_lt_hash: ExtraFields.AccountsLtHash = undefined;
-            random.bytes(std.mem.asBytes(&accounts_lt_hash));
-            break :blk accounts_lt_hash;
-        } else null;
-
-        return .{
-            .lamports_per_signature = lamports_per_signature,
-            .snapshot_persistence = snapshot_persistence,
-            .epoch_accounts_hash = epoch_accounts_hash,
-            .versioned_epoch_stakes = versioned_epoch_stakes.unmanaged,
-            .accounts_lt_hash = accounts_lt_hash,
-        };
+        return extra_fields;
     }
 
     fn bincodeRead(
@@ -1183,89 +1173,36 @@ pub const ExtraFields = struct {
         reader: anytype,
         params: bincode.Params,
     ) !ExtraFields {
-        const assert_allocator = sig.utils.allocators.failing.allocator(.{
-            .alloc = .assert,
-            .resize = .assert,
-            .free = .assert,
-        });
+        var extra_fields: ExtraFields = INIT_EOF;
+        errdefer extra_fields.deinit(allocator);
 
-        var eof = false;
+        until_eof: {
+            const FieldTag = std.meta.FieldEnum(ExtraFields);
+            const assert_allocator = sig.utils.allocators.failing.allocator(.{
+                .alloc = .assert,
+                .resize = .assert,
+                .free = .assert,
+            });
 
-        const lamports_per_signature = bincode.readInt(
-            u64,
-            reader,
-            params,
-        ) catch |err| switch (err) {
-            else => |e| return e,
-            error.EndOfStream => blk: {
-                eof = true;
-                break :blk 0;
-            },
-        };
+            inline for (@typeInfo(ExtraFields).Struct.fields) |field| {
+                const field_ptr = &@field(extra_fields, field.name);
+                field_ptr.* = switch (@field(FieldTag, field.name)) {
+                    .lamports_per_signature,
+                    => bincode.readInt(u64, reader, params),
 
-        const snapshot_persistence = if (eof) null else bincode.read(
-            assert_allocator,
-            ?BankIncrementalSnapshotPersistence,
-            reader,
-            params,
-        ) catch |err| switch (err) {
-            else => |e| return e,
-            error.EndOfStream => blk: {
-                eof = true;
-                break :blk null;
-            },
-        };
+                    .snapshot_persistence,
+                    .epoch_accounts_hash,
+                    .versioned_epoch_stakes,
+                    .accounts_lt_hash,
+                    => bincode.read(assert_allocator, field.type, reader, params),
+                } catch |err| switch (err) {
+                    error.EndOfStream => break :until_eof,
+                    else => |e| return e,
+                };
+            }
+        }
 
-        const epoch_accounts_hash = if (eof) null else bincode.read(
-            assert_allocator,
-            ?Hash,
-            reader,
-            params,
-        ) catch |err| switch (err) {
-            else => |e| return e,
-            error.EndOfStream => blk: {
-                eof = true;
-                break :blk null;
-            },
-        };
-
-        const hmDeserialize = comptime bincode.hashmap.hashMapFieldConfig(
-            VersionedEpochStakesMap,
-            .{},
-        ).deserializer.?;
-        var versioned_epoch_stakes = if (eof) VersionedEpochStakesMap{} else hmDeserialize(
-            allocator,
-            reader,
-            params,
-        ) catch |err| switch (err) {
-            else => |e| return e,
-            error.EndOfStream => blk: {
-                eof = true;
-                break :blk VersionedEpochStakesMap{};
-            },
-        };
-        errdefer versioned_epoch_stakes.deinit(allocator);
-
-        const accounts_lt_hash = if (eof) null else bincode.read(
-            assert_allocator,
-            ?AccountsLtHash,
-            reader,
-            params,
-        ) catch |err| switch (err) {
-            else => |e| return e,
-            error.EndOfStream => blk: {
-                eof = true;
-                break :blk null;
-            },
-        };
-
-        return .{
-            .lamports_per_signature = lamports_per_signature,
-            .snapshot_persistence = snapshot_persistence,
-            .epoch_accounts_hash = epoch_accounts_hash,
-            .versioned_epoch_stakes = versioned_epoch_stakes,
-            .accounts_lt_hash = accounts_lt_hash,
-        };
+        return extra_fields;
     }
 
     fn bincodeWrite(
