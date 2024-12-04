@@ -142,9 +142,9 @@ fn randomAccountsDbFields(
 
     const file_map_len = random.intRangeAtMost(usize, params.file_map_len.min, params.file_map_len.max);
 
-    var file_map = AccountsDbFields.FileMap.init(allocator);
-    errdefer file_map.deinit();
-    try file_map.ensureTotalCapacity(file_map_len);
+    var file_map: AccountsDbFields.FileMap = .{};
+    errdefer file_map.deinit(allocator);
+    try file_map.ensureTotalCapacity(allocator, file_map_len);
 
     var file_id_set = std.AutoArrayHashMap(void, void).init(allocator);
     defer file_id_set.deinit();

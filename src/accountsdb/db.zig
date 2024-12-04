@@ -274,6 +274,7 @@ pub const AccountsDB = struct {
         self: *Self,
         /// needs to be a thread-safe allocator
         allocator: std.mem.Allocator,
+        /// Must have been allocated with `self.allocator`.
         snapshot_fields_and_paths: *AllSnapshotFields,
         n_threads: u32,
         validate: bool,
@@ -281,7 +282,7 @@ pub const AccountsDB = struct {
         should_fastload: bool,
         save_index: bool,
     ) !SnapshotFields {
-        const snapshot_fields = try snapshot_fields_and_paths.collapse();
+        const snapshot_fields = try snapshot_fields_and_paths.collapse(self.allocator);
 
         if (should_fastload) {
             var timer = try sig.time.Timer.start();
@@ -2602,14 +2603,14 @@ pub const AccountsDB = struct {
         };
         defer archive_file.close();
 
-        const SerializableFileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
+        const SerializableFileMap = AccountsDbFields.FileMap;
 
-        var serializable_file_map = SerializableFileMap.init(self.allocator);
-        defer serializable_file_map.deinit();
+        var serializable_file_map: SerializableFileMap = .{};
+        defer serializable_file_map.deinit(self.allocator);
         var bank_hash_stats = BankHashStats.zero_init;
 
         // collect account files into serializable_file_map and compute bank_hash_stats
-        try serializable_file_map.ensureTotalCapacity(file_map.count());
+        try serializable_file_map.ensureTotalCapacity(self.allocator, file_map.count());
         for (file_map.values()) |account_file| {
             if (account_file.slot > params.target_slot) continue;
 
@@ -2816,14 +2817,14 @@ pub const AccountsDB = struct {
         };
         defer archive_file.close();
 
-        const SerializableFileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
+        const SerializableFileMap = AccountsDbFields.FileMap;
 
         var serializable_file_map: SerializableFileMap, //
         const bank_hash_stats: BankHashStats //
         = blk: {
-            var serializable_file_map = SerializableFileMap.init(self.allocator);
-            errdefer serializable_file_map.deinit();
-            try serializable_file_map.ensureTotalCapacity(file_map.count());
+            var serializable_file_map: SerializableFileMap = .{};
+            errdefer serializable_file_map.deinit(self.allocator);
+            try serializable_file_map.ensureTotalCapacity(self.allocator, file_map.count());
 
             var bank_hash_stats = BankHashStats.zero_init;
             for (file_map.values()) |account_file| {
@@ -2847,7 +2848,7 @@ pub const AccountsDB = struct {
 
             break :blk .{ serializable_file_map, bank_hash_stats };
         };
-        defer serializable_file_map.deinit();
+        defer serializable_file_map.deinit(self.allocator);
 
         const snap_persistence: BankIncrementalSnapshotPersistence = .{
             .full_slot = full_snapshot_info.slot,
@@ -3360,7 +3361,7 @@ fn loadTestAccountsDB(
     var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
     errdefer snapshots.deinit(allocator);
 
-    const snapshot = try snapshots.collapse();
+    const snapshot = try snapshots.collapse(allocator);
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
@@ -3431,7 +3432,7 @@ test "geyser stream on load" {
         _ = reader_handle.join();
     }
 
-    const snapshot = try snapshots.collapse();
+    const snapshot = try snapshots.collapse(allocator);
     defer snapshots.deinit(allocator);
 
     var accounts_db = try AccountsDB.init(.{
@@ -4337,7 +4338,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
         var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
         defer snapshots.deinit(allocator);
-        const snapshot = try snapshots.collapse();
+        const snapshot = try snapshots.collapse(allocator);
 
         var accounts_db = try AccountsDB.init(.{
             .allocator = allocator,
