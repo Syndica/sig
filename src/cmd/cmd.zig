@@ -821,23 +821,6 @@ fn validator() !void {
     // Retransmit service
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
-    var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
-    defer retransmit_shred_channel.deinit();
-
-    const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.retransmit_service.run, .{.{
-        .allocator = allocator,
-        .my_contact_info = my_contact_info,
-        .bank_fields = snapshot.bank.bank_fields,
-        .leader_schedule_cache = &leader_schedule_cache,
-        .gossip_table_rw = &gossip_service.gossip_table_rw,
-        .receiver = &retransmit_shred_channel,
-        .maybe_num_retransmit_threads = config.current.turbine.num_retransmit_threads,
-        .overwrite_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
-        .exit = &app_base.exit,
-        .rand = prng.random(),
-        .logger = app_base.logger.unscoped(),
-    }});
-
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
@@ -854,12 +837,15 @@ fn validator() !void {
             .my_shred_version = &gossip_service.my_shred_version,
             .leader_schedule = leader_provider,
             .shred_inserter = shred_inserter,
-            .retransmit_shred_sender = &retransmit_shred_channel,
+            .my_contact_info = my_contact_info,
+            .n_retransmit_threads = config.current.turbine.num_retransmit_threads,
+            .overwrite_turbine_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
+            .leader_schedule_cache = &leader_schedule_cache,
+            .bank_fields = snapshot.bank.bank_fields,
         },
     );
     defer shred_collector_manager.deinit();
 
-    retransmit_service_handle.join();
     gossip_service.service_manager.join();
     shred_collector_manager.join();
 }
@@ -951,24 +937,6 @@ fn shredCollector() !void {
 
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
-    var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
-    defer retransmit_shred_channel.deinit();
-
-    // retransmit service
-    const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.retransmit_service.run, .{.{
-        .allocator = allocator,
-        .my_contact_info = my_contact_info,
-        .bank_fields = snapshot.bank.bank_fields,
-        .leader_schedule_cache = &leader_schedule_cache,
-        .gossip_table_rw = &gossip_service.gossip_table_rw,
-        .receiver = &retransmit_shred_channel,
-        .maybe_num_retransmit_threads = config.current.turbine.num_retransmit_threads,
-        .overwrite_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
-        .exit = &app_base.exit,
-        .rand = prng.random(),
-        .logger = app_base.logger.unscoped(),
-    }});
-
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
@@ -985,12 +953,15 @@ fn shredCollector() !void {
             .my_shred_version = &gossip_service.my_shred_version,
             .leader_schedule = leader_provider,
             .shred_inserter = shred_inserter,
-            .retransmit_shred_sender = &retransmit_shred_channel,
+            .my_contact_info = my_contact_info,
+            .n_retransmit_threads = config.current.turbine.num_retransmit_threads,
+            .overwrite_turbine_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
+            .leader_schedule_cache = &leader_schedule_cache,
+            .bank_fields = snapshot.bank.bank_fields,
         },
     );
     defer shred_collector_manager.deinit();
 
-    retransmit_service_handle.join();
     gossip_service.service_manager.join();
     shred_collector_manager.join();
 }

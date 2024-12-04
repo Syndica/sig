@@ -11,6 +11,7 @@ const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
 const GossipTable = sig.gossip.GossipTable;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
@@ -19,6 +20,7 @@ const Registry = sig.prometheus.Registry;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
+const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 
 const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
 const RepairPeerProvider = shred_collector.repair_service.RepairPeerProvider;
@@ -49,9 +51,13 @@ pub const ShredCollectorDependencies = struct {
     gossip_table_rw: *RwMux(GossipTable),
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
+    my_contact_info: ThreadSafeContactInfo,
     leader_schedule: SlotLeaderProvider,
     shred_inserter: sig.ledger.ShredInserter,
-    retransmit_shred_sender: ?*Channel(Packet),
+    n_retransmit_threads: ?usize,
+    overwrite_turbine_stake_for_testing: bool,
+    leader_schedule_cache: *LeaderScheduleCache,
+    bank_fields: *const sig.accounts_db.snapshots.BankFields,
 };
 
 /// Start the Shred Collector.
@@ -79,6 +85,9 @@ pub fn start(
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
+
+    var retransmit_channel = try sig.sync.Channel(sig.net.Packet).init(deps.allocator);
+    defer retransmit_channel.deinit();
 
     // receiver (threads)
     const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
@@ -112,7 +121,7 @@ pub fn start(
             deps.registry,
             unverified_shred_channel,
             verified_shred_channel,
-            deps.retransmit_shred_sender,
+            &retransmit_channel,
             deps.leader_schedule,
         },
         false,
@@ -140,6 +149,26 @@ pub fn start(
             deps.shred_inserter,
             deps.leader_schedule,
         },
+        false,
+    );
+
+    // retransmitter (thread)
+    try service_manager.spawn(
+        "Shred Retransmitter",
+        shred_collector.shred_retransmitter.runShredRetransmitter,
+        .{.{
+            .allocator = deps.allocator,
+            .my_contact_info = deps.my_contact_info,
+            .bank_fields = deps.bank_fields,
+            .leader_schedule_cache = deps.leader_schedule_cache,
+            .gossip_table_rw = deps.gossip_table_rw,
+            .receiver = &retransmit_channel,
+            .maybe_num_retransmit_threads = deps.n_retransmit_threads,
+            .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
+            .exit = deps.exit,
+            .rand = deps.random,
+            .logger = deps.logger.unscoped(),
+        }},
         false,
     );
 
