@@ -1422,7 +1422,6 @@ const LoadedSnapshot = struct {
         self.snapshot_fields.deinit(self.allocator);
         self.accounts_db.deinit();
         self.allocator.destroy(self);
-        self.collapsed_snapshot_fields.deinit(self.allocator);
     }
 };
 
