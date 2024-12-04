@@ -2605,6 +2605,7 @@ test "handle old prune & pull request message" {
     handle.join();
 
     try std.testing.expect(gossip_service.metrics.pull_requests_dropped.get() == 2);
+    try std.testing.expect(gossip_service.metrics.prune_messages_dropped.get() == 1);
 }
 
 test "handle pull request" {
