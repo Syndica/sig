@@ -1492,22 +1492,129 @@ pub const AccountsDbFields = struct {
     slot: Slot,
     bank_hash_info: BankHashInfo,
 
-    // default on EOF
     /// NOTE: these are currently always empty?
-    /// https://github.com/anza-xyz/agave/blob/b9eb4e2aa328abb9d3ee1d857d82ccd7a86f8c4d/runtime/src/serde_snapshot.rs#L769-L782
-    rooted_slots: std.ArrayListUnmanaged(Slot),
-    rooted_slot_hashes: std.ArrayListUnmanaged(SlotAndHash),
-
-    pub const @"!bincode-config:file_map" = bincode.hashmap.hashMapFieldConfig(FileMap, .{
-        .value = bincode.list.valueEncodedAsSlice(AccountFileInfo, .{}),
-    });
-    pub const @"!bincode-config:rooted_slots" = bincode.arraylist.defaultOnEofConfig(std.ArrayListUnmanaged(Slot));
-    pub const @"!bincode-config:rooted_slot_hashes" = bincode.arraylist.defaultOnEofConfig(std.ArrayListUnmanaged(SlotAndHash));
+    /// https://github.com/anza-xyz/agave/blob/9c899a72414993dc005f11afb5df10752b10810b/runtime/src/serde_snapshot.rs#L815-L825
+    rooted_slots: []const Slot,
+    rooted_slot_hashes: []const SlotAndHash,
 
     pub const FileMap = std.AutoArrayHashMapUnmanaged(Slot, AccountFileInfo);
 
     pub fn deinit(fields: AccountsDbFields, allocator: std.mem.Allocator) void {
-        bincode.free(allocator, fields);
+        var file_map = fields.file_map;
+        file_map.deinit(allocator);
+
+        allocator.free(fields.rooted_slots);
+        allocator.free(fields.rooted_slot_hashes);
+    }
+
+    pub const @"!bincode-config": bincode.FieldConfig(AccountsDbFields) = .{
+        .deserializer = bincodeRead,
+        .serializer = bincodeWrite,
+        .free = bincodeFree,
+    };
+
+    fn bincodeRead(
+        allocator: std.mem.Allocator,
+        reader: anytype,
+        params: bincode.Params,
+    ) !AccountsDbFields {
+        const assert_allocator = sig.utils.allocators.failing.allocator(.{
+            .alloc = .assert,
+            .resize = .assert,
+            .free = .assert,
+        });
+
+        var file_map = blk: {
+            const file_map_len: usize = try bincode.readIntAsLength(usize, reader, params) orelse
+                return error.FileMapTooBig;
+            var file_map: FileMap = .{};
+            errdefer file_map.deinit(allocator);
+
+            try file_map.ensureTotalCapacity(allocator, file_map_len);
+
+            for (0..file_map_len) |_| {
+                const key = try bincode.readInt(Slot, reader, params);
+
+                if (try bincode.readIntAsLength(usize, reader, params) != 1) {
+                    return error.TooManyAccountFileInfos;
+                }
+                const value = try bincode.read(assert_allocator, AccountFileInfo, reader, params);
+
+                const gop = file_map.getOrPutAssumeCapacity(key);
+                if (gop.found_existing) return error.DuplicateFileMapEntry;
+                gop.value_ptr.* = value;
+            }
+
+            break :blk file_map;
+        };
+        errdefer file_map.deinit(allocator);
+
+        const stored_meta_write_version = try bincode.readInt(u64, reader, params);
+        const slot = try bincode.readInt(Slot, reader, params);
+        const bank_hash_info = try bincode.read(assert_allocator, BankHashInfo, reader, params);
+
+        const rooted_slots: []const Slot = bincode.read(
+            allocator,
+            []const Slot,
+            reader,
+            params,
+        ) catch |err| switch (err) {
+            error.EndOfStream => &.{},
+            else => |e| return e,
+        };
+        errdefer allocator.free(rooted_slots);
+
+        const rooted_slot_hashes: []const SlotAndHash = bincode.read(
+            allocator,
+            []const SlotAndHash,
+            reader,
+            params,
+        ) catch |err| switch (err) {
+            error.EndOfStream => &.{},
+            else => |e| return e,
+        };
+        errdefer allocator.free(rooted_slot_hashes);
+
+        return .{
+            .file_map = file_map,
+            .stored_meta_write_version = stored_meta_write_version,
+            .slot = slot,
+            .bank_hash_info = bank_hash_info,
+
+            .rooted_slots = rooted_slots,
+            .rooted_slot_hashes = rooted_slot_hashes,
+        };
+    }
+
+    fn bincodeWrite(writer: anytype, data: anytype, params: bincode.Params) !void {
+        comptime if (@TypeOf(data) != AccountsDbFields) unreachable;
+
+        {
+            try bincode.write(writer, @as(usize, data.file_map.count()), params);
+            var iter = data.file_map.iterator();
+            while (iter.next()) |entry| {
+                try bincode.write(writer, entry.key_ptr.*, params);
+
+                const value_as_slice: []const AccountFileInfo = entry.value_ptr[0..1];
+                try bincode.write(writer, value_as_slice, params);
+            }
+        }
+
+        try bincode.write(writer, data.stored_meta_write_version, params);
+        try bincode.write(writer, data.slot, params);
+        try bincode.write(writer, data.bank_hash_info, params);
+
+        if (data.rooted_slot_hashes.len != 0 or data.rooted_slots.len != 0) {
+            try bincode.write(writer, data.rooted_slots, params);
+        }
+
+        if (data.rooted_slot_hashes.len != 0) {
+            try bincode.write(writer, data.rooted_slot_hashes, params);
+        }
+    }
+
+    fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
+        data.deinit(allocator);
     }
 };
 

@@ -190,7 +190,7 @@ fn randomAccountsDbFields(
             },
         },
         // NOTE: see field comment about these always being empty
-        .rooted_slots = .{},
-        .rooted_slot_hashes = .{},
+        .rooted_slots = &.{},
+        .rooted_slot_hashes = &.{},
     };
 }

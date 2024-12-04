@@ -2641,8 +2641,8 @@ pub const AccountsDB = struct {
                     .accounts_hash = full_hash,
                     .stats = bank_hash_stats,
                 },
-                .rooted_slots = .{},
-                .rooted_slot_hashes = .{},
+                .rooted_slots = &.{},
+                .rooted_slot_hashes = &.{},
             },
             .bank_extra = .{
                 .lamports_per_signature = params.lamports_per_signature,
@@ -2867,8 +2867,8 @@ pub const AccountsDB = struct {
                     .accounts_hash = Hash.ZEROES,
                     .stats = bank_hash_stats,
                 },
-                .rooted_slots = .{},
-                .rooted_slot_hashes = .{},
+                .rooted_slots = &.{},
+                .rooted_slot_hashes = &.{},
             },
             .bank_extra = .{
                 .lamports_per_signature = params.lamports_per_signature,
