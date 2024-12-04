@@ -21,7 +21,6 @@ const AccountFile = sig.accounts_db.accounts_file.AccountFile;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const FileId = sig.accounts_db.accounts_file.FileId;
 
-const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
 const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const BankFields = sig.accounts_db.snapshots.BankFields;
