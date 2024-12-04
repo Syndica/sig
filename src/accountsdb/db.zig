@@ -245,7 +245,7 @@ pub const BufferPool = struct {
             .size = try allocator.alignedAlloc(u16, std.mem.page_size, num_frames),
         };
 
-        @memset(frames_metadata.rc, .{ .state = .{ .raw = std.math.maxInt(u64) } });
+        @memset(frames_metadata.rc, .{ .state = .{ .raw = 0 } });
 
         var free_list = try std.ArrayListUnmanaged(FrameIndex).initCapacity(allocator, num_frames);
         for (0..num_frames) |i| free_list.appendAssumeCapacity(@intCast(i));
