@@ -4,6 +4,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const zstd = @import("zstd");
+const xev = @import("xev");
 
 const sysvars = sig.accounts_db.sysvars;
 const snapgen = sig.accounts_db.snapshots.generate;
@@ -227,7 +228,9 @@ pub const BufferPool = struct {
     frames_metadata: FramesMetadata,
 
     /// used for eviction to free less popular (rc=0) frames first
-    fifo: S3_FIFO,
+    eviction_lfu: S3_FIFO,
+
+    event_loop: xev.Loop,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -260,7 +263,8 @@ pub const BufferPool = struct {
             .frames_metadata = frames_metadata,
             .free_list = free_list,
             .file_frames = .{},
-            .fifo = try S3_FIFO.init(allocator, small_fifo_size, main_fifo_size),
+            .eviction_lfu = try S3_FIFO.init(allocator, small_fifo_size, main_fifo_size),
+            .event_loop = try xev.Loop.init(.{}),
         };
     }
 
@@ -276,27 +280,19 @@ pub const BufferPool = struct {
         allocator.free(self.frames_metadata.rc);
         allocator.free(self.frames_metadata.size);
         self.free_list.deinit(allocator);
-        self.fifo.deinit(allocator);
+        self.eviction_lfu.deinit(allocator);
     }
 
-    // TODO: add read-nonblocking, which should return a completion and do reads in parallel
-    fn read_blocking(
+    fn makeIndeces(
         self: *BufferPool,
-        // TODO: should probably get rid of this hot-path small allocation
-        cached_read_allocator: std.mem.Allocator,
-        slot: Slot,
         file_id: FileId,
+        allocator: std.mem.Allocator,
         range_start: u32,
         range_end: u32,
-    ) !CachedRead {
-        const file_path = file_id.path(slot);
-
-        const file = try self.snapshot_dir.openFile(file_path.constSlice(), .{});
-        defer file.close();
-
+    ) ![]FrameIndex {
         const n_indeces = ((range_end - 1) / FRAME_SIZE) - (range_start / FRAME_SIZE) + 1;
 
-        const indeces = try cached_read_allocator.alloc(FrameIndex, n_indeces);
+        const indeces = try allocator.alloc(FrameIndex, n_indeces);
         for (indeces) |*idx| idx.* = INVALID_FRAME;
 
         // lookup frame mappings
@@ -310,6 +306,43 @@ pub const BufferPool = struct {
 
             if (maybe_frame_idx) |frame_idx| idx.* = frame_idx;
         }
+
+        return indeces;
+    }
+
+    pub fn read_nonblocking(
+        self: *BufferPool,
+        cached_read_allocator: std.mem.Allocator,
+        slot: Slot,
+        file_id: FileId,
+        range_start: u32,
+        range_end: u32,
+    ) !CachedRead {
+        const file_path = file_id.path(slot);
+
+        const file = try self.snapshot_dir.openFile(file_path.constSlice(), .{});
+        defer file.close();
+
+        const indeces = try self.makeIndeces(file_id, cached_read_allocator, range_start, range_end);
+        _ = indeces;
+        @panic("TODO");
+    }
+
+    // TODO: add read-nonblocking, which should return a completion and do reads in parallel
+    pub fn read_blocking(
+        self: *BufferPool,
+        cached_read_allocator: std.mem.Allocator,
+        slot: Slot,
+        file_id: FileId,
+        range_start: u32,
+        range_end: u32,
+    ) !CachedRead {
+        const file_path = file_id.path(slot);
+
+        const file = try self.snapshot_dir.openFile(file_path.constSlice(), .{});
+        defer file.close();
+
+        const indeces = try self.makeIndeces(file_id, cached_read_allocator, range_start, range_end);
 
         // seek to first frame (offset rounds down to frame size)
         try file.seekBy(@intCast((range_start / FRAME_SIZE) * FRAME_SIZE));
@@ -361,8 +394,17 @@ test "BufferPool read_blocking" {
         0,
         1000,
     );
-
     defer read.release();
+
+    var read2 = try bp.read_nonblocking(
+        allocator,
+        @as(Slot, 301285806),
+        FileId.fromInt(3771301),
+        0,
+        1000,
+    );
+
+    defer read2.release();
 }
 
 /// slice-ish d\atatype
