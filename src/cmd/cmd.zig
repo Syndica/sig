@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
 const network = @import("zig-network");
-const helpers = @import("helpers.zig");
 const sig = @import("../sig.zig");
 const config = @import("config.zig");
 const zstd = @import("zstd");
@@ -11,6 +10,7 @@ const zstd = @import("zstd");
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
 const Bank = sig.accounts_db.Bank;
@@ -33,7 +33,6 @@ const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
-const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
@@ -1762,4 +1761,66 @@ fn getOrDownloadSnapshots(
     logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
     return .{ snapshots, snapshot_files };
+}
+
+pub fn getOrInitIdentity(
+    allocator: std.mem.Allocator,
+    unscoped_logger: Logger,
+) !KeyPair {
+    const logger = unscoped_logger.withScope(@src().file ++ @src().fn_name);
+
+    const app_data_dir_path = try std.fs.getAppDataDir(allocator, "sig");
+    defer allocator.free(app_data_dir_path);
+
+    if (!std.fs.path.isAbsolute(app_data_dir_path)) {
+        return error.DataDirPathIsNotAbsolute;
+    }
+
+    var app_data_dir = try std.fs.cwd().makeOpenPath(app_data_dir_path, .{});
+    defer app_data_dir.close();
+
+    const IDENTITY_KEYPAIR_PATH = "identity.key";
+
+    if (app_data_dir.openFile(IDENTITY_KEYPAIR_PATH, .{})) |file| existing: {
+        defer file.close();
+
+        const end_pos = try file.getEndPos();
+
+        var buf: [SecretKey.encoded_length]u8 = undefined;
+        const file_len = try file.readAll(&buf);
+
+        if (file_len != buf.len) {
+            logger.err().logf("Truncated identity file, expected {} bytes, found {}", .{ buf.len, file_len });
+            break :existing;
+        }
+
+        if (end_pos != buf.len) {
+            logger.err().logf("Overlong identity file, expected {} bytes, found {}", .{ buf.len, file_len });
+            break :existing;
+        }
+
+        const sk = SecretKey.fromBytes(buf) catch |err| switch (err) {};
+
+        const kp = KeyPair.fromSecretKey(sk) catch |err| {
+            logger.err().logf("{s}", .{@errorName(err)});
+            break :existing;
+        };
+
+        return kp;
+    } else |err| switch (err) {
+        else => |e| return e,
+        error.FileNotFound => {
+            // file not found, fall through directly to the creation process
+        },
+    }
+
+    const file = try app_data_dir.createFile(IDENTITY_KEYPAIR_PATH, .{
+        .truncate = true,
+    });
+    defer file.close();
+
+    const kp = try KeyPair.create(null);
+    try file.writeAll(&kp.secret_key.toBytes());
+
+    return kp;
 }
