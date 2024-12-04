@@ -22,6 +22,7 @@ pub fn build(b: *Build) void {
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
     const benchmark_step = b.step("benchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
+    const repro_step = b.step("repro", "Reproduce the ledger segfault ");
 
     // Dependencies
     const dep_opts = .{ .target = target, .optimize = optimize };
@@ -196,6 +197,23 @@ pub fn build(b: *Build) void {
     geyser_reader_exe_run.addArgs(b.args orelse &.{});
     if (!no_run) geyser_reader_step.dependOn(&geyser_reader_exe_run.step);
     if (no_run) geyser_reader_step.dependOn(&b.addInstallArtifact(geyser_reader_exe, .{}).step);
+
+    // Executable to reproduce ledger segfault.
+    const repro_exe = b.addExecutable(.{
+        .name = "geyser",
+        .root_source_file = b.path("src/repro/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .sanitize_thread = enable_tsan,
+    });
+    b.installArtifact(repro_exe);
+    repro_exe.root_module.addImport("sig", sig_mod);
+    repro_exe.root_module.addImport("zig-cli", zig_cli_module);
+
+    const repro_exe_run = b.addRunArtifact(repro_exe);
+    repro_exe_run.addArgs(b.args orelse &.{});
+    if (!no_run) repro_step.dependOn(&repro_exe_run.step);
+    if (no_run) repro_step.dependOn(&b.addInstallArtifact(repro_exe, .{}).step);
 }
 
 /// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/
