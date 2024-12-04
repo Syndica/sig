@@ -173,23 +173,19 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                             // can be collapsed and the alloc call will then succeed.
                             continue;
                         },
-                        error.AllocFailed => {
-                            // if allocation failed, then expand the capacity and try again
-                            try self.expandCapacity(@max(
-                                config.min_split_size,
-                                n,
-                            ));
-                            // the next alloc call will succeed
-                            continue;
-                        },
+                        // not able to recycle anything, so we break to expand the capacity
+                        error.AllocFailed => break,
                         else => return err,
                     }
                 };
             }
 
-            // not enough memory to allocate and no possible recycles will be perma stuck.
-            // though its possible to recover from this, its very unlikely, so we panic
-            @panic("not enough memory and collapse failed max times");
+            // if allocation failed, then expand the capacity and try again
+            try self.expandCapacityUnsafe(@max(
+                config.min_split_size,
+                n,
+            ));
+            return self.allocUnsafe(n);
         }
 
         pub fn allocUnsafe(self: *Self, n: u64) AllocError!struct { []T, u64 } {
