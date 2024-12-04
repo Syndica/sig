@@ -152,7 +152,7 @@ pub const AccountsDB = struct {
         push_msg_queue: *sig.sync.Mux(std.ArrayList(sig.gossip.GossipData)),
 
         // TODO/NOTE: this will be more useful/nicer to use as a decl literal
-        pub fn fromService(gossip_service: *sig.gossip.GossipService) GossipView {
+        pub fn fromService(gossip_service: *sig.gossip.GossipService) !GossipView {
             return .{
                 .my_pubkey = Pubkey.fromPublicKey(&gossip_service.my_keypair.public_key),
                 .push_msg_queue = &gossip_service.push_msg_queue_mux,
@@ -1755,9 +1755,9 @@ pub const AccountsDB = struct {
             }
         }
 
+        self.logger.info().logf("deleting {} slots ...", .{delete_queue.items.len});
         for (delete_queue.items) |account_file| {
             const slot = account_file.slot;
-            self.logger.info().logf("deleting slot: {}...", .{slot});
             account_file.deinit();
 
             // delete file from disk
@@ -1914,7 +1914,7 @@ pub const AccountsDB = struct {
 
             // update the references
             const new_reference_block, _ = try self.account_index
-                .reference_manager.alloc(accounts_alive_count);
+                .reference_manager.allocOrExpand(accounts_alive_count);
 
             account_iter.reset();
             var offset_index: u64 = 0;
@@ -2277,7 +2277,8 @@ pub const AccountsDB = struct {
         defer self.allocator.free(shard_counts);
         @memset(shard_counts, 0);
 
-        const reference_buf, const ref_global_index = try self.account_index.reference_manager.alloc(n_accounts);
+        const reference_buf, const ref_global_index = try self.account_index
+            .reference_manager.allocOrExpand(n_accounts);
         var references = std.ArrayListUnmanaged(AccountRef).initBuffer(reference_buf);
 
         try indexAndValidateAccountFile(
@@ -2289,7 +2290,7 @@ pub const AccountsDB = struct {
             // to support geyser
             null,
         );
-        //
+
         // track the slot's references
         {
             const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
@@ -2409,7 +2410,7 @@ pub const AccountsDB = struct {
         // update index
         var accounts_dead_count: u64 = 0;
         const reference_buf, const global_ref_index = try self.account_index
-            .reference_manager.alloc(accounts.len);
+            .reference_manager.allocOrExpand(accounts.len);
 
         for (0..accounts.len) |i| {
             reference_buf[i] = AccountRef{

@@ -15,7 +15,6 @@ const GossipKey = sig.gossip.data.GossipKey;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ContactInfo = sig.gossip.data.ContactInfo;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
-const ThreadPool = sig.sync.ThreadPool;
 const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.Pubkey;
 const SocketAddr = sig.net.SocketAddr;
@@ -77,11 +76,10 @@ pub const GossipTable = struct {
 
     // NOTE: this allocator is used to free any memory allocated by the bincode library
     allocator: std.mem.Allocator,
-    thread_pool: *ThreadPool,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, thread_pool: *ThreadPool) !Self {
+    pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
             .store = AutoArrayHashMap(GossipKey, GossipVersionedData).init(allocator),
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
@@ -95,7 +93,6 @@ pub const GossipTable = struct {
             .shards = try GossipTableShards.init(allocator),
             .purged = HashTimeQueue.init(allocator),
             .allocator = allocator,
-            .thread_pool = thread_pool,
         };
     }
 
@@ -452,12 +449,37 @@ pub const GossipTable = struct {
     ) []ThreadSafeContactInfo {
         var infos = self.contactInfoIterator(minimum_insertion_timestamp);
         var i: usize = 0;
-        while (infos.next()) |info| {
+        while (infos.nextThreadSafe()) |info| {
             if (i >= buf.len) break;
-            buf[i] = ThreadSafeContactInfo.fromContactInfo(info.*);
+            buf[i] = info;
             i += 1;
         }
         return buf[0..i];
+    }
+
+    /// Get peers from the gossip table which have the same shred version.
+    pub fn getThreadSafeContactInfosMatchingShredVersion(
+        self: Self,
+        allocator: std.mem.Allocator,
+        pubkey: *const Pubkey,
+        shred_version: u16,
+        minumum_insertion_timestamp: u64,
+    ) !std.ArrayList(ThreadSafeContactInfo) {
+        var contact_info_iter = self.contactInfoIterator(minumum_insertion_timestamp);
+        var peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(
+            allocator,
+            self.contact_infos.count(),
+        );
+
+        while (contact_info_iter.nextThreadSafe()) |contact_info| {
+            if (!contact_info.pubkey.equals(pubkey) and
+                contact_info.shred_version == shred_version)
+            {
+                peers.appendAssumeCapacity(contact_info);
+            }
+        }
+
+        return peers;
     }
 
     /// Returns a slice of contact infos that are no older than minimum_insertion_timestamp.
@@ -516,6 +538,11 @@ pub const GossipTable = struct {
                 }
             }
             return null;
+        }
+
+        pub fn nextThreadSafe(self: *@This()) ?ThreadSafeContactInfo {
+            const contact_info = self.next() orelse return null;
+            return ThreadSafeContactInfo.fromContactInfo(contact_info.*);
         }
     };
 
@@ -879,13 +906,8 @@ test "remove old values" {
 
     var prng = std.rand.DefaultPrng.init(91);
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     for (0..5) |_| {
         const value = SignedGossipData.initSigned(
@@ -913,13 +935,8 @@ test "insert and remove value" {
 
     var prng = std.rand.DefaultPrng.init(91);
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     const value = SignedGossipData.initSigned(
         &keypair,
@@ -936,13 +953,8 @@ test "trim pruned values" {
 
     var prng = std.rand.DefaultPrng.init(91);
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     const N_VALUES = 10;
     const N_TRIM_VALUES = 5;
@@ -1009,13 +1021,8 @@ test "gossip.HashTimeQueue: trim pruned values" {
     };
     var value = SignedGossipData.initSigned(&keypair, data);
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     // timestamp = 100
     _ = try table.insert(value, 100);
@@ -1045,13 +1052,8 @@ test "insert and get" {
     const random = prng.random();
     var value = SignedGossipData.initRandom(random, &keypair);
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     _ = try table.insert(value, 0);
 
@@ -1069,13 +1071,8 @@ test "insert and get contact_info" {
         .LegacyContactInfo = legacy_contact_info,
     });
 
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer {
-        tp.shutdown();
-        tp.deinit();
-        table.deinit();
-    }
+    var table = try GossipTable.init(std.testing.allocator);
+    defer table.deinit();
 
     // test insertion
     const result = try table.insert(gossip_value, 0);

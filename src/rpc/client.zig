@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 const base58 = @import("base58-zig");
+const sig = @import("../sig.zig");
 
 const types = sig.rpc.types;
 
@@ -12,7 +12,7 @@ const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
 const ScopedLogger = sig.trace.log.ScopedLogger;
 const Transaction = sig.core.transaction.Transaction;
-const ClusterType = sig.rpc.ClusterType;
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 pub const Client = struct {
     http_endpoint: []const u8,
@@ -32,6 +32,7 @@ pub const Client = struct {
             .MainnetBeta => "https://api.mainnet-beta.solana.com",
             .Testnet => "https://api.testnet.solana.com",
             .Devnet => "https://api.devnet.solana.com",
+            .Development => @panic("cannot initialize RPC client with Development cluster type"),
             .LocalHost => "http://localhost:8899",
             .Custom => |cluster| cluster.url,
         };
@@ -146,7 +147,12 @@ pub const Client = struct {
         return self.sendFetchRequest(allocator, types.EpochInfo, request, .{});
     }
 
-    // TODO: getEpochSchedule()
+    pub fn getEpochSchedule(self: *Client, allocator: std.mem.Allocator) !Response(types.EpochSchedule) {
+        var request = try Request.init(allocator, "getEpochSchedule");
+        defer request.deinit();
+        return self.sendFetchRequest(allocator, types.EpochSchedule, request, .{});
+    }
+
     // TODO: getFeeForMessage()
     // TODO: getFirstAvailableBlock()
     // TODO: getGenesisHash()
@@ -270,23 +276,6 @@ pub const Client = struct {
         return self.sendFetchRequest(allocator, Slot, request, .{});
     }
 
-    // TODO: getSlotLeader()
-    // TODO: getSlotLeaders()
-    // TODO: getStakeActivation()
-    // TODO: getStakeMinimumDelegation()
-    // TODO: getSupply()
-    // TODO: getTokenAccountBalance()
-    // TODO: getTokenAccountsByDelegate()
-    // TODO: getTockenAccountsByOwner()
-    // TODO: getTokenLargestAccounts()
-    // TODO: getTokenSupply()
-    // TODO: getTransaction()
-    // TODO: getTransactionCount()
-    // TODO: getVoteAccounts()
-    // TODO: isBlockhashValid()
-    // TODO: minimumLedgerSlot()
-    // TODO: simulateTransaction()
-
     pub const RequestAirdropOptions = struct {
         commitment: ?types.Commitment = null,
     };
@@ -305,6 +294,23 @@ pub const Client = struct {
         try request.addConfig(config);
         return self.sendFetchRequest(allocator, types.Signature, request, .{});
     }
+
+    // TODO: getSlotLeader()
+    // TODO: getSlotLeaders()
+    // TODO: getStakeActivation()
+    // TODO: getStakeMinimumDelegation()
+    // TODO: getSupply()
+    // TODO: getTokenAccountBalance()
+    // TODO: getTokenAccountsByDelegate()
+    // TODO: getTockenAccountsByOwner()
+    // TODO: getTokenLargestAccounts()
+    // TODO: getTokenSupply()
+    // TODO: getTransaction()
+    // TODO: getTransactionCount()
+    // TODO: getVoteAccounts()
+    // TODO: isBlockhashValid()
+    // TODO: minimumLedgerSlot()
+    // TODO: simulateTransaction()
 
     const SendTransactionConfig = struct {};
 
@@ -471,7 +477,15 @@ test "getEpochInfo" {
     _ = try response.result();
 }
 
-// TODO: test getEpochSchedule()
+test "getEpochSchedule" {
+    const allocator = std.testing.allocator;
+    var client = Client.init(allocator, .Testnet, .{});
+    defer client.deinit();
+    const response = try client.getEpochSchedule(allocator);
+    defer response.deinit();
+    _ = try response.result();
+}
+
 // TODO: test getFeeForMessage()
 // TODO: test getFirstAvailableBlock()
 // TODO: test getGenesisHash()

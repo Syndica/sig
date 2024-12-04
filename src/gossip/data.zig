@@ -150,7 +150,7 @@ pub const SignedGossipData = struct {
         /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
         keypair: *const KeyPair,
         index: usize,
-    ) Self {
+    ) !Self {
         var data = GossipData.randomFromIndex(random, index);
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         data.setId(pubkey);
@@ -1439,6 +1439,24 @@ pub const ThreadSafeContactInfo = struct {
     gossip_addr: ?SocketAddr,
     rpc_addr: ?SocketAddr,
     tpu_addr: ?SocketAddr,
+    tvu_addr: ?SocketAddr,
+    tpu_quic_addr: ?SocketAddr,
+
+    pub fn initRandom(
+        random: std.rand.Random,
+        pubkey: Pubkey,
+        shred_version: u16,
+    ) !ThreadSafeContactInfo {
+        return .{
+            .pubkey = pubkey,
+            .shred_version = shred_version,
+            .gossip_addr = SocketAddr.initRandom(random),
+            .rpc_addr = SocketAddr.initRandom(random),
+            .tpu_addr = SocketAddr.initRandom(random),
+            .tvu_addr = SocketAddr.initRandom(random),
+            .tpu_quic_addr = SocketAddr.initRandom(random),
+        };
+    }
 
     pub fn fromContactInfo(contact_info: ContactInfo) ThreadSafeContactInfo {
         return .{
@@ -1447,6 +1465,8 @@ pub const ThreadSafeContactInfo = struct {
             .gossip_addr = contact_info.getSocket(.gossip),
             .rpc_addr = contact_info.getSocket(.rpc),
             .tpu_addr = contact_info.getSocket(.tpu),
+            .tvu_addr = contact_info.getSocket(.turbine_recv),
+            .tpu_quic_addr = contact_info.getSocket(.tpu_quic),
         };
     }
 
@@ -1457,6 +1477,8 @@ pub const ThreadSafeContactInfo = struct {
             .gossip_addr = legacy_contact_info.gossip,
             .rpc_addr = legacy_contact_info.rpc,
             .tpu_addr = legacy_contact_info.tpu,
+            .tvu_addr = legacy_contact_info.turbine_recv,
+            .tpu_quic_addr = null,
         };
     }
 };

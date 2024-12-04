@@ -365,6 +365,12 @@ pub fn Mutable(comptime T: type) type {
     };
 }
 
+pub fn deinitMux(mux: anytype) void {
+    var v, var lg = mux.writeWithLock();
+    defer lg.unlock();
+    v.deinit();
+}
+
 test "sync.mux: Const is correct" {
     const Packet = struct {
         buffer: [100]u8 = [_]u8{0} ** 100,

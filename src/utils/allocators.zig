@@ -87,10 +87,14 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
 
         /// append a block of N elements to the manager
         pub fn expandCapacity(self: *Self, n: u64) std.mem.Allocator.Error!void {
-            if (n == 0) return;
-
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
+
+            return self.expandCapacityUnsafe(n);
+        }
+
+        pub fn expandCapacityUnsafe(self: *Self, n: u64) std.mem.Allocator.Error!void {
+            if (n == 0) return;
 
             try self.records.ensureUnusedCapacity(1);
             try self.memory.ensureUnusedCapacity(1);
@@ -143,6 +147,46 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                     }
                 };
             }
+            // not enough memory to allocate and no possible recycles will be perma stuck.
+            // though its possible to recover from this, its very unlikely, so we panic
+            @panic("not enough memory and collapse failed max times");
+        }
+
+        /// same as alloc but if the alloc fails due to not having enough free records (error.AllocFailed),
+        /// it expands the records to max(min_split_size, n) and retrys (which should always succeed)
+        pub fn allocOrExpand(self: *Self, n: u64) AllocError!struct { []T, u64 } {
+            if (config.thread_safe) self.mux.lock();
+            defer if (config.thread_safe) self.mux.unlock();
+
+            if (n == 0) return error.AttemptedZeroAlloc;
+
+            for (0..config.max_collapse_tries) |_| {
+                return self.allocUnsafe(n) catch |err| {
+                    switch (err) {
+                        error.CollapseFailed => {
+                            if (config.thread_safe) self.mux.unlock();
+                            defer if (config.thread_safe) self.mux.lock();
+                            // wait some time and try to collapse again.
+                            std.time.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
+                            // NOTE: this is because there may be new free records
+                            // (which were free'd by some other consumer thread) which
+                            // can be collapsed and the alloc call will then succeed.
+                            continue;
+                        },
+                        error.AllocFailed => {
+                            // if allocation failed, then expand the capacity and try again
+                            try self.expandCapacity(@max(
+                                config.min_split_size,
+                                n,
+                            ));
+                            // the next alloc call will succeed
+                            continue;
+                        },
+                        else => return err,
+                    }
+                };
+            }
+
             // not enough memory to allocate and no possible recycles will be perma stuck.
             // though its possible to recover from this, its very unlikely, so we panic
             @panic("not enough memory and collapse failed max times");
@@ -523,7 +567,7 @@ pub const DiskMemoryAllocator = struct {
     /// mmaps at least enough memory to the file for `size`, the metadata, and optionally
     /// more based on the `mmap_ratio` field, in order to accommodate potential growth
     /// from `resize` calls.
-    fn alloc(ctx: *anyopaque, size: usize, log2_align: u8, return_address: usize) ?[*]u8 {
+    fn alloc(ctx: *anyopaque, requested_size: usize, log2_align: u8, return_address: usize) ?[*]u8 {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
         std.debug.assert(self.mmap_ratio != 0);
@@ -532,7 +576,7 @@ pub const DiskMemoryAllocator = struct {
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
         std.debug.assert(alignment <= std.mem.page_size);
 
-        const file_aligned_size = alignedFileSize(size);
+        const file_aligned_size = alignedFileSize(requested_size);
         const aligned_mmap_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
 
         const file_index = self.count.fetchAdd(1, .monotonic);
@@ -563,8 +607,9 @@ pub const DiskMemoryAllocator = struct {
             return null;
         };
 
-        std.debug.assert(size <= file_aligned_size - @sizeOf(Metadata)); // sanity check
-        std.mem.bytesAsValue(Metadata, full_alloc[size..][0..@sizeOf(Metadata)]).* = .{
+        std.debug.assert(requested_size <= file_aligned_size - @sizeOf(Metadata)); // sanity check
+        const metadata_start = file_aligned_size - @sizeOf(Metadata);
+        std.mem.bytesAsValue(Metadata, full_alloc[metadata_start..][0..@sizeOf(Metadata)]).* = .{
             .file_index = file_index,
             .mmap_size = aligned_mmap_size,
         };
@@ -576,7 +621,7 @@ pub const DiskMemoryAllocator = struct {
         ctx: *anyopaque,
         buf: []u8,
         log2_align: u8,
-        new_size: usize,
+        requested_size: usize,
         return_address: usize,
     ) bool {
         _ = return_address;
@@ -588,15 +633,22 @@ pub const DiskMemoryAllocator = struct {
         std.debug.assert(alignment <= std.mem.page_size);
 
         const old_file_aligned_size = alignedFileSize(buf.len);
-        const new_file_aligned_size = alignedFileSize(new_size);
+        const new_file_aligned_size = alignedFileSize(requested_size);
 
         if (new_file_aligned_size == old_file_aligned_size) {
             return true;
         }
 
         const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
-        const offset = old_file_aligned_size - @sizeOf(Metadata);
-        const metadata: Metadata = @bitCast(buf_ptr[offset..][0..@sizeOf(Metadata)].*);
+        const old_metadata_start = old_file_aligned_size - @sizeOf(Metadata);
+        const metadata: Metadata = @bitCast(blk: {
+            // you might think this block can be replaced with:
+            //      buf_ptr[old_metadata_start..][0..@sizeOf(Metadata)].*
+            // but no, that causes bus errors. it's not the same!
+            var metadata_bytes: [@sizeOf(Metadata)]u8 = undefined;
+            @memcpy(&metadata_bytes, buf_ptr[old_metadata_start..][0..@sizeOf(Metadata)]);
+            break :blk metadata_bytes;
+        });
 
         if (new_file_aligned_size > metadata.mmap_size) {
             return false;
@@ -613,8 +665,12 @@ pub const DiskMemoryAllocator = struct {
 
         file.setEndPos(new_file_aligned_size) catch return false;
 
-        std.debug.assert(new_size <= new_file_aligned_size - @sizeOf(Metadata)); // sanity check
-        std.mem.bytesAsValue(Metadata, buf_ptr[new_size..][0..@sizeOf(Metadata)]).* = metadata;
+        std.debug.assert(requested_size <= new_file_aligned_size - @sizeOf(Metadata));
+        const new_metadata_start = new_file_aligned_size - @sizeOf(Metadata);
+        std.mem.bytesAsValue(
+            Metadata,
+            buf_ptr[new_metadata_start..][0..@sizeOf(Metadata)],
+        ).* = metadata;
 
         return true;
     }
@@ -631,15 +687,15 @@ pub const DiskMemoryAllocator = struct {
         std.debug.assert(alignment <= std.mem.page_size);
 
         const file_aligned_size = alignedFileSize(buf.len);
-        const mmap_aligned_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
 
         const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
-        const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
+        const metadata_start = file_aligned_size - @sizeOf(Metadata);
+        const metadata: Metadata = @bitCast(buf_ptr[metadata_start..][0..@sizeOf(Metadata)].*);
 
         const file_name_bounded = fileNameBounded(metadata.file_index);
         const file_name = file_name_bounded.constSlice();
 
-        std.posix.munmap(buf_ptr[0..mmap_aligned_size]);
+        std.posix.munmap(buf_ptr[0..metadata.mmap_size]);
         self.dir.deleteFile(file_name) catch |err| {
             self.logFailure(err, file_name);
         };
@@ -983,4 +1039,139 @@ test "disk allocator large realloc" {
     page1 = try dma.realloc(page1, std.mem.page_size * 15);
 
     page1[page1.len - 1] = 10;
+}
+
+test "fuzzDiskMemoryAllocator - past failures" {
+    const test_cases = [_]struct { usize, u16, usize }{
+        .{ 18813, 8, 2 },
+        .{ 40309, 8, 2 },
+        .{ 41790, 8, 2 },
+        .{ 47097, 8, 2 },
+        .{ 2952, 8, 10 },
+        .{ 6143, 8, 10 },
+        .{ 10455, 8, 10 },
+        .{ 10887, 8, 10 },
+        .{ 11639, 8, 10 },
+        .{ 79, 8, 100 },
+        .{ 13, 8, 1000 },
+        // .{ 0, 8, 10_000 }, // slow
+    };
+    const debug = false;
+    for (test_cases) |case| {
+        const seed, const mmap_ratio, const iterations = case;
+        var rng = std.Random.DefaultPrng.init(seed);
+        if (debug) std.debug.print("\n>>> Test Case: {}, {}, {}\n", .{ seed, mmap_ratio, iterations });
+        try fuzzDiskMemoryAllocator(.{
+            .allocator = std.testing.allocator,
+            .random = rng.random(),
+            .iterations = iterations,
+            .debug = debug,
+        }, mmap_ratio);
+    }
+}
+
+pub fn runFuzzer(seed: u64, args: *std.process.ArgIterator) !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const max_actions = if (args.next()) |max_actions_str|
+        try std.fmt.parseInt(usize, max_actions_str, 10)
+    else
+        std.math.maxInt(usize);
+
+    const debug = false;
+    const iterations = 10_000;
+    for (0..max_actions / iterations) |i| {
+        var rng = std.Random.DefaultPrng.init(seed +% i);
+        const random = rng.random();
+        const mmap_ratio: u16 = @intFromFloat(std.math.pow(f64, 2, 16 * random.float(f64)));
+        std.debug.print(
+            "seed: {}, iterations: {}, mmap_ratio: {}\n",
+            .{ seed +% i, iterations, mmap_ratio },
+        );
+        try fuzzDiskMemoryAllocator(.{
+            .allocator = gpa.allocator(),
+            .random = random,
+            .iterations = iterations,
+            .debug = debug,
+        }, mmap_ratio);
+    }
+    if (gpa.deinit() == .leak) return error.Leaked;
+}
+
+fn fuzzDiskMemoryAllocator(config: AllocatorFuzzParams, mmap_ratio: u16) !void {
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+    var disk_memory_allocator = DiskMemoryAllocator{
+        .dir = dir.dir,
+        .logger = .noop,
+        .mmap_ratio = mmap_ratio,
+    };
+    try fuzzAllocator(config, disk_memory_allocator.allocator());
+}
+
+const AllocatorFuzzParams = struct {
+    /// Used for bookkeeping during the test. This allocator will *not* be fuzzed.
+    allocator: std.mem.Allocator,
+    /// Determines which actions to take, and how much to allocate.
+    random: std.Random,
+    /// Number of actions to take.
+    iterations: usize,
+    /// Set true to print code that runs this specific test case.
+    debug: bool,
+};
+
+/// Randomly takes actions with the allocator: alloc, realloc, or free
+fn fuzzAllocator(
+    params: AllocatorFuzzParams,
+    /// The allocator being tested.
+    subject: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    // all existing allocations from the allocator
+    var allocations = std.ArrayList(struct { usize, []u8 }).init(params.allocator);
+    defer {
+        for (allocations.items) |pair| {
+            const item_id, const item = pair;
+            if (params.debug) std.debug.print("allocator.free(item{});\n", .{item_id});
+            subject.free(item);
+        }
+        allocations.deinit();
+    }
+
+    // take some random actions: alloc, realloc, or free
+    var item_id_sequence: usize = 0;
+    for (0..params.iterations) |_| {
+        const Options = enum { alloc, realloc, free };
+        const choice = if (allocations.items.len == 0) .alloc else params.random.enumValue(Options);
+        switch (choice) {
+            .alloc => {
+                const size = params.random.intRangeAtMost(usize, 1, 1_000_000);
+                if (params.debug) std.debug.print(
+                    "var item{} = try allocator.alloc(u8, {});\n",
+                    .{ item_id_sequence, size },
+                );
+                const data = try subject.alloc(u8, size);
+                errdefer subject.free(data);
+                @memset(data, 0x22);
+                try allocations.append(.{ item_id_sequence, data });
+                item_id_sequence += 1;
+            },
+            .realloc => {
+                const index = params.random.intRangeLessThan(usize, 0, allocations.items.len);
+                const size = params.random.intRangeAtMost(usize, 1, 1_000_000);
+                const item_id, const item = allocations.items[index];
+                if (params.debug) std.debug.print(
+                    "item{} = try allocator.realloc(item{}, {});\n",
+                    .{ item_id, item_id, size },
+                );
+                const new_data = try subject.realloc(item, size);
+                @memset(new_data, 0x33);
+                allocations.items[index] = .{ item_id, new_data };
+            },
+            .free => {
+                const index = params.random.intRangeLessThan(usize, 0, allocations.items.len);
+                const item_id, const data = allocations.swapRemove(index);
+                if (params.debug) std.debug.print("allocator.free(item{});\n", .{item_id});
+                subject.free(data);
+            },
+        }
+    }
 }

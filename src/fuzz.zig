@@ -21,6 +21,7 @@ pub const FuzzFilter = enum {
     snapshot,
     gossip_service,
     gossip_table,
+    allocators,
 };
 
 pub fn main() !void {
@@ -85,6 +86,7 @@ pub fn main() !void {
         .snapshot => try accountsdb_snapshot_fuzz.run(&cli_args),
         .gossip_service => try gossip_fuzz_service.run(seed, &cli_args),
         .gossip_table => try gossip_fuzz_table.run(seed, &cli_args),
+        .allocators => try sig.utils.allocators.runFuzzer(seed, &cli_args),
     }
 }
 

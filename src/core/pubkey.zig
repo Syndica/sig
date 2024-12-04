@@ -23,7 +23,7 @@ pub const Pubkey = extern struct {
     }
 
     pub fn fromPublicKey(public_key: *const std.crypto.sign.Ed25519.PublicKey) Self {
-        return fromBytes(&public_key.bytes) catch unreachable;
+        return .{ .data = public_key.bytes };
     }
 
     pub fn initRandom(random: std.Random) Self {

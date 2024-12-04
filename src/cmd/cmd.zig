@@ -30,6 +30,7 @@ const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getOrInitIdentity = helpers.getOrInitIdentity;
@@ -49,7 +50,9 @@ const gpa_allocator = if (builtin.mode == .Debug)
 else
     std.heap.c_allocator;
 
-var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{
+    .stack_trace_frames = 100,
+}) = .{};
 const gossip_value_gpa_allocator = if (builtin.mode == .Debug)
     gossip_value_gpa.allocator()
 else
@@ -63,7 +66,7 @@ const LOG_SCOPE = "cmd";
 pub fn run() !void {
     defer {
         // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
-        _ = gossip_value_gpa.deinit();
+        // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
     }
 
     var gossip_host_option = cli.Option{
@@ -100,6 +103,23 @@ pub fn run() !void {
         .value_ref = cli.mkRef(&config.current.shred_collector.turbine_recv_port),
         .required = false,
         .value_name = "Turbine Port",
+    };
+
+    var turbine_num_retransmit_threads = cli.Option{
+        .long_name = "num-retransmit-threads",
+        .help = "The number of retransmit threads to use for the turbine service - default: cpu count",
+        .value_ref = cli.mkRef(&config.current.turbine.num_retransmit_threads),
+        .required = false,
+        .value_name = "Number of turbine retransmit threads",
+    };
+
+    // TODO: Remove when no longer needed
+    var turbine_overwrite_stake_for_testing = cli.Option{
+        .long_name = "overwrite-stake-for-testing",
+        .help = "Overwrite the stake for testing purposes",
+        .value_ref = cli.mkRef(&config.current.turbine.overwrite_stake_for_testing),
+        .required = false,
+        .value_name = "Overwrite stake for testing",
     };
 
     var leader_schedule_option = cli.Option{
@@ -238,6 +258,14 @@ pub fn run() !void {
         .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_dir),
         .required = false,
         .value_name = "snapshot_dir",
+    };
+
+    var snapshot_metadata_only = cli.Option{
+        .long_name = "snapshot-metadata-only",
+        .help = "load only the snapshot metadata",
+        .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_metadata_only),
+        .required = false,
+        .value_name = "snapshot_metadata_only",
     };
 
     var genesis_file_path = cli.Option{
@@ -411,6 +439,8 @@ pub fn run() !void {
                             &test_repair_option,
                             // blockstore cleanup service
                             &max_shreds_option,
+                            // turbine
+                            &turbine_num_retransmit_threads,
                             // accounts-db
                             &snapshot_dir_option,
                             &use_disk_index_option,
@@ -465,11 +495,15 @@ pub fn run() !void {
                             &turbine_recv_port_option,
                             &repair_port_option,
                             &test_repair_option,
+                            // turbine
+                            &turbine_num_retransmit_threads,
+                            &turbine_overwrite_stake_for_testing,
                             // blockstore cleanup service
                             &max_shreds_option,
                             // general
                             &leader_schedule_option,
                             &network_option,
+                            &snapshot_metadata_only,
                         },
                         .target = .{
                             .action = .{
@@ -504,7 +538,6 @@ pub fn run() !void {
                             },
                         },
                     },
-
                     &cli.Command{
                         .name = "snapshot-validate",
                         .description = .{
@@ -524,6 +557,7 @@ pub fn run() !void {
                             &accounts_per_file_estimate,
                             &fastload_option,
                             &save_index_option,
+                            &network_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -674,22 +708,25 @@ fn gossip() !void {
         app_base.deinit();
     }
 
-    const gossip_service, var service_manager =
-        try startGossip(gpa_allocator, &app_base, &.{});
+    const gossip_service = try startGossip(gpa_allocator, &app_base, &.{});
     defer {
         gossip_service.shutdown();
-        service_manager.deinit();
+        gossip_service.deinit();
+        gpa_allocator.destroy(gossip_service);
     }
 
-    // block until we're all done
-    service_manager.join();
+    // block forever
+    gossip_service.service_manager.join();
 }
 
 /// entrypoint to run a full solana validator
 fn validator() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
-    defer app_base.deinit();
+    defer {
+        app_base.shutdown();
+        app_base.deinit();
+    }
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
@@ -698,15 +735,14 @@ fn validator() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var gossip_service, var service_manager = try startGossip(allocator, &app_base, &.{
+    var gossip_service = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
     defer {
-        app_base.shutdown();
         gossip_service.shutdown();
-        service_manager.join();
-        service_manager.deinit();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
     }
 
     const geyser_writer = try buildGeyserWriter(allocator, app_base.logger.unscoped());
@@ -717,21 +753,20 @@ fn validator() !void {
         }
     }
 
-    const snapshot = try loadSnapshot(
-        allocator,
-        app_base.logger.unscoped(),
-        gossip_service,
-        true,
-        geyser_writer,
-    );
+    // snapshot
+    const snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+        .gossip_service = gossip_service,
+        .geyser_writer = geyser_writer,
+        .validate_snapshot = true,
+    });
 
-    // leader schedule cache
+    // leader schedule
     var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
     if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
         try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
     } else {
         const schedule = try snapshot.bank.bank_fields.leaderSchedule(allocator);
-        _ = try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, schedule);
+        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, schedule);
     }
     // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
     // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
@@ -780,10 +815,32 @@ fn validator() !void {
     });
     defer cleanup_service_handle.join();
 
+    // Random number generator
+    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+
+    // Retransmit service
+    const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+
+    var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
+    defer retransmit_shred_channel.deinit();
+
+    const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.retransmit_service.run, .{.{
+        .allocator = allocator,
+        .my_contact_info = my_contact_info,
+        .bank_fields = snapshot.bank.bank_fields,
+        .leader_schedule_cache = &leader_schedule_cache,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .receiver = &retransmit_shred_channel,
+        .maybe_num_retransmit_threads = config.current.turbine.num_retransmit_threads,
+        .overwrite_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
+        .exit = &app_base.exit,
+        .rand = prng.random(),
+        .logger = app_base.logger.unscoped(),
+    }});
+
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
-    var prng = std.rand.DefaultPrng.init(91);
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
         ShredCollectorDependencies{
@@ -797,45 +854,54 @@ fn validator() !void {
             .my_shred_version = &gossip_service.my_shred_version,
             .leader_schedule = leader_provider,
             .shred_inserter = shred_inserter,
+            .retransmit_shred_sender = &retransmit_shred_channel,
         },
     );
     defer shred_collector_manager.deinit();
 
-    service_manager.join();
+    retransmit_service_handle.join();
+    gossip_service.service_manager.join();
     shred_collector_manager.join();
 }
 
 fn shredCollector() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
-    defer app_base.deinit();
-
-    const genesis_file_path = try config.current.genesisFilePath() orelse return error.GenesisPathNotProvided;
-    const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
+    defer {
+        if (!app_base.closed) app_base.shutdown();
+        app_base.deinit();
+    }
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
 
-    var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
+    var gossip_service = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
     defer {
-        app_base.shutdown();
         gossip_service.shutdown();
-        gossip_manager.deinit();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
     }
 
+    const snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+        .gossip_service = gossip_service,
+        .geyser_writer = null,
+        .validate_snapshot = true,
+        .metadata_only = config.current.accounts_db.snapshot_metadata_only,
+    });
+
     // leader schedule
-    // NOTE: leader schedule is needed for the shred collector because we skip accounts-db setup
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, genesis_config.epoch_schedule);
-
-    // This is a sort of hack to get the epoch of the leader schedule and then insert into the cache
-    const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
-    // first_slot is non null iff leader schedule is built from cli
-    const leader_schedule_epoch = leader_schedule_cache.epoch_schedule.getEpoch(start_slot);
-    try leader_schedule_cache.put(leader_schedule_epoch, leader_schedule);
-
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
+    if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
+        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
+    } else {
+        const schedule = try snapshot.bank.bank_fields.leaderSchedule(allocator);
+        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, schedule);
+    }
+    // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
+    // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
     const leader_provider = leader_schedule_cache.slotLeaderProvider();
 
     // blockstore
@@ -881,10 +947,31 @@ fn shredCollector() !void {
     });
     defer cleanup_service_handle.join();
 
+    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+
+    const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+
+    var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
+    defer retransmit_shred_channel.deinit();
+
+    // retransmit service
+    const retransmit_service_handle = try std.Thread.spawn(.{}, sig.turbine.retransmit_service.run, .{.{
+        .allocator = allocator,
+        .my_contact_info = my_contact_info,
+        .bank_fields = snapshot.bank.bank_fields,
+        .leader_schedule_cache = &leader_schedule_cache,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .receiver = &retransmit_shred_channel,
+        .maybe_num_retransmit_threads = config.current.turbine.num_retransmit_threads,
+        .overwrite_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
+        .exit = &app_base.exit,
+        .rand = prng.random(),
+        .logger = app_base.logger.unscoped(),
+    }});
+
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
-    var prng = std.rand.DefaultPrng.init(91);
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
         .{
@@ -898,11 +985,13 @@ fn shredCollector() !void {
             .my_shred_version = &gossip_service.my_shred_version,
             .leader_schedule = leader_provider,
             .shred_inserter = shred_inserter,
+            .retransmit_shred_sender = &retransmit_shred_channel,
         },
     );
     defer shred_collector_manager.deinit();
 
-    gossip_manager.join();
+    retransmit_service_handle.join();
+    gossip_service.service_manager.join();
     shred_collector_manager.join();
 }
 
@@ -974,13 +1063,12 @@ fn createSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const snapshot_result = try loadSnapshot(
-        allocator,
-        app_base.logger.unscoped(),
-        null,
-        false,
-        null,
-    );
+    const snapshot_result = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+        .gossip_service = null,
+        .geyser_writer = null,
+        .validate_snapshot = false,
+        .metadata_only = false,
+    });
     defer snapshot_result.deinit();
 
     var accounts_db = snapshot_result.accounts_db;
@@ -1030,13 +1118,12 @@ fn validateSnapshot() !void {
         }
     }
 
-    const snapshot_result = try loadSnapshot(
-        allocator,
-        app_base.logger.unscoped(),
-        null,
-        true,
-        geyser_writer,
-    );
+    const snapshot_result = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+        .gossip_service = null,
+        .geyser_writer = geyser_writer,
+        .validate_snapshot = true,
+        .metadata_only = false,
+    });
     defer snapshot_result.deinit();
 }
 
@@ -1051,13 +1138,12 @@ fn printLeaderSchedule() !void {
 
     const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
-        const loaded_snapshot = loadSnapshot(
-            allocator,
-            app_base.logger.unscoped(),
-            null,
-            true,
-            null,
-        ) catch |err| {
+        const loaded_snapshot = loadSnapshot(allocator, app_base.logger.unscoped(), .{
+            .gossip_service = null,
+            .geyser_writer = null,
+            .validate_snapshot = true,
+            .metadata_only = false,
+        }) catch |err| {
             if (err == error.SnapshotsNotFoundAndNoGossipService) {
                 app_base.logger.err().log(
                     \\\ No snapshot found and no gossip service to download a snapshot from.
@@ -1106,15 +1192,14 @@ pub fn testTransactionSenderService() !void {
     const genesis_config = try readGenesisConfig(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
-    const gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
+    const gossip_service = try startGossip(allocator, &app_base, &.{});
     defer {
-        if (!app_base.closed) app_base.shutdown(); // we call this here to set exit to true
-        gossip_service.shutdown();
-        gossip_manager.deinit();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
     }
 
     // define cluster of where to land transactions
-    const cluster: sig.rpc.ClusterType = if (try config.current.gossip.getNetwork()) |n| switch (n) {
+    const cluster: ClusterType = if (try config.current.gossip.getNetwork()) |n| switch (n) {
         .mainnet => .MainnetBeta,
         .devnet => .Devnet,
         .testnet => .Testnet,
@@ -1162,16 +1247,15 @@ pub fn testTransactionSenderService() !void {
         config.current.test_transaction_sender.n_lamports_per_transaction,
     );
 
+    gossip_service.shutdown();
     app_base.shutdown();
     transaction_sender_handle.join();
-    gossip_manager.join();
 }
 
 /// State that typically needs to be initialized at the start of the app,
 /// and deinitialized only when the app exits.
 const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     closed: bool,
     logger: ScopedLogger(@typeName(Self)),
@@ -1219,8 +1303,6 @@ const AppBase = struct {
     pub fn shutdown(self: *AppBase) void {
         std.debug.assert(!self.closed);
         defer self.closed = true;
-
-        self.counter.store(1, .release);
         self.exit.store(true, .release);
     }
 
@@ -1237,7 +1319,7 @@ fn startGossip(
     app_base: *AppBase,
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
-) !struct { *GossipService, sig.utils.service_manager.ServiceManager } {
+) !*GossipService {
     app_base.logger.info().logf("gossip host: {any}", .{app_base.my_ip});
     app_base.logger.info().logf("gossip port: {d}", .{app_base.my_port});
 
@@ -1248,33 +1330,21 @@ fn startGossip(
     for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));
     contact_info.shred_version = app_base.shred_version;
 
-    var manager = sig.utils.service_manager.ServiceManager.init(
-        allocator,
-        app_base.logger.unscoped(),
-        &app_base.exit,
-        "gossip",
-        .{},
-        .{},
-    );
-
-    const service = try manager.arena.allocator().create(GossipService);
-    service.* = try GossipService.init(
+    const service = try GossipService.create(
         gpa_allocator,
         gossip_value_gpa_allocator,
         contact_info,
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints.items,
-        &app_base.counter,
         app_base.logger.unscoped(),
     );
-    try manager.defers.deferCall(GossipService.deinit, .{service});
 
     try service.start(.{
         .spy_node = config.current.gossip.spy_node,
         .dump = config.current.gossip.dump,
-    }, &manager);
+    });
 
-    return .{ service, manager };
+    return service;
 }
 
 /// determine our shred version and ip. in the solana-labs client, the shred version
@@ -1406,6 +1476,10 @@ const LoadedSnapshot = struct {
     /// contains pointers to `accounts_db` and `snapshot_fields`
     bank: Bank,
     genesis_config: GenesisConfig,
+    // Snapshot resulting from collapse needs to be retained here for
+    // valid lifetime as it is used by bank. This was a quick fix, a minor
+    // refactor is probably not a bad idea.
+    collapsed_snapshot_fields: sig.accounts_db.snapshots.SnapshotFields,
 
     pub fn deinit(self: *@This()) void {
         self.genesis_config.deinit(self.allocator);
@@ -1413,18 +1487,25 @@ const LoadedSnapshot = struct {
         self.snapshot_fields.deinit(self.allocator);
         self.accounts_db.deinit();
         self.allocator.destroy(self);
+        self.collapsed_snapshot_fields.deinit(self.allocator);
     }
+};
+
+const LoadSnapshotOptions = struct {
+    /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
+    gossip_service: ?*GossipService,
+    /// optional geyser to write snapshot data to
+    geyser_writer: ?*GeyserWriter,
+    /// whether to validate the snapshot account data against the metadata
+    validate_snapshot: bool,
+    /// whether to load only the metadata of the snapshot
+    metadata_only: bool = false,
 };
 
 fn loadSnapshot(
     allocator: Allocator,
     logger_: Logger,
-    /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
-    maybe_gossip_service: ?*GossipService,
-    /// whether to validate the snapshot account data against the metadata
-    validate_snapshot: bool,
-    /// optional geyser to write snapshot data to
-    geyser_writer: ?*GeyserWriter,
+    options: LoadSnapshotOptions,
 ) !*LoadedSnapshot {
     const logger = logger_.withScope(@typeName(@This()));
     const result = try allocator.create(LoadedSnapshot);
@@ -1438,7 +1519,7 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger.unscoped(), maybe_gossip_service, .{
+    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger.unscoped(), options.gossip_service, .{
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
@@ -1472,27 +1553,30 @@ fn loadSnapshot(
         .allocator = allocator,
         .logger = logger.unscoped(),
         .snapshot_dir = snapshot_dir,
-        .geyser_writer = geyser_writer,
-        .gossip_view = if (maybe_gossip_service) |service| AccountsDB.GossipView.fromService(service) else null,
+        .geyser_writer = options.geyser_writer,
+        .gossip_view = if (options.gossip_service) |service| try AccountsDB.GossipView.fromService(service) else null,
         .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
         .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
         .lru_size = 10_000,
     });
     errdefer result.accounts_db.deinit();
 
-    var snapshot_fields = try result.accounts_db.loadWithDefaults(
-        allocator,
-        &all_snapshot_fields,
-        n_threads_snapshot_load,
-        validate_snapshot,
-        config.current.accounts_db.accounts_per_file_estimate,
-        config.current.accounts_db.fastload,
-        config.current.accounts_db.save_index,
-    );
-    errdefer snapshot_fields.deinit(allocator);
-    result.snapshot_fields.was_collapsed = true;
+    if (options.metadata_only) {
+        result.collapsed_snapshot_fields = try result.snapshot_fields.collapse();
+    } else {
+        result.collapsed_snapshot_fields = try result.accounts_db.loadWithDefaults(
+            allocator,
+            &all_snapshot_fields,
+            n_threads_snapshot_load,
+            options.validate_snapshot,
+            config.current.accounts_db.accounts_per_file_estimate,
+            config.current.accounts_db.fastload,
+            config.current.accounts_db.save_index,
+        );
+    }
+    errdefer result.collapsed_snapshot_fields.deinit(allocator);
 
-    const bank_fields = &snapshot_fields.bank_fields;
+    const bank_fields = &result.collapsed_snapshot_fields.bank_fields;
 
     // this should exist before we start to unpack
     logger.info().log("reading genesis...");
@@ -1507,6 +1591,10 @@ fn loadSnapshot(
     logger.info().log("validating bank...");
     result.bank = Bank.init(&result.accounts_db, bank_fields);
     try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
+
+    if (options.metadata_only) {
+        return result;
+    }
 
     // validate the status cache
     result.status_cache = readStatusCache(allocator, snapshot_dir) catch |err| {
@@ -1556,11 +1644,14 @@ fn downloadSnapshot() !void {
         app_base.deinit();
     }
 
-    const gossip_service, var service_manager =
-        try startGossip(gpa_allocator, &app_base, &.{});
+    if (app_base.entrypoints.items.len == 0) {
+        @panic("cannot download a snapshot with no entrypoints");
+    }
+    const gossip_service = try startGossip(gpa_allocator, &app_base, &.{});
     defer {
         gossip_service.shutdown();
-        service_manager.deinit();
+        gossip_service.deinit();
+        gpa_allocator.destroy(gossip_service);
     }
 
     const trusted_validators = try getTrustedValidators(gpa_allocator);
