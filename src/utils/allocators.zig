@@ -5,7 +5,6 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const FixedBufferAllocator = std.heap.FixedBufferAllocator;
-const Mutex = std.Thread.Mutex;
 
 const log2 = std.math.log2;
 
