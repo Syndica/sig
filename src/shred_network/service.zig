@@ -166,7 +166,6 @@ pub fn start(
             .rand = deps.random,
             .logger = deps.logger.unscoped(),
         }},
-        false,
     );
 
     // repair (thread)
