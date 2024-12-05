@@ -163,7 +163,10 @@ pub fn Channel(T: type) type {
                     // Release the exclusive lock on the slot's value, which allows a consumer
                     // to read the data we've just assigned.
                     _ = slot.state.fetchOr(WRITTEN_TO, .release);
+
+                    channel.mutex.lock();
                     channel.condition.signal();
+                    channel.mutex.unlock();
                     return;
                 }
             }
