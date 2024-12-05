@@ -1102,10 +1102,7 @@ pub const ExtraFields = struct {
 
     pub const VersionedEpochStakesMap = std.AutoArrayHashMapUnmanaged(u64, VersionedEpochStake);
 
-    /// TODO: Investigate this `LtHash` business:
-    /// * [The field](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/serde_snapshot.rs#L406)
-    /// * [The serde wrapper hack](https://github.com/anza-xyz/agave/blob/81b615fa9d21ff8dc7df00985deeef118930979e/runtime/src/serde_snapshot/types.rs#L7-L11)
-    /// * [Lattice Hash](https://github.com/anza-xyz/agave/blob/81b615fa9d21ff8dc7df00985deeef118930979e/lattice-hash/src/lt_hash.rs#L12-L15)
+    /// TODO: https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=85238686
     pub const ACCOUNTS_LATTICE_HASH_LEN = 1024;
     pub const AccountsLtHash = [ACCOUNTS_LATTICE_HASH_LEN]u16;
 
