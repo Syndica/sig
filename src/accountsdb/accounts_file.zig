@@ -41,7 +41,10 @@ pub const FileId = enum(Int) {
     }
 
     pub fn path(self: FileId, slot: Slot) std.BoundedArray(u8, 40) {
-        const file_path_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, self.toInt() });
+        const file_path_bounded = sig.utils.fmt.boundedFmt(
+            "accounts/{d}.{d}",
+            .{ slot, self.toInt() },
+        );
         return file_path_bounded;
     }
 
