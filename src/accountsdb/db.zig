@@ -322,9 +322,44 @@ pub const BufferPool = struct {
 
         const file = try self.snapshot_dir.openFile(file_path.constSlice(), .{});
         defer file.close();
+        const xev_file = try xev.File.init(file);
 
         const indeces = try self.makeIndeces(file_id, cached_read_allocator, range_start, range_end);
-        _ = indeces;
+
+        // fill in invalid frames with file data, replacing invalid frames with
+        // freshly read ones.
+
+        var offset: u64 = 0;
+        for (indeces) |*idx| {
+            defer offset += FRAME_SIZE;
+
+            if (idx.* != INVALID_FRAME) continue;
+            idx.* = self.free_list.popOrNull() orelse unreachable; // TODO - call eviction
+
+            const completion = undefined;
+            xev_file.pread(
+                &self.event_loop,
+                completion,
+                xev.ReadBuffer{ .slice = &self.frames[idx.*] },
+                offset,
+                usize,
+                &self.frames_metadata.size[idx],
+                (struct {
+                    fn callback(
+                        bytes_read: ?*usize,
+                        _: *xev.Loop,
+                        _: *xev.Completion,
+                        _: BufferPool,
+                        _: xev.WriteBuffer,
+                        r: xev.ReadError!usize,
+                    ) xev.CallbackAction {
+                        if (bytes_read) |br| br.* = r catch unreachable;
+                        return .disarm;
+                    }
+                }).callback,
+            );
+        }
+
         @panic("TODO");
     }
 
@@ -353,7 +388,7 @@ pub const BufferPool = struct {
             if (idx.* != INVALID_FRAME) continue;
             idx.* = self.free_list.popOrNull() orelse unreachable; // TODO - call eviction
             _ = try file.read(&self.frames[idx.*]); // TODO: check return
-            try file.seekBy(FRAME_SIZE);
+            try file.seekBy(FRAME_SIZE); // TODO - this is incorrect... we need to make sure we've got the right offset
         }
 
         const cached_read = CachedRead{
