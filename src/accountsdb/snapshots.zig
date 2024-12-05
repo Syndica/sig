@@ -1108,7 +1108,7 @@ pub const ExtraFields = struct {
 
     pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
         .deserializer = bincodeRead,
-        .serializer = bincodeWrite,
+        .serializer = null, // just use default serialization method
         .free = bincodeFree,
     };
 
@@ -1200,38 +1200,6 @@ pub const ExtraFields = struct {
         }
 
         return extra_fields;
-    }
-
-    fn bincodeWrite(
-        writer: anytype,
-        data: anytype,
-        params: bincode.Params,
-    ) !void {
-        comptime if (@TypeOf(data) != ExtraFields) unreachable;
-        const FieldTag = std.meta.FieldEnum(ExtraFields);
-        const fields = @typeInfo(ExtraFields).Struct.fields;
-        // scan from the end to the beginning for all eof values; any
-        // eof values are discarded, and not included in the subsequent
-        // iteration which actually outputs the values.
-        inline for (0 + 1..fields.len + 1) |reverse_i| {
-            const i = fields.len - reverse_i;
-            const last_field = fields[i];
-            const value = @field(data, last_field.name);
-            const is_eof_value = switch (@field(FieldTag, last_field.name)) {
-                .lamports_per_signature => value == 0,
-                .snapshot_persistence => value == null,
-                .epoch_accounts_hash => value == null,
-                .versioned_epoch_stakes => value.count() == 0,
-                .accounts_lt_hash => value == null,
-            };
-
-            if (is_eof_value) {
-                inline for (fields[0 .. i + 1]) |field| {
-                    try bincode.write(writer, @field(data, field.name), params);
-                }
-                return;
-            }
-        }
     }
 
     fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
