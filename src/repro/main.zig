@@ -15,15 +15,15 @@ pub fn main() !void {
     const count: u32 = if (args.next()) |arg| blk: {
         break :blk try std.fmt.parseInt(u32, arg, 10);
     } else blk: {
-        break :blk  @as(u32, 100_000);
+        break :blk @as(u32, 100_000);
     };
 
-    const path = "data/test-state/blockstore/database/repro";
+    const path = "validator/blockstore";
 
-    if (std.fs.cwd().access(path, .{})) |_| {
-        try std.fs.cwd().deleteTree(path);
-    } else |_| {}
-    try std.fs.cwd().makePath(path);
+    // if (std.fs.cwd().access(path, .{})) |_| {
+    //     try std.fs.cwd().deleteTree(path);
+    // } else |_| {}
+    // try std.fs.cwd().makePath(path);
 
     const logger = try spawnLogger();
 
@@ -34,14 +34,13 @@ pub fn main() !void {
     );
     defer db.deinit();
 
-    var writer_thread = try std.Thread.spawn(.{}, writer, .{&db, count});
-    var deleter_thread = try std.Thread.spawn(.{}, deleter, .{&db, count});
-    var reader_thread = try std.Thread.spawn(.{}, reader, .{&db, count});
+    var writer_thread = try std.Thread.spawn(.{}, writer, .{ &db, count });
+    var deleter_thread = try std.Thread.spawn(.{}, deleter, .{ &db, count });
+    var reader_thread = try std.Thread.spawn(.{}, reader, .{ &db, count });
 
     defer writer_thread.join();
     defer deleter_thread.join();
     defer reader_thread.join();
-
 }
 
 fn spawnLogger() !Logger {
@@ -54,9 +53,9 @@ fn spawnLogger() !Logger {
 }
 
 fn writer(db: *BlockstoreDB, count: u32) !void {
-    try db.put(ledger.schema.schema.slot_meta, 1, ledger.meta.SlotMeta.init(allocator, 0,  null));
+    try db.put(ledger.schema.schema.slot_meta, 1, ledger.meta.SlotMeta.init(allocator, 0, null));
     for (1..count) |c| {
-        try db.put(ledger.schema.schema.slot_meta, (c + 1), ledger.meta.SlotMeta.init(allocator, c,  (c - 1)));
+        try db.put(ledger.schema.schema.slot_meta, (c + 1), ledger.meta.SlotMeta.init(allocator, c, (c - 1)));
     }
 }
 

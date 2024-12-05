@@ -1,0 +1,2 @@
+src/repro/curropted_data/*.log filter=lfs diff=lfs merge=lfs -text
+src/repro/curropted_data/*.sst filter=lfs diff=lfs merge=lfs -text
