@@ -10,14 +10,15 @@ const Packet = sig.net.Packet;
 const Channel = sig.sync.Channel;
 const AtomicBool = std.atomic.Value(bool);
 const Logger = sig.trace.log.Logger;
+const ExitCondition = sig.sync.ExitCondition;
 
 pub fn runClient(
     allocator: std.mem.Allocator,
     receiver: *Channel(Packet),
-    exit: *AtomicBool,
     logger: Logger,
+    exit: ExitCondition,
 ) !void {
-    var client = try Client(20, 20).create(allocator, receiver, exit, logger);
+    var client = try Client(20, 20).create(allocator, receiver, logger, exit);
     try client.run();
     defer {
         client.deinit();
@@ -34,7 +35,7 @@ pub fn Client(
         receiver: *Channel(Packet),
         socket: network.Socket,
         connections: std.BoundedArray(*Connection, max_connections),
-        exit: *AtomicBool,
+        exit: ExitCondition,
         logger: Logger,
 
         ssl_ctx: *ssl.SSL_CTX,
@@ -69,11 +70,11 @@ pub fn Client(
         pub fn create(
             allocator: std.mem.Allocator,
             receiver: *Channel(Packet),
-            exit: *AtomicBool,
             logger: Logger,
+            exit: ExitCondition,
         ) !*Self {
             const self = try allocator.create(Self);
-            try self.init(allocator, receiver, exit, logger);
+            try self.init(allocator, receiver, logger, exit);
             return self;
         }
 
@@ -81,8 +82,8 @@ pub fn Client(
             self: *Self,
             allocator: std.mem.Allocator,
             receiver: *Channel(Packet),
-            exit: *AtomicBool,
             logger: Logger,
+            exit: ExitCondition,
         ) !void {
             if (lsquic.lsquic_global_init(
                 lsquic.LSQUIC_GLOBAL_CLIENT,
@@ -195,7 +196,7 @@ pub fn Client(
             lsquic.lsquic_engine_process_conns(self.lsquic_engine);
             self.tick_event.run(xev_loop, xev_completion, 100, Self, self, onTick);
 
-            if (self.exit.load(.acquire)) {
+            if (self.exit.shouldExit()) {
                 xev_loop.stop();
             }
 

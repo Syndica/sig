@@ -90,8 +90,8 @@ pub const Service = struct {
             .{
                 self.allocator,
                 self.send_channel,
-                self.exit,
                 self.logger.unscoped(),
+                .{ .unordered = self.exit },
             },
         );
 

@@ -8,6 +8,7 @@ const Packet = sig.net.Packet;
 const PACKET_DATA_SIZE = sig.net.PACKET_DATA_SIZE;
 const Channel = sig.sync.Channel;
 const Logger = sig.trace.Logger;
+const ExitCondition = sig.sync.ExitCondition;
 
 const UdpSocket = @import("zig-network").Socket;
 
@@ -21,19 +22,11 @@ pub fn readSocket(
     socket_: UdpSocket,
     incoming_channel: *Channel(Packet),
     logger_: Logger,
-    comptime needs_exit_order: bool,
-    counter: *Atomic(if (needs_exit_order) u64 else bool),
-    idx: if (needs_exit_order) usize else void,
+    exit: ExitCondition,
 ) !void {
     const logger = logger_.withScope(LOG_SCOPE);
     defer {
-        logger.info().logf(
-            "leaving with: {}, {}, {}",
-            .{ incoming_channel.len(), counter.load(.acquire), idx },
-        );
-        if (needs_exit_order) {
-            counter.store(idx + 1, .release);
-        }
+        exit.afterExit();
         logger.info().log("readSocket loop closed");
     }
 
@@ -41,8 +34,7 @@ pub fn readSocket(
     var socket = socket_;
     try socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
-    const exit_condition = if (needs_exit_order) idx else true;
-    while (counter.load(.acquire) != exit_condition) {
+    while (exit.shouldRun()) {
         var packet: Packet = Packet.default();
         const recv_meta = socket.receiveFrom(&packet.data) catch |err| switch (err) {
             error.WouldBlock => continue,
@@ -60,23 +52,17 @@ pub fn sendSocket(
     socket: UdpSocket,
     outgoing_channel: *Channel(Packet),
     logger_: Logger,
-    comptime needs_exit_order: bool,
-    counter: *Atomic(if (needs_exit_order) u64 else bool),
-    idx: if (needs_exit_order) usize else void,
+    exit: ExitCondition,
 ) !void {
     const logger = logger_.withScope(LOG_SCOPE);
     defer {
-        if (needs_exit_order) {
-            // exit the next service in the chain
-            counter.store(idx + 1, .release);
-        }
+        // empty the channel
+        while (outgoing_channel.receive()) |_| {}
+        exit.afterExit();
         logger.debug().log("sendSocket loop closed");
     }
 
-    const exit_condition = if (needs_exit_order) idx else true;
-    while (counter.load(.acquire) != exit_condition or
-        outgoing_channel.len() != 0)
-    {
+    while (exit.shouldRun()) {
         while (outgoing_channel.receive()) |p| {
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                 logger.debug().logf("send_socket error: {s}", .{@errorName(e)});
@@ -113,7 +99,7 @@ pub const SocketThread = struct {
             .handle = try std.Thread.spawn(
                 .{},
                 sendSocket,
-                .{ socket, channel, logger, false, exit, {} },
+                .{ socket, channel, logger, .{ .unordered = exit } },
             ),
         };
     }
@@ -131,7 +117,7 @@ pub const SocketThread = struct {
             .handle = try std.Thread.spawn(
                 .{},
                 readSocket,
-                .{ socket, channel, logger, false, exit, {} },
+                .{ socket, channel, logger, .{ .unordered = exit } },
             ),
         };
     }
@@ -172,14 +158,17 @@ pub const BenchmarkPacketProcessing = struct {
 
         const to_endpoint = try socket.getLocalEndPoint();
 
-        var counter = std.atomic.Value(bool).init(false);
+        var exit_flag = std.atomic.Value(bool).init(false);
+        const exit_condition = ExitCondition{
+            .unordered = &exit_flag,
+        };
         var handle = try std.Thread.spawn(
             .{},
             readSocket,
-            .{ socket, &channel, .noop, false, &counter, {} },
+            .{ socket, &channel, .noop, exit_condition },
         );
         defer {
-            counter.store(true, .release);
+            exit_condition.setExit();
             handle.join();
         }
         var recv_handle = try std.Thread.spawn(

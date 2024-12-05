@@ -100,7 +100,6 @@ pub fn start(
         "Shred Receiver",
         ShredReceiver.run,
         .{shred_receiver},
-        false,
     );
 
     // verifier (thread)
@@ -115,7 +114,6 @@ pub fn start(
             deps.retransmit_shred_sender,
             deps.leader_schedule,
         },
-        false,
     );
 
     // tracker (shared state, internal to Shred Collector)
@@ -140,7 +138,6 @@ pub fn start(
             deps.shred_inserter,
             deps.leader_schedule,
         },
-        false,
     );
 
     // repair (thread)
@@ -176,7 +173,6 @@ pub fn start(
         "Repair Service",
         RepairService.run,
         .{repair_svc},
-        false,
     );
 
     return service_manager;

@@ -53,6 +53,7 @@ const PingCache = sig.gossip.ping_pong.PingCache;
 const PingAndSocketAddr = sig.gossip.ping_pong.PingAndSocketAddr;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Duration = sig.time.Duration;
+const ExitCondition = sig.sync.ExitCondition;
 
 const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
@@ -376,37 +377,50 @@ pub const GossipService = struct {
         self: *Self,
         params: RunThreadsParams,
     ) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
+        // NOTE: this is stack copied on each spawn() call below so we can modify it without
+        // affecting other threads
+        var exit_condition = sig.sync.ExitCondition{
+            .ordered = .{
+                .exit_counter = self.exit_counter,
+                .exit_index = 1,
+            },
+        };
+
         try self.service_manager.spawn("[gossip] readSocket", socket_utils.readSocket, .{
             self.gossip_socket,
             self.packet_incoming_channel,
             self.logger.unscoped(),
-            true,
-            self.exit_counter,
-        }, true);
+            exit_condition,
+        });
+        exit_condition.ordered.exit_index += 1;
 
-        try self.service_manager.spawn("[gossip] verifyPackets", verifyPackets, .{self}, true);
+        try self.service_manager.spawn("[gossip] verifyPackets", verifyPackets, .{ self, exit_condition });
+        exit_condition.ordered.exit_index += 1;
 
-        try self.service_manager.spawn("[gossip] processMessages", processMessages, .{ self, 19 }, true);
+        try self.service_manager.spawn("[gossip] processMessages", processMessages, .{ self, 19, exit_condition });
+        exit_condition.ordered.exit_index += 1;
 
         if (!params.spy_node) {
-            try self.service_manager.spawn("[gossip] buildMessages", buildMessages, .{ self, 19 }, true);
+            try self.service_manager.spawn("[gossip] buildMessages", buildMessages, .{ self, 19, exit_condition });
+            exit_condition.ordered.exit_index += 1;
         }
 
         try self.service_manager.spawn("[gossip] sendSocket", socket_utils.sendSocket, .{
             self.gossip_socket,
             self.packet_outgoing_channel,
             self.logger.unscoped(),
-            true,
-            self.exit_counter,
-        }, true);
+            exit_condition,
+        });
+        exit_condition.ordered.exit_index += 1;
 
         if (params.dump) {
             try self.service_manager.spawn("[gossip] dumpService", GossipDumpService.run, .{.{
                 .allocator = self.allocator,
                 .logger = self.logger.withScope(@typeName(GossipDumpService)),
                 .gossip_table_rw = &self.gossip_table_rw,
-                .counter = self.exit_counter,
-            }}, true);
+                .exit_condition = exit_condition,
+            }});
+            exit_condition.ordered.exit_index += 1;
         }
     }
 
@@ -455,10 +469,12 @@ pub const GossipService = struct {
     /// main logic for deserializing Packets into GossipMessage messages
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
-    fn verifyPackets(self: *Self, idx: usize) !void {
+    fn verifyPackets(self: *Self, exit_condition: ExitCondition) !void {
         defer {
+            // empty the channel
+            while (self.packet_incoming_channel.receive()) |_| {}
             // trigger the next service in the chain to close
-            self.exit_counter.store(idx + 1, .release);
+            exit_condition.afterExit();
             self.logger.debug().log("verifyPackets loop closed");
         }
 
@@ -476,10 +492,7 @@ pub const GossipService = struct {
         }
 
         // loop until the previous service closes and triggers us to close
-        // and the packet_incoming_channel isn't empty, in order to not lose messages.
-        while (self.exit_counter.load(.acquire) != idx or
-            self.packet_incoming_channel.len() != 0)
-        {
+        while (exit_condition.shouldRun()) {
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
             var task_search_start_idx: usize = 0;
@@ -533,10 +546,14 @@ pub const GossipService = struct {
     };
 
     /// main logic for recieving and processing gossip messages.
-    pub fn processMessages(self: *Self, seed: u64, idx: usize) !void {
+    pub fn processMessages(self: *Self, seed: u64, exit_condition: ExitCondition) !void {
         defer {
-            // even if we fail, trigger the next thing
-            self.exit_counter.store(idx + 1, .release);
+            // empty the channel and release the memory
+            while (self.verified_incoming_channel.receive()) |message| {
+                bincode.free(self.gossip_value_allocator, message.message);
+            }
+            // even if we fail, trigger the next thread to close
+            exit_condition.afterExit();
             self.logger.debug().log("processMessages loop closed");
         }
 
@@ -570,9 +587,7 @@ pub const GossipService = struct {
         // keep waiting for new data until,
         // - `exit` isn't set,
         // - there isn't any data to process in the input channel, in order to block the join until we've finished
-        while (self.exit_counter.load(.acquire) != idx or
-            self.verified_incoming_channel.len() != 0)
-        {
+        while (exit_condition.shouldRun()) {
             var msg_count: usize = 0;
             while (self.verified_incoming_channel.receive()) |message| {
                 msg_count += 1;
@@ -825,9 +840,9 @@ pub const GossipService = struct {
     /// main gossip loop for periodically sending new GossipMessagemessages.
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
-    fn buildMessages(self: *Self, seed: u64, idx: usize) !void {
+    fn buildMessages(self: *Self, seed: u64, exit_condition: ExitCondition) !void {
         defer {
-            self.exit_counter.store(idx + 1, .release);
+            exit_condition.afterExit();
             self.logger.info().log("buildMessages loop closed");
         }
 
@@ -844,7 +859,7 @@ pub const GossipService = struct {
         var entrypoints_identified = false;
         var shred_version_assigned = false;
 
-        while (self.exit_counter.load(.acquire) != idx) {
+        while (exit_condition.shouldRun()) {
             defer loop_timer.reset();
 
             if (pull_req_timer.read().asNanos() > PULL_REQUEST_RATE.asNanos()) pull_blk: {
@@ -2335,7 +2350,7 @@ test "build messages startup and shutdown" {
     var build_messages_handle = try Thread.spawn(
         .{},
         GossipService.buildMessages,
-        .{ gossip_service, 19, 1 },
+        .{ gossip_service, 19, .{ .unordered = gossip_service.service_manager.exit } },
     );
     defer {
         gossip_service.shutdown();
@@ -2524,14 +2539,13 @@ test "handle old prune & pull request message" {
         allocator.destroy(gossip_service);
     }
 
+    const handle = try std.Thread.spawn(.{}, GossipService.run, .{ gossip_service, .{} });
+
     const prune_pubkey = Pubkey.initRandom(random);
     const prune_data = PruneData.init(prune_pubkey, &.{}, my_pubkey, 0);
     const message = .{
         .PruneMessage = .{ prune_pubkey, prune_data },
     };
-
-    const handle = try std.Thread.spawn(.{}, GossipService.run, .{ gossip_service, .{} });
-
     try gossip_service.verified_incoming_channel.send(.{
         .from_endpoint = try EndPoint.parse("127.0.0.1:8000"),
         .message = message,
@@ -2573,10 +2587,25 @@ test "handle old prune & pull request message" {
         .message = .{ .PullRequest = .{ filter2, data } },
     });
 
+    // wait for all processing to be done
+    const MAX_N_SLEEPS = 100;
+    var i: u64 = 0;
+    while (gossip_service.metrics.pull_requests_dropped.get() != 2) {
+        std.time.sleep(std.time.ns_per_ms * 100);
+        if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
+        i += 1;
+    }
+    while (gossip_service.metrics.prune_messages_dropped.get() != 1) {
+        std.time.sleep(std.time.ns_per_ms * 100);
+        if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
+        i += 1;
+    }
+
     gossip_service.shutdown();
     handle.join();
 
     try std.testing.expect(gossip_service.metrics.pull_requests_dropped.get() == 2);
+    try std.testing.expect(gossip_service.metrics.prune_messages_dropped.get() == 1);
 }
 
 test "handle pull request" {
@@ -2988,7 +3017,7 @@ test "test packet verification" {
     const packet_verifier_handle = try Thread.spawn(
         .{},
         GossipService.verifyPackets,
-        .{ gossip_service, 1 },
+        .{ gossip_service, .{ .unordered = gossip_service.service_manager.exit } },
     );
     defer {
         gossip_service.shutdown();
@@ -3112,7 +3141,7 @@ test "process contact info push packet" {
     var packet_handle = try Thread.spawn(
         .{},
         GossipService.processMessages,
-        .{ gossip_service, 19, 1 },
+        .{ gossip_service, 19, .{ .unordered = gossip_service.service_manager.exit } },
     );
 
     // new contact info
@@ -3121,7 +3150,9 @@ test "process contact info push packet" {
     const gossip_value = SignedGossipData.initSigned(&kp, gossip_data);
     const heap_values = try allocator.dupe(SignedGossipData, &.{gossip_value});
 
-    // packet
+    var valid_messages_sent: u64 = 0;
+
+    // push message
     const msg: GossipMessage = .{ .PushMessage = .{ id, heap_values } };
     const peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
     const message: GossipMessageWithEndpoint = .{
@@ -3129,6 +3160,7 @@ test "process contact info push packet" {
         .from_endpoint = peer,
     };
     try verified_channel.send(message);
+    valid_messages_sent += 1;
 
     // ping
     const ping_msg: GossipMessageWithEndpoint = .{
@@ -3136,6 +3168,7 @@ test "process contact info push packet" {
         .from_endpoint = peer,
     };
     try verified_channel.send(ping_msg);
+    valid_messages_sent += 1;
 
     // send pull request with own pubkey
     const erroneous_pull_request_msg: GossipMessageWithEndpoint = .{
@@ -3151,21 +3184,32 @@ test "process contact info push packet" {
     };
     try verified_channel.send(erroneous_pull_request_msg);
 
+    // wait for all processing to be done
+    const MAX_N_SLEEPS = 100;
+    var i: u64 = 0;
+    while (gossip_service.metrics.gossip_packets_processed_total.get() != valid_messages_sent) {
+        std.time.sleep(std.time.ns_per_ms * 100);
+        if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
+        i += 1;
+    }
+
+    // the ping message we sent, processed into a pong
+    try std.testing.expectEqual(1, responder_channel.len());
+    const out_packet = responder_channel.receive().?;
+    const out_msg = try bincode.readFromSlice(std.testing.allocator, GossipMessage, &out_packet.data, .{});
+    defer bincode.free(std.testing.allocator, out_msg);
+    try std.testing.expect(out_msg == .PongMessage);
+
     // close everything up before looking at the output channel in order to
     // not race with work services are doing
     gossip_service.shutdown();
     packet_handle.join();
 
-    // the ping message we sent, processed into a pong
-    try std.testing.expectEqual(1, responder_channel.len());
-    _ = responder_channel.receive().?;
-
-    // correct insertion into table
+    // correct insertion into table (from push message)
     var buf2: [100]ContactInfo = undefined;
     {
         var lg = gossip_service.gossip_table_rw.read();
         defer lg.unlock();
-
         const res = lg.get().getContactInfos(&buf2, 0);
         try std.testing.expect(res.len == 1);
     }

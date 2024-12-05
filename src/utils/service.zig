@@ -58,25 +58,14 @@ pub const ServiceManager = struct {
         comptime name: []const u8,
         comptime function: anytype,
         args: anytype,
-        comptime needs_exit_order: bool,
     ) !void {
-        if (comptime needs_exit_order)
-            try self.spawnCustomIdx(
-                name,
-                self.default_run_config,
-                self.default_spawn_config,
-                function,
-                args,
-            )
-        else {
-            try self.spawnCustom(
-                name,
-                self.default_run_config,
-                self.default_spawn_config,
-                function,
-                args,
-            );
-        }
+        try self.spawnCustom(
+            name,
+            self.default_run_config,
+            self.default_spawn_config,
+            function,
+            args,
+        );
     }
 
     /// Spawn a thread to be managed.
@@ -101,35 +90,6 @@ pub const ServiceManager = struct {
                 run_config orelse self.default_run_config,
                 function,
                 args,
-            },
-        );
-
-        thread.setName(name) catch {};
-        try self.threads.append(allocator, thread);
-    }
-
-    /// Does the same thing as `spawnCustom`, however appends the index of the service
-    /// in the shutdown chain to the arguments.
-    fn spawnCustomIdx(
-        self: *Self,
-        comptime name: []const u8,
-        run_config: ?RunConfig,
-        spawn_config: std.Thread.SpawnConfig,
-        comptime function: anytype,
-        args: anytype,
-    ) !void {
-        const allocator = self.arena.allocator();
-
-        var thread = try std.Thread.spawn(
-            spawn_config,
-            runService,
-            .{
-                self.logger,
-                self.exit,
-                name,
-                run_config orelse self.default_run_config,
-                function,
-                args ++ .{@as(u64, @intCast(self.threads.items.len + 1))},
             },
         );
 
