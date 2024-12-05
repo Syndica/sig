@@ -1,7 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../sig.zig");
-const shred_collector = @import("lib.zig");
+const shred_network = @import("lib.zig");
 
 const bincode = sig.bincode;
 const layout = sig.ledger.shred.layout;
@@ -18,7 +18,7 @@ const ScopedLogger = sig.trace.ScopedLogger;
 const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
-const RepairMessage = shred_collector.repair_message.RepairMessage;
+const RepairMessage = shred_network.repair_message.RepairMessage;
 const Slot = sig.core.Slot;
 const SocketThread = sig.net.SocketThread;
 const VariantCounter = sig.prometheus.VariantCounter;
