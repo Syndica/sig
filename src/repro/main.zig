@@ -18,7 +18,7 @@ pub fn main() !void {
         break :blk @as(u32, 100_000);
     };
 
-    const path = "validator/blockstore";
+    const path = "src/repro/corrupted_data";
 
     // if (std.fs.cwd().access(path, .{})) |_| {
     //     try std.fs.cwd().deleteTree(path);
