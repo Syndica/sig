@@ -212,7 +212,8 @@ pub fn Channel(T: type) type {
                 }
                 channel.mutex.lock();
                 defer channel.mutex.unlock();
-                channel.condition.timedWait(end - now) catch |e| switch (e) {
+                channel.condition.timedWait(&channel.mutex, @intCast(end - now)) catch |e|
+                    switch (e) {
                     error.Timeout => return null,
                 };
             }
@@ -464,6 +465,55 @@ test "spsc" {
 
     consumer.join();
     producer.join();
+}
+
+test "blocking receive" {
+    const S = struct {
+        fn producer(ch: *Channel(u64)) !void {
+            try ch.send(123);
+        }
+
+        fn consumer(ch: *Channel(u64)) void {
+            std.debug.assert(123 == ch.receive() catch @panic("error receiving"));
+        }
+    };
+
+    var ch = try Channel(u64).init(std.testing.allocator);
+    defer ch.deinit();
+
+    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
+    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
+
+    consumer.join();
+    producer.join();
+}
+
+test "timeout receive receives" {
+    const S = struct {
+        fn producer(ch: *Channel(u64)) !void {
+            try ch.send(123);
+        }
+
+        fn consumer(ch: *Channel(u64)) void {
+            std.debug.assert(123 == ch.receiveTimeout(sig.time.Duration.fromSecs(1)) catch
+                @panic("error receiving"));
+        }
+    };
+
+    var ch = try Channel(u64).init(std.testing.allocator);
+    defer ch.deinit();
+
+    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
+    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
+
+    consumer.join();
+    producer.join();
+}
+
+test "timeout receive times out" {
+    var ch = try Channel(u64).init(std.testing.allocator);
+    defer ch.deinit();
+    try std.testing.expectEqual(null, try ch.receiveTimeout(sig.time.Duration.fromMillis(10)));
 }
 
 test "mpmc" {
