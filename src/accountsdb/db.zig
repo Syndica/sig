@@ -4,7 +4,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const zstd = @import("zstd");
-const xev = @import("xev");
 
 const sysvars = sig.accounts_db.sysvars;
 const snapgen = sig.accounts_db.snapshots.generate;
@@ -230,7 +229,9 @@ pub const BufferPool = struct {
     /// used for eviction to free less popular (rc=0) frames first
     eviction_lfu: S3_FIFO,
 
-    event_loop: xev.Loop,
+    io_uring: if (builtin.os.tag == .linux) std.os.linux.IoUring else void,
+    /// pretty much a slice of each frame so that io_uring can efficiently write into them
+    iovecs: if (builtin.os.tag == .linux) []std.posix.iovec else void,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -241,12 +242,19 @@ pub const BufferPool = struct {
         // sidenote, might as well just use the page allocator
         const frames = try allocator.alignedAlloc(Frame, std.mem.page_size, num_frames);
 
-        const frames_metadata = FramesMetadata{
-            .rc = try allocator.alignedAlloc(sig.sync.ReferenceCounter, std.mem.page_size, num_frames),
-            .freq = try allocator.alignedAlloc(u2, std.mem.page_size, num_frames),
-            .in_queue = try allocator.alignedAlloc(InQueue, std.mem.page_size, num_frames),
-            .size = try allocator.alignedAlloc(u16, std.mem.page_size, num_frames),
-        };
+        const rc = try allocator.alignedAlloc(sig.sync.ReferenceCounter, std.mem.page_size, num_frames);
+        errdefer allocator.free(rc);
+
+        const freq = try allocator.alignedAlloc(u2, std.mem.page_size, num_frames);
+        errdefer allocator.free(freq);
+
+        const in_queue = try allocator.alignedAlloc(InQueue, std.mem.page_size, num_frames);
+        errdefer allocator.free(in_queue);
+
+        const size = try allocator.alignedAlloc(u16, std.mem.page_size, num_frames);
+        errdefer allocator.free(size);
+
+        const frames_metadata = FramesMetadata{ .rc = rc, .freq = freq, .in_queue = in_queue, .size = size };
 
         @memset(frames_metadata.rc, .{ .state = .{ .raw = 0 } });
 
@@ -256,6 +264,29 @@ pub const BufferPool = struct {
         const main_fifo_size = (num_frames * 90) / 100;
         const small_fifo_size = num_frames - main_fifo_size;
 
+        const io_uring, const iovecs = if (builtin.os.tag == .linux) blk: {
+            // NOTE: this is pretty much a guess, maybe worth tweaking?
+            // think this is a bit on the high end, libxev uses 256
+            const io_uring_entries = 4096;
+
+            var io_uring = try std.os.linux.IoUring.init(
+                io_uring_entries,
+                0,
+            );
+            errdefer io_uring.deinit();
+
+            const iovecs = try allocator.alignedAlloc(std.posix.iovec, std.mem.page_size, num_frames);
+            errdefer allocator.free(iovecs);
+
+            for (iovecs, frames) |*iov, *frame| iov.* = .{
+                .base = frame,
+                .len = FRAME_SIZE,
+            };
+            try io_uring.register_buffers(iovecs);
+
+            break :blk .{ io_uring, iovecs };
+        } else .{ {}, {} };
+
         return .{
             .allocator = allocator,
             .snapshot_dir = snapshot_dir,
@@ -264,23 +295,29 @@ pub const BufferPool = struct {
             .free_list = free_list,
             .file_frames = .{},
             .eviction_lfu = try S3_FIFO.init(allocator, small_fifo_size, main_fifo_size),
-            .event_loop = try xev.Loop.init(.{}),
+            .io_uring = io_uring,
+            .iovecs = iovecs,
         };
     }
 
-    pub fn deinit(self: *BufferPool, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *BufferPool) void {
         // NOTE: this check itself is racy, but should never happen
         for (self.frames_metadata.rc) |rc| {
             if (rc.state.raw != 0) @panic("BufferPool deinitialised with alive handles");
         }
+
+        const allocator = self.allocator;
 
         allocator.free(self.frames);
         allocator.free(self.frames_metadata.freq);
         allocator.free(self.frames_metadata.in_queue);
         allocator.free(self.frames_metadata.rc);
         allocator.free(self.frames_metadata.size);
+        if (builtin.os.tag == .linux) self.io_uring.deinit();
+        if (builtin.os.tag == .linux) allocator.free(self.iovecs);
         self.free_list.deinit(allocator);
         self.eviction_lfu.deinit(allocator);
+        self.file_frames.deinit(allocator);
     }
 
     fn makeIndeces(
@@ -310,67 +347,124 @@ pub const BufferPool = struct {
         return indeces;
     }
 
-    pub fn read_nonblocking(
+    /// On a "new" frame (i.e. freshly read into), set all of its associated metadata
+    fn populateNew(
+        self: *BufferPool,
+        idx: FrameIndex,
+        file_id: FileId,
+        file_offset: FileOffset,
+        size: u16,
+    ) !void {
+        try self.populateNewNoSize(idx, file_id, file_offset);
+        self.frames_metadata.size[idx] = size;
+    }
+
+    /// Useful if you don't currently know the size.
+    /// make sure to set the size later (!)
+    fn populateNewNoSize(
+        self: *BufferPool,
+        idx: FrameIndex,
+        file_id: FileId,
+        file_offset: FileOffset,
+    ) !void {
+        self.frames_metadata.freq[idx] = 0;
+        self.frames_metadata.in_queue[idx] = .none;
+
+        // this feels a bit wrong?
+        const rc = &self.frames_metadata.rc[idx];
+        if (rc.state.raw != 0) unreachable; // not-found indeces should always have 0 active readers
+        rc.* = .{ .state = .{ .raw = 1 } };
+
+        try self.file_frames.put(self.allocator, FileIdFileOffset{
+            .file_id = file_id,
+            .file_offset = file_offset,
+        }, idx);
+    }
+
+    // TODO: we should ideally make this cross-platform
+    pub fn readIoUringSubmitAndWait(
         self: *BufferPool,
         cached_read_allocator: std.mem.Allocator,
         slot: Slot,
         file_id: FileId,
-        range_start: u32,
-        range_end: u32,
+        /// inclusive
+        range_start: FileOffset,
+        /// exclusive
+        range_end: FileOffset,
     ) !CachedRead {
+        if (builtin.os.tag != .linux) @compileError("io_uring only available on linux - unsupported target");
+
         const file_path = file_id.path(slot);
 
         const file = try self.snapshot_dir.openFile(file_path.constSlice(), .{});
         defer file.close();
-        const xev_file = try xev.File.init(file);
 
         const indeces = try self.makeIndeces(file_id, cached_read_allocator, range_start, range_end);
 
         // fill in invalid frames with file data, replacing invalid frames with
         // freshly read ones.
-
-        var offset: u64 = 0;
+        var file_offset: FileOffset = 0;
+        var sent_reads: u32 = 0;
         for (indeces) |*idx| {
-            defer offset += FRAME_SIZE;
+            defer file_offset += FRAME_SIZE;
 
-            if (idx.* != INVALID_FRAME) continue;
-            idx.* = self.free_list.popOrNull() orelse unreachable; // TODO - call eviction
+            // not found, read fresh and populate
+            if (idx.* == INVALID_FRAME) {
+                idx.* = self.free_list.popOrNull() orelse unreachable; // TODO - call eviction
 
-            const completion = undefined;
-            xev_file.pread(
-                &self.event_loop,
-                completion,
-                xev.ReadBuffer{ .slice = &self.frames[idx.*] },
-                offset,
-                usize,
-                &self.frames_metadata.size[idx],
-                (struct {
-                    fn callback(
-                        bytes_read: ?*usize,
-                        _: *xev.Loop,
-                        _: *xev.Completion,
-                        _: BufferPool,
-                        _: xev.WriteBuffer,
-                        r: xev.ReadError!usize,
-                    ) xev.CallbackAction {
-                        if (bytes_read) |br| br.* = r catch unreachable;
-                        return .disarm;
-                    }
-                }).callback,
-            );
+                _ = try self.io_uring.read_fixed(idx.*, file.handle, &self.iovecs[idx.*], file_offset, @intCast(idx.*));
+                sent_reads += 1;
+
+                try self.populateNewNoSize(idx.*, file_id, file_offset);
+            } else {
+                if (!self.frames_metadata.rc[idx.*].acquire()) {
+                    @panic("attempted borrow on dead frame");
+                }
+            }
         }
 
-        @panic("TODO");
+        if (sent_reads > 0) {
+            const n_submitted = try self.io_uring.submit_and_wait(sent_reads);
+            if (n_submitted != sent_reads) unreachable; // race condition; did something else submit an event?
+
+            // would be nice to get rid of this alloc
+            const cqes = try cached_read_allocator.alloc(std.os.linux.io_uring_cqe, n_submitted);
+            defer cached_read_allocator.free(cqes);
+
+            // check our completions in order to set the frame's size;
+            // we need to wait for completion to get the bytes read
+            const cqe_count = try self.io_uring.copy_cqes(cqes, n_submitted);
+            if (cqe_count != n_submitted) unreachable; // why did we not receive them all?
+            for (cqes) |cqe| {
+                const idx = cqe.user_data;
+                const bytes_read: u16 = @intCast(cqe.res);
+                if (bytes_read > FRAME_SIZE) unreachable;
+
+                self.frames_metadata.size[idx] = bytes_read;
+            }
+        }
+
+        const cached_read = CachedRead{
+            .bp = self,
+            .indeces = indeces,
+            .start_offset = (range_start % FRAME_SIZE),
+            .end_offset = range_end - range_start - 1,
+        };
+        errdefer cached_read.destroy(cached_read_allocator);
+
+        return cached_read;
     }
 
     // TODO: add read-nonblocking, which should return a completion and do reads in parallel
-    pub fn read_blocking(
+    pub fn readBlocking(
         self: *BufferPool,
         cached_read_allocator: std.mem.Allocator,
         slot: Slot,
         file_id: FileId,
-        range_start: u32,
-        range_end: u32,
+        /// inclusive
+        range_start: FileOffset,
+        /// exclusive
+        range_end: FileOffset,
     ) !CachedRead {
         const file_path = file_id.path(slot);
 
@@ -384,11 +478,15 @@ pub const BufferPool = struct {
 
         // fill in invalid frames with file data, replacing invalid frames with
         // fresh ones.
+        var file_offset: FileOffset = 0;
         for (indeces) |*idx| {
+            defer file_offset += FRAME_SIZE;
+
             if (idx.* != INVALID_FRAME) continue;
             idx.* = self.free_list.popOrNull() orelse unreachable; // TODO - call eviction
-            _ = try file.read(&self.frames[idx.*]); // TODO: check return
-            try file.seekBy(FRAME_SIZE); // TODO - this is incorrect... we need to make sure we've got the right offset
+            const bytes_read = try file.pread(&self.frames[idx.*], file_offset); // TODO: check return
+            if (bytes_read > FRAME_SIZE) unreachable;
+            try self.populateNew(idx.*, file_id, file_offset, @intCast(bytes_read));
         }
 
         const cached_read = CachedRead{
@@ -398,11 +496,6 @@ pub const BufferPool = struct {
             .end_offset = range_end - range_start - 1,
         };
         errdefer cached_read.destroy(cached_read_allocator);
-
-        for (cached_read.indeces) |idx| {
-            // TODO: should probably be atomic... this doesn't work with the RC api
-            self.frames_metadata.rc[idx] = .{ .state = .{ .raw = 1 } };
-        }
 
         return cached_read;
     }
@@ -419,10 +512,10 @@ test "BufferPool read_blocking" {
     defer snapshot_dir.close();
 
     var bp = try BufferPool.init(allocator, snapshot_dir, 2048); // 2048 frames = 1MiB
-    defer bp.deinit(allocator);
+    defer bp.deinit();
     // 301285806.3771301 - slot.fileid
 
-    var read = try bp.read_blocking(
+    var read = try bp.readBlocking(
         allocator,
         @as(Slot, 301285806),
         FileId.fromInt(3771301),
@@ -431,15 +524,23 @@ test "BufferPool read_blocking" {
     );
     defer read.release();
 
-    var read2 = try bp.read_nonblocking(
-        allocator,
-        @as(Slot, 301285806),
-        FileId.fromInt(3771301),
-        0,
-        1000,
-    );
+    if (builtin.os.tag == .linux) {
+        var read2 = try bp.readIoUringSubmitAndWait(
+            allocator,
+            @as(Slot, 301285806),
+            FileId.fromInt(3771301),
+            0,
+            1000,
+        );
+        defer read2.release();
 
-    defer read2.release();
+        try std.testing.expectEqual(read.start_offset, read2.start_offset);
+        try std.testing.expectEqual(read.end_offset, read2.end_offset);
+        try std.testing.expectEqual(read.bp, read2.bp);
+
+        // indeces will be equal
+        try std.testing.expectEqualDeep(read.indeces, read2.indeces);
+    }
 }
 
 /// slice-ish d\atatype
