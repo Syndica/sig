@@ -5,14 +5,12 @@ const shred_network = @import("lib.zig");
 
 const socket_utils = sig.net.socket_utils;
 
-const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicU64 = std.atomic.Value(u64);
 const EndPoint = net.EndPoint;
 const Random = std.rand.Random;
 const UdpSocket = net.Socket;
 
-const BankFields = sig.accounts_db.snapshots.BankFields;
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Duration = sig.time.Duration;
@@ -20,7 +18,6 @@ const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
-const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 const Logger = sig.trace.log.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
