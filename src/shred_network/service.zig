@@ -1,7 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../sig.zig");
-const shred_networking = @import("lib.zig");
+const shred_network = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -22,12 +22,12 @@ const Slot = sig.core.Slot;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 
-const BasicShredTracker = shred_networking.shred_tracker.BasicShredTracker;
-const RepairPeerProvider = shred_networking.repair_service.RepairPeerProvider;
-const RepairRequester = shred_networking.repair_service.RepairRequester;
-const RepairService = shred_networking.repair_service.RepairService;
-const ShredReceiver = shred_networking.shred_receiver.ShredReceiver;
-const ShredReceiverMetrics = shred_networking.shred_receiver.ShredReceiverMetrics;
+const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
+const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
+const RepairRequester = shred_network.repair_service.RepairRequester;
+const RepairService = shred_network.repair_service.RepairService;
+const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
+const ShredReceiverMetrics = shred_network.shred_receiver.ShredReceiverMetrics;
 
 /// Settings which instruct the Shred Collector how to behave.
 pub const ShredCollectorConfig = struct {
@@ -114,7 +114,7 @@ pub fn start(
     // verifier (thread)
     try service_manager.spawn(
         "Shred Verifier",
-        shred_networking.shred_verifier.runShredVerifier,
+        shred_network.shred_verifier.runShredVerifier,
         .{
             deps.exit,
             deps.registry,
@@ -136,7 +136,7 @@ pub fn start(
     // processor (thread)
     try service_manager.spawn(
         "Shred Processor",
-        shred_networking.shred_processor.runShredProcessor,
+        shred_network.shred_processor.runShredProcessor,
         .{
             deps.allocator,
             deps.exit,
@@ -152,7 +152,7 @@ pub fn start(
     // retransmitter (thread)
     try service_manager.spawn(
         "Shred Retransmitter",
-        shred_networking.shred_retransmitter.runShredRetransmitter,
+        shred_network.shred_retransmitter.runShredRetransmitter,
         .{.{
             .allocator = deps.allocator,
             .my_contact_info = deps.my_contact_info,

@@ -18,15 +18,15 @@ const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
 const Duration = sig.time.Duration;
-const TurbineTree = sig.shred_networking.turbine_tree.TurbineTree;
-const TurbineTreeCache = sig.shred_networking.turbine_tree.TurbineTreeCache;
+const TurbineTree = sig.shred_network.turbine_tree.TurbineTree;
+const TurbineTreeCache = sig.shred_network.turbine_tree.TurbineTreeCache;
 const Channel = sig.sync.Channel;
 const ShredId = sig.ledger.shred.ShredId;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
-const ShredDeduper = sig.shred_networking.shred_deduper.ShredDeduper;
+const ShredDeduper = sig.shred_network.shred_deduper.ShredDeduper;
 
 const globalRegistry = sig.prometheus.globalRegistry;
 

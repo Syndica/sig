@@ -1,6 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const shred_networking = @import("lib.zig");
+const shred_network = @import("lib.zig");
 
 const layout = sig.ledger.shred.layout;
 
@@ -8,7 +8,7 @@ const Allocator = std.mem.Allocator;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Atomic = std.atomic.Value;
 
-const BasicShredTracker = shred_networking.shred_tracker.BasicShredTracker;
+const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Histogram = sig.prometheus.Histogram;
@@ -17,7 +17,7 @@ const Packet = sig.net.Packet;
 const Registry = sig.prometheus.Registry;
 const Shred = sig.ledger.shred.Shred;
 const ShredInserter = sig.ledger.ShredInserter;
-const SlotOutOfBounds = shred_networking.shred_tracker.SlotOutOfBounds;
+const SlotOutOfBounds = shred_network.shred_tracker.SlotOutOfBounds;
 const VariantCounter = sig.prometheus.VariantCounter;
 
 // The identifier for the scoped logger used in this file.
