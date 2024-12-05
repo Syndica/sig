@@ -1369,52 +1369,36 @@ pub const AccountsDbFields = struct {
             .free = .assert,
         });
 
-        var file_map = blk: {
-            const file_map_len: usize = try bincode.readIntAsLength(usize, reader, params) orelse
-                return error.FileMapTooBig;
-            var file_map: FileMap = .{};
-            errdefer file_map.deinit(allocator);
-
-            try file_map.ensureTotalCapacity(allocator, file_map_len);
-
-            for (0..file_map_len) |_| {
-                const key = try bincode.readInt(Slot, reader, params);
-
-                if (try bincode.readIntAsLength(usize, reader, params) != 1) {
+        var file_map = try bincode.hashmap.readCtx(allocator, FileMap, reader, params, struct {
+            pub const readKey = {};
+            pub const freeKey = {};
+            pub fn readValue(
+                _: std.mem.Allocator,
+                _reader: anytype,
+                _params: bincode.Params,
+            ) !AccountFileInfo {
+                if (try bincode.readIntAsLength(usize, _reader, _params) != 1) {
                     return error.TooManyAccountFileInfos;
                 }
-                const value = try bincode.read(assert_allocator, AccountFileInfo, reader, params);
-
-                const gop = file_map.getOrPutAssumeCapacity(key);
-                if (gop.found_existing) return error.DuplicateFileMapEntry;
-                gop.value_ptr.* = value;
+                return bincode.read(assert_allocator, AccountFileInfo, _reader, _params);
             }
-
-            break :blk file_map;
-        };
+            pub const freeValue = {};
+        });
         errdefer file_map.deinit(allocator);
 
         const stored_meta_write_version = try bincode.readInt(u64, reader, params);
         const slot = try bincode.readInt(Slot, reader, params);
         const bank_hash_info = try bincode.read(assert_allocator, BankHashInfo, reader, params);
 
-        const rooted_slots: []const Slot = bincode.read(
-            allocator,
-            []const Slot,
-            reader,
-            params,
-        ) catch |err| switch (err) {
+        const rooted_slots: []const Slot =
+            bincode.read(allocator, []const Slot, reader, params) catch |err| switch (err) {
             error.EndOfStream => &.{},
             else => |e| return e,
         };
         errdefer allocator.free(rooted_slots);
 
-        const rooted_slot_hashes: []const SlotAndHash = bincode.read(
-            allocator,
-            []const SlotAndHash,
-            reader,
-            params,
-        ) catch |err| switch (err) {
+        const rooted_slot_hashes: []const SlotAndHash =
+            bincode.read(allocator, []const SlotAndHash, reader, params) catch |err| switch (err) {
             error.EndOfStream => &.{},
             else => |e| return e,
         };
