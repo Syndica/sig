@@ -632,13 +632,16 @@ pub const BatchAllocator = struct {
         // create batch
         const padding = @max(@as(usize, 1) << @intCast(ptr_align_with_offset), @sizeOf(Batch));
         const batch_size = @max(self.batch_size, len_with_offset + padding);
-        const batch_slice = self.backing_allocator
-            .alignedAlloc(u8, @alignOf(Batch), batch_size) catch return null;
-        const new_batch: *Batch = @ptrCast(batch_slice.ptr);
+        const batch_bytes: [*]align(@alignOf(Batch)) u8 = @alignCast(
+            self.backing_allocator.rawAlloc(batch_size, log2(@alignOf(Batch)), ret_addr) orelse
+                return null,
+        );
+        const new_batch: *Batch = @ptrCast(batch_bytes);
+        const buffer: []u8 = batch_bytes[@sizeOf(Batch)..batch_size];
         new_batch.* = Batch{
-            .ptr = batch_slice.ptr,
+            .ptr = batch_bytes,
             .len = batch_size,
-            .fba = FixedBufferAllocator.init(batch_slice[@sizeOf(Batch)..]),
+            .fba = FixedBufferAllocator.init(buffer),
             .num_allocs = Atomic(usize).init(1),
         };
 
