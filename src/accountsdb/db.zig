@@ -681,10 +681,6 @@ test "BufferPool readIoUringSubmitAndWait" {
 }
 
 test "BufferPool basic usage" {
-    errdefer |err| {
-        std.debug.print("errname: {s}\n", .{@errorName(err)});
-    }
-
     const allocator = std.testing.allocator;
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
