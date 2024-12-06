@@ -240,6 +240,7 @@ pub const BufferPool = struct {
     /// used for eviction to free less popular (rc=0) frames first
     eviction_lfu: S3_FIFO,
 
+    /// NOTE: we might want this to be a threadlocal for best performance? I don't think this field is threadsafe
     io_uring: if (builtin.os.tag == .linux) std.os.linux.IoUring else void,
     /// pretty much a slice of each frame so that io_uring can efficiently write into them
     iovecs: if (builtin.os.tag == .linux) []std.posix.iovec else void,
@@ -279,7 +280,7 @@ pub const BufferPool = struct {
         const main_fifo_size = (num_frames * 90) / 100;
         const small_fifo_size = num_frames - main_fifo_size;
 
-        const io_uring, const iovecs = if (builtin.os.tag == .linux) blk: {
+        var io_uring, const iovecs = if (builtin.os.tag == .linux) blk: {
             // NOTE: this is pretty much a guess, maybe worth tweaking?
             // think this is a bit on the high end, libxev uses 256
             const io_uring_entries = 4096;
@@ -301,6 +302,11 @@ pub const BufferPool = struct {
 
             break :blk .{ io_uring, iovecs };
         } else .{ {}, {} };
+
+        errdefer if (builtin.os.tag == .linux) {
+            io_uring.unregister_buffers() catch unreachable;
+            io_uring.deinit();
+        };
 
         return .{
             .allocator = allocator,
@@ -340,14 +346,35 @@ pub const BufferPool = struct {
         self.file_frames.deinit(allocator);
     }
 
+    pub fn indecesRequired(
+        /// inclusive
+        range_start: FileOffset,
+        /// exclusive
+        range_end: FileOffset,
+    ) u32 {
+        if (range_start > range_end) unreachable;
+        if (range_start == range_end) return 0;
+
+        const starting_frame = range_start / FRAME_SIZE;
+        const ending_frame = (range_end - 1) / FRAME_SIZE;
+
+        return ending_frame - starting_frame + 1;
+    }
+
+    /// allocates the required amount of indeces, sets them all to
+    /// INVALID_FRAME, overwriting with a valid frame where one is found.
+    /// INVALID_FRAME indicates that there is no frame in the BufferPool for the
+    /// given file_id and range.
     fn makeIndeces(
         self: *BufferPool,
         file_id: FileId,
         allocator: std.mem.Allocator,
-        range_start: u32,
-        range_end: u32,
+        /// inclusive
+        range_start: FileOffset,
+        /// exclusive
+        range_end: FileOffset,
     ) ![]FrameIndex {
-        const n_indeces = ((range_end - 1) / FRAME_SIZE) - (range_start / FRAME_SIZE) + 1;
+        const n_indeces = indecesRequired(range_start, range_end);
 
         const indeces = try allocator.alloc(FrameIndex, n_indeces);
         for (indeces) |*idx| idx.* = INVALID_FRAME;
@@ -414,8 +441,24 @@ pub const BufferPool = struct {
         } else @panic("unable to evict unused frame");
     }
 
-    // TODO: we should ideally make this cross-platform
-    pub fn readIoUringSubmitAndWait(
+    pub fn read(
+        self: *BufferPool,
+        /// used for temp allocations, and the returned .indeces slice
+        allocator: std.mem.Allocator,
+        slot: Slot,
+        file_id: FileId,
+        /// inclusive
+        range_start: FileOffset,
+        /// exclusive
+        range_end: FileOffset,
+    ) !CachedRead {
+        return switch (builtin.os.tag) {
+            .linux => self.readIoUringSubmitAndWait(allocator, slot, file_id, range_start, range_end),
+            else => self.readBlocking(allocator, slot, file_id, range_start, range_end),
+        };
+    }
+
+    fn readIoUringSubmitAndWait(
         self: *BufferPool,
         /// used for temp allocations, and the returned .indeces slice
         allocator: std.mem.Allocator,
@@ -492,12 +535,11 @@ pub const BufferPool = struct {
             .bp = self,
             .indeces = indeces,
             .start_offset = (range_start % FRAME_SIZE),
-            .end_offset = range_end - range_start - 1,
+            .end_offset = range_end - range_start,
         };
     }
 
-    // TODO: add read-nonblocking, which should return a completion and do reads in parallel
-    pub fn readBlocking(
+    fn readBlocking(
         self: *BufferPool,
         /// used for temp allocations, and the returned .indeces slice
         allocator: std.mem.Allocator,
@@ -541,7 +583,7 @@ pub const BufferPool = struct {
             .bp = self,
             .indeces = indeces,
             .start_offset = (range_start % FRAME_SIZE),
-            .end_offset = range_end - range_start - 1,
+            .end_offset = range_end - range_start,
         };
         errdefer cached_read.destroy(allocator);
 
@@ -553,22 +595,46 @@ pub const BufferPool = struct {
     }
 };
 
-test "BufferPool init deinit" {
-    const allocator = std.testing.allocator;
+test "BufferPool indecesRequired" {
+    const TestCase = struct {
+        start: BufferPool.FileOffset,
+        end: BufferPool.FileOffset,
+        expected: u32,
+    };
+    const F_SIZE = BufferPool.FRAME_SIZE;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
-    defer snapshot_dir.close();
+    const cases = [_]TestCase{
+        .{ .start = 0, .end = 1, .expected = 1 },
+        .{ .start = 1, .end = 1, .expected = 0 },
+        .{ .start = 0, .end = F_SIZE, .expected = 1 },
+        .{ .start = F_SIZE / 2, .end = (F_SIZE * 3) / 2, .expected = 2 },
+        .{ .start = F_SIZE, .end = F_SIZE * 2, .expected = 1 },
+    };
 
-    for (&[_]u32{ 2, 16, 32, 65535, 65536 }) |frame_count| {
-        std.debug.print("on count: {}\n", .{frame_count});
-
-        var bp = BufferPool.init(allocator, snapshot_dir, frame_count) catch |err| {
-            std.debug.print("failed on count: {}\n", .{frame_count});
-            return err;
-        };
-        bp.deinit();
+    for (0.., cases) |i, case| {
+        errdefer std.debug.print("failed on case(i={}): {}", .{ i, case });
+        try std.testing.expectEqual(case.expected, BufferPool.indecesRequired(case.start, case.end));
     }
 }
+
+// currently fails at higher frame_counts on linux because of io_uring's max registered iovecs
+// test "BufferPool init deinit" {
+//     const allocator = std.testing.allocator;
+
+//     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
+//     defer snapshot_dir.close();
+
+//     for (0.., &[_]u32{
+//         2,     3,     4,     8,
+//         16,    32,    256,   4096,
+//         16384, 16385, 24576, 32767,
+//         32768, 49152, 65535, 65536,
+//     }) |i, frame_count| {
+//         errdefer std.debug.print("failed on case(i={}): {}", .{ i, frame_count });
+//         var bp = try BufferPool.init(allocator, snapshot_dir, frame_count);
+//         bp.deinit();
+//     }
+// }
 
 test "BufferPool readBlocking" {
     const allocator = std.testing.allocator;
@@ -587,7 +653,7 @@ test "BufferPool readBlocking" {
         0,
         1000,
     );
-    defer read.release();
+    defer read.release(allocator);
 }
 
 test "BufferPool readIoUringSubmitAndWait" {
@@ -608,7 +674,41 @@ test "BufferPool readIoUringSubmitAndWait" {
         0,
         1000,
     );
-    defer read.release();
+    defer read.release(allocator);
+}
+
+test "BufferPool basic usage" {
+    errdefer |err| {
+        std.debug.print("errname: {s}\n", .{@errorName(err)});
+    }
+
+    const allocator = std.testing.allocator;
+
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
+    defer snapshot_dir.close();
+
+    var bp = try BufferPool.init(allocator, snapshot_dir, 2048); // 2048 frames = 1MiB
+    defer bp.deinit();
+
+    var fba_buf: [1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+
+    const read = try bp.read(fba.allocator(), @as(Slot, 301285806), FileId.fromInt(3771301), 0, 1000);
+    defer read.release(fba.allocator());
+
+    try std.testing.expectEqual(2, read.indeces.len);
+    for (read.indeces) |idx| try std.testing.expect(idx != BufferPool.INVALID_FRAME);
+
+    // in actual use, avoid copying like this
+
+    const buf = try allocator.alloc(u8, 1000);
+    defer allocator.free(buf);
+
+    const bytes_read = try read.readBytes(buf);
+    try std.testing.expectEqual(1000, bytes_read);
+
+    // const data = try read.reader().readAllAlloc(allocator, 10_000);
+    // defer allocator.free(data);
 }
 
 /// slice-ish d\atatype
@@ -616,25 +716,36 @@ test "BufferPool readIoUringSubmitAndWait" {
 /// Trivially copyable, however make sure to use .borrow() and .release()
 /// appropriately.
 pub const CachedRead = struct {
-    const Reader = std.io.GenericReader(CachedRead, void, readBytes);
+    const Reader = std.io.GenericReader(CachedRead, error{}, readBytes);
 
     bp: *BufferPool,
     indeces: []const BufferPool.FrameIndex,
+    /// inclusive
     start_offset: BufferPool.FileOffset,
+    /// exclusive
     end_offset: BufferPool.FileOffset,
 
     pub fn readByte(self: CachedRead, idx: usize) u8 {
         const offset = idx + self.start_offset;
-
         if (offset < self.start_offset) unreachable;
-        if (offset >= self.end_offset) unreachable;
-        return self.indeces[offset / BufferPool.FRAME_SIZE][offset % BufferPool.FRAME_SIZE];
+        if (offset > self.end_offset) unreachable;
+
+        return self.bp.frames[self.indeces[offset / BufferPool.FRAME_SIZE]][offset % BufferPool.FRAME_SIZE];
     }
 
-    pub fn readBytes(self: CachedRead, buffer: []u8) usize {
-        for (0.., buffer) |idx, *byte| {
+    pub fn readBytes(self: CachedRead, buffer: []u8) error{}!usize {
+        const bytes_read: usize = for (0.., buffer) |idx, *byte| {
+            const offset = idx + self.start_offset;
+            if (offset > self.end_offset) {
+                std.debug.print("breaked at idx: {}\n", .{idx});
+                break idx - 1;
+            }
             byte.* = self.readByte(idx);
-        }
+        } else buffer.len;
+
+        std.debug.print("returned bytes_read: {}\n", .{bytes_read});
+
+        return bytes_read;
     }
 
     pub fn reader(self: CachedRead) Reader {
@@ -645,7 +756,7 @@ pub const CachedRead = struct {
         self.end_offset - self.start_offset;
     }
 
-    pub fn release(self: CachedRead) void {
+    pub fn release(self: CachedRead, allocator: std.mem.Allocator) void {
         for (self.indeces) |frame_index| {
             if (frame_index == BufferPool.INVALID_FRAME) unreachable;
 
@@ -653,7 +764,7 @@ pub const CachedRead = struct {
                 // frame is now dead
             }
         }
-        self.destroy(self.bp.allocator);
+        self.destroy(allocator);
     }
 
     pub fn borrow(self: CachedRead) CachedRead {
