@@ -47,11 +47,14 @@ pub fn buildGossipPullFilters(
             const hash = gossip_values[i].value_hash;
             filter_set.add(&hash);
         }
+
         // add purged values
         const purged_values = try gossip_table.purged.getValues();
+        defer purged_values.deinit();
         for (purged_values.items) |hash| {
             filter_set.add(&hash);
         }
+
         // add failed inserts
         for (failed_pull_hashes.items) |hash| {
             filter_set.add(&hash);
@@ -217,6 +220,10 @@ pub const GossipPullFilter = struct {
         };
     }
 
+    pub fn deinit(self: *const Self) void {
+        self.filter.deinit();
+    }
+
     pub fn computeMask(index: u64, mask_bits: u32) u64 {
         if (mask_bits == 0) {
             return ~@as(u64, 0);
@@ -244,10 +251,6 @@ pub const GossipPullFilter = struct {
         const p = false_rate;
         const k = num_keys;
         return std.math.ceil(m / (-k / @log(@as(f64, 1) - exp(@log(p) / k))));
-    }
-
-    pub fn deinit(self: *const Self) void {
-        self.filter.deinit();
     }
 };
 

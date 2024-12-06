@@ -137,6 +137,13 @@ pub const GossipTable = struct {
         pub fn wasInserted(self: InsertResult) bool {
             return self == .InsertedNewEntry or self == .OverwroteExistingEntry;
         }
+
+        pub fn overwrittenEntry(self: InsertResult) ?GossipData {
+            return switch (self) {
+                .OverwroteExistingEntry => |v| v,
+                else => null,
+            };
+        }
     };
 
     pub fn insert(self: *Self, value: SignedGossipData, now: u64) !InsertResult {
@@ -1066,9 +1073,19 @@ test "insert and get contact_info" {
     const kp = try KeyPair.create([_]u8{1} ** 32);
     var id = Pubkey.fromPublicKey(&kp.public_key);
 
-    const legacy_contact_info = LegacyContactInfo.default(id);
+    var prng = std.rand.Xoshiro256.init(10);
+    const random = prng.random();
+
+    const ci = try ContactInfo.initRandom(
+        std.testing.allocator,
+        random,
+        id,
+        0,
+        0,
+        10,
+    );
     var gossip_value = SignedGossipData.initSigned(&kp, .{
-        .LegacyContactInfo = legacy_contact_info,
+        .ContactInfo = ci,
     });
 
     var table = try GossipTable.init(std.testing.allocator);
@@ -1089,8 +1106,8 @@ test "insert and get contact_info" {
     try std.testing.expectEqual(.IgnoredDuplicateValue, result2);
 
     // test re-insertion with greater wallclock
-    gossip_value.data.LegacyContactInfo.wallclock += 2;
-    const v = gossip_value.data.LegacyContactInfo.wallclock;
+    gossip_value.data.ContactInfo.wallclock += 2;
+    const v = gossip_value.data.ContactInfo.wallclock;
     const result3 = try table.insert(gossip_value, 0);
     try std.testing.expectEqual(.OverwroteExistingEntry, std.meta.activeTag(result3));
 
