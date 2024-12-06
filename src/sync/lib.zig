@@ -12,6 +12,7 @@ pub const RwMux = mux.RwMux;
 
 pub const OnceCell = once_cell.OnceCell;
 pub const ReferenceCounter = reference_counter.ReferenceCounter;
+pub const RcSlice = reference_counter.RcSlice;
 pub const ThreadPool = thread_pool.ThreadPool;
 
 pub const ExitCondition = exit.ExitCondition;
