@@ -214,7 +214,7 @@ pub fn build(b: *Build) void {
 
     // Executable to reproduce ledger segfault.
     const repro_exe = b.addExecutable(.{
-        .name = "geyser",
+        .name = "repro",
         .root_source_file = b.path("src/repro/main.zig"),
         .target = target,
         .optimize = optimize,
