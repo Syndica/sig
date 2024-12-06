@@ -534,6 +534,35 @@ pub fn enablePortReuse(self: *network.Socket, enabled: bool) !void {
     try setsockopt_fn(self.internal, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, std.mem.asBytes(&opt));
 }
 
+pub fn resolveSocketAddr(allocator: std.mem.Allocator, entrypoint: []const u8) !SocketAddr {
+    const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
+        return error.EntrypointPortMissing;
+    };
+    const domain_str = entrypoint[0..domain_port_sep];
+    if (domain_str.len == 0) {
+        return error.EntrypointDomainNotValid;
+    }
+    // parse port from string
+    const port = std.fmt.parseInt(u16, entrypoint[domain_port_sep + 1 ..], 10) catch {
+        return error.EntrypointPortNotValid;
+    };
+
+    // get dns address lists
+    const addr_list = try std.net.getAddressList(allocator, domain_str, port);
+    defer addr_list.deinit();
+
+    if (addr_list.addrs.len == 0) {
+        return error.EntrypointDnsResolutionFailure;
+    }
+
+    // use first A record address
+    const ipv4_addr = addr_list.addrs[0];
+
+    const socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
+    std.debug.assert(socket_addr.port() == port);
+    return socket_addr;
+}
+
 test "invalid ipv4 socket parsing" {
     {
         const addr = "127.0.0.11234";

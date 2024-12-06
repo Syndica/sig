@@ -39,6 +39,7 @@ const getWallclockMs = sig.time.getWallclockMs;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 const requestIpEcho = sig.net.requestIpEcho;
 const spawnMetrics = sig.prometheus.spawnMetrics;
+const resolveSocketAddr = sig.net.net.resolveSocketAddr;
 
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
@@ -1320,7 +1321,7 @@ fn startGossip(
 
 /// determine our shred version and ip. in the solana-labs client, the shred version
 /// comes from the snapshot, and ip echo is only used to validate it.
-fn getMyDataFromIpEcho(
+pub fn getMyDataFromIpEcho(
     logger_: Logger,
     entrypoints: []SocketAddr,
 ) !struct { shred_version: u16, ip: IpAddr } {
@@ -1357,42 +1358,6 @@ fn getMyDataFromIpEcho(
     };
 }
 
-fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
-    const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
-        logger.err()
-            .field("entrypoint", entrypoint)
-            .log("entrypoint port missing");
-
-        return error.EntrypointPortMissing;
-    };
-    const domain_str = entrypoint[0..domain_port_sep];
-    if (domain_str.len == 0) {
-        logger.err().logf("'{s}': entrypoint domain not valid", .{entrypoint});
-        return error.EntrypointDomainNotValid;
-    }
-    // parse port from string
-    const port = std.fmt.parseInt(u16, entrypoint[domain_port_sep + 1 ..], 10) catch {
-        logger.err().logf("'{s}': entrypoint port not valid", .{entrypoint});
-        return error.EntrypointPortNotValid;
-    };
-
-    // get dns address lists
-    const addr_list = try std.net.getAddressList(gpa_allocator, domain_str, port);
-    defer addr_list.deinit();
-
-    if (addr_list.addrs.len == 0) {
-        logger.err().logf("'{s}': entrypoint resolve dns failed (no records found)", .{entrypoint});
-        return error.EntrypointDnsResolutionFailure;
-    }
-
-    // use first A record address
-    const ipv4_addr = addr_list.addrs[0];
-
-    const socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
-    std.debug.assert(socket_addr.port() == port);
-    return socket_addr;
-}
-
 fn getEntrypoints(logger_: Logger) !std.ArrayList(SocketAddr) {
     const logger = logger_.withScope(LOG_SCOPE);
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
@@ -1408,14 +1373,14 @@ fn getEntrypoints(logger_: Logger) !std.ArrayList(SocketAddr) {
     if (try config.current.gossip.getNetwork()) |cluster| {
         for (cluster.entrypoints()) |entrypoint| {
             logger.info().logf("adding predefined entrypoint: {s}", .{entrypoint});
-            const socket_addr = try resolveSocketAddr(entrypoint, .noop);
+            const socket_addr = try resolveSocketAddr(gpa_allocator, entrypoint);
             try entrypoints.append(socket_addr);
         }
     }
 
     for (config.current.gossip.entrypoints) |entrypoint| {
         const socket_addr = SocketAddr.parse(entrypoint) catch brk: {
-            break :brk try resolveSocketAddr(entrypoint, logger.unscoped());
+            break :brk try resolveSocketAddr(gpa_allocator, entrypoint);
         };
 
         const gop = try entrypoint_set.getOrPut(socket_addr);
