@@ -220,8 +220,8 @@ pub const BufferPool = struct {
         file_offset: FileOffset,
     };
 
-    // /// holds indeces for returned CachedReads
-    // indeces_allocator: sig.utils.allocators.RecycleFBA(.{}),
+    // /// holds indices for returned CachedReads
+    // indices_allocator: sig.utils.allocators.RecycleFBA(.{}),
 
     allocator: std.mem.Allocator,
     snapshot_dir: std.fs.Dir,
@@ -333,7 +333,7 @@ pub const BufferPool = struct {
         self.file_frames.deinit(allocator);
     }
 
-    pub fn indecesRequired(
+    pub fn indicesRequired(
         /// inclusive
         range_start: FileOffset,
         /// exclusive
@@ -348,11 +348,11 @@ pub const BufferPool = struct {
         return ending_frame - starting_frame + 1;
     }
 
-    /// allocates the required amount of indeces, sets them all to
+    /// allocates the required amount of indices, sets them all to
     /// INVALID_FRAME, overwriting with a valid frame where one is found.
     /// INVALID_FRAME indicates that there is no frame in the BufferPool for the
     /// given file_id and range.
-    fn makeIndeces(
+    fn makeindices(
         self: *BufferPool,
         file_id: FileId,
         allocator: std.mem.Allocator,
@@ -361,13 +361,13 @@ pub const BufferPool = struct {
         /// exclusive
         range_end: FileOffset,
     ) ![]FrameIndex {
-        const n_indeces = indecesRequired(range_start, range_end);
+        const n_indices = indicesRequired(range_start, range_end);
 
-        const indeces = try allocator.alloc(FrameIndex, n_indeces);
-        for (indeces) |*idx| idx.* = INVALID_FRAME;
+        const indices = try allocator.alloc(FrameIndex, n_indices);
+        for (indices) |*idx| idx.* = INVALID_FRAME;
 
         // lookup frame mappings
-        for (0.., indeces) |i, *idx| {
+        for (0.., indices) |i, *idx| {
             const file_offset: u32 = @intCast((i * FRAME_SIZE) + (range_start / FRAME_SIZE));
 
             const maybe_frame_idx = self.file_frames.get(FileIdFileOffset{
@@ -378,7 +378,7 @@ pub const BufferPool = struct {
             if (maybe_frame_idx) |frame_idx| idx.* = frame_idx;
         }
 
-        return indeces;
+        return indices;
     }
 
     /// On a "new" frame (i.e. freshly read into), set all of its associated metadata
@@ -406,7 +406,7 @@ pub const BufferPool = struct {
 
         // this feels a bit wrong?
         const rc = &self.frames_metadata.rc[idx];
-        if (rc.state.raw != 0) unreachable; // not-found indeces should always have 0 active readers
+        if (rc.state.raw != 0) unreachable; // not-found indices should always have 0 active readers
         rc.* = .{ .state = .{ .raw = 1 } };
 
         try self.file_frames.put(self.allocator, FileIdFileOffset{
@@ -430,7 +430,7 @@ pub const BufferPool = struct {
 
     pub fn read(
         self: *BufferPool,
-        /// used for temp allocations, and the returned .indeces slice
+        /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
         slot: Slot,
         file_id: FileId,
@@ -447,7 +447,7 @@ pub const BufferPool = struct {
 
     fn readIoUringSubmitAndWait(
         self: *BufferPool,
-        /// used for temp allocations, and the returned .indeces slice
+        /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
         slot: Slot,
         file_id: FileId,
@@ -463,10 +463,10 @@ pub const BufferPool = struct {
         const file = try self.snapshot_dir.openFile(file_path.constSlice(), .{});
         defer file.close();
 
-        const indeces = try self.makeIndeces(file_id, allocator, range_start, range_end);
+        const indices = try self.makeindices(file_id, allocator, range_start, range_end);
 
         var n_invalid: u32 = 0;
-        for (indeces) |idx| {
+        for (indices) |idx| {
             if (idx == INVALID_FRAME) n_invalid += 1;
         }
 
@@ -479,7 +479,7 @@ pub const BufferPool = struct {
         // fill in invalid frames with file data, replacing invalid frames with
         // freshly read ones.
         var sent_reads: u32 = 0;
-        for (indeces) |*idx| {
+        for (indices) |*idx| {
             defer file_offset += FRAME_SIZE;
 
             // not found, read fresh and populate
@@ -511,7 +511,7 @@ pub const BufferPool = struct {
         if (sent_reads != n_invalid) unreachable;
         if (n_invalid != iovecs.items.len) unreachable;
 
-        for (indeces) |idx| self.eviction_lfu.read(idx, self.frames_metadata);
+        for (indices) |idx| self.eviction_lfu.read(idx, self.frames_metadata);
 
         if (sent_reads > 0) {
             const n_submitted = try self.io_uring.submit_and_wait(sent_reads);
@@ -536,7 +536,7 @@ pub const BufferPool = struct {
 
         return CachedRead{
             .bp = self,
-            .indeces = indeces,
+            .indices = indices,
             .start_offset = (range_start % FRAME_SIZE),
             .end_offset = range_end - range_start,
         };
@@ -544,7 +544,7 @@ pub const BufferPool = struct {
 
     fn readBlocking(
         self: *BufferPool,
-        /// used for temp allocations, and the returned .indeces slice
+        /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
         slot: Slot,
         file_id: FileId,
@@ -558,14 +558,14 @@ pub const BufferPool = struct {
         const file = try self.snapshot_dir.openFile(file_path.constSlice(), .{});
         defer file.close();
 
-        const indeces = try self.makeIndeces(file_id, allocator, range_start, range_end);
+        const indices = try self.makeindices(file_id, allocator, range_start, range_end);
 
         // seek to first frame (offset rounds down to frame size)
         var file_offset: FileOffset = @intCast((range_start / FRAME_SIZE) * FRAME_SIZE);
 
         // fill in invalid frames with file data, replacing invalid frames with
         // fresh ones.
-        for (indeces) |*idx| {
+        for (indices) |*idx| {
             defer file_offset += FRAME_SIZE;
 
             if (idx.* != INVALID_FRAME) continue;
@@ -584,7 +584,7 @@ pub const BufferPool = struct {
 
         const cached_read = CachedRead{
             .bp = self,
-            .indeces = indeces,
+            .indices = indices,
             .start_offset = (range_start % FRAME_SIZE),
             .end_offset = range_end - range_start,
         };
@@ -598,7 +598,7 @@ pub const BufferPool = struct {
     }
 };
 
-test "BufferPool indecesRequired" {
+test "BufferPool indicesRequired" {
     const TestCase = struct {
         start: BufferPool.FileOffset,
         end: BufferPool.FileOffset,
@@ -616,7 +616,7 @@ test "BufferPool indecesRequired" {
 
     for (0.., cases) |i, case| {
         errdefer std.debug.print("failed on case(i={}): {}", .{ i, case });
-        try std.testing.expectEqual(case.expected, BufferPool.indecesRequired(case.start, case.end));
+        try std.testing.expectEqual(case.expected, BufferPool.indicesRequired(case.start, case.end));
     }
 }
 
@@ -695,8 +695,8 @@ test "BufferPool basic usage" {
     const read = try bp.read(fba.allocator(), @as(Slot, 301285806), FileId.fromInt(3771301), 0, 1000);
     defer read.release(fba.allocator());
 
-    try std.testing.expectEqual(2, read.indeces.len);
-    for (read.indeces) |idx| try std.testing.expect(idx != BufferPool.INVALID_FRAME);
+    try std.testing.expectEqual(2, read.indices.len);
+    for (read.indices) |idx| try std.testing.expect(idx != BufferPool.INVALID_FRAME);
 
     // in actual use, avoid copying like this
 
@@ -718,7 +718,7 @@ pub const CachedRead = struct {
     const Reader = std.io.GenericReader(CachedRead, error{}, readBytes);
 
     bp: *BufferPool,
-    indeces: []const BufferPool.FrameIndex,
+    indices: []const BufferPool.FrameIndex,
     /// inclusive
     start_offset: BufferPool.FileOffset,
     /// exclusive
@@ -729,7 +729,7 @@ pub const CachedRead = struct {
         if (offset < self.start_offset) unreachable;
         if (offset > self.end_offset) unreachable;
 
-        return self.bp.frames[self.indeces[offset / BufferPool.FRAME_SIZE]][offset % BufferPool.FRAME_SIZE];
+        return self.bp.frames[self.indices[offset / BufferPool.FRAME_SIZE]][offset % BufferPool.FRAME_SIZE];
     }
 
     pub fn readBytes(self: CachedRead, buffer: []u8) error{}!usize {
@@ -756,7 +756,7 @@ pub const CachedRead = struct {
     }
 
     pub fn release(self: CachedRead, allocator: std.mem.Allocator) void {
-        for (self.indeces) |frame_index| {
+        for (self.indices) |frame_index| {
             if (frame_index == BufferPool.INVALID_FRAME) unreachable;
 
             if (self.bp.frames_metadata.rc[frame_index].release()) {
@@ -767,7 +767,7 @@ pub const CachedRead = struct {
     }
 
     pub fn borrow(self: CachedRead) CachedRead {
-        for (self.indeces) |frame_index| {
+        for (self.indices) |frame_index| {
             if (frame_index == BufferPool.INVALID_FRAME) unreachable;
 
             if (!self.bp.frames_metadata.rc[frame_index].acquire()) {
@@ -779,14 +779,14 @@ pub const CachedRead = struct {
 
     fn destroy(self: CachedRead, allocator: std.mem.Allocator) void {
         // TODO: can do atomically
-        for (self.indeces) |frame_index| {
+        for (self.indices) |frame_index| {
             if (frame_index == BufferPool.INVALID_FRAME) unreachable;
 
             self.bp.frames_metadata.freq[frame_index] = 0;
             self.bp.frames_metadata.size[frame_index] = 0;
             self.bp.frames_metadata.in_queue[frame_index] = .none;
         }
-        allocator.free(self.indeces);
+        allocator.free(self.indices);
     }
 };
 
