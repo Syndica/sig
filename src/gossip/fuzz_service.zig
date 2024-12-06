@@ -290,7 +290,7 @@ pub fn newGossipClient(
     var contact_info = ContactInfo.init(allocator, pubkey, now, shred_version);
     try contact_info.setSocket(.gossip, address);
 
-    const service = try GossipService.create(
+    return try GossipService.create(
         allocator,
         allocator,
         contact_info,
@@ -298,21 +298,16 @@ pub fn newGossipClient(
         entrypoints,
         logger,
     );
-
-    return service;
 }
 
 pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
     const msg_slice = try bincode.writeToSlice(&packet_buf, d, bincode.Params{});
-    const packet = Packet.init(to_addr, packet_buf, msg_slice.len);
-    return packet;
+    return Packet.init(to_addr, packet_buf, msg_slice.len);
 }
 
 pub fn randomPing(random: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
-    return GossipMessage{
-        .PingMessage = try Ping.initRandom(random, keypair),
-    };
+    return .{ .PingMessage = try Ping.initRandom(random, keypair) };
 }
 
 pub fn randomPingPacket(
@@ -321,14 +316,11 @@ pub fn randomPingPacket(
     to_addr: EndPoint,
 ) !Packet {
     const ping = try randomPing(random, keypair);
-    const packet = try serializeToPacket(ping, to_addr);
-    return packet;
+    return try serializeToPacket(ping, to_addr);
 }
 
 pub fn randomPong(random: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
-    return .{
-        .PongMessage = try Pong.initRandom(random, keypair),
-    };
+    return .{ .PongMessage = try Pong.initRandom(random, keypair) };
 }
 
 pub fn randomPongPacket(
@@ -337,19 +329,18 @@ pub fn randomPongPacket(
     to_addr: EndPoint,
 ) !Packet {
     const pong = try randomPong(random, keypair);
-    const packet = try serializeToPacket(pong, to_addr);
-    return packet;
+    return try serializeToPacket(pong, to_addr);
 }
 
 pub fn randomSignedGossipData(
     allocator: std.mem.Allocator,
     random: std.rand.Random,
-    must_pass_sign_verification: bool,
+    should_pass_sig_verification: bool,
 ) !SignedGossipData {
     const keypair = try KeyPair.create(null);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     const now = getWallclockMs();
-    const info_pubkey = if (must_pass_sign_verification) pubkey else Pubkey.initRandom(random);
+    const info_pubkey = if (should_pass_sig_verification) pubkey else Pubkey.initRandom(random);
     // TODO: support other types of gossip data
     const info = ContactInfo.init(allocator, info_pubkey, now, SHRED_VERSION);
 
@@ -364,7 +355,7 @@ pub fn randomPushMessage(
 ) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
     var values: [size]SignedGossipData = undefined;
-    const should_pass_sig_verification = true; // random.boolean();
+    const should_pass_sig_verification = random.boolean();
     for (0..size) |i| {
         const value = try randomSignedGossipData(
             allocator,
@@ -374,14 +365,13 @@ pub fn randomPushMessage(
         values[i] = value;
     }
 
-    const packets = try gossipDataToPackets(
+    return try gossipDataToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
         ChunkType.PushMessage,
     );
-    return packets;
 }
 
 pub fn randomPullResponse(
@@ -402,14 +392,13 @@ pub fn randomPullResponse(
         values[i] = value;
     }
 
-    const packets = try gossipDataToPackets(
+    return try gossipDataToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
         ChunkType.PullResponse,
     );
-    return packets;
 }
 
 /// note the contact info must have responded to a ping
@@ -487,14 +476,9 @@ pub fn randomPullRequestWithContactInfo(
         }
         filters.deinit();
     }
-    defer {
-        if (!invalid_filter) {
-            filter.filter.deinit();
-        }
-    }
+    defer if (!invalid_filter) filter.filter.deinit();
 
     // serialize and send as packet
     const msg = GossipMessage{ .PullRequest = .{ filter, contact_info } };
-    const packet = try serializeToPacket(msg, to_addr);
-    return packet;
+    return try serializeToPacket(msg, to_addr);
 }

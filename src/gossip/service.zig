@@ -100,6 +100,7 @@ const DEFAULT_EPOCH_DURATION = Duration.fromMillis(172_800_000);
 pub const VERIFY_PACKET_PARALLEL_TASKS = 4;
 
 const MAX_PROCESS_BATCH_SIZE = 64;
+const GOSSIP_PRNG_SEED = 19;
 
 /// The flow of data goes as follows:
 ///
@@ -401,14 +402,25 @@ pub const GossipService = struct {
         });
         exit_condition.ordered.exit_index += 1;
 
-        try self.service_manager.spawn("[gossip] verifyPackets", verifyPackets, .{ self, exit_condition });
+        try self.service_manager.spawn("[gossip] verifyPackets", verifyPackets, .{
+            self,
+            exit_condition,
+        });
         exit_condition.ordered.exit_index += 1;
 
-        try self.service_manager.spawn("[gossip] processMessages", processMessages, .{ self, 19, exit_condition });
+        try self.service_manager.spawn("[gossip] processMessages", processMessages, .{
+            self,
+            GOSSIP_PRNG_SEED,
+            exit_condition,
+        });
         exit_condition.ordered.exit_index += 1;
 
         if (!params.spy_node) {
-            try self.service_manager.spawn("[gossip] buildMessages", buildMessages, .{ self, 19, exit_condition });
+            try self.service_manager.spawn("[gossip] buildMessages", buildMessages, .{
+                self,
+                GOSSIP_PRNG_SEED,
+                exit_condition,
+            });
             exit_condition.ordered.exit_index += 1;
         }
 
@@ -1877,9 +1889,7 @@ pub const GossipService = struct {
             switch (result) {
                 // good and expected
                 .InsertedNewEntry => {},
-                .OverwroteExistingEntry => |*v| {
-                    v.deinit(deinit_allocator);
-                },
+                .OverwroteExistingEntry => |*v| v.deinit(deinit_allocator),
 
                 // concerning
                 .IgnoredOldValue => {

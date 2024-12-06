@@ -153,8 +153,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     // !
                     const result = try gossip_table.insert(signed_data, now);
                     defer {
-                        if (result == .OverwroteExistingEntry) {
-                            result.OverwroteExistingEntry.deinit(allocator);
+                        if (result.overwrittenEntry()) |entry| {
+                            entry.deinit(allocator);
                         } else if (!result.wasInserted()) {
                             data.deinit(allocator);
                         }
