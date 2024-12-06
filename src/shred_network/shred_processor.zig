@@ -33,7 +33,7 @@ pub fn runShredProcessor(
     verified_shred_receiver: *Channel(Packet),
     tracker: *BasicShredTracker,
     shred_inserter_: ShredInserter,
-    leader_schedule: sig.core.leader_schedule.SlotLeaderProvider,
+    leader_schedule: sig.core.leader_schedule.SlotLeaders,
 ) !void {
     const logger = logger_.withScope(LOG_SCOPE);
     var shred_inserter = shred_inserter_;
