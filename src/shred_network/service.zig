@@ -1,7 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../sig.zig");
-const shred_collector = @import("lib.zig");
+const shred_network = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -11,6 +11,7 @@ const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
 const GossipTable = sig.gossip.GossipTable;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
@@ -19,13 +20,14 @@ const Registry = sig.prometheus.Registry;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
+const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 
-const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
-const RepairPeerProvider = shred_collector.repair_service.RepairPeerProvider;
-const RepairRequester = shred_collector.repair_service.RepairRequester;
-const RepairService = shred_collector.repair_service.RepairService;
-const ShredReceiver = shred_collector.shred_receiver.ShredReceiver;
-const ShredReceiverMetrics = shred_collector.shred_receiver.ShredReceiverMetrics;
+const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
+const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
+const RepairRequester = shred_network.repair_service.RepairRequester;
+const RepairService = shred_network.repair_service.RepairService;
+const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
+const ShredReceiverMetrics = shred_network.shred_receiver.ShredReceiverMetrics;
 
 /// Settings which instruct the Shred Collector how to behave.
 pub const ShredCollectorConfig = struct {
@@ -49,9 +51,13 @@ pub const ShredCollectorDependencies = struct {
     gossip_table_rw: *RwMux(GossipTable),
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
+    my_contact_info: ThreadSafeContactInfo,
     leader_schedule: SlotLeaderProvider,
     shred_inserter: sig.ledger.ShredInserter,
-    retransmit_shred_sender: ?*Channel(Packet),
+    n_retransmit_threads: ?usize,
+    overwrite_turbine_stake_for_testing: bool,
+    leader_schedule_cache: *LeaderScheduleCache,
+    bank_fields: *const sig.accounts_db.snapshots.BankFields,
 };
 
 /// Start the Shred Collector.
@@ -80,6 +86,9 @@ pub fn start(
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
+    var retransmit_channel = try sig.sync.Channel(sig.net.Packet).init(deps.allocator);
+    defer retransmit_channel.deinit();
+
     // receiver (threads)
     const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
     const verified_shred_channel = try Channel(Packet).create(deps.allocator);
@@ -105,13 +114,13 @@ pub fn start(
     // verifier (thread)
     try service_manager.spawn(
         "Shred Verifier",
-        shred_collector.shred_verifier.runShredVerifier,
+        shred_network.shred_verifier.runShredVerifier,
         .{
             deps.exit,
             deps.registry,
             unverified_shred_channel,
             verified_shred_channel,
-            deps.retransmit_shred_sender,
+            &retransmit_channel,
             deps.leader_schedule,
         },
     );
@@ -127,7 +136,7 @@ pub fn start(
     // processor (thread)
     try service_manager.spawn(
         "Shred Processor",
-        shred_collector.shred_processor.runShredProcessor,
+        shred_network.shred_processor.runShredProcessor,
         .{
             deps.allocator,
             deps.exit,
@@ -138,6 +147,25 @@ pub fn start(
             deps.shred_inserter,
             deps.leader_schedule,
         },
+    );
+
+    // retransmitter (thread)
+    try service_manager.spawn(
+        "Shred Retransmitter",
+        shred_network.shred_retransmitter.runShredRetransmitter,
+        .{.{
+            .allocator = deps.allocator,
+            .my_contact_info = deps.my_contact_info,
+            .bank_fields = deps.bank_fields,
+            .leader_schedule_cache = deps.leader_schedule_cache,
+            .gossip_table_rw = deps.gossip_table_rw,
+            .receiver = &retransmit_channel,
+            .maybe_num_retransmit_threads = deps.n_retransmit_threads,
+            .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
+            .exit = deps.exit,
+            .rand = deps.random,
+            .logger = deps.logger.unscoped(),
+        }},
     );
 
     // repair (thread)
