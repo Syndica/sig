@@ -242,8 +242,6 @@ pub const BufferPool = struct {
 
     /// NOTE: we might want this to be a threadlocal for best performance? I don't think this field is threadsafe
     io_uring: if (builtin.os.tag == .linux) std.os.linux.IoUring else void,
-    /// pretty much a slice of each frame so that io_uring can efficiently write into them
-    iovecs: if (builtin.os.tag == .linux) []std.posix.iovec else void,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -280,7 +278,7 @@ pub const BufferPool = struct {
         const main_fifo_size = (num_frames * 90) / 100;
         const small_fifo_size = num_frames - main_fifo_size;
 
-        var io_uring, const iovecs = if (builtin.os.tag == .linux) blk: {
+        var io_uring = if (builtin.os.tag == .linux) blk: {
             // NOTE: this is pretty much a guess, maybe worth tweaking?
             // think this is a bit on the high end, libxev uses 256
             const io_uring_entries = 4096;
@@ -294,19 +292,9 @@ pub const BufferPool = struct {
             const iovecs = try allocator.alignedAlloc(std.posix.iovec, std.mem.page_size, num_frames);
             errdefer allocator.free(iovecs);
 
-            for (iovecs, frames) |*iov, *frame| iov.* = .{
-                .base = frame,
-                .len = FRAME_SIZE,
-            };
-            try io_uring.register_buffers(iovecs);
-
-            break :blk .{ io_uring, iovecs };
-        } else .{ {}, {} };
-
-        errdefer if (builtin.os.tag == .linux) {
-            io_uring.unregister_buffers() catch unreachable;
-            io_uring.deinit();
-        };
+            break :blk io_uring;
+        } else {};
+        errdefer if (builtin.os.tag == .linux) io_uring.deinit();
 
         return .{
             .allocator = allocator,
@@ -317,7 +305,6 @@ pub const BufferPool = struct {
             .file_frames = .{},
             .eviction_lfu = try S3_FIFO.init(allocator, small_fifo_size, main_fifo_size),
             .io_uring = io_uring,
-            .iovecs = iovecs,
         };
     }
 
@@ -478,6 +465,14 @@ pub const BufferPool = struct {
 
         const indeces = try self.makeIndeces(file_id, allocator, range_start, range_end);
 
+        var n_invalid: u32 = 0;
+        for (indeces) |idx| {
+            if (idx == INVALID_FRAME) n_invalid += 1;
+        }
+
+        const iovecs = try std.ArrayListUnmanaged(std.posix.iovec).initCapacity(allocator, n_invalid);
+        defer iovecs.deinit(allocator);
+
         // seek to first frame (offset rounds down to frame size)
         var file_offset: FileOffset = @intCast((range_start / FRAME_SIZE) * FRAME_SIZE);
 
@@ -497,7 +492,12 @@ pub const BufferPool = struct {
                     }
                 };
 
-                _ = try self.io_uring.read_fixed(idx.*, file.handle, &self.iovecs[idx.*], file_offset, @intCast(idx.*));
+                self.io_uring.read(
+                    idx.*,
+                    file.handle,
+                    .{ .buffer = &self.frames[idx.*] },
+                    file_offset,
+                );
                 sent_reads += 1;
 
                 try self.populateNewNoSize(idx.*, file_id, file_offset);
@@ -507,6 +507,9 @@ pub const BufferPool = struct {
                 }
             }
         }
+
+        if (sent_reads != n_invalid) unreachable;
+        if (n_invalid != iovecs.items.len) unreachable;
 
         for (indeces) |idx| self.eviction_lfu.read(idx, self.frames_metadata);
 
