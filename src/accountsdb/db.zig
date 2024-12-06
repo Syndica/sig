@@ -21,7 +21,6 @@ const AccountFile = sig.accounts_db.accounts_file.AccountFile;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const FileId = sig.accounts_db.accounts_file.FileId;
 
-const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
 const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const BankFields = sig.accounts_db.snapshots.BankFields;
@@ -274,6 +273,7 @@ pub const AccountsDB = struct {
         self: *Self,
         /// needs to be a thread-safe allocator
         allocator: std.mem.Allocator,
+        /// Must have been allocated with `self.allocator`.
         snapshot_fields_and_paths: *AllSnapshotFields,
         n_threads: u32,
         validate: bool,
@@ -281,7 +281,7 @@ pub const AccountsDB = struct {
         should_fastload: bool,
         save_index: bool,
     ) !SnapshotFields {
-        const snapshot_fields = try snapshot_fields_and_paths.collapse();
+        const snapshot_fields = try snapshot_fields_and_paths.collapse(self.allocator);
 
         if (should_fastload) {
             var timer = try sig.time.Timer.start();
@@ -318,7 +318,7 @@ pub const AccountsDB = struct {
                     .accounts_hash = snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
                     .capitalization = full_snapshot.bank_fields.capitalization,
                 },
-                .expected_incremental = if (snapshot_fields.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+                .expected_incremental = if (snapshot_fields.bank_extra.snapshot_persistence) |inc_persistence| .{
                     .accounts_hash = inc_persistence.incremental_hash,
                     .capitalization = inc_persistence.incremental_capitalization,
                 } else null,
@@ -2602,14 +2602,14 @@ pub const AccountsDB = struct {
         };
         defer archive_file.close();
 
-        const SerializableFileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
+        const SerializableFileMap = AccountsDbFields.FileMap;
 
-        var serializable_file_map = SerializableFileMap.init(self.allocator);
-        defer serializable_file_map.deinit();
+        var serializable_file_map: SerializableFileMap = .{};
+        defer serializable_file_map.deinit(self.allocator);
         var bank_hash_stats = BankHashStats.zero_init;
 
         // collect account files into serializable_file_map and compute bank_hash_stats
-        try serializable_file_map.ensureTotalCapacity(file_map.count());
+        try serializable_file_map.ensureTotalCapacity(self.allocator, file_map.count());
         for (file_map.values()) |account_file| {
             if (account_file.slot > params.target_slot) continue;
 
@@ -2618,8 +2618,6 @@ pub const AccountsDB = struct {
 
             if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
                 bank_hash_stats.accumulate(other_stats);
-            } else {
-                self.logger.warn().logf("No bank hash stats for slot {}.", .{account_file.slot});
             }
 
             serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
@@ -2642,11 +2640,17 @@ pub const AccountsDB = struct {
                     .accounts_hash = full_hash,
                     .stats = bank_hash_stats,
                 },
-                .rooted_slots = .{},
-                .rooted_slot_hashes = .{},
+                .rooted_slots = &.{},
+                .rooted_slot_hashes = &.{},
             },
-            .lamports_per_signature = params.lamports_per_signature,
-            .bank_fields_inc = .{}, // default to null for full snapshot,
+            .bank_extra = .{
+                .lamports_per_signature = params.lamports_per_signature,
+                // default to null for full snapshot,
+                .snapshot_persistence = null,
+                .epoch_accounts_hash = null,
+                .versioned_epoch_stakes = .{},
+                .accounts_lt_hash = null,
+            },
         };
 
         // main snapshot writing logic
@@ -2814,14 +2818,14 @@ pub const AccountsDB = struct {
         };
         defer archive_file.close();
 
-        const SerializableFileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
+        const SerializableFileMap = AccountsDbFields.FileMap;
 
         var serializable_file_map: SerializableFileMap, //
         const bank_hash_stats: BankHashStats //
         = blk: {
-            var serializable_file_map = SerializableFileMap.init(self.allocator);
-            errdefer serializable_file_map.deinit();
-            try serializable_file_map.ensureTotalCapacity(file_map.count());
+            var serializable_file_map: SerializableFileMap = .{};
+            errdefer serializable_file_map.deinit(self.allocator);
+            try serializable_file_map.ensureTotalCapacity(self.allocator, file_map.count());
 
             var bank_hash_stats = BankHashStats.zero_init;
             for (file_map.values()) |account_file| {
@@ -2833,8 +2837,6 @@ pub const AccountsDB = struct {
 
                 if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
                     bank_hash_stats.accumulate(other_stats);
-                } else {
-                    self.logger.warn().logf("No bank hash stats for slot {}.", .{account_file.slot});
                 }
 
                 serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
@@ -2845,7 +2847,7 @@ pub const AccountsDB = struct {
 
             break :blk .{ serializable_file_map, bank_hash_stats };
         };
-        defer serializable_file_map.deinit();
+        defer serializable_file_map.deinit(self.allocator);
 
         const snap_persistence: BankIncrementalSnapshotPersistence = .{
             .full_slot = full_snapshot_info.slot,
@@ -2868,13 +2870,16 @@ pub const AccountsDB = struct {
                     .accounts_hash = Hash.ZEROES,
                     .stats = bank_hash_stats,
                 },
-                .rooted_slots = .{},
-                .rooted_slot_hashes = .{},
+                .rooted_slots = &.{},
+                .rooted_slot_hashes = &.{},
             },
-            .lamports_per_signature = params.lamports_per_signature,
-            .bank_fields_inc = .{
+            .bank_extra = .{
+                .lamports_per_signature = params.lamports_per_signature,
                 .snapshot_persistence = snap_persistence,
-                // TODO: the other fields default to null, but this may not always be correct.
+                // TODO: the other fields default to empty/null, but this may not always be correct.
+                .epoch_accounts_hash = null,
+                .versioned_epoch_stakes = .{},
+                .accounts_lt_hash = null,
             },
         };
 
@@ -3197,7 +3202,7 @@ fn testWriteSnapshotFull(
     const snapshot_gen_info = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
         .bank_fields = &snap_fields.bank_fields,
-        .lamports_per_signature = snap_fields.lamports_per_signature,
+        .lamports_per_signature = snap_fields.bank_extra.lamports_per_signature,
         .old_snapshot_action = .ignore_old,
         .deprecated_stored_meta_write_version = snap_fields.accounts_db_fields.stored_meta_write_version,
     });
@@ -3236,7 +3241,7 @@ fn testWriteSnapshotIncremental(
     const snapshot_gen_info = try accounts_db.generateIncrementalSnapshot(.{
         .target_slot = slot,
         .bank_fields = &snap_fields.bank_fields,
-        .lamports_per_signature = snap_fields.lamports_per_signature,
+        .lamports_per_signature = snap_fields.bank_extra.lamports_per_signature,
         .old_snapshot_action = .delete_old,
         .deprecated_stored_meta_write_version = snap_fields.accounts_db_fields.stored_meta_write_version,
     });
@@ -3358,7 +3363,7 @@ fn loadTestAccountsDB(
     var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
     errdefer snapshots.deinit(allocator);
 
-    const snapshot = try snapshots.collapse();
+    const snapshot = try snapshots.collapse(allocator);
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
@@ -3429,7 +3434,7 @@ test "geyser stream on load" {
         _ = reader_handle.join();
     }
 
-    const snapshot = try snapshots.collapse();
+    const snapshot = try snapshots.collapse(allocator);
     defer snapshots.deinit(allocator);
 
     var accounts_db = try AccountsDB.init(.{
@@ -3506,7 +3511,7 @@ test "load and validate from test snapshot" {
             .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
             .capitalization = snapshots.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+        .expected_incremental = if (snapshots.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
             .accounts_hash = inc_persistence.incremental_hash,
             .capitalization = inc_persistence.incremental_capitalization,
         } else null,
@@ -3529,7 +3534,7 @@ test "load and validate from test snapshot using disk index" {
             .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
             .capitalization = snapshots.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+        .expected_incremental = if (snapshots.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
             .accounts_hash = inc_persistence.incremental_hash,
             .capitalization = inc_persistence.incremental_capitalization,
         } else null,
@@ -3552,7 +3557,7 @@ test "load and validate from test snapshot parallel" {
             .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
             .capitalization = snapshots.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (snapshots.incremental.?.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+        .expected_incremental = if (snapshots.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
             .accounts_hash = inc_persistence.incremental_hash,
             .capitalization = inc_persistence.incremental_capitalization,
         } else null,
@@ -4223,7 +4228,7 @@ test "generate snapshot & update gossip snapshot hashes" {
     try std.testing.expectEqual(all_snapshot_fields.full.accounts_db_fields.bank_hash_info.accounts_hash, full_gen_result.hash);
     try std.testing.expectEqual(all_snapshot_fields.full.bank_fields.capitalization, full_gen_result.capitalization);
 
-    try std.testing.expectEqual(all_snapshot_fields.incremental.?.bank_fields_inc.snapshot_persistence.?, inc_gen_result);
+    try std.testing.expectEqual(all_snapshot_fields.incremental.?.bank_extra.snapshot_persistence.?, inc_gen_result);
 
     try std.testing.expectEqual(full_slot, inc_gen_result.full_slot);
     try std.testing.expectEqual(full_gen_result.hash, inc_gen_result.full_hash);
@@ -4335,7 +4340,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
         var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
         defer snapshots.deinit(allocator);
-        const snapshot = try snapshots.collapse();
+        const snapshot = try snapshots.collapse(allocator);
 
         var accounts_db = try AccountsDB.init(.{
             .allocator = allocator,
@@ -4364,7 +4369,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .accounts_hash = snapshot.accounts_db_fields.bank_hash_info.accounts_hash,
                 .capitalization = full_snapshot.bank_fields.capitalization,
             },
-            .expected_incremental = if (snapshot.bank_fields_inc.snapshot_persistence) |inc_persistence| .{
+            .expected_incremental = if (snapshot.bank_extra.snapshot_persistence) |inc_persistence| .{
                 .accounts_hash = inc_persistence.incremental_hash,
                 .capitalization = inc_persistence.incremental_capitalization,
             } else null,
