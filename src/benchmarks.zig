@@ -76,12 +76,10 @@ fn exitWithUsage() noreturn {
 /// zig build benchmark -- gossip
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
-    var std_logger = try sig.trace.ChannelPrintLogger.init(.{
-        .allocator = allocator,
-        .max_level = .info, // NOTE: change to debug to see all logs
-        .max_buffer = 1 << 15,
-    });
-    defer std_logger.deinit();
+    var std_logger = sig.trace.DirectPrintLogger.init(
+        allocator,
+        .info, // NOTE: change to debug to see all logs
+    );
     const logger = std_logger.logger();
 
     if (builtin.mode == .Debug) logger.warn().log("running benchmark in Debug mode");
