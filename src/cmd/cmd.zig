@@ -58,8 +58,6 @@ const gossip_value_gpa_allocator = if (builtin.mode == .Debug)
 else
     std.heap.c_allocator;
 
-const base58Encoder = base58.Encoder.init(.{});
-
 // The identifier for the scoped logger used in this file.
 const LOG_SCOPE = "cmd";
 
@@ -685,19 +683,11 @@ pub fn run() !void {
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    var std_logger = try ChannelPrintLogger.init(.{
-        .allocator = gpa_allocator,
-        .max_level = config.current.log_level,
-        .max_buffer = 1 << 20,
-    });
-    defer std_logger.deinit();
-
-    const logger = std_logger.logger();
-
+    const logger = try spawnLogger();
+    defer logger.deinit();
     const keypair = try getOrInitIdentity(gpa_allocator, logger);
-    var pubkey: [50]u8 = undefined;
-    const size = try base58Encoder.encode(&keypair.public_key.toBytes(), &pubkey);
-    try std.io.getStdErr().writer().print("Identity: {s}\n", .{pubkey[0..size]});
+    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    try std.io.getStdOut().writer().print("Identity: {s}\n", .{pubkey});
 }
 
 /// entrypoint to run only gossip

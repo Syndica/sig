@@ -51,3 +51,39 @@ pub fn PeekableReader(comptime ReaderType: type) type {
         }
     };
 }
+
+pub fn NarrowAnyWriter(comptime WriteError: type) type {
+    return NarrowAnyStream(WriteError).Writer;
+}
+/// Returns a wrapper over the `AnyWriter` which narrows the error set from `anyerror`.
+pub fn narrowAnyWriter(
+    any_writer: std.io.AnyWriter,
+    comptime WriteError: type,
+) NarrowAnyWriter(WriteError) {
+    return .{ .context = any_writer };
+}
+
+pub fn NarrowAnyReader(comptime ReadError: type) type {
+    return NarrowAnyStream(ReadError).Reader;
+}
+/// Returns a wrapper over the `AnyReader` which narrows the error set from `anyerror`.
+pub fn narrowAnyReader(
+    any_reader: std.io.AnyReader,
+    comptime ReadError: type,
+) NarrowAnyReader(ReadError) {
+    return .{ .context = any_reader };
+}
+
+fn NarrowAnyStream(comptime Error: type) type {
+    return struct {
+        const Writer = std.io.GenericWriter(std.io.AnyWriter, Error, write);
+        fn write(any_writer: std.io.AnyWriter, bytes: []const u8) Error!usize {
+            return @errorCast(any_writer.write(bytes));
+        }
+
+        const Reader = std.io.GenericReader(std.io.AnyReader, Error, read);
+        fn read(any_reader: std.io.AnyReader, buffer: []u8) Error!usize {
+            return @errorCast(any_reader.read(buffer));
+        }
+    };
+}

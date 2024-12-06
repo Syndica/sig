@@ -80,7 +80,7 @@ pub const ThreadPool = struct {
     /// The user provides a `callback` which is invoked when the *Task can run on a thread.
     pub const Task = struct {
         node: Node = .{},
-        callback: *const (fn (*Task) void),
+        callback: *const fn (*Task) void,
     };
 
     /// An unordered collection of Tasks which can be submitted for scheduling as a group.
