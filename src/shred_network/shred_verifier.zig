@@ -33,7 +33,7 @@ pub fn runShredVerifier(
         unverified_shred_receiver.len() != 0)
     {
         var packet_count: usize = 0;
-        while (unverified_shred_receiver.receive()) |packet| {
+        while (unverified_shred_receiver.tryReceive()) |packet| {
             packet_count += 1;
             metrics.received_count.inc();
             if (verifyShred(&packet, leader_schedule, &verified_merkle_roots, metrics)) |_| {

@@ -57,13 +57,13 @@ pub fn sendSocket(
     const logger = logger_.withScope(LOG_SCOPE);
     defer {
         // empty the channel
-        while (outgoing_channel.receive()) |_| {}
+        while (outgoing_channel.tryReceive()) |_| {}
         exit.afterExit();
         logger.debug().log("sendSocket loop closed");
     }
 
     while (exit.shouldRun()) {
-        while (outgoing_channel.receive()) |p| {
+        while (outgoing_channel.tryReceive()) |p| {
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                 logger.debug().logf("send_socket error: {s}", .{@errorName(e)});
                 continue;
@@ -208,7 +208,7 @@ pub fn benchmarkChannelRecv(
 ) !void {
     var count: usize = 0;
     while (count < n_values_to_receive) {
-        if (channel.receive()) |i| {
+        if (channel.tryReceive()) |i| {
             std.mem.doNotOptimizeAway(i);
             count += 1;
         }
