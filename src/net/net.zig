@@ -259,16 +259,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    /// returns:
-    /// - array: the string, plus some extra bytes at the end
-    /// - integer: length of the string within the array
-    pub fn toString(self: Self) struct { [53]u8, usize } {
-        var buf: [53]u8 = undefined;
-        const len = self.toStringBuf(&buf);
-        return .{ buf, len };
-    }
-
-    pub fn toStringBounded(self: Self) std.BoundedArray(u8, 53) {
+    pub fn toString(self: Self) std.BoundedArray(u8, 53) {
         var buf: [53]u8 = undefined;
         const len = self.toStringBuf(&buf);
         return std.BoundedArray(u8, 53).fromSlice(buf[0..len]) catch unreachable;

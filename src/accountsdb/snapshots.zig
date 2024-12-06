@@ -1457,6 +1457,13 @@ pub const StatusCache = struct {
         return readFromFile(allocator, status_cache_file);
     }
 
+    /// opens the status cache using path {dir}/snapshots/status_cache
+    pub fn initFromDir(allocator: std.mem.Allocator, dir: std.fs.Dir) !StatusCache {
+        const status_cache_file = try dir.openFile("snapshots/status_cache", .{});
+        defer status_cache_file.close();
+        return readFromFile(allocator, status_cache_file);
+    }
+
     pub fn readFromFile(allocator: std.mem.Allocator, file: std.fs.File) !StatusCache {
         return decodeFromBincode(allocator, file.reader());
     }
