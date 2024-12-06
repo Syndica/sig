@@ -1189,9 +1189,11 @@ pub const ExtraFields = struct {
 
                     .snapshot_persistence,
                     .epoch_accounts_hash,
-                    .versioned_epoch_stakes,
                     .accounts_lt_hash,
                     => bincode.read(assert_allocator, field.type, reader, params),
+
+                    .versioned_epoch_stakes,
+                    => bincode.read(allocator, field.type, reader, params),
                 } catch |err| switch (err) {
                     error.EndOfStream => break :until_eof,
                     else => |e| return e,
