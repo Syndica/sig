@@ -38,9 +38,9 @@ pub const Config = struct {
 pub const current: *Config = &default_validator_config;
 var default_validator_config: Config = .{};
 
-const IdentityConfig = struct {};
+pub const IdentityConfig = struct {};
 
-const GossipConfig = struct {
+pub const GossipConfig = struct {
     host: ?[]const u8 = null,
     port: u16 = 8001,
     entrypoints: [][]const u8 = &.{},
@@ -113,7 +113,7 @@ pub const Network = enum {
     }
 };
 
-const shred_network_defaults = ShredCollectorConfig{
+pub const shred_network_defaults = ShredCollectorConfig{
     .turbine_recv_port = 8002,
     .repair_port = 8003,
     .start_slot = null,
