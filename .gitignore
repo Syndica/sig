@@ -1,19 +1,15 @@
-.zig-cache/
-zig-cache/
-zig-out/
-data/
+# build outputs
+/.zig-cache
+/zig-cache
+/zig-out
 
-results/
-/validator/
-alt_validator/
-/ledger/
-alt_ledger/
-index_storage/
-kcov-output/
-.vscode/
-
-/gossip-dumps
-
-**/.DS_Store
-
+# sig outputs
 /data/test-state
+/gossip-dumps
+/kcov-output
+/results
+/validator
+
+# desktop app config
+.DS_Store
+.vscode/
