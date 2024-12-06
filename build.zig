@@ -181,6 +181,7 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("zig-network", zig_network_module);
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
+    benchmark_exe.root_module.addImport("curl", curl_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
     switch (blockstore_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
