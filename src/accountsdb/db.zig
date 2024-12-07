@@ -640,7 +640,7 @@ test "BufferPool readBlocking" {
         0,
         1000,
     );
-    defer read.release(allocator);
+    defer read.deinit(allocator);
 }
 
 test "BufferPool readIoUringSubmitAndWait" {
@@ -661,7 +661,7 @@ test "BufferPool readIoUringSubmitAndWait" {
         0,
         1000,
     );
-    defer read.release(allocator);
+    defer read.deinit(allocator);
 }
 
 test "BufferPool basic usage" {
@@ -677,34 +677,73 @@ test "BufferPool basic usage" {
     var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
 
     const read = try bp.read(fba.allocator(), @as(Slot, 301285806), FileId.fromInt(3771301), 0, 1000);
-    defer read.release(fba.allocator());
+    defer read.deinit(fba.allocator());
 
     try std.testing.expectEqual(2, read.indices.len);
     for (read.indices) |idx| try std.testing.expect(idx != BufferPool.INVALID_FRAME);
 
-    // in actual use, avoid copying like this
+    {
+        var iter1 = read.iterator();
+        const data = try iter1.reader().readAllAlloc(allocator, 1000);
+        defer allocator.free(data);
+        try std.testing.expectEqual(1000, data.len);
 
-    const buf = try allocator.alloc(u8, 1000);
-    defer allocator.free(buf);
+        var iter2 = read.iterator();
 
-    const bytes_read = try read.readBytes(buf);
-    try std.testing.expectEqual(1000, bytes_read);
-
-    // const data = try read.reader().readAllAlloc(allocator, 10_000);
-    // defer allocator.free(data);
+        var bytes_read: usize = 0;
+        while (iter2.next()) |byte| : (bytes_read += 1) {
+            _ = byte;
+        }
+        try std.testing.expectEqual(1000, bytes_read);
+    }
 }
 
 /// slice-like datatype
 /// view over one or more buffers owned by the BufferPool
 pub const CachedRead = struct {
-    const Reader = std.io.GenericReader(CachedRead, error{}, readBytes);
-
     bp: *BufferPool,
     indices: []const BufferPool.FrameIndex,
     /// inclusive
     start_offset: BufferPool.FileOffset,
     /// exclusive
     end_offset: BufferPool.FileOffset,
+
+    pub const Iterator = struct {
+        cached_read: *const CachedRead,
+        bytes_read: u32 = 0,
+
+        const Reader = std.io.GenericReader(*Iterator, error{}, readBytes);
+
+        pub fn next(self: *Iterator) ?u8 {
+            if (self.bytes_read == self.cached_read.len()) {
+                return null;
+            }
+            self.bytes_read += 1;
+            return self.cached_read.readByte(self.bytes_read);
+        }
+
+        pub fn reset(self: *Iterator) void {
+            self.bytes_read = 0;
+        }
+
+        pub fn readBytes(self: *Iterator, buffer: []u8) error{}!usize {
+            const bytes_read: u32 = for (0.., buffer) |idx, *byte| {
+                const offset = idx + self.cached_read.start_offset + self.bytes_read;
+                if (offset > self.cached_read.end_offset) {
+                    break @intCast(idx - 1);
+                }
+                byte.* = self.cached_read.readByte(idx);
+            } else @intCast(buffer.len);
+
+            self.bytes_read += bytes_read;
+
+            return bytes_read;
+        }
+
+        pub fn reader(self: *Iterator) Reader {
+            return .{ .context = self };
+        }
+    };
 
     pub fn readByte(self: CachedRead, idx: usize) u8 {
         const offset = idx + self.start_offset;
@@ -714,24 +753,12 @@ pub const CachedRead = struct {
         return self.bp.frames[self.indices[offset / BufferPool.FRAME_SIZE]][offset % BufferPool.FRAME_SIZE];
     }
 
-    pub fn readBytes(self: CachedRead, buffer: []u8) error{}!usize {
-        const bytes_read: usize = for (0.., buffer) |idx, *byte| {
-            const offset = idx + self.start_offset;
-            if (offset > self.end_offset) {
-                break idx - 1;
-            }
-            byte.* = self.readByte(idx);
-        } else buffer.len;
-
-        return bytes_read;
-    }
-
-    pub fn reader(self: CachedRead) Reader {
-        return .{ .context = self };
+    pub fn iterator(self: *const CachedRead) Iterator {
+        return .{ .cached_read = self };
     }
 
     pub fn len(self: CachedRead) u32 {
-        self.end_offset - self.start_offset;
+        return self.end_offset - self.start_offset;
     }
 
     pub fn deinit(self: CachedRead, allocator: std.mem.Allocator) void {
