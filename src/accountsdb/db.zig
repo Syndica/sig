@@ -694,10 +694,8 @@ test "BufferPool basic usage" {
     // defer allocator.free(data);
 }
 
-/// slice-ish d\atatype
+/// slice-like datatype
 /// view over one or more buffers owned by the BufferPool
-/// Trivially copyable, however make sure to use .borrow() and .release()
-/// appropriately.
 pub const CachedRead = struct {
     const Reader = std.io.GenericReader(CachedRead, error{}, readBytes);
 
@@ -736,36 +734,16 @@ pub const CachedRead = struct {
         self.end_offset - self.start_offset;
     }
 
-    pub fn release(self: CachedRead, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: CachedRead, allocator: std.mem.Allocator) void {
         for (self.indices) |frame_index| {
             if (frame_index == BufferPool.INVALID_FRAME) unreachable;
 
             if (self.bp.frames_metadata.rc[frame_index].release()) {
-                // frame is now dead
+                // dead frame, clean up metadata
+                self.bp.frames_metadata.freq[frame_index] = 0;
+                self.bp.frames_metadata.size[frame_index] = 0;
+                self.bp.frames_metadata.in_queue[frame_index] = .none;
             }
-        }
-        self.destroy(allocator);
-    }
-
-    pub fn borrow(self: CachedRead) CachedRead {
-        for (self.indices) |frame_index| {
-            if (frame_index == BufferPool.INVALID_FRAME) unreachable;
-
-            if (!self.bp.frames_metadata.rc[frame_index].acquire()) {
-                @panic("attempted borrow on dead read frame");
-            }
-        }
-        return self;
-    }
-
-    fn destroy(self: CachedRead, allocator: std.mem.Allocator) void {
-        // TODO: can do atomically
-        for (self.indices) |frame_index| {
-            if (frame_index == BufferPool.INVALID_FRAME) unreachable;
-
-            self.bp.frames_metadata.freq[frame_index] = 0;
-            self.bp.frames_metadata.size[frame_index] = 0;
-            self.bp.frames_metadata.in_queue[frame_index] = .none;
         }
         allocator.free(self.indices);
     }
