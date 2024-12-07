@@ -284,16 +284,10 @@ pub const BufferPool = struct {
             // think this is a bit on the high end, libxev uses 256
             const io_uring_entries = 4096;
 
-            var io_uring = try std.os.linux.IoUring.init(
+            break :blk try std.os.linux.IoUring.init(
                 io_uring_entries,
                 0,
             );
-            errdefer io_uring.deinit();
-
-            const iovecs = try allocator.alignedAlloc(std.posix.iovec, std.mem.page_size, num_frames);
-            errdefer allocator.free(iovecs);
-
-            break :blk io_uring;
         } else {};
         errdefer if (builtin.os.tag == .linux) io_uring.deinit();
 
@@ -323,11 +317,7 @@ pub const BufferPool = struct {
         allocator.free(self.frames_metadata.rc);
         allocator.free(self.frames_metadata.size);
         if (builtin.os.tag == .linux) {
-            self.io_uring.unregister_buffers() catch {
-                @panic("tried to unregister unregistered buffers");
-            };
             self.io_uring.deinit();
-            allocator.free(self.iovecs);
         }
         self.free_list.deinit(allocator);
         self.eviction_lfu.deinit(allocator);
@@ -471,9 +461,6 @@ pub const BufferPool = struct {
             if (idx == INVALID_FRAME) n_invalid += 1;
         }
 
-        const iovecs = try std.ArrayListUnmanaged(std.posix.iovec).initCapacity(allocator, n_invalid);
-        defer iovecs.deinit(allocator);
-
         // seek to first frame (offset rounds down to frame size)
         var file_offset: FileOffset = @intCast((range_start / FRAME_SIZE) * FRAME_SIZE);
 
@@ -493,7 +480,7 @@ pub const BufferPool = struct {
                     }
                 };
 
-                self.io_uring.read(
+                _ = try self.io_uring.read(
                     idx.*,
                     file.handle,
                     .{ .buffer = &self.frames[idx.*] },
@@ -508,9 +495,7 @@ pub const BufferPool = struct {
                 }
             }
         }
-
         if (sent_reads != n_invalid) unreachable;
-        if (n_invalid != iovecs.items.len) unreachable;
 
         for (indices) |idx| self.eviction_lfu.read(idx, self.frames_metadata);
 
@@ -621,24 +606,23 @@ test "BufferPool indicesRequired" {
     }
 }
 
-// currently fails at higher frame_counts on linux because of io_uring's max registered iovecs
-// test "BufferPool init deinit" {
-//     const allocator = std.testing.allocator;
+test "BufferPool init deinit" {
+    const allocator = std.testing.allocator;
 
-//     var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
-//     defer snapshot_dir.close();
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
+    defer snapshot_dir.close();
 
-//     for (0.., &[_]u32{
-//         2,     3,     4,     8,
-//         16,    32,    256,   4096,
-//         16384, 16385, 24576, 32767,
-//         32768, 49152, 65535, 65536,
-//     }) |i, frame_count| {
-//         errdefer std.debug.print("failed on case(i={}): {}", .{ i, frame_count });
-//         var bp = try BufferPool.init(allocator, snapshot_dir, frame_count);
-//         bp.deinit();
-//     }
-// }
+    for (0.., &[_]u32{
+        2,     3,     4,     8,
+        16,    32,    256,   4096,
+        16384, 16385, 24576, 32767,
+        32768, 49152, 65535, 65536,
+    }) |i, frame_count| {
+        errdefer std.debug.print("failed on case(i={}): {}", .{ i, frame_count });
+        var bp = try BufferPool.init(allocator, snapshot_dir, frame_count);
+        bp.deinit();
+    }
+}
 
 test "BufferPool readBlocking" {
     const allocator = std.testing.allocator;
@@ -737,13 +721,10 @@ pub const CachedRead = struct {
         const bytes_read: usize = for (0.., buffer) |idx, *byte| {
             const offset = idx + self.start_offset;
             if (offset > self.end_offset) {
-                std.debug.print("breaked at idx: {}\n", .{idx});
                 break idx - 1;
             }
             byte.* = self.readByte(idx);
         } else buffer.len;
-
-        std.debug.print("returned bytes_read: {}\n", .{bytes_read});
 
         return bytes_read;
     }
