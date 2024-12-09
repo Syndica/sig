@@ -344,6 +344,25 @@ pub const Client = struct {
         return self.sendFetchRequest(allocator, types.RpcVersionInfo, request, .{});
     }
 
+    const GetVoteAccountsConfig = struct {
+        commitment: ?types.Commitment = null,
+        votePubkey: ?Pubkey = null,
+        keepUnstakedDelinquents: ?bool = null,
+        delinquintSlotDistance: ?u64 = null,
+    };
+
+    pub fn getVoteAccounts(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        config: GetVoteAccountsConfig,
+    ) !Response(types.GetVoteAccountsResponse) {
+        var request = try Request.init(allocator, "getVoteAccounts");
+        defer request.deinit();
+        try request.addConfig(config);
+
+        return self.sendFetchRequest(allocator, types.GetVoteAccountsResponse, request, .{});
+    }
+
     /// Sends a JSON-RPC request to the HTTP endpoint and parses the response.
     /// If the request fails, it will be retried up to `max_retries` times, restarting the HTTP client
     /// if necessary. If the response fails to parse, an error will be returned.
@@ -577,4 +596,51 @@ test "getVersion" {
     const response = try client.getVersion(allocator);
     defer response.deinit();
     _ = try response.result();
+}
+
+test "getVoteAccounts response parses correctly" {
+    const response_json =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "result": {
+        \\    "current": [
+        \\      {
+        \\        "commission": 0,
+        \\        "epochVoteAccount": true,
+        \\        "epochCredits": [
+        \\          [1, 64, 0],
+        \\          [2, 192, 64]
+        \\        ],
+        \\        "nodePubkey": "B97CCUW3AEZFGy6uUg6zUdnNYvnVq5VG8PUtb2HayTDD",
+        \\        "lastVote": 147,
+        \\        "activatedStake": 42,
+        \\        "votePubkey": "3ZT31jkAGhUaw8jsy4bTknwBMP8i4Eueh52By4zXcsVw",
+        \\        "rootSlot": 100
+        \\      }
+        \\    ],
+        \\    "delinquent": []
+        \\  },
+        \\  "id": 1
+        \\}
+    ;
+
+    var response = try Response(types.GetVoteAccountsResponse).init(std.testing.allocator, .{});
+    try response.bytes.appendSlice(response_json);
+    defer response.deinit();
+    try response.parse();
+    const actual = try response.result();
+    const expected = types.GetVoteAccountsResponse{
+        .current = &.{.{
+            .commission = 0,
+            .epochVoteAccount = true,
+            .epochCredits = &.{ .{ 1, 64, 0 }, .{ 2, 192, 64 } },
+            .nodePubkey = try Pubkey.fromString("B97CCUW3AEZFGy6uUg6zUdnNYvnVq5VG8PUtb2HayTDD"),
+            .lastVote = 147,
+            .activatedStake = 42,
+            .votePubkey = try Pubkey.fromString("3ZT31jkAGhUaw8jsy4bTknwBMP8i4Eueh52By4zXcsVw"),
+            .rootSlot = 100,
+        }},
+        .delinquent = &.{},
+    };
+    try std.testing.expect(sig.utils.types.eql(expected, actual));
 }
