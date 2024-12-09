@@ -1424,8 +1424,11 @@ pub const GossipService = struct {
         }
 
         for (tasks) |*task| {
-            for (task.output.items) |output| {
-                try self.packet_outgoing_channel.send(output);
+            packet_loop: for (task.output.items) |output| {
+                self.packet_outgoing_channel.send(output) catch {
+                    self.logger.err().log("failed to send outgoing packet");
+                    break :packet_loop;
+                };
                 self.metrics.pull_responses_sent.add(1);
             }
             task.output_consumed.store(true, .release);
