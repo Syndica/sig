@@ -1271,12 +1271,8 @@ pub const GossipService = struct {
         task: Task,
         done: Atomic(bool) = Atomic(bool).init(false),
 
-        pub fn deinit(this: *PullRequestTask) error{OutputNotConsumed}!void {
-            if (this.output_consumed.load(.acquire)) {
-                this.output.deinit();
-            } else {
-                return error.OutputNotConsumed;
-            }
+        pub fn deinit(this: *PullRequestTask) void {
+            this.output.deinit();
         }
 
         pub fn callback(task: *Task) void {
@@ -1383,9 +1379,11 @@ pub const GossipService = struct {
         const n_valid_requests = valid_indexs.items.len;
         const tasks = try self.allocator.alloc(PullRequestTask, n_valid_requests);
         defer {
-            // SAFTEY: unreachable is used here because tasks are always consumed at the last
-            // for loop of this method
-            for (tasks) |*task| task.deinit() catch unreachable;
+            for (tasks) |*task| {
+                // assert: tasks are always consumed in the last for-loop of this method
+                std.debug.assert(task.output_consumed.load(.monotonic));
+                task.deinit();
+            }
             self.allocator.free(tasks);
         }
 
