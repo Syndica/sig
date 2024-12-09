@@ -686,6 +686,7 @@ pub const GossipService = struct {
                         const incorrect_destination = !prune_data.destination.equals(&self.my_pubkey);
                         if (too_old or incorrect_destination) {
                             self.metrics.prune_messages_dropped.add(1);
+                            prune_data.deinit(self.gossip_value_allocator);
                             continue;
                         }
                         try prune_messages.append(prune_data);
@@ -759,6 +760,9 @@ pub const GossipService = struct {
                 const elapsed = x_timer.read().asMillis();
                 self.metrics.handle_batch_prune_time.observe(elapsed);
 
+                for (prune_messages.items) |prune| {
+                    prune.deinit(self.gossip_value_allocator);
+                }
                 prune_messages.clearRetainingCapacity();
             }
 

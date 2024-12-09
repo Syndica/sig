@@ -128,6 +128,10 @@ pub const PruneData = struct {
         };
     }
 
+    pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+        allocator.free(self.prunes);
+    }
+
     const PruneSignableData = struct {
         pubkey: Pubkey,
         prunes: []const Pubkey,
