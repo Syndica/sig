@@ -137,13 +137,6 @@ pub const GossipTable = struct {
         pub fn wasInserted(self: InsertResult) bool {
             return self == .InsertedNewEntry or self == .OverwroteExistingEntry;
         }
-
-        pub fn overwrittenEntry(self: InsertResult) ?GossipData {
-            return switch (self) {
-                .OverwroteExistingEntry => |v| v,
-                else => null,
-            };
-        }
     };
 
     pub fn insert(self: *Self, value: SignedGossipData, now: u64) !InsertResult {

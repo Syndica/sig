@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-fn getVariant(
+pub fn getVariant(
     tagged_union: anytype,
     variant_tag: anytype,
 ) ?UnionFieldType(@TypeOf(tagged_union), variant_tag) {
@@ -12,7 +12,7 @@ fn getVariant(
         null;
 }
 
-fn UnionFieldType(TaggedUnion: type, variant_tag: anytype) type {
+pub fn UnionFieldType(TaggedUnion: type, variant_tag: anytype) type {
     const tag_name = @tagName(variant_tag);
     for (@typeInfo(TaggedUnion).Union.fields) |field| {
         if (std.mem.eql(u8, field.name, tag_name)) {

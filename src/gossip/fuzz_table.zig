@@ -14,6 +14,8 @@ const GossipKey = sig.gossip.data.GossipKey;
 const Signature = sig.core.Signature;
 const Duration = sig.time.Duration;
 
+const getVariant = sig.utils.types.getVariant;
+
 const TRIM_INTERVAL = Duration.fromSecs(2);
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
@@ -148,7 +150,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     // !
                     const result = try gossip_table.insert(signed_data, now);
                     defer {
-                        if (result.overwrittenEntry()) |entry| {
+                        if (getVariant(result, .OverwroteExistingEntry)) |entry| {
                             entry.deinit(allocator);
                         } else if (!result.wasInserted()) {
                             data.deinit(allocator);
