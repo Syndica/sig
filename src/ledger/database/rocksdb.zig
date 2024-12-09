@@ -25,14 +25,14 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         db: rocks.DB,
         logger: ScopedLogger(LOG_SCOPE),
         cf_handles: []const rocks.ColumnFamilyHandle,
-        path: []const u8,
+        path: [:0]const u8,
 
         const Self = @This();
 
         pub fn open(allocator: Allocator, logger_: Logger, path: []const u8) Error!Self {
             const logger = logger_.withScope(LOG_SCOPE);
             logger.info().log("Initializing RocksDB");
-            const owned_path = try allocator.dupe(u8, path);
+            const owned_path = try std.fmt.allocPrintZ(allocator, "{s}/rocksdb", .{path});
 
             // allocate cf descriptions
             const column_family_descriptions = try allocator
@@ -53,7 +53,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 rocks.DB.open,
                 .{
                     allocator,
-                    path,
+                    owned_path,
                     .{ .create_if_missing = true, .create_missing_column_families = true },
                     column_family_descriptions,
                 },
