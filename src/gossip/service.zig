@@ -491,7 +491,7 @@ pub const GossipService = struct {
     fn verifyPackets(self: *Self, exit_condition: ExitCondition) !void {
         defer {
             // empty the channel
-            while (self.packet_incoming_channel.receive()) |_| {}
+            while (self.packet_incoming_channel.tryReceive()) |_| {}
             // trigger the next service in the chain to close
             exit_condition.afterExit();
             self.logger.debug().log("verifyPackets loop closed");
@@ -515,7 +515,7 @@ pub const GossipService = struct {
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
             var task_search_start_idx: usize = 0;
-            while (self.packet_incoming_channel.receive()) |packet| {
+            while (self.packet_incoming_channel.tryReceive()) |packet| {
                 defer self.metrics.gossip_packets_received_total.inc();
 
                 const acquired_task_idx = VerifyMessageTask.awaitAndAcquireFirstAvailableTask(tasks, task_search_start_idx);
@@ -568,7 +568,7 @@ pub const GossipService = struct {
     pub fn processMessages(self: *Self, seed: u64, exit_condition: ExitCondition) !void {
         defer {
             // empty the channel and release the memory
-            while (self.verified_incoming_channel.receive()) |message| {
+            while (self.verified_incoming_channel.tryReceive()) |message| {
                 bincode.free(self.gossip_value_allocator, message.message);
             }
             // even if we fail, trigger the next thread to close
@@ -608,7 +608,7 @@ pub const GossipService = struct {
         // - there isn't any data to process in the input channel, in order to block the join until we've finished
         while (exit_condition.shouldRun()) {
             var msg_count: usize = 0;
-            while (self.verified_incoming_channel.receive()) |message| {
+            while (self.verified_incoming_channel.tryReceive()) |message| {
                 msg_count += 1;
                 switch (message.message) {
                     .PushMessage => |*push| {
@@ -2748,7 +2748,7 @@ test "handle pull request" {
     {
         const outgoing_packets = gossip_service.packet_outgoing_channel;
 
-        while (outgoing_packets.receive()) |response_packet| {
+        while (outgoing_packets.tryReceive()) |response_packet| {
             const message = try bincode.readFromSlice(
                 allocator,
                 GossipMessage,
@@ -2827,7 +2827,7 @@ test "test build prune messages and handle push messages" {
     }
 
     try gossip_service.handleBatchPushMessages(&msgs);
-    var packet = gossip_service.packet_outgoing_channel.receive() orelse return error.ChannelEmpty;
+    var packet = gossip_service.packet_outgoing_channel.tryReceive() orelse return error.ChannelEmpty;
     const message = try bincode.readFromSlice(
         allocator,
         GossipMessage,
@@ -3143,7 +3143,7 @@ test "test packet verification" {
 
     var msg_count: usize = 0;
     while (msg_count < 4) {
-        if (verified_channel.receive()) |msg| {
+        if (verified_channel.tryReceive()) |msg| {
             defer bincode.free(gossip_service.allocator, msg);
             try std.testing.expect(msg.message.PushMessage[0].equals(&id));
             msg_count += 1;
@@ -3238,7 +3238,7 @@ test "process contact info push packet" {
 
     // the ping message we sent, processed into a pong
     try std.testing.expectEqual(1, responder_channel.len());
-    const out_packet = responder_channel.receive().?;
+    const out_packet = responder_channel.tryReceive().?;
     const out_msg = try bincode.readFromSlice(std.testing.allocator, GossipMessage, &out_packet.data, .{});
     defer bincode.free(std.testing.allocator, out_msg);
     try std.testing.expect(out_msg == .PongMessage);

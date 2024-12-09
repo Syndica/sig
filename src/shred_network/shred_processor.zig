@@ -47,7 +47,7 @@ pub fn runShredProcessor(
     {
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
-        while (verified_shred_receiver.receive()) |packet| {
+        while (verified_shred_receiver.tryReceive()) |packet| {
             processShred(
                 allocator,
                 tracker,

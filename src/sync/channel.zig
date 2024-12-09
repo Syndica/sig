@@ -11,6 +11,8 @@ pub fn Channel(T: type) type {
         tail: Position,
         closed: Atomic(bool) = Atomic(bool).init(false),
         allocator: Allocator,
+        mutex: std.Thread.Mutex = .{},
+        condition: std.Thread.Condition = .{},
 
         const Self = @This();
         const BLOCK_CAP = 31;
@@ -99,7 +101,15 @@ pub fn Channel(T: type) type {
             return channel;
         }
 
+        pub fn close(channel: *Self) void {
+            channel.closed.store(true, .monotonic);
+            channel.condition.broadcast();
+        }
+
         pub fn send(channel: *Self, value: T) !void {
+            if (channel.closed.load(.monotonic)) {
+                return error.ChannelClosed;
+            }
             var backoff: Backoff = .{};
             var tail = channel.tail.index.load(.acquire);
             var block = channel.tail.block.load(.acquire);
@@ -153,12 +163,65 @@ pub fn Channel(T: type) type {
                     // Release the exclusive lock on the slot's value, which allows a consumer
                     // to read the data we've just assigned.
                     _ = slot.state.fetchOr(WRITTEN_TO, .release);
+
+                    channel.mutex.lock();
+                    channel.condition.signal();
+                    channel.mutex.unlock();
                     return;
                 }
             }
         }
 
-        pub fn receive(channel: *Self) ?T {
+        /// Attempt to receive an item. If the channel is empty, waits until
+        /// an item is available or the channel is closed.
+        ///
+        /// Returns:
+        /// - T: when an item is available.
+        /// - error.ChannelClosed: if the channel is both empty and closed.
+        pub fn receive(channel: *Self) error{ChannelClosed}!T {
+            while (true) {
+                if (channel.tryReceive()) |item| {
+                    return item;
+                } else if (channel.closed.load(.monotonic)) {
+                    return error.ChannelClosed;
+                }
+                channel.mutex.lock();
+                channel.condition.wait(&channel.mutex);
+                channel.mutex.unlock();
+            }
+        }
+
+        /// Attempt to receive an item. If the channel is empty, waits until
+        /// the timeout, an item is available, or the channel is closed.
+        ///
+        /// Returns:
+        /// - T: if item was available before the timeout.
+        /// - null: if empty and timed out before an item arrived.
+        /// - error.ChannelClosed: if the channel is both empty and closed.
+        pub fn receiveTimeout(channel: *Self, timeout: sig.time.Duration) error{ChannelClosed}!?T {
+            const end = std.time.nanoTimestamp() + timeout.asNanos();
+            while (true) {
+                if (channel.tryReceive()) |item| {
+                    return item;
+                } else if (channel.closed.load(.monotonic)) {
+                    return error.ChannelClosed;
+                }
+                const now = std.time.nanoTimestamp();
+                if (now > end) {
+                    return null;
+                }
+                channel.mutex.lock();
+                defer channel.mutex.unlock();
+                channel.condition.timedWait(&channel.mutex, @intCast(end - now)) catch |e|
+                    switch (e) {
+                    error.Timeout => return null,
+                };
+            }
+        }
+
+        /// Attempt to receive an item, returning immediately.
+        /// Returns null if the channel is empty.
+        pub fn tryReceive(channel: *Self) ?T {
             var backoff: Backoff = .{};
             var head = channel.head.index.load(.acquire);
             var block = channel.head.block.load(.acquire);
@@ -328,11 +391,11 @@ test "smoke" {
     defer ch.deinit();
 
     try ch.send(7);
-    try expect(ch.receive() == 7);
+    try expect(ch.tryReceive() == 7);
 
     try ch.send(8);
-    try expect(ch.receive() == 8);
-    try expect(ch.receive() == null);
+    try expect(ch.tryReceive() == 8);
+    try expect(ch.tryReceive() == null);
 }
 
 test "len_empty_full" {
@@ -347,7 +410,7 @@ test "len_empty_full" {
     try expect(ch.len() == 1);
     try expect(!ch.isEmpty());
 
-    _ = ch.receive().?;
+    _ = ch.tryReceive().?;
 
     try expect(ch.len() == 0);
     try expect(ch.isEmpty());
@@ -365,7 +428,7 @@ test "len" {
     }
 
     for (0..50) |i| {
-        _ = ch.receive().?;
+        _ = ch.tryReceive().?;
         try expect(ch.len() == 50 - i - 1);
     }
 
@@ -385,7 +448,7 @@ test "spsc" {
         fn consumer(ch: *Channel(u64)) void {
             for (0..COUNT) |i| {
                 while (true) {
-                    if (ch.receive()) |x| {
+                    if (ch.tryReceive()) |x| {
                         std.debug.assert(x == i);
                         break;
                     }
@@ -404,6 +467,55 @@ test "spsc" {
     producer.join();
 }
 
+test "blocking receive" {
+    const S = struct {
+        fn producer(ch: *Channel(u64)) !void {
+            try ch.send(123);
+        }
+
+        fn consumer(ch: *Channel(u64)) void {
+            std.debug.assert(123 == ch.receive() catch @panic("error receiving"));
+        }
+    };
+
+    var ch = try Channel(u64).init(std.testing.allocator);
+    defer ch.deinit();
+
+    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
+    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
+
+    consumer.join();
+    producer.join();
+}
+
+test "timeout receive receives" {
+    const S = struct {
+        fn producer(ch: *Channel(u64)) !void {
+            try ch.send(123);
+        }
+
+        fn consumer(ch: *Channel(u64)) void {
+            std.debug.assert(123 == ch.receiveTimeout(sig.time.Duration.fromSecs(1)) catch
+                @panic("error receiving"));
+        }
+    };
+
+    var ch = try Channel(u64).init(std.testing.allocator);
+    defer ch.deinit();
+
+    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
+    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
+
+    consumer.join();
+    producer.join();
+}
+
+test "timeout receive times out" {
+    var ch = try Channel(u64).init(std.testing.allocator);
+    defer ch.deinit();
+    try std.testing.expectEqual(null, try ch.receiveTimeout(sig.time.Duration.fromMillis(10)));
+}
+
 test "mpmc" {
     const COUNT = 100;
     const THREADS = 4;
@@ -418,7 +530,7 @@ test "mpmc" {
         fn consumer(ch: *Channel(u64), v: *[COUNT]Atomic(usize)) void {
             for (0..COUNT) |_| {
                 const n = while (true) {
-                    if (ch.receive()) |x| break x;
+                    if (ch.tryReceive()) |x| break x;
                 };
                 _ = v[n].fetchAdd(1, .seq_cst);
             }
@@ -460,7 +572,7 @@ const logger = std.log.scoped(.sync_channel_tests);
 fn testUsizeReceiver(chan: anytype, recv_count: usize) void {
     var count: usize = 0;
     while (count < recv_count) {
-        if (chan.receive()) |_| count += 1;
+        if (chan.tryReceive()) |_| count += 1;
     }
 }
 
@@ -490,7 +602,7 @@ fn testPacketSender(chan: anytype, total_send: usize) void {
 fn testPacketReceiver(chan: anytype, total_recv: usize) void {
     var count: usize = 0;
     while (count < total_recv) {
-        if (chan.receive()) |_| count += 1;
+        if (chan.tryReceive()) |_| count += 1;
     }
 }
 
