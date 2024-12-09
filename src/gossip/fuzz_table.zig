@@ -13,8 +13,8 @@ const GossipData = sig.gossip.data.GossipData;
 const GossipKey = sig.gossip.data.GossipKey;
 const Signature = sig.core.Signature;
 const Duration = sig.time.Duration;
-const StandardErrLogger = sig.trace.ChannelPrintLogger;
-const Level = sig.trace.Level;
+
+const getVariant = sig.utils.types.getVariant;
 
 const TRIM_INTERVAL = Duration.fromSecs(2);
 
@@ -29,29 +29,25 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     };
 
     // setup
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{
+        .safety = true,
+    }){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var std_logger = try StandardErrLogger.init(.{
-        .allocator = allocator,
-        .max_level = Level.debug,
-        .max_buffer = 1 << 20,
-    });
-    defer std_logger.deinit();
-
+    // NOTE: change to trace for full logs
+    var std_logger = sig.trace.DirectPrintLogger.init(
+        allocator,
+        .debug,
+    );
     const logger = std_logger.logger();
 
     var prng = std.rand.DefaultPrng.init(seed);
     const random = prng.random();
 
     // init gossip table
-    const gossip_table = try allocator.create(GossipTable);
-    gossip_table.* = try GossipTable.init(allocator);
-    defer {
-        gossip_table.deinit();
-        allocator.destroy(gossip_table);
-    }
+    var gossip_table = try GossipTable.init(allocator);
+    defer gossip_table.deinit();
 
     var put_count: u64 = 0;
     var get_count: u64 = 0;
@@ -94,8 +90,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 defer put_count += 1;
                 const new_keypair = random.boolean();
 
-                var data: GossipData = .{
-                    .ContactInfo = try ContactInfo.initRandom(allocator, random, Pubkey.initRandom(random), 0, 0, 0),
+                var data = GossipData{
+                    .ContactInfo = try ContactInfo
+                        .initRandom(allocator, random, Pubkey.initRandom(random), 0, 0, 0),
                 };
 
                 if (new_keypair) {
@@ -109,7 +106,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     const signed_data = SignedGossipData.initSigned(&keypair, data);
 
                     // !
-                    logger.debug().logf("putting pubkey: {}", .{pubkey});
+                    logger.trace().logf("putting pubkey: {}", .{pubkey});
                     const result = try gossip_table.insert(signed_data, now);
                     std.debug.assert(result.wasInserted());
 
@@ -120,6 +117,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     try insertion_times.append(now);
                 } else {
                     if (pubkeys.items.len == 0) {
+                        data.deinit(allocator);
                         continue;
                     }
 
@@ -132,31 +130,41 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                     const should_overwrite = random.boolean();
                     if (should_overwrite) {
-                        logger.debug().logf("overwriting pubkey: {}", .{pubkey});
+                        logger.trace().logf("overwriting pubkey: {}", .{pubkey});
                         data.wallclockPtr().* = now;
                     } else {
-                        logger.debug().logf("writing old pubkey: {}", .{pubkey});
+                        logger.trace().logf("writing old pubkey: {}", .{pubkey});
+                        const old_value = random.boolean();
                         const other_insertion_time = insertion_times.items[index];
-                        data.wallclockPtr().* = other_insertion_time -| random.intRangeAtMost(u64, 10, 100);
+                        if (old_value) {
+                            // ignored old value
+                            data.wallclockPtr().* = other_insertion_time -| random.intRangeAtMost(u64, 10, 100);
+                        } else {
+                            // will be a duplicate value
+                            data.wallclockPtr().* = other_insertion_time;
+                        }
                     }
 
                     const signed_data = SignedGossipData.initSigned(&keypair, data);
 
                     // !
                     const result = try gossip_table.insert(signed_data, now);
-                    const did_insert = result.wasInserted();
+                    defer {
+                        if (getVariant(result, .OverwroteExistingEntry)) |entry| {
+                            entry.deinit(allocator);
+                        } else if (!result.wasInserted()) {
+                            data.deinit(allocator);
+                        }
+                    }
                     if (result == .IgnoredOldValue) {
+                        logger.trace().logf("ignored old value: {}", .{pubkey});
                         std.debug.assert(!should_overwrite);
                     }
                     if (result == .IgnoredDuplicateValue) {
-                        logger.debug().logf("duplicate value: {}", .{pubkey});
+                        logger.trace().logf("duplicate value: {}", .{pubkey});
                     }
 
-                    if (!should_overwrite and did_insert) {
-                        return error.ValueDidNotOverwrite;
-                    }
-
-                    if (should_overwrite) {
+                    if (result.wasInserted()) {
                         keys.items[index] = GossipKey{ .ContactInfo = pubkey };
                         // should over-write the old value
                         insertion_times.items[index] = now;
