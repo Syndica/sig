@@ -1271,9 +1271,11 @@ pub const GossipService = struct {
         task: Task,
         done: Atomic(bool) = Atomic(bool).init(false),
 
-        pub fn deinit(this: *PullRequestTask) void {
+        pub fn deinit(this: *PullRequestTask) error{OutputNotConsumed}!void {
             if (this.output_consumed.load(.acquire)) {
                 this.output.deinit();
+            } else {
+                return error.OutputNotConsumed;
             }
         }
 
@@ -1381,7 +1383,9 @@ pub const GossipService = struct {
         const n_valid_requests = valid_indexs.items.len;
         const tasks = try self.allocator.alloc(PullRequestTask, n_valid_requests);
         defer {
-            for (tasks) |*task| task.deinit();
+            // SAFTEY: unreachable is used here because tasks are always consumed at the last
+            // for loop of this method
+            for (tasks) |*task| task.deinit() catch unreachable;
             self.allocator.free(tasks);
         }
 
@@ -1414,18 +1418,17 @@ pub const GossipService = struct {
             for (tasks) |*task| {
                 while (!task.done.load(.acquire)) {
                     // busy wait
+                    std.atomic.spinLoopHint();
                 }
             }
         }
 
         for (tasks) |*task| {
-            if (task.output.items.len > 0) {
-                for (task.output.items) |output| {
-                    try self.packet_outgoing_channel.send(output);
-                    self.metrics.pull_responses_sent.add(1);
-                }
-                task.output_consumed.store(true, .release);
+            for (task.output.items) |output| {
+                try self.packet_outgoing_channel.send(output);
+                self.metrics.pull_responses_sent.add(1);
             }
+            task.output_consumed.store(true, .release);
         }
     }
 
@@ -1504,12 +1507,6 @@ pub const GossipService = struct {
                     pull_message.from_pubkey.*,
                 );
                 const invalid_shred_count = full_len - valid_len;
-                defer {
-                    // these values will never be inserted so we can drop them
-                    for (pull_message.gossip_values[valid_len..]) |value| {
-                        value.deinit(self.gossip_value_allocator);
-                    }
-                }
 
                 const insert_results = try gossip_table.insertValues(
                     now,
@@ -1654,12 +1651,6 @@ pub const GossipService = struct {
                     push_message.from_pubkey.*,
                 );
                 const invalid_shred_count = full_len - valid_len;
-                defer {
-                    // these values will never be inserted, so we can drop them
-                    for (push_message.gossip_values[valid_len..]) |value| {
-                        value.deinit(self.gossip_value_allocator);
-                    }
-                }
 
                 try gossip_table.insertValuesWithResults(
                     now,
