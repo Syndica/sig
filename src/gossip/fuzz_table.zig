@@ -33,6 +33,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
+    // NOTE: change to trace for full logs
     var std_logger = sig.trace.DirectPrintLogger.init(
         allocator,
         .debug,
@@ -109,7 +110,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     const signed_data = SignedGossipData.initSigned(&keypair, data);
 
                     // !
-                    // logger.debug().logf("putting pubkey: {}", .{pubkey});
+                    logger.trace().logf("putting pubkey: {}", .{pubkey});
                     const result = try gossip_table.insert(signed_data, now);
                     std.debug.assert(result.wasInserted());
 
@@ -133,10 +134,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                     const should_overwrite = random.boolean();
                     if (should_overwrite) {
-                        // logger.debug().logf("overwriting pubkey: {}", .{pubkey});
+                        logger.trace().logf("overwriting pubkey: {}", .{pubkey});
                         data.wallclockPtr().* = now;
                     } else {
-                        // logger.debug().logf("writing old pubkey: {}", .{pubkey});
+                        logger.trace().logf("writing old pubkey: {}", .{pubkey});
                         const old_value = random.boolean();
                         const other_insertion_time = insertion_times.items[index];
                         if (old_value) {
@@ -160,11 +161,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                         }
                     }
                     if (result == .IgnoredOldValue) {
-                        // logger.debug().logf("ignored old value: {}", .{pubkey});
+                        logger.trace().logf("ignored old value: {}", .{pubkey});
                         std.debug.assert(!should_overwrite);
                     }
                     if (result == .IgnoredDuplicateValue) {
-                        // logger.debug().logf("duplicate value: {}", .{pubkey});
+                        logger.trace().logf("duplicate value: {}", .{pubkey});
                     }
 
                     if (result.wasInserted()) {
