@@ -942,7 +942,10 @@ fn shredCollector() !void {
 
     // shred collector
     var shred_col_conf = config.current.shred_network;
-    shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
+    shred_col_conf.start_slot = shred_col_conf.start_slot orelse blk: {
+        const response = try rpc_client.getSlot(allocator, .{});
+        break :blk try response.result();
+    };
     var shred_network_manager = try sig.shred_network.start(
         shred_col_conf,
         .{
