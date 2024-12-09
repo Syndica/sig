@@ -534,17 +534,17 @@ pub fn enablePortReuse(self: *network.Socket, enabled: bool) !void {
     try setsockopt_fn(self.internal, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, std.mem.asBytes(&opt));
 }
 
-pub fn resolveSocketAddr(allocator: std.mem.Allocator, entrypoint: []const u8) !SocketAddr {
-    const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
-        return error.EntrypointPortMissing;
+pub fn resolveSocketAddr(allocator: std.mem.Allocator, host_and_port: []const u8) !SocketAddr {
+    const domain_port_sep = std.mem.indexOfScalar(u8, host_and_port, ':') orelse {
+        return error.PortMissing;
     };
-    const domain_str = entrypoint[0..domain_port_sep];
+    const domain_str = host_and_port[0..domain_port_sep];
     if (domain_str.len == 0) {
-        return error.EntrypointDomainNotValid;
+        return error.DomainNotValid;
     }
     // parse port from string
-    const port = std.fmt.parseInt(u16, entrypoint[domain_port_sep + 1 ..], 10) catch {
-        return error.EntrypointPortNotValid;
+    const port = std.fmt.parseInt(u16, host_and_port[domain_port_sep + 1 ..], 10) catch {
+        return error.PortNotValid;
     };
 
     // get dns address lists
@@ -552,7 +552,7 @@ pub fn resolveSocketAddr(allocator: std.mem.Allocator, entrypoint: []const u8) !
     defer addr_list.deinit();
 
     if (addr_list.addrs.len == 0) {
-        return error.EntrypointDnsResolutionFailure;
+        return error.DnsResolutionFailure;
     }
 
     // use first A record address
