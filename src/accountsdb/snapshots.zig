@@ -1078,7 +1078,7 @@ pub const BankFields = struct {
     }
 };
 
-/// Analogous to https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/serde_snapshot.rs#L396
+/// Analogous to [ExtraFieldsToDeserialize](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/serde_snapshot.rs#L396).
 pub const ExtraFields = struct {
     lamports_per_signature: u64,
     snapshot_persistence: ?BankIncrementalSnapshotPersistence,
