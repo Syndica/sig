@@ -56,7 +56,7 @@ pub const Server = struct {
         read_buffer_size: u32,
         /// The socket address to listen on for incoming HTTP and/or RPC requests.
         socket_addr: std.net.Address,
-    }) std.net.Address.ListenError!Server {
+    }) InitError!Server {
         var tcp_server = try params.socket_addr.listen(.{
             // NOTE: ideally we would be doing this nonblockingly, however this doesn't work properly on mac,
             // so for testing purposes we can't teste the `serve` functionality directly.
