@@ -1824,7 +1824,7 @@ pub const AllSnapshotFields = struct {
         return snapshot;
     }
 
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
         if (!self.was_collapsed) {
             self.full.deinit(allocator);
             if (self.incremental) |inc| {
@@ -1832,8 +1832,10 @@ pub const AllSnapshotFields = struct {
             }
         } else {
             self.full.deinit(allocator);
-            if (self.incremental) |*inc| {
-                inc.accounts_db_fields.file_map.deinit();
+            if (self.incremental) |inc| {
+                var file_map = inc.accounts_db_fields.file_map;
+                file_map.deinit();
+
                 bincode.free(allocator, inc.bank_fields);
                 bincode.free(allocator, inc.accounts_db_fields.rooted_slots);
                 bincode.free(allocator, inc.accounts_db_fields.rooted_slot_hashes);
