@@ -274,14 +274,14 @@ pub const AccountsDB = struct {
         /// needs to be a thread-safe allocator
         allocator: std.mem.Allocator,
         /// Must have been allocated with `self.allocator`.
-        snapshot_fields_and_paths: *AllSnapshotFields,
+        all_snapshot_fields: *AllSnapshotFields,
         n_threads: u32,
         validate: bool,
         accounts_per_file_estimate: u64,
         should_fastload: bool,
         save_index: bool,
     ) !SnapshotFields {
-        const snapshot_fields = try snapshot_fields_and_paths.collapse(self.allocator);
+        const snapshot_fields = try all_snapshot_fields.collapse(self.allocator);
 
         if (should_fastload) {
             var timer = try sig.time.Timer.start();
@@ -310,7 +310,7 @@ pub const AccountsDB = struct {
         }
 
         if (validate) {
-            const full_snapshot = snapshot_fields_and_paths.full;
+            const full_snapshot = all_snapshot_fields.full;
             var validate_timer = try sig.time.Timer.start();
             try self.validateLoadFromSnapshot(.{
                 .full_slot = full_snapshot.bank_fields.slot,
