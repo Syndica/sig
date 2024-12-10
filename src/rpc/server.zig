@@ -59,7 +59,7 @@ pub const Server = struct {
     }) InitError!Server {
         var tcp_server = try params.socket_addr.listen(.{
             // NOTE: ideally we would be doing this nonblockingly, however this doesn't work properly on mac,
-            // so for testing purposes we can't teste the `serve` functionality directly.
+            // so for testing purposes we can't test the `serve` functionality directly.
             .force_nonblocking = false,
         });
         errdefer tcp_server.deinit();
