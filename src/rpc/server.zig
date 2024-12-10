@@ -6,8 +6,8 @@ const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
 const ThreadPool = sig.sync.ThreadPool;
 
-const logger_scope = "rpc.Server";
-const ScopedLogger = sig.trace.log.ScopedLogger(logger_scope);
+const LOGGER_SCOPE = "rpc.Server";
+const ScopedLogger = sig.trace.log.ScopedLogger(LOGGER_SCOPE);
 
 pub const Server = struct {
     //! Basic usage:
@@ -66,7 +66,7 @@ pub const Server = struct {
 
         return .{
             .allocator = params.allocator,
-            .logger = params.logger.withScope(logger_scope),
+            .logger = params.logger.withScope(LOGGER_SCOPE),
 
             .snapshot_dir = params.snapshot_dir,
             .latest_snapshot_gen_info = params.latest_snapshot_gen_info,
