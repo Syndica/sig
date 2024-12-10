@@ -33,7 +33,12 @@ pub const Server = struct {
     read_buffer_size: usize,
     tcp: std.net.Server,
 
-    pub const InitParams = struct {
+    pub const MIN_READ_BUFFER_SIZE = 256;
+
+    pub const InitError = std.net.Address.ListenError;
+
+    /// The returned result must be pinned to a memory location before calling any methods.
+    pub fn init(params: struct {
         /// Must be a thread-safe allocator.
         allocator: std.mem.Allocator,
         logger: sig.trace.Logger,
@@ -51,14 +56,7 @@ pub const Server = struct {
         read_buffer_size: u32,
         /// The socket address to listen on for incoming HTTP and/or RPC requests.
         socket_addr: std.net.Address,
-
-        pub const MIN_READ_BUFFER_SIZE = 256;
-    };
-
-    pub const InitError = std.net.Address.ListenError;
-
-    /// The returned result must be pinned to a memory location before calling any methods.
-    pub fn init(params: InitParams) std.net.Address.ListenError!Server {
+    }) std.net.Address.ListenError!Server {
         var tcp_server = try params.socket_addr.listen(.{
             // NOTE: ideally we would be doing this nonblockingly, however this doesn't work properly on mac,
             // so for testing purposes we can't teste the `serve` functionality directly.
@@ -76,7 +74,7 @@ pub const Server = struct {
             .wait_group = .{},
             .thread_pool = params.thread_pool,
 
-            .read_buffer_size = @max(params.read_buffer_size, InitParams.MIN_READ_BUFFER_SIZE),
+            .read_buffer_size = @max(params.read_buffer_size, MIN_READ_BUFFER_SIZE),
             .tcp = tcp_server,
         };
     }
