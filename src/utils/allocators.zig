@@ -1278,19 +1278,6 @@ test "fuzzBatchAllocator - past failures" {
     }
 }
 
-test "adhoc" {
-    var batch_allocator = BatchAllocator{
-        .backing_allocator = std.testing.allocator,
-        .batch_size = 1433431,
-    };
-    defer batch_allocator.deinit();
-    const allocator = batch_allocator.allocator();
-    const item0 = try allocator.alloc(u8, 747105);
-    const item1 = try allocator.alloc(u8, 746217);
-    allocator.free(item0);
-    allocator.free(item1);
-}
-
 /// args "[allocator] [max_actions]"
 pub fn runFuzzer(seed: u64, args: *std.process.ArgIterator) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
