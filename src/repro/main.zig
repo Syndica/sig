@@ -15,7 +15,7 @@ const cf1 = ColumnFamily{
     .Key = u64,
     .Value = []const u8,
 };
-const DB = Database(sig.ledger.database.RocksDB(&.{cf1}));
+const RocksDb = sig.ledger.database.RocksDB(&.{cf1});
 
 pub fn main() !void {
     var args = try std.process.argsWithAllocator(allocator);
@@ -36,7 +36,7 @@ pub fn main() !void {
 
     const logger = try spawnLogger();
 
-    var db: DB = try DB.open(
+    var db: RocksDb = try RocksDb.open(
         allocator,
         logger,
         path,
@@ -64,7 +64,7 @@ fn spawnLogger() !Logger {
     return std_logger.logger();
 }
 
-fn writer(db: *DB) !void {
+fn writer(db: *RocksDb) !void {
     var rng = std.rand.DefaultPrng.init(1234);
     while (true) {
         const index = rng.random().int(u32);
@@ -82,7 +82,7 @@ fn writer(db: *DB) !void {
     }
 }
 
-fn deleter(db: *DB) !void {
+fn deleter(db: *RocksDb) !void {
     var rng = std.rand.DefaultPrng.init(123);
     while (true) {
         const start = rng.random().int(u32);
@@ -102,7 +102,7 @@ fn deleter(db: *DB) !void {
     }
 }
 
-fn reader(db: *DB) !void {
+fn reader(db: *RocksDb) !void {
     var rng = std.rand.DefaultPrng.init(12345);
     while (true) {
         const index = rng.random().int(u32);
