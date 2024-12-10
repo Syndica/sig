@@ -165,7 +165,7 @@ fn receiveShreds(
         shreds.clearRetainingCapacity();
         try shreds.ensureTotalCapacity(receiver_len);
 
-        while (receiver.receive()) |packet| try shreds.append(packet);
+        while (receiver.tryReceive()) |packet| try shreds.append(packet);
 
         if (shreds.items.len == 0) continue;
 
@@ -329,7 +329,7 @@ fn retransmitShreds(
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
-        const retransmit_info: RetransmitShredInfo = receiver.receive() orelse continue;
+        const retransmit_info: RetransmitShredInfo = receiver.tryReceive() orelse continue;
         defer retransmit_info.turbine_tree.releaseUnsafe();
 
         children.clearRetainingCapacity();
