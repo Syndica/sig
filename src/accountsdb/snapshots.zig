@@ -73,80 +73,6 @@ pub fn stakeHistoryRandom(
     return stake_history;
 }
 
-pub const StakeDelegations = std.AutoArrayHashMapUnmanaged(Pubkey, Delegation);
-
-pub fn stakeDelegationsRandom(
-    random: std.Random,
-    allocator: std.mem.Allocator,
-    max_list_entries: usize,
-) std.mem.Allocator.Error!StakeDelegations {
-    var stake_delegations = std.AutoArrayHashMap(Pubkey, Delegation).init(allocator);
-    errdefer stake_delegations.deinit();
-
-    try sig.rand.fillHashmapWithRng(&stake_delegations, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(rand: std.Random) !Pubkey {
-            return Pubkey.initRandom(rand);
-        }
-        pub fn randomValue(rand: std.Random) !Delegation {
-            return Delegation.initRandom(rand);
-        }
-    });
-
-    return stake_delegations.unmanaged;
-}
-
-/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186)
-pub const Stakes = struct {
-    /// vote accounts
-    vote_accounts: VoteAccounts,
-
-    /// stake_delegations
-    stake_delegations: StakeDelegations,
-
-    /// unused
-    unused: u64,
-
-    /// current epoch, used to calculate current stake
-    epoch: Epoch,
-
-    /// history of staking levels
-    stake_history: StakeHistory,
-
-    pub fn deinit(stakes: Stakes, allocator: std.mem.Allocator) void {
-        stakes.vote_accounts.deinit(allocator);
-
-        var stake_delegations = stakes.stake_delegations;
-        stake_delegations.deinit(allocator);
-
-        allocator.free(stakes.stake_history);
-    }
-
-    pub fn initRandom(
-        allocator: std.mem.Allocator,
-        /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
-        /// for commentary on the runtime of this function.
-        random: std.Random,
-        max_list_entries: usize,
-    ) std.mem.Allocator.Error!Stakes {
-        const vote_accounts = try VoteAccounts.initRandom(random, allocator, max_list_entries);
-        errdefer vote_accounts.deinit(allocator);
-
-        var stake_delegations = try stakeDelegationsRandom(random, allocator, max_list_entries);
-        errdefer stake_delegations.deinit(allocator);
-
-        var stake_history = try stakeHistoryRandom(random, allocator, max_list_entries);
-        errdefer stake_history.deinit(allocator);
-
-        return .{
-            .vote_accounts = vote_accounts,
-            .stake_delegations = stake_delegations,
-            .unused = random.int(u64),
-            .epoch = random.int(Epoch),
-            .stake_history = stake_history,
-        };
-    }
-};
-
 /// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/vote/src/vote_account.rs#L44)
 pub const VoteAccounts = struct {
     vote_accounts: std.AutoArrayHashMapUnmanaged(Pubkey, StakeAndVoteAccount),
@@ -308,7 +234,7 @@ test "deserialize VoteState.node_pubkey" {
     try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
 }
 
-/// Analogous to [Delegation](https://github.com/anza-xyz/agave/blob/f807911531359e0ae4cfcaf371bd3843ec52f1c6/sdk/program/src/stake/state.rs#L587)
+/// Analogous to [Delegation](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L607)
 pub const Delegation = struct {
     /// to whom the stake is delegated
     voter_pubkey: Pubkey,
@@ -318,9 +244,8 @@ pub const Delegation = struct {
     activation_epoch: Epoch,
     /// epoch the stake was deactivated, std::Epoch::MAX if not deactivated
     deactivation_epoch: Epoch,
-    /// how much stake we can activate per-epoch as a fraction of currently effective stake
-    /// depreciated!
-    warmup_cooldown_rate: f64,
+    /// DEPRECATED: since 1.16.7
+    deprecated_warmup_cooldown_rate: f64,
 
     pub fn initRandom(random: std.Random) Delegation {
         return .{
@@ -328,7 +253,7 @@ pub const Delegation = struct {
             .stake = random.int(u64),
             .activation_epoch = random.int(Epoch),
             .deactivation_epoch = random.int(Epoch),
-            .warmup_cooldown_rate = random.float(f64),
+            .deprecated_warmup_cooldown_rate = random.float(f64),
         };
     }
 };
@@ -535,7 +460,7 @@ pub const HardForks = struct {
     }
 };
 
-/// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L14)
+/// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L14)
 pub const NodeVoteAccounts = struct {
     vote_accounts: []const Pubkey,
     total_stake: u64,
@@ -559,6 +484,7 @@ pub const NodeVoteAccounts = struct {
     }
 };
 
+/// Analogous to [NodeIdToVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L9)
 pub const NodeIdToVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, NodeVoteAccounts);
 
 pub fn nodeIdToVoteAccountsMapDeinit(map: NodeIdToVoteAccountsMap, allocator: std.mem.Allocator) void {
@@ -570,8 +496,8 @@ pub fn nodeIdToVoteAccountsMapDeinit(map: NodeIdToVoteAccountsMap, allocator: st
 }
 
 pub fn nodeIdToVoteAccountsMapRandom(
-    random: std.Random,
     allocator: std.mem.Allocator,
+    random: std.Random,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!NodeIdToVoteAccountsMap {
     var node_id_to_vote_accounts = NodeIdToVoteAccountsMap.Managed.init(allocator);
@@ -596,11 +522,12 @@ pub fn nodeIdToVoteAccountsMapRandom(
     return node_id_to_vote_accounts.unmanaged;
 }
 
+/// Analogous to [EpochAuthorizedVoters](https://github.com/anza-xyz/agave/blob/42df56cac041077e471655579d6189a389c53882/runtime/src/epoch_stakes.rs#L10)
 pub const EpochAuthorizedVoters = std.AutoArrayHashMapUnmanaged(Pubkey, Pubkey);
 
 pub fn epochAuthorizedVotersRandom(
-    random: std.Random,
     allocator: std.mem.Allocator,
+    random: std.Random,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!EpochAuthorizedVoters {
     var epoch_authorized_voters = EpochAuthorizedVoters.Managed.init(allocator);
@@ -620,7 +547,7 @@ pub fn epochAuthorizedVotersRandom(
 
 /// Analogous to [EpochStakes](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L22)
 pub const EpochStakes = struct {
-    stakes: Stakes,
+    stakes: Stakes(Delegation),
     total_stake: u64,
     node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
     epoch_authorized_voters: EpochAuthorizedVoters,
@@ -640,13 +567,22 @@ pub const EpochStakes = struct {
         random: std.Random,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!EpochStakes {
-        var result_stakes = try Stakes.initRandom(allocator, random, max_list_entries);
+        var result_stakes = try Stakes(Delegation).initRandom(
+            allocator,
+            random,
+            max_list_entries,
+            struct {
+                pub fn randomValue(rand: std.Random) !Delegation {
+                    return Delegation.initRandom(rand);
+                }
+            },
+        );
         errdefer result_stakes.deinit(allocator);
 
-        const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(random, allocator, max_list_entries);
+        const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(allocator, random, max_list_entries);
         errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
 
-        var epoch_authorized_voters = try epochAuthorizedVotersRandom(random, allocator, max_list_entries);
+        var epoch_authorized_voters = try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
         errdefer epoch_authorized_voters.deinit(allocator);
 
         return .{
@@ -671,13 +607,22 @@ pub const BankIncrementalSnapshotPersistence = struct {
     /// capitalization of the accounts in the incremental snapshot slot range
     incremental_capitalization: u64,
 
-    pub fn default() @This() {
+    pub const ZEROES: BankIncrementalSnapshotPersistence = .{
+        .full_slot = 0,
+        .full_hash = Hash.ZEROES,
+        .full_capitalization = 0,
+        .incremental_hash = Hash.ZEROES,
+        .incremental_capitalization = 0,
+    };
+
+    pub fn initRandom(random: std.Random) BankIncrementalSnapshotPersistence {
+        const full_capitalization = random.int(u64);
         return .{
-            .full_slot = 0,
-            .full_hash = Hash.ZEROES,
-            .full_capitalization = 0,
-            .incremental_hash = Hash.ZEROES,
-            .incremental_capitalization = 0,
+            .full_slot = random.int(Slot),
+            .full_hash = Hash.initRandom(random),
+            .full_capitalization = full_capitalization,
+            .incremental_hash = Hash.initRandom(random),
+            .incremental_capitalization = random.uintAtMost(u64, full_capitalization),
         };
     }
 };
@@ -705,21 +650,240 @@ pub const RewardType = enum {
     Voting,
 };
 
-/// Analogous to [StartBlockHeightAndRewards](https://github.com/anza-xyz/agave/blob/034cd7396a1db2db21a3305b259a17a5fdea312c/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L60)
-pub const StartBlockHeightAndRewards = struct {
-    /// the block height of the parent of the slot at which rewards distribution began
-    parent_start_block_height: u64,
-    /// calculated epoch rewards pending distribution
-    calculated_epoch_stake_rewards: std.ArrayList(StakeReward),
+/// Analogous to [Authorized](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L362)
+pub const Authorized = struct {
+    staker: Pubkey,
+    withdrawer: Pubkey,
+
+    pub fn initRandom(random: std.Random) Authorized {
+        return .{
+            .staker = Pubkey.initRandom(random),
+            .withdrawer = Pubkey.initRandom(random),
+        };
+    }
 };
 
-/// Analogous to [EpochRewardStatus](https://github.com/anza-xyz/agave/blob/034cd7396a1db2db21a3305b259a17a5fdea312c/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L70)
-pub const EpochRewardStatus = union(enum) {
-    Active: StartBlockHeightAndRewards,
-    Inactive: void,
+/// Analogous to [Lockup](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L273)
+pub const Lockup = struct {
+    /// UnixTimestamp at which this stake will allow withdrawal, unless the
+    ///   transaction is signed by the custodian
+    unix_timestamp: UnixTimestamp,
+    /// epoch height at which this stake will allow withdrawal, unless the
+    ///   transaction is signed by the custodian
+    epoch: Epoch,
+    /// custodian signature on a transaction exempts the operation from
+    ///  lockup constraints
+    custodian: Pubkey,
 
-    pub fn default() @This() {
-        return @This().Inactive;
+    pub fn initRandom(random: std.Random) Lockup {
+        return .{
+            .unix_timestamp = random.int(UnixTimestamp),
+            .epoch = random.int(Epoch),
+            .custodian = Pubkey.initRandom(random),
+        };
+    }
+};
+
+/// Analogous to [Stake](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L918)
+pub const Stake = struct {
+    delegation: Delegation,
+    /// Credits observed is credits from vote account state when delegated or redeemed.
+    credits_observed: u64,
+
+    pub fn initRandom(random: std.Random) Stake {
+        return .{
+            .delegation = Delegation.initRandom(random),
+            .credits_observed = random.int(u64),
+        };
+    }
+};
+
+/// Analogous to [StakeStateV2](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L145)
+pub const StakeStateV2 = union(enum) {
+    uninitialized,
+    initialized: Meta,
+    stake: struct { Meta, Stake, StakeFlags },
+    rewards_pool,
+
+    pub const Meta = struct {
+        rent_exempt_reserve: u64,
+        authorized: Authorized,
+        lockup: Lockup,
+
+        pub fn initRandom(random: std.Random) Meta {
+            return .{
+                .rent_exempt_reserve = random.int(u64),
+                .authorized = Authorized.initRandom(random),
+                .lockup = Lockup.initRandom(random),
+            };
+        }
+    };
+
+    /// Analogous to [StakeFlags](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/stake_flags.rs#L12)
+    pub const StakeFlags = enum(u8) {
+        empty = 0,
+        _,
+
+        pub fn initRandom(random: std.Random) StakeFlags {
+            return @enumFromInt(random.int(u8));
+        }
+    };
+
+    pub fn initRandom(random: std.Random) StakeStateV2 {
+        return switch (random.enumValue(@typeInfo(StakeStateV2).Union.tag_type.?)) {
+            inline .uninitialized, .rewards_pool => |tag| tag,
+            .initialized => .{ .initialized = Meta.initRandom(random) },
+            .stake => .{ .stake = .{
+                Meta.initRandom(random),
+                Stake.initRandom(random),
+                StakeFlags.initRandom(random),
+            } },
+        };
+    }
+};
+
+/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186)
+pub fn Stakes(comptime StakeDelegationElem: type) type {
+    return struct {
+        /// vote accounts
+        vote_accounts: VoteAccounts,
+        /// stake_delegations
+        stake_delegations: StakeDelegations,
+        /// unused
+        unused: u64,
+        /// current epoch, used to calculate current stake
+        epoch: Epoch,
+        /// history of staking levels
+        stake_history: StakeHistory,
+        const Self = @This();
+
+        pub const StakeDelegations = std.AutoArrayHashMapUnmanaged(Pubkey, StakeDelegationElem);
+
+        pub fn deinit(stakes: Self, allocator: std.mem.Allocator) void {
+            stakes.vote_accounts.deinit(allocator);
+
+            var stake_delegations = stakes.stake_delegations;
+            stake_delegations.deinit(allocator);
+
+            allocator.free(stakes.stake_history);
+        }
+
+        pub fn initRandom(
+            allocator: std.mem.Allocator,
+            /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
+            /// for commentary on the runtime of this function.
+            random: std.Random,
+            max_list_entries: usize,
+            /// Expected to provide methods & fields/decls:
+            /// * `fn randomValue(delegation_ctx, random: std.Random) StakeDelegationElem`.
+            ///
+            /// Also see `sig.rand.fillHashmapWithRng`.
+            delegation_ctx: anytype,
+        ) std.mem.Allocator.Error!Self {
+            const vote_accounts = try VoteAccounts.initRandom(random, allocator, max_list_entries);
+            errdefer vote_accounts.deinit(allocator);
+
+            var stake_delegations = StakeDelegations.Managed.init(allocator);
+            errdefer stake_delegations.deinit();
+
+            try sig.rand.fillHashmapWithRng(
+                &stake_delegations,
+                random,
+                random.uintAtMost(usize, max_list_entries),
+                struct {
+                    pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
+                        return Pubkey.initRandom(rand);
+                    }
+                    pub fn randomValue(ctx: @This(), rand: std.Random) !StakeDelegationElem {
+                        return ctx.delegation_ctx.randomValue(rand);
+                    }
+
+                    delegation_ctx: @TypeOf(delegation_ctx),
+                }{ .delegation_ctx = delegation_ctx },
+            );
+
+            var stake_history = try stakeHistoryRandom(random, allocator, max_list_entries);
+            errdefer stake_history.deinit(allocator);
+
+            return .{
+                .vote_accounts = vote_accounts,
+                .stake_delegations = stake_delegations.unmanaged,
+                .unused = random.int(u64),
+                .epoch = random.int(Epoch),
+                .stake_history = stake_history,
+            };
+        }
+    };
+}
+
+/// Analogous to [VersionedEpochStake](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L137)
+pub const VersionedEpochStake = union(enum(u32)) {
+    current: Current,
+
+    pub fn deinit(ves: VersionedEpochStake, allocator: std.mem.Allocator) void {
+        switch (ves) {
+            .current => |current| current.deinit(allocator),
+        }
+    }
+
+    pub const Current = struct {
+        stakes: Stakes(Stake),
+        total_stake: u64,
+        node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
+        epoch_authorized_voters: EpochAuthorizedVoters,
+
+        pub fn deinit(current: Current, allocator: std.mem.Allocator) void {
+            current.stakes.deinit(allocator);
+            nodeIdToVoteAccountsMapDeinit(current.node_id_to_vote_accounts, allocator);
+            var epoch_authorized_voters = current.epoch_authorized_voters;
+            epoch_authorized_voters.deinit(allocator);
+        }
+
+        pub fn initRandom(
+            allocator: std.mem.Allocator,
+            random: std.Random,
+            max_list_entries: usize,
+        ) std.mem.Allocator.Error!Current {
+            const stakes = try Stakes(Stake).initRandom(
+                allocator,
+                random,
+                max_list_entries,
+                struct {
+                    pub fn randomValue(rand: std.Random) !Stake {
+                        return Stake.initRandom(rand);
+                    }
+                },
+            );
+            errdefer stakes.deinit(allocator);
+
+            const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(
+                allocator,
+                random,
+                max_list_entries,
+            );
+            errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
+
+            var epoch_authorized_voters = try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
+            errdefer epoch_authorized_voters.deinit(allocator);
+
+            return .{
+                .stakes = stakes,
+                .total_stake = random.int(u64),
+                .node_id_to_vote_accounts = node_id_to_vote_accounts,
+                .epoch_authorized_voters = epoch_authorized_voters,
+            };
+        }
+    };
+
+    pub fn initRandom(
+        allocator: std.mem.Allocator,
+        random: std.Random,
+        max_list_entries: usize,
+    ) std.mem.Allocator.Error!VersionedEpochStake {
+        comptime std.debug.assert(@typeInfo(VersionedEpochStake).Union.fields.len == 1); // randomly generate the tag otherwise
+        return .{
+            .current = try Current.initRandom(allocator, random, max_list_entries),
+        };
     }
 };
 
@@ -764,8 +928,7 @@ pub fn epochStakeMapRandom(
     return epoch_stakes.unmanaged;
 }
 
-/// Analogous to most of the fields of [Bank](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L718)
-/// and [BankFieldsToDeserialize](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L459)
+/// Analogous to [DeserializableVersionedBank](https://github.com/anza-xyz/agave/blob/9c899a72414993dc005f11afb5df10752b10810b/runtime/src/serde_snapshot.rs#L134).
 pub const BankFields = struct {
     blockhash_queue: BlockhashQueue,
     ancestors: Ancestors,
@@ -796,7 +959,7 @@ pub const BankFields = struct {
     rent_collector: RentCollector,
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
-    stakes: Stakes,
+    stakes: Stakes(Delegation),
     unused_accounts: UnusedAccounts, // required for deserialization
     epoch_stakes: EpochStakeMap,
     is_delta: bool,
@@ -816,18 +979,6 @@ pub const BankFields = struct {
         epochStakeMapDeinit(bank_fields.epoch_stakes, allocator);
     }
 
-    pub const Incremental = struct {
-        snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
-        epoch_accounts_hash: ?Hash = null,
-        epoch_reward_status: ?EpochRewardStatus = null,
-
-        // TODO: do a thorough review on this, this seems to work by chance with the test data, but I don't trust it yet
-
-        pub const @"!bincode-config:snapshot_persistence" = bincode.optional.defaultToNullOnEof(BankIncrementalSnapshotPersistence, .{ .encode_optional = true });
-        pub const @"!bincode-config:epoch_accounts_hash" = bincode.optional.defaultToNullOnEof(Hash, .{ .encode_optional = true });
-        pub const @"!bincode-config:epoch_reward_status" = bincode.optional.defaultToNullOnEof(EpochRewardStatus, .{ .encode_optional = false });
-    };
-
     pub fn initRandom(
         allocator: std.mem.Allocator,
         /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
@@ -844,7 +995,11 @@ pub const BankFields = struct {
         const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
         errdefer hard_forks.deinit(allocator);
 
-        const stakes = try Stakes.initRandom(allocator, random, max_list_entries);
+        const stakes = try Stakes(Delegation).initRandom(allocator, random, max_list_entries, struct {
+            pub fn randomValue(rand: std.Random) !Delegation {
+                return Delegation.initRandom(rand);
+            }
+        });
         errdefer stakes.deinit(allocator);
 
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
@@ -920,6 +1075,138 @@ pub const BankFields = struct {
                 staked_nodes,
             ),
         };
+    }
+};
+
+/// Analogous to [ExtraFieldsToDeserialize](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/serde_snapshot.rs#L396).
+pub const ExtraFields = struct {
+    lamports_per_signature: u64,
+    snapshot_persistence: ?BankIncrementalSnapshotPersistence,
+    epoch_accounts_hash: ?Hash,
+    versioned_epoch_stakes: VersionedEpochStakesMap,
+    accounts_lt_hash: ?AccountsLtHash,
+
+    pub const INIT_EOF: ExtraFields = .{
+        .lamports_per_signature = 0,
+        .snapshot_persistence = null,
+        .epoch_accounts_hash = null,
+        .versioned_epoch_stakes = .{},
+        .accounts_lt_hash = null,
+    };
+
+    pub fn deinit(extra: *const ExtraFields, allocator: std.mem.Allocator) void {
+        var versioned_epoch_stakes = extra.versioned_epoch_stakes;
+        for (versioned_epoch_stakes.values()) |ves| ves.deinit(allocator);
+        versioned_epoch_stakes.deinit(allocator);
+    }
+
+    pub const VersionedEpochStakesMap = std.AutoArrayHashMapUnmanaged(u64, VersionedEpochStake);
+
+    /// TODO: https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=85238686
+    pub const ACCOUNTS_LATTICE_HASH_LEN = 1024;
+    pub const AccountsLtHash = [ACCOUNTS_LATTICE_HASH_LEN]u16;
+
+    pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
+        .deserializer = bincodeRead,
+        .serializer = null, // just use default serialization method
+        .free = bincodeFree,
+    };
+
+    pub fn initRandom(
+        allocator: std.mem.Allocator,
+        random: std.Random,
+        max_list_entries: usize,
+    ) std.mem.Allocator.Error!ExtraFields {
+        var extra_fields: ExtraFields = INIT_EOF;
+        errdefer extra_fields.deinit(allocator);
+
+        const FieldTag = std.meta.FieldEnum(ExtraFields);
+        const field_infos = @typeInfo(ExtraFields).Struct.fields;
+
+        const NonEofCount = std.math.IntFittingRange(0, field_infos.len);
+        const non_eof_count = random.uintLessThan(NonEofCount, field_infos.len);
+
+        inline for (field_infos, 0..) |field, i| runtime_continue: {
+            if (i != non_eof_count) break :runtime_continue;
+            const field_ptr = &@field(extra_fields, field.name);
+            switch (@field(FieldTag, field.name)) {
+                .lamports_per_signature,
+                => field_ptr.* = random.int(u64),
+
+                .snapshot_persistence,
+                => field_ptr.* = BankIncrementalSnapshotPersistence.initRandom(random),
+
+                .epoch_accounts_hash,
+                => field_ptr.* = Hash.initRandom(random),
+
+                .versioned_epoch_stakes,
+                => {
+                    const entry_count = random.uintAtMost(usize, max_list_entries);
+                    try field_ptr.ensureTotalCapacity(allocator, entry_count);
+                    for (0..entry_count) |_| {
+                        const ves = try VersionedEpochStake.initRandom(
+                            allocator,
+                            random,
+                            max_list_entries,
+                        );
+                        field_ptr.putAssumeCapacity(random.int(u64), ves);
+                    }
+                },
+
+                .accounts_lt_hash,
+                => field_ptr.* = hash: {
+                    var hash: AccountsLtHash = undefined;
+                    random.bytes(std.mem.asBytes(&hash));
+                    break :hash hash;
+                },
+            }
+        }
+
+        return extra_fields;
+    }
+
+    fn bincodeRead(
+        allocator: std.mem.Allocator,
+        reader: anytype,
+        params: bincode.Params,
+    ) !ExtraFields {
+        var extra_fields: ExtraFields = INIT_EOF;
+        errdefer extra_fields.deinit(allocator);
+
+        until_eof: {
+            const FieldTag = std.meta.FieldEnum(ExtraFields);
+            const assert_allocator = sig.utils.allocators.failing.allocator(.{
+                .alloc = .assert,
+                .resize = .assert,
+                .free = .assert,
+            });
+
+            inline for (@typeInfo(ExtraFields).Struct.fields) |field| {
+                const field_ptr = &@field(extra_fields, field.name);
+                field_ptr.* = switch (@field(FieldTag, field.name)) {
+                    .lamports_per_signature,
+                    => bincode.readInt(u64, reader, params),
+
+                    .snapshot_persistence,
+                    .epoch_accounts_hash,
+                    .accounts_lt_hash,
+                    => bincode.read(assert_allocator, field.type, reader, params),
+
+                    .versioned_epoch_stakes,
+                    => bincode.read(allocator, field.type, reader, params),
+                } catch |err| switch (err) {
+                    error.EndOfStream => break :until_eof,
+                    else => |e| return e,
+                };
+            }
+        }
+
+        return extra_fields;
+    }
+
+    fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
+        comptime if (@TypeOf(data) == ExtraFields) unreachable;
+        data.deinit(allocator);
     }
 };
 
@@ -1052,22 +1339,113 @@ pub const AccountsDbFields = struct {
     slot: Slot,
     bank_hash_info: BankHashInfo,
 
-    // default on EOF
     /// NOTE: these are currently always empty?
-    /// https://github.com/anza-xyz/agave/blob/b9eb4e2aa328abb9d3ee1d857d82ccd7a86f8c4d/runtime/src/serde_snapshot.rs#L769-L782
-    rooted_slots: std.ArrayListUnmanaged(Slot),
-    rooted_slot_hashes: std.ArrayListUnmanaged(SlotAndHash),
+    /// https://github.com/anza-xyz/agave/blob/9c899a72414993dc005f11afb5df10752b10810b/runtime/src/serde_snapshot.rs#L815-L825
+    rooted_slots: []const Slot,
+    rooted_slot_hashes: []const SlotAndHash,
 
-    pub const @"!bincode-config:file_map" = bincode.hashmap.hashMapFieldConfig(FileMap, .{
-        .value = bincode.list.valueEncodedAsSlice(AccountFileInfo, .{}),
-    });
-    pub const @"!bincode-config:rooted_slots" = bincode.arraylist.defaultOnEofConfig(std.ArrayListUnmanaged(Slot));
-    pub const @"!bincode-config:rooted_slot_hashes" = bincode.arraylist.defaultOnEofConfig(std.ArrayListUnmanaged(SlotAndHash));
-
-    pub const FileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
+    pub const FileMap = std.AutoArrayHashMapUnmanaged(Slot, AccountFileInfo);
 
     pub fn deinit(fields: AccountsDbFields, allocator: std.mem.Allocator) void {
-        bincode.free(allocator, fields);
+        var file_map = fields.file_map;
+        file_map.deinit(allocator);
+
+        allocator.free(fields.rooted_slots);
+        allocator.free(fields.rooted_slot_hashes);
+    }
+
+    pub const @"!bincode-config": bincode.FieldConfig(AccountsDbFields) = .{
+        .deserializer = bincodeRead,
+        .serializer = bincodeWrite,
+        .free = bincodeFree,
+    };
+
+    fn bincodeRead(
+        allocator: std.mem.Allocator,
+        reader: anytype,
+        params: bincode.Params,
+    ) !AccountsDbFields {
+        const assert_allocator = sig.utils.allocators.failing.allocator(.{
+            .alloc = .assert,
+            .resize = .assert,
+            .free = .assert,
+        });
+
+        var file_map = try bincode.hashmap.readCtx(allocator, FileMap, reader, params, struct {
+            pub const readKey = {};
+            pub const freeKey = {};
+            pub fn readValue(
+                _: std.mem.Allocator,
+                _reader: anytype,
+                _params: bincode.Params,
+            ) !AccountFileInfo {
+                if (try bincode.readIntAsLength(usize, _reader, _params) != 1) {
+                    return error.TooManyAccountFileInfos;
+                }
+                return bincode.read(assert_allocator, AccountFileInfo, _reader, _params);
+            }
+            pub const freeValue = {};
+        });
+        errdefer file_map.deinit(allocator);
+
+        const stored_meta_write_version = try bincode.readInt(u64, reader, params);
+        const slot = try bincode.readInt(Slot, reader, params);
+        const bank_hash_info = try bincode.read(assert_allocator, BankHashInfo, reader, params);
+
+        const rooted_slots: []const Slot =
+            bincode.read(allocator, []const Slot, reader, params) catch |err| switch (err) {
+            error.EndOfStream => &.{},
+            else => |e| return e,
+        };
+        errdefer allocator.free(rooted_slots);
+
+        const rooted_slot_hashes: []const SlotAndHash =
+            bincode.read(allocator, []const SlotAndHash, reader, params) catch |err| switch (err) {
+            error.EndOfStream => &.{},
+            else => |e| return e,
+        };
+        errdefer allocator.free(rooted_slot_hashes);
+
+        return .{
+            .file_map = file_map,
+            .stored_meta_write_version = stored_meta_write_version,
+            .slot = slot,
+            .bank_hash_info = bank_hash_info,
+
+            .rooted_slots = rooted_slots,
+            .rooted_slot_hashes = rooted_slot_hashes,
+        };
+    }
+
+    fn bincodeWrite(writer: anytype, data: anytype, params: bincode.Params) !void {
+        comptime if (@TypeOf(data) != AccountsDbFields) unreachable;
+
+        {
+            try bincode.write(writer, @as(usize, data.file_map.count()), params);
+            var iter = data.file_map.iterator();
+            while (iter.next()) |entry| {
+                try bincode.write(writer, entry.key_ptr.*, params);
+
+                const value_as_slice: []const AccountFileInfo = entry.value_ptr[0..1];
+                try bincode.write(writer, value_as_slice, params);
+            }
+        }
+
+        try bincode.write(writer, data.stored_meta_write_version, params);
+        try bincode.write(writer, data.slot, params);
+        try bincode.write(writer, data.bank_hash_info, params);
+
+        if (data.rooted_slot_hashes.len != 0 or data.rooted_slots.len != 0) {
+            try bincode.write(writer, data.rooted_slots, params);
+        }
+
+        if (data.rooted_slot_hashes.len != 0) {
+            try bincode.write(writer, data.rooted_slot_hashes, params);
+        }
+    }
+
+    fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
+        data.deinit(allocator);
     }
 };
 
@@ -1077,11 +1455,14 @@ pub const AccountsDbFields = struct {
 pub const SnapshotFields = struct {
     bank_fields: BankFields,
     accounts_db_fields: AccountsDbFields,
-    lamports_per_signature: u64,
-    /// incremental snapshot fields (to accompany added to bank_fields)
-    bank_fields_inc: BankFields.Incremental = .{},
+    /// incremental snapshot fields.
+    bank_extra: ExtraFields,
 
-    pub const @"!bincode-config:lamports_per_signature" = bincode.int.defaultOnEof(u64, 0);
+    pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
+        self.bank_fields.deinit(allocator);
+        self.accounts_db_fields.deinit(allocator);
+        self.bank_extra.deinit(allocator);
+    }
 
     pub fn readFromFilePath(
         allocator: std.mem.Allocator,
@@ -1115,10 +1496,6 @@ pub const SnapshotFields = struct {
         reader: anytype,
     ) !SnapshotFields {
         return try bincode.read(allocator, SnapshotFields, reader, .{});
-    }
-
-    pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
-        bincode.free(allocator, self);
     }
 };
 
@@ -1777,7 +2154,11 @@ pub const AllSnapshotFields = struct {
     /// this will 1) modify the incremental snapshot account map
     /// and 2) the returned snapshot heap fields will still point to the incremental snapshot
     /// (so be sure not to deinit it while still using the returned snapshot)
-    pub fn collapse(self: *Self) !SnapshotFields {
+    pub fn collapse(
+        self: *Self,
+        /// Should be the same allocator passed to `fromFiles`, or otherwise to allocate `Self`.
+        allocator: std.mem.Allocator,
+    ) !SnapshotFields {
         // nothing to collapse
         if (self.incremental == null)
             return self.full;
@@ -1792,13 +2173,12 @@ pub const AllSnapshotFields = struct {
         const storages_map = &self.incremental.?.accounts_db_fields.file_map;
 
         // TODO: use a better allocator
-        const allocator = storages_map.allocator;
         var slots_to_remove = std.ArrayList(Slot).init(allocator);
         defer slots_to_remove.deinit();
 
         // make sure theres no overlap in slots between full and incremental and combine
         var storages_entry_iter = storages_map.iterator();
-        while (storages_entry_iter.next()) |*incremental_entry| {
+        while (storages_entry_iter.next()) |incremental_entry| {
             const slot = incremental_entry.key_ptr.*;
 
             // only keep slots > full snapshot slot
@@ -1807,7 +2187,7 @@ pub const AllSnapshotFields = struct {
                 continue;
             }
 
-            const slot_entry = try self.full.accounts_db_fields.file_map.getOrPut(slot);
+            const slot_entry = try self.full.accounts_db_fields.file_map.getOrPut(allocator, slot);
             if (slot_entry.found_existing) {
                 std.debug.panic("invalid incremental snapshot: slot {d} is in both full and incremental snapshots\n", .{slot});
             } else {
@@ -1825,18 +2205,16 @@ pub const AllSnapshotFields = struct {
     }
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        if (!self.was_collapsed) {
-            self.full.deinit(allocator);
-            if (self.incremental) |inc| {
+        self.full.deinit(allocator);
+        if (self.incremental) |*inc| {
+            if (!self.was_collapsed) {
                 inc.deinit(allocator);
-            }
-        } else {
-            self.full.deinit(allocator);
-            if (self.incremental) |*inc| {
-                inc.accounts_db_fields.file_map.deinit();
-                bincode.free(allocator, inc.bank_fields);
-                bincode.free(allocator, inc.accounts_db_fields.rooted_slots);
-                bincode.free(allocator, inc.accounts_db_fields.rooted_slot_hashes);
+            } else {
+                inc.accounts_db_fields.file_map.deinit(allocator);
+                inc.bank_fields.deinit(allocator);
+                allocator.free(inc.accounts_db_fields.rooted_slots);
+                allocator.free(inc.accounts_db_fields.rooted_slot_hashes);
+                inc.bank_extra.deinit(allocator);
             }
         }
     }
@@ -1957,8 +2335,16 @@ test "incremental snapshot path parsing" {
 test "parse status cache" {
     const allocator = std.testing.allocator;
 
-    const status_cache_path = sig.TEST_DATA_DIR ++ "status_cache";
-    var status_cache = try StatusCache.initFromPath(allocator, status_cache_path);
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapdir = tmp_dir_root.dir;
+
+    _ = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
+
+    const status_cache_file = try snapdir.openFile("snapshots/status_cache", .{});
+    defer status_cache_file.close();
+
+    const status_cache = try StatusCache.readFromFile(allocator, status_cache_file);
     defer status_cache.deinit(allocator);
 
     try std.testing.expect(status_cache.bank_slot_deltas.len > 0);
@@ -1966,19 +2352,32 @@ test "parse status cache" {
 
 test "parse snapshot fields" {
     const allocator = std.testing.allocator;
-    const snapshot_path = sig.TEST_DATA_DIR ++ "10";
 
-    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
-    defer snapshot_fields.deinit(allocator);
-}
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapdir = tmp_dir_root.dir;
 
-test "parse incremental snapshot fields" {
-    const allocator = std.testing.allocator;
-    const snapshot_path = sig.TEST_DATA_DIR ++ "25";
+    const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
 
-    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
-    defer snapshot_fields.deinit(allocator);
+    const full_slot = snapshot_files.full_snapshot.slot;
+    const full_manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{full_slot});
+    const full_manifest_path = full_manifest_path_bounded.constSlice();
 
-    try std.testing.expectEqual(snapshot_fields.lamports_per_signature, 5000);
-    try std.testing.expectEqual(snapshot_fields.bank_fields_inc.snapshot_persistence.?.full_slot, 10);
+    const full_manifest_file = try snapdir.openFile(full_manifest_path, .{});
+    defer full_manifest_file.close();
+
+    const snapshot_fields_full = try SnapshotFields.readFromFile(allocator, full_manifest_file);
+    defer snapshot_fields_full.deinit(allocator);
+
+    if (snapshot_files.incremental_snapshot) |inc| {
+        const inc_slot = inc.slot;
+        const inc_manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_slot});
+        const inc_manifest_path = inc_manifest_path_bounded.constSlice();
+
+        const inc_manifest_file = try snapdir.openFile(inc_manifest_path, .{});
+        defer inc_manifest_file.close();
+
+        const snapshot_fields_inc = try SnapshotFields.readFromFile(allocator, inc_manifest_file);
+        defer snapshot_fields_inc.deinit(allocator);
+    }
 }

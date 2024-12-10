@@ -5,15 +5,12 @@ const bincode = sig.bincode;
 
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
-const Account = sig.core.Account;
 const SnapshotFields = sig.accounts_db.SnapshotFields;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
 const BankFields = sig.accounts_db.snapshots.BankFields;
+const ExtraFields = sig.accounts_db.snapshots.ExtraFields;
 const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
-const EpochRewardStatus = sig.accounts_db.snapshots.EpochRewardStatus;
-const StakeReward = sig.accounts_db.snapshots.StakeReward;
 
 const MAX_FUZZ_TIME_NS = std.time.ns_per_s * 100_000;
 
@@ -84,49 +81,13 @@ fn randomSnapshotFields(
     const accounts_db_fields = try randomAccountsDbFields(allocator, random, .{});
     errdefer accounts_db_fields.deinit(allocator);
 
-    const epoch_reward_status: ?EpochRewardStatus = if (random.boolean()) null else switch (random.enumValue(@typeInfo(EpochRewardStatus).Union.tag_type.?)) {
-        .Active => .{ .Active = .{
-            .parent_start_block_height = random.int(u64),
-            .calculated_epoch_stake_rewards = blk: {
-                const stake_rewards = try allocator.alloc(StakeReward, random.uintAtMost(usize, max_list_entries));
-                errdefer allocator.free(stake_rewards);
-                errdefer for (stake_rewards) |*reward| {
-                    reward.stake_account.deinit(allocator);
-                };
-                for (stake_rewards) |*rewards| {
-                    rewards.* = .{
-                        .stake_pubkey = Pubkey.initRandom(random),
-                        .stake_reward_info = .{
-                            .reward_type = random.enumValue(sig.accounts_db.snapshots.RewardType),
-                            .lamports = random.int(i64),
-                            .post_balance = random.int(u64),
-                            .commission = if (random.boolean()) random.int(u8) else null,
-                        },
-                        .stake_account = try Account.initRandom(allocator, random, random.uintAtMost(usize, max_list_entries)),
-                    };
-                }
-                break :blk std.ArrayList(StakeReward).fromOwnedSlice(allocator, stake_rewards);
-            },
-        } },
-        .Inactive => .Inactive,
-    };
-    errdefer comptime unreachable;
+    const bank_extra = try ExtraFields.initRandom(allocator, random, max_list_entries);
+    errdefer bank_extra.deinit(allocator);
 
     return .{
         .bank_fields = bank_fields,
         .accounts_db_fields = accounts_db_fields,
-        .lamports_per_signature = random.int(u64),
-        .bank_fields_inc = .{
-            .snapshot_persistence = if (random.boolean()) null else .{
-                .full_slot = random.int(Slot),
-                .full_hash = Hash.initRandom(random),
-                .full_capitalization = random.int(u64),
-                .incremental_hash = Hash.initRandom(random),
-                .incremental_capitalization = random.int(u64),
-            },
-            .epoch_accounts_hash = if (random.boolean()) null else Hash.initRandom(random),
-            .epoch_reward_status = epoch_reward_status,
-        },
+        .bank_extra = bank_extra,
     };
 }
 
@@ -181,9 +142,9 @@ fn randomAccountsDbFields(
 
     const file_map_len = random.intRangeAtMost(usize, params.file_map_len.min, params.file_map_len.max);
 
-    var file_map = AccountsDbFields.FileMap.init(allocator);
-    errdefer file_map.deinit();
-    try file_map.ensureTotalCapacity(file_map_len);
+    var file_map: AccountsDbFields.FileMap = .{};
+    errdefer file_map.deinit(allocator);
+    try file_map.ensureTotalCapacity(allocator, file_map_len);
 
     var file_id_set = std.AutoArrayHashMap(void, void).init(allocator);
     defer file_id_set.deinit();
@@ -229,7 +190,7 @@ fn randomAccountsDbFields(
             },
         },
         // NOTE: see field comment about these always being empty
-        .rooted_slots = .{},
-        .rooted_slot_hashes = .{},
+        .rooted_slots = &.{},
+        .rooted_slot_hashes = &.{},
     };
 }

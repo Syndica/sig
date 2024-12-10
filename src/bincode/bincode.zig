@@ -57,17 +57,30 @@ pub inline fn writeAlloc(allocator: std.mem.Allocator, data: anytype, params: bi
     return try bincode.writeToSlice(buffer, data, params);
 }
 
-pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, params: bincode.Params) !U {
+pub fn read(
+    allocator: std.mem.Allocator,
+    comptime U: type,
+    reader: anytype,
+    params: bincode.Params,
+) !U {
+    return readWithConfig(allocator, U, reader, params, getConfig(U) orelse .{});
+}
+
+pub fn readWithConfig(
+    allocator: std.mem.Allocator,
+    comptime U: type,
+    reader: anytype,
+    params: bincode.Params,
+    comptime config: FieldConfig(U),
+) !U {
     const T = switch (U) {
         usize => u64,
         isize => i64,
         else => U,
     };
 
-    if (getConfig(T)) |type_config| {
-        if (type_config.deserializer) |deserialize_fcn| {
-            return deserialize_fcn(allocator, reader, params);
-        }
+    if (config.deserializer) |deserialize_fcn| {
+        return deserialize_fcn(allocator, reader, params);
     }
 
     switch (@typeInfo(T)) {
@@ -349,16 +362,23 @@ pub fn readFieldWithConfig(
 }
 
 pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
+    return writeWithConfig(writer, data, params, getConfig(@TypeOf(data)) orelse .{});
+}
+
+pub fn writeWithConfig(
+    writer: anytype,
+    data: anytype,
+    params: bincode.Params,
+    comptime config: FieldConfig(@TypeOf(data)),
+) !void {
     const T = switch (@TypeOf(data)) {
         usize => u64,
         isize => i64,
         else => @TypeOf(data),
     };
 
-    if (getConfig(T)) |type_config| {
-        if (type_config.serializer) |serialize_fcn| {
-            return serialize_fcn(writer, data, params);
-        }
+    if (config.serializer) |serialize_fcn| {
+        return serialize_fcn(writer, data, params);
     }
 
     switch (@typeInfo(T)) {
@@ -517,12 +537,18 @@ pub fn writeFieldWithConfig(
 }
 
 pub fn free(allocator: std.mem.Allocator, value: anytype) void {
+    return freeWithConfig(allocator, value, getConfig(@TypeOf(value)) orelse .{});
+}
+
+pub fn freeWithConfig(
+    allocator: std.mem.Allocator,
+    value: anytype,
+    comptime config: FieldConfig(@TypeOf(value)),
+) void {
     const T = @TypeOf(value);
 
-    if (getConfig(T)) |type_config| {
-        if (type_config.free) |freeFn| {
-            return freeFn(allocator, value);
-        }
+    if (config.free) |freeFn| {
+        return freeFn(allocator, value);
     }
 
     switch (@typeInfo(T)) {
