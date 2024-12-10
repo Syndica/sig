@@ -391,8 +391,8 @@ pub const BufferPool = struct {
         file_offset: FileOffset,
     };
 
+    /// used for large allocations
     allocator: std.mem.Allocator,
-    snapshot_dir: std.fs.Dir,
 
     /// indexes of all free frames
     /// free frames have a refcount of 0 *and* have been evicted
@@ -413,7 +413,6 @@ pub const BufferPool = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        snapshot_dir: std.fs.Dir,
         num_frames: u32,
     ) !BufferPool {
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
@@ -445,7 +444,6 @@ pub const BufferPool = struct {
 
         return .{
             .allocator = allocator,
-            .snapshot_dir = snapshot_dir,
             .frames = frames,
             .frames_metadata = frames_metadata,
             .free_list = free_list,
@@ -570,7 +568,7 @@ pub const BufferPool = struct {
         self: *BufferPool,
         /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
-        slot: Slot,
+        file: std.fs.File,
         file_id: FileId,
         /// inclusive
         range_start: FileOffset,
@@ -578,8 +576,8 @@ pub const BufferPool = struct {
         range_end: FileOffset,
     ) !CachedRead {
         return switch (builtin.os.tag) {
-            .linux => self.readIoUringSubmitAndWait(allocator, slot, file_id, range_start, range_end),
-            else => self.readBlocking(allocator, slot, file_id, range_start, range_end),
+            .linux => self.readIoUringSubmitAndWait(allocator, file, file_id, range_start, range_end),
+            else => self.readBlocking(allocator, file, file_id, range_start, range_end),
         };
     }
 
@@ -587,7 +585,7 @@ pub const BufferPool = struct {
         self: *BufferPool,
         /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
-        slot: Slot,
+        file: std.fs.File,
         file_id: FileId,
         /// inclusive
         range_start: FileOffset,
@@ -595,11 +593,6 @@ pub const BufferPool = struct {
         range_end: FileOffset,
     ) !CachedRead {
         if (builtin.os.tag != .linux) @compileError("io_uring only available on linux - unsupported target");
-
-        const file_path = file_id.path(slot);
-
-        const file = try self.snapshot_dir.openFile(file_path.constSlice(), .{});
-        defer file.close();
 
         const indices = try self.makeindices(file_id, allocator, range_start, range_end);
 
@@ -680,18 +673,13 @@ pub const BufferPool = struct {
         self: *BufferPool,
         /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
-        slot: Slot,
+        file: std.fs.File,
         file_id: FileId,
         /// inclusive
         range_start: FileOffset,
         /// exclusive
         range_end: FileOffset,
     ) !CachedRead {
-        const file_path = file_id.path(slot);
-
-        const file = try self.snapshot_dir.openFile(file_path.constSlice(), .{});
-        defer file.close();
-
         const indices = try self.makeindices(file_id, allocator, range_start, range_end);
 
         // seek to first frame (offset rounds down to frame size)
@@ -757,9 +745,6 @@ test "BufferPool indicesRequired" {
 test "BufferPool init deinit" {
     const allocator = std.testing.allocator;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
-    defer snapshot_dir.close();
-
     for (0.., &[_]u32{
         2,     3,     4,     8,
         16,    32,    256,   4096,
@@ -767,7 +752,7 @@ test "BufferPool init deinit" {
         32768, 49152, 65535, 65536,
     }) |i, frame_count| {
         errdefer std.debug.print("failed on case(i={}): {}", .{ i, frame_count });
-        var bp = try BufferPool.init(allocator, snapshot_dir, frame_count);
+        var bp = try BufferPool.init(allocator, frame_count);
         bp.deinit();
     }
 }
@@ -775,20 +760,14 @@ test "BufferPool init deinit" {
 test "BufferPool readBlocking" {
     const allocator = std.testing.allocator;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
-    defer snapshot_dir.close();
+    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    defer file.close();
+    const file_id = FileId.fromInt(1);
 
-    var bp = try BufferPool.init(allocator, snapshot_dir, 2048); // 2048 frames = 1MiB
+    var bp = try BufferPool.init(allocator, 2048); // 2048 frames = 1MiB
     defer bp.deinit();
-    // 301285806.3771301 - slot.fileid
 
-    var read = try bp.readBlocking(
-        allocator,
-        @as(Slot, 301285806),
-        FileId.fromInt(3771301),
-        0,
-        1000,
-    );
+    var read = try bp.readBlocking(allocator, file, file_id, 0, 1000);
     defer read.deinit(allocator);
 }
 
@@ -797,35 +776,31 @@ test "BufferPool readIoUringSubmitAndWait" {
 
     const allocator = std.testing.allocator;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
-    defer snapshot_dir.close();
+    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    defer file.close();
+    const file_id = FileId.fromInt(1);
 
-    var bp = try BufferPool.init(allocator, snapshot_dir, 2048); // 2048 frames = 1MiB
+    var bp = try BufferPool.init(allocator, 2048); // 2048 frames = 1MiB
     defer bp.deinit();
 
-    var read = try bp.readIoUringSubmitAndWait(
-        allocator,
-        @as(Slot, 301285806),
-        FileId.fromInt(3771301),
-        0,
-        1000,
-    );
+    var read = try bp.readIoUringSubmitAndWait(allocator, file, file_id, 0, 1000);
     defer read.deinit(allocator);
 }
 
 test "BufferPool basic usage" {
     const allocator = std.testing.allocator;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
-    defer snapshot_dir.close();
+    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    defer file.close();
+    const file_id = FileId.fromInt(1);
 
-    var bp = try BufferPool.init(allocator, snapshot_dir, 2048); // 2048 frames = 1MiB
+    var bp = try BufferPool.init(allocator, 2048); // 2048 frames = 1MiB
     defer bp.deinit();
 
-    var fba_buf: [1024]u8 = undefined;
+    var fba_buf: [4096]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
 
-    const read = try bp.read(fba.allocator(), @as(Slot, 301285806), FileId.fromInt(3771301), 0, 1000);
+    const read = try bp.read(fba.allocator(), file, file_id, 0, 1000);
     defer read.deinit(fba.allocator());
 
     try std.testing.expectEqual(2, read.indices.len);
@@ -833,8 +808,8 @@ test "BufferPool basic usage" {
 
     {
         var iter1 = read.iterator();
-        const data = try iter1.reader().readAllAlloc(allocator, 1000);
-        defer allocator.free(data);
+        const data = try iter1.reader().readAllAlloc(fba.allocator(), 1000);
+        defer fba.allocator().free(data);
         try std.testing.expectEqual(1000, data.len);
 
         var iter2 = read.iterator();
