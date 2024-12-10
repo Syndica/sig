@@ -1542,8 +1542,8 @@ fn loadSnapshot(
     };
     errdefer result.status_cache.deinit(allocator);
 
-    var slot_history = try result.accounts_db.getSlotHistory();
-    defer slot_history.deinit(result.accounts_db.allocator);
+    var slot_history = try result.accounts_db.getSlotHistory(allocator);
+    defer slot_history.deinit(allocator);
     try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
     logger.info().log("accounts-db setup done...");

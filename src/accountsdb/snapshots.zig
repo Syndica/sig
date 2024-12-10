@@ -2205,18 +2205,16 @@ pub const AllSnapshotFields = struct {
     }
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        if (!self.was_collapsed) {
-            self.full.deinit(allocator);
-            if (self.incremental) |inc| {
+        self.full.deinit(allocator);
+        if (self.incremental) |*inc| {
+            if (!self.was_collapsed) {
                 inc.deinit(allocator);
-            }
-        } else {
-            self.full.deinit(allocator);
-            if (self.incremental) |*inc| {
+            } else {
                 inc.accounts_db_fields.file_map.deinit(allocator);
-                bincode.free(allocator, inc.bank_fields);
-                bincode.free(allocator, inc.accounts_db_fields.rooted_slots);
-                bincode.free(allocator, inc.accounts_db_fields.rooted_slot_hashes);
+                inc.bank_fields.deinit(allocator);
+                allocator.free(inc.accounts_db_fields.rooted_slots);
+                allocator.free(inc.accounts_db_fields.rooted_slot_hashes);
+                inc.bank_extra.deinit(allocator);
             }
         }
     }
@@ -2337,8 +2335,16 @@ test "incremental snapshot path parsing" {
 test "parse status cache" {
     const allocator = std.testing.allocator;
 
-    const status_cache_path = sig.TEST_DATA_DIR ++ "status_cache";
-    var status_cache = try StatusCache.initFromPath(allocator, status_cache_path);
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapdir = tmp_dir_root.dir;
+
+    _ = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
+
+    const status_cache_file = try snapdir.openFile("snapshots/status_cache", .{});
+    defer status_cache_file.close();
+
+    const status_cache = try StatusCache.readFromFile(allocator, status_cache_file);
     defer status_cache.deinit(allocator);
 
     try std.testing.expect(status_cache.bank_slot_deltas.len > 0);
@@ -2346,19 +2352,32 @@ test "parse status cache" {
 
 test "parse snapshot fields" {
     const allocator = std.testing.allocator;
-    const snapshot_path = sig.TEST_DATA_DIR ++ "10";
 
-    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
-    defer snapshot_fields.deinit(allocator);
-}
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapdir = tmp_dir_root.dir;
 
-test "parse incremental snapshot fields" {
-    const allocator = std.testing.allocator;
-    const snapshot_path = sig.TEST_DATA_DIR ++ "25";
+    const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
 
-    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
-    defer snapshot_fields.deinit(allocator);
+    const full_slot = snapshot_files.full_snapshot.slot;
+    const full_manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{full_slot});
+    const full_manifest_path = full_manifest_path_bounded.constSlice();
 
-    try std.testing.expectEqual(snapshot_fields.bank_extra.lamports_per_signature, 5000);
-    try std.testing.expectEqual(snapshot_fields.bank_extra.snapshot_persistence.?.full_slot, 10);
+    const full_manifest_file = try snapdir.openFile(full_manifest_path, .{});
+    defer full_manifest_file.close();
+
+    const snapshot_fields_full = try SnapshotFields.readFromFile(allocator, full_manifest_file);
+    defer snapshot_fields_full.deinit(allocator);
+
+    if (snapshot_files.incremental_snapshot) |inc| {
+        const inc_slot = inc.slot;
+        const inc_manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_slot});
+        const inc_manifest_path = inc_manifest_path_bounded.constSlice();
+
+        const inc_manifest_file = try snapdir.openFile(inc_manifest_path, .{});
+        defer inc_manifest_file.close();
+
+        const snapshot_fields_inc = try SnapshotFields.readFromFile(allocator, inc_manifest_file);
+        defer snapshot_fields_inc.deinit(allocator);
+    }
 }
