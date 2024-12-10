@@ -808,17 +808,21 @@ test "BufferPool basic usage" {
 
     {
         var iter1 = read.iterator();
-        const data = try iter1.reader().readAllAlloc(fba.allocator(), 1000);
-        defer fba.allocator().free(data);
-        try std.testing.expectEqual(1000, data.len);
+        const reader_data = try iter1.reader().readAllAlloc(fba.allocator(), 1000);
+        defer fba.allocator().free(reader_data);
+        try std.testing.expectEqual(1000, reader_data.len);
 
         var iter2 = read.iterator();
 
+        const iter_data = try fba.allocator().alloc(u8, 1000);
+        defer fba.allocator().free(iter_data);
+
         var bytes_read: usize = 0;
         while (iter2.next()) |byte| : (bytes_read += 1) {
-            _ = byte;
+            iter_data[bytes_read] = byte;
         }
         try std.testing.expectEqual(1000, bytes_read);
+        try std.testing.expectEqualSlices(u8, reader_data, iter_data);
     }
 }
 
@@ -842,7 +846,7 @@ pub const CachedRead = struct {
             if (self.bytes_read == self.cached_read.len()) {
                 return null;
             }
-            self.bytes_read += 1;
+            defer self.bytes_read += 1;
             return self.cached_read.readByte(self.bytes_read);
         }
 
