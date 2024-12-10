@@ -176,7 +176,7 @@ pub fn Client(
 
             const self = maybe_self.?;
 
-            while (self.receiver.receive()) |packet| {
+            while (self.receiver.tryReceive()) |packet| {
                 const connection = try self.getConnection(packet.addr);
                 try connection.packets.push(packet);
             }
