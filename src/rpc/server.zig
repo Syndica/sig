@@ -35,8 +35,6 @@ pub const Server = struct {
 
     pub const MIN_READ_BUFFER_SIZE = 256;
 
-    pub const InitError = std.net.Address.ListenError;
-
     /// The returned result must be pinned to a memory location before calling any methods.
     pub fn init(params: struct {
         /// Must be a thread-safe allocator.
@@ -56,7 +54,7 @@ pub const Server = struct {
         read_buffer_size: u32,
         /// The socket address to listen on for incoming HTTP and/or RPC requests.
         socket_addr: std.net.Address,
-    }) InitError!Server {
+    }) std.net.Address.ListenError!Server {
         var tcp_server = try params.socket_addr.listen(.{
             // NOTE: ideally we would be doing this nonblockingly, however this doesn't work properly on mac,
             // so for testing purposes we can't test the `serve` functionality directly.
@@ -356,7 +354,7 @@ fn acceptConnection(
         error.FileDescriptorNotASocket,
         error.SocketNotListening,
         error.OperationNotSupported,
-        => unreachable, // Improperly initialized server.
+        => @panic("Improperly initialized server."),
 
         error.WouldBlock,
         => return null,
