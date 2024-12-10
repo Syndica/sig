@@ -5,6 +5,7 @@
 
 # sig outputs
 /data/test-state
+/data/fuzz-data
 /gossip-dumps
 /kcov-output
 /results
