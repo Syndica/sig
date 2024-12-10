@@ -1252,16 +1252,16 @@ test "fuzzDiskMemoryAllocator - past failures" {
 
 test "fuzzBatchAllocator - past failures" {
     const test_cases = [_]struct { usize, usize, usize }{
-        // .{ 0, 10, 32457527 },
-        // .{ 13, 10, 1315344 },
-        // .{ 44, 10, 122063 },
-        // .{ 200, 10, 1439666 },
-        // .{ 1139, 3, 240 },
-        // .{ 144, 10, 293 },
-        // .{ 12, 10000, 1067751 },
-        // 1, iterations: 5, batch_size: 1433431
+        .{ 0, 10, 32457527 },
+        .{ 13, 10, 1315344 },
+        .{ 44, 10, 122063 },
+        .{ 200, 10, 1439666 },
+        .{ 1139, 3, 240 },
+        .{ 144, 10, 293 },
+        .{ 12, 10000, 1067751 },
+        .{ 1, 5, 1433431 },
     };
-    const debug = true;
+    const debug = false;
     for (test_cases) |case| {
         const seed, const iterations, const batch_size = case;
         var rng = std.Random.DefaultPrng.init(seed);
