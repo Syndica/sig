@@ -89,53 +89,65 @@ pub const ReferenceCounter = extern struct {
 /// provide this guarantee.
 pub fn RcSlice(T: type) type {
     return struct {
-        /// this is just the start of the data, with the payload bytes after it.
-        ref_count: *ReferenceCounter,
+        /// contains a reference counter followed by an array of T, as in:
+        ///    { ReferenceCounter, T, T, T, T, ..., T }
+        /// To access the contained data, use the methods `refCount` or `payload`.
+        ptr: [*]align(alignment) u8,
+        /// The number of T elements, *not* the number of bytes.
+        /// For the total number of allocated bytes, use `totalSize`
         len: usize,
 
         const Self = @This();
         const Allocator = std.mem.Allocator;
 
         const alignment = @max(@alignOf(T), @alignOf(ReferenceCounter));
-        const reserved_space = @max(@sizeOf(ReferenceCounter), alignment);
+        const reserved_space = std.mem.alignForward(usize, @sizeOf(ReferenceCounter), @alignOf(T));
 
-        pub fn alloc(allocator: Allocator, size: usize) Allocator.Error!Self {
-            const data = try allocator
-                .alignedAlloc(T, alignment, size + reserved_space);
+        pub fn alloc(allocator: Allocator, n: usize) Allocator.Error!Self {
+            const total_size = totalSize(n) catch return error.OutOfMemory;
+            const bytes = try allocator.alignedAlloc(u8, alignment, total_size);
 
-            const ref_count: *ReferenceCounter = @ptrCast(@alignCast(data.ptr));
-            ref_count.* = .{};
-
-            return .{ .ref_count = ref_count, .len = data.len };
-        }
-
-        pub fn acquire(self: Self) Self {
-            std.debug.assert(self.ref_count.acquire());
-            return self;
+            @as(*ReferenceCounter, @ptrCast(bytes.ptr)).* = .{};
+            return .{ .ptr = @alignCast(bytes.ptr), .len = n };
         }
 
         pub fn deinit(self: Self, allocator: Allocator) void {
-            if (self.ref_count.release()) {
-                const ptr: [*]align(alignment) T = @ptrCast(self.ref_count);
-                allocator.free(ptr[0..self.len]);
+            if (self.refCount().release()) {
+                const total_size = totalSize(self.len) catch unreachable;
+                allocator.free(self.ptr[0..total_size]);
             }
         }
 
         /// value must be the exact original slice returned by `payload`
+        /// otherwise this function has undefined behavior
         pub fn deinitPayload(value: []const T, allocator: Allocator) void {
-            const full_ptr_int = @intFromPtr(value.ptr) - reserved_space;
-            const full_allocation_ptr: [*]align(alignment) T = @ptrFromInt(full_ptr_int);
+            const value_ptr: [*]u8 = @constCast(@ptrCast(value.ptr));
             const self = Self{
-                .ref_count = @ptrCast(full_allocation_ptr),
-                .len = reserved_space + value.len,
+                .ptr = @alignCast(value_ptr - reserved_space),
+                .len = value.len,
             };
 
             self.deinit(allocator);
         }
 
+        pub fn acquire(self: Self) Self {
+            std.debug.assert(self.refCount().acquire());
+            return self;
+        }
+
         pub fn payload(self: Self) []T {
-            const ptr: [*]align(alignment) T = @ptrCast(self.ref_count);
-            return ptr[reserved_space..self.len];
+            const ptr: [*]T = @ptrCast(self.ptr[reserved_space..]);
+            return ptr[0..self.len];
+        }
+
+        fn refCount(self: Self) *ReferenceCounter {
+            return @ptrCast(self.ptr);
+        }
+
+        /// The total number of bytes that need to be allocated to support this many T's
+        fn totalSize(num_of_T: usize) error{Overflow}!usize {
+            const bytes_for_T = try std.math.mul(usize, @sizeOf(T), num_of_T);
+            return try std.math.add(usize, reserved_space, bytes_for_T);
         }
     };
 }
