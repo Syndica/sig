@@ -5,14 +5,23 @@ const ledger = sig.ledger;
 const Logger = sig.trace.Logger;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const BlockstoreDB = sig.ledger.BlockstoreDB;
+const ColumnFamily = sig.ledger.database.ColumnFamily;
+const Database = sig.ledger.database.interface.Database;
 
 const allocator = std.heap.c_allocator;
+
+const cf1 = ColumnFamily{
+    .name = "data",
+    .Key = u64,
+    .Value = []const u8,
+};
+const DB = Database(sig.ledger.database.RocksDB(&.{cf1}));
 
 pub fn main() !void {
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.skip();
-    _= if (args.next()) |arg| blk: {
+    _ = if (args.next()) |arg| blk: {
         break :blk try std.fmt.parseInt(u32, arg, 10);
     } else blk: {
         break :blk @as(u32, 100_000);
@@ -20,14 +29,14 @@ pub fn main() !void {
 
     const path = "src/repro/blockstore";
 
-    // if (std.fs.cwd().access(path, .{})) |_| {
-    //     try std.fs.cwd().deleteTree(path);
-    // } else |_| {}
-    // try std.fs.cwd().makePath(path);
+    if (std.fs.cwd().access(path, .{})) |_| {
+        try std.fs.cwd().deleteTree(path);
+    } else |_| {}
+    try std.fs.cwd().makePath(path);
 
     const logger = try spawnLogger();
 
-    var db: BlockstoreDB = try sig.ledger.BlockstoreDB.open(
+    var db: DB = try DB.open(
         allocator,
         logger,
         path,
@@ -55,23 +64,25 @@ fn spawnLogger() !Logger {
     return std_logger.logger();
 }
 
-fn writer(db: *BlockstoreDB) !void {
+fn writer(db: *DB) !void {
     var rng = std.rand.DefaultPrng.init(1234);
     while (true) {
         const index = rng.random().int(u32);
-        const parent = blk: {
-            const parent_ = rng.random().int(u32);
-            if (parent_ > index)
-                break :blk index - 1
-            else
-                break :blk parent_;
-        };
-        // std.debug.print("Writing {}\n", .{index});
-        try db.put(ledger.schema.schema.slot_meta, (index + 1), ledger.meta.SlotMeta.init(allocator, index,  parent));
+        var buffer: [61]u8 = undefined;
+
+        // Fill the buffer with random bytes
+        for (0..buffer.len) |i| {
+            buffer[i] = @intCast(rng.random().int(u8));
+        }
+
+        const slice: []const u8 = buffer[0..];
+
+        //std.debug.print("Writing {}\n", .{index});
+        try db.put(cf1, (index + 1), slice);
     }
 }
 
-fn deleter(db: *BlockstoreDB) !void {
+fn deleter(db: *DB) !void {
     var rng = std.rand.DefaultPrng.init(123);
     while (true) {
         const start = rng.random().int(u32);
@@ -84,18 +95,18 @@ fn deleter(db: *BlockstoreDB) !void {
         };
         var batch = try db.initWriteBatch();
         defer batch.deinit();
-        std.debug.print("Deleting. Start:{} End: {}\n", .{start, end});
-        try batch.deleteRange(ledger.schema.schema.slot_meta, start, end);
+        std.debug.print("Deleting. Start:{} End: {}\n", .{ start, end });
+        try batch.deleteRange(cf1, start, end);
         try db.commit(&batch);
-        std.debug.print("Deleted. Start:{} End: {}\n", .{start, end});
+        std.debug.print("Deleted. Start:{} End: {}\n", .{ start, end });
     }
 }
 
-fn reader(db: *BlockstoreDB) !void {
+fn reader(db: *DB) !void {
     var rng = std.rand.DefaultPrng.init(12345);
     while (true) {
         const index = rng.random().int(u32);
-        const read = try db.get(db.allocator, ledger.schema.schema.slot_meta, index);
+        const read = try db.getBytes(cf1, index);
         if (read) |_| {
             std.debug.print("Read key {}\n", .{index});
         } else {
