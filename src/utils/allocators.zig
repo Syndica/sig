@@ -533,8 +533,6 @@ pub const BatchAllocator = struct {
     const Self = @This();
 
     const Batch = struct {
-        ptr: [*]u8,
-        len: usize,
         fba: FixedBufferAllocator,
         num_allocs: Atomic(usize),
 
@@ -542,7 +540,7 @@ pub const BatchAllocator = struct {
 
         pub fn deinit(self: *Batch, backing_allocator: Allocator) void {
             backing_allocator.rawFree(
-                self.ptr[0..self.len],
+                (self.fba.buffer.ptr - @sizeOf(Batch))[0 .. self.fba.buffer.len + @sizeOf(Batch)],
                 log2(@alignOf(Batch)),
                 @returnAddress(),
             );
@@ -679,8 +677,6 @@ pub const BatchAllocator = struct {
         const new_batch: *Batch = @ptrCast(batch_bytes);
         const buffer: []u8 = batch_bytes[@sizeOf(Batch)..batch_size];
         new_batch.* = Batch{
-            .ptr = batch_bytes,
-            .len = batch_size,
             .fba = FixedBufferAllocator.init(buffer),
             .num_allocs = Atomic(usize).init(1),
         };
