@@ -68,7 +68,7 @@ pub const ACCOUNT_INDEX_SHARDS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
-/// TODO: atomics on all field accesses
+/// TODO: atomics on all index accesses
 const FramesMetadata = struct {
     /// ref count for the frame. For frames that are currently being used elsewhere.
     rc: []sig.sync.ReferenceCounter,
@@ -135,7 +135,7 @@ const FramesMetadata = struct {
     // should never be called on a frame with rc>0
     // TODO: this should *all* be atomic (!)
     fn resetFrame(self: FramesMetadata, index: BufferPool.FrameIndex) void {
-        if (self.rc[index].state.raw != 0) unreachable;
+        if (self.rc[index].isAlive()) unreachable;
         self.freq[index] = 0;
         self.in_queue[index] = .none;
         self.size[index] = 0;
@@ -555,10 +555,10 @@ pub const BufferPool = struct {
         self.frames_metadata.freq[idx] = 0;
         self.frames_metadata.in_queue[idx] = .none;
 
-        // this feels a bit wrong?
-        const rc = &self.frames_metadata.rc[idx];
-        if (rc.state.raw != 0) unreachable; // not-found indices should always have 0 active readers
-        rc.* = .{ .state = .{ .raw = 1 } };
+        if (self.frames_metadata.rc[idx].isAlive()) {
+            unreachable; // not-found indices should always have 0 active readers
+        }
+        self.frames_metadata.rc[idx].reset();
 
         self.frames_metadata.key[idx] = .{
             .file_id = file_id,
@@ -579,9 +579,7 @@ pub const BufferPool = struct {
     /// are evicted first is up to the LFU.
     fn evictUnusedFrame(self: *BufferPool) void {
         return while (self.eviction_lfu.evict(self.frames_metadata)) |least_used_frame| {
-
-            // TODO: we need an atomic method for just checking if an rc is dead
-            if (self.frames_metadata.rc[least_used_frame].state.raw == 0) {
+            if (!self.frames_metadata.rc[least_used_frame].isAlive()) {
                 self.free_list.appendAssumeCapacity(least_used_frame);
                 self.frames_metadata.resetFrame(least_used_frame);
 
