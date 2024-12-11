@@ -4353,6 +4353,8 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 1;
 
+    pub const SNAPSHOT_DIR_PATH = sig.TEST_DATA_DIR ++ "bench_snapshot/";
+
     pub const BenchArgs = struct {
         use_disk: bool,
         n_threads: u32,
@@ -4377,15 +4379,12 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         validate_time: u64,
     } {
         const allocator = std.heap.c_allocator;
-        const logger = .noop;
+        var print_logger = sig.trace.DirectPrintLogger.init(allocator, .debug);
+        const logger = print_logger.logger();
 
         // unpack the snapshot
-        // NOTE: usually this will be an incremental snapshot
-        // renamed as a full snapshot (mv {inc-snap-fmt}.tar.zstd {full-snap-fmt}.tar.zstd)
-        // (because test snapshots are too small and full snapshots are too big)
-        const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
-        var snapshot_dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
-            std.debug.print("need to setup a snapshot in {s} for this benchmark...\n", .{dir_path});
+        var snapshot_dir = std.fs.cwd().openDir(SNAPSHOT_DIR_PATH, .{ .iterate = true }) catch {
+            std.debug.print("need to setup a snapshot in {s} for this benchmark...\n", .{SNAPSHOT_DIR_PATH});
             const zero_duration = sig.time.Duration.fromNanos(0);
             return .{
                 .load_time = zero_duration.asNanos(),
