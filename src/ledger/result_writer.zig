@@ -203,7 +203,8 @@ pub const LedgerResultWriter = struct {
         } else self.max_root.load(.monotonic);
         const end_slot = maybe_end_slot orelse lowest_cleanup_slot.get().*;
 
-        var ancestor_iterator = try AncestorIterator.initExclusive(&self.db, start_root);
+        var ancestor_iterator = try AncestorIterator
+            .initExclusive(self.allocator, &self.db, start_root);
 
         var find_missing_roots_timer = try Timer.start();
         var roots_to_fix = ArrayList(Slot).init(self.allocator);
