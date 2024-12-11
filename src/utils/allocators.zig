@@ -7,6 +7,7 @@ const Atomic = std.atomic.Value;
 const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
 const log2 = std.math.log2;
+const alignForward = std.mem.alignForward;
 
 /// very similar to RecycleFBA but with a few differences:
 /// - this uses an explicit T type and only returns slices of that type (instead of a generic u8)
@@ -546,6 +547,64 @@ pub const BatchAllocator = struct {
                 @returnAddress(),
             );
         }
+
+        /// allocates the full size, which includes extra space at the end for the batch,
+        /// and writes the batch pointer in the extra space.
+        fn alloc(batch: *Batch, params: AllocationParams, ret_addr: usize) ?[*]u8 {
+            // allocate the full slice including space for the *Batch
+            const full_ptr = batch.fba.threadSafeAllocator()
+                .rawAlloc(params.full_len, params.log2_buf_align, ret_addr) orelse
+                return null;
+
+            // write the *Batch into the end of the slice
+            @as(**Batch, @alignCast(@ptrCast(full_ptr[params.start_of_batch_ptr..]))).* = batch;
+
+            return full_ptr;
+        }
+
+        /// identifies the batch by extending the buf,
+        /// then frees the buf using the batch's fba.
+        fn free(buf: []u8, log2_buf_align: u8, return_address: usize) *Batch {
+            const params = AllocationParams.init(buf.len, log2_buf_align);
+
+            // extract the batch pointer from after the end of the buffer
+            const batch_bytes = buf.ptr[params.start_of_batch_ptr..][0..@sizeOf(*Batch)];
+            const batch: **Batch = @alignCast(@ptrCast(batch_bytes));
+
+            // free the full allocation
+            batch.*.fba.threadSafeAllocator().rawFree(
+                buf.ptr[0..params.full_len],
+                params.log2_buf_align,
+                return_address,
+            );
+
+            return batch.*;
+        }
+    };
+
+    const AllocationParams = struct {
+        /// The size of the allocation requested by the user
+        requested_len: usize,
+        /// The full allocation that will be needed from the fba to
+        /// satisfy the request (includes space for an aligned *Batch)
+        full_len: usize,
+        /// The actual alignment to use for the allocation.
+        /// may be larger than the requested alignment.
+        log2_buf_align: u8,
+        /// The position of the *Batch within the full allocation
+        start_of_batch_ptr: usize,
+
+        /// adjust the alloc/free parameters to ensure there
+        /// is space for an aligned *Batch at the end
+        fn init(requested_len: usize, requested_log2_buf_align: u8) AllocationParams {
+            const start_of_batch_ptr = alignForward(usize, requested_len, @alignOf(*Batch));
+            return .{
+                .requested_len = requested_len,
+                .full_len = start_of_batch_ptr + @sizeOf(*Batch),
+                .log2_buf_align = @max(log2(@alignOf(*Batch)), requested_log2_buf_align),
+                .start_of_batch_ptr = start_of_batch_ptr,
+            };
+        }
     };
 
     /// only after all the allocated data has been freed.
@@ -566,44 +625,30 @@ pub const BatchAllocator = struct {
         };
     }
 
-    fn alloc(
-        ctx: *anyopaque,
-        requested_len: usize,
-        log2_ptr_align: u8,
-        ret_addr: usize,
-    ) ?[*]u8 {
+    fn alloc(ctx: *anyopaque, requested_len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
         const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
-        const len_with_offset = requested_len + @sizeOf(usize);
-        const ptr_align_with_offset = @max(log2_ptr_align, log2(@alignOf(usize)));
+        const params = AllocationParams.init(requested_len, log2_ptr_align);
 
         while (true) {
             // try to allocate from a prior batch
-            if (self.tryAllocOldBatch(len_with_offset, ptr_align_with_offset, ret_addr)) |success| {
+            if (self.tryAllocOldBatch(params, ret_addr)) |success| {
                 return success;
             }
 
             // existing batch is not suitable. create a new one
-            if (self.tryAllocNewBatch(len_with_offset, ptr_align_with_offset, ret_addr)) |success| {
+            if (self.tryAllocNewBatch(params, ret_addr)) |success| {
                 return success;
             }
         }
     }
 
-    fn tryAllocOldBatch(
-        self: *Self,
-        len_with_offset: usize,
-        ptr_align_with_offset: u8,
-        ret_addr: usize,
-    ) ?[*]u8 {
+    fn tryAllocOldBatch(self: *Self, params: AllocationParams, ret_addr: usize) ?[*]u8 {
         self.new_batch_lock.lockShared();
         defer self.new_batch_lock.unlockShared();
 
         if (self.last_batch.load(.monotonic)) |batch| {
             _ = batch.num_allocs.fetchAdd(1, .monotonic);
-            if (batch.fba.threadSafeAllocator()
-                .rawAlloc(len_with_offset, ptr_align_with_offset, ret_addr)) |ptr|
-            {
-                writeBatchPtr(batch, ptr[0..len_with_offset]);
+            if (batch.alloc(params, ret_addr)) |ptr| {
                 return ptr;
             } else {
                 _ = batch.num_allocs.fetchSub(1, .monotonic);
@@ -612,12 +657,7 @@ pub const BatchAllocator = struct {
         return null;
     }
 
-    fn tryAllocNewBatch(
-        self: *Self,
-        len_with_offset: usize,
-        ptr_align_with_offset: u8,
-        ret_addr: usize,
-    ) ?[*]u8 {
+    fn tryAllocNewBatch(self: *Self, params: AllocationParams, ret_addr: usize) ?[*]u8 {
         // only one thread should do this at a time.
         // other threads should wait until the first one finishes.
         if (self.new_batch_waiters.fetchAdd(1, .monotonic) > 0) {
@@ -630,8 +670,8 @@ pub const BatchAllocator = struct {
         defer self.new_batch_lock.unlock();
 
         // create batch
-        const padding = @max(@as(usize, 1) << @intCast(ptr_align_with_offset), @sizeOf(Batch));
-        const batch_size = @max(self.batch_size, len_with_offset + padding);
+        const padding = @max(@as(usize, 1) << @intCast(params.log2_buf_align), @sizeOf(Batch));
+        const batch_size = @max(self.batch_size, params.full_len + padding);
         const batch_bytes: [*]align(@alignOf(Batch)) u8 = @alignCast(
             self.backing_allocator.rawAlloc(batch_size, log2(@alignOf(Batch)), ret_addr) orelse
                 return null,
@@ -646,11 +686,9 @@ pub const BatchAllocator = struct {
         };
 
         // use new batch for allocation
-        const ptr = new_batch.fba.threadSafeAllocator()
-            .rawAlloc(len_with_offset, ptr_align_with_offset, ret_addr) orelse unreachable;
-        writeBatchPtr(new_batch, ptr[0..len_with_offset]);
+        const ptr = new_batch.alloc(params, ret_addr) orelse unreachable;
 
-        if (len_with_offset >= self.batch_size) {
+        if (params.full_len >= self.batch_size) {
             // this batch won't be useful for any other allocations
             _ = new_batch.num_allocs.fetchOr(Batch.DONE, .monotonic);
         } else {
@@ -666,35 +704,14 @@ pub const BatchAllocator = struct {
         return ptr;
     }
 
-    fn writeBatchPtr(batch: *Batch, slice_with_batch: []u8) void {
-        const batch_int = @intFromPtr(batch);
-        const batch_ptr_bytes: [@sizeOf(usize)]u8 = @bitCast(batch_int);
-        @memcpy(
-            slice_with_batch[slice_with_batch.len - @sizeOf(usize) .. slice_with_batch.len],
-            &batch_ptr_bytes,
-        );
-    }
-
-    fn free(
-        ctx: *anyopaque,
-        buf: []u8,
-        log2_buf_align: u8,
-        return_address: usize,
-    ) void {
+    fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, return_address: usize) void {
         const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
-        const ptr_align = @max(log2_buf_align, log2(@alignOf(usize)));
-        const full_buf = buf.ptr[0 .. buf.len + @sizeOf(usize)];
-        const batch = getBatch(buf);
-        batch.fba.threadSafeAllocator().rawFree(full_buf, ptr_align, return_address);
+
+        const batch = Batch.free(buf, log2_buf_align, return_address);
+
         if (Batch.DONE + 1 == batch.num_allocs.fetchSub(1, .monotonic)) {
             batch.deinit(self.backing_allocator);
         }
-    }
-
-    fn getBatch(allocated_slice: []u8) *Batch {
-        const batch_ptr_bytes = allocated_slice.ptr[allocated_slice.len..][0..@sizeOf(usize)].*;
-        const batch_int: usize = @bitCast(batch_ptr_bytes);
-        return @ptrFromInt(batch_int);
     }
 };
 
