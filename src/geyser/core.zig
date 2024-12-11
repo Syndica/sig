@@ -154,7 +154,7 @@ pub const GeyserWriter = struct {
 
     pub fn IOStreamLoop(self: *Self) !void {
         while (!self.exit.load(.acquire)) {
-            while (self.io_channel.receive()) |payload| {
+            while (self.io_channel.tryReceive()) |payload| {
                 _ = self.writeToPipe(payload) catch |err| {
                     if (err == WritePipeError.PipeBlockedWithExitSignaled) {
                         return;

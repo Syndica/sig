@@ -3,13 +3,13 @@ const builtin = @import("builtin");
 const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
 const network = @import("zig-network");
-const helpers = @import("helpers.zig");
 const sig = @import("../sig.zig");
 const config = @import("config.zig");
 const zstd = @import("zstd");
 
 const Allocator = std.mem.Allocator;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
 const Bank = sig.accounts_db.Bank;
@@ -35,7 +35,6 @@ const SocketTag = sig.gossip.SocketTag;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
-const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
@@ -56,8 +55,6 @@ const gossip_value_gpa_allocator = if (builtin.mode == .Debug)
     gossip_value_gpa.allocator()
 else
     std.heap.c_allocator;
-
-const base58Encoder = base58.Encoder.init(.{});
 
 // The identifier for the scoped logger used in this file.
 const LOG_SCOPE = "cmd";
@@ -684,19 +681,13 @@ pub fn run() !void {
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    var std_logger = try ChannelPrintLogger.init(.{
-        .allocator = gpa_allocator,
-        .max_level = config.current.log_level,
-        .max_buffer = 1 << 20,
-    });
-    defer std_logger.deinit();
-
-    const logger = std_logger.logger();
+    const logger = try spawnLogger(gpa_allocator);
+    defer logger.deinit();
 
     const keypair = try getOrInitIdentity(gpa_allocator, logger);
-    var pubkey: [50]u8 = undefined;
-    const size = try base58Encoder.encode(&keypair.public_key.toBytes(), &pubkey);
-    try std.io.getStdErr().writer().print("Identity: {s}\n", .{pubkey[0..size]});
+    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+
+    logger.info().logf("Identity: {s}\n", .{pubkey});
 }
 
 /// entrypoint to run only gossip
@@ -993,7 +984,7 @@ fn printManifest() !void {
     );
     defer snapshots.deinit(allocator);
 
-    _ = try snapshots.collapse();
+    _ = try snapshots.collapse(allocator);
 
     // TODO: support better inspection of snapshots (maybe dump to a file as json?)
     std.debug.print("full snapshots: {any}\n", .{snapshots.full.bank_fields});
@@ -1345,7 +1336,6 @@ const LoadedSnapshot = struct {
         self.snapshot_fields.deinit(self.allocator);
         self.accounts_db.deinit();
         self.allocator.destroy(self);
-        self.collapsed_snapshot_fields.deinit(self.allocator);
     }
 };
 
@@ -1420,7 +1410,7 @@ fn loadSnapshot(
     errdefer result.accounts_db.deinit();
 
     if (options.metadata_only) {
-        result.collapsed_snapshot_fields = try result.snapshot_fields.collapse();
+        result.collapsed_snapshot_fields = try result.snapshot_fields.collapse(allocator);
     } else {
         result.collapsed_snapshot_fields = try result.accounts_db.loadWithDefaults(
             allocator,
@@ -1438,7 +1428,7 @@ fn loadSnapshot(
 
     // this should exist before we start to unpack
     logger.info().log("reading genesis...");
-    result.genesis_config = try GenesisConfig.init(allocator, genesis_file_path) catch |err| {
+    result.genesis_config = GenesisConfig.init(allocator, genesis_file_path) catch |err| {
         if (err == error.FileNotFound) {
             logger.err().logf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
         }
@@ -1466,8 +1456,8 @@ fn loadSnapshot(
     };
     errdefer result.status_cache.deinit(allocator);
 
-    var slot_history = try result.accounts_db.getSlotHistory();
-    defer slot_history.deinit(result.accounts_db.allocator);
+    var slot_history = try result.accounts_db.getSlotHistory(allocator);
+    defer slot_history.deinit(allocator);
     try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
     logger.info().log("accounts-db setup done...");
@@ -1665,4 +1655,66 @@ fn getOrDownloadSnapshots(
     logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
     return .{ snapshots, snapshot_files };
+}
+
+pub fn getOrInitIdentity(
+    allocator: std.mem.Allocator,
+    unscoped_logger: Logger,
+) !KeyPair {
+    const logger = unscoped_logger.withScope(@src().file ++ @src().fn_name);
+
+    const app_data_dir_path = try std.fs.getAppDataDir(allocator, "sig");
+    defer allocator.free(app_data_dir_path);
+
+    if (!std.fs.path.isAbsolute(app_data_dir_path)) {
+        return error.DataDirPathIsNotAbsolute;
+    }
+
+    var app_data_dir = try std.fs.cwd().makeOpenPath(app_data_dir_path, .{});
+    defer app_data_dir.close();
+
+    const IDENTITY_KEYPAIR_PATH = "identity.key";
+
+    if (app_data_dir.openFile(IDENTITY_KEYPAIR_PATH, .{})) |file| existing: {
+        defer file.close();
+
+        const end_pos = try file.getEndPos();
+
+        var buf: [SecretKey.encoded_length]u8 = undefined;
+        const file_len = try file.readAll(&buf);
+
+        if (file_len != buf.len) {
+            logger.err().logf("Truncated identity file, expected {} bytes, found {}", .{ buf.len, file_len });
+            break :existing;
+        }
+
+        if (end_pos != buf.len) {
+            logger.err().logf("Overlong identity file, expected {} bytes, found {}", .{ buf.len, file_len });
+            break :existing;
+        }
+
+        const sk = SecretKey.fromBytes(buf) catch |err| switch (err) {};
+
+        const kp = KeyPair.fromSecretKey(sk) catch |err| {
+            logger.err().logf("{s}", .{@errorName(err)});
+            break :existing;
+        };
+
+        return kp;
+    } else |err| switch (err) {
+        else => |e| return e,
+        error.FileNotFound => {
+            // file not found, fall through directly to the creation process
+        },
+    }
+
+    const file = try app_data_dir.createFile(IDENTITY_KEYPAIR_PATH, .{
+        .truncate = true,
+    });
+    defer file.close();
+
+    const kp = try KeyPair.create(null);
+    try file.writeAll(&kp.secret_key.toBytes());
+
+    return kp;
 }

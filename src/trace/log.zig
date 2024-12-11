@@ -22,7 +22,7 @@ pub const Config = struct {
 pub fn ScopedLogger(comptime scope: ?[]const u8) type {
     return union(enum) {
         channel_print: *ChannelPrintLogger,
-        direct_print: *DirectPrintLogger,
+        direct_print: DirectPrintLogger,
         noop: void,
 
         const Self = @This();
@@ -170,7 +170,7 @@ pub const ChannelPrintLogger = struct {
 
     pub fn run(self: *Self) void {
         while (!self.exit.load(.acquire)) {
-            while (self.channel.receive()) |message| {
+            while (self.channel.tryReceive()) |message| {
                 defer self.log_allocator.free(message);
                 const writer = std.io.getStdErr().writer();
                 std.debug.lockStdErr();
@@ -229,29 +229,24 @@ pub const ChannelPrintLogger = struct {
 /// where some log messages never get logged because the logger is deinitialized before the
 /// logging thread picks up the log message.
 pub const DirectPrintLogger = struct {
-    const builtin = @import("builtin");
     max_level: Level,
-    allocator: Allocator,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, max_level: Level) Self {
-        return .{
-            .max_level = max_level,
-            .allocator = allocator,
-        };
+    pub fn init(_: std.mem.Allocator, max_level: Level) Self {
+        return .{ .max_level = max_level };
     }
 
-    pub fn logger(self: *Self) Logger {
+    pub fn logger(self: Self) Logger {
         return .{ .direct_print = self };
     }
 
-    pub fn scopedLogger(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
+    pub fn scopedLogger(self: Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
         return .{ .direct_print = self };
     }
 
     pub fn log(
-        self: *Self,
+        self: Self,
         comptime scope: ?[]const u8,
         level: Level,
         fields: anytype,

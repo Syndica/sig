@@ -63,12 +63,22 @@ pub fn yearsAsSlots(years: f64, tick_duration_ns: u32, ticks_per_slot: u64) f64 
 test "core.bank: load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
-    const full_metadata_path = sig.TEST_DATA_DIR ++ "10";
-    var full_snapshot_fields = try SnapshotFields.readFromFilePath(
-        allocator,
-        full_metadata_path,
-    );
-    defer full_snapshot_fields.deinit(allocator);
+    var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{});
+    defer test_data_dir.close();
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapdir = tmp_dir_root.dir;
+
+    const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
+
+    const boundedFmt = sig.utils.fmt.boundedFmt;
+    const full_manifest_path = boundedFmt("snapshots/{0}/{0}", .{snapshot_files.full_snapshot.slot});
+    const full_manifest_file = try snapdir.openFile(full_manifest_path.constSlice(), .{});
+    defer full_manifest_file.close();
+
+    const full_manifest = try SnapshotFields.readFromFile(allocator, full_manifest_file);
+    defer full_manifest.deinit(allocator);
 
     // use the genesis to verify loading
     const genesis_path = sig.TEST_DATA_DIR ++ "genesis.bin";
@@ -76,7 +86,7 @@ test "core.bank: load and validate from test snapshot" {
     defer genesis_config.deinit(allocator);
 
     try Bank.validateBankFields(
-        &full_snapshot_fields.bank_fields,
+        &full_manifest.bank_fields,
         &genesis_config,
     );
 }
