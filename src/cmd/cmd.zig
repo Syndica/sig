@@ -1375,7 +1375,7 @@ fn loadSnapshot(
     result.snapshot_fields = all_snapshot_fields;
 
     logger.info().logf("full snapshot: {s}", .{
-        sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full().snapshotArchiveName().constSlice()),
+        sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full.snapshotArchiveName().constSlice()),
     });
     if (snapshot_files.incremental()) |inc_snap| {
         logger.info().logf("incremental snapshot: {s}", .{
@@ -1607,10 +1607,10 @@ fn getOrDownloadSnapshots(
         // if accounts/ doesnt exist then we unpack the found snapshots
         // TODO: delete old accounts/ dir if it exists
         timer.reset();
-        logger.info().logf("unpacking {s}...", .{snapshot_files.full().snapshotArchiveName().constSlice()});
+        logger.info().logf("unpacking {s}...", .{snapshot_files.full.snapshotArchiveName().constSlice()});
         {
             const archive_file = try snapshot_dir.openFile(
-                snapshot_files.full().snapshotArchiveName().constSlice(),
+                snapshot_files.full.snapshotArchiveName().constSlice(),
                 .{},
             );
             defer archive_file.close();

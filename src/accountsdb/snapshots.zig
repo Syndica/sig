@@ -1920,20 +1920,6 @@ pub const FullSnapshotFileInfo = struct {
     slot: Slot,
     hash: Hash,
 
-    pub fn from(sah: SlotAndHash) FullSnapshotFileInfo {
-        return .{
-            .slot = sah.slot,
-            .hash = sah.hash,
-        };
-    }
-
-    pub fn slotAndHash(self: FullSnapshotFileInfo) SlotAndHash {
-        return .{
-            .slot = self.slot,
-            .hash = self.hash,
-        };
-    }
-
     const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("snapshot-{[slot]d}-{[hash]s}.tar.zst");
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
@@ -2052,14 +2038,6 @@ pub const IncrementalSnapshotFileInfo = struct {
     base_slot: Slot,
     slot: Slot,
     hash: Hash,
-
-    pub fn from(base_slot: Slot, sah: SlotAndHash) IncrementalSnapshotFileInfo {
-        return .{
-            .base_slot = base_slot,
-            .slot = sah.slot,
-            .hash = sah.hash,
-        };
-    }
 
     /// Returns the incremental slot and hash.
     pub fn slotAndHash(self: IncrementalSnapshotFileInfo) SlotAndHash {
@@ -2212,16 +2190,16 @@ pub const IncrementalSnapshotFileInfo = struct {
 };
 
 pub const SnapshotFiles = struct {
-    full_info: SlotAndHash,
+    full: FullSnapshotFileInfo,
     incremental_info: ?SlotAndHash,
-
-    pub fn full(snapshot_files: SnapshotFiles) FullSnapshotFileInfo {
-        return FullSnapshotFileInfo.from(snapshot_files.full_info);
-    }
 
     pub fn incremental(snapshot_files: SnapshotFiles) ?IncrementalSnapshotFileInfo {
         const inc_info = snapshot_files.incremental_info orelse return null;
-        return IncrementalSnapshotFileInfo.from(snapshot_files.full_info.slot, inc_info);
+        return .{
+            .base_slot = snapshot_files.full.slot,
+            .slot = inc_info.slot,
+            .hash = inc_info.hash,
+        };
     }
 
     pub fn fromFileInfos(
@@ -2232,7 +2210,7 @@ pub const SnapshotFiles = struct {
             std.debug.assert(inc.base_slot == full_info.slot);
         }
         return .{
-            .full_info = full_info.slotAndHash(),
+            .full = full_info,
             .incremental_info = if (maybe_incremental_info) |inc| inc.slotAndHash() else null,
         };
     }
@@ -2272,7 +2250,10 @@ pub const SnapshotFiles = struct {
             count += 1;
         }
 
-        return fromFileInfos(latest_full_snapshot, maybe_latest_incremental_snapshot);
+        return fromFileInfos(
+            latest_full_snapshot,
+            maybe_latest_incremental_snapshot,
+        );
     }
 };
 
@@ -2295,7 +2276,7 @@ pub const AllSnapshotFields = struct {
         const logger = logger_.withScope(@typeName((Self)));
         // unpack
         const full_fields = blk: {
-            const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full_info.slot});
+            const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full.slot});
             const rel_path = rel_path_bounded.constSlice();
 
             logger.info().logf("reading snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
@@ -2557,7 +2538,7 @@ test "parse snapshot fields" {
 
     const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
 
-    const full_slot = snapshot_files.full_info.slot;
+    const full_slot = snapshot_files.full.slot;
     const full_manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{full_slot});
     const full_manifest_path = full_manifest_path_bounded.constSlice();
 

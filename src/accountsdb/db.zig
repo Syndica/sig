@@ -3363,7 +3363,7 @@ pub fn findAndUnpackTestSnapshots(
     const snapshot_files = try SnapshotFiles.find(allocator, test_data_dir);
 
     {
-        const full_name_bounded = snapshot_files.full().snapshotArchiveName();
+        const full_name_bounded = snapshot_files.full.snapshotArchiveName();
         const full_name = full_name_bounded.constSlice();
         const full_archive_file = try test_data_dir.openFile(full_name, .{});
         defer full_archive_file.close();
@@ -4402,7 +4402,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             else |err| switch (err) {
                 else => |e| return e,
                 error.FileNotFound => if (attempt == 0) {
-                    const archive_file = try snapshot_dir.openFile(snapshot_files.full().snapshotArchiveName().constSlice(), .{});
+                    const archive_file = try snapshot_dir.openFile(snapshot_files.full.snapshotArchiveName().constSlice(), .{});
                     defer archive_file.close();
                     try parallelUnpackZstdTarBall(
                         allocator,
