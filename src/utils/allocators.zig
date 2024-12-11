@@ -8,6 +8,7 @@ const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
 const log2 = std.math.log2;
 const alignForward = std.mem.alignForward;
+const bytesAsValue = std.mem.bytesAsValue;
 
 /// very similar to RecycleFBA but with a few differences:
 /// - this uses an explicit T type and only returns slices of that type (instead of a generic u8)
@@ -538,7 +539,7 @@ pub const BatchAllocator = struct {
 
         const DONE = 1 << (@bitSizeOf(usize) - 1);
 
-        pub fn deinit(self: *Batch, backing_allocator: Allocator) void {
+        fn deinit(self: *Batch, backing_allocator: Allocator) void {
             backing_allocator.rawFree(
                 (self.fba.buffer.ptr - @sizeOf(Batch))[0 .. self.fba.buffer.len + @sizeOf(Batch)],
                 log2(@alignOf(Batch)),
@@ -548,14 +549,14 @@ pub const BatchAllocator = struct {
 
         /// allocates the full size, which includes extra space at the end for the batch,
         /// and writes the batch pointer in the extra space.
-        fn alloc(batch: *Batch, params: AllocationParams, ret_addr: usize) ?[*]u8 {
+        fn alloc(batch: *Batch, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
             // allocate the full slice including space for the *Batch
             const full_ptr = batch.fba.threadSafeAllocator()
-                .rawAlloc(params.full_len, params.log2_buf_align, ret_addr) orelse
+                .rawAlloc(len + @sizeOf(*Batch), log2_ptr_align, ret_addr) orelse
                 return null;
 
             // write the *Batch into the end of the slice
-            @as(**Batch, @alignCast(@ptrCast(full_ptr[params.start_of_batch_ptr..]))).* = batch;
+            bytesAsValue(*Batch, full_ptr[len..]).* = batch;
 
             return full_ptr;
         }
@@ -563,45 +564,18 @@ pub const BatchAllocator = struct {
         /// identifies the batch by extending the buf,
         /// then frees the buf using the batch's fba.
         fn free(buf: []u8, log2_buf_align: u8, return_address: usize) *Batch {
-            const params = AllocationParams.init(buf.len, log2_buf_align);
-
             // extract the batch pointer from after the end of the buffer
-            const batch_bytes = buf.ptr[params.start_of_batch_ptr..][0..@sizeOf(*Batch)];
-            const batch: **Batch = @alignCast(@ptrCast(batch_bytes));
+            const batch_bytes = buf.ptr[buf.len..][0..@sizeOf(*Batch)];
+            const batch = bytesAsValue(*Batch, batch_bytes).*;
 
             // free the full allocation
-            batch.*.fba.threadSafeAllocator().rawFree(
-                buf.ptr[0..params.full_len],
-                params.log2_buf_align,
+            batch.fba.threadSafeAllocator().rawFree(
+                buf.ptr[0 .. buf.len + @sizeOf(*Batch)],
+                log2_buf_align,
                 return_address,
             );
 
-            return batch.*;
-        }
-    };
-
-    const AllocationParams = struct {
-        /// The size of the allocation requested by the user
-        requested_len: usize,
-        /// The full allocation that will be needed from the fba to
-        /// satisfy the request (includes space for an aligned *Batch)
-        full_len: usize,
-        /// The actual alignment to use for the allocation.
-        /// may be larger than the requested alignment.
-        log2_buf_align: u8,
-        /// The position of the *Batch within the full allocation
-        start_of_batch_ptr: usize,
-
-        /// adjust the alloc/free parameters to ensure there
-        /// is space for an aligned *Batch at the end
-        fn init(requested_len: usize, requested_log2_buf_align: u8) AllocationParams {
-            const start_of_batch_ptr = alignForward(usize, requested_len, @alignOf(*Batch));
-            return .{
-                .requested_len = requested_len,
-                .full_len = start_of_batch_ptr + @sizeOf(*Batch),
-                .log2_buf_align = @max(log2(@alignOf(*Batch)), requested_log2_buf_align),
-                .start_of_batch_ptr = start_of_batch_ptr,
-            };
+            return batch;
         }
     };
 
@@ -623,30 +597,29 @@ pub const BatchAllocator = struct {
         };
     }
 
-    fn alloc(ctx: *anyopaque, requested_len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+    fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
         const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
-        const params = AllocationParams.init(requested_len, log2_ptr_align);
 
         while (true) {
             // try to allocate from a prior batch
-            if (self.tryAllocOldBatch(params, ret_addr)) |success| {
+            if (self.tryAllocOldBatch(len, log2_ptr_align, ret_addr)) |success| {
                 return success;
             }
 
             // existing batch is not suitable. create a new one
-            if (self.tryAllocNewBatch(params, ret_addr)) |success| {
+            if (self.tryAllocNewBatch(len, log2_ptr_align, ret_addr)) |success| {
                 return success;
             }
         }
     }
 
-    fn tryAllocOldBatch(self: *Self, params: AllocationParams, ret_addr: usize) ?[*]u8 {
+    fn tryAllocOldBatch(self: *Self, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
         self.new_batch_lock.lockShared();
         defer self.new_batch_lock.unlockShared();
 
         if (self.last_batch.load(.monotonic)) |batch| {
             _ = batch.num_allocs.fetchAdd(1, .monotonic);
-            if (batch.alloc(params, ret_addr)) |ptr| {
+            if (batch.alloc(len, log2_ptr_align, ret_addr)) |ptr| {
                 return ptr;
             } else {
                 _ = batch.num_allocs.fetchSub(1, .monotonic);
@@ -655,7 +628,7 @@ pub const BatchAllocator = struct {
         return null;
     }
 
-    fn tryAllocNewBatch(self: *Self, params: AllocationParams, ret_addr: usize) ?[*]u8 {
+    fn tryAllocNewBatch(self: *Self, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
         // only one thread should do this at a time.
         // other threads should wait until the first one finishes.
         if (self.new_batch_waiters.fetchAdd(1, .monotonic) > 0) {
@@ -667,24 +640,22 @@ pub const BatchAllocator = struct {
         self.new_batch_lock.lock();
         defer self.new_batch_lock.unlock();
 
-        // create batch
-        const padding = @max(@as(usize, 1) << @intCast(params.log2_buf_align), @sizeOf(Batch));
-        const batch_size = @max(self.batch_size, params.full_len + padding);
-        const batch_bytes: [*]align(@alignOf(Batch)) u8 = @alignCast(
-            self.backing_allocator.rawAlloc(batch_size, log2(@alignOf(Batch)), ret_addr) orelse
-                return null,
-        );
-        const new_batch: *Batch = @ptrCast(batch_bytes);
-        const buffer: []u8 = batch_bytes[@sizeOf(Batch)..batch_size];
+        const padding = alignForward(usize, @sizeOf(Batch), alignment(log2_ptr_align));
+        const batch_size = @max(self.batch_size, padding + len + @sizeOf(*Batch));
+
+        // create new batch
+        const batch_bytes = self.backing_allocator
+            .rawAlloc(batch_size, log2(@alignOf(Batch)), ret_addr) orelse return null;
+        const new_batch: *Batch = @alignCast(@ptrCast(batch_bytes));
         new_batch.* = Batch{
-            .fba = FixedBufferAllocator.init(buffer),
+            .fba = FixedBufferAllocator.init(batch_bytes[@sizeOf(Batch)..batch_size]),
             .num_allocs = Atomic(usize).init(1),
         };
 
         // use new batch for allocation
-        const ptr = new_batch.alloc(params, ret_addr) orelse unreachable;
+        const ptr = new_batch.alloc(len, log2_ptr_align, ret_addr) orelse unreachable;
 
-        if (params.full_len >= self.batch_size) {
+        if (batch_size >= self.batch_size) {
             // this batch won't be useful for any other allocations
             _ = new_batch.num_allocs.fetchOr(Batch.DONE, .monotonic);
         } else {
@@ -765,9 +736,8 @@ pub const DiskMemoryAllocator = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         std.debug.assert(self.mmap_ratio != 0);
 
-        const alignment = @as(usize, 1) << @intCast(log2_align);
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
-        std.debug.assert(alignment <= std.mem.page_size);
+        std.debug.assert(alignment(log2_align) <= std.mem.page_size);
 
         const file_aligned_size = alignedFileSize(requested_size);
         const aligned_mmap_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
@@ -821,9 +791,8 @@ pub const DiskMemoryAllocator = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         std.debug.assert(self.mmap_ratio != 0);
 
-        const alignment = @as(usize, 1) << @intCast(log2_align);
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
-        std.debug.assert(alignment <= std.mem.page_size);
+        std.debug.assert(alignment(log2_align) <= std.mem.page_size);
 
         const old_file_aligned_size = alignedFileSize(buf.len);
         const new_file_aligned_size = alignedFileSize(requested_size);
@@ -875,9 +844,8 @@ pub const DiskMemoryAllocator = struct {
         std.debug.assert(self.mmap_ratio != 0);
         std.debug.assert(buf.len != 0); // should be ensured by the allocator interface
 
-        const alignment = @as(usize, 1) << @intCast(log2_align);
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
-        std.debug.assert(alignment <= std.mem.page_size);
+        std.debug.assert(alignment(log2_align) <= std.mem.page_size);
 
         const file_aligned_size = alignedFileSize(buf.len);
 
@@ -926,6 +894,11 @@ pub fn createAndMmapFile(
     );
 
     return memory;
+}
+
+/// converts from a log2 alignment to the actual alignment
+pub fn alignment(log2_align: u8) usize {
+    return @as(usize, 1) << @intCast(log2_align);
 }
 
 /// Namespace housing the different components for the stateless failing allocator.
