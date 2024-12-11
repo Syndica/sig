@@ -31,4 +31,4 @@ pub const Transaction = transaction.Transaction;
 pub const VersionedTransaction = transaction.VersionedTransaction;
 pub const V0Message = transaction.V0Message;
 
-pub const Cluster = enum { mainnet, devnet, testnet, localnet };
+pub const Cluster = enum { mainnet, testnet, devnet, localnet };

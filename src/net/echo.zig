@@ -29,19 +29,19 @@ pub fn getShredAndIPFromEchoServer(
 
     for (socket_addresses) |socket_addr| {
         if (requestIpEcho(allocator, socket_addr.toAddress(), .{})) |response| {
-            // ip is optional, but we should have it if given in response
             if (my_ip == null)
                 my_ip = response.address;
 
-            // shred version is always mandatory (so we break)
             if (response.shred_version) |shred_version| {
                 logger.info().logf(
                     "shred version: {} - from entrypoint ip echo: {s}",
                     .{ shred_version.value, socket_addr.toString().constSlice() },
                 );
                 my_shred_version = shred_version.value;
-                break;
             }
+
+            // fully break when we have both
+            if (my_shred_version != null and my_ip != null) break;
         } else |_| {}
     }
 
