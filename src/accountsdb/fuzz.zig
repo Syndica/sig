@@ -246,7 +246,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     .slot = full_snapshot_info.slot,
                     .hash = full_snapshot_info.hash,
                 };
-                const full_archive_name_bounded = full_snapshot_file_info.snapshotNameStr();
+                const full_archive_name_bounded = full_snapshot_file_info.snapshotArchiveName();
                 const full_archive_name = full_archive_name_bounded.constSlice();
 
                 const full_archive_file = try snapshot_dir.openFile(full_archive_name, .{ .mode = .read_only });
@@ -278,7 +278,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     .hash = inc_snapshot_info.hash,
                     .slot = inc_snapshot_info.slot,
                 };
-                const inc_archive_name_bounded = inc_snapshot_file_info.snapshotNameStr();
+                const inc_archive_name_bounded = inc_snapshot_file_info.snapshotArchiveName();
                 const inc_archive_name = inc_archive_name_bounded.constSlice();
 
                 try snapshot_dir.copyFile(inc_archive_name, alternative_snapshot_dir, inc_archive_name, .{});

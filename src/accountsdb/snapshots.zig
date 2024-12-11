@@ -3,6 +3,7 @@
 const std = @import("std");
 const zstd = @import("zstd");
 const sig = @import("../sig.zig");
+const base58 = @import("base58-zig");
 
 const bincode = sig.bincode;
 
@@ -1912,72 +1913,121 @@ pub const StatusCache = struct {
     }
 };
 
-pub const CompressionMethod = enum {
-    zstd,
-
-    pub inline fn extension(method: CompressionMethod) []const u8 {
-        return switch (method) {
-            .zstd => "zst",
-        };
-    }
-};
-
 /// information on a full snapshot including the filename, slot, and hash
 ///
 /// Analogous to [SnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L44)
 pub const FullSnapshotFileInfo = struct {
     slot: Slot,
     hash: Hash,
-    comptime compression: CompressionMethod = .zstd,
 
-    /// matches with the regex: r"^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
-    pub fn fromString(filename: []const u8) !FullSnapshotFileInfo {
-        var ext_parts = std.mem.splitSequence(u8, filename, ".");
-        const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
+    const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("snapshot-{[slot]d}-{[hash]s}.tar.zst");
 
-        const extn = ext_parts.rest();
-        // only support tar.zst
-        if (!std.mem.eql(u8, extn, "tar.zst"))
-            return error.InvalidSnapshotPath;
-
-        var parts = std.mem.splitSequence(u8, stem, "-");
-        const header = parts.next() orelse return error.InvalidSnapshotPath;
-        if (!std.mem.eql(u8, header, "snapshot"))
-            return error.InvalidSnapshotPath;
-
-        const slot_str = parts.next() orelse return error.InvalidSnapshotPath;
-        const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
-
-        const hash_str = parts.next() orelse return error.InvalidSnapshotPath;
-        const hash = Hash.parseBase58String(hash_str) catch return error.InvalidSnapshotPath;
-
-        return .{
-            .slot = slot,
-            .hash = hash,
-        };
-    }
-
-    const SnapshotNameFmtSpec = sig.utils.fmt.BoundedSpec("snapshot-{[slot]d}-{[hash]s}.tar.{[extension]s}");
-    const SnapshotNameStr = SnapshotNameFmtSpec.BoundedArrayValue(.{
+    pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .slot = std.math.maxInt(Slot),
         .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
-        .extension = CompressionMethod.extension(.zstd),
     });
 
-    pub fn snapshotNameStr(self: FullSnapshotFileInfo) SnapshotNameStr {
+    pub fn snapshotArchiveName(self: FullSnapshotFileInfo) SnapshotArchiveNameStr {
         const b58_str = self.hash.base58String();
-        return SnapshotNameFmtSpec.fmt(.{
+        return SnapshotArchiveNameFmtSpec.fmt(.{
             .slot = self.slot,
             .hash = sig.utils.fmt.boundedString(&b58_str),
-            .extension = self.compression.extension(),
         });
     }
 
-    test snapshotNameStr {
-        try std.testing.expectEqualStrings(
-            "snapshot-10-11111111111111111111111111111111.tar.zst",
-            snapshotNameStr(.{ .slot = 10, .hash = Hash.ZEROES }).constSlice(),
-        );
+    pub const ParseFileNameTarZstError = ParseFileBaseNameError || error{
+        MissingExtension,
+        InvalidExtension,
+    };
+
+    /// Matches with the regex: `^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$`.
+    pub fn parseFileNameTarZst(
+        filename: []const u8,
+    ) ParseFileNameTarZstError!FullSnapshotFileInfo {
+        const snapshot_file_info, const extension_start = try parseFileBaseName(filename);
+        if (extension_start == filename.len) return error.MissingExtension;
+        if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) return error.InvalidExtension;
+        return snapshot_file_info;
+    }
+
+    pub const ParseFileBaseNameError = error{
+        /// The file name did not start with 'snapshot-'.
+        MissingPrefix,
+        /// The prefix was not followed by a slot number.
+        MissingSlot,
+        /// The slot was not followed by a delimiter '-'.
+        MissingSlotDelimiter,
+        /// The slot number string either did not fit into
+        /// a `Slot` integer, or contained invalid digits.
+        InvalidSlot,
+        /// The slot was not followed by a hash.
+        MissingHash,
+        /// The hash was invalid.
+        InvalidHash,
+    };
+
+    /// Matches with the regex: `^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)`.
+    /// Returns the full snapshot info based on the parsed section, and the index to the
+    /// remainder of the unparsed section of `filename`, which the caller can check for
+    /// the expected extension.
+    pub fn parseFileBaseName(
+        filename: []const u8,
+    ) ParseFileBaseNameError!struct { FullSnapshotFileInfo, usize } {
+        const prefix = "snapshot-";
+        if (!std.mem.startsWith(u8, filename, prefix)) {
+            return error.MissingPrefix;
+        }
+
+        // parse slot until '-'
+        const slot, const slot_end = slot: {
+            const start = prefix.len;
+            if (start == filename.len) {
+                return error.MissingSlot;
+            }
+
+            const str_max_len = std.fmt.count("{d}", .{std.math.maxInt(Slot)});
+            const end_max = @max(filename.len, start + str_max_len + 1);
+            const filename_trunc = filename[0..end_max];
+            const end = std.mem.indexOfScalarPos(u8, filename_trunc, start + 1, '-') orelse
+                return error.MissingSlotDelimiter;
+
+            const str = filename[start..end];
+            const slot = std.fmt.parseInt(Slot, str, 10) catch |err| switch (err) {
+                error.Overflow, error.InvalidCharacter => return error.InvalidSlot,
+            };
+
+            break :slot .{ slot, end };
+        };
+
+        // parse until there's no base58 characters left
+        const hash, const hash_end = hash: {
+            const start = slot_end + 1;
+            if (start == filename.len) {
+                return error.MissingHash;
+            }
+
+            const str_max_len = Hash.base58_max_encoded_size;
+            const end_max = @max(filename.len, start + str_max_len + 1);
+            const filename_truncated = filename[0..end_max];
+            // TODO: accessing it this way is dirty, the base58 API should be improved
+            const alphabet = &base58.Alphabet.DEFAULT.encode;
+            const end = std.mem.indexOfNonePos(u8, filename_truncated, start + 1, alphabet) orelse
+                filename_truncated.len;
+
+            const str = filename[start..end];
+            const hash = Hash.parseBase58String(str) catch |err| switch (err) {
+                error.InvalidHash => return error.InvalidHash,
+            };
+
+            break :hash .{ hash, end };
+        };
+
+        const snapshot_file_info: FullSnapshotFileInfo = .{
+            .slot = slot,
+            .hash = hash,
+        };
+
+        return .{ snapshot_file_info, hash_end };
     }
 };
 
@@ -1988,65 +2038,146 @@ pub const IncrementalSnapshotFileInfo = struct {
     base_slot: Slot,
     slot: Slot,
     hash: Hash,
-    comptime compression: CompressionMethod = .zstd,
 
-    /// matches against regex: r"^incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
-    pub fn fromString(filename: []const u8) !IncrementalSnapshotFileInfo {
-        var ext_parts = std.mem.splitSequence(u8, filename, ".");
-        const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
+    const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst");
 
-        const extn = ext_parts.rest();
-        // only support tar.zst
-        if (!std.mem.eql(u8, extn, "tar.zst"))
-            return error.InvalidSnapshotPath;
+    pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
+        .base_slot = std.math.maxInt(Slot),
+        .slot = std.math.maxInt(Slot),
+        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+    });
 
-        var parts = std.mem.splitSequence(u8, stem, "-");
-        var header = parts.next() orelse return error.InvalidSnapshotPath;
-        if (!std.mem.eql(u8, header, "incremental"))
-            return error.InvalidSnapshotPath;
+    pub fn snapshotArchiveName(self: IncrementalSnapshotFileInfo) SnapshotArchiveNameStr {
+        const b58_str = self.hash.base58String();
+        return SnapshotArchiveNameFmtSpec.fmt(.{
+            .base_slot = self.base_slot,
+            .slot = self.slot,
+            .hash = sig.utils.fmt.boundedString(&b58_str),
+        });
+    }
 
-        header = parts.next() orelse return error.InvalidSnapshotPath;
-        if (!std.mem.eql(u8, header, "snapshot"))
-            return error.InvalidSnapshotPath;
+    pub const ParseFileNameTarZstError = ParseFileBaseNameError || error{
+        MissingExtension,
+        InvalidExtension,
+    };
 
-        const base_slot_str = parts.next() orelse return error.InvalidSnapshotPath;
-        const base_slot = std.fmt.parseInt(Slot, base_slot_str, 10) catch return error.InvalidSnapshotPath;
+    /// Matches against regex: `^incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$`.
+    pub fn parseFileNameTarZst(
+        filename: []const u8,
+    ) ParseFileNameTarZstError!IncrementalSnapshotFileInfo {
+        const snapshot_file_info, const extension_start = try parseFileBaseName(filename);
+        if (extension_start == filename.len) return error.MissingExtension;
+        if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) return error.InvalidExtension;
+        return snapshot_file_info;
+    }
 
-        const slot_str = parts.next() orelse return error.InvalidSnapshotPath;
-        const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
+    pub const ParseFileBaseNameError = error{
+        /// The file name did not start with 'incremental-snapshot-'.
+        MissingPrefix,
+        /// The prefix was not followed by a base slot number.
+        MissingBaseSlot,
+        /// The base slot was not followed by a delimiter '-'.
+        MissingBaseSlotDelimiter,
+        /// The base slot number string either did not fit into
+        /// a `Slot` integer, or contained invalid digits.
+        InvalidBaseSlot,
+        /// The base slot was not followed by a slot number.
+        MissingSlot,
+        /// The slot was not followed by a delimiter '-'.
+        MissingSlotDelimiter,
+        /// The slot number string either did not fit into
+        /// a `Slot` integer, or contained invalid digits.
+        InvalidSlot,
+        /// The slot was not followed by a hash.
+        MissingHash,
+        /// The hash was invalid.
+        InvalidHash,
+    };
 
-        const hash_str = parts.next() orelse return error.InvalidSnapshotPath;
-        const hash = Hash.parseBase58String(hash_str) catch return error.InvalidSnapshotPath;
+    /// Matches with the regex: `incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)`.
+    /// Returns the full snapshot info based on the parsed section, and the index to the
+    /// remainder of the unparsed section of `filename`, which the caller can check for
+    /// the expected extension.
+    pub fn parseFileBaseName(
+        filename: []const u8,
+    ) ParseFileBaseNameError!struct { IncrementalSnapshotFileInfo, usize } {
+        const prefix = "incremental-snapshot-";
+        if (!std.mem.startsWith(u8, filename, prefix)) {
+            return error.MissingPrefix;
+        }
 
-        return .{
+        // parse base slot until '-'
+        const base_slot, const base_slot_end = base_slot: {
+            const start = prefix.len;
+            if (start == filename.len) {
+                return error.MissingBaseSlot;
+            }
+
+            const str_max_len = std.fmt.count("{d}", .{std.math.maxInt(Slot)});
+            const end_max = @max(filename.len, start + str_max_len + 1);
+            const filename_trunc = filename[0..end_max];
+            const end = std.mem.indexOfScalarPos(u8, filename_trunc, start + 1, '-') orelse
+                return error.MissingSlotDelimiter;
+
+            const str = filename[start..end];
+            const base_slot = std.fmt.parseInt(Slot, str, 10) catch |err| switch (err) {
+                error.Overflow, error.InvalidCharacter => return error.InvalidBaseSlot,
+            };
+
+            break :base_slot .{ base_slot, end };
+        };
+
+        // parse slot until '-'
+        const slot, const slot_end = slot: {
+            const start = base_slot_end + 1;
+            if (start == filename.len) {
+                return error.MissingSlot;
+            }
+
+            const str_max_len = std.fmt.count("{d}", .{std.math.maxInt(Slot)});
+            const end_max = @max(filename.len, start + str_max_len + 1);
+            const filename_trunc = filename[0..end_max];
+            const end = std.mem.indexOfScalarPos(u8, filename_trunc, start + 1, '-') orelse
+                return error.MissingSlotDelimiter;
+
+            const str = filename[start..end];
+            const slot = std.fmt.parseInt(Slot, str, 10) catch |err| switch (err) {
+                error.Overflow, error.InvalidCharacter => return error.InvalidSlot,
+            };
+
+            break :slot .{ slot, end };
+        };
+
+        // parse until there's no base58 characters left
+        const hash, const hash_end = hash: {
+            const start = slot_end + 1;
+            if (start == filename.len) {
+                return error.MissingHash;
+            }
+
+            const str_max_len = Hash.base58_max_encoded_size;
+            const end_max = @max(filename.len, start + str_max_len + 1);
+            const filename_truncated = filename[0..end_max];
+            // TODO: accessing it this way is dirty, the base58 API should be improved
+            const alphabet = &base58.Alphabet.DEFAULT.encode;
+            const end = std.mem.indexOfNonePos(u8, filename_truncated, start + 1, alphabet) orelse
+                filename_truncated.len;
+
+            const str = filename[start..end];
+            const hash = Hash.parseBase58String(str) catch |err| switch (err) {
+                error.InvalidHash => return error.InvalidHash,
+            };
+
+            break :hash .{ hash, end };
+        };
+
+        const snapshot_file_info: IncrementalSnapshotFileInfo = .{
             .base_slot = base_slot,
             .slot = slot,
             .hash = hash,
         };
-    }
 
-    const SnapshotNameFmtSpec = sig.utils.fmt.BoundedSpec("incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.{[extension]s}");
-    pub const SnapshotNameStr = SnapshotNameFmtSpec.BoundedArrayValue(.{
-        .base_slot = std.math.maxInt(Slot),
-        .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
-        .extension = CompressionMethod.extension(.zstd),
-    });
-    pub fn snapshotNameStr(self: IncrementalSnapshotFileInfo) SnapshotNameStr {
-        const b58_str = self.hash.base58String();
-        return SnapshotNameFmtSpec.fmt(.{
-            .base_slot = self.base_slot,
-            .slot = self.slot,
-            .hash = sig.utils.fmt.boundedString(&b58_str),
-            .extension = self.compression.extension(),
-        });
-    }
-
-    test snapshotNameStr {
-        try std.testing.expectEqualStrings(
-            "incremental-snapshot-10-25-11111111111111111111111111111111.tar.zst",
-            snapshotNameStr(.{ .base_slot = 10, .slot = 25, .hash = Hash.ZEROES }).constSlice(),
-        );
+        return .{ snapshot_file_info, hash_end };
     }
 };
 
@@ -2068,7 +2199,7 @@ pub const SnapshotFiles = struct {
         var maybe_latest_full_snapshot: ?FullSnapshotFileInfo = null;
         var count: usize = 0;
         for (files) |filename| {
-            const snapshot = FullSnapshotFileInfo.fromString(filename) catch continue;
+            const snapshot = FullSnapshotFileInfo.parseFileNameTarZst(filename) catch continue;
             if (count == 0 or snapshot.slot > maybe_latest_full_snapshot.?.slot) {
                 maybe_latest_full_snapshot = snapshot;
             }
@@ -2079,7 +2210,7 @@ pub const SnapshotFiles = struct {
         count = 0;
         var maybe_latest_incremental_snapshot: ?IncrementalSnapshotFileInfo = null;
         for (files) |filename| {
-            const snapshot = IncrementalSnapshotFileInfo.fromString(filename) catch continue;
+            const snapshot = IncrementalSnapshotFileInfo.parseFileNameTarZst(filename) catch continue;
             // need to match the base slot
             if (snapshot.base_slot == latest_full_snapshot.slot and (count == 0 or
                 // this unwrap is safe because count > 0
@@ -2320,23 +2451,35 @@ pub fn parallelUnpackZstdTarBall(
     );
 }
 
-test "full snapshot path parsing" {
-    const full_snapshot_path = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
-    const snapshot_info = try FullSnapshotFileInfo.fromString(full_snapshot_path);
+test FullSnapshotFileInfo {
+    try std.testing.expectEqualStrings(
+        "snapshot-10-11111111111111111111111111111111.tar.zst",
+        FullSnapshotFileInfo.snapshotArchiveName(.{ .slot = 10, .hash = Hash.ZEROES }).constSlice(),
+    );
+
+    const snapshot_name = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
+    const snapshot_info = try FullSnapshotFileInfo.parseFileNameTarZst(snapshot_name);
 
     try std.testing.expectEqual(269, snapshot_info.slot);
     try std.testing.expectEqualStrings("EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn", snapshot_info.hash.base58String().constSlice());
-    try std.testing.expectEqual(.zstd, snapshot_info.compression);
+
+    try std.testing.expectEqualStrings(snapshot_name, snapshot_info.snapshotArchiveName().constSlice());
 }
 
-test "incremental snapshot path parsing" {
-    const path = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
-    const snapshot_info = try IncrementalSnapshotFileInfo.fromString(path);
+test IncrementalSnapshotFileInfo {
+    try std.testing.expectEqualStrings(
+        "incremental-snapshot-10-25-11111111111111111111111111111111.tar.zst",
+        IncrementalSnapshotFileInfo.snapshotArchiveName(.{ .base_slot = 10, .slot = 25, .hash = Hash.ZEROES }).constSlice(),
+    );
+
+    const snapshot_name = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
+    const snapshot_info = try IncrementalSnapshotFileInfo.parseFileNameTarZst(snapshot_name);
 
     try std.testing.expectEqual(269, snapshot_info.base_slot);
     try std.testing.expectEqual(307, snapshot_info.slot);
     try std.testing.expectEqualStrings("4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB", snapshot_info.hash.base58String().constSlice());
-    try std.testing.expectEqual(.zstd, snapshot_info.compression);
+
+    try std.testing.expectEqualStrings(snapshot_name, snapshot_info.snapshotArchiveName().constSlice());
 }
 
 test "parse status cache" {
