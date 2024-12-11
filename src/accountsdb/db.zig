@@ -383,6 +383,64 @@ test "S3_FIFO read main + evict" {
     );
 }
 
+/// Used for atomic appends + pops; No guarantees for elements.
+/// Methods follow that of ArrayListUnmanaged
+pub fn AtomicStack(T: type) type {
+    return struct {
+        const Self = @This();
+
+        buf: [*]T,
+        len: std.atomic.Value(usize),
+        cap: usize, // fixed
+
+        fn init(allocator: std.mem.Allocator, cap: usize) !Self {
+            const buf = try allocator.alloc(T, cap);
+            return .{
+                .buf = buf.ptr,
+                .len = .{ .raw = 0 },
+                .cap = cap,
+            };
+        }
+
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.buf[0..self.cap]);
+            self.* = undefined;
+        }
+
+        // add new item to the end of buf, incrementing self.len atomically
+        fn appendAssumeCapacity(self: *Self, item: T) void {
+            const prev_len = self.len.load(.acquire);
+            if (prev_len >= self.cap) unreachable;
+            self.buf[prev_len] = item;
+            _ = self.len.fetchAdd(1, .release);
+        }
+
+        // return item at end of buf, decrementing self.len atomically
+        fn popOrNull(self: *Self) ?T {
+            const prev_len = self.len.fetchSub(1, .acquire);
+            if (prev_len == 0) {
+                _ = self.len.fetchAdd(1, .release);
+                return null;
+            }
+            return self.buf[prev_len - 1];
+        }
+    };
+}
+
+test AtomicStack {
+    const allocator = std.testing.allocator;
+    var stack = try AtomicStack(usize).init(allocator, 100);
+    defer stack.deinit(allocator);
+
+    for (0..100) |i| stack.appendAssumeCapacity(i);
+
+    var i: usize = 100;
+    while (i > 0) {
+        i -= 1;
+        try std.testing.expectEqual(i, stack.popOrNull());
+    }
+}
+
 /// Used for obtaining cached reads
 pub const BufferPool = struct {
     /// arbitrarily chosen, I believe >95% of accounts will be <= 512 bytes
@@ -407,8 +465,7 @@ pub const BufferPool = struct {
 
     /// indexes of all free frames
     /// free frames have a refcount of 0 *and* have been evicted
-    // TODO: thread safety? - I only append & pop, should be trivial
-    free_list: std.ArrayListUnmanaged(FrameIndex),
+    free_list: AtomicStack(FrameIndex),
 
     /// uniquely identifies a frame
     /// for finding your wanted index
@@ -436,7 +493,7 @@ pub const BufferPool = struct {
         var frames_metadata = try FramesMetadata.init(init_allocator, num_frames);
         errdefer frames_metadata.deinit(init_allocator);
 
-        var free_list = try std.ArrayListUnmanaged(FrameIndex).initCapacity(init_allocator, num_frames);
+        var free_list = try AtomicStack(FrameIndex).init(init_allocator, num_frames);
         errdefer free_list.deinit(init_allocator);
         for (0..num_frames) |i| free_list.appendAssumeCapacity(@intCast(i));
 
@@ -904,9 +961,9 @@ test "BufferPool filesize > frame_size * num_frames" {
         // when we've already filled every frame, we evict as we go
         // => free list should be empty
         if (offset >= BufferPool.FRAME_SIZE * num_frames) {
-            try std.testing.expectEqual(0, bp.free_list.items.len);
+            try std.testing.expectEqual(0, bp.free_list.len.raw);
         } else {
-            try std.testing.expect(bp.free_list.items.len > 0);
+            try std.testing.expect(bp.free_list.len.raw > 0);
         }
 
         const read_frame = try bp.read(
