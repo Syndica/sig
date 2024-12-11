@@ -48,10 +48,15 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
     };
 
+    const N_ACCOUNTS_MAX: ?u64 = null;
+    const N_ACCOUNTS_PER_SLOT = 10;
+
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{
+        .safety = true,
+    }){};
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
 
@@ -150,7 +155,12 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         const action = random.enumValue(enum { put, get });
         switch (action) {
             .put => {
-                const N_ACCOUNTS_PER_SLOT = 10;
+                var update_all_existing = false;
+                if (N_ACCOUNTS_MAX != null and tracked_accounts.count() > N_ACCOUNTS_MAX.?) {
+                    // NOTE: we don't want to grow the db indefinitely -- so when we reach
+                    // the max, we only update existing accounts
+                    update_all_existing = true;
+                }
 
                 var accounts: [N_ACCOUNTS_PER_SLOT]Account = undefined;
                 var pubkeys: [N_ACCOUNTS_PER_SLOT]Pubkey = undefined;
@@ -162,7 +172,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     var tracked_account = try TrackedAccount.initRandom(random, slot);
 
                     const existing_pubkey = random.boolean();
-                    if (existing_pubkey and tracked_accounts.count() > 0) {
+                    if ((existing_pubkey and tracked_accounts.count() > 0) or update_all_existing) {
                         const index = random.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
                         const key = tracked_accounts.keys()[index];
                         // only if the pubkey is not already in this slot
@@ -318,7 +328,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 &snapshot_fields,
                 1,
                 true,
-                1_500,
+                N_ACCOUNTS_PER_SLOT,
                 false,
                 false,
             );
