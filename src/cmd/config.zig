@@ -5,6 +5,10 @@ const ACCOUNT_INDEX_SHARDS = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS;
 const ShredCollectorConfig = sig.shred_network.ShredCollectorConfig;
 const IpAddr = sig.net.IpAddr;
 const LogLevel = sig.trace.Level;
+const Cluster = sig.core.Cluster;
+const SocketAddr = sig.net.SocketAddr;
+
+const resolveSocketAddr = sig.net.net.resolveSocketAddr;
 
 pub const Config = struct {
     identity: IdentityConfig = .{},
@@ -23,10 +27,10 @@ pub const Config = struct {
     log_level: LogLevel = .debug,
     metrics_port: u16 = 12345,
 
-    pub fn genesisFilePath(self: Config) error{UnknownNetwork}!?[]const u8 {
+    pub fn genesisFilePath(self: Config) error{UnknownCluster}!?[]const u8 {
         return if (self.genesis_file_path) |provided_path|
             provided_path
-        else if (try self.gossip.getNetwork()) |n| switch (n) {
+        else if (try self.gossip.getCluster()) |n| switch (n) {
             .mainnet => "data/genesis-files/mainnet_genesis.bin",
             .devnet => "data/genesis-files/devnet_genesis.bin",
             .testnet => "data/genesis-files/testnet_genesis.bin",
@@ -38,9 +42,9 @@ pub const Config = struct {
 pub const current: *Config = &default_validator_config;
 var default_validator_config: Config = .{};
 
-const IdentityConfig = struct {};
+pub const IdentityConfig = struct {};
 
-const GossipConfig = struct {
+pub const GossipConfig = struct {
     host: ?[]const u8 = null,
     port: u16 = 8001,
     entrypoints: [][]const u8 = &.{},
@@ -49,7 +53,7 @@ const GossipConfig = struct {
     dump: bool = false,
     trusted_validators: [][]const u8 = &.{},
 
-    pub fn getHost(config: GossipConfig) ?sig.net.IpAddr.ParseIpError!IpAddr {
+    pub fn getHost(config: GossipConfig) sig.net.IpAddr.ParseIpError!?IpAddr {
         const host_str = config.host orelse return null;
         const socket = try sig.net.IpAddr.parse(host_str);
         return switch (socket) {
@@ -67,53 +71,43 @@ const GossipConfig = struct {
         };
     }
 
-    pub fn getNetwork(self: GossipConfig) error{UnknownNetwork}!?Network {
+    pub fn getCluster(self: GossipConfig) error{UnknownCluster}!?Cluster {
         return if (self.network) |network_str|
-            std.meta.stringToEnum(Network, network_str) orelse
-                error.UnknownNetwork
+            std.meta.stringToEnum(Cluster, network_str) orelse
+                error.UnknownCluster
         else
             null;
     }
-};
 
-pub const Network = enum {
-    mainnet,
-    devnet,
-    testnet,
-    localnet,
+    pub fn getEntrypointAddrs(
+        self: GossipConfig,
+        allocator: std.mem.Allocator,
+    ) ![]SocketAddr {
+        var entrypoint_set = std.AutoArrayHashMap(SocketAddr, void).init(allocator);
+        defer entrypoint_set.deinit();
 
-    const Self = @This();
+        // add cluster entrypoints
+        if (try self.getCluster()) |cluster| {
+            for (sig.gossip.getClusterEntrypoints(cluster)) |entrypoint| {
+                const socket_addr = try resolveSocketAddr(allocator, entrypoint);
+                try entrypoint_set.put(socket_addr, {});
+            }
+        }
 
-    pub fn entrypoints(self: Self) []const []const u8 {
-        return switch (self) {
-            .mainnet => &.{
-                "entrypoint.mainnet-beta.solana.com:8001",
-                "entrypoint2.mainnet-beta.solana.com:8001",
-                "entrypoint3.mainnet-beta.solana.com:8001",
-                "entrypoint4.mainnet-beta.solana.com:8001",
-                "entrypoint5.mainnet-beta.solana.com:8001",
-            },
-            .testnet => &.{
-                "entrypoint.testnet.solana.com:8001",
-                "entrypoint2.testnet.solana.com:8001",
-                "entrypoint3.testnet.solana.com:8001",
-            },
-            .devnet => &.{
-                "entrypoint.devnet.solana.com:8001",
-                "entrypoint2.devnet.solana.com:8001",
-                "entrypoint3.devnet.solana.com:8001",
-                "entrypoint4.devnet.solana.com:8001",
-                "entrypoint5.devnet.solana.com:8001",
-            },
-            .localnet => &.{
-                "127.0.0.1:1024", // agave test-validator default
-                "127.0.0.1:8001", // sig validator default
-            },
-        };
+        // add config entrypoints
+        for (self.entrypoints) |entrypoint| {
+            const socket_addr = SocketAddr.parse(entrypoint) catch brk: {
+                break :brk try resolveSocketAddr(allocator, entrypoint);
+            };
+            try entrypoint_set.put(socket_addr, {});
+        }
+
+        const entrypoints = try allocator.dupe(SocketAddr, entrypoint_set.keys());
+        return entrypoints;
     }
 };
 
-const shred_network_defaults = ShredCollectorConfig{
+pub const shred_network_defaults = ShredCollectorConfig{
     .turbine_recv_port = 8002,
     .repair_port = 8003,
     .start_slot = null,

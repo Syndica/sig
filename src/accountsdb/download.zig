@@ -229,7 +229,7 @@ pub fn downloadSnapshotsFromGossip(
             const snapshot_filename = snapshot_filename_bounded.constSlice();
 
             const rpc_socket = peer.contact_info.rpc_addr.?;
-            const rpc_url_bounded = rpc_socket.toStringBounded();
+            const rpc_url_bounded = rpc_socket.toString();
             const rpc_url = rpc_url_bounded.constSlice();
 
             const bStr = sig.utils.fmt.boundedString;
