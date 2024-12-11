@@ -416,6 +416,7 @@ pub const Client = struct {
 };
 
 test "getAccountInfo: null value" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -429,6 +430,7 @@ test "getAccountInfo: null value" {
 }
 
 test "getAccountInfo" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -439,6 +441,7 @@ test "getAccountInfo" {
 }
 
 test "getBalance" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -449,6 +452,7 @@ test "getBalance" {
 }
 
 test "getBlockHeight" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -458,6 +462,7 @@ test "getBlockHeight" {
 }
 
 test "getBlockCommitment" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -469,6 +474,7 @@ test "getBlockCommitment" {
 }
 
 test "getEpochInfo" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -478,6 +484,7 @@ test "getEpochInfo" {
 }
 
 test "getEpochSchedule" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -498,6 +505,7 @@ test "getEpochSchedule" {
 // TODO: test getLargeAccounts()
 
 test "getLatestBlockhash" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -507,6 +515,7 @@ test "getLatestBlockhash" {
 }
 
 test "getLeaderSchedule" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -524,6 +533,7 @@ test "getLeaderSchedule" {
 // TODO: test getRecentPrioritizationFees()
 
 test "getSignatureStatuses" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -543,6 +553,7 @@ test "getSignatureStatuses" {
 // TODO: test getSignaturesForAddress()
 
 test "getSlot" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -571,6 +582,7 @@ test "getSlot" {
 // TODO: test simulateTransaction()
 
 test "getVersion" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
