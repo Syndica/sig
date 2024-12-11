@@ -7,7 +7,7 @@ const math = std.math;
 const Decl = std.builtin.Type.Declaration;
 const Duration = sig.time.Duration;
 
-const initGossipFromNetwork = sig.gossip.helpers.initGossipFromNetwork;
+const initGossipFromCluster = sig.gossip.helpers.initGossipFromCluster;
 
 pub const BenchTimeUnit = enum {
     nanos,
@@ -184,34 +184,40 @@ pub fn main() !void {
         if ((filter == .accounts_db_snapshot or run_all) and run_expensive_benchmarks) {
             // NOTE: snapshot must exist in this directory for the benchmark to run
             // NOTE: also need to increase file limits to run this benchmark (see debugging.md)
-            const SNAPSHOT_DIR_PATH = @import("accountsdb/db.zig")
+            const BENCH_SNAPSHOT_DIR_PATH = @import("accountsdb/db.zig")
                 .BenchmarkAccountsDBSnapshotLoad
                 .SNAPSHOT_DIR_PATH;
 
             var test_snapshot_exists = true;
-            if (std.fs.cwd().openDir(SNAPSHOT_DIR_PATH, .{ .iterate = true })) |dir| {
+            if (std.fs.cwd().openDir(BENCH_SNAPSHOT_DIR_PATH, .{ .iterate = true })) |dir| {
                 std.posix.close(dir.fd);
             } else |_| {
                 test_snapshot_exists = false;
             }
 
-            if (force_fresh_state or !test_snapshot_exists) {
-                // delete + download fresh snapshot
+            const download_new_snapshot = force_fresh_state or !test_snapshot_exists;
+            if (download_new_snapshot) {
+                // delete existing snapshot dir
                 if (force_fresh_state and test_snapshot_exists) {
                     std.debug.print("deleting snapshot dir...\n", .{});
-                    std.fs.cwd().deleteTreeMinStackSize(SNAPSHOT_DIR_PATH) catch |err| {
+                    std.fs.cwd().deleteTreeMinStackSize(BENCH_SNAPSHOT_DIR_PATH) catch |err| {
                         std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{
-                            SNAPSHOT_DIR_PATH,
+                            BENCH_SNAPSHOT_DIR_PATH,
                             err,
                         });
                     };
                 }
-                try std.fs.cwd().makeDir(SNAPSHOT_DIR_PATH);
 
-                var snapshot_dir = try std.fs.cwd().openDir(SNAPSHOT_DIR_PATH, .{ .iterate = true });
+                // make fresh snapshot dir
+                try std.fs.cwd().makeDir(BENCH_SNAPSHOT_DIR_PATH);
+                var snapshot_dir = try std.fs.cwd().openDir(
+                    BENCH_SNAPSHOT_DIR_PATH,
+                    .{ .iterate = true },
+                );
                 defer snapshot_dir.close();
 
-                const gossip_service = try initGossipFromNetwork(
+                // start gossip to download snapshot
+                const gossip_service = try initGossipFromCluster(
                     allocator,
                     .noop, // dont need logs here
                     .testnet,
@@ -223,6 +229,7 @@ pub fn main() !void {
                 }
                 try gossip_service.start(.{});
 
+                // use config to get reasonable default value for min_snapshot_download_speed_mbs
                 const default_config = sig.cmd.config.AccountsDBConfig{};
                 const default_min_mb_per_sec = default_config.min_snapshot_download_speed_mbs;
 
