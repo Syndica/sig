@@ -245,7 +245,7 @@ pub fn downloadSnapshotsFromGossip(
 
             downloadFile(
                 allocator,
-                logger.unscoped(),
+                logger,
                 snapshot_url,
                 output_dir,
                 snapshot_filename,
@@ -286,7 +286,7 @@ pub fn downloadSnapshotsFromGossip(
                 logger.info().logf("downloading inc_snapshot from: {s}", .{inc_snapshot_url});
                 _ = downloadFile(
                     allocator,
-                    logger.unscoped(),
+                    logger,
                     inc_snapshot_url,
                     output_dir,
                     inc_snapshot_filename,
@@ -309,7 +309,7 @@ pub fn downloadSnapshotsFromGossip(
 const DownloadProgress = struct {
     file: std.fs.File,
     min_mb_per_second: ?usize,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: ScopedLogger(LOG_SCOPE),
 
     progress_timer: sig.time.Timer,
     bytes_read: u64 = 0,
@@ -319,7 +319,7 @@ const DownloadProgress = struct {
     const Self = @This();
 
     fn init(
-        logger: Logger,
+        logger: ScopedLogger(LOG_SCOPE),
         output_dir: std.fs.Dir,
         filename: []const u8,
         download_size: usize,
@@ -330,7 +330,7 @@ const DownloadProgress = struct {
         try file.setEndPos(download_size);
 
         return .{
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger,
             .file = file,
             .min_mb_per_second = min_mb_per_second,
             .progress_timer = try sig.time.Timer.start(),
@@ -481,13 +481,12 @@ fn enableProgress(
 /// the main errors include {HeaderRequestFailed, NoContentLength, TooSlow} or a curl-related error
 pub fn downloadFile(
     allocator: std.mem.Allocator,
-    logger_: Logger,
+    logger: ScopedLogger(LOG_SCOPE),
     url: [:0]const u8,
     output_dir: std.fs.Dir,
     filename: []const u8,
     min_mb_per_second: ?usize,
 ) !void {
-    const logger = logger_.withScope(LOG_SCOPE);
     var easy = try curl.Easy.init(allocator, .{});
     defer easy.deinit();
 
@@ -509,7 +508,7 @@ pub fn downloadFile(
     // timeout will need to be larger
     easy.timeout_ms = std.time.ms_per_hour * 5; // 5 hours is probs too long but its ok
     var download_progress = try DownloadProgress.init(
-        logger.unscoped(),
+        logger,
         output_dir,
         filename,
         download_size,
