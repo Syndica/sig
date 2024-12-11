@@ -2113,7 +2113,8 @@ pub const AllSnapshotFields = struct {
         snapshot_dir: std.fs.Dir,
         files: SnapshotFiles,
     ) !Self {
-        const logger = logger_.withScope(@typeName((Self)));
+        const logger = logger_.withScope("accounts_db.snapshot_fields");
+
         // unpack
         const full_fields = blk: {
             const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full_snapshot.slot});

@@ -11,6 +11,9 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipService = sig.gossip.GossipService;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const DOWNLOAD_PROGRESS_UPDATES_NS = 6 * std.time.ns_per_s;
 
@@ -537,10 +540,38 @@ pub fn downloadFile(
     }
 }
 
-const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
-const SignedGossipData = sig.gossip.data.SignedGossipData;
+pub fn downloadSnapshotFromCluster(
+    allocator: std.mem.Allocator,
+    logger: Logger,
+    snapshot_dir: std.fs.Dir,
+    cluster: sig.core.Cluster,
+) !void {
+    // start gossip to download snapshot
+    const gossip_service = try sig.gossip.helpers.initGossipFromCluster(
+        allocator,
+        logger,
+        cluster,
+    );
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
+    }
+    try gossip_service.start(.{});
 
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+    // use config to get reasonable default value for min_snapshot_download_speed_mbs
+    const default_config = sig.cmd.config.AccountsDBConfig{};
+    const default_min_mb_per_sec = default_config.min_snapshot_download_speed_mbs;
+
+    try sig.accounts_db.download.downloadSnapshotsFromGossip(
+        allocator,
+        logger,
+        null,
+        gossip_service,
+        snapshot_dir,
+        @intCast(default_min_mb_per_sec),
+    );
+}
 
 test "accounts_db.download: test remove untrusted peers" {
     const allocator = std.testing.allocator;

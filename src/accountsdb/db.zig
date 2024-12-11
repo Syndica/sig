@@ -43,7 +43,6 @@ const Slot = sig.core.Slot;
 
 const NestedHashTree = sig.utils.merkle_tree.NestedHashTree;
 const Logger = sig.trace.log.Logger;
-
 const GeyserWriter = sig.geyser.GeyserWriter;
 
 const Counter = sig.prometheus.counter.Counter;
@@ -60,6 +59,9 @@ const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 const globalRegistry = sig.prometheus.registry.globalRegistry;
 
+const LOG_SCOPE = "accounts_db";
+const ScopedLogger = sig.trace.log.ScopedLogger(LOG_SCOPE);
+
 pub const DB_LOG_RATE = sig.time.Duration.fromSecs(5);
 pub const DB_MANAGER_LOOP_MIN = sig.time.Duration.fromSecs(5);
 
@@ -74,10 +76,10 @@ pub const DELETE_ACCOUNT_FILES_MIN = 100;
 pub const AccountsDB = struct {
 
     // injected dependencies
-
     allocator: std.mem.Allocator,
     metrics: AccountsDBMetrics,
-    logger: Logger,
+    logger: ScopedLogger,
+
     /// Not closed by the `AccountsDB`, but must live at least as long as it.
     snapshot_dir: std.fs.Dir,
     geyser_writer: ?*GeyserWriter,
@@ -204,7 +206,7 @@ pub const AccountsDB = struct {
         return .{
             .allocator = params.allocator,
             .metrics = metrics,
-            .logger = params.logger,
+            .logger = params.logger.withScope(LOG_SCOPE),
             .snapshot_dir = params.snapshot_dir,
             .geyser_writer = params.geyser_writer,
             .gossip_view = params.gossip_view,
@@ -306,8 +308,7 @@ pub const AccountsDB = struct {
             var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
             defer fastload_dir.close();
 
-            self.logger.info().log("saving account index state to disk...");
-            try self.account_index.saveToDisk(fastload_dir, self.logger);
+            try self.account_index.saveToDisk(fastload_dir);
         }
 
         if (validate) {
@@ -377,7 +378,7 @@ pub const AccountsDB = struct {
 
         // NOTE: index loading was the most expensive part which we fastload here
         self.logger.info().log("loading account index");
-        try self.account_index.loadFromDisk(dir, self.logger);
+        try self.account_index.loadFromDisk(dir);
     }
 
     /// loads the account files and generates the account index from a snapshot
@@ -704,7 +705,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger.withScope(@typeName(Self)),
+                    self.logger,
                     &timer,
                     n_account_files,
                     file_count,
@@ -742,7 +743,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger.withScope(@typeName(Self)),
+                    self.logger,
                     &timer,
                     n_accounts_total,
                     ref_count,
@@ -761,14 +762,14 @@ pub const AccountsDB = struct {
         thread_dbs: []AccountsDB,
         n_threads: usize,
     ) !void {
-        var combine_indexes_wg: std.Thread.WaitGroup = .{};
-        defer combine_indexes_wg.wait();
-        try spawnThreadTasks(combineThreadIndexesMultiThread, .{
-            .wg = &combine_indexes_wg,
+        var merge_indexes_wg: std.Thread.WaitGroup = .{};
+        defer merge_indexes_wg.wait();
+        try spawnThreadTasks(mergeThreadIndexesMultiThread, .{
+            .wg = &merge_indexes_wg,
             .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
             .max_threads = n_threads,
             .params = .{
-                self.logger.unscoped(),
+                self.logger,
                 &self.account_index,
                 thread_dbs,
             },
@@ -830,13 +831,12 @@ pub const AccountsDB = struct {
 
     /// combines multiple thread indexes into the given index.
     /// each bin is also sorted by pubkey.
-    pub fn combineThreadIndexesMultiThread(
-        logger_: Logger,
+    pub fn mergeThreadIndexesMultiThread(
+        logger: ScopedLogger,
         index: *AccountIndex,
         thread_dbs: []const AccountsDB,
         task: sig.utils.thread.TaskParams,
     ) !void {
-        const logger = logger_.withScope(@typeName(Self));
         const shard_start_index = task.start_index;
         const shard_end_index = task.end_index;
 
@@ -880,7 +880,7 @@ pub const AccountsDB = struct {
                     &timer,
                     total_shards,
                     iteration_count,
-                    "combining thread indexes",
+                    "merging thread indexes",
                     "thread0",
                 );
                 progress_timer.reset();
@@ -1239,7 +1239,7 @@ pub const AccountsDB = struct {
 
             if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
-                    self.logger.withScope(@typeName(Self)),
+                    self.logger,
                     &timer,
                     shards.len,
                     count,
@@ -4349,6 +4349,15 @@ test "generate snapshot & update gossip snapshot hashes" {
     }
 }
 
+pub fn getAccountPerFileEstimateFromCluster(
+    cluster: sig.core.Cluster,
+) error{NotImplementedYet}!u64 {
+    return switch (cluster) {
+        .testnet => 500,
+        else => error.NotImplementedYet,
+    };
+}
+
 pub const BenchmarkAccountsDBSnapshotLoad = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 1;
@@ -4359,19 +4368,17 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         use_disk: bool,
         n_threads: u32,
         name: []const u8,
+        cluster: sig.core.Cluster,
+        // TODO: support fastloading checks
     };
 
     pub const args = [_]BenchArgs{
         BenchArgs{
-            .name = "RAM index (2 threads)",
+            .name = "testnet - ram index - 4 threads",
             .use_disk = false,
-            .n_threads = 2,
+            .n_threads = 4,
+            .cluster = .testnet,
         },
-        // BenchArgs{
-        //     .use_disk = true,
-        //     .n_threads = 2,
-        //     .name = "DISK index (2 threads)",
-        // },
     };
 
     pub fn loadAndVerifySnapshot(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
@@ -4384,7 +4391,11 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
         // unpack the snapshot
         var snapshot_dir = std.fs.cwd().openDir(SNAPSHOT_DIR_PATH, .{ .iterate = true }) catch {
-            std.debug.print("need to setup a snapshot in {s} for this benchmark...\n", .{SNAPSHOT_DIR_PATH});
+            // not snapshot -> early exit
+            std.debug.print(
+                "need to setup a snapshot in {s} for this benchmark...\n",
+                .{SNAPSHOT_DIR_PATH},
+            );
             const zero_duration = sig.time.Duration.fromNanos(0);
             return .{
                 .load_time = zero_duration.asNanos(),
@@ -4394,29 +4405,56 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         defer snapshot_dir.close();
 
         const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
-
         var accounts_dir = inline for (0..2) |attempt| {
             if (snapshot_dir.openDir("accounts", .{ .iterate = true })) |accounts_dir|
                 break accounts_dir
             else |err| switch (err) {
                 else => |e| return e,
                 error.FileNotFound => if (attempt == 0) {
-                    const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
-                    defer archive_file.close();
-                    try parallelUnpackZstdTarBall(
-                        allocator,
-                        logger,
-                        archive_file,
-                        snapshot_dir,
-                        try std.Thread.getCpuCount() / 2,
-                        true,
-                    );
+                    // unpack the full snapshot
+                    {
+                        const archive_file = try snapshot_dir.openFile(
+                            snapshot_files.full_snapshot.snapshotNameStr().constSlice(),
+                            .{},
+                        );
+                        defer archive_file.close();
+                        try parallelUnpackZstdTarBall(
+                            allocator,
+                            logger,
+                            archive_file,
+                            snapshot_dir,
+                            try std.Thread.getCpuCount() / 2,
+                            true,
+                        );
+                    }
+
+                    // unpack the incremental snapshot
+                    if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
+                        const archive_file = try snapshot_dir.openFile(
+                            incremental_snapshot.snapshotNameStr().constSlice(),
+                            .{},
+                        );
+                        defer archive_file.close();
+                        try parallelUnpackZstdTarBall(
+                            allocator,
+                            logger,
+                            archive_file,
+                            snapshot_dir,
+                            try std.Thread.getCpuCount() / 2,
+                            true,
+                        );
+                    }
                 },
             }
         } else return error.SnapshotMissingAccountsDir;
         defer accounts_dir.close();
 
-        var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+        var snapshots = try AllSnapshotFields.fromFiles(
+            allocator,
+            logger,
+            snapshot_dir,
+            snapshot_files,
+        );
         defer snapshots.deinit(allocator);
         const snapshot = try snapshots.collapse(allocator);
 
@@ -4436,7 +4474,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             snapshot.accounts_db_fields,
             bench_args.n_threads,
             allocator,
-            500,
+            getAccountPerFileEstimateFromCluster(bench_args.cluster),
         );
 
         const full_snapshot = snapshots.full;
@@ -4447,9 +4485,9 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .accounts_hash = snapshot.accounts_db_fields.bank_hash_info.accounts_hash,
                 .capitalization = full_snapshot.bank_fields.capitalization,
             },
-            .expected_incremental = if (snapshot.bank_extra.snapshot_persistence) |inc_persistence| .{
-                .accounts_hash = inc_persistence.incremental_hash,
-                .capitalization = inc_persistence.incremental_capitalization,
+            .expected_incremental = if (snapshot.bank_extra.snapshot_persistence) |persistence| .{
+                .accounts_hash = persistence.incremental_hash,
+                .capitalization = persistence.incremental_capitalization,
             } else null,
         });
         const validate_duration = validate_timer.read();

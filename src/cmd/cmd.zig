@@ -1651,7 +1651,12 @@ fn getOrDownloadSnapshots(
 
     timer.reset();
     logger.info().log("reading snapshot metadata...");
-    const snapshots = try AllSnapshotFields.fromFiles(allocator, logger.unscoped(), snapshot_dir, snapshot_files);
+    const snapshots = try AllSnapshotFields.fromFiles(
+        allocator,
+        logger.unscoped(),
+        snapshot_dir,
+        snapshot_files,
+    );
     logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
     return .{ snapshots, snapshot_files };
