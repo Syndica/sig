@@ -3314,7 +3314,7 @@ test "testWriteSnapshot" {
         try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, true);
     }
 
-    if (snap_files.incremental_snapshot) |inc_snap| {
+    if (snap_files.incremental()) |inc_snap| {
         const archive_file = try test_data_dir.openFile(inc_snap.snapshotArchiveName().constSlice(), .{});
         defer archive_file.close();
         try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, false);
@@ -3341,8 +3341,8 @@ test "testWriteSnapshot" {
     try testWriteSnapshotIncremental(
         allocator,
         &accounts_db,
-        snap_files.incremental_snapshot.?.slot,
-        snap_files.incremental_snapshot.?.hash,
+        snap_files.incremental_info.?.slot,
+        snap_files.incremental_info.?.hash,
     );
 }
 
@@ -3363,7 +3363,7 @@ pub fn findAndUnpackTestSnapshots(
     const snapshot_files = try SnapshotFiles.find(allocator, test_data_dir);
 
     {
-        const full_name_bounded = snapshot_files.full_snapshot.snapshotArchiveName();
+        const full_name_bounded = snapshot_files.full().snapshotArchiveName();
         const full_name = full_name_bounded.constSlice();
         const full_archive_file = try test_data_dir.openFile(full_name, .{});
         defer full_archive_file.close();
@@ -3377,7 +3377,7 @@ pub fn findAndUnpackTestSnapshots(
         );
     }
 
-    if (snapshot_files.incremental_snapshot) |inc| {
+    if (snapshot_files.incremental()) |inc| {
         const inc_name_bounded = inc.snapshotArchiveName();
         const inc_name = inc_name_bounded.constSlice();
         const inc_archive_file = try test_data_dir.openFile(inc_name, .{});
@@ -4402,7 +4402,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             else |err| switch (err) {
                 else => |e| return e,
                 error.FileNotFound => if (attempt == 0) {
-                    const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotArchiveName().constSlice(), .{});
+                    const archive_file = try snapshot_dir.openFile(snapshot_files.full().snapshotArchiveName().constSlice(), .{});
                     defer archive_file.close();
                     try parallelUnpackZstdTarBall(
                         allocator,

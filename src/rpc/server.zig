@@ -410,11 +410,9 @@ test Server {
     const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
     const snap_files = try SnapshotFiles.find(allocator, test_data_dir);
 
-    const full_snap_name_bounded = snap_files.full_snapshot.snapshotArchiveName();
-    const maybe_inc_snap_name_bounded = if (snap_files.incremental_snapshot) |inc|
-        inc.snapshotArchiveName()
-    else
-        null;
+    const full_snap_name_bounded = snap_files.full().snapshotArchiveName();
+    const maybe_inc_snap_name_bounded =
+        if (snap_files.incremental()) |inc| inc.snapshotArchiveName() else null;
 
     {
         const full_snap_name = full_snap_name_bounded.constSlice();

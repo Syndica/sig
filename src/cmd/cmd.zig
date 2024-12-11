@@ -1375,9 +1375,9 @@ fn loadSnapshot(
     result.snapshot_fields = all_snapshot_fields;
 
     logger.info().logf("full snapshot: {s}", .{
-        sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full_snapshot.snapshotArchiveName().constSlice()),
+        sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full().snapshotArchiveName().constSlice()),
     });
-    if (snapshot_files.incremental_snapshot) |inc_snap| {
+    if (snapshot_files.incremental()) |inc_snap| {
         logger.info().logf("incremental snapshot: {s}", .{
             sig.utils.fmt.tryRealPath(snapshot_dir, inc_snap.snapshotArchiveName().constSlice()),
         });
@@ -1569,7 +1569,7 @@ fn getOrDownloadSnapshots(
         break :blk try SnapshotFiles.find(allocator, snapshot_dir);
     };
 
-    if (snapshot_files.incremental_snapshot == null) {
+    if (snapshot_files.incremental_info == null) {
         logger.info().log("no incremental snapshot found");
     }
 
@@ -1607,10 +1607,10 @@ fn getOrDownloadSnapshots(
         // if accounts/ doesnt exist then we unpack the found snapshots
         // TODO: delete old accounts/ dir if it exists
         timer.reset();
-        logger.info().logf("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotArchiveName().constSlice()});
+        logger.info().logf("unpacking {s}...", .{snapshot_files.full().snapshotArchiveName().constSlice()});
         {
             const archive_file = try snapshot_dir.openFile(
-                snapshot_files.full_snapshot.snapshotArchiveName().constSlice(),
+                snapshot_files.full().snapshotArchiveName().constSlice(),
                 .{},
             );
             defer archive_file.close();
@@ -1626,7 +1626,7 @@ fn getOrDownloadSnapshots(
         logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
 
         // TODO: can probs do this in parallel with full snapshot
-        if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
+        if (snapshot_files.incremental()) |incremental_snapshot| {
             timer.reset();
             logger.info().logf("unpacking {s}...", .{incremental_snapshot.snapshotArchiveName().constSlice()});
 
