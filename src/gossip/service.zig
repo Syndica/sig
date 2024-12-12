@@ -3297,7 +3297,7 @@ test "init, exit, and deinit" {
 
     const logger = test_logger.logger();
 
-    var gossip_service = try GossipService.create(
+    const gossip_service = try GossipService.create(
         std.testing.allocator,
         std.testing.allocator,
         contact_info,
@@ -3311,10 +3311,7 @@ test "init, exit, and deinit" {
     }
 
     const handle = try std.Thread.spawn(.{}, GossipService.run, .{
-        gossip_service, .{
-            .spy_node = true,
-            .dump = false,
-        },
+        gossip_service, .{ .spy_node = true, .dump = false },
     });
     defer {
         gossip_service.shutdown();

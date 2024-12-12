@@ -1367,13 +1367,18 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger.unscoped(), options.gossip_service, .{
-        .snapshot_dir = snapshot_dir,
-        .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
-        .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
-        .num_threads_snapshot_unpack = config.current.accounts_db.num_threads_snapshot_unpack,
-        .min_snapshot_download_speed_mbs = config.current.accounts_db.min_snapshot_download_speed_mbs,
-    });
+    var all_snapshot_fields, const snapshot_files = try sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
+        allocator,
+        logger.unscoped(),
+        snapshot_dir,
+        .{
+            .gossip_service = options.gossip_service,
+            .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
+            .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
+            .num_threads_snapshot_unpack = config.current.accounts_db.num_threads_snapshot_unpack,
+            .min_snapshot_download_speed_mbs = config.current.accounts_db.min_snapshot_download_speed_mbs,
+        },
+    );
     result.snapshot_fields = all_snapshot_fields;
 
     logger.info().logf("full snapshot: {s}", .{
@@ -1515,144 +1520,5 @@ fn getTrustedValidators(allocator: Allocator) !?std.ArrayList(Pubkey) {
             );
         }
     }
-
     return trusted_validators;
-}
-
-fn getOrDownloadSnapshots(
-    allocator: Allocator,
-    logger_: Logger,
-    gossip_service: ?*GossipService,
-    // accounts_db_config: config.AccountsDBConfig,
-    options: struct {
-        snapshot_dir: std.fs.Dir,
-        force_unpack_snapshot: bool,
-        force_new_snapshot_download: bool,
-        num_threads_snapshot_unpack: u16,
-        min_snapshot_download_speed_mbs: usize,
-    },
-) !struct { AllSnapshotFields, SnapshotFiles } {
-    const logger = logger_.withScope(LOG_SCOPE);
-    // arg parsing
-    const snapshot_dir = options.snapshot_dir;
-    const force_unpack_snapshot = options.force_unpack_snapshot;
-    const force_new_snapshot_download = options.force_new_snapshot_download;
-
-    const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
-    var n_threads_snapshot_unpack: u32 = options.num_threads_snapshot_unpack;
-    if (n_threads_snapshot_unpack == 0) {
-        n_threads_snapshot_unpack = n_cpus * 2;
-    }
-
-    const maybe_snapshot_files: ?SnapshotFiles = blk: {
-        if (force_new_snapshot_download) {
-            break :blk null;
-        }
-
-        break :blk SnapshotFiles.find(allocator, snapshot_dir) catch |err| switch (err) {
-            error.NoFullSnapshotFileInfoFound => null,
-            else => |e| return e,
-        };
-    };
-
-    const snapshot_files = maybe_snapshot_files orelse blk: {
-        const trusted_validators = try getTrustedValidators(gpa_allocator);
-        defer if (trusted_validators) |*tvs| tvs.deinit();
-
-        const min_mb_per_sec = options.min_snapshot_download_speed_mbs;
-        try downloadSnapshotsFromGossip(
-            allocator,
-            logger.unscoped(),
-            if (trusted_validators) |trusted| trusted.items else null,
-            gossip_service orelse return error.SnapshotsNotFoundAndNoGossipService,
-            snapshot_dir,
-            @intCast(min_mb_per_sec),
-        );
-        break :blk try SnapshotFiles.find(allocator, snapshot_dir);
-    };
-
-    if (snapshot_files.incremental_snapshot == null) {
-        logger.info().log("no incremental snapshot found");
-    }
-
-    // if this exists, we wont look for a .tar.zstd
-    const accounts_path_exists = !std.meta.isError(snapshot_dir.access("accounts", .{}));
-    errdefer {
-        // if something goes wrong, delete the accounts/ directory
-        // so we unpack the full snapshot the next time.
-        //
-        // NOTE: if we didnt do this, we would try to startup with a incomplete
-        // accounts/ directory the next time we ran the code - see `should_unpack_snapshot`.
-        snapshot_dir.deleteTree("accounts") catch |err| {
-            std.debug.print("failed to delete accounts/ dir: {}\n", .{err});
-        };
-    }
-
-    var should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
-    if (!should_unpack_snapshot) {
-        // number of files in accounts/
-        var accounts_dir = try snapshot_dir.openDir("accounts", .{});
-        defer accounts_dir.close();
-
-        const dir_size = (try accounts_dir.stat()).size;
-        if (dir_size <= 100) {
-            should_unpack_snapshot = true;
-            logger.info().log("empty accounts/ directory found, will unpack snapshot...");
-        } else {
-            logger.info().log("accounts/ directory found, will not unpack snapshot...");
-        }
-    }
-
-    var timer = try std.time.Timer.start();
-    if (should_unpack_snapshot) {
-        logger.info().log("unpacking snapshots...");
-        // if accounts/ doesnt exist then we unpack the found snapshots
-        // TODO: delete old accounts/ dir if it exists
-        timer.reset();
-        logger.info().logf("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
-        {
-            const archive_file = try snapshot_dir.openFile(
-                snapshot_files.full_snapshot.snapshotNameStr().constSlice(),
-                .{},
-            );
-            defer archive_file.close();
-            try parallelUnpackZstdTarBall(
-                allocator,
-                logger.unscoped(),
-                archive_file,
-                snapshot_dir,
-                n_threads_snapshot_unpack,
-                true,
-            );
-        }
-        logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
-
-        // TODO: can probs do this in parallel with full snapshot
-        if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
-            timer.reset();
-            logger.info().logf("unpacking {s}...", .{incremental_snapshot.snapshotNameStr().constSlice()});
-
-            const archive_file = try snapshot_dir.openFile(incremental_snapshot.snapshotNameStr().constSlice(), .{});
-            defer archive_file.close();
-
-            try parallelUnpackZstdTarBall(
-                allocator,
-                logger.unscoped(),
-                archive_file,
-                snapshot_dir,
-                n_threads_snapshot_unpack,
-                false,
-            );
-            logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
-        }
-    } else {
-        logger.info().log("not unpacking snapshot...");
-    }
-
-    timer.reset();
-    logger.info().log("reading snapshot metadata...");
-    const snapshots = try AllSnapshotFields.fromFiles(allocator, logger.unscoped(), snapshot_dir, snapshot_files);
-    logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
-
-    return .{ snapshots, snapshot_files };
 }
