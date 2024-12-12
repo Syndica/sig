@@ -25,7 +25,6 @@ const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
 const Logger = sig.trace.Logger;
 
 const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
-const readDirectory = sig.utils.directory.readDirectory;
 
 pub const MAXIMUM_ACCOUNT_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
@@ -2215,44 +2214,72 @@ pub const SnapshotFiles = struct {
         };
     }
 
+    pub const FindError = std.mem.Allocator.Error || std.fs.Dir.Iterator.Error || error{
+        NoFullSnapshotFileInfoFound,
+    };
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
-    pub fn find(allocator: std.mem.Allocator, snapshot_directory: std.fs.Dir) !SnapshotFiles {
-        const files = try readDirectory(allocator, snapshot_directory);
-        defer {
-            for (files) |file| allocator.free(file);
-            allocator.free(files);
-        }
+    pub fn find(allocator: std.mem.Allocator, search_dir: std.fs.Dir) FindError!SnapshotFiles {
+        var incremental_snaps: std.ArrayListUnmanaged(IncrementalSnapshotFileInfo) = .{};
+        defer incremental_snaps.deinit(allocator);
 
-        // find the snapshots
-        var maybe_latest_full_snapshot: ?FullSnapshotFileInfo = null;
-        var count: usize = 0;
-        for (files) |filename| {
-            const snapshot = FullSnapshotFileInfo.parseFileNameTarZst(filename) catch continue;
-            if (count == 0 or snapshot.slot > maybe_latest_full_snapshot.?.slot) {
-                maybe_latest_full_snapshot = snapshot;
-            }
-            count += 1;
-        }
-        const latest_full_snapshot = maybe_latest_full_snapshot orelse
-            return error.NoFullSnapshotFileInfoFound;
+        var maybe_latest_full: ?FullSnapshotFileInfo = null;
 
-        count = 0;
-        var maybe_latest_incremental_snapshot: ?IncrementalSnapshotFileInfo = null;
-        for (files) |filename| {
-            const snapshot = IncrementalSnapshotFileInfo.parseFileNameTarZst(filename) catch continue;
-            // need to match the base slot
-            if (snapshot.base_slot == latest_full_snapshot.slot and (count == 0 or
-                // this unwrap is safe because count > 0
-                snapshot.slot > maybe_latest_incremental_snapshot.?.slot))
-            {
-                maybe_latest_incremental_snapshot = snapshot;
+        var dir_iter = search_dir.iterate();
+        while (try dir_iter.next()) |dir_entry| {
+            if (dir_entry.kind != .file) continue;
+            const filename = dir_entry.name;
+
+            if (IncrementalSnapshotFileInfo.parseFileNameTarZst(filename)) |inc_snap| {
+                if (maybe_latest_full) |latest_full| {
+                    if (inc_snap.slot < latest_full.slot) continue;
+                    if (inc_snap.base_slot < latest_full.slot) continue;
+                }
+                try incremental_snaps.append(allocator, inc_snap);
+                continue;
+            } else |_| {}
+
+            const current = FullSnapshotFileInfo.parseFileNameTarZst(filename) catch continue;
+            const prev = maybe_latest_full orelse {
+                maybe_latest_full = current;
+                continue;
+            };
+            if (prev.slot < current.slot) {
+                maybe_latest_full = current;
+                continue;
             }
-            count += 1;
+            if (prev.slot == current.slot) {
+                // TODO:
+                std.debug.panic("TODO: report this error gracefully in some way ({s} vs {s})", .{
+                    prev.snapshotArchiveName().constSlice(),
+                    current.snapshotArchiveName().constSlice(),
+                });
+            }
+        }
+        const latest_full = maybe_latest_full orelse return error.NoFullSnapshotFileInfoFound;
+
+        var maybe_latest_incremental: ?IncrementalSnapshotFileInfo = null;
+        for (incremental_snaps.items) |current| {
+            if (current.base_slot != latest_full.slot) continue;
+            const prev = maybe_latest_incremental orelse {
+                maybe_latest_incremental = current;
+                continue;
+            };
+            if (prev.slot < current.slot) {
+                maybe_latest_incremental = current;
+                continue;
+            }
+            if (prev.slot == current.slot) {
+                // TODO:
+                std.debug.panic("TODO: report this error gracefully in some way ({s} vs {s})", .{
+                    prev.snapshotArchiveName().constSlice(),
+                    current.snapshotArchiveName().constSlice(),
+                });
+            }
         }
 
         return fromFileInfos(
-            latest_full_snapshot,
-            maybe_latest_incremental_snapshot,
+            latest_full,
+            maybe_latest_incremental,
         );
     }
 };
