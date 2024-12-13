@@ -870,7 +870,7 @@ fn shredCollector() !void {
         return error.GenesisPathNotProvided;
     const genesis_config = try readGenesisConfig(allocator, genesis_path);
 
-    var rpc_client = sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
+    var rpc_client = sig.rpc.Client.init(std.heap.c_allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
 
     const repair_port: u16 = config.current.shred_network.repair_port;

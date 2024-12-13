@@ -12,6 +12,8 @@ pub const RpcSlotLeaders = struct {
     logger: sig.trace.ScopedLogger(@typeName(Self)),
     rpc_client: sig.rpc.Client,
     cache: leader_schedule.LeaderScheduleCache,
+    item: ?leader_schedule.LeaderSchedule = null,
+    mutex: std.Thread.Mutex = .{},
 
     const Self = @This();
 
@@ -41,20 +43,33 @@ pub const RpcSlotLeaders = struct {
     }
 
     fn getFallible(self: *Self, slot: sig.core.Slot) !?sig.core.Pubkey {
-        if (self.cache.slotLeader(slot)) |leader| {
-            return leader;
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        // if (self.cache.slotLeader(slot)) |leader| {
+        //     return leader;
+        // }
+
+        if (self.item) |item| {
+            const epoch, const slot_index = self.cache.epoch_schedule.getEpochAndSlotIndex(slot);
+            _ = epoch; // autofix
+            // if (true) return sig.core.Pubkey.ZEROES;
+            return item.slot_leaders[slot_index];
         }
 
         const response = try self.rpc_client.getLeaderSchedule(self.allocator, slot, .{});
         defer response.deinit();
         const rpc_schedule = try response.result();
         const schedule = try leader_schedule.LeaderSchedule.fromMap(self.allocator, rpc_schedule);
-
         const epoch, const slot_index = self.cache.epoch_schedule.getEpochAndSlotIndex(slot);
+        _ = epoch; // autofix
         const leader = schedule.slot_leaders[slot_index];
-        try self.cache.put(epoch, schedule);
 
+        self.item = schedule;
+
+        if (true) return sig.core.Pubkey.ZEROES;
         return leader;
+
+        // try self.cache.put(epoch, schedule);
     }
 };
 
@@ -86,9 +101,10 @@ pub const RpcStakedNodes = struct {
     }
 
     fn get(self: *Self, epoch: sig.core.Epoch) anyerror!*const NodeToStakeMap {
-        if (self.cache.get(epoch)) |staked_nodes| {
-            return staked_nodes;
-        }
+        _ = epoch; // autofix
+        // if (self.cache.get(epoch)) |staked_nodes| {
+        //     return staked_nodes;
+        // }
 
         const response = try self.rpc_client.getVoteAccounts(self.allocator, .{});
         defer response.deinit();
@@ -105,7 +121,10 @@ pub const RpcStakedNodes = struct {
             node_entry.value_ptr.* += vote_account.activatedStake;
         };
 
-        return try self.cache.putGet(epoch, staked_nodes.unmanaged);
+        // return try self.cache.putGet(epoch, staked_nodes.unmanaged);
+        const item = try self.allocator.create(NodeToStakeMap);
+        item.* = staked_nodes.unmanaged;
+        return item;
     }
 
     fn release(self: *Self, ptr: *const NodeToStakeMap) void {

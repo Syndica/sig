@@ -150,25 +150,25 @@ pub fn start(
         },
     );
 
-    // retransmitter (thread)
-    try service_manager.spawn(
-        "Shred Retransmitter",
-        shred_network.shred_retransmitter.runShredRetransmitter,
-        .{.{
-            .allocator = deps.allocator,
-            .my_contact_info = deps.my_contact_info,
-            .epoch_schedule = deps.epoch_schedule,
-            .staked_nodes = deps.staked_nodes,
-            .slot_leaders = deps.slot_leaders,
-            .gossip_table_rw = deps.gossip_table_rw,
-            .receiver = &retransmit_channel,
-            .maybe_num_retransmit_threads = deps.n_retransmit_threads,
-            .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
-            .exit = deps.exit,
-            .rand = deps.random,
-            .logger = deps.logger.unscoped(),
-        }},
-    );
+    // // retransmitter (thread)
+    // try service_manager.spawn(
+    //     "Shred Retransmitter",
+    //     shred_network.shred_retransmitter.runShredRetransmitter,
+    //     .{.{
+    //         .allocator = deps.allocator,
+    //         .my_contact_info = deps.my_contact_info,
+    //         .epoch_schedule = deps.epoch_schedule,
+    //         .staked_nodes = deps.staked_nodes,
+    //         .slot_leaders = deps.slot_leaders,
+    //         .gossip_table_rw = deps.gossip_table_rw,
+    //         .receiver = &retransmit_channel,
+    //         .maybe_num_retransmit_threads = deps.n_retransmit_threads,
+    //         .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
+    //         .exit = deps.exit,
+    //         .rand = deps.random,
+    //         .logger = deps.logger.unscoped(),
+    //     }},
+    // );
 
     // repair (thread)
     const repair_peer_provider = try RepairPeerProvider.init(

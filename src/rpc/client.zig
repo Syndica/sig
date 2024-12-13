@@ -373,6 +373,8 @@ pub const Client = struct {
         request: Request,
         response_parse_options: std.json.ParseOptions,
     ) !Response(T) {
+        std.debug.print("HELLOO\n\n\n", .{});
+        self.logger.info().log("sending request");
         var response = try Response(T).init(allocator, response_parse_options);
         errdefer response.deinit();
 
