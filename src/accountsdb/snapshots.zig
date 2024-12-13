@@ -733,50 +733,6 @@ pub const Stake = struct {
     }
 };
 
-/// Analogous to [StakeStateV2](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L145)
-pub const StakeStateV2 = union(enum) {
-    uninitialized,
-    initialized: Meta,
-    stake: struct { Meta, Stake, StakeFlags },
-    rewards_pool,
-
-    pub const Meta = struct {
-        rent_exempt_reserve: u64,
-        authorized: Authorized,
-        lockup: Lockup,
-
-        pub fn initRandom(random: std.Random) Meta {
-            return .{
-                .rent_exempt_reserve = random.int(u64),
-                .authorized = Authorized.initRandom(random),
-                .lockup = Lockup.initRandom(random),
-            };
-        }
-    };
-
-    /// Analogous to [StakeFlags](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/stake_flags.rs#L12)
-    pub const StakeFlags = enum(u8) {
-        empty = 0,
-        _,
-
-        pub fn initRandom(random: std.Random) StakeFlags {
-            return @enumFromInt(random.int(u8));
-        }
-    };
-
-    pub fn initRandom(random: std.Random) StakeStateV2 {
-        return switch (random.enumValue(@typeInfo(StakeStateV2).Union.tag_type.?)) {
-            inline .uninitialized, .rewards_pool => |tag| tag,
-            .initialized => .{ .initialized = Meta.initRandom(random) },
-            .stake => .{ .stake = .{
-                Meta.initRandom(random),
-                Stake.initRandom(random),
-                StakeFlags.initRandom(random),
-            } },
-        };
-    }
-};
-
 /// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186)
 pub fn Stakes(comptime StakeDelegationElem: type) type {
     return struct {
