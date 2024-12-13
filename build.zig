@@ -12,7 +12,7 @@ pub fn build(b: *Build) void {
     const filters = b.option([]const []const u8, "filter", "List of filters, used for example to filter unit tests by name"); // specified as a series like `-Dfilter="filter1" -Dfilter="filter2"`
     const enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite");
     const no_run = b.option(bool, "no-run", "Do not run the selected step and install it") orelse false;
-    const blockstore_db = b.option(BlockstoreDB, "blockstore", "Blockstore database backend") orelse .hashmap;
+    const blockstore_db = b.option(BlockstoreDB, "blockstore", "Blockstore database backend") orelse .rocksdb;
 
     // Build options
     const build_options = b.addOptions();
