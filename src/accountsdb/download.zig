@@ -609,7 +609,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         );
     }
 
-    const valid_acounts_folder = blk: {
+    const valid_accounts_folder = blk: {
         // NOTE: we only need to check this if we are *not* unpacking a fresh snapshot
         if (force_unpack_snapshot or !snapshot_exists) break :blk false;
 
@@ -635,7 +635,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
     };
 
     var timer = try std.time.Timer.start();
-    const should_unpack_snapshot = force_unpack_snapshot or !snapshot_exists or !valid_acounts_folder;
+    const should_unpack_snapshot = force_unpack_snapshot or !snapshot_exists or !valid_accounts_folder;
     if (should_unpack_snapshot) {
         const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
         if (snapshot_files.incremental_snapshot == null) {
