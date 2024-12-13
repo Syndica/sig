@@ -172,3 +172,56 @@ test "RcSlice payload has the correct data" {
     try std.testing.expectEqual(5, slice.payload().len);
     try std.testing.expect(sig.utils.types.eql(hello, slice.payload()[0..5]));
 }
+
+test "RcSlice reference counting" {
+    const sig = @import("../sig.zig");
+
+    const TestAllocator = struct {
+        arena: std.heap.ArenaAllocator,
+        was_freed: bool = false,
+        fn free(ctx: *anyopaque, _: []u8, _: u8, _: usize) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.was_freed = true;
+        }
+    };
+    var test_allocator = TestAllocator{
+        .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
+    };
+    defer test_allocator.arena.deinit();
+    const allocator: std.mem.Allocator = .{ .ptr = @ptrCast(&test_allocator), .vtable = &.{
+        .alloc = test_allocator.arena.allocator().vtable.alloc,
+        .resize = test_allocator.arena.allocator().vtable.resize,
+        .free = TestAllocator.free,
+    } };
+
+    const slice1 = try RcSlice(u8).alloc(allocator, 5);
+
+    // Copy data into the slice1's payload
+    @memcpy(slice1.payload(), "hello");
+
+    // Acquire a second reference to the RcSlice
+    const slice2 = slice1.acquire();
+
+    // Assert that both slices see the same payload
+    const hello: *const [5]u8 = "hello";
+    try std.testing.expect(sig.utils.types.eql(hello, slice1.payload()[0..5]));
+    try std.testing.expect(sig.utils.types.eql(hello, slice2.payload()[0..5]));
+
+    // Modify the payload via the second reference
+    slice2.payload()[0] = 'H';
+
+    // Assert the change is visible through the first reference
+    const hello2: *const [5]u8 = "Hello";
+    try std.testing.expect(sig.utils.types.eql(hello2, slice1.payload()[0..5]));
+    try std.testing.expect(sig.utils.types.eql(hello2, slice2.payload()[0..5]));
+
+    // Release the first reference
+    slice1.deinit(allocator);
+    try std.testing.expect(!test_allocator.was_freed);
+
+    // The second reference should still be valid
+    try std.testing.expect(sig.utils.types.eql(hello2, slice2.payload()[0..5]));
+    // Release the final reference
+    slice2.deinit(allocator);
+    try std.testing.expect(test_allocator.was_freed);
+}
