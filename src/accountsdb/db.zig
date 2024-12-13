@@ -22,13 +22,13 @@ const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const FileId = sig.accounts_db.accounts_file.FileId;
 
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
-const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
+const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
 const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
-const SnapshotFields = sig.accounts_db.snapshots.SnapshotFields;
+const SnapshotManifest = sig.accounts_db.snapshots.Manifest;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 
 const AccountIndex = sig.accounts_db.index.AccountIndex;
@@ -275,14 +275,14 @@ pub const AccountsDB = struct {
         /// needs to be a thread-safe allocator
         allocator: std.mem.Allocator,
         /// Must have been allocated with `self.allocator`.
-        all_snapshot_fields: *AllSnapshotFields,
+        combined_manifest: *FullAndIncrementalManifest,
         n_threads: u32,
         validate: bool,
         accounts_per_file_estimate: u64,
         should_fastload: bool,
         save_index: bool,
-    ) !SnapshotFields {
-        const snapshot_fields = try all_snapshot_fields.collapse(self.allocator);
+    ) !SnapshotManifest {
+        const snapshot_fields = try combined_manifest.collapse(self.allocator);
 
         if (should_fastload) {
             var timer = try sig.time.Timer.start();
@@ -311,7 +311,7 @@ pub const AccountsDB = struct {
         }
 
         if (validate) {
-            const full_snapshot = all_snapshot_fields.full;
+            const full_snapshot = combined_manifest.full;
             var validate_timer = try sig.time.Timer.start();
             try self.validateLoadFromSnapshot(.{
                 .full_slot = full_snapshot.bank_fields.slot,
@@ -2672,7 +2672,7 @@ pub const AccountsDB = struct {
         params.bank_fields.slot = params.target_slot; // !
         params.bank_fields.capitalization = full_capitalization; // !
 
-        const snapshot_fields: SnapshotFields = .{
+        const snapshot_fields: SnapshotManifest = .{
             .bank_fields = params.bank_fields.*,
             .accounts_db_fields = .{
                 .file_map = serializable_file_map,
@@ -2902,7 +2902,7 @@ pub const AccountsDB = struct {
 
         params.bank_fields.slot = params.target_slot; // !
 
-        const snapshot_fields: SnapshotFields = .{
+        const snapshot_fields: SnapshotManifest = .{
             .bank_fields = params.bank_fields.*,
             .accounts_db_fields = .{
                 .file_map = serializable_file_map,
@@ -3199,7 +3199,7 @@ pub fn writeSnapshotTarWithFields(
     archive_writer: anytype,
     version: sig.version.ClientVersion,
     status_cache: StatusCache,
-    manifest: *const SnapshotFields,
+    manifest: *const SnapshotManifest,
     file_map: *const AccountsDB.FileMap,
 ) !void {
     var counting_state = if (std.debug.runtime_safety) std.io.countingWriter(archive_writer);
@@ -3237,7 +3237,7 @@ fn testWriteSnapshotFull(
     const manifest_file = try snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
     defer manifest_file.close();
 
-    var snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
+    var snap_fields = try SnapshotManifest.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
     _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 1_500);
@@ -3276,7 +3276,7 @@ fn testWriteSnapshotIncremental(
     const manifest_file = try snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
     defer manifest_file.close();
 
-    var snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
+    var snap_fields = try SnapshotManifest.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
     _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 1_500);
@@ -3420,7 +3420,7 @@ fn loadTestAccountsDB(
     /// The directory into which the snapshots are unpacked, and
     /// the `snapshots_dir` for the returned `AccountsDB`.
     snapshot_dir: std.fs.Dir,
-) !struct { AccountsDB, AllSnapshotFields } {
+) !struct { AccountsDB, FullAndIncrementalManifest } {
     comptime std.debug.assert(builtin.is_test); // should only be used in tests
 
     var dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
@@ -3428,7 +3428,7 @@ fn loadTestAccountsDB(
 
     const snapshot_files = try findAndUnpackTestSnapshots(n_threads, snapshot_dir);
 
-    var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+    var snapshots = try FullAndIncrementalManifest.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
     errdefer snapshots.deinit(allocator);
 
     const snapshot = try snapshots.collapse(allocator);
@@ -3465,7 +3465,7 @@ test "geyser stream on load" {
     const snapdir = tmp_dir_root.dir;
     const snapshot_files = try findAndUnpackTestSnapshots(2, snapdir);
 
-    var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapdir, snapshot_files);
+    var snapshots = try FullAndIncrementalManifest.fromFiles(allocator, logger, snapdir, snapshot_files);
     errdefer snapshots.deinit(allocator);
 
     var geyser_exit = std.atomic.Value(bool).init(false);
@@ -4261,7 +4261,7 @@ test "generate snapshot & update gossip snapshot hashes" {
     const snapdir = tmp_dir_root.dir;
     const snap_files = try findAndUnpackTestSnapshots(1, snapdir);
 
-    var all_snapshot_fields = try AllSnapshotFields.fromFiles(
+    var all_snapshot_fields = try FullAndIncrementalManifest.fromFiles(
         allocator,
         .noop,
         snapdir,
@@ -4434,7 +4434,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         } else return error.SnapshotMissingAccountsDir;
         defer accounts_dir.close();
 
-        var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+        var snapshots = try FullAndIncrementalManifest.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
         defer snapshots.deinit(allocator);
         const snapshot = try snapshots.collapse(allocator);
 

@@ -24,8 +24,6 @@ const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
 
 const Logger = sig.trace.Logger;
 
-const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
-
 pub const MAXIMUM_ACCOUNT_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
 pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
@@ -774,7 +772,7 @@ pub fn Stakes(comptime StakeDelegationElem: type) type {
             /// for commentary on the runtime of this function.
             random: std.Random,
             max_list_entries: usize,
-            /// Expected to provide methods & fields/decls:
+            /// Expected to provide methods/decls:
             /// * `fn randomValue(delegation_ctx, random: std.Random) StakeDelegationElem`.
             ///
             /// Also see `sig.rand.fillHashmapWithRng`.
@@ -1086,6 +1084,18 @@ pub const ExtraFields = struct {
     versioned_epoch_stakes: VersionedEpochStakesMap,
     accounts_lt_hash: ?AccountsLtHash,
 
+    pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
+        .deserializer = bincodeRead,
+        .serializer = null, // just use default serialization method
+        .free = bincodeFree,
+    };
+
+    pub const VersionedEpochStakesMap = std.AutoArrayHashMapUnmanaged(u64, VersionedEpochStake);
+
+    /// TODO: https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=85238686
+    pub const ACCOUNTS_LATTICE_HASH_LEN = 1024;
+    pub const AccountsLtHash = [ACCOUNTS_LATTICE_HASH_LEN]u16;
+
     pub const INIT_EOF: ExtraFields = .{
         .lamports_per_signature = 0,
         .snapshot_persistence = null,
@@ -1099,18 +1109,6 @@ pub const ExtraFields = struct {
         for (versioned_epoch_stakes.values()) |ves| ves.deinit(allocator);
         versioned_epoch_stakes.deinit(allocator);
     }
-
-    pub const VersionedEpochStakesMap = std.AutoArrayHashMapUnmanaged(u64, VersionedEpochStake);
-
-    /// TODO: https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=85238686
-    pub const ACCOUNTS_LATTICE_HASH_LEN = 1024;
-    pub const AccountsLtHash = [ACCOUNTS_LATTICE_HASH_LEN]u16;
-
-    pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
-        .deserializer = bincodeRead,
-        .serializer = null, // just use default serialization method
-        .free = bincodeFree,
-    };
 
     pub fn initRandom(
         allocator: std.mem.Allocator,
@@ -1344,6 +1342,12 @@ pub const AccountsDbFields = struct {
     rooted_slots: []const Slot,
     rooted_slot_hashes: []const SlotAndHash,
 
+    pub const @"!bincode-config": bincode.FieldConfig(AccountsDbFields) = .{
+        .deserializer = bincodeRead,
+        .serializer = bincodeWrite,
+        .free = bincodeFree,
+    };
+
     pub const FileMap = std.AutoArrayHashMapUnmanaged(Slot, AccountFileInfo);
 
     pub fn deinit(fields: AccountsDbFields, allocator: std.mem.Allocator) void {
@@ -1353,12 +1357,6 @@ pub const AccountsDbFields = struct {
         allocator.free(fields.rooted_slots);
         allocator.free(fields.rooted_slot_hashes);
     }
-
-    pub const @"!bincode-config": bincode.FieldConfig(AccountsDbFields) = .{
-        .deserializer = bincodeRead,
-        .serializer = bincodeWrite,
-        .free = bincodeFree,
-    };
 
     fn bincodeRead(
         allocator: std.mem.Allocator,
@@ -1452,22 +1450,22 @@ pub const AccountsDbFields = struct {
 /// contains all the metadata from a snapshot.
 /// this includes fields for accounts-db and the bank of the snapshots slots.
 /// this does not include account-specific data.
-pub const SnapshotFields = struct {
+pub const Manifest = struct {
     bank_fields: BankFields,
     accounts_db_fields: AccountsDbFields,
     /// incremental snapshot fields.
     bank_extra: ExtraFields,
 
-    pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
-        self.bank_fields.deinit(allocator);
-        self.accounts_db_fields.deinit(allocator);
-        self.bank_extra.deinit(allocator);
+    pub fn deinit(man: Manifest, allocator: std.mem.Allocator) void {
+        man.bank_fields.deinit(allocator);
+        man.accounts_db_fields.deinit(allocator);
+        man.bank_extra.deinit(allocator);
     }
 
     pub fn readFromFilePath(
         allocator: std.mem.Allocator,
         path: []const u8,
-    ) !SnapshotFields {
+    ) !Manifest {
         const file = std.fs.cwd().openFile(path, .{}) catch |err| {
             switch (err) {
                 error.FileNotFound => return error.SnapshotFieldsNotFound,
@@ -1481,7 +1479,7 @@ pub const SnapshotFields = struct {
     pub fn readFromFile(
         allocator: std.mem.Allocator,
         file: std.fs.File,
-    ) !SnapshotFields {
+    ) !Manifest {
         const size = (try file.stat()).size;
         const contents = try file.readToEndAllocOptions(allocator, size, size, @alignOf(u8), null);
         defer allocator.free(contents);
@@ -1494,8 +1492,8 @@ pub const SnapshotFields = struct {
         allocator: std.mem.Allocator,
         /// `std.io.GenericReader(...)` | `std.io.AnyReader`
         reader: anytype,
-    ) !SnapshotFields {
-        return try bincode.read(allocator, SnapshotFields, reader, .{});
+    ) !Manifest {
+        return try bincode.read(allocator, Manifest, reader, .{});
     }
 };
 
@@ -2287,24 +2285,22 @@ pub const SnapshotFiles = struct {
     }
 };
 
-/// contains all fields from a snapshot (full and incremental)
+/// Represents the full manifest optionally combined with an incremental manifest.
 ///
 /// Analogous to [SnapshotBankFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L299)
-pub const AllSnapshotFields = struct {
-    full: SnapshotFields,
-    incremental: ?SnapshotFields,
+pub const FullAndIncrementalManifest = struct {
+    full: Manifest,
+    incremental: ?Manifest,
     was_collapsed: bool = false, // used for deinit()
-
-    const Self = @This();
 
     pub fn fromFiles(
         allocator: std.mem.Allocator,
-        logger_: Logger,
+        unscoped_logger: Logger,
         snapshot_dir: std.fs.Dir,
         files: SnapshotFiles,
-    ) !Self {
-        const logger = logger_.withScope(@typeName((Self)));
-        // unpack
+    ) !FullAndIncrementalManifest {
+        const logger = unscoped_logger.withScope(@typeName(@This()));
+
         const full_fields = blk: {
             const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full.slot});
             const rel_path = rel_path_bounded.constSlice();
@@ -2314,28 +2310,23 @@ pub const AllSnapshotFields = struct {
             const full_file = try snapshot_dir.openFile(rel_path, .{});
             defer full_file.close();
 
-            break :blk try SnapshotFields.readFromFile(allocator, full_file);
+            break :blk try Manifest.readFromFile(allocator, full_file);
         };
         errdefer full_fields.deinit(allocator);
 
-        const incremental_fields: ?SnapshotFields = blk: {
-            if (files.incremental_info) |inc_snap| {
-                const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_snap.slot});
-                const rel_path = rel_path_bounded.constSlice();
+        const incremental_fields = if (files.incremental_info) |inc_snap| blk: {
+            const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_snap.slot});
+            const rel_path = rel_path_bounded.constSlice();
 
-                logger.info().logf("reading inc snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+            logger.info().logf("reading incremental snapshot manifest from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
 
-                const incremental_file = try snapshot_dir.openFile(rel_path, .{});
-                defer incremental_file.close();
+            const incremental_file = try snapshot_dir.openFile(rel_path, .{});
+            defer incremental_file.close();
 
-                const incremental_fields = try SnapshotFields.readFromFile(allocator, incremental_file);
-                errdefer incremental_fields.deinit(allocator);
-
-                break :blk incremental_fields;
-            } else {
-                logger.info().log("no incremental snapshot fields found");
-                break :blk null;
-            }
+            break :blk try Manifest.readFromFile(allocator, incremental_file);
+        } else blk: {
+            logger.info().log("no incremental snapshot fields found");
+            break :blk null;
         };
         errdefer if (incremental_fields) |fields| fields.deinit(allocator);
 
@@ -2352,10 +2343,10 @@ pub const AllSnapshotFields = struct {
     /// and 2) the returned snapshot heap fields will still point to the incremental snapshot
     /// (so be sure not to deinit it while still using the returned snapshot)
     pub fn collapse(
-        self: *Self,
+        self: *FullAndIncrementalManifest,
         /// Should be the same allocator passed to `fromFiles`, or otherwise to allocate `Self`.
         allocator: std.mem.Allocator,
-    ) !SnapshotFields {
+    ) !Manifest {
         // nothing to collapse
         if (self.incremental == null)
             return self.full;
@@ -2401,7 +2392,7 @@ pub const AllSnapshotFields = struct {
         return snapshot;
     }
 
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *FullAndIncrementalManifest, allocator: std.mem.Allocator) void {
         self.full.deinit(allocator);
         if (self.incremental) |*inc| {
             if (!self.was_collapsed) {
@@ -2424,7 +2415,7 @@ pub const generate = struct {
         archive_writer: anytype,
         version: sig.version.ClientVersion,
         status_cache: StatusCache,
-        manifest: *const SnapshotFields,
+        manifest: *const Manifest,
     ) !void {
         const slot: Slot = manifest.bank_fields.slot;
 
@@ -2500,7 +2491,7 @@ pub fn parallelUnpackZstdTarBall(
     defer tar_stream.deinit();
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
 
-    try parallelUntarToFileSystem(
+    try sig.utils.tar.parallelUntarToFileSystem(
         allocator,
         logger,
         output_dir,
@@ -2575,7 +2566,7 @@ test "parse snapshot fields" {
     const full_manifest_file = try snapdir.openFile(full_manifest_path, .{});
     defer full_manifest_file.close();
 
-    const snapshot_fields_full = try SnapshotFields.readFromFile(allocator, full_manifest_file);
+    const snapshot_fields_full = try Manifest.readFromFile(allocator, full_manifest_file);
     defer snapshot_fields_full.deinit(allocator);
 
     if (snapshot_files.incremental_info) |inc| {
@@ -2586,7 +2577,7 @@ test "parse snapshot fields" {
         const inc_manifest_file = try snapdir.openFile(inc_manifest_path, .{});
         defer inc_manifest_file.close();
 
-        const snapshot_fields_inc = try SnapshotFields.readFromFile(allocator, inc_manifest_file);
+        const snapshot_fields_inc = try Manifest.readFromFile(allocator, inc_manifest_file);
         defer snapshot_fields_inc.deinit(allocator);
     }
 }

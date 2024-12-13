@@ -5,7 +5,7 @@ const bincode = sig.bincode;
 
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
-const SnapshotFields = sig.accounts_db.SnapshotFields;
+const SnapshotManifest = sig.accounts_db.Manifest;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
 const BankFields = sig.accounts_db.snapshots.BankFields;
@@ -44,7 +44,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
     while (timer.read() < MAX_FUZZ_TIME_NS) : (i += 1) {
         bytes_buffer.clearRetainingCapacity();
 
-        const snapshot_original: SnapshotFields = try randomSnapshotFields(allocator, random);
+        const snapshot_original: SnapshotManifest = try randomSnapshotFields(allocator, random);
         defer snapshot_original.deinit(allocator);
 
         try bytes_buffer.ensureUnusedCapacity(bincode.sizeOf(snapshot_original, .{}) * 2);
@@ -53,7 +53,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
         try bincode.write(bytes_buffer.writer(), snapshot_original, .{});
         const original_bytes_end = bytes_buffer.items.len;
 
-        const snapshot_deserialized = try bincode.readFromSlice(allocator, SnapshotFields, bytes_buffer.items[original_bytes_start..original_bytes_end], .{});
+        const snapshot_deserialized = try bincode.readFromSlice(allocator, SnapshotManifest, bytes_buffer.items[original_bytes_start..original_bytes_end], .{});
         defer snapshot_deserialized.deinit(allocator);
 
         const serialized_bytes_start = bytes_buffer.items.len;
@@ -74,7 +74,7 @@ fn randomSnapshotFields(
     /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
     /// for commentary on the runtime of this function.
     random: std.Random,
-) !SnapshotFields {
+) !SnapshotManifest {
     const bank_fields = try BankFields.initRandom(allocator, random, max_list_entries);
     errdefer bank_fields.deinit(allocator);
 

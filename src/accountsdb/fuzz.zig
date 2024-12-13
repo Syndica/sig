@@ -303,7 +303,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 maybe_incremental_file_info,
             );
 
-            var snapshot_fields = try sig.accounts_db.AllSnapshotFields.fromFiles(
+            var snapshot_fields = try sig.accounts_db.FullAndIncrementalManifest.fromFiles(
                 allocator,
                 logger,
                 alternative_snapshot_dir,

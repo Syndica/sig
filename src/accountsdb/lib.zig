@@ -13,10 +13,10 @@ pub const swiss_map = @import("swiss_map.zig");
 pub const sysvars = @import("sysvars.zig");
 
 pub const AccountsDB = db.AccountsDB;
-pub const AllSnapshotFields = snapshots.AllSnapshotFields;
+pub const FullAndIncrementalManifest = snapshots.FullAndIncrementalManifest;
 pub const Bank = bank.Bank;
 pub const GenesisConfig = genesis_config.GenesisConfig;
-pub const SnapshotFields = snapshots.SnapshotFields;
+pub const Manifest = snapshots.Manifest;
 pub const SnapshotFiles = snapshots.SnapshotFiles;
 pub const StatusCache = snapshots.StatusCache;
 pub const ClusterType = genesis_config.ClusterType;
