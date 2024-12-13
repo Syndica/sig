@@ -73,37 +73,47 @@ pub fn stakeHistoryRandom(
 
 /// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/vote/src/vote_account.rs#L44)
 pub const VoteAccounts = struct {
-    vote_accounts: std.AutoArrayHashMapUnmanaged(Pubkey, StakeAndVoteAccount),
-    staked_nodes: ?std.AutoArrayHashMapUnmanaged(
-        Pubkey, // VoteAccount.vote_state.node_pubkey.
-        u64, // Total stake across all vote-accounts.
-    ) = null,
+    accounts: StakeAndVoteAccountsMap,
+    staked_nodes: ?StakedNodesMap,
 
-    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?std.AutoArrayHashMapUnmanaged(Pubkey, u64)){ .skip = true };
-
-    const Self = @This();
+    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?StakedNodesMap){
+        .skip = true,
+        .default_value = @as(?StakedNodesMap, null),
+    };
 
     pub const StakeAndVoteAccount = struct { u64, VoteAccount };
 
-    pub fn deinit(vote_accounts: VoteAccounts, allocator: std.mem.Allocator) void {
+    pub const StakeAndVoteAccountsMap = std.AutoArrayHashMapUnmanaged(
+        Pubkey,
+        StakeAndVoteAccount,
+    );
+    pub const StakedNodesMap = std.AutoArrayHashMapUnmanaged(
+        Pubkey, // VoteAccount.vote_state.node_pubkey.
+        u64, // Total stake across all vote-accounts.
+    );
+
+    pub fn deinit(
+        vote_accounts: VoteAccounts,
+        allocator: std.mem.Allocator,
+    ) void {
         var copy = vote_accounts;
 
-        for (copy.vote_accounts.values()) |entry| {
+        for (copy.accounts.values()) |entry| {
             _, const vote_account = entry;
             vote_account.deinit(allocator);
         }
-        copy.vote_accounts.deinit(allocator);
+        copy.accounts.deinit(allocator);
 
         if (copy.staked_nodes) |*staked_nodes| {
             staked_nodes.deinit(allocator);
         }
     }
 
-    pub fn stakedNodes(self: *Self, allocator: std.mem.Allocator) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+    pub fn stakedNodes(self: *VoteAccounts, allocator: std.mem.Allocator) !*const StakedNodesMap {
         if (self.staked_nodes) |*staked_nodes| {
             return staked_nodes;
         }
-        const vote_accounts = self.vote_accounts;
+        const vote_accounts = self.accounts;
         var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(allocator);
         var iter = vote_accounts.iterator();
         while (iter.next()) |vote_entry| {
@@ -124,7 +134,7 @@ pub const VoteAccounts = struct {
         allocator: std.mem.Allocator,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!VoteAccounts {
-        var stakes_vote_accounts = std.AutoArrayHashMap(Pubkey, VoteAccounts.StakeAndVoteAccount).init(allocator);
+        var stakes_vote_accounts = StakeAndVoteAccountsMap.Managed.init(allocator);
         errdefer stakes_vote_accounts.deinit();
 
         errdefer for (stakes_vote_accounts.values()) |pair| {
@@ -152,17 +162,24 @@ pub const VoteAccounts = struct {
         var stakes_maybe_staked_nodes = if (random.boolean()) std.AutoArrayHashMap(Pubkey, u64).init(allocator) else null;
         errdefer if (stakes_maybe_staked_nodes) |*staked_nodes| staked_nodes.deinit();
 
-        if (stakes_maybe_staked_nodes) |*staked_nodes| try sig.rand.fillHashmapWithRng(staked_nodes, random, random.uintAtMost(usize, max_list_entries), struct {
-            pub fn randomKey(rand: std.Random) !Pubkey {
-                return Pubkey.initRandom(rand);
-            }
-            pub fn randomValue(rand: std.Random) !u64 {
-                return rand.int(u64);
-            }
-        });
+        if (stakes_maybe_staked_nodes) |*staked_nodes| {
+            try sig.rand.fillHashmapWithRng(
+                staked_nodes,
+                random,
+                random.uintAtMost(usize, max_list_entries),
+                struct {
+                    pub fn randomKey(rand: std.Random) !Pubkey {
+                        return Pubkey.initRandom(rand);
+                    }
+                    pub fn randomValue(rand: std.Random) !u64 {
+                        return rand.int(u64);
+                    }
+                },
+            );
+        }
 
         return .{
-            .vote_accounts = stakes_vote_accounts.unmanaged,
+            .accounts = stakes_vote_accounts.unmanaged,
             .staked_nodes = if (stakes_maybe_staked_nodes) |staked_nodes| staked_nodes.unmanaged else null,
         };
     }
@@ -182,8 +199,19 @@ pub const VoteAccount = struct {
         if (self.vote_state) |vs| {
             return vs;
         }
-        self.vote_state = bincode.readFromSlice(undefined, VoteState, self.account.data, .{});
-        return self.vote_state.?;
+        const assert_alloc = sig.utils.allocators.failing.allocator(.{
+            .alloc = .assert,
+            .resize = .assert,
+            .free = .assert,
+        });
+        const vote_state = bincode.readFromSlice(
+            assert_alloc,
+            VoteState,
+            self.account.data,
+            .{},
+        );
+        self.vote_state = vote_state;
+        return vote_state;
     }
 
     pub fn initRandom(
@@ -362,6 +390,12 @@ pub const UnusedAccounts = struct {
     unused2: std.AutoArrayHashMapUnmanaged(Pubkey, void),
     unused3: std.AutoArrayHashMapUnmanaged(Pubkey, u64),
 
+    pub const EMPTY: UnusedAccounts = .{
+        .unused1 = .{},
+        .unused2 = .{},
+        .unused3 = .{},
+    };
+
     pub fn deinit(unused_accounts: UnusedAccounts, allocator: std.mem.Allocator) void {
         var copy = unused_accounts;
         copy.unused1.deinit(allocator);
@@ -485,7 +519,10 @@ pub const NodeVoteAccounts = struct {
 /// Analogous to [NodeIdToVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L9)
 pub const NodeIdToVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, NodeVoteAccounts);
 
-pub fn nodeIdToVoteAccountsMapDeinit(map: NodeIdToVoteAccountsMap, allocator: std.mem.Allocator) void {
+pub fn nodeIdToVoteAccountsMapDeinit(
+    map: NodeIdToVoteAccountsMap,
+    allocator: std.mem.Allocator,
+) void {
     for (map.values()) |*node_vote_accounts| {
         node_vote_accounts.deinit(allocator);
     }
@@ -551,7 +588,7 @@ pub const EpochStakes = struct {
     epoch_authorized_voters: EpochAuthorizedVoters,
 
     pub fn deinit(epoch_stakes: EpochStakes, allocator: std.mem.Allocator) void {
-        epoch_stakes.stakes.deinit(allocator);
+        epoch_stakes.stakes.deinit(allocator, {});
         nodeIdToVoteAccountsMapDeinit(epoch_stakes.node_id_to_vote_accounts, allocator);
 
         var epoch_authorized_voters = epoch_stakes.epoch_authorized_voters;
@@ -575,7 +612,7 @@ pub const EpochStakes = struct {
                 }
             },
         );
-        errdefer result_stakes.deinit(allocator);
+        errdefer result_stakes.deinit(allocator, {});
 
         const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(allocator, random, max_list_entries);
         errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
@@ -757,10 +794,29 @@ pub fn Stakes(comptime StakeDelegationElem: type) type {
 
         pub const StakeDelegations = std.AutoArrayHashMapUnmanaged(Pubkey, StakeDelegationElem);
 
-        pub fn deinit(stakes: Self, allocator: std.mem.Allocator) void {
+        pub fn deinit(
+            stakes: Self,
+            allocator: std.mem.Allocator,
+            /// Expected to be a `void` value, or a type/value providing methods/decls:
+            /// * `fn clone(delegation_ctx, allocator: std.mem.Allocator, elem: StakeDelegationElem) std.mem.Allocator.Error!StakeDelegationElem`.
+            /// * `fn free(delegation_ctx, allocator: std.mem.Allocator, elem: StakeDelegationElem) void`.
+            ///
+            /// If it is void, it will directly copy each element by value, and never deallocate them.
+            void_or_delegation_ctx: anytype,
+        ) void {
             stakes.vote_accounts.deinit(allocator);
 
+            const delegation_ctx = switch (@TypeOf(void_or_delegation_ctx)) {
+                void => struct {
+                    inline fn free(_: std.mem.Allocator, _: StakeDelegationElem) void {}
+                },
+                else => void_or_delegation_ctx,
+            };
+
             var stake_delegations = stakes.stake_delegations;
+            for (stake_delegations.values()) |elem| {
+                delegation_ctx.free(allocator, elem);
+            }
             stake_delegations.deinit(allocator);
 
             allocator.free(stakes.stake_history);
@@ -831,7 +887,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
         epoch_authorized_voters: EpochAuthorizedVoters,
 
         pub fn deinit(current: Current, allocator: std.mem.Allocator) void {
-            current.stakes.deinit(allocator);
+            current.stakes.deinit(allocator, {});
             nodeIdToVoteAccountsMapDeinit(current.node_id_to_vote_accounts, allocator);
             var epoch_authorized_voters = current.epoch_authorized_voters;
             epoch_authorized_voters.deinit(allocator);
@@ -852,7 +908,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
                     }
                 },
             );
-            errdefer stakes.deinit(allocator);
+            errdefer stakes.deinit(allocator, {});
 
             const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(
                 allocator,
@@ -958,11 +1014,14 @@ pub const BankFields = struct {
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
     stakes: Stakes(Delegation),
-    unused_accounts: UnusedAccounts, // required for deserialization
+    unused_accounts: UnusedAccounts,
     epoch_stakes: EpochStakeMap,
     is_delta: bool,
 
-    pub fn deinit(bank_fields: *const BankFields, allocator: std.mem.Allocator) void {
+    pub fn deinit(
+        bank_fields: *const BankFields,
+        allocator: std.mem.Allocator,
+    ) void {
         bank_fields.blockhash_queue.deinit(allocator);
 
         var ancestors = bank_fields.ancestors;
@@ -970,11 +1029,44 @@ pub const BankFields = struct {
 
         bank_fields.hard_forks.deinit(allocator);
 
-        bank_fields.stakes.deinit(allocator);
+        bank_fields.stakes.deinit(allocator, {});
 
         bank_fields.unused_accounts.deinit(allocator);
 
         epochStakeMapDeinit(bank_fields.epoch_stakes, allocator);
+    }
+
+    pub fn getStakedNodes(self: *const BankFields, allocator: std.mem.Allocator, epoch: Epoch) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+        const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
+        return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
+    }
+
+    /// Returns the leader schedule for this bank's epoch
+    pub fn leaderSchedule(
+        self: *const BankFields,
+        allocator: std.mem.Allocator,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        return self.leaderScheduleForEpoch(allocator, self.epoch);
+    }
+
+    /// Returns the leader schedule for an arbitrary epoch.
+    /// Only works if the bank is aware of the staked nodes for that epoch.
+    pub fn leaderScheduleForEpoch(
+        self: *const BankFields,
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
+        const staked_nodes = try self.getStakedNodes(allocator, epoch);
+        return .{
+            .allocator = allocator,
+            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule.fromStakedNodes(
+                allocator,
+                epoch,
+                slots_in_epoch,
+                staked_nodes,
+            ),
+        };
     }
 
     pub fn initRandom(
@@ -998,7 +1090,7 @@ pub const BankFields = struct {
                 return Delegation.initRandom(rand);
             }
         });
-        errdefer stakes.deinit(allocator);
+        errdefer stakes.deinit(allocator, {});
 
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
         errdefer unused_accounts.deinit(allocator);
@@ -1039,39 +1131,6 @@ pub const BankFields = struct {
             .unused_accounts = unused_accounts,
             .epoch_stakes = epoch_stakes,
             .is_delta = random.boolean(),
-        };
-    }
-
-    pub fn getStakedNodes(self: *const BankFields, allocator: std.mem.Allocator, epoch: Epoch) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
-        const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
-        return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
-    }
-
-    /// Returns the leader schedule for this bank's epoch
-    pub fn leaderSchedule(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-    ) !sig.core.leader_schedule.LeaderSchedule {
-        return self.leaderScheduleForEpoch(allocator, self.epoch);
-    }
-
-    /// Returns the leader schedule for an arbitrary epoch.
-    /// Only works if the bank is aware of the staked nodes for that epoch.
-    pub fn leaderScheduleForEpoch(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-    ) !sig.core.leader_schedule.LeaderSchedule {
-        const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
-        const staked_nodes = try self.getStakedNodes(allocator, epoch);
-        return .{
-            .allocator = allocator,
-            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                slots_in_epoch,
-                staked_nodes,
-            ),
         };
     }
 };
