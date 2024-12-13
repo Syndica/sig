@@ -79,7 +79,7 @@ pub const ReferenceCounter = struct {
     /// - true: there is at least 1 remaining reference
     /// - false: there are no more references
     pub fn isAlive(self: *Self) bool {
-        const current: State = @bitCast(self.state.load(.acquire));
+        const current: State = @bitCast(self.state.load(.seq_cst));
         return current.refs >= 1;
     }
 
