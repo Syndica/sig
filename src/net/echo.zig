@@ -1,17 +1,55 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 const builtin = @import("builtin");
-const net = @import("net.zig");
-const ShredVersion = @import("../core/shred.zig").ShredVersion;
-const SocketAddr = @import("net.zig").SocketAddr;
-const Atomic = std.atomic.Value;
+const httpz = @import("httpz");
+
+const bincode = sig.bincode;
 const assert = std.debug.assert;
 const testing = std.testing;
-const bincode = @import("../bincode/bincode.zig");
-const httpz = @import("httpz");
+
+const ShredVersion = sig.core.shred.ShredVersion;
+const SocketAddr = sig.net.SocketAddr;
+const Atomic = std.atomic.Value;
+const Logger = sig.trace.Logger;
+const IpAddr = sig.net.IpAddr;
 
 const MAX_PORT_COUNT_PER_MSG: usize = 4;
 const SERVER_LISTENER_LINGERING_TIMEOUT: u64 = std.time.ns_per_s * 1;
 const HEADER_LENGTH: usize = 4;
+
+/// determine our shred version and ip. in the solana-labs client, the shred version
+/// comes from the snapshot, and ip echo is only used to validate it.
+pub fn getShredAndIPFromEchoServer(
+    logger: Logger,
+    allocator: std.mem.Allocator,
+    socket_addresses: []SocketAddr,
+) !struct { shred_version: ?u16, ip: ?IpAddr } {
+    var my_ip: ?IpAddr = null;
+    var my_shred_version: ?u16 = null;
+
+    for (socket_addresses) |socket_addr| {
+        if (requestIpEcho(allocator, socket_addr.toAddress(), .{})) |response| {
+            if (my_ip == null)
+                my_ip = response.address;
+
+            if (response.shred_version) |shred_version| {
+                logger.info().logf(
+                    "shred version: {} - from entrypoint ip echo: {s}",
+                    .{ shred_version.value, socket_addr.toString().constSlice() },
+                );
+                my_shred_version = shred_version.value;
+            }
+
+            // fully break when we have both
+            if (my_shred_version != null and my_ip != null) break;
+        } else |_| {}
+    }
+
+    return .{
+        .shred_version = my_shred_version,
+        .ip = my_ip,
+    };
+}
 
 const IpEchoServerMessage = struct {
     tcp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
@@ -32,13 +70,13 @@ const IpEchoServerMessage = struct {
 
 const IpEchoServerResponse = struct {
     // Public IP address of request echoed back to the node.
-    address: net.IpAddr,
+    address: IpAddr,
     // Cluster shred-version of the node running the server.
     shred_version: ?ShredVersion,
 
     const Self = @This();
 
-    pub fn init(addr: net.IpAddr) Self {
+    pub fn init(addr: IpAddr) Self {
         return Self{
             .address = addr,
             .shred_version = ShredVersion{ .value = 0 },
@@ -103,7 +141,7 @@ pub fn handleEchoRequest(req: *httpz.Request, res: *httpz.Response) !void {
     // convert a u32 to Ipv4
     const socket_addr = SocketAddr.fromIpV4Address(res.conn.address);
 
-    std.json.stringify(IpEchoServerResponse.init(net.IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, res.writer()) catch |err| {
+    std.json.stringify(IpEchoServerResponse.init(IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, res.writer()) catch |err| {
         // logger.err().logf("could not json stringify IpEchoServerResponse: {any}", .{err});
         std.debug.print("could not json stringify ip echo server response message: {}\n", .{err});
     };

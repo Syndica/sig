@@ -1842,10 +1842,9 @@ pub const GossipService = struct {
         for (self.entrypoints.items) |entrypoint| {
             if (entrypoint.info) |info| {
                 if (info.shred_version != 0) {
-                    var addr_str = entrypoint.addr.toString();
                     self.logger.info().logf(
                         "shred version: {} - from entrypoint contact info: {s}",
-                        .{ info.shred_version, addr_str[0][0..addr_str[1]] },
+                        .{ info.shred_version, entrypoint.addr.toString().constSlice() },
                     );
                     self.my_shred_version.store(info.shred_version, .monotonic);
                     self.my_contact_info.shred_version = info.shred_version;
@@ -2288,6 +2287,34 @@ pub fn chunkValuesIntoPacketIndexes(
     }
 
     return packet_indexs;
+}
+
+pub fn getClusterEntrypoints(cluster: sig.core.Cluster) []const []const u8 {
+    return switch (cluster) {
+        .mainnet => &.{
+            "entrypoint.mainnet-beta.solana.com:8001",
+            "entrypoint2.mainnet-beta.solana.com:8001",
+            "entrypoint3.mainnet-beta.solana.com:8001",
+            "entrypoint4.mainnet-beta.solana.com:8001",
+            "entrypoint5.mainnet-beta.solana.com:8001",
+        },
+        .testnet => &.{
+            "entrypoint.testnet.solana.com:8001",
+            "entrypoint2.testnet.solana.com:8001",
+            "entrypoint3.testnet.solana.com:8001",
+        },
+        .devnet => &.{
+            "entrypoint.devnet.solana.com:8001",
+            "entrypoint2.devnet.solana.com:8001",
+            "entrypoint3.devnet.solana.com:8001",
+            "entrypoint4.devnet.solana.com:8001",
+            "entrypoint5.devnet.solana.com:8001",
+        },
+        .localnet => &.{
+            "127.0.0.1:1024", // agave test-validator default
+            "127.0.0.1:8001", // sig validator default
+        },
+    };
 }
 
 const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
@@ -3299,7 +3326,7 @@ const fuzz_service = sig.gossip.fuzz_service;
 
 pub const BenchmarkGossipServiceGeneral = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const max_iterations = 5;
 
     pub const MessageCounts = struct {
         n_ping: usize,
@@ -3433,7 +3460,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
 /// pull requests require some additional setup to work
 pub const BenchmarkGossipServicePullRequests = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const max_iterations = 5;
 
     pub const BenchmarkArgs = struct {
         name: []const u8 = "",

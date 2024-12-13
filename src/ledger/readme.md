@@ -53,11 +53,14 @@ The erasure coding algorithm used is [Reed-Solomon](https://en.wikipedia.org/wik
 
 For more information on Shreds, see the spec [here](https://github.com/solana-foundation/specs/blob/main/p2p/shred.md).
 
-### ShredCollector
+### Shred Network
 
-The ShredCollector is responsible for gathering and storing shreds from the network. While it is not a direct 
-part of the ledger, the ledger plays a crucial role in supporting its operations. As such, the ShredCollector 
+The Shred Network is responsible for gathering and storing shreds from the network. While it is not a direct 
+part of the ledger, the ledger plays a crucial role in supporting its operations. As such, the Shred Network 
 is implemented in its own module, ie: [`shred_network`](../shred_network), separate from the ledger module.
+
+A core part of the Shred Network is the `ShredCollector` which collects shreds received via the Shred Network 
+and persist in ledger.
 
 Understanding how the ShredCollector interacts with components from the ledger can help sheds light on key elements of the 
 ledger’s architecture. 
