@@ -189,6 +189,8 @@ pub fn testShreds(allocator: std.mem.Allocator, comptime filename: []const u8) !
 /// ```
 pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred {
     const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
     const reader = file.reader();
     var shreds = std.ArrayList(Shred).init(allocator);
     errdefer {
