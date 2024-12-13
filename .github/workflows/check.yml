@@ -53,9 +53,6 @@ jobs:
         with:
           version: 0.13.0
 
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-    
       - name: test
         run: |
           zig build test -Denable-tsan=true 
