@@ -46,7 +46,11 @@ pub fn build(b: *Build) void {
     const curl_dep = b.dependency("curl", dep_opts);
     const curl_mod = curl_dep.module("curl");
 
-    const rocksdb_dep = b.dependency("rocksdb", dep_opts);
+    const rocksdb_dep = b.dependency("rocksdb", .{
+        .target = target,
+        // this avoids a bug where rocksdb segfaults when built in ReleaseSafe
+        .optimize = if (optimize == .ReleaseSafe) .ReleaseFast else optimize,
+    });
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
 
     const lsquic_dep = b.dependency("lsquic", dep_opts);
