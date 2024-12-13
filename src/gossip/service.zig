@@ -3326,7 +3326,7 @@ const fuzz_service = sig.gossip.fuzz_service;
 
 pub const BenchmarkGossipServiceGeneral = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const max_iterations = 5;
 
     pub const MessageCounts = struct {
         n_ping: usize,
@@ -3460,7 +3460,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
 /// pull requests require some additional setup to work
 pub const BenchmarkGossipServicePullRequests = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const max_iterations = 5;
 
     pub const BenchmarkArgs = struct {
         name: []const u8 = "",
