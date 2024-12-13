@@ -863,7 +863,7 @@ fn shredCollector() !void {
 
     const genesis_path = try config.current.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
-    const genesis_config = try readGenesisConfig(allocator, genesis_path);
+    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
 
     var rpc_client = sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
