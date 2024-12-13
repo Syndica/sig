@@ -22,7 +22,7 @@ const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 const DOWNLOAD_PROGRESS_UPDATES_NS = 6 * std.time.ns_per_s;
 
 // The identifier for the scoped logger used in this file.
-pub const LOG_SCOPE = "accountsdb.download";
+const LOG_SCOPE = "accountsdb.download";
 
 /// Analogous to [PeerSnapshotHash](https://github.com/anza-xyz/agave/blob/f868aa38097094e4fb78a885b6fb27ce0e43f5c7/validator/src/bootstrap.rs#L342)
 const PeerSnapshotHash = struct {
@@ -486,7 +486,7 @@ fn enableProgress(
 /// downloads a file from a url into output_dir/filename
 /// returns error if it fails.
 /// the main errors include {HeaderRequestFailed, NoContentLength, TooSlow} or a curl-related error
-pub fn downloadFile(
+fn downloadFile(
     allocator: std.mem.Allocator,
     logger: ScopedLogger(LOG_SCOPE),
     url: [:0]const u8,
