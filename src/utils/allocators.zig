@@ -655,7 +655,7 @@ pub const BatchAllocator = struct {
         // use new batch for allocation
         const ptr = new_batch.alloc(len, log2_ptr_align, ret_addr) orelse unreachable;
 
-        if (batch_size >= self.batch_size) {
+        if (batch_size > self.batch_size) {
             // this batch won't be useful for any other allocations
             _ = new_batch.num_allocs.fetchOr(Batch.DONE, .monotonic);
         } else {
