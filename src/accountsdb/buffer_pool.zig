@@ -671,6 +671,79 @@ pub const HierarchicalFIFO = struct {
     }
 };
 
+/// slice-like datatype
+/// view over one or more buffers owned by the BufferPool
+pub const CachedRead = struct {
+    bp: *BufferPool,
+    indices: []const FrameIndex,
+    /// inclusive, the offset into the first frame
+    start_offset: FrameOffset,
+    /// exclusive, the offset into the last frame
+    end_offset: FrameOffset,
+
+    pub const Iterator = struct {
+        cached_read: *const CachedRead,
+        bytes_read: u32 = 0,
+
+        const Reader = std.io.GenericReader(*Iterator, error{}, readBytes);
+
+        pub fn next(self: *Iterator) ?u8 {
+            if (self.bytes_read == self.cached_read.len()) {
+                return null;
+            }
+            defer self.bytes_read += 1;
+            return self.cached_read.readByte(self.bytes_read);
+        }
+
+        pub fn reset(self: *Iterator) void {
+            self.bytes_read = 0;
+        }
+
+        pub fn readBytes(self: *Iterator, buffer: []u8) error{}!usize {
+            var i: u32 = 0;
+            while (i < buffer.len) : (i += 1) {
+                buffer[i] = self.next() orelse break;
+            }
+            return i;
+        }
+
+        pub fn reader(self: *Iterator) Reader {
+            return .{ .context = self };
+        }
+    };
+
+    pub fn readByte(self: CachedRead, idx: usize) u8 {
+        if (self.indices.len == 0) unreachable;
+        if (idx > self.len()) unreachable;
+        const offset = idx + self.start_offset;
+        if (offset < self.start_offset) unreachable;
+
+        return self.bp.frames[self.indices[offset / FRAME_SIZE]][offset % FRAME_SIZE];
+    }
+
+    pub fn iterator(self: *const CachedRead) Iterator {
+        return .{ .cached_read = self };
+    }
+
+    pub fn len(self: CachedRead) u32 {
+        if (self.indices.len == 0) return 0;
+        return (@as(u32, @intCast(self.indices.len)) - 1) *
+            FRAME_SIZE + self.end_offset - self.start_offset;
+    }
+
+    pub fn deinit(self: CachedRead, allocator: std.mem.Allocator) void {
+        for (self.indices) |frame_index| {
+            if (frame_index == INVALID_FRAME) unreachable;
+
+            if (self.bp.frames_metadata.rc[frame_index].release()) {
+                // notably, the frame remains in memory, and its hashmap entry
+                // remains valid.
+            }
+        }
+        allocator.free(self.indices);
+    }
+};
+
 /// Used for atomic appends + pops; No guarantees for elements.
 /// Methods follow that of ArrayListUnmanaged
 pub fn AtomicStack(T: type) type {
@@ -999,76 +1072,3 @@ test "BufferPool random read" {
         try std.testing.expectEqual(preaded_bytes, read_data_bp_reader.len);
     }
 }
-
-/// slice-like datatype
-/// view over one or more buffers owned by the BufferPool
-pub const CachedRead = struct {
-    bp: *BufferPool,
-    indices: []const FrameIndex,
-    /// inclusive, the offset into the first frame
-    start_offset: FrameOffset,
-    /// exclusive, the offset into the last frame
-    end_offset: FrameOffset,
-
-    pub const Iterator = struct {
-        cached_read: *const CachedRead,
-        bytes_read: u32 = 0,
-
-        const Reader = std.io.GenericReader(*Iterator, error{}, readBytes);
-
-        pub fn next(self: *Iterator) ?u8 {
-            if (self.bytes_read == self.cached_read.len()) {
-                return null;
-            }
-            defer self.bytes_read += 1;
-            return self.cached_read.readByte(self.bytes_read);
-        }
-
-        pub fn reset(self: *Iterator) void {
-            self.bytes_read = 0;
-        }
-
-        pub fn readBytes(self: *Iterator, buffer: []u8) error{}!usize {
-            var i: u32 = 0;
-            while (i < buffer.len) : (i += 1) {
-                buffer[i] = self.next() orelse break;
-            }
-            return i;
-        }
-
-        pub fn reader(self: *Iterator) Reader {
-            return .{ .context = self };
-        }
-    };
-
-    pub fn readByte(self: CachedRead, idx: usize) u8 {
-        if (self.indices.len == 0) unreachable;
-        if (idx > self.len()) unreachable;
-        const offset = idx + self.start_offset;
-        if (offset < self.start_offset) unreachable;
-
-        return self.bp.frames[self.indices[offset / FRAME_SIZE]][offset % FRAME_SIZE];
-    }
-
-    pub fn iterator(self: *const CachedRead) Iterator {
-        return .{ .cached_read = self };
-    }
-
-    pub fn len(self: CachedRead) u32 {
-        if (self.indices.len == 0) return 0;
-        return (@as(u32, @intCast(self.indices.len)) - 1) *
-            FRAME_SIZE + self.end_offset - self.start_offset;
-    }
-
-    pub fn deinit(self: CachedRead, allocator: std.mem.Allocator) void {
-        for (self.indices) |frame_index| {
-            if (frame_index == INVALID_FRAME) unreachable;
-
-            if (self.bp.frames_metadata.rc[frame_index].release()) {
-                // notably, the frame remains in memory, and its hashmap entry
-                // remains valid.
-            }
-        }
-        allocator.free(self.indices);
-    }
-};
