@@ -808,10 +808,8 @@ fn validator() !void {
     // Random number generator
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
-    // Retransmit service
+    // shred networking
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
-
-    // shred collector
     var shred_col_conf = config.current.shred_network;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
     var shred_network_manager = try sig.shred_network.start(
@@ -927,7 +925,7 @@ fn shredCollector() !void {
 
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
-    // shred collector
+    // shred networking
     var shred_col_conf = config.current.shred_network;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
     var shred_network_manager = try sig.shred_network.start(
