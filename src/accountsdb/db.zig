@@ -1917,7 +1917,7 @@ pub const AccountsDB = struct {
                 }
             }
 
-            var account_file_buf = try std.ArrayList(u8).initCapacity(self.allocator, file_size);
+            var account_file_buf = std.ArrayList(u8).init(self.allocator);
             defer account_file_buf.deinit();
 
             // write the alive accounts
