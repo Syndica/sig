@@ -209,8 +209,7 @@ pub fn main() !void {
                 }
 
                 // create fresh snapshot dir
-                try std.fs.cwd().makeDir(BENCH_SNAPSHOT_DIR_PATH);
-                var snapshot_dir = try std.fs.cwd().openDir(
+                var snapshot_dir = try std.fs.cwd().makeOpenPath(
                     BENCH_SNAPSHOT_DIR_PATH,
                     .{ .iterate = true },
                 );

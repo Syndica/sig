@@ -587,8 +587,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         accounts_db_exists = false;
     }
 
-    if (!accounts_db_exists) try validator_dir.makeDir("accounts_db");
-    const snapshot_dir = try validator_dir.openDir("accounts_db", .{});
+    const snapshot_dir = try validator_dir.makeOpenPath("accounts_db", .{});
 
     // download a new snapshot if required
     const snapshot_exists = !std.meta.isError(snapshot_dir.access("accounts", .{}));
