@@ -1126,7 +1126,9 @@ test "BufferPool random read" {
             );
             defer read2.deinit(gpa.allocator());
 
-            try std.testing.expect(read.first_frame_start_offset == read2.first_frame_start_offset);
+            try std.testing.expect(
+                read.first_frame_start_offset == read2.first_frame_start_offset,
+            );
             try std.testing.expect(read.last_frame_end_offset == read2.last_frame_end_offset);
             try std.testing.expectEqualSlices(u32, read.frame_indices, read2.frame_indices);
         }
