@@ -436,15 +436,6 @@ test Server {
         try unpack(allocator, logger, inc_snap_file, snap_dir, 1, false);
     }
 
-    const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
-    var all_snap_fields = try FullAndIncrementalManifest.fromFiles(
-        allocator,
-        logger,
-        snap_dir,
-        snap_files,
-    );
-    defer all_snap_fields.deinit(allocator);
-
     var accountsdb = try sig.accounts_db.AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
@@ -456,7 +447,27 @@ test Server {
         .lru_size = null,
     });
     defer accountsdb.deinit();
-    _ = try accountsdb.loadWithDefaults(allocator, &all_snap_fields, 1, true, 300, false, false);
+
+    {
+        const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
+        const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
+            allocator,
+            logger,
+            snap_dir,
+            snap_files,
+        );
+        defer all_snap_fields.deinit(allocator);
+
+        (try accountsdb.loadWithDefaults(
+            allocator,
+            all_snap_fields,
+            1,
+            true,
+            300,
+            false,
+            false,
+        )).deinit(allocator);
+    }
 
     var thread_pool = sig.sync.ThreadPool.init(.{ .max_threads = 1 });
     defer {

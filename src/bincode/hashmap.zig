@@ -101,11 +101,10 @@ pub fn readCtx(
         const key = try ctx_impl.readKey(allocator, reader, params);
         errdefer ctx_impl.freeKey(allocator, key);
 
-        const gop = hash_map.getOrPutAssumeCapacity(key);
-        if (gop.found_existing) return error.DuplicateFileMapEntry;
+        if (hash_map.contains(key)) return error.DuplicateFileMapEntry;
 
         const value = try ctx_impl.readValue(allocator, reader, params);
-        gop.value_ptr.* = value;
+        hash_map.putAssumeCapacityNoClobber(key, value);
     }
 
     return switch (hm_info.management) {
