@@ -553,10 +553,20 @@ pub const HierarchicalFIFO = struct {
         num_frames: u32,
     ) error{ InvalidArgument, OutOfMemory }!HierarchicalFIFO {
         if (small_size > num_frames) return error.InvalidArgument;
+
+        const small_buf = try allocator.alloc(FrameIndex, small_size);
+        errdefer allocator.free(small_buf);
+
+        const main_buf = try allocator.alloc(FrameIndex, num_frames);
+        errdefer allocator.free(main_buf);
+
+        const ghost_buf = try allocator.alloc(FrameIndex, num_frames);
+        errdefer allocator.free(ghost_buf);
+
         return .{
-            .small = Fifo.init(try allocator.alloc(FrameIndex, small_size)),
-            .main = Fifo.init(try allocator.alloc(FrameIndex, num_frames)),
-            .ghost = Fifo.init(try allocator.alloc(FrameIndex, num_frames)),
+            .small = Fifo.init(small_buf),
+            .main = Fifo.init(main_buf),
+            .ghost = Fifo.init(ghost_buf),
         };
     }
 
