@@ -341,7 +341,7 @@ pub const BufferPool = struct {
         // that at the end of the file)
         if (n_invalid_indices > 0) {
             const n_submitted = try self.io_uring.submit_and_wait(n_invalid_indices);
-            std.debug.assert(n_submitted == n_invalid_indices); // did smthing else submit an event?
+            std.debug.assert(n_submitted == n_invalid_indices); // did smthng else submit an event?
 
             // would be nice to get rid of this alloc
             const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, n_submitted);
