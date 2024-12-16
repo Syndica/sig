@@ -222,7 +222,7 @@ pub fn downloadSnapshotsFromGossip(
 
         for (available_snapshot_peers.items) |peer| {
             // download the full snapshot
-            const snapshot_filename_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+            const snapshot_filename_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotArchiveName(.{
                 .slot = peer.full_snapshot.slot,
                 .hash = peer.full_snapshot.hash,
             });

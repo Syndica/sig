@@ -1375,11 +1375,11 @@ fn loadSnapshot(
     result.snapshot_fields = all_snapshot_fields;
 
     logger.info().logf("full snapshot: {s}", .{
-        sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full_snapshot.snapshotNameStr().constSlice()),
+        sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full_snapshot.snapshotArchiveName().constSlice()),
     });
     if (snapshot_files.incremental_snapshot) |inc_snap| {
         logger.info().logf("incremental snapshot: {s}", .{
-            sig.utils.fmt.tryRealPath(snapshot_dir, inc_snap.snapshotNameStr().constSlice()),
+            sig.utils.fmt.tryRealPath(snapshot_dir, inc_snap.snapshotArchiveName().constSlice()),
         });
     }
 
@@ -1607,10 +1607,10 @@ fn getOrDownloadSnapshots(
         // if accounts/ doesnt exist then we unpack the found snapshots
         // TODO: delete old accounts/ dir if it exists
         timer.reset();
-        logger.info().logf("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
+        logger.info().logf("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotArchiveName().constSlice()});
         {
             const archive_file = try snapshot_dir.openFile(
-                snapshot_files.full_snapshot.snapshotNameStr().constSlice(),
+                snapshot_files.full_snapshot.snapshotArchiveName().constSlice(),
                 .{},
             );
             defer archive_file.close();
@@ -1628,9 +1628,9 @@ fn getOrDownloadSnapshots(
         // TODO: can probs do this in parallel with full snapshot
         if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
             timer.reset();
-            logger.info().logf("unpacking {s}...", .{incremental_snapshot.snapshotNameStr().constSlice()});
+            logger.info().logf("unpacking {s}...", .{incremental_snapshot.snapshotArchiveName().constSlice()});
 
-            const archive_file = try snapshot_dir.openFile(incremental_snapshot.snapshotNameStr().constSlice(), .{});
+            const archive_file = try snapshot_dir.openFile(incremental_snapshot.snapshotArchiveName().constSlice(), .{});
             defer archive_file.close();
 
             try parallelUnpackZstdTarBall(
