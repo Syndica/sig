@@ -2229,53 +2229,53 @@ pub const SnapshotFiles = struct {
             if (dir_entry.kind != .file) continue;
             const filename = dir_entry.name;
 
-            if (IncrementalSnapshotFileInfo.parseFileNameTarZst(filename)) |inc_snap| {
+            if (IncrementalSnapshotFileInfo.parseFileNameTarZst(filename)) |_incremental| {
                 if (maybe_latest_full) |latest_full| {
-                    if (inc_snap.slot < latest_full.slot) continue;
-                    if (inc_snap.base_slot < latest_full.slot) continue;
+                    if (_incremental.slot < latest_full.slot) continue;
+                    if (_incremental.base_slot < latest_full.slot) continue;
                 }
-                try incremental_snapshots.append(allocator, inc_snap);
+                try incremental_snapshots.append(allocator, _incremental);
                 continue;
             } else |_| {}
 
-            const current = FullSnapshotFileInfo.parseFileNameTarZst(filename) catch continue;
-            const prev = maybe_latest_full orelse {
-                maybe_latest_full = current;
+            const full = FullSnapshotFileInfo.parseFileNameTarZst(filename) catch continue;
+            const latest_full = maybe_latest_full orelse {
+                maybe_latest_full = full;
                 continue;
             };
-            if (prev.slot < current.slot) {
-                maybe_latest_full = current;
+            if (latest_full.slot < full.slot) {
+                maybe_latest_full = full;
                 continue;
             }
-            if (prev.slot == current.slot) {
+            if (latest_full.slot == full.slot) {
                 // TODO:
                 std.debug.panic("TODO: report this error gracefully in some way ({s} vs {s})", .{
-                    prev.snapshotArchiveName().constSlice(),
-                    current.snapshotArchiveName().constSlice(),
+                    latest_full.snapshotArchiveName().constSlice(),
+                    full.snapshotArchiveName().constSlice(),
                 });
             }
         }
         const latest_full = maybe_latest_full orelse return error.NoFullSnapshotFileInfoFound;
 
         var maybe_latest_incremental: ?IncrementalSnapshotFileInfo = null;
-        for (incremental_snapshots.items) |current| {
-            if (current.base_slot != latest_full.slot) continue;
-            const prev = maybe_latest_incremental orelse {
-                maybe_latest_incremental = current;
+        for (incremental_snapshots.items) |_incremental| {
+            if (_incremental.base_slot != latest_full.slot) continue;
+            const latest_incremental = maybe_latest_incremental orelse {
+                maybe_latest_incremental = _incremental;
                 continue;
             };
-            if (prev.slot < current.slot) {
-                maybe_latest_incremental = current;
+            if (latest_incremental.slot < _incremental.slot) {
+                maybe_latest_incremental = _incremental;
                 continue;
             }
-            if (prev.slot == current.slot) {
+            if (latest_incremental.slot == _incremental.slot) {
                 // TODO: if they have the same slot, that means they have different hashes, despite it being
                 // impossible for a given slot range to possess two different hashes; we have no way at this
                 // stage to unambiguously decide which of the two snapshots we want to select, since either
                 // could be valid. For now, we panic, but we should gracefully report this in some way.
                 std.debug.panic("TODO: report this error gracefully in some way ({s} vs {s})", .{
-                    prev.snapshotArchiveName().constSlice(),
-                    current.snapshotArchiveName().constSlice(),
+                    latest_incremental.snapshotArchiveName().constSlice(),
+                    _incremental.snapshotArchiveName().constSlice(),
                 });
             }
         }
