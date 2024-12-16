@@ -2219,8 +2219,8 @@ pub const SnapshotFiles = struct {
     };
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
     pub fn find(allocator: std.mem.Allocator, search_dir: std.fs.Dir) FindError!SnapshotFiles {
-        var incremental_snaps: std.ArrayListUnmanaged(IncrementalSnapshotFileInfo) = .{};
-        defer incremental_snaps.deinit(allocator);
+        var incremental_snapshots: std.ArrayListUnmanaged(IncrementalSnapshotFileInfo) = .{};
+        defer incremental_snapshots.deinit(allocator);
 
         var maybe_latest_full: ?FullSnapshotFileInfo = null;
 
@@ -2234,7 +2234,7 @@ pub const SnapshotFiles = struct {
                     if (inc_snap.slot < latest_full.slot) continue;
                     if (inc_snap.base_slot < latest_full.slot) continue;
                 }
-                try incremental_snaps.append(allocator, inc_snap);
+                try incremental_snapshots.append(allocator, inc_snap);
                 continue;
             } else |_| {}
 
@@ -2258,7 +2258,7 @@ pub const SnapshotFiles = struct {
         const latest_full = maybe_latest_full orelse return error.NoFullSnapshotFileInfoFound;
 
         var maybe_latest_incremental: ?IncrementalSnapshotFileInfo = null;
-        for (incremental_snaps.items) |current| {
+        for (incremental_snapshots.items) |current| {
             if (current.base_slot != latest_full.slot) continue;
             const prev = maybe_latest_incremental orelse {
                 maybe_latest_incremental = current;
