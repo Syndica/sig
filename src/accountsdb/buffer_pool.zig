@@ -471,7 +471,6 @@ pub const FramesMetadata = struct {
 
     /// frequency for the S3_FIFO
     /// Yes, really, only 0, 1, 2, 3.
-    /// Wonder if it would be faster to pack this.
     freq: []u2,
 
     /// which S3_FIFO queue this frame exists in
@@ -1123,7 +1122,9 @@ test "BufferPool random read" {
 
     var reads: usize = 0;
     while (reads < 5000) : (reads += 1) {
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        var gpa = std.heap.GeneralPurposeAllocator(.{
+            .safety = true,
+        }){};
         defer _ = gpa.deinit();
 
         const range_start = prng.random().intRangeAtMost(u32, 0, file_size);

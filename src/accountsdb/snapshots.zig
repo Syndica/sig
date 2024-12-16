@@ -2292,6 +2292,9 @@ pub fn parallelUnpackZstdTarBall(
     const file_stat = try file.stat();
     const file_size: u64 = @intCast(file_stat.size);
 
+    // TODO: improve `zstd.Reader` to be capable of sourcing a stream of bytes
+    // rather than a fixed slice of bytes, so we don't have to load the entire
+    // snapshot file into memory.
     const file_data = try allocator.alloc(u8, file_size);
     defer allocator.free(file_data);
     if (try file.readAll(file_data) != file_size) unreachable;
