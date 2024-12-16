@@ -131,8 +131,8 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) u32 {
-        if (file_offset_start > file_offset_end) unreachable;
+    ) error{InvalidArgument}!u32 {
+        if (file_offset_start > file_offset_end) return error.InvalidArgument;
         if (file_offset_start == file_offset_end) return 0;
 
         const starting_frame = file_offset_start / FRAME_SIZE;
@@ -153,10 +153,10 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) error{ InvalidArgument, OutOfMemory }![]FrameIndex {
-        const n_indices = computeNumberofFrameIndices(file_offset_start, file_offset_end);
+    ) error{ InvalidArgument, OffsetsOutOfBounds, OutOfMemory }![]FrameIndex {
+        const n_indices = try computeNumberofFrameIndices(file_offset_start, file_offset_end);
 
-        if (n_indices > self.frames.len) return error.InvalidArgument;
+        if (n_indices > self.frames.len) return error.OffsetsOutOfBounds;
 
         const frame_indices = try allocator.alloc(FrameIndex, n_indices);
         for (frame_indices) |*f_idx| f_idx.* = INVALID_FRAME;
@@ -309,7 +309,6 @@ pub const BufferPool = struct {
 
         // fill in invalid frames with file data, replacing invalid frames with
         // fresh ones.
-        var sent_reads: u32 = 0;
         for (0.., frame_indices) |i, *f_idx| {
             if (f_idx.* != INVALID_FRAME) continue;
             // INVALID_FRAME => not found, read fresh and populate
@@ -332,15 +331,16 @@ pub const BufferPool = struct {
                 .{ .buffer = &self.frames[f_idx.*] },
                 frame_aligned_file_offset,
             );
-            sent_reads += 1;
             try self.overwriteDeadFrameInfoNoSize(f_idx.*, file_id, frame_aligned_file_offset);
             try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
         }
-        if (sent_reads != n_invalid_indices) unreachable;
 
-        if (sent_reads > 0) {
-            const n_submitted = try self.io_uring.submit_and_wait(sent_reads);
-            if (n_submitted != sent_reads) unreachable; // did something else submit an event?
+        // Wait for our file reads to complete, filling the read length into the metadata as we go.
+        // (This read length will almost always be FRAME_SIZE, however it will likely be less than
+        // that at the end of the file)
+        if (n_invalid_indices > 0) {
+            const n_submitted = try self.io_uring.submit_and_wait(n_invalid_indices);
+            if (n_submitted != n_invalid_indices) unreachable; // did something else submit an event?
 
             // would be nice to get rid of this alloc
             const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, n_submitted);
@@ -387,6 +387,7 @@ pub const BufferPool = struct {
         InvalidKey,
         CannotResetAlive,
         CannotOverwriteAliveInfo,
+        OffsetsOutOfBounds,
     } || std.posix.PReadError)!CachedRead {
         const frame_indices = try self.computeFrameIndices(
             file_id,
@@ -1043,7 +1044,7 @@ test "BufferPool filesize > frame_size * num_frames" {
 
     // can't read buffer larger than total size of the buffer pool
     const read_whole = bp.read(allocator, file, file_id, 0, @intCast(file_size - 1));
-    try std.testing.expectEqual(error.InvalidArgument, read_whole);
+    try std.testing.expectEqual(error.OffsetsOutOfBounds, read_whole);
 
     // file_size > total buffers size => we evict as we go
     var offset: u32 = 0;
@@ -1107,7 +1108,7 @@ test "BufferPool random read" {
             @min(file_size, range_start + num_frames * FRAME_SIZE),
         );
 
-        if (BufferPool.computeNumberofFrameIndices(range_start, range_end) > num_frames) {
+        if (try BufferPool.computeNumberofFrameIndices(range_start, range_end) > num_frames) {
             continue;
         }
 
