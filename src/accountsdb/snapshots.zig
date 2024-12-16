@@ -2289,16 +2289,16 @@ pub fn parallelUnpackZstdTarBall(
     /// only used for progress estimation
     full_snapshot: bool,
 ) !void {
-    const file_stat = try file.stat();
-    const file_size: u64 = @intCast(file_stat.size);
+    const file_size = (try file.stat()).size;
 
     // TODO: improve `zstd.Reader` to be capable of sourcing a stream of bytes
     // rather than a fixed slice of bytes, so we don't have to load the entire
     // snapshot file into memory.
     const file_data = try allocator.alloc(u8, file_size);
     defer allocator.free(file_data);
-    if (try file.readAll(file_data) != file_size) unreachable;
-
+    if (try file.readAll(file_data) != file_size) {
+        return error.UnexpectedEOF; // has the file shrunk since we got its size?
+    }
     var tar_stream = try zstd.Reader.init(file_data);
     defer tar_stream.deinit();
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
