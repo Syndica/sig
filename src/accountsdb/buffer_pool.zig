@@ -61,8 +61,8 @@ pub const BufferPool = struct {
 
     /// uniquely identifies a frame
     /// for finding your wanted index
-    // TODO: thread safety?
-    frame_map: FrameMap,
+    /// TODO: a concurrent hashmap would be more appropriate
+    frame_map_rw: sig.sync.RwMux(FrameMap),
 
     frames: []Frame,
     frames_metadata: FramesMetadata,
@@ -105,11 +105,13 @@ pub const BufferPool = struct {
         try frame_map.ensureTotalCapacity(init_allocator, num_frames);
         errdefer frame_map.deinit(init_allocator);
 
+        const frame_map_rw = sig.sync.RwMux(FrameMap).init(frame_map);
+
         return .{
             .frames = frames,
             .frames_metadata = frames_metadata,
             .free_list = free_list,
-            .frame_map = frame_map,
+            .frame_map_rw = frame_map_rw,
             .eviction_lfu = try HierarchicalFIFO.init(init_allocator, num_frames / 10, num_frames),
             .io_uring = io_uring,
         };
@@ -121,7 +123,9 @@ pub const BufferPool = struct {
         if (use_io_uring) self.io_uring.deinit();
         self.free_list.deinit(init_allocator);
         self.eviction_lfu.deinit(init_allocator);
-        self.frame_map.deinit(init_allocator);
+        const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
+        frame_map.deinit(init_allocator);
+        frame_map_lg.unlock();
     }
 
     pub fn computeNumberofFrameIndices(
@@ -170,7 +174,11 @@ pub const BufferPool = struct {
                 .file_offset = file_offset,
             };
 
-            const maybe_frame_idx = self.frame_map.get(key);
+            const maybe_frame_idx = blk: {
+                const frame_map, var frame_map_lg = self.frame_map_rw.readWithLock();
+                defer frame_map_lg.unlock();
+                break :blk frame_map.get(key);
+            };
 
             if (maybe_frame_idx) |frame_idx| f_idx.* = frame_idx;
         }
@@ -221,7 +229,11 @@ pub const BufferPool = struct {
             .file_offset = frame_aligned_file_offset,
         };
 
-        self.frame_map.putAssumeCapacityNoClobber(key, f_idx);
+        {
+            const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
+            defer frame_map_lg.unlock();
+            frame_map.putAssumeCapacityNoClobber(key, f_idx);
+        }
     }
 
     /// Frames with an associated rc of 0 are up for eviction, and which frames
@@ -229,7 +241,12 @@ pub const BufferPool = struct {
     fn evictUnusedFrame(self: *BufferPool) error{CannotResetAlive}!void {
         const evicted = self.eviction_lfu.evict(self.frames_metadata);
         self.free_list.appendAssumeCapacity(evicted);
-        const did_remove = self.frame_map.remove(self.frames_metadata.key[evicted]);
+
+        const did_remove = blk: {
+            const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
+            defer frame_map_lg.unlock();
+            break :blk frame_map.remove(self.frames_metadata.key[evicted]);
+        };
         if (!did_remove) {
             std.debug.panic(
                 "evicted a frame that did not exist in frame_map, frame: {}\n",
