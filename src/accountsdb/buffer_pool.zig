@@ -14,6 +14,7 @@ const FileOffset = u32;
 const FrameOffset = u10; // 0..=FRAME_SIZE
 
 comptime {
+    // assert our FRAME_SIZE fits in FrameOffset
     const offset: FrameOffset = FRAME_SIZE;
     _ = offset;
 }
