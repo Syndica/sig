@@ -635,6 +635,9 @@ pub const HierarchicalFIFO = struct {
     }
 
     /// To be called when freelist is empty.
+    /// This does not return an optional, as the caller *requires* a key to be
+    /// evicted. Not being able to return a key means illegal internal state in
+    /// the BufferPool.
     pub fn evict(self: *HierarchicalFIFO, metadata: Metadata) Key {
         var alive_eviction_attempts: usize = 0;
 
@@ -655,8 +658,12 @@ pub const HierarchicalFIFO = struct {
                 if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(metadata, .main);
             }
 
+            // NOTE: This panic is effectively unreachable - an empty cache
+            // shouldn't be possible by (mis)using the public API of BufferPool,
+            // except by touching the .eviction_lfu field (which you should
+            // never do).
             const evicted = maybe_evicted orelse
-                @panic("unable to evict: cache empty");
+                @panic("unable to evict: cache empty"); // see above comment
 
             // alive evicted keys are reinserted, we try again
             if (metadata.rc[evicted].isAlive()) {
