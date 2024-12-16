@@ -12,7 +12,7 @@ pub fn build(b: *Build) void {
     const filters = b.option([]const []const u8, "filter", "List of filters, used for example to filter unit tests by name"); // specified as a series like `-Dfilter="filter1" -Dfilter="filter2"`
     const enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite");
     const no_run = b.option(bool, "no-run", "Do not run the selected step and install it") orelse false;
-    const blockstore_db = b.option(BlockstoreDB, "blockstore-db", "Blockstore database backend") orelse .rocksdb;
+    const blockstore_db = b.option(BlockstoreDB, "blockstore", "Blockstore database backend") orelse .rocksdb;
 
     // Build options
     const build_options = b.addOptions();
@@ -46,7 +46,11 @@ pub fn build(b: *Build) void {
     const curl_dep = b.dependency("curl", dep_opts);
     const curl_mod = curl_dep.module("curl");
 
-    const rocksdb_dep = b.dependency("rocksdb", dep_opts);
+    const rocksdb_dep = b.dependency("rocksdb", .{
+        .target = target,
+        // this avoids a bug where rocksdb segfaults when built in ReleaseSafe
+        .optimize = if (optimize == .ReleaseSafe) .ReleaseFast else optimize,
+    });
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
 
     const lsquic_dep = b.dependency("lsquic", dep_opts);

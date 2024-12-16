@@ -73,7 +73,7 @@ test "core.bank: load and validate from test snapshot" {
     const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
 
     const boundedFmt = sig.utils.fmt.boundedFmt;
-    const full_manifest_path = boundedFmt("snapshots/{0}/{0}", .{snapshot_files.full_snapshot.slot});
+    const full_manifest_path = boundedFmt("snapshots/{0}/{0}", .{snapshot_files.full.slot});
     const full_manifest_file = try snapdir.openFile(full_manifest_path.constSlice(), .{});
     defer full_manifest_file.close();
 
