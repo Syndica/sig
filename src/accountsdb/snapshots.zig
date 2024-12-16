@@ -2269,7 +2269,10 @@ pub const SnapshotFiles = struct {
                 continue;
             }
             if (prev.slot == current.slot) {
-                // TODO:
+                // TODO: if they have the same slot, that means they have different hashes, despite it being
+                // impossible for a given slot range to possess two different hashes; we have no way at this
+                // stage to unambiguously decide which of the two snapshots we want to select, since either
+                // could be valid. For now, we panic, but we should gracefully report this in some way.
                 std.debug.panic("TODO: report this error gracefully in some way ({s} vs {s})", .{
                     prev.snapshotArchiveName().constSlice(),
                     current.snapshotArchiveName().constSlice(),
