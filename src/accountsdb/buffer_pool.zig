@@ -24,6 +24,8 @@ const LinuxIoMode = enum {
 };
 const linux_io_mode: LinuxIoMode = .IoUring;
 
+const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
+
 const FileIdFileOffset = struct {
     const INVALID: FileIdFileOffset = .{
         .file_id = FileId.fromInt(std.math.maxInt(FileId.Int)),
@@ -71,7 +73,7 @@ pub const BufferPool = struct {
     eviction_lfu: HierarchicalFIFO,
 
     /// NOTE: we might want this to be a threadlocal for best performance? I don't think this field is threadsafe
-    io_uring: if (builtin.os.tag == .linux) std.os.linux.IoUring else void,
+    io_uring: if (use_io_uring) std.os.linux.IoUring else void,
 
     pub fn init(
         init_allocator: std.mem.Allocator,
@@ -89,7 +91,7 @@ pub const BufferPool = struct {
         errdefer free_list.deinit(init_allocator);
         for (0..num_frames) |i| free_list.appendAssumeCapacity(@intCast(i));
 
-        var io_uring = if (builtin.os.tag == .linux) blk: {
+        var io_uring = if (use_io_uring) blk: {
             // NOTE: this is pretty much a guess, maybe worth tweaking?
             // think this is a bit on the high end, libxev uses 256
             const io_uring_entries = 4096;
@@ -99,7 +101,7 @@ pub const BufferPool = struct {
                 0,
             );
         } else {};
-        errdefer if (builtin.os.tag == .linux) io_uring.deinit();
+        errdefer if (use_io_uring) io_uring.deinit();
 
         var frame_map: FrameMap = .{};
         try frame_map.ensureTotalCapacity(init_allocator, num_frames);
@@ -118,9 +120,7 @@ pub const BufferPool = struct {
     pub fn deinit(self: *BufferPool, init_allocator: std.mem.Allocator) void {
         init_allocator.free(self.frames);
         self.frames_metadata.deinit(init_allocator);
-        if (builtin.os.tag == .linux) {
-            self.io_uring.deinit();
-        }
+        if (use_io_uring) self.io_uring.deinit();
         self.free_list.deinit(init_allocator);
         self.eviction_lfu.deinit(init_allocator);
         self.frame_map.deinit(init_allocator);
@@ -253,8 +253,6 @@ pub const BufferPool = struct {
         /// exclusive
         file_offset_end: FileOffset,
     ) !CachedRead {
-        const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
-
         return if (use_io_uring)
             self.readIoUringSubmitAndWait(
                 allocator,
@@ -1116,7 +1114,8 @@ test "BufferPool random read" {
         var read = try bp.read(gpa.allocator(), file, file_id, range_start, range_end);
         defer read.deinit(gpa.allocator());
 
-        if (builtin.os.tag == .linux) {
+        // check for equality with other impl
+        if (use_io_uring) {
             var read2 = try bp.readBlocking(
                 gpa.allocator(),
                 file,
