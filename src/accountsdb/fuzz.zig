@@ -298,10 +298,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 break :inc inc_snapshot_file_info;
             };
 
-            const snapshot_files: sig.accounts_db.SnapshotFiles = .{
-                .full_snapshot = full_snapshot_file_info,
-                .incremental_snapshot = maybe_incremental_file_info,
-            };
+            const snapshot_files = sig.accounts_db.SnapshotFiles.fromFileInfos(
+                full_snapshot_file_info,
+                maybe_incremental_file_info,
+            );
 
             var snapshot_fields = try sig.accounts_db.AllSnapshotFields.fromFiles(
                 allocator,

@@ -2039,6 +2039,14 @@ pub const IncrementalSnapshotFileInfo = struct {
     slot: Slot,
     hash: Hash,
 
+    /// Returns the incremental slot and hash.
+    pub fn slotAndHash(self: IncrementalSnapshotFileInfo) SlotAndHash {
+        return .{
+            .slot = self.slot,
+            .hash = self.hash,
+        };
+    }
+
     const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst");
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
@@ -2182,13 +2190,33 @@ pub const IncrementalSnapshotFileInfo = struct {
 };
 
 pub const SnapshotFiles = struct {
-    full_snapshot: FullSnapshotFileInfo,
-    incremental_snapshot: ?IncrementalSnapshotFileInfo,
+    full: FullSnapshotFileInfo,
+    incremental_info: ?SlotAndHash,
 
-    const Self = @This();
+    pub fn incremental(snapshot_files: SnapshotFiles) ?IncrementalSnapshotFileInfo {
+        const inc_info = snapshot_files.incremental_info orelse return null;
+        return .{
+            .base_slot = snapshot_files.full.slot,
+            .slot = inc_info.slot,
+            .hash = inc_info.hash,
+        };
+    }
+
+    pub fn fromFileInfos(
+        full_info: FullSnapshotFileInfo,
+        maybe_incremental_info: ?IncrementalSnapshotFileInfo,
+    ) SnapshotFiles {
+        if (maybe_incremental_info) |inc| {
+            std.debug.assert(inc.base_slot == full_info.slot);
+        }
+        return .{
+            .full = full_info,
+            .incremental_info = if (maybe_incremental_info) |inc| inc.slotAndHash() else null,
+        };
+    }
 
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
-    pub fn find(allocator: std.mem.Allocator, snapshot_directory: std.fs.Dir) !Self {
+    pub fn find(allocator: std.mem.Allocator, snapshot_directory: std.fs.Dir) !SnapshotFiles {
         const files = try readDirectory(allocator, snapshot_directory);
         defer {
             for (files) |file| allocator.free(file);
@@ -2205,7 +2233,8 @@ pub const SnapshotFiles = struct {
             }
             count += 1;
         }
-        const latest_full_snapshot = maybe_latest_full_snapshot orelse return error.NoFullSnapshotFileInfoFound;
+        const latest_full_snapshot = maybe_latest_full_snapshot orelse
+            return error.NoFullSnapshotFileInfoFound;
 
         count = 0;
         var maybe_latest_incremental_snapshot: ?IncrementalSnapshotFileInfo = null;
@@ -2221,10 +2250,10 @@ pub const SnapshotFiles = struct {
             count += 1;
         }
 
-        return .{
-            .full_snapshot = latest_full_snapshot,
-            .incremental_snapshot = maybe_latest_incremental_snapshot,
-        };
+        return fromFileInfos(
+            latest_full_snapshot,
+            maybe_latest_incremental_snapshot,
+        );
     }
 };
 
@@ -2247,7 +2276,7 @@ pub const AllSnapshotFields = struct {
         const logger = logger_.withScope(@typeName((Self)));
         // unpack
         const full_fields = blk: {
-            const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full_snapshot.slot});
+            const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full.slot});
             const rel_path = rel_path_bounded.constSlice();
 
             logger.info().logf("reading snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
@@ -2260,8 +2289,8 @@ pub const AllSnapshotFields = struct {
         errdefer full_fields.deinit(allocator);
 
         const incremental_fields: ?SnapshotFields = blk: {
-            if (files.incremental_snapshot) |incremental_snapshot_path| {
-                const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{incremental_snapshot_path.slot});
+            if (files.incremental_info) |inc_snap| {
+                const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_snap.slot});
                 const rel_path = rel_path_bounded.constSlice();
 
                 logger.info().logf("reading inc snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
@@ -2509,7 +2538,7 @@ test "parse snapshot fields" {
 
     const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
 
-    const full_slot = snapshot_files.full_snapshot.slot;
+    const full_slot = snapshot_files.full.slot;
     const full_manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{full_slot});
     const full_manifest_path = full_manifest_path_bounded.constSlice();
 
@@ -2519,7 +2548,7 @@ test "parse snapshot fields" {
     const snapshot_fields_full = try SnapshotFields.readFromFile(allocator, full_manifest_file);
     defer snapshot_fields_full.deinit(allocator);
 
-    if (snapshot_files.incremental_snapshot) |inc| {
+    if (snapshot_files.incremental_info) |inc| {
         const inc_slot = inc.slot;
         const inc_manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_slot});
         const inc_manifest_path = inc_manifest_path_bounded.constSlice();
