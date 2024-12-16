@@ -341,7 +341,7 @@ pub const BufferPool = struct {
         // that at the end of the file)
         if (n_invalid_indices > 0) {
             const n_submitted = try self.io_uring.submit_and_wait(n_invalid_indices);
-            if (n_submitted != n_invalid_indices) unreachable; // did something else submit an event?
+            std.debug.assert(n_submitted == n_invalid_indices); // did smthing else submit an event?
 
             // would be nice to get rid of this alloc
             const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, n_submitted);
@@ -350,14 +350,14 @@ pub const BufferPool = struct {
             // check our completions in order to set the frame's size;
             // we need to wait for completion to get the bytes read
             const cqe_count = try self.io_uring.copy_cqes(cqes, n_submitted);
-            if (cqe_count != n_submitted) unreachable; // why did we not receive them all?
+            std.debug.assert(cqe_count == n_submitted); // why did we not receive them all?
             for (0.., cqes) |i, cqe| {
                 if (cqe.err() != .SUCCESS) {
                     std.debug.panic("cqe err: {}, i: {}", .{ cqe, i });
                 }
                 const f_idx = cqe.user_data;
                 const bytes_read: FrameOffset = @intCast(cqe.res);
-                if (bytes_read > FRAME_SIZE) unreachable;
+                std.debug.assert(bytes_read <= FRAME_SIZE);
 
                 // TODO: atomics
                 self.frames_metadata.size[f_idx] = bytes_read;
@@ -586,7 +586,7 @@ pub const HierarchicalFIFO = struct {
                 metadata.freq[key] +|= 1;
             },
             .ghost => {
-                if (metadata.freq[key] != 0) unreachable;
+                std.debug.assert(metadata.freq[key] == 0);
                 metadata.freq[key] = 1;
                 // Add key to main too - important to note that the key *still*
                 // exists within ghost, but from now on we'll ignore that entry.
@@ -745,10 +745,10 @@ pub const CachedRead = struct {
     };
 
     pub fn readByte(self: CachedRead, index: usize) u8 {
-        if (self.frame_indices.len == 0) unreachable;
-        if (index > self.len()) unreachable;
+        std.debug.assert(self.frame_indices.len != 0);
+        std.debug.assert(index < self.len());
         const offset = index + self.first_frame_start_offset;
-        if (offset < self.first_frame_start_offset) unreachable;
+        std.debug.assert(offset >= self.first_frame_start_offset);
 
         return self.buffer_pool.frames[
             self.frame_indices[offset / FRAME_SIZE]
@@ -821,7 +821,7 @@ pub const CachedRead = struct {
 
     pub fn deinit(self: CachedRead, allocator: std.mem.Allocator) void {
         for (self.frame_indices) |frame_index| {
-            if (frame_index == INVALID_FRAME) unreachable;
+            std.debug.assert(frame_index != INVALID_FRAME);
 
             if (self.buffer_pool.frames_metadata.rc[frame_index].release()) {
                 // notably, the frame remains in memory, and its hashmap entry
@@ -859,7 +859,7 @@ pub fn AtomicStack(T: type) type {
         // add new item to the end of buf, incrementing self.len atomically
         fn appendAssumeCapacity(self: *Self, item: T) void {
             const prev_len = self.len.load(.acquire);
-            if (prev_len >= self.cap) unreachable;
+            std.debug.assert(prev_len < self.cap);
             self.buf[prev_len] = item;
             _ = self.len.fetchAdd(1, .release);
         }
