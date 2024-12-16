@@ -27,7 +27,7 @@ const linux_io_mode: LinuxIoMode = .IoUring;
 
 const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
 
-const FileIdFileOffset = struct {
+const FileIdFileOffset = packed struct(u64) {
     const INVALID: FileIdFileOffset = .{
         .file_id = FileId.fromInt(std.math.maxInt(FileId.Int)),
         // disambiguate from 0xAAAA / will trigger asserts as it's not even.
@@ -39,9 +39,6 @@ const FileIdFileOffset = struct {
     /// offset in the file from which the frame begin
     /// always a multiple of FRAME_SIZE
     file_offset: FileOffset,
-    comptime {
-        if (@sizeOf(FileIdFileOffset) != @sizeOf(u64)) unreachable;
-    }
 };
 
 /// Used for obtaining cached reads.
