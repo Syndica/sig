@@ -10,7 +10,7 @@ const zstd = @import("zstd");
 const Allocator = std.mem.Allocator;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const AccountsDB = sig.accounts_db.AccountsDB;
-const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
+const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
 const Bank = sig.accounts_db.Bank;
 const Slot = sig.core.Slot;
 const ContactInfo = sig.gossip.ContactInfo;
@@ -974,7 +974,7 @@ fn printManifest() !void {
 
     const snapshot_file_info = try SnapshotFiles.find(allocator, snapshot_dir);
 
-    var snapshots = try AllSnapshotFields.fromFiles(
+    var snapshots = try FullAndIncrementalManifest.fromFiles(
         allocator,
         app_base.logger.unscoped(),
         snapshot_dir,
@@ -1319,14 +1319,14 @@ const LoadedSnapshot = struct {
     allocator: Allocator,
     accounts_db: AccountsDB,
     status_cache: sig.accounts_db.snapshots.StatusCache,
-    snapshot_fields: sig.accounts_db.snapshots.AllSnapshotFields,
+    snapshot_fields: sig.accounts_db.snapshots.FullAndIncrementalManifest,
     /// contains pointers to `accounts_db` and `snapshot_fields`
     bank: Bank,
     genesis_config: GenesisConfig,
     // Snapshot resulting from collapse needs to be retained here for
     // valid lifetime as it is used by bank. This was a quick fix, a minor
     // refactor is probably not a bad idea.
-    collapsed_snapshot_fields: sig.accounts_db.snapshots.SnapshotFields,
+    collapsed_snapshot_fields: sig.accounts_db.snapshots.Manifest,
 
     pub fn deinit(self: *@This()) void {
         self.genesis_config.deinit(self.allocator);
@@ -1529,7 +1529,7 @@ fn getOrDownloadSnapshots(
         num_threads_snapshot_unpack: u16,
         min_snapshot_download_speed_mbs: usize,
     },
-) !struct { AllSnapshotFields, SnapshotFiles } {
+) !struct { FullAndIncrementalManifest, SnapshotFiles } {
     const logger = logger_.withScope(LOG_SCOPE);
     // arg parsing
     const snapshot_dir = options.snapshot_dir;
@@ -1649,7 +1649,7 @@ fn getOrDownloadSnapshots(
 
     timer.reset();
     logger.info().log("reading snapshot metadata...");
-    const snapshots = try AllSnapshotFields.fromFiles(allocator, logger.unscoped(), snapshot_dir, snapshot_files);
+    const snapshots = try FullAndIncrementalManifest.fromFiles(allocator, logger.unscoped(), snapshot_dir, snapshot_files);
     logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
     return .{ snapshots, snapshot_files };

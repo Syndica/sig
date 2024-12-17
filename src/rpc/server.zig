@@ -436,8 +436,8 @@ test Server {
         try unpack(allocator, logger, inc_snap_file, snap_dir, 1, false);
     }
 
-    const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
-    var all_snap_fields = try AllSnapshotFields.fromFiles(
+    const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
+    var all_snap_fields = try FullAndIncrementalManifest.fromFiles(
         allocator,
         logger,
         snap_dir,
