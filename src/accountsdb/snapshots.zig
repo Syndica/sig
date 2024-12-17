@@ -2606,13 +2606,13 @@ pub const FullAndIncrementalManifest = struct {
         snapshot_dir: std.fs.Dir,
         files: SnapshotFiles,
     ) !FullAndIncrementalManifest {
-        const logger = unscoped_logger.withScope(@typeName(@This()));
+        const logger = unscoped_logger.withScope("accounts_db.snapshot_manifest");
 
         const full_fields = blk: {
             const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full.slot});
             const rel_path = rel_path_bounded.constSlice();
 
-            logger.info().logf("reading snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+            logger.info().logf("reading *full* snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
 
             const full_file = try snapshot_dir.openFile(rel_path, .{});
             defer full_file.close();
@@ -2624,8 +2624,7 @@ pub const FullAndIncrementalManifest = struct {
         const incremental_fields = if (files.incremental_info) |inc_snap| blk: {
             const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_snap.slot});
             const rel_path = rel_path_bounded.constSlice();
-
-            logger.info().logf("reading incremental snapshot manifest from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+            logger.info().logf("reading *incremental* snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
 
             const incremental_file = try snapshot_dir.openFile(rel_path, .{});
             defer incremental_file.close();
