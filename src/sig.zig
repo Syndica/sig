@@ -28,3 +28,7 @@ pub const TEST_STATE_DIR = "data/test-state/";
 pub const FUZZ_DATA_DIR = "data/fuzz-data/";
 pub const BENCHMARK_RESULTS_DIR = "results/";
 pub const GENESIS_DIR = "data/genesis-files/";
+
+/// a sane default timeout for most blocking receives on channels in sig.
+/// should be long enough to avoid busy waiting and short enough for a responsive shutdown.
+pub const CHANNEL_TIMEOUT = time.Duration.fromMillis(100);

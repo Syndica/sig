@@ -101,6 +101,7 @@ pub const VERIFY_PACKET_PARALLEL_TASKS = 4;
 
 const MAX_PROCESS_BATCH_SIZE = 64;
 const GOSSIP_PRNG_SEED = 19;
+const CHANNEL_TIMEOUT = sig.CHANNEL_TIMEOUT;
 
 /// The flow of data goes as follows:
 ///
@@ -515,7 +516,9 @@ pub const GossipService = struct {
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
             var task_search_start_idx: usize = 0;
-            while (self.packet_incoming_channel.tryReceive()) |packet| {
+            while (self.packet_incoming_channel
+                .receiveTimeout(CHANNEL_TIMEOUT) catch break) |packet|
+            {
                 defer self.metrics.gossip_packets_received_total.inc();
 
                 const acquired_task_idx = VerifyMessageTask.awaitAndAcquireFirstAvailableTask(tasks, task_search_start_idx);
@@ -608,7 +611,9 @@ pub const GossipService = struct {
         // - there isn't any data to process in the input channel, in order to block the join until we've finished
         while (exit_condition.shouldRun()) {
             var msg_count: usize = 0;
-            while (self.verified_incoming_channel.tryReceive()) |message| {
+            while (self.verified_incoming_channel
+                .receiveTimeout(CHANNEL_TIMEOUT) catch null) |message|
+            {
                 msg_count += 1;
                 switch (message.message) {
                     .PushMessage => |*push| {

@@ -1,6 +1,7 @@
 const std = @import("std");
 const net = @import("zig-network");
 const sig = @import("../sig.zig");
+const shred_network = @import("lib.zig");
 
 const socket_utils = sig.net.socket_utils;
 
@@ -35,6 +36,7 @@ const DEDUPER_MAX_DUPLICATE_COUNT: usize = 2;
 const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
 const DEDUPER_RESET_CYCLE: Duration = Duration.fromSecs(5 * 60);
 const DEDUPER_NUM_BITS: u64 = 637_534_199;
+const CHANNEL_TIMEOUT = sig.CHANNEL_TIMEOUT;
 
 /// Retransmit Service
 /// The retransmit service receives verified shreds from the shred collector and retransmits them to the network.
@@ -165,7 +167,9 @@ fn receiveShreds(
         shreds.clearRetainingCapacity();
         try shreds.ensureTotalCapacity(receiver_len);
 
-        while (receiver.tryReceive()) |packet| try shreds.append(packet);
+        while (receiver.receiveTimeout(CHANNEL_TIMEOUT) catch null) |packet| {
+            try shreds.append(packet);
+        }
 
         if (shreds.items.len == 0) continue;
 
@@ -329,7 +333,8 @@ fn retransmitShreds(
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
-        const retransmit_info: RetransmitShredInfo = receiver.tryReceive() orelse continue;
+        const retransmit_info: RetransmitShredInfo = receiver
+            .receiveTimeout(CHANNEL_TIMEOUT) catch break orelse continue;
         defer retransmit_info.turbine_tree.releaseUnsafe();
 
         children.clearRetainingCapacity();

@@ -14,6 +14,7 @@ const UdpSocket = @import("zig-network").Socket;
 
 pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
+const CHANNEL_TIMEOUT = sig.CHANNEL_TIMEOUT;
 
 // The identifier for the scoped logger used in this file.
 const LOG_SCOPE: []const u8 = "socket_utils";
@@ -63,7 +64,7 @@ pub fn sendSocket(
     }
 
     while (exit.shouldRun()) {
-        while (outgoing_channel.tryReceive()) |p| {
+        while (outgoing_channel.receiveTimeout(CHANNEL_TIMEOUT) catch break) |p| {
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                 logger.debug().logf("send_socket error: {s}", .{@errorName(e)});
                 continue;
