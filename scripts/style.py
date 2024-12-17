@@ -165,7 +165,6 @@ files_excluded_from_line_length_check = [
     "src/transaction_sender/transaction_pool.zig",
     "src/gossip/ping_pong.zig",
     "src/accountsdb/download.zig",
-    "src/accountsdb/fuzz.zig",
     "src/ledger/reader.zig",
     "src/rpc/client.zig",
     "src/accountsdb/index.zig",

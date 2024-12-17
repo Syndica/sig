@@ -81,7 +81,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         // NOTE: sometimes this can take a long time so we print when we start and finish
         std.debug.print("deleting snapshot dir...\n", .{});
         test_data_dir.deleteTreeMinStackSize(snapshot_dir_name) catch |err| {
-            std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{ sig.utils.fmt.tryRealPath(snapshot_dir, "."), err });
+            std.debug.print(
+                "failed to delete snapshot dir ('{s}'): {}\n",
+                .{ sig.utils.fmt.tryRealPath(snapshot_dir, "."), err },
+            );
         };
         std.debug.print("deleted snapshot dir\n", .{});
     }
@@ -172,8 +175,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     var tracked_account = try TrackedAccount.initRandom(random, slot);
 
                     const existing_pubkey = random.boolean();
-                    if ((existing_pubkey and tracked_accounts.count() > 0) or update_all_existing) {
-                        const index = random.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
+                    if ((existing_pubkey and tracked_accounts.count() > 0) or
+                        update_all_existing)
+                    {
+                        const index = random.intRangeLessThan(usize, 0, tracked_accounts.count());
                         const key = tracked_accounts.keys()[index];
                         // only if the pubkey is not already in this slot
                         if (!pubkeys_this_slot.contains(key)) {
@@ -209,11 +214,16 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 const key = tracked_accounts.keys()[index];
 
                 const tracked_account = tracked_accounts.get(key).?;
-                var account, const ref = try accounts_db.getAccountAndReference(&tracked_account.pubkey);
+                const account, const ref =
+                    try accounts_db.getAccountAndReference(&tracked_account.pubkey);
                 defer account.deinit(allocator);
 
                 if (!std.mem.eql(u8, &tracked_account.data, account.data)) {
-                    std.debug.panic("found account {any} with different data: tracked: {any} vs found: {any} ({any})\n", .{ key, tracked_account.data, account.data, ref });
+                    std.debug.panic(
+                        "found account {} with different data: " ++
+                            "tracked: {any} vs found: {any} ({})\n",
+                        .{ key, tracked_account.data, account.data, ref },
+                    );
                 }
             },
         }
@@ -227,17 +237,22 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         snapshot_validation: {
             // holding the lock here means that the snapshot archive(s) wont be deleted
             // since deletion requires a write lock
-            const maybe_latest_snapshot_info, var snapshot_info_lg = accounts_db.latest_snapshot_gen_info.readWithLock();
+            const maybe_latest_snapshot_info, //
+            var snapshot_info_lg //
+            = accounts_db.latest_snapshot_gen_info.readWithLock();
             defer snapshot_info_lg.unlock();
 
-            const snapshot_info = maybe_latest_snapshot_info.* orelse break :snapshot_validation; // no snapshot yet
+            const snapshot_info = maybe_latest_snapshot_info.* orelse
+                break :snapshot_validation; // no snapshot yet
             const full_snapshot_info = snapshot_info.full;
 
             // copy the archive to the alternative snapshot dir
             const full_snapshot_file_info: FullSnapshotFileInfo = full: {
                 if (full_snapshot_info.slot <= last_full_snapshot_validated_slot) {
                     const inc_snapshot_info = snapshot_info.inc orelse break :snapshot_validation;
-                    if (inc_snapshot_info.slot <= last_inc_snapshot_validated_slot) break :snapshot_validation;
+                    if (inc_snapshot_info.slot <= last_inc_snapshot_validated_slot) {
+                        break :snapshot_validation;
+                    }
                 } else {
                     last_full_snapshot_validated_slot = full_snapshot_info.slot;
                 }
@@ -249,7 +264,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 const full_archive_name_bounded = full_snapshot_file_info.snapshotArchiveName();
                 const full_archive_name = full_archive_name_bounded.constSlice();
 
-                const full_archive_file = try snapshot_dir.openFile(full_archive_name, .{ .mode = .read_only });
+                const full_archive_file =
+                    try snapshot_dir.openFile(full_archive_name, .{ .mode = .read_only });
                 defer full_archive_file.close();
 
                 try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
@@ -260,7 +276,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     5,
                     true,
                 );
-                logger.info().logf("fuzz[validate]: unpacked full snapshot at slot: {}", .{full_snapshot_info.slot});
+                logger.info().logf(
+                    "fuzz[validate]: unpacked full snapshot at slot: {}",
+                    .{full_snapshot_info.slot},
+                );
 
                 break :full full_snapshot_file_info;
             };
@@ -281,8 +300,15 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 const inc_archive_name_bounded = inc_snapshot_file_info.snapshotArchiveName();
                 const inc_archive_name = inc_archive_name_bounded.constSlice();
 
-                try snapshot_dir.copyFile(inc_archive_name, alternative_snapshot_dir, inc_archive_name, .{});
-                const inc_archive_file = try alternative_snapshot_dir.openFile(inc_archive_name, .{});
+                try snapshot_dir.copyFile(
+                    inc_archive_name,
+                    alternative_snapshot_dir,
+                    inc_archive_name,
+                    .{},
+                );
+
+                const inc_archive_file =
+                    try alternative_snapshot_dir.openFile(inc_archive_name, .{});
                 defer inc_archive_file.close();
 
                 try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
@@ -293,7 +319,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     5,
                     true,
                 );
-                logger.info().logf("fuzz[validate]: unpacked inc snapshot at slot: {}", .{inc_snapshot_info.slot});
+                logger.info().logf(
+                    "fuzz[validate]: unpacked inc snapshot at slot: {}",
+                    .{inc_snapshot_info.slot},
+                );
 
                 break :inc inc_snapshot_file_info;
             };
