@@ -1471,10 +1471,10 @@ pub const Manifest = struct {
     /// incremental snapshot fields.
     bank_extra: ExtraFields,
 
-    pub fn deinit(man: Manifest, allocator: std.mem.Allocator) void {
-        man.bank_fields.deinit(allocator);
-        man.accounts_db_fields.deinit(allocator);
-        man.bank_extra.deinit(allocator);
+    pub fn deinit(self: Manifest, allocator: std.mem.Allocator) void {
+        self.bank_fields.deinit(allocator);
+        self.accounts_db_fields.deinit(allocator);
+        self.bank_extra.deinit(allocator);
     }
 
     pub fn readFromFilePath(
