@@ -574,7 +574,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
 
     // check if we need to download a fresh snapshot
     var accounts_db_exists = blk: {
-        if (validator_dir.openDir("accounts_db", .{ .iterate = true })) |dir| {
+        if (validator_dir.openDir(sig.ACCOUNTS_DB_SUBDIR, .{ .iterate = true })) |dir| {
             std.posix.close(dir.fd);
             break :blk true;
         } else |_| {
@@ -589,7 +589,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         accounts_db_exists = false;
     }
 
-    const accounts_db_dir = try validator_dir.makeOpenPath("accounts_db", .{
+    const accounts_db_dir = try validator_dir.makeOpenPath(sig.ACCOUNTS_DB_SUBDIR, .{
         .iterate = true,
     });
     const snapshot_dir = maybe_snapshot_dir orelse accounts_db_dir;
