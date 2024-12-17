@@ -5,7 +5,7 @@ const sig = @import("../sig.zig");
 const AccountsDB = sig.accounts_db.AccountsDB;
 const GenesisConfig = sig.accounts_db.GenesisConfig;
 const BankFields = sig.accounts_db.snapshots.BankFields;
-const SnapshotFields = sig.accounts_db.snapshots.SnapshotFields;
+const SnapshotManifest = sig.accounts_db.snapshots.Manifest;
 
 // TODO: we can likley come up with a better name for this struct
 /// Analogous to [Bank](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L718)
@@ -73,11 +73,11 @@ test "core.bank: load and validate from test snapshot" {
     const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
 
     const boundedFmt = sig.utils.fmt.boundedFmt;
-    const full_manifest_path = boundedFmt("snapshots/{0}/{0}", .{snapshot_files.full_snapshot.slot});
+    const full_manifest_path = boundedFmt("snapshots/{0}/{0}", .{snapshot_files.full.slot});
     const full_manifest_file = try snapdir.openFile(full_manifest_path.constSlice(), .{});
     defer full_manifest_file.close();
 
-    const full_manifest = try SnapshotFields.readFromFile(allocator, full_manifest_file);
+    const full_manifest = try SnapshotManifest.readFromFile(allocator, full_manifest_file);
     defer full_manifest.deinit(allocator);
 
     // use the genesis to verify loading

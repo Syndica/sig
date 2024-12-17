@@ -259,14 +259,14 @@ fn handleRequest(
             };
 
             logger.debug().logf("Available full: {?s}", .{
-                if (full_info) |info| info.snapshotNameStr().constSlice() else null,
+                if (full_info) |info| info.snapshotArchiveName().constSlice() else null,
             });
             logger.debug().logf("Available inc: {?s}", .{
-                if (inc_info) |info| info.snapshotNameStr().constSlice() else null,
+                if (inc_info) |info| info.snapshotArchiveName().constSlice() else null,
             });
 
             if (full_info) |full| {
-                const full_archive_name_bounded = full.snapshotNameStr();
+                const full_archive_name_bounded = full.snapshotArchiveName();
                 const full_archive_name = full_archive_name_bounded.constSlice();
                 if (std.mem.eql(u8, path, full_archive_name)) {
                     const archive_file = try snapshot_dir.openFile(full_archive_name, .{});
@@ -278,7 +278,7 @@ fn handleRequest(
             }
 
             if (inc_info) |inc| {
-                const inc_archive_name_bounded = inc.snapshotNameStr();
+                const inc_archive_name_bounded = inc.snapshotArchiveName();
                 const inc_archive_name = inc_archive_name_bounded.constSlice();
                 if (std.mem.eql(u8, path, inc_archive_name)) {
                     const archive_file = try snapshot_dir.openFile(inc_archive_name, .{});
@@ -410,11 +410,9 @@ test Server {
     const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
     const snap_files = try SnapshotFiles.find(allocator, test_data_dir);
 
-    const full_snap_name_bounded = snap_files.full_snapshot.snapshotNameStr();
-    const maybe_inc_snap_name_bounded = if (snap_files.incremental_snapshot) |inc|
-        inc.snapshotNameStr()
-    else
-        null;
+    const full_snap_name_bounded = snap_files.full.snapshotArchiveName();
+    const maybe_inc_snap_name_bounded =
+        if (snap_files.incremental()) |inc| inc.snapshotArchiveName() else null;
 
     {
         const full_snap_name = full_snap_name_bounded.constSlice();
@@ -438,15 +436,6 @@ test Server {
         try unpack(allocator, logger, inc_snap_file, snap_dir, 1, false);
     }
 
-    const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
-    var all_snap_fields = try AllSnapshotFields.fromFiles(
-        allocator,
-        logger,
-        snap_dir,
-        snap_files,
-    );
-    defer all_snap_fields.deinit(allocator);
-
     var accountsdb = try sig.accounts_db.AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
@@ -458,7 +447,27 @@ test Server {
         .lru_size = null,
     });
     defer accountsdb.deinit();
-    _ = try accountsdb.loadWithDefaults(allocator, &all_snap_fields, 1, true, 300, false, false);
+
+    {
+        const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
+        const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
+            allocator,
+            logger,
+            snap_dir,
+            snap_files,
+        );
+        defer all_snap_fields.deinit(allocator);
+
+        (try accountsdb.loadWithDefaults(
+            allocator,
+            all_snap_fields,
+            1,
+            true,
+            300,
+            false,
+            false,
+        )).deinit(allocator);
+    }
 
     var thread_pool = sig.sync.ThreadPool.init(.{ .max_threads = 1 });
     defer {

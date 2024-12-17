@@ -246,7 +246,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     .slot = full_snapshot_info.slot,
                     .hash = full_snapshot_info.hash,
                 };
-                const full_archive_name_bounded = full_snapshot_file_info.snapshotNameStr();
+                const full_archive_name_bounded = full_snapshot_file_info.snapshotArchiveName();
                 const full_archive_name = full_archive_name_bounded.constSlice();
 
                 const full_archive_file = try snapshot_dir.openFile(full_archive_name, .{ .mode = .read_only });
@@ -278,7 +278,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     .hash = inc_snapshot_info.hash,
                     .slot = inc_snapshot_info.slot,
                 };
-                const inc_archive_name_bounded = inc_snapshot_file_info.snapshotNameStr();
+                const inc_archive_name_bounded = inc_snapshot_file_info.snapshotArchiveName();
                 const inc_archive_name = inc_archive_name_bounded.constSlice();
 
                 try snapshot_dir.copyFile(inc_archive_name, alternative_snapshot_dir, inc_archive_name, .{});
@@ -298,18 +298,18 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 break :inc inc_snapshot_file_info;
             };
 
-            const snapshot_files: sig.accounts_db.SnapshotFiles = .{
-                .full_snapshot = full_snapshot_file_info,
-                .incremental_snapshot = maybe_incremental_file_info,
-            };
+            const snapshot_files = sig.accounts_db.SnapshotFiles.fromFileInfos(
+                full_snapshot_file_info,
+                maybe_incremental_file_info,
+            );
 
-            var snapshot_fields = try sig.accounts_db.AllSnapshotFields.fromFiles(
+            const combined_manifest = try sig.accounts_db.FullAndIncrementalManifest.fromFiles(
                 allocator,
                 logger,
                 alternative_snapshot_dir,
                 snapshot_files,
             );
-            defer snapshot_fields.deinit(allocator);
+            defer combined_manifest.deinit(allocator);
 
             var alt_accounts_db = try AccountsDB.init(.{
                 .allocator = allocator,
@@ -323,17 +323,21 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             });
             defer alt_accounts_db.deinit();
 
-            _ = try alt_accounts_db.loadWithDefaults(
+            (try alt_accounts_db.loadWithDefaults(
                 allocator,
-                &snapshot_fields,
+                combined_manifest,
                 1,
                 true,
                 N_ACCOUNTS_PER_SLOT,
                 false,
                 false,
-            );
+            )).deinit(allocator);
+
             const maybe_inc_slot = if (snapshot_info.inc) |inc| inc.slot else null;
-            logger.info().logf("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})", .{ full_snapshot_info.slot, maybe_inc_slot });
+            logger.info().logf(
+                "loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})",
+                .{ full_snapshot_info.slot, maybe_inc_slot },
+            );
         }
     }
 

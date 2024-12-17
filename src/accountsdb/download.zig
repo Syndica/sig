@@ -14,8 +14,8 @@ const ScopedLogger = sig.trace.ScopedLogger;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
+const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 
@@ -229,7 +229,7 @@ pub fn downloadSnapshotsFromGossip(
 
         for (available_snapshot_peers.items) |peer| {
             // download the full snapshot
-            const snapshot_filename_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+            const snapshot_filename_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotArchiveName(.{
                 .slot = peer.full_snapshot.slot,
                 .hash = peer.full_snapshot.hash,
             });
@@ -548,6 +548,8 @@ pub fn getOrDownloadAndUnpackSnapshot(
     allocator: std.mem.Allocator,
     logger_: Logger,
     validator_dir: std.fs.Dir,
+    /// dir which stores the snapshot files to unpack into {validator_dir}/accounts_db
+    maybe_snapshot_dir: ?std.fs.Dir,
     options: struct {
         /// gossip service is not needed when loading from an existing snapshot.
         /// but when we need to download a new snapshot (force_new_snapshot_download flag),
@@ -559,7 +561,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         min_snapshot_download_speed_mbs: usize = 20,
         trusted_validators: ?[]const Pubkey = null,
     },
-) !struct { AllSnapshotFields, SnapshotFiles } {
+) !struct { FullAndIncrementalManifest, SnapshotFiles } {
     const logger = logger_.withScope(LOG_SCOPE);
 
     const force_unpack_snapshot = options.force_unpack_snapshot;
@@ -587,10 +589,19 @@ pub fn getOrDownloadAndUnpackSnapshot(
         accounts_db_exists = false;
     }
 
-    const snapshot_dir = try validator_dir.makeOpenPath("accounts_db", .{});
+    const accounts_db_dir = try validator_dir.makeOpenPath("accounts_db", .{
+        .iterate = true,
+    });
+    const snapshot_dir = maybe_snapshot_dir orelse accounts_db_dir;
 
     // download a new snapshot if required
-    const snapshot_exists = !std.meta.isError(snapshot_dir.access("accounts", .{}));
+    const snapshot_exists = blk: {
+        _ = SnapshotFiles.find(allocator, snapshot_dir) catch |err| {
+            std.debug.print("failed to find snapshot files: {}\n", .{err});
+            break :blk false;
+        };
+        break :blk true;
+    };
     const should_download_snapshot = force_new_snapshot_download or !snapshot_exists;
     if (should_download_snapshot) {
         const min_mb_per_sec = options.min_snapshot_download_speed_mbs;
@@ -615,7 +626,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         // do a quick sanity check on the number of files in accounts/
         // NOTE: this is sometimes the case that you unpacked only a portion
         // of the snapshot
-        var accounts_dir = snapshot_dir.openDir("accounts", .{}) catch |err| switch (err) {
+        var accounts_dir = accounts_db_dir.openDir("accounts", .{}) catch |err| switch (err) {
             // accounts folder doesnt exist, so its invalid
             error.FileNotFound => break :blk false,
             else => return err,
@@ -637,7 +648,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
     const should_unpack_snapshot = force_unpack_snapshot or !snapshot_exists or !valid_accounts_folder;
     if (should_unpack_snapshot) {
         const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
-        if (snapshot_files.incremental_snapshot == null) {
+        if (snapshot_files.incremental_info == null) {
             logger.info().log("no incremental snapshot found");
         }
         errdefer {
@@ -655,10 +666,10 @@ pub fn getOrDownloadAndUnpackSnapshot(
         logger.info().log("unpacking snapshots...");
 
         timer.reset();
-        logger.info().logf("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
+        logger.info().logf("unpacking {s}...", .{snapshot_files.full.snapshotArchiveName().constSlice()});
         {
             const archive_file = try snapshot_dir.openFile(
-                snapshot_files.full_snapshot.snapshotNameStr().constSlice(),
+                snapshot_files.full.snapshotArchiveName().constSlice(),
                 .{},
             );
             defer archive_file.close();
@@ -666,7 +677,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
                 allocator,
                 logger.unscoped(),
                 archive_file,
-                snapshot_dir,
+                accounts_db_dir,
                 n_threads_snapshot_unpack,
                 true,
             );
@@ -674,18 +685,18 @@ pub fn getOrDownloadAndUnpackSnapshot(
         logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
 
         // TODO: can probs do this in parallel with full snapshot
-        if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
+        if (snapshot_files.incremental()) |incremental_snapshot| {
             timer.reset();
-            logger.info().logf("unpacking {s}...", .{incremental_snapshot.snapshotNameStr().constSlice()});
+            logger.info().logf("unpacking {s}...", .{incremental_snapshot.snapshotArchiveName().constSlice()});
 
-            const archive_file = try snapshot_dir.openFile(incremental_snapshot.snapshotNameStr().constSlice(), .{});
+            const archive_file = try snapshot_dir.openFile(incremental_snapshot.snapshotArchiveName().constSlice(), .{});
             defer archive_file.close();
 
             try parallelUnpackZstdTarBall(
                 allocator,
                 logger.unscoped(),
                 archive_file,
-                snapshot_dir,
+                accounts_db_dir,
                 n_threads_snapshot_unpack,
                 false,
             );
@@ -698,10 +709,10 @@ pub fn getOrDownloadAndUnpackSnapshot(
     timer.reset();
     logger.info().log("reading snapshot metadata...");
     const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
-    const snapshot_fields = try AllSnapshotFields.fromFiles(
+    const snapshot_fields = try FullAndIncrementalManifest.fromFiles(
         allocator,
         logger.unscoped(),
-        snapshot_dir,
+        accounts_db_dir,
         snapshot_files,
     );
     logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
