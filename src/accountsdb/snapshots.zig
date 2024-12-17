@@ -2899,8 +2899,8 @@ test "parse snapshot fields" {
     const full_manifest_file = try snapdir.openFile(full_manifest_path, .{});
     defer full_manifest_file.close();
 
-    const snapshot_fields_full = try Manifest.readFromFile(allocator, full_manifest_file);
-    defer snapshot_fields_full.deinit(allocator);
+    const full_manifest = try Manifest.readFromFile(allocator, full_manifest_file);
+    defer full_manifest.deinit(allocator);
 
     if (snapshot_files.incremental_info) |inc| {
         const inc_slot = inc.slot;
@@ -2910,7 +2910,7 @@ test "parse snapshot fields" {
         const inc_manifest_file = try snapdir.openFile(inc_manifest_path, .{});
         defer inc_manifest_file.close();
 
-        const snapshot_fields_inc = try Manifest.readFromFile(allocator, inc_manifest_file);
-        defer snapshot_fields_inc.deinit(allocator);
+        const inc_manifest = try Manifest.readFromFile(allocator, inc_manifest_file);
+        defer inc_manifest.deinit(allocator);
     }
 }

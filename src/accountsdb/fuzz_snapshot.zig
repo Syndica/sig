@@ -44,13 +44,13 @@ pub fn run(args: *std.process.ArgIterator) !void {
     while (timer.read() < MAX_FUZZ_TIME_NS) : (i += 1) {
         bytes_buffer.clearRetainingCapacity();
 
-        const snapshot_original: SnapshotManifest = try randomSnapshotFields(allocator, random);
-        defer snapshot_original.deinit(allocator);
+        const manifest_original: SnapshotManifest = try randomSnapshotManifest(allocator, random);
+        defer manifest_original.deinit(allocator);
 
-        try bytes_buffer.ensureUnusedCapacity(bincode.sizeOf(snapshot_original, .{}) * 2);
+        try bytes_buffer.ensureUnusedCapacity(bincode.sizeOf(manifest_original, .{}) * 2);
 
         const original_bytes_start = bytes_buffer.items.len;
-        try bincode.write(bytes_buffer.writer(), snapshot_original, .{});
+        try bincode.write(bytes_buffer.writer(), manifest_original, .{});
         const original_bytes_end = bytes_buffer.items.len;
 
         const snapshot_deserialized = try bincode.readFromSlice(allocator, SnapshotManifest, bytes_buffer.items[original_bytes_start..original_bytes_end], .{});
@@ -69,7 +69,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
 
 const max_list_entries = 1 << 8;
 
-fn randomSnapshotFields(
+fn randomSnapshotManifest(
     allocator: std.mem.Allocator,
     /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
     /// for commentary on the runtime of this function.
