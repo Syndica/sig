@@ -37,7 +37,6 @@ const getOrInitIdentity = sig.cmd.helpers.getOrInitIdentity;
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
-const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 const spawnMetrics = sig.prometheus.spawnMetrics;
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
 const createGeyserWriterFromConfig = sig.geyser.core.createGeyserWriterFromConfig;

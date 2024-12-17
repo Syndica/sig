@@ -4446,7 +4446,12 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         defer snapshot_dir.close();
 
         const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
-        const full_inc_manifest = try FullAndIncrementalManifest.fromFiles(allocator, logger, snapshot_dir, snapshot_files,);
+        const full_inc_manifest = try FullAndIncrementalManifest.fromFiles(
+            allocator,
+            logger,
+            snapshot_dir,
+            snapshot_files,
+        );
         defer full_inc_manifest.deinit(allocator);
         const collapsed_manifest = try full_inc_manifest.collapse(allocator);
 

@@ -7,8 +7,6 @@ const math = std.math;
 const Decl = std.builtin.Type.Declaration;
 const Duration = sig.time.Duration;
 
-const initGossipFromCluster = sig.gossip.helpers.initGossipFromCluster;
-
 pub const BenchTimeUnit = enum {
     nanos,
     millis,
