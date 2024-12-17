@@ -222,14 +222,14 @@ pub fn downloadSnapshotsFromGossip(
 
         for (available_snapshot_peers.items) |peer| {
             // download the full snapshot
-            const snapshot_filename_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+            const snapshot_filename_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotArchiveName(.{
                 .slot = peer.full_snapshot.slot,
                 .hash = peer.full_snapshot.hash,
             });
             const snapshot_filename = snapshot_filename_bounded.constSlice();
 
             const rpc_socket = peer.contact_info.rpc_addr.?;
-            const rpc_url_bounded = rpc_socket.toStringBounded();
+            const rpc_url_bounded = rpc_socket.toString();
             const rpc_url = rpc_url_bounded.constSlice();
 
             const bStr = sig.utils.fmt.boundedString;

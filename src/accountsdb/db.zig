@@ -2636,7 +2636,7 @@ pub const AccountsDB = struct {
                 .slot = params.target_slot,
                 .hash = full_hash,
             };
-            const archive_file_name_bounded = archive_info.snapshotNameStr();
+            const archive_file_name_bounded = archive_info.snapshotArchiveName();
             const archive_file_name = archive_file_name_bounded.constSlice();
             self.logger.info().logf("Generating full snapshot '{s}' (full path: {s}).", .{
                 archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, archive_file_name),
@@ -2852,7 +2852,7 @@ pub const AccountsDB = struct {
                 .slot = params.target_slot,
                 .hash = incremental_hash,
             };
-            const archive_file_name_bounded = archive_info.snapshotNameStr();
+            const archive_file_name_bounded = archive_info.snapshotArchiveName();
             const archive_file_name = archive_file_name_bounded.constSlice();
             self.logger.info().logf("Generating incremental snapshot '{s}' (full path: {s}).", .{
                 archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, archive_file_name),
@@ -2988,7 +2988,7 @@ pub const AccountsDB = struct {
             .incremental => sig.accounts_db.snapshots.IncrementalSnapshotFileInfo,
         },
     ) std.fs.Dir.DeleteFileError!void {
-        const file_name_bounded = snapshot_name_info.snapshotNameStr();
+        const file_name_bounded = snapshot_name_info.snapshotArchiveName();
         const file_name = file_name_bounded.constSlice();
         self.logger.info().logf("deleting old " ++ @tagName(kind) ++ " snapshot archive: {s}", .{file_name});
         try self.snapshot_dir.deleteFile(file_name);
@@ -3326,13 +3326,13 @@ test "testWriteSnapshot" {
     const tmp_snap_dir = tmp_snap_dir_root.dir;
 
     {
-        const archive_file = try test_data_dir.openFile(snap_files.full_snapshot.snapshotNameStr().constSlice(), .{});
+        const archive_file = try test_data_dir.openFile(snap_files.full_snapshot.snapshotArchiveName().constSlice(), .{});
         defer archive_file.close();
         try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, true);
     }
 
-    if (snap_files.incremental_snapshot) |inc_snap| {
-        const archive_file = try test_data_dir.openFile(inc_snap.snapshotNameStr().constSlice(), .{});
+    if (snap_files.incremental()) |inc_snap| {
+        const archive_file = try test_data_dir.openFile(inc_snap.snapshotArchiveName().constSlice(), .{});
         defer archive_file.close();
         try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, false);
     }
@@ -3358,8 +3358,8 @@ test "testWriteSnapshot" {
     try testWriteSnapshotIncremental(
         allocator,
         &accounts_db,
-        snap_files.incremental_snapshot.?.slot,
-        snap_files.incremental_snapshot.?.hash,
+        snap_files.incremental_info.?.slot,
+        snap_files.incremental_info.?.hash,
     );
 }
 
@@ -3380,7 +3380,7 @@ pub fn findAndUnpackTestSnapshots(
     const snapshot_files = try SnapshotFiles.find(allocator, test_data_dir);
 
     {
-        const full_name_bounded = snapshot_files.full_snapshot.snapshotNameStr();
+        const full_name_bounded = snapshot_files.full.snapshotArchiveName();
         const full_name = full_name_bounded.constSlice();
         const full_archive_file = try test_data_dir.openFile(full_name, .{});
         defer full_archive_file.close();
@@ -3394,8 +3394,8 @@ pub fn findAndUnpackTestSnapshots(
         );
     }
 
-    if (snapshot_files.incremental_snapshot) |inc| {
-        const inc_name_bounded = inc.snapshotNameStr();
+    if (snapshot_files.incremental()) |inc| {
+        const inc_name_bounded = inc.snapshotArchiveName();
         const inc_name = inc_name_bounded.constSlice();
         const inc_archive_file = try test_data_dir.openFile(inc_name, .{});
         defer inc_archive_file.close();
@@ -4419,7 +4419,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             else |err| switch (err) {
                 else => |e| return e,
                 error.FileNotFound => if (attempt == 0) {
-                    const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
+                    const archive_file = try snapshot_dir.openFile(snapshot_files.full.snapshotArchiveName().constSlice(), .{});
                     defer archive_file.close();
                     try parallelUnpackZstdTarBall(
                         allocator,

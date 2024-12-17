@@ -198,7 +198,7 @@ pub fn main() !void {
             logger,
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
-            .millis,
+            .nanos,
             &maybe_metrics,
         );
         try benchmark(
@@ -206,7 +206,7 @@ pub fn main() !void {
             logger,
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
-            .millis,
+            .nanos,
             &maybe_metrics,
         );
     }
@@ -480,7 +480,7 @@ pub fn benchmark(
                         const metric = Metric{
                             .name = name,
                             .unit = time_unit.toString(),
-                            .value = mean,
+                            .value = max,
                             .allocator = allocator,
                         };
                         try metrics.append(metric);
@@ -541,8 +541,8 @@ pub fn benchmark(
                             const value = switch (@typeInfo(T)) {
                                 // in the float case we retain the last two decimal points by
                                 // multiplying by 100 and converting to an integer
-                                .Float => @as(u64, @intFromFloat(f_mean * 100)),
-                                else => f_mean,
+                                .Float => @as(u64, @intFromFloat(f_max * 100)),
+                                else => f_max,
                             };
                             const metric = Metric{
                                 .name = name,

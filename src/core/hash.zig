@@ -50,7 +50,9 @@ pub const Hash = extern struct {
         return .{ .data = base58.decode(str) catch return error.InvalidHash };
     }
 
-    pub fn base58String(self: Hash) std.BoundedArray(u8, 44) {
+    pub const base58_max_encoded_size = base58.max_encoded_size;
+    pub const Base58String = std.BoundedArray(u8, base58_max_encoded_size);
+    pub fn base58String(self: Hash) Base58String {
         return base58.encode(self.data);
     }
 
