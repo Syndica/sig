@@ -297,8 +297,7 @@ pub const BufferPool = struct {
         /// exclusive
         file_offset_end: FileOffset,
     ) !CachedRead {
-        if (builtin.os.tag != .linux)
-            @compileError("io_uring only available on linux - unsupported target");
+        if (!use_io_uring) @compileError("io_uring disabled");
 
         const frame_indices = try self.computeFrameIndices(
             file_id,
@@ -447,6 +446,7 @@ pub const BufferPool = struct {
                 frame_aligned_file_offset,
                 @intCast(bytes_read),
             );
+            try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
         }
 
         return CachedRead{
@@ -975,7 +975,7 @@ test "BufferPool readBlocking" {
 }
 
 test "BufferPool readIoUringSubmitAndWait" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (!use_io_uring) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
 
