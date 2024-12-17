@@ -1238,8 +1238,8 @@ const AppBase = struct {
         const my_shred_version = echo_data.shred_version orelse 0;
         logger.info().logf("my shred version: {d}", .{my_shred_version});
 
-        const my_ip = config.current.gossip.getHost() catch
-            echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
+        const config_host = config.current.gossip.getHost() catch null;
+        const my_ip = config_host orelse echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
         logger.info().logf("my ip: {any}", .{my_ip});
 
         const my_port = config.current.gossip.port;
