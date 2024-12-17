@@ -47,28 +47,92 @@ pub const StakeHistoryEntry = struct {
     }
 };
 
-pub const EpochAndStakeHistoryEntry = struct { Epoch, StakeHistoryEntry };
+pub const EpochAndStakeHistoryEntry = struct {
+    epoch: Epoch,
+    history_entry: StakeHistoryEntry,
 
-pub fn epochAndStakeHistoryEntryRandom(random: std.Random) EpochAndStakeHistoryEntry {
-    return .{ random.int(Epoch), StakeHistoryEntry.initRandom(random) };
-}
+    pub fn initRandom(random: std.Random) EpochAndStakeHistoryEntry {
+        return .{
+            .epoch = random.int(Epoch),
+            .history_entry = StakeHistoryEntry.initRandom(random),
+        };
+    }
+};
 
 /// Analogous to [StakeHistory](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L62)
-pub const StakeHistory = []const EpochAndStakeHistoryEntry;
+pub const EpochAndStakeHistory = []const EpochAndStakeHistoryEntry;
 
 pub fn stakeHistoryRandom(
     random: std.Random,
     allocator: std.mem.Allocator,
     max_list_entries: usize,
-) std.mem.Allocator.Error!StakeHistory {
-    const StakeHistoryItem = struct { Epoch, StakeHistoryEntry };
+) std.mem.Allocator.Error!EpochAndStakeHistory {
     const stake_history_len = random.uintAtMost(usize, max_list_entries);
 
-    const stake_history = try allocator.alloc(StakeHistoryItem, stake_history_len);
+    const stake_history = try allocator.alloc(EpochAndStakeHistoryEntry, stake_history_len);
     errdefer allocator.free(stake_history);
 
-    for (stake_history) |*entry| entry.* = epochAndStakeHistoryEntryRandom(random);
+    for (stake_history) |*entry| entry.* = EpochAndStakeHistoryEntry.initRandom(random);
     return stake_history;
+}
+
+pub const StakeAndVoteAccount = struct { u64, VoteAccount };
+
+pub const StakeAndVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, StakeAndVoteAccount);
+
+pub fn stakeAndVoteAccountsMapDeinit(
+    map: StakeAndVoteAccountsMap,
+    allocator: std.mem.Allocator,
+) void {
+    var copy = map;
+    for (copy.values()) |stake_and_vote_account| {
+        _, const vote_account = stake_and_vote_account;
+        vote_account.deinit(allocator);
+    }
+    copy.deinit(allocator);
+}
+
+pub fn stakeAndVoteAccountsMapClone(
+    map: StakeAndVoteAccountsMap,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!StakeAndVoteAccountsMap {
+    var cloned: StakeAndVoteAccountsMap = .{};
+    errdefer stakeAndVoteAccountsMapDeinit(cloned, allocator);
+
+    try cloned.ensureTotalCapacity(allocator, map.count());
+    for (map.keys(), map.values()) |key, value| {
+        const stake, const vote_account = value;
+        const vote_account_cloned = try vote_account.clone(allocator);
+        cloned.putAssumeCapacityNoClobber(key, .{ stake, vote_account_cloned });
+    }
+
+    return cloned;
+}
+
+pub fn stakeAndVoteAccountsMapRandom(
+    random: std.Random,
+    allocator: std.mem.Allocator,
+    max_list_entries: usize,
+) std.mem.Allocator.Error!StakeAndVoteAccountsMap {
+    var result: StakeAndVoteAccountsMap = .{};
+    errdefer stakeAndVoteAccountsMapDeinit(result, allocator);
+
+    const entry_count = random.uintAtMost(usize, max_list_entries);
+    try result.ensureTotalCapacity(allocator, entry_count);
+    for (0..entry_count) |_| {
+        const key = Pubkey.initRandom(random);
+        const gop = result.getOrPutAssumeCapacity(key);
+        if (gop.found_existing) continue;
+        const value = try VoteAccount.initRandom(
+            random,
+            allocator,
+            max_list_entries,
+            error{ RandomError1, RandomError2, RandomError3 },
+        );
+        gop.value_ptr.* = .{ random.int(u64), value };
+    }
+
+    return result;
 }
 
 /// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/vote/src/vote_account.rs#L44)
@@ -81,12 +145,6 @@ pub const VoteAccounts = struct {
         .default_value = @as(?StakedNodesMap, null),
     };
 
-    pub const StakeAndVoteAccount = struct { u64, VoteAccount };
-
-    pub const StakeAndVoteAccountsMap = std.AutoArrayHashMapUnmanaged(
-        Pubkey,
-        StakeAndVoteAccount,
-    );
     pub const StakedNodesMap = std.AutoArrayHashMapUnmanaged(
         Pubkey, // VoteAccount.vote_state.node_pubkey.
         u64, // Total stake across all vote-accounts.
@@ -107,6 +165,23 @@ pub const VoteAccounts = struct {
         if (copy.staked_nodes) |*staked_nodes| {
             staked_nodes.deinit(allocator);
         }
+    }
+
+    pub fn clone(
+        vote_accounts: VoteAccounts,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!VoteAccounts {
+        const accounts = try stakeAndVoteAccountsMapClone(vote_accounts.accounts, allocator);
+        errdefer stakeAndVoteAccountsMapDeinit(accounts, allocator);
+
+        var staked_nodes: ?StakedNodesMap =
+            if (vote_accounts.staked_nodes) |map| try map.clone(allocator) else null;
+        errdefer if (staked_nodes) |*map| map.deinit(allocator);
+
+        return .{
+            .accounts = accounts,
+            .staked_nodes = staked_nodes,
+        };
     }
 
     pub fn stakedNodes(self: *VoteAccounts, allocator: std.mem.Allocator) !*const StakedNodesMap {
@@ -150,7 +225,12 @@ pub const VoteAccounts = struct {
                 return Pubkey.initRandom(rand);
             }
             pub fn randomValue(ctx: @This(), rand: std.Random) !StakeAndVoteAccount {
-                const vote_account: VoteAccount = try VoteAccount.initRandom(rand, ctx.allocator, ctx.max_list_entries, error{ RandomError1, RandomError2, RandomError3 });
+                const vote_account: VoteAccount = try VoteAccount.initRandom(
+                    rand,
+                    ctx.allocator,
+                    ctx.max_list_entries,
+                    error{ RandomError1, RandomError2, RandomError3 },
+                );
                 errdefer vote_account.deinit(ctx.allocator);
                 return .{ rand.int(u64), vote_account };
             }
@@ -193,6 +273,18 @@ pub const VoteAccount = struct {
 
     pub fn deinit(vote_account: VoteAccount, allocator: std.mem.Allocator) void {
         vote_account.account.deinit(allocator);
+    }
+
+    pub fn clone(
+        vote_account: VoteAccount,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!VoteAccount {
+        const account = try vote_account.account.clone(allocator);
+        errdefer account.deinit(allocator);
+        return .{
+            .account = account,
+            .vote_state = vote_account.vote_state,
+        };
     }
 
     pub fn voteState(self: *@This()) !VoteState {
@@ -367,6 +459,20 @@ pub const BlockhashQueue = struct {
         ages.deinit(allocator);
     }
 
+    pub fn clone(
+        bhq: BlockhashQueue,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!BlockhashQueue {
+        var ages = try bhq.ages.clone(allocator);
+        errdefer ages.deinit(allocator);
+        return .{
+            .last_hash_index = bhq.last_hash_index,
+            .last_hash = bhq.last_hash,
+            .ages = ages,
+            .max_age = bhq.max_age,
+        };
+    }
+
     pub fn initRandom(
         random: std.Random,
         allocator: std.mem.Allocator,
@@ -401,6 +507,26 @@ pub const UnusedAccounts = struct {
         copy.unused1.deinit(allocator);
         copy.unused2.deinit(allocator);
         copy.unused3.deinit(allocator);
+    }
+
+    pub fn clone(
+        unused_accounts: UnusedAccounts,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!UnusedAccounts {
+        var unused1 = try unused_accounts.unused1.clone(allocator);
+        errdefer unused1.deinit(allocator);
+
+        var unused2 = try unused_accounts.unused2.clone(allocator);
+        errdefer unused2.deinit(allocator);
+
+        var unused3 = try unused_accounts.unused3.clone(allocator);
+        errdefer unused3.deinit(allocator);
+
+        return .{
+            .unused1 = unused1,
+            .unused2 = unused2,
+            .unused3 = unused3,
+        };
     }
 
     pub fn initRandom(
@@ -473,6 +599,13 @@ pub const HardForks = struct {
         allocator.free(hard_forks.items);
     }
 
+    pub fn clone(
+        hard_forks: HardForks,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!HardForks {
+        return .{ .items = try allocator.dupe(SlotAndCount, hard_forks.items) };
+    }
+
     pub fn initRandom(
         random: std.Random,
         allocator: std.mem.Allocator,
@@ -499,6 +632,16 @@ pub const NodeVoteAccounts = struct {
 
     pub fn deinit(node_vote_accounts: NodeVoteAccounts, allocator: std.mem.Allocator) void {
         allocator.free(node_vote_accounts.vote_accounts);
+    }
+
+    pub fn clone(
+        node_vote_accounts: NodeVoteAccounts,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!NodeVoteAccounts {
+        return .{
+            .vote_accounts = try allocator.dupe(Pubkey, node_vote_accounts.vote_accounts),
+            .total_stake = node_vote_accounts.total_stake,
+        };
     }
 
     pub fn initRandom(
@@ -528,6 +671,21 @@ pub fn nodeIdToVoteAccountsMapDeinit(
     }
     var copy = map;
     copy.deinit(allocator);
+}
+
+pub fn nodeIdToVoteAccountsMapClone(
+    map: NodeIdToVoteAccountsMap,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!NodeIdToVoteAccountsMap {
+    var cloned: NodeIdToVoteAccountsMap = .{};
+    errdefer nodeIdToVoteAccountsMapDeinit(cloned, allocator);
+
+    try cloned.ensureTotalCapacity(allocator, map.count());
+    for (map.keys(), map.values()) |key, value| {
+        cloned.putAssumeCapacityNoClobber(key, try value.clone(allocator));
+    }
+
+    return cloned;
 }
 
 pub fn nodeIdToVoteAccountsMapRandom(
@@ -582,17 +740,41 @@ pub fn epochAuthorizedVotersRandom(
 
 /// Analogous to [EpochStakes](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L22)
 pub const EpochStakes = struct {
-    stakes: Stakes(Delegation),
+    stakes: Stakes(.delegation),
     total_stake: u64,
     node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
     epoch_authorized_voters: EpochAuthorizedVoters,
 
     pub fn deinit(epoch_stakes: EpochStakes, allocator: std.mem.Allocator) void {
-        epoch_stakes.stakes.deinit(allocator, {});
+        epoch_stakes.stakes.deinit(allocator);
         nodeIdToVoteAccountsMapDeinit(epoch_stakes.node_id_to_vote_accounts, allocator);
 
         var epoch_authorized_voters = epoch_stakes.epoch_authorized_voters;
         epoch_authorized_voters.deinit(allocator);
+    }
+
+    pub fn clone(
+        epoch_stakes: EpochStakes,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!EpochStakes {
+        const stakes = try epoch_stakes.stakes.clone(allocator);
+        errdefer stakes.deinit(allocator);
+
+        const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapClone(
+            epoch_stakes.node_id_to_vote_accounts,
+            allocator,
+        );
+        errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
+
+        var epoch_authorized_voters = try epoch_stakes.epoch_authorized_voters.clone(allocator);
+        errdefer epoch_authorized_voters.deinit(allocator);
+
+        return .{
+            .stakes = stakes,
+            .total_stake = epoch_stakes.total_stake,
+            .node_id_to_vote_accounts = node_id_to_vote_accounts,
+            .epoch_authorized_voters = epoch_authorized_voters,
+        };
     }
 
     pub fn initRandom(
@@ -602,17 +784,8 @@ pub const EpochStakes = struct {
         random: std.Random,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!EpochStakes {
-        var result_stakes = try Stakes(Delegation).initRandom(
-            allocator,
-            random,
-            max_list_entries,
-            struct {
-                pub fn randomValue(rand: std.Random) !Delegation {
-                    return Delegation.initRandom(rand);
-                }
-            },
-        );
-        errdefer result_stakes.deinit(allocator, {});
+        var result_stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
+        errdefer result_stakes.deinit(allocator);
 
         const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(allocator, random, max_list_entries);
         errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
@@ -733,49 +906,81 @@ pub const Stake = struct {
     }
 };
 
-/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186)
-pub fn Stakes(comptime StakeDelegationElem: type) type {
+pub const StakesDelegationElement = enum {
+    delegation,
+    stake,
+
+    pub fn fromType(comptime T: type) ?StakesDelegationElement {
+        return switch (T) {
+            Delegation => .delegation,
+            Stake => .stake,
+        };
+    }
+
+    pub fn Type(comptime kind: StakesDelegationElement) type {
+        return switch (kind) {
+            .delegation => Delegation,
+            .stake => Stake,
+        };
+    }
+};
+
+/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186).
+/// It differs in that its delegation element parameterization is narrowed to only accept the specific types we actually need to implement.
+pub fn Stakes(comptime delegation_elem: StakesDelegationElement) type {
     return struct {
         /// vote accounts
         vote_accounts: VoteAccounts,
         /// stake_delegations
-        stake_delegations: StakeDelegations,
+        delegations: DelegationsMap,
         /// unused
         unused: u64,
         /// current epoch, used to calculate current stake
         epoch: Epoch,
         /// history of staking levels
-        stake_history: StakeHistory,
+        history: EpochAndStakeHistory,
         const Self = @This();
 
-        pub const StakeDelegations = std.AutoArrayHashMapUnmanaged(Pubkey, StakeDelegationElem);
+        pub const DelegationElem = delegation_elem.Type();
+        pub const DelegationsMap = std.AutoArrayHashMapUnmanaged(Pubkey, DelegationElem);
 
-        pub fn deinit(
+        pub fn deinit(stakes: Self, allocator: std.mem.Allocator) void {
+            stakes.vote_accounts.deinit(allocator);
+            freeDelegations(allocator, stakes.delegations);
+            allocator.free(stakes.history);
+        }
+
+        fn freeDelegations(allocator: std.mem.Allocator, delegations: DelegationsMap) void {
+            var copy = delegations;
+            switch (delegation_elem) {
+                .delegation, .stake => {}, // these values needn't be deinitialized
+            }
+            copy.deinit(allocator);
+        }
+
+        pub fn clone(
             stakes: Self,
             allocator: std.mem.Allocator,
-            /// Expected to be a `void` value, or a type/value providing methods/decls:
-            /// * `fn clone(delegation_ctx, allocator: std.mem.Allocator, elem: StakeDelegationElem) std.mem.Allocator.Error!StakeDelegationElem`.
-            /// * `fn free(delegation_ctx, allocator: std.mem.Allocator, elem: StakeDelegationElem) void`.
-            ///
-            /// If it is void, it will directly copy each element by value, and never deallocate them.
-            void_or_delegation_ctx: anytype,
-        ) void {
-            stakes.vote_accounts.deinit(allocator);
+        ) std.mem.Allocator.Error!Self {
+            const vote_accounts = try stakes.vote_accounts.clone(allocator);
+            errdefer vote_accounts.deinit(allocator);
 
-            const delegation_ctx = switch (@TypeOf(void_or_delegation_ctx)) {
-                void => struct {
-                    inline fn free(_: std.mem.Allocator, _: StakeDelegationElem) void {}
-                },
-                else => void_or_delegation_ctx,
+            const delegations = switch (delegation_elem) {
+                // these values are trivially copyable
+                .delegation, .stake => try stakes.delegations.clone(allocator),
             };
+            errdefer freeDelegations(allocator, delegations);
 
-            var stake_delegations = stakes.stake_delegations;
-            for (stake_delegations.values()) |elem| {
-                delegation_ctx.free(allocator, elem);
-            }
-            stake_delegations.deinit(allocator);
+            const history = try allocator.dupe(EpochAndStakeHistoryEntry, stakes.history);
+            errdefer allocator.free(history);
 
-            allocator.free(stakes.stake_history);
+            return .{
+                .vote_accounts = vote_accounts,
+                .delegations = delegations,
+                .unused = stakes.unused,
+                .epoch = stakes.epoch,
+                .history = history,
+            };
         }
 
         pub fn initRandom(
@@ -784,43 +989,34 @@ pub fn Stakes(comptime StakeDelegationElem: type) type {
             /// for commentary on the runtime of this function.
             random: std.Random,
             max_list_entries: usize,
-            /// Expected to provide methods/decls:
-            /// * `fn randomValue(delegation_ctx, random: std.Random) StakeDelegationElem`.
-            ///
-            /// Also see `sig.rand.fillHashmapWithRng`.
-            delegation_ctx: anytype,
         ) std.mem.Allocator.Error!Self {
             const vote_accounts = try VoteAccounts.initRandom(random, allocator, max_list_entries);
             errdefer vote_accounts.deinit(allocator);
 
-            var stake_delegations = StakeDelegations.Managed.init(allocator);
-            errdefer stake_delegations.deinit();
+            var delegations: DelegationsMap = .{};
+            errdefer freeDelegations(allocator, delegations);
 
-            try sig.rand.fillHashmapWithRng(
-                &stake_delegations,
-                random,
-                random.uintAtMost(usize, max_list_entries),
-                struct {
-                    pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
-                        return Pubkey.initRandom(rand);
-                    }
-                    pub fn randomValue(ctx: @This(), rand: std.Random) !StakeDelegationElem {
-                        return ctx.delegation_ctx.randomValue(rand);
-                    }
+            const delegations_count = random.uintAtMost(usize, max_list_entries);
+            try delegations.ensureTotalCapacity(allocator, delegations_count);
 
-                    delegation_ctx: @TypeOf(delegation_ctx),
-                }{ .delegation_ctx = delegation_ctx },
-            );
+            for (0..delegations_count) |_| {
+                const key = Pubkey.initRandom(random);
+                const gop = delegations.getOrPutAssumeCapacity(key);
+                if (gop.found_existing) continue;
+                gop.value_ptr.* = switch (delegation_elem) {
+                    .delegation, .stake => DelegationElem.initRandom(random),
+                };
+            }
 
-            var stake_history = try stakeHistoryRandom(random, allocator, max_list_entries);
-            errdefer stake_history.deinit(allocator);
+            const history = try stakeHistoryRandom(random, allocator, max_list_entries);
+            errdefer history.deinit(allocator);
 
             return .{
                 .vote_accounts = vote_accounts,
-                .stake_delegations = stake_delegations.unmanaged,
+                .delegations = delegations,
                 .unused = random.int(u64),
                 .epoch = random.int(Epoch),
-                .stake_history = stake_history,
+                .history = history,
             };
         }
     };
@@ -837,13 +1033,13 @@ pub const VersionedEpochStake = union(enum(u32)) {
     }
 
     pub const Current = struct {
-        stakes: Stakes(Stake),
+        stakes: Stakes(.stake),
         total_stake: u64,
         node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
         epoch_authorized_voters: EpochAuthorizedVoters,
 
         pub fn deinit(current: Current, allocator: std.mem.Allocator) void {
-            current.stakes.deinit(allocator, {});
+            current.stakes.deinit(allocator);
             nodeIdToVoteAccountsMapDeinit(current.node_id_to_vote_accounts, allocator);
             var epoch_authorized_voters = current.epoch_authorized_voters;
             epoch_authorized_voters.deinit(allocator);
@@ -854,17 +1050,8 @@ pub const VersionedEpochStake = union(enum(u32)) {
             random: std.Random,
             max_list_entries: usize,
         ) std.mem.Allocator.Error!Current {
-            const stakes = try Stakes(Stake).initRandom(
-                allocator,
-                random,
-                max_list_entries,
-                struct {
-                    pub fn randomValue(rand: std.Random) !Stake {
-                        return Stake.initRandom(rand);
-                    }
-                },
-            );
-            errdefer stakes.deinit(allocator, {});
+            const stakes = try Stakes(.stake).initRandom(allocator, random, max_list_entries);
+            errdefer stakes.deinit(allocator);
 
             const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(
                 allocator,
@@ -909,6 +1096,22 @@ pub fn epochStakeMapDeinit(
 
     var copy = epoch_stakes;
     copy.deinit(allocator);
+}
+
+pub fn epochStakeMapClone(
+    epoch_stakes: EpochStakeMap,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!EpochStakeMap {
+    var cloned: EpochStakeMap = .{};
+    errdefer epochStakeMapDeinit(cloned, allocator);
+    try cloned.ensureTotalCapacity(allocator, epoch_stakes.count());
+
+    for (epoch_stakes.keys(), epoch_stakes.values()) |key, value| {
+        const cloned_value = try value.clone(allocator);
+        cloned.putAssumeCapacityNoClobber(key, cloned_value);
+    }
+
+    return cloned;
 }
 
 pub fn epochStakeMapRandom(
@@ -969,7 +1172,7 @@ pub const BankFields = struct {
     rent_collector: RentCollector,
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
-    stakes: Stakes(Delegation),
+    stakes: Stakes(.delegation),
     unused_accounts: UnusedAccounts,
     epoch_stakes: EpochStakeMap,
     is_delta: bool,
@@ -985,11 +1188,43 @@ pub const BankFields = struct {
 
         bank_fields.hard_forks.deinit(allocator);
 
-        bank_fields.stakes.deinit(allocator, {});
+        bank_fields.stakes.deinit(allocator);
 
         bank_fields.unused_accounts.deinit(allocator);
 
         epochStakeMapDeinit(bank_fields.epoch_stakes, allocator);
+    }
+
+    pub fn clone(
+        bank_fields: *const BankFields,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!BankFields {
+        const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
+        errdefer blockhash_queue.deinit(allocator);
+
+        var ancestors = try bank_fields.ancestors.clone(allocator);
+        errdefer ancestors.deinit(allocator);
+
+        const hard_forks = try bank_fields.hard_forks.clone(allocator);
+        errdefer hard_forks.deinit(allocator);
+
+        const stakes = try bank_fields.stakes.clone(allocator);
+        errdefer stakes.deinit(allocator);
+
+        const unused_accounts = try bank_fields.unused_accounts.clone(allocator);
+        errdefer unused_accounts.deinit(allocator);
+
+        const epoch_stakes = try epochStakeMapClone(bank_fields.epoch_stakes, allocator);
+        errdefer epochStakeMapDeinit(epoch_stakes, allocator);
+
+        var cloned = bank_fields.*;
+        cloned.blockhash_queue = blockhash_queue;
+        cloned.ancestors = ancestors;
+        cloned.hard_forks = hard_forks;
+        cloned.stakes = stakes;
+        cloned.unused_accounts = unused_accounts;
+        cloned.epoch_stakes = epoch_stakes;
+        return cloned;
     }
 
     pub fn getStakedNodes(self: *const BankFields, allocator: std.mem.Allocator, epoch: Epoch) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
@@ -1041,12 +1276,8 @@ pub const BankFields = struct {
         const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
         errdefer hard_forks.deinit(allocator);
 
-        const stakes = try Stakes(Delegation).initRandom(allocator, random, max_list_entries, struct {
-            pub fn randomValue(rand: std.Random) !Delegation {
-                return Delegation.initRandom(rand);
-            }
-        });
-        errdefer stakes.deinit(allocator, {});
+        const stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
+        errdefer stakes.deinit(allocator);
 
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
         errdefer unused_accounts.deinit(allocator);
@@ -1123,6 +1354,25 @@ pub const ExtraFields = struct {
         var versioned_epoch_stakes = extra.versioned_epoch_stakes;
         for (versioned_epoch_stakes.values()) |ves| ves.deinit(allocator);
         versioned_epoch_stakes.deinit(allocator);
+    }
+
+    pub fn clone(
+        extra: *const ExtraFields,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!ExtraFields {
+        var versioned_epoch_stakes: VersionedEpochStakesMap = .{};
+        errdefer versioned_epoch_stakes.deinit(allocator);
+        errdefer for (extra.versioned_epoch_stakes.values()) |ves| {
+            ves.deinit(allocator);
+        };
+
+        return .{
+            .lamports_per_signature = extra.lamports_per_signature,
+            .snapshot_persistence = extra.snapshot_persistence,
+            .epoch_accounts_hash = extra.epoch_accounts_hash,
+            .versioned_epoch_stakes = versioned_epoch_stakes,
+            .accounts_lt_hash = extra.accounts_lt_hash,
+        };
     }
 
     pub fn initRandom(
@@ -1373,6 +1623,29 @@ pub const AccountsDbFields = struct {
         allocator.free(fields.rooted_slot_hashes);
     }
 
+    pub fn clone(
+        fields: AccountsDbFields,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!AccountsDbFields {
+        var file_map = try fields.file_map.clone(allocator);
+        errdefer file_map.deinit(allocator);
+
+        const rooted_slots = try allocator.dupe(Slot, fields.rooted_slots);
+        errdefer allocator.free(rooted_slots);
+
+        const rooted_slot_hashes = try allocator.dupe(SlotAndHash, fields.rooted_slot_hashes);
+        errdefer allocator.free(rooted_slot_hashes);
+
+        return .{
+            .file_map = file_map,
+            .stored_meta_write_version = fields.stored_meta_write_version,
+            .slot = fields.slot,
+            .bank_hash_info = fields.bank_hash_info,
+            .rooted_slots = rooted_slots,
+            .rooted_slot_hashes = rooted_slot_hashes,
+        };
+    }
+
     fn bincodeRead(
         allocator: std.mem.Allocator,
         reader: anytype,
@@ -1475,6 +1748,26 @@ pub const Manifest = struct {
         self.bank_fields.deinit(allocator);
         self.accounts_db_fields.deinit(allocator);
         self.bank_extra.deinit(allocator);
+    }
+
+    pub fn clone(
+        man: Manifest,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!Manifest {
+        const bank_fields = try man.bank_fields.clone(allocator);
+        errdefer bank_fields.deinit(allocator);
+
+        const accounts_db_fields = try man.accounts_db_fields.clone(allocator);
+        errdefer accounts_db_fields.deinit(allocator);
+
+        const bank_extra = try man.bank_extra.clone(allocator);
+        errdefer bank_extra.deinit(allocator);
+
+        return .{
+            .bank_fields = bank_fields,
+            .accounts_db_fields = accounts_db_fields,
+            .bank_extra = bank_extra,
+        };
     }
 
     pub fn readFromFilePath(
