@@ -303,13 +303,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 maybe_incremental_file_info,
             );
 
-            var snapshot_fields = try sig.accounts_db.FullAndIncrementalManifest.fromFiles(
+            const combined_manifest = try sig.accounts_db.FullAndIncrementalManifest.fromFiles(
                 allocator,
                 logger,
                 alternative_snapshot_dir,
                 snapshot_files,
             );
-            defer snapshot_fields.deinit(allocator);
+            defer combined_manifest.deinit(allocator);
 
             var alt_accounts_db = try AccountsDB.init(.{
                 .allocator = allocator,
@@ -323,17 +323,21 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             });
             defer alt_accounts_db.deinit();
 
-            _ = try alt_accounts_db.loadWithDefaults(
+            (try alt_accounts_db.loadWithDefaults(
                 allocator,
-                &snapshot_fields,
+                combined_manifest,
                 1,
                 true,
                 N_ACCOUNTS_PER_SLOT,
                 false,
                 false,
-            );
+            )).deinit(allocator);
+
             const maybe_inc_slot = if (snapshot_info.inc) |inc| inc.slot else null;
-            logger.info().logf("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})", .{ full_snapshot_info.slot, maybe_inc_slot });
+            logger.info().logf(
+                "loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})",
+                .{ full_snapshot_info.slot, maybe_inc_slot },
+            );
         }
     }
 

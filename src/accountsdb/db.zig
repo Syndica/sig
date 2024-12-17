@@ -275,25 +275,26 @@ pub const AccountsDB = struct {
         /// needs to be a thread-safe allocator
         allocator: std.mem.Allocator,
         /// Must have been allocated with `self.allocator`.
-        combined_manifest: *FullAndIncrementalManifest,
+        full_inc_manifest: FullAndIncrementalManifest,
         n_threads: u32,
         validate: bool,
         accounts_per_file_estimate: u64,
         should_fastload: bool,
         save_index: bool,
     ) !SnapshotManifest {
-        const snapshot_fields = try combined_manifest.collapse(self.allocator);
+        const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
+        errdefer collapsed_manifest.deinit(self.allocator);
 
         if (should_fastload) {
             var timer = try sig.time.Timer.start();
             var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
             defer fastload_dir.close();
             self.logger.info().log("fast loading accountsdb...");
-            try self.fastload(fastload_dir, snapshot_fields.accounts_db_fields);
+            try self.fastload(fastload_dir, collapsed_manifest.accounts_db_fields);
             self.logger.info().logf("loaded from snapshot in {s}", .{timer.read()});
         } else {
             const load_duration = try self.loadFromSnapshot(
-                snapshot_fields.accounts_db_fields,
+                collapsed_manifest.accounts_db_fields,
                 n_threads,
                 allocator,
                 accounts_per_file_estimate,
@@ -311,15 +312,20 @@ pub const AccountsDB = struct {
         }
 
         if (validate) {
-            const full_snapshot = combined_manifest.full;
+            const full_man = full_inc_manifest.full;
+            const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
+                inc.bank_extra.snapshot_persistence
+            else
+                null;
+
             var validate_timer = try sig.time.Timer.start();
             try self.validateLoadFromSnapshot(.{
-                .full_slot = full_snapshot.bank_fields.slot,
+                .full_slot = full_man.bank_fields.slot,
                 .expected_full = .{
-                    .accounts_hash = snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
-                    .capitalization = full_snapshot.bank_fields.capitalization,
+                    .accounts_hash = full_man.accounts_db_fields.bank_hash_info.accounts_hash,
+                    .capitalization = full_man.bank_fields.capitalization,
                 },
-                .expected_incremental = if (snapshot_fields.bank_extra.snapshot_persistence) |inc_persistence| .{
+                .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
                     .accounts_hash = inc_persistence.incremental_hash,
                     .capitalization = inc_persistence.incremental_capitalization,
                 } else null,
@@ -327,7 +333,7 @@ pub const AccountsDB = struct {
             self.logger.info().logf("validated from snapshot in {s}", .{validate_timer.read()});
         }
 
-        return snapshot_fields;
+        return collapsed_manifest;
     }
 
     pub fn fastload(
@@ -2672,7 +2678,7 @@ pub const AccountsDB = struct {
         params.bank_fields.slot = params.target_slot; // !
         params.bank_fields.capitalization = full_capitalization; // !
 
-        const snapshot_fields: SnapshotManifest = .{
+        const manifest: SnapshotManifest = .{
             .bank_fields = params.bank_fields.*,
             .accounts_db_fields = .{
                 .file_map = serializable_file_map,
@@ -2703,7 +2709,7 @@ pub const AccountsDB = struct {
             zstd_write_ctx.writer(),
             sig.version.CURRENT_CLIENT_VERSION,
             StatusCache.EMPTY,
-            &snapshot_fields,
+            &manifest,
             file_map,
         );
         try zstd_write_ctx.finish();
@@ -2902,7 +2908,7 @@ pub const AccountsDB = struct {
 
         params.bank_fields.slot = params.target_slot; // !
 
-        const snapshot_fields: SnapshotManifest = .{
+        const manifest: SnapshotManifest = .{
             .bank_fields = params.bank_fields.*,
             .accounts_db_fields = .{
                 .file_map = serializable_file_map,
@@ -2933,7 +2939,7 @@ pub const AccountsDB = struct {
             zstd_write_ctx.writer(),
             sig.version.CURRENT_CLIENT_VERSION,
             StatusCache.EMPTY,
-            &snapshot_fields,
+            &manifest,
             file_map,
         );
         try zstd_write_ctx.finish();
@@ -3193,7 +3199,7 @@ pub fn indexAndValidateAccountFile(
     accounts_file.number_of_accounts = number_of_accounts;
 }
 
-/// All entries in `snapshot_fields.accounts_db_fields.file_map` must correspond to an entry in `file_map`,
+/// All entries in `manifest.accounts_db_fields.file_map` must correspond to an entry in `file_map`,
 /// with the association defined by the file id (a field of the value of the former, the key of the latter).
 pub fn writeSnapshotTarWithFields(
     archive_writer: anytype,
@@ -3321,26 +3327,26 @@ test "testWriteSnapshot" {
 
     const snap_files = try SnapshotFiles.find(allocator, test_data_dir);
 
-    var tmp_snap_dir_root = std.testing.tmpDir(.{});
-    defer tmp_snap_dir_root.cleanup();
-    const tmp_snap_dir = tmp_snap_dir_root.dir;
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
 
     {
         const archive_file = try test_data_dir.openFile(snap_files.full_snapshot.snapshotArchiveName().constSlice(), .{});
         defer archive_file.close();
-        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, true);
+        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, snapshot_dir, 4, true);
     }
 
     if (snap_files.incremental()) |inc_snap| {
         const archive_file = try test_data_dir.openFile(inc_snap.snapshotArchiveName().constSlice(), .{});
         defer archive_file.close();
-        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, tmp_snap_dir, 4, false);
+        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, snapshot_dir, 4, false);
     }
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = .noop,
-        .snapshot_dir = tmp_snap_dir,
+        .snapshot_dir = snapshot_dir,
         .geyser_writer = null,
         .gossip_view = null,
         .index_allocation = .ram,
@@ -3428,10 +3434,12 @@ fn loadTestAccountsDB(
 
     const snapshot_files = try findAndUnpackTestSnapshots(n_threads, snapshot_dir);
 
-    var snapshots = try FullAndIncrementalManifest.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
-    errdefer snapshots.deinit(allocator);
+    const full_inc_manifest =
+        try FullAndIncrementalManifest.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+    errdefer full_inc_manifest.deinit(allocator);
 
-    const snapshot = try snapshots.collapse(allocator);
+    const manifest = try full_inc_manifest.collapse(allocator);
+    defer manifest.deinit(allocator);
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
@@ -3446,13 +3454,13 @@ fn loadTestAccountsDB(
     errdefer accounts_db.deinit();
 
     _ = try accounts_db.loadFromSnapshot(
-        snapshot.accounts_db_fields,
+        manifest.accounts_db_fields,
         n_threads,
         allocator,
         500,
     );
 
-    return .{ accounts_db, snapshots };
+    return .{ accounts_db, full_inc_manifest };
 }
 
 // NOTE: this is a memory leak test - geyser correctness is tested in the geyser tests
@@ -3462,11 +3470,13 @@ test "geyser stream on load" {
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
-    const snapdir = tmp_dir_root.dir;
-    const snapshot_files = try findAndUnpackTestSnapshots(2, snapdir);
+    const snapshot_dir = tmp_dir_root.dir;
 
-    var snapshots = try FullAndIncrementalManifest.fromFiles(allocator, logger, snapdir, snapshot_files);
-    errdefer snapshots.deinit(allocator);
+    const snapshot_files = try findAndUnpackTestSnapshots(2, snapshot_dir);
+
+    const full_inc_manifest =
+        try FullAndIncrementalManifest.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+    defer full_inc_manifest.deinit(allocator);
 
     var geyser_exit = std.atomic.Value(bool).init(false);
 
@@ -3497,13 +3507,13 @@ test "geyser stream on load" {
 
     defer geyser_exit.store(true, .release);
 
-    const snapshot = try snapshots.collapse(allocator);
-    defer snapshots.deinit(allocator);
+    const snapshot = try full_inc_manifest.collapse(allocator);
+    defer snapshot.deinit(allocator);
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger,
-        .snapshot_dir = snapdir,
+        .snapshot_dir = snapshot_dir,
         .geyser_writer = geyser_writer,
         .gossip_view = null,
         .index_allocation = .ram,
@@ -3525,13 +3535,12 @@ test "write and read an account" {
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
-    const snapdir = tmp_dir_root.dir;
+    const snapshot_dir = tmp_dir_root.dir;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1, .noop, snapdir);
-    defer {
-        accounts_db.deinit();
-        snapshots.deinit(allocator);
-    }
+    var accounts_db, const full_inc_manifest =
+        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
+    defer accounts_db.deinit();
+    defer full_inc_manifest.deinit(allocator);
 
     var prng = std.rand.DefaultPrng.init(0);
     const pubkey = Pubkey.initRandom(prng.random());
@@ -3566,21 +3575,22 @@ test "load and validate from test snapshot" {
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
-    const snapdir = tmp_dir_root.dir;
+    const snapshot_dir = tmp_dir_root.dir;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1, .noop, snapdir);
+    var accounts_db, const full_inc_manifest =
+        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
     defer {
         accounts_db.deinit();
-        snapshots.deinit(allocator);
+        full_inc_manifest.deinit(allocator);
     }
 
     try accounts_db.validateLoadFromSnapshot(.{
-        .full_slot = snapshots.full.bank_fields.slot,
+        .full_slot = full_inc_manifest.full.bank_fields.slot,
         .expected_full = .{
-            .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
-            .capitalization = snapshots.full.bank_fields.capitalization,
+            .accounts_hash = full_inc_manifest.full.accounts_db_fields.bank_hash_info.accounts_hash,
+            .capitalization = full_inc_manifest.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (snapshots.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
+        .expected_incremental = if (full_inc_manifest.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
             .accounts_hash = inc_persistence.incremental_hash,
             .capitalization = inc_persistence.incremental_capitalization,
         } else null,
@@ -3592,21 +3602,22 @@ test "load and validate from test snapshot using disk index" {
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
-    const snapdir = tmp_dir_root.dir;
+    const snapshot_dir = tmp_dir_root.dir;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1, .noop, snapdir);
+    var accounts_db, const full_inc_manifest =
+        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
     defer {
         accounts_db.deinit();
-        snapshots.deinit(allocator);
+        full_inc_manifest.deinit(allocator);
     }
 
     try accounts_db.validateLoadFromSnapshot(.{
-        .full_slot = snapshots.full.bank_fields.slot,
+        .full_slot = full_inc_manifest.full.bank_fields.slot,
         .expected_full = .{
-            .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
-            .capitalization = snapshots.full.bank_fields.capitalization,
+            .accounts_hash = full_inc_manifest.full.accounts_db_fields.bank_hash_info.accounts_hash,
+            .capitalization = full_inc_manifest.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (snapshots.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
+        .expected_incremental = if (full_inc_manifest.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
             .accounts_hash = inc_persistence.incremental_hash,
             .capitalization = inc_persistence.incremental_capitalization,
         } else null,
@@ -3618,21 +3629,22 @@ test "load and validate from test snapshot parallel" {
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
-    const snapdir = tmp_dir_root.dir;
+    const snapshot_dir = tmp_dir_root.dir;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 2, .noop, snapdir);
+    var accounts_db, const full_inc_manifest =
+        try loadTestAccountsDB(allocator, false, 2, .noop, snapshot_dir);
     defer {
         accounts_db.deinit();
-        snapshots.deinit(allocator);
+        full_inc_manifest.deinit(allocator);
     }
 
     try accounts_db.validateLoadFromSnapshot(.{
-        .full_slot = snapshots.full.bank_fields.slot,
+        .full_slot = full_inc_manifest.full.bank_fields.slot,
         .expected_full = .{
-            .accounts_hash = snapshots.full.accounts_db_fields.bank_hash_info.accounts_hash,
-            .capitalization = snapshots.full.bank_fields.capitalization,
+            .accounts_hash = full_inc_manifest.full.accounts_db_fields.bank_hash_info.accounts_hash,
+            .capitalization = full_inc_manifest.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (snapshots.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
+        .expected_incremental = if (full_inc_manifest.incremental.?.bank_extra.snapshot_persistence) |inc_persistence| .{
             .accounts_hash = inc_persistence.incremental_hash,
             .capitalization = inc_persistence.incremental_capitalization,
         } else null,
@@ -3644,16 +3656,17 @@ test "load clock sysvar" {
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
-    const snapdir = tmp_dir_root.dir;
+    const snapshot_dir = tmp_dir_root.dir;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1, .noop, snapdir);
+    var accounts_db, const full_inc_manifest =
+        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
     defer {
         accounts_db.deinit();
-        snapshots.deinit(allocator);
+        full_inc_manifest.deinit(allocator);
     }
 
-    const full = snapshots.full;
-    const inc = snapshots.incremental;
+    const full = full_inc_manifest.full;
+    const inc = full_inc_manifest.incremental;
     const expected_clock: sysvars.Clock = .{
         .slot = (inc orelse full).bank_fields.slot,
         .epoch_start_timestamp = 1733349736,
@@ -3677,12 +3690,13 @@ test "load other sysvars" {
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
-    const snapdir = tmp_dir_root.dir;
+    const snapshot_dir = tmp_dir_root.dir;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(allocator, false, 1, .noop, snapdir);
+    var accounts_db, const full_inc_manifest =
+        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
     defer {
         accounts_db.deinit();
-        snapshots.deinit(allocator);
+        full_inc_manifest.deinit(allocator);
     }
 
     const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
@@ -4258,16 +4272,13 @@ test "generate snapshot & update gossip snapshot hashes" {
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
-    const snapdir = tmp_dir_root.dir;
-    const snap_files = try findAndUnpackTestSnapshots(1, snapdir);
+    const snapshot_dir = tmp_dir_root.dir;
 
-    var all_snapshot_fields = try FullAndIncrementalManifest.fromFiles(
-        allocator,
-        .noop,
-        snapdir,
-        snap_files,
-    );
-    defer all_snapshot_fields.deinit(allocator);
+    const snap_files = try findAndUnpackTestSnapshots(1, snapshot_dir);
+
+    const full_inc_manifest =
+        try FullAndIncrementalManifest.fromFiles(allocator, .noop, snapshot_dir, snap_files);
+    defer full_inc_manifest.deinit(allocator);
 
     // mock gossip service
     const Queue = std.ArrayList(sig.gossip.GossipData);
@@ -4278,7 +4289,7 @@ test "generate snapshot & update gossip snapshot hashes" {
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = .noop,
-        .snapshot_dir = snapdir,
+        .snapshot_dir = snapshot_dir,
         .gossip_view = .{
             .my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key),
             .push_msg_queue = &push_msg_queue_mux,
@@ -4290,25 +4301,37 @@ test "generate snapshot & update gossip snapshot hashes" {
     });
     defer accounts_db.deinit();
 
-    // pretend `all_snapshot_fields`/`snap_files` refers to `tmp_snap_dir`, even though the archive file isn't actually in there, just the unpacked contents.
-    // TODO: this is not nice, make sure the API for loading from archives outside of the snapshot dir is improved.
-    _ = try accounts_db.loadWithDefaults(allocator, &all_snapshot_fields, 1, true, 300, false, false);
+    (try accounts_db.loadWithDefaults(
+        allocator,
+        full_inc_manifest,
+        1,
+        true,
+        300,
+        false,
+        false,
+    )).deinit(allocator);
 
     var bank_fields = try BankFields.initRandom(allocator, random, 128);
     defer bank_fields.deinit(allocator);
 
-    const full_slot = all_snapshot_fields.full.accounts_db_fields.slot;
+    const full_slot = full_inc_manifest.full.accounts_db_fields.slot;
     const full_gen_result = try accounts_db.generateFullSnapshot(.{
         .target_slot = full_slot,
         .bank_fields = &bank_fields,
         .lamports_per_signature = random.int(u64),
         .old_snapshot_action = .ignore_old, // make sure we don't delete anything in `sig.TEST_DATA_DIR`
-        .deprecated_stored_meta_write_version = all_snapshot_fields.full.accounts_db_fields.stored_meta_write_version,
+        .deprecated_stored_meta_write_version = full_inc_manifest.full.accounts_db_fields.stored_meta_write_version,
     });
     const full_hash = full_gen_result.hash;
 
-    try std.testing.expectEqual(all_snapshot_fields.full.accounts_db_fields.bank_hash_info.accounts_hash, full_gen_result.hash);
-    try std.testing.expectEqual(all_snapshot_fields.full.bank_fields.capitalization, full_gen_result.capitalization);
+    try std.testing.expectEqual(
+        full_inc_manifest.full.accounts_db_fields.bank_hash_info.accounts_hash,
+        full_gen_result.hash,
+    );
+    try std.testing.expectEqual(
+        full_inc_manifest.full.bank_fields.capitalization,
+        full_gen_result.capitalization,
+    );
 
     {
         const queue, var queue_lg = push_msg_queue_mux.readWithLock();
@@ -4329,18 +4352,19 @@ test "generate snapshot & update gossip snapshot hashes" {
         );
     }
 
-    if (all_snapshot_fields.incremental) |inc_snapshot_fields| {
-        const inc_slot = inc_snapshot_fields.accounts_db_fields.slot;
+    if (full_inc_manifest.incremental) |inc_manifest| {
+        const inc_slot = inc_manifest.accounts_db_fields.slot;
         const inc_gen_result = try accounts_db.generateIncrementalSnapshot(.{
             .target_slot = inc_slot,
             .bank_fields = &bank_fields,
             .lamports_per_signature = random.int(u64),
             .old_snapshot_action = .ignore_old, // make sure we don't delete anything in `sig.TEST_DATA_DIR`
-            .deprecated_stored_meta_write_version = all_snapshot_fields.incremental.?.accounts_db_fields.stored_meta_write_version,
+            .deprecated_stored_meta_write_version = inc_manifest
+                .accounts_db_fields.stored_meta_write_version,
         });
         const inc_hash = inc_gen_result.incremental_hash;
 
-        try std.testing.expectEqual(inc_snapshot_fields.bank_extra.snapshot_persistence, inc_gen_result);
+        try std.testing.expectEqual(inc_manifest.bank_extra.snapshot_persistence, inc_gen_result);
         try std.testing.expectEqual(full_slot, inc_gen_result.full_slot);
         try std.testing.expectEqual(full_gen_result.hash, inc_gen_result.full_hash);
         try std.testing.expectEqual(full_gen_result.capitalization, inc_gen_result.full_capitalization);
@@ -4434,9 +4458,9 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         } else return error.SnapshotMissingAccountsDir;
         defer accounts_dir.close();
 
-        var snapshots = try FullAndIncrementalManifest.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
-        defer snapshots.deinit(allocator);
-        const snapshot = try snapshots.collapse(allocator);
+        const full_inc_manifest = try FullAndIncrementalManifest.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+        defer full_inc_manifest.deinit(allocator);
+        const collapsed_manifest = try full_inc_manifest.collapse(allocator);
 
         var accounts_db = try AccountsDB.init(.{
             .allocator = allocator,
@@ -4451,21 +4475,21 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         defer accounts_db.deinit();
 
         const loading_duration = try accounts_db.loadFromSnapshot(
-            snapshot.accounts_db_fields,
+            collapsed_manifest.accounts_db_fields,
             bench_args.n_threads,
             allocator,
             500,
         );
 
-        const full_snapshot = snapshots.full;
+        const full_snapshot = full_inc_manifest.full;
         var validate_timer = try sig.time.Timer.start();
         try accounts_db.validateLoadFromSnapshot(.{
             .full_slot = full_snapshot.bank_fields.slot,
             .expected_full = .{
-                .accounts_hash = snapshot.accounts_db_fields.bank_hash_info.accounts_hash,
+                .accounts_hash = collapsed_manifest.accounts_db_fields.bank_hash_info.accounts_hash,
                 .capitalization = full_snapshot.bank_fields.capitalization,
             },
-            .expected_incremental = if (snapshot.bank_extra.snapshot_persistence) |inc_persistence| .{
+            .expected_incremental = if (collapsed_manifest.bank_extra.snapshot_persistence) |inc_persistence| .{
                 .accounts_hash = inc_persistence.incremental_hash,
                 .capitalization = inc_persistence.incremental_capitalization,
             } else null,

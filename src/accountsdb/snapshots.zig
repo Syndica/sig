@@ -2599,7 +2599,6 @@ pub const SnapshotFiles = struct {
 pub const FullAndIncrementalManifest = struct {
     full: Manifest,
     incremental: ?Manifest,
-    was_collapsed: bool = false, // used for deinit()
 
     pub fn fromFiles(
         allocator: std.mem.Allocator,
@@ -2644,77 +2643,103 @@ pub const FullAndIncrementalManifest = struct {
         };
     }
 
-    /// collapse all full and incremental snapshots into one.
-    /// note: this works by stack copying the full snapshot and combining
-    /// the accounts-db account file map.
-    /// this will 1) modify the incremental snapshot account map
-    /// and 2) the returned snapshot heap fields will still point to the incremental snapshot
-    /// (so be sure not to deinit it while still using the returned snapshot)
+    pub const CollapseError = error{
+        /// There are storages for the same slot in both the full and incremental snapshot.
+        SnapshotSlotOverlap,
+    };
+
+    /// Like `collapseIfNecessary`, but returns a clone of the full snapshot
+    /// manifest if there is no incremental update to apply.
+    /// The caller is responsible for `.deinit`ing the result with `allocator`.
     pub fn collapse(
-        self: *FullAndIncrementalManifest,
-        /// Should be the same allocator passed to `fromFiles`, or otherwise to allocate `Self`.
+        self: FullAndIncrementalManifest,
         allocator: std.mem.Allocator,
-    ) !Manifest {
-        // nothing to collapse
-        if (self.incremental == null)
-            return self.full;
-        self.was_collapsed = true;
-
-        // collapse bank fields into the
-        // incremental =pushed into=> full
-        var snapshot = self.incremental.?; // stack copy
-        const full_slot = self.full.bank_fields.slot;
-
-        // collapse accounts-db fields
-        const storages_map = &self.incremental.?.accounts_db_fields.file_map;
-
-        // TODO: use a better allocator
-        var slots_to_remove = std.ArrayList(Slot).init(allocator);
-        defer slots_to_remove.deinit();
-
-        // make sure theres no overlap in slots between full and incremental and combine
-        var storages_entry_iter = storages_map.iterator();
-        while (storages_entry_iter.next()) |incremental_entry| {
-            const slot = incremental_entry.key_ptr.*;
-
-            // only keep slots > full snapshot slot
-            if (!(slot > full_slot)) {
-                try slots_to_remove.append(slot);
-                continue;
-            }
-
-            const slot_entry = try self.full.accounts_db_fields.file_map.getOrPut(allocator, slot);
-            if (slot_entry.found_existing) {
-                std.debug.panic("invalid incremental snapshot: slot {d} is in both full and incremental snapshots\n", .{slot});
-            } else {
-                slot_entry.value_ptr.* = incremental_entry.value_ptr.*;
-            }
-        }
-
-        for (slots_to_remove.items) |slot| {
-            _ = storages_map.swapRemove(slot);
-        }
-
-        snapshot.accounts_db_fields = self.full.accounts_db_fields;
-
-        return snapshot;
+    ) (std.mem.Allocator.Error || CollapseError)!Manifest {
+        const maybe_collapsed = try self.collapseIfNecessary(allocator);
+        return maybe_collapsed orelse try self.full.clone(allocator);
     }
 
-    pub fn deinit(self: *FullAndIncrementalManifest, allocator: std.mem.Allocator) void {
+    /// Returns null if there is no incremental snapshot manifest; otherwise
+    /// returns the result of overlaying the updates of the incremental
+    /// onto the full snapshot manifest.
+    /// The caller is responsible for `.deinit`ing the result with `allocator`
+    /// if it is non-null.
+    pub fn collapseIfNecessary(
+        self: FullAndIncrementalManifest,
+        allocator: std.mem.Allocator,
+    ) (std.mem.Allocator.Error || CollapseError)!?Manifest {
+        const full = self.full;
+        const incremental = self.incremental orelse return null;
+
+        // make a heap clone of the incremental manifest's more up-to-date
+        // data, except with the file map of the full manifest, which is
+        // likely to contain a larger amount of entries; can then overlay
+        // the relevant entries from the incremental manifest onto the
+        // clone of the full manifest.
+
+        var collapsed = incremental;
+        collapsed.accounts_db_fields.file_map = full.accounts_db_fields.file_map;
+
+        collapsed = try collapsed.clone(allocator);
+        errdefer collapsed.deinit(allocator);
+
+        const collapsed_file_map = &collapsed.accounts_db_fields.file_map;
+        try collapsed_file_map.ensureUnusedCapacity(
+            allocator,
+            incremental.accounts_db_fields.file_map.count(),
+        );
+
+        const inc_file_map = &incremental.accounts_db_fields.file_map;
+        for (inc_file_map.keys(), inc_file_map.values()) |slot, account_file_info| {
+            if (slot <= full.accounts_db_fields.slot) continue;
+            const gop = collapsed_file_map.getOrPutAssumeCapacity(slot);
+            if (gop.found_existing) return error.SnapshotSlotOverlap;
+            gop.value_ptr.* = account_file_info;
+        }
+
+        return collapsed;
+    }
+
+    pub fn deinit(self: FullAndIncrementalManifest, allocator: std.mem.Allocator) void {
         self.full.deinit(allocator);
-        if (self.incremental) |*inc| {
-            if (!self.was_collapsed) {
-                inc.deinit(allocator);
-            } else {
-                inc.accounts_db_fields.file_map.deinit(allocator);
-                inc.bank_fields.deinit(allocator);
-                allocator.free(inc.accounts_db_fields.rooted_slots);
-                allocator.free(inc.accounts_db_fields.rooted_slot_hashes);
-                inc.bank_extra.deinit(allocator);
-            }
+        if (self.incremental) |inc| {
+            inc.deinit(allocator);
         }
     }
 };
+
+test "checkAllAllocationFailures FullAndIncrementalManifest" {
+    const local = struct {
+        fn parseFiles(
+            allocator: std.mem.Allocator,
+            snapdir: std.fs.Dir,
+            snapshot_files: SnapshotFiles,
+        ) !void {
+            const combined_manifest = try FullAndIncrementalManifest.fromFiles(
+                allocator,
+                .noop,
+                snapdir,
+                snapshot_files,
+            );
+            defer combined_manifest.deinit(allocator);
+
+            const collapsed_manifest = try combined_manifest.collapse(allocator);
+            defer collapsed_manifest.deinit(allocator);
+        }
+    };
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapdir = tmp_dir_root.dir;
+
+    const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        local.parseFiles,
+        .{ snapdir, snapshot_files },
+    );
+}
 
 pub const generate = struct {
     /// Writes the version, status cache, and manifest files.
@@ -2874,8 +2899,8 @@ test "parse snapshot fields" {
     const full_manifest_file = try snapdir.openFile(full_manifest_path, .{});
     defer full_manifest_file.close();
 
-    const snapshot_fields_full = try Manifest.readFromFile(allocator, full_manifest_file);
-    defer snapshot_fields_full.deinit(allocator);
+    const full_manifest = try Manifest.readFromFile(allocator, full_manifest_file);
+    defer full_manifest.deinit(allocator);
 
     if (snapshot_files.incremental_info) |inc| {
         const inc_slot = inc.slot;
@@ -2885,7 +2910,7 @@ test "parse snapshot fields" {
         const inc_manifest_file = try snapdir.openFile(inc_manifest_path, .{});
         defer inc_manifest_file.close();
 
-        const snapshot_fields_inc = try Manifest.readFromFile(allocator, inc_manifest_file);
-        defer snapshot_fields_inc.deinit(allocator);
+        const inc_manifest = try Manifest.readFromFile(allocator, inc_manifest_file);
+        defer inc_manifest.deinit(allocator);
     }
 }

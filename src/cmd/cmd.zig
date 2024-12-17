@@ -750,19 +750,21 @@ fn validator() !void {
     }
 
     // snapshot
-    const snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = gossip_service,
         .geyser_writer = geyser_writer,
         .validate_snapshot = true,
     });
+    defer loaded_snapshot.deinit();
 
     // leader schedule
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, loaded_snapshot.collapsed_manifest.bank_fields.epoch_schedule);
     if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
-        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
+        try leader_schedule_cache.put(loaded_snapshot.collapsed_manifest.bank_fields.epoch, leader_schedule[1]);
     } else {
-        const schedule = try snapshot.bank.bank_fields.leaderSchedule(allocator);
-        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, schedule);
+        const schedule = try loaded_snapshot.collapsed_manifest.bank_fields.leaderSchedule(allocator);
+        errdefer schedule.deinit();
+        try leader_schedule_cache.put(loaded_snapshot.collapsed_manifest.bank_fields.epoch, schedule);
     }
     // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
     // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
@@ -817,7 +819,7 @@ fn validator() !void {
     // shred networking
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
     var shred_col_conf = config.current.shred_network;
-    shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
+    shred_col_conf.start_slot = shred_col_conf.start_slot orelse loaded_snapshot.collapsed_manifest.bank_fields.slot;
     var shred_network_manager = try sig.shred_network.start(
         shred_col_conf,
         ShredCollectorDependencies{
@@ -835,7 +837,7 @@ fn validator() !void {
             .n_retransmit_threads = config.current.turbine.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
             .leader_schedule_cache = &leader_schedule_cache,
-            .bank_fields = snapshot.bank.bank_fields,
+            .bank_fields = &loaded_snapshot.collapsed_manifest.bank_fields,
         },
     );
     defer shred_network_manager.deinit();
@@ -865,20 +867,22 @@ fn shredCollector() !void {
         allocator.destroy(gossip_service);
     }
 
-    const snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = gossip_service,
         .geyser_writer = null,
         .validate_snapshot = true,
         .metadata_only = config.current.accounts_db.snapshot_metadata_only,
     });
+    defer loaded_snapshot.deinit();
 
     // leader schedule
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, snapshot.bank.bank_fields.epoch_schedule);
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, loaded_snapshot.collapsed_manifest.bank_fields.epoch_schedule);
     if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
-        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, leader_schedule[1]);
+        try leader_schedule_cache.put(loaded_snapshot.collapsed_manifest.bank_fields.epoch, leader_schedule[1]);
     } else {
-        const schedule = try snapshot.bank.bank_fields.leaderSchedule(allocator);
-        try leader_schedule_cache.put(snapshot.bank.bank_fields.epoch, schedule);
+        const schedule = try loaded_snapshot.collapsed_manifest.bank_fields.leaderSchedule(allocator);
+        errdefer schedule.deinit();
+        try leader_schedule_cache.put(loaded_snapshot.collapsed_manifest.bank_fields.epoch, schedule);
     }
     // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
     // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
@@ -951,7 +955,7 @@ fn shredCollector() !void {
             .n_retransmit_threads = config.current.turbine.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
             .leader_schedule_cache = &leader_schedule_cache,
-            .bank_fields = snapshot.bank.bank_fields,
+            .bank_fields = &loaded_snapshot.collapsed_manifest.bank_fields,
         },
     );
     defer shred_network_manager.deinit();
@@ -1000,16 +1004,16 @@ fn createSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const snapshot_result = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = null,
         .geyser_writer = null,
         .validate_snapshot = false,
         .metadata_only = false,
     });
-    defer snapshot_result.deinit();
+    defer loaded_snapshot.deinit();
 
-    var accounts_db = snapshot_result.accounts_db;
-    const slot = snapshot_result.snapshot_fields.full.bank_fields.slot;
+    var accounts_db = loaded_snapshot.accounts_db;
+    const slot = loaded_snapshot.combined_manifest.full.bank_fields.slot;
 
     var n_accounts_indexed: u64 = 0;
     for (accounts_db.account_index.pubkey_ref_map.shards) |*shard_rw| {
@@ -1026,7 +1030,7 @@ fn createSnapshot() !void {
     app_base.logger.info().logf("accountsdb[manager]: generating full snapshot for slot {d}", .{slot});
     _ = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
-        .bank_fields = &snapshot_result.snapshot_fields.full.bank_fields,
+        .bank_fields = &loaded_snapshot.combined_manifest.full.bank_fields,
         .lamports_per_signature = lps: {
             var prng = std.Random.DefaultPrng.init(1234);
             break :lps prng.random().int(u64);
@@ -1061,13 +1065,13 @@ fn validateSnapshot() !void {
         }
     }
 
-    const snapshot_result = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = null,
         .geyser_writer = geyser_writer,
         .validate_snapshot = true,
         .metadata_only = false,
     });
-    defer snapshot_result.deinit();
+    defer loaded_snapshot.deinit();
 }
 
 /// entrypoint to print the leader schedule and then exit
@@ -1081,7 +1085,8 @@ fn printLeaderSchedule() !void {
 
     const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
-        const loaded_snapshot = loadSnapshot(allocator, app_base.logger.unscoped(), .{
+
+        var loaded_snapshot = loadSnapshot(allocator, app_base.logger.unscoped(), .{
             .gossip_service = null,
             .geyser_writer = null,
             .validate_snapshot = true,
@@ -1092,12 +1097,12 @@ fn printLeaderSchedule() !void {
                     \\\ No snapshot found and no gossip service to download a snapshot from.
                     \\\ Download using the `snapshot-download` command.
                 );
-                return err;
-            } else {
-                return err;
             }
+            return err;
         };
-        const bank_fields = loaded_snapshot.bank.bank_fields;
+        defer loaded_snapshot.deinit();
+
+        const bank_fields = &loaded_snapshot.collapsed_manifest.bank_fields;
         _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
         break :b .{
             bank_fields.slot - slot_index,
@@ -1318,22 +1323,19 @@ fn spawnLogger(allocator: std.mem.Allocator) !Logger {
 const LoadedSnapshot = struct {
     allocator: Allocator,
     accounts_db: AccountsDB,
-    status_cache: sig.accounts_db.snapshots.StatusCache,
-    snapshot_fields: sig.accounts_db.snapshots.FullAndIncrementalManifest,
-    /// contains pointers to `accounts_db` and `snapshot_fields`
-    bank: Bank,
+    combined_manifest: sig.accounts_db.snapshots.FullAndIncrementalManifest,
+    collapsed_manifest: sig.accounts_db.snapshots.Manifest,
     genesis_config: GenesisConfig,
-    // Snapshot resulting from collapse needs to be retained here for
-    // valid lifetime as it is used by bank. This was a quick fix, a minor
-    // refactor is probably not a bad idea.
-    collapsed_snapshot_fields: sig.accounts_db.snapshots.Manifest,
+    status_cache: ?sig.accounts_db.snapshots.StatusCache,
 
     pub fn deinit(self: *@This()) void {
-        self.genesis_config.deinit(self.allocator);
-        self.status_cache.deinit(self.allocator);
-        self.snapshot_fields.deinit(self.allocator);
         self.accounts_db.deinit();
-        self.allocator.destroy(self);
+        self.combined_manifest.deinit(self.allocator);
+        self.collapsed_manifest.deinit(self.allocator);
+        self.genesis_config.deinit(self.allocator);
+        if (self.status_cache) |status_cache| {
+            status_cache.deinit(self.allocator);
+        }
     }
 };
 
@@ -1350,13 +1352,10 @@ const LoadSnapshotOptions = struct {
 
 fn loadSnapshot(
     allocator: Allocator,
-    logger_: Logger,
+    unscoped_logger: Logger,
     options: LoadSnapshotOptions,
-) !*LoadedSnapshot {
-    const logger = logger_.withScope(@typeName(@This()));
-    const result = try allocator.create(LoadedSnapshot);
-    errdefer allocator.destroy(result);
-    result.allocator = allocator;
+) !LoadedSnapshot {
+    const logger = unscoped_logger.withScope(@typeName(@This()) ++ "." ++ @src().fn_name);
 
     const genesis_file_path = try config.current.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
@@ -1365,14 +1364,14 @@ fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger.unscoped(), options.gossip_service, .{
+    const combined_manifest, const snapshot_files = try getOrDownloadSnapshots(allocator, logger.unscoped(), options.gossip_service, .{
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
         .num_threads_snapshot_unpack = config.current.accounts_db.num_threads_snapshot_unpack,
         .min_snapshot_download_speed_mbs = config.current.accounts_db.min_snapshot_download_speed_mbs,
     });
-    result.snapshot_fields = all_snapshot_fields;
+    errdefer combined_manifest.deinit(allocator);
 
     logger.info().logf("full snapshot: {s}", .{
         sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full.snapshotArchiveName().constSlice()),
@@ -1395,7 +1394,7 @@ fn loadSnapshot(
     };
     logger.info().logf("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
-    result.accounts_db = try AccountsDB.init(.{
+    var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger.unscoped(),
         .snapshot_dir = snapshot_dir,
@@ -1405,45 +1404,51 @@ fn loadSnapshot(
         .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
         .lru_size = 10_000,
     });
-    errdefer result.accounts_db.deinit();
+    errdefer accounts_db.deinit();
 
-    if (options.metadata_only) {
-        result.collapsed_snapshot_fields = try result.snapshot_fields.collapse(allocator);
-    } else {
-        result.collapsed_snapshot_fields = try result.accounts_db.loadWithDefaults(
+    const collapsed_manifest = if (options.metadata_only)
+        try combined_manifest.collapse(allocator)
+    else
+        try accounts_db.loadWithDefaults(
             allocator,
-            &all_snapshot_fields,
+            combined_manifest,
             n_threads_snapshot_load,
             options.validate_snapshot,
             config.current.accounts_db.accounts_per_file_estimate,
             config.current.accounts_db.fastload,
             config.current.accounts_db.save_index,
         );
-    }
-    errdefer result.collapsed_snapshot_fields.deinit(allocator);
-
-    const bank_fields = &result.collapsed_snapshot_fields.bank_fields;
+    errdefer collapsed_manifest.deinit(allocator);
 
     // this should exist before we start to unpack
     logger.info().log("reading genesis...");
-    result.genesis_config = GenesisConfig.init(allocator, genesis_file_path) catch |err| {
+
+    const genesis_config = GenesisConfig.init(allocator, genesis_file_path) catch |err| {
         if (err == error.FileNotFound) {
             logger.err().logf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
         }
         return err;
     };
-    errdefer result.genesis_config.deinit(allocator);
+    errdefer genesis_config.deinit(allocator);
 
     logger.info().log("validating bank...");
-    result.bank = Bank.init(&result.accounts_db, bank_fields);
-    try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
+
+    try Bank.validateBankFields(&collapsed_manifest.bank_fields, &genesis_config);
 
     if (options.metadata_only) {
-        return result;
+        logger.info().log("accounts-db setup done...");
+        return .{
+            .allocator = allocator,
+            .accounts_db = accounts_db,
+            .combined_manifest = combined_manifest,
+            .collapsed_manifest = collapsed_manifest,
+            .genesis_config = genesis_config,
+            .status_cache = null,
+        };
     }
 
     // validate the status cache
-    result.status_cache = StatusCache.initFromDir(allocator, snapshot_dir) catch |err| {
+    const status_cache = StatusCache.initFromDir(allocator, snapshot_dir) catch |err| {
         if (err == error.FileNotFound) {
             logger.err().logf(
                 "status_cache not found - expecting {s}/snapshots/status_cache to exist",
@@ -1452,15 +1457,23 @@ fn loadSnapshot(
         }
         return err;
     };
-    errdefer result.status_cache.deinit(allocator);
+    errdefer status_cache.deinit(allocator);
 
-    var slot_history = try result.accounts_db.getSlotHistory(allocator);
+    const slot_history = try accounts_db.getSlotHistory(allocator);
     defer slot_history.deinit(allocator);
-    try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
+
+    try status_cache.validate(allocator, collapsed_manifest.bank_fields.slot, &slot_history);
 
     logger.info().log("accounts-db setup done...");
 
-    return result;
+    return .{
+        .allocator = allocator,
+        .accounts_db = accounts_db,
+        .combined_manifest = combined_manifest,
+        .collapsed_manifest = collapsed_manifest,
+        .genesis_config = genesis_config,
+        .status_cache = status_cache,
+    };
 }
 
 /// entrypoint to download snapshot
