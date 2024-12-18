@@ -10,7 +10,7 @@ const Counter = sig.prometheus.Counter;
 const Histogram = sig.prometheus.Histogram;
 const Packet = sig.net.Packet;
 const Registry = sig.prometheus.Registry;
-const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
+const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const VariantCounter = sig.prometheus.VariantCounter;
 
 const VerifiedMerkleRoots = sig.common.lru.LruCache(.non_locking, sig.core.Hash, void);
@@ -25,7 +25,7 @@ pub fn runShredVerifier(
     verified_shred_sender: *Channel(Packet),
     /// me --> retransmit service
     maybe_retransmit_shred_sender: ?*Channel(Packet),
-    leader_schedule: SlotLeaderProvider,
+    leader_schedule: SlotLeaders,
 ) !void {
     const metrics = try registry.initStruct(Metrics);
     var verified_merkle_roots = try VerifiedMerkleRoots.init(std.heap.c_allocator, 1024);
@@ -53,7 +53,7 @@ pub fn runShredVerifier(
 /// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
 fn verifyShred(
     packet: *const Packet,
-    leader_schedule: SlotLeaderProvider,
+    leader_schedule: SlotLeaders,
     verified_merkle_roots: *VerifiedMerkleRoots,
     metrics: Metrics,
 ) ShredVerificationFailure!void {
@@ -66,7 +66,7 @@ fn verifyShred(
         return;
     }
     metrics.cache_miss_count.inc();
-    const leader = leader_schedule.call(slot) orelse return error.leader_unknown;
+    const leader = leader_schedule.get(slot) orelse return error.leader_unknown;
     const valid = signature.verify(leader, &signed_data.data) catch
         return error.failed_verification;
     if (!valid) return error.failed_verification;

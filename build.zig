@@ -161,6 +161,11 @@ pub fn build(b: *Build) void {
     fuzz_exe.root_module.addImport("zig-network", zig_network_module);
     fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
+    fuzz_exe.root_module.addOptions("build-options", build_options);
+    switch (blockstore_db) {
+        .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
     fuzz_exe.linkLibC();
 
     const fuzz_exe_run = b.addRunArtifact(fuzz_exe);
@@ -181,6 +186,7 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("zig-network", zig_network_module);
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
+    benchmark_exe.root_module.addImport("curl", curl_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
     switch (blockstore_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -236,7 +242,7 @@ fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
     }
 }
 
-/// TODO: remove after updating to 0.14, where M3 feature detection is fixed.
+/// TODO: remove after updating to 0.14, where M3/M4 feature detection is fixed.
 /// Ref: https://github.com/ziglang/zig/pull/21116
 fn defaultTargetDetectM3() ?std.Target.Query {
     const builtin = @import("builtin");
@@ -245,17 +251,20 @@ fn defaultTargetDetectM3() ?std.Target.Query {
         .aarch64, .aarch64_be => {},
         else => return null,
     }
-
     var cpu_family: std.c.CPUFAMILY = undefined;
     var len: usize = @sizeOf(std.c.CPUFAMILY);
     std.posix.sysctlbynameZ("hw.cpufamily", &cpu_family, &len, null, 0) catch unreachable;
 
+    // Detects M4 as M3 to get around missing C flag translations when passing the target to dependencies.
+    // https://github.com/Homebrew/brew/blob/64edbe6b7905c47b113c1af9cb1a2009ed57a5c7/Library/Homebrew/extend/os/mac/hardware/cpu.rb#L106
     const model: *const std.Target.Cpu.Model = switch (@intFromEnum(cpu_family)) {
         else => return null,
         0x2876f5b5 => &std.Target.aarch64.cpu.apple_a17, // ARM_COLL
         0xfa33415e => &std.Target.aarch64.cpu.apple_m3, // ARM_IBIZA
         0x5f4dea93 => &std.Target.aarch64.cpu.apple_m3, // ARM_LOBOS
         0x72015832 => &std.Target.aarch64.cpu.apple_m3, // ARM_PALMA
+        0x6f5129ac => &std.Target.aarch64.cpu.apple_m3, // ARM_DONAN (M4)
+        0x17d5b93a => &std.Target.aarch64.cpu.apple_m3, // ARM_BRAVA (M4)
     };
 
     return .{

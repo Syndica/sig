@@ -6,6 +6,7 @@ const accountsdb_fuzz = sig.accounts_db.fuzz;
 const gossip_fuzz_service = sig.gossip.fuzz_service;
 const gossip_fuzz_table = sig.gossip.fuzz_table;
 const accountsdb_snapshot_fuzz = sig.accounts_db.fuzz_snapshot;
+const ledger_rocksdb_fuzz = sig.ledger.fuzz_rocksdb;
 const StandardErrLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
 
@@ -22,6 +23,7 @@ pub const FuzzFilter = enum {
     gossip_service,
     gossip_table,
     allocators,
+    ledger_rocksdb,
 };
 
 pub fn main() !void {
@@ -86,6 +88,7 @@ pub fn main() !void {
         .snapshot => try accountsdb_snapshot_fuzz.run(&cli_args),
         .gossip_service => try gossip_fuzz_service.run(seed, &cli_args),
         .gossip_table => try gossip_fuzz_table.run(seed, &cli_args),
+        .ledger_rocksdb => try ledger_rocksdb_fuzz.run(seed, &cli_args),
         .allocators => try sig.utils.allocators.runFuzzer(seed, &cli_args),
     }
 }

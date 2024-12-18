@@ -107,6 +107,10 @@ pub const AccountInFile = struct {
             offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
             return offset;
         }
+
+        pub fn writeToBufLen() usize {
+            return @sizeOf(u64) + @sizeOf(u64) + @sizeOf(Pubkey);
+        }
     };
 
     /// on-chain account info about the account
@@ -275,7 +279,7 @@ pub const AccountFile = struct {
         const memory = try std.posix.mmap(
             null,
             file_size,
-            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            std.posix.PROT.READ,
             std.posix.MAP{ .TYPE = .PRIVATE },
             file.handle,
             0,

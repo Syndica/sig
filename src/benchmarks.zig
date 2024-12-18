@@ -33,7 +33,7 @@ const Benchmark = enum {
     all,
     accounts_db,
     accounts_db_readwrite,
-    accounts_db_snapshot,
+    accounts_db_snapshot, // expensive
     bincode,
     geyser,
     gossip,
@@ -66,8 +66,13 @@ fn exitWithUsage() noreturn {
         \\    Prints this usage message
         \\
         \\  --metrics
-        \\    save benchmark results to results/output.json
+        \\    save benchmark results to results/output.json. default: false.
         \\
+        \\  -e
+        \\    run expensive benchmarks. default: false.
+        \\
+        \\  -f
+        \\    force fresh state for expensive benchmarks. default: false.
     ) catch @panic("failed to print usage");
     std.posix.exit(1);
 }
@@ -87,7 +92,10 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
+    var run_expensive_benchmarks: bool = false;
     var collect_metrics: bool = false;
+    var force_fresh_state: bool = false;
+
     var maybe_filter: ?Benchmark = null;
     // skip the benchmark argv[0]
     _ = cli_args.skip();
@@ -96,6 +104,13 @@ pub fn main() !void {
             exitWithUsage();
         } else if (std.mem.startsWith(u8, arg, "--metrics")) {
             collect_metrics = true;
+            continue;
+        } else if (std.mem.startsWith(u8, arg, "-e")) {
+            run_expensive_benchmarks = true;
+            collect_metrics = true; // by default collect metrics when running expensive benchmarks
+            continue;
+        } else if (std.mem.startsWith(u8, arg, "-f")) {
+            force_fresh_state = true;
             continue;
         }
         maybe_filter = std.meta.stringToEnum(Benchmark, arg) orelse {
@@ -160,15 +175,70 @@ pub fn main() !void {
             );
         }
 
-        if (filter == .accounts_db_snapshot or run_all) blk: {
-            // NOTE: for this benchmark you need to setup a snapshot in test-data/snapshot_bench
-            // and run as a binary ./zig-out/bin/... so the open file limits are ok
-            const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
-            var snapshot_dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
-                logger.debug().logf("[accounts_db_snapshot]: need to setup a snapshot in {s} for this benchmark...", .{dir_path});
-                break :blk;
-            };
-            snapshot_dir.close();
+        if ((filter == .accounts_db_snapshot or run_all) and !run_expensive_benchmarks) {
+            logger.warn().log("[accounts_db_snapshot]: skipping benchmark, use -e to run");
+        }
+
+        if ((filter == .accounts_db_snapshot or run_all) and run_expensive_benchmarks) {
+            // NOTE: snapshot must exist in this directory for the benchmark to run
+            // NOTE: also need to increase file limits to run this benchmark (see debugging.md)
+            const BENCH_SNAPSHOT_DIR_PATH = @import("accountsdb/db.zig")
+                .BenchmarkAccountsDBSnapshotLoad
+                .SNAPSHOT_DIR_PATH;
+
+            var test_snapshot_exists = true;
+            if (std.fs.cwd().openDir(BENCH_SNAPSHOT_DIR_PATH, .{ .iterate = true })) |dir| {
+                std.posix.close(dir.fd);
+            } else |_| {
+                test_snapshot_exists = false;
+            }
+
+            const download_new_snapshot = force_fresh_state or !test_snapshot_exists;
+            if (download_new_snapshot) {
+                // delete existing snapshot dir
+                if (test_snapshot_exists) {
+                    std.debug.print("deleting snapshot dir...\n", .{});
+                    std.fs.cwd().deleteTreeMinStackSize(BENCH_SNAPSHOT_DIR_PATH) catch |err| {
+                        std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{
+                            BENCH_SNAPSHOT_DIR_PATH,
+                            err,
+                        });
+                    };
+                }
+
+                // create fresh snapshot dir
+                var snapshot_dir = try std.fs.cwd().makeOpenPath(
+                    BENCH_SNAPSHOT_DIR_PATH,
+                    .{ .iterate = true },
+                );
+                defer snapshot_dir.close();
+
+                // start gossip
+                const gossip_service = try sig.gossip.helpers.initGossipFromCluster(
+                    allocator,
+                    logger.unscoped(),
+                    .testnet, // TODO: support other clusters
+                );
+                defer {
+                    gossip_service.shutdown();
+                    gossip_service.deinit();
+                    allocator.destroy(gossip_service);
+                }
+                try gossip_service.start(.{});
+
+                // download and unpack snapshot
+                var snapshot_manifests, _ = try sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
+                    allocator,
+                    logger,
+                    snapshot_dir,
+                    null,
+                    .{
+                        .gossip_service = gossip_service,
+                        .force_new_snapshot_download = true,
+                    },
+                );
+                defer snapshot_manifests.deinit(allocator);
+            }
 
             try benchmark(
                 allocator,
