@@ -14,6 +14,7 @@ const cf1 = ColumnFamily{
     .Value = []const u8,
 };
 const RocksDb = sig.ledger.database.RocksDB(&.{cf1});
+const WriteBatch = sig.ledger.blockstore.BlockstoreDB.WriteBatch;
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const maybe_max_actions_string = args.next();
@@ -58,7 +59,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         var db_put_thread = try std.Thread.spawn(.{}, dbPut, .{ &db, &random, &total_action_count, maybe_max_actions });
         defer db_put_thread.join();
 
-        var db_delete_thread = try std.Thread.spawn(.{}, dbDelete, .{ &db,  &random, &total_action_count, maybe_max_actions });
+        var db_delete_thread = try std.Thread.spawn(.{}, dbDelete, .{ &db, &random, &total_action_count, maybe_max_actions });
         defer db_delete_thread.join();
 
         var db_delete_files_in_range = try std.Thread.spawn(.{}, dbDeleteFilesInRange, .{ &db, &random, &total_action_count, maybe_max_actions });
@@ -70,12 +71,40 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         var db_count_thread = try std.Thread.spawn(.{}, dbCount, .{ &db, &total_action_count, maybe_max_actions });
         defer db_count_thread.join();
 
-        var db_contains_thread = try std.Thread.spawn(.{}, dbContains, .{ &db,  &random, &total_action_count, maybe_max_actions });
+        var db_contains_thread = try std.Thread.spawn(.{}, dbContains, .{ &db, &random, &total_action_count, maybe_max_actions });
         defer db_contains_thread.join();
 
         // Batch API
         var batch_delete_range_thread = try std.Thread.spawn(.{}, batchDeleteRange, .{ &db, &random, &total_action_count, maybe_max_actions });
         defer batch_delete_range_thread.join();
+    }
+}
+
+fn performDbAction(
+    action_name: []const u8,
+    comptime func: anytype,
+    args: anytype,
+    count: *std.atomic.Value(u64),
+    max_actions: ?usize,
+) !void {
+    var last_print_msg_count: u64 = 0;
+
+    while (true) {
+        if (max_actions) |max| {
+            if (count.load(.monotonic) >= max) {
+                std.debug.print("{s} reached max actions: {}\n", .{ action_name, max });
+                break;
+            }
+        }
+
+        _ = try @call(.auto, func, args);
+
+        if ((count.load(.monotonic) - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} {s} actions\n", .{ count.load(.monotonic), action_name });
+            last_print_msg_count = count.load(.monotonic);
+        }
+
+        _ = count.fetchAdd(1, .monotonic);
     }
 }
 
@@ -85,34 +114,14 @@ fn dbPut(
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
-    var last_print_msg_count: u64 = 0;
-    while (true) {
-        if (max_actions) |max| {
-            if (count.load(.monotonic) >= max) {
-                std.debug.print("Writer reached max actions: {}\n", .{max});
-                break;
-            }
-        }
-
-        const key = random.int(u32);
-        var buffer: [61]u8 = undefined;
-
-        // Fill the buffer with random bytes
-        for (0..buffer.len) |i| {
-            buffer[i] = @intCast(random.int(u8));
-        }
-
-        const value: []const u8 = buffer[0..];
-
-        try db.put(cf1, (key + 1), value);
-
-        if ((count.load(.monotonic) - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} db action\n", .{count.load(.monotonic)});
-            last_print_msg_count = count.load(.monotonic);
-        }
-
-        _ = count.fetchAdd(1, .monotonic);
+    const key = random.int(u32);
+    var buffer: [61]u8 = undefined;
+    // Fill the buffer with random bytes
+    for (0..buffer.len) |i| {
+        buffer[i] = @intCast(random.int(u8));
     }
+    const value: []const u8 = buffer[0..];
+    try performDbAction("Put", RocksDb.put, .{ db, cf1, (key + 1), value }, count, max_actions);
 }
 
 fn dbDelete(
@@ -121,25 +130,8 @@ fn dbDelete(
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
-    var last_print_msg_count: u64 = 0;
-    while (true) {
-        if (max_actions) |max| {
-            if (count.load(.monotonic) >= max) {
-                std.debug.print("Delete reached max actions: {}\n", .{max});
-                break;
-            }
-        }
-
-        const key = random.int(u32);
-        _ = try db.delete(cf1, key);
-
-        if ((count.load(.monotonic) - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} db action\n", .{count.load(.monotonic)});
-            last_print_msg_count = count.load(.monotonic);
-        }
-
-        _ = count.fetchAdd(1, .monotonic);
-    }
+    const key = random.int(u32);
+    try performDbAction("Delete", RocksDb.delete, .{ db, cf1, key }, count, max_actions);
 }
 
 fn dbDeleteFilesInRange(
@@ -148,32 +140,16 @@ fn dbDeleteFilesInRange(
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
-    var last_print_msg_count: u64 = 0;
-    while (true) {
-        if (max_actions) |max| {
-            if (count.load(.monotonic) >= max) {
-                std.debug.print("Batch delete range reached max actions: {}\n", .{max});
-                break;
-            }
-        }
-        const start = random.int(u32);
-        const end = blk: {
-            const end_ = random.int(u32);
-            if (end_ < start)
-                break :blk (end_ +| start)
-            else
-                break :blk end_;
-        };
+    const start = random.int(u32);
+    const end = blk: {
+        const end_ = random.int(u32);
+        if (end_ < start)
+            break :blk (end_ +| start)
+        else
+            break :blk end_;
+    };
 
-        try db.deleteFilesInRange(cf1, start, end);
-
-        if ((count.load(.monotonic) - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} db action\n", .{count.load(.monotonic)});
-            last_print_msg_count = count.load(.monotonic);
-        }
-
-        _ = count.fetchAdd(1, .monotonic);
-    }
+    try performDbAction("Delete Files in Range", RocksDb.deleteFilesInRange, .{ db, cf1, start, end }, count, max_actions);
 }
 
 fn dbGetBytes(
@@ -182,25 +158,8 @@ fn dbGetBytes(
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
-    var last_print_msg_count: u64 = 0;
-    while (true) {
-        if (max_actions) |max| {
-            if (count.load(.monotonic) >= max) {
-                std.debug.print("Reader reached max actions: {}\n", .{max});
-                break;
-            }
-        }
-
-        const key = random.int(u32);
-        _ = try db.getBytes(cf1, key);
-
-        if ((count.load(.monotonic) - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} db action\n", .{count.load(.monotonic)});
-            last_print_msg_count = count.load(.monotonic);
-        }
-
-        _ = count.fetchAdd(1, .monotonic);
-    }
+    const key = random.int(u32);
+    try performDbAction("getBytes", RocksDb.getBytes, .{ db, cf1, key }, count, max_actions);
 }
 
 fn dbCount(
@@ -208,24 +167,7 @@ fn dbCount(
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
-    var last_print_msg_count: u64 = 0;
-    while (true) {
-        if (max_actions) |max| {
-            if (count.load(.monotonic) >= max) {
-                std.debug.print("Count reached max actions: {}\n", .{max});
-                break;
-            }
-        }
-
-        _ = try db.count(cf1);
-
-        if ((count.load(.monotonic) - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} db action\n", .{count.load(.monotonic)});
-            last_print_msg_count = count.load(.monotonic);
-        }
-
-        _ = count.fetchAdd(1, .monotonic);
-    }
+    try performDbAction("count", RocksDb.count, .{ db, cf1 }, count, max_actions);
 }
 
 fn dbContains(
@@ -234,25 +176,8 @@ fn dbContains(
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
-    var last_print_msg_count: u64 = 0;
-    while (true) {
-        if (max_actions) |max| {
-            if (count.load(.monotonic) >= max) {
-                std.debug.print("Contains reached max actions: {}\n", .{max});
-                break;
-            }
-        }
-
-        const key = random.int(u32);
-        _ = try db.contains(cf1, key);
-
-        if ((count.load(.monotonic) - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} db action\n", .{count.load(.monotonic)});
-            last_print_msg_count = count.load(.monotonic);
-        }
-
-        _ = count.fetchAdd(1, .monotonic);
-    }
+    const key = random.int(u32);
+    try performDbAction("contains", RocksDb.contains, .{ db, cf1, key }, count, max_actions);
 }
 
 // Batch API
@@ -278,7 +203,6 @@ fn batchDeleteRange(
             else
                 break :blk end_;
         };
-
 
         const key = random.int(u32);
         var buffer: [61]u8 = undefined;
