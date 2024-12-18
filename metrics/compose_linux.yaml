@@ -11,6 +11,35 @@ services:
     volumes:
       - ./prometheus:/etc/prometheus
       - prom_data:/prometheus
+
+  loki:
+    network_mode: "host" # -- only linux
+    image: grafana/loki:3.0.0
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki:/etc/loki
+    command:
+      - "--config.file=/etc/loki/loki.yml"
+
+  alloy:
+    network_mode: "host" # -- only linux
+    image: grafana/alloy:v1.3.1
+    ports:
+      - "3200:3200"
+    volumes:
+      - "./alloy/config.alloy:/etc/alloy/config.alloy"
+      - "../logs:/var/log/alloy"
+    command:
+      [
+        "run",
+        "--server.http.listen-addr=0.0.0.0:3200",
+        "/etc/alloy/config.alloy",
+      ]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   grafana:
     network_mode: "host" # -- only linux
     image: grafana/grafana
@@ -25,6 +54,7 @@ services:
       - ./grafana/datasources:/etc/grafana/provisioning/datasources
       - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
       - ./grafana/dashboards:/var/lib/grafana/dashboards
+
   node-exporter:
     image: prom/node-exporter
     container_name: node-exporter
