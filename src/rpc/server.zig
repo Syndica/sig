@@ -1,5 +1,8 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
+
+const IoUring = std.os.linux.IoUring;
 
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
@@ -28,18 +31,31 @@ pub const Server = struct {
     /// all of them to finish before deinitializing.
     wait_group: std.Thread.WaitGroup,
     thread_pool: *ThreadPool,
+    work_pool: WorkPool,
 
+    tcp: std.net.Server,
     /// Must not be mutated.
     read_buffer_size: usize,
-    tcp: std.net.Server,
 
     pub const MIN_READ_BUFFER_SIZE = 256;
+
+    pub const InitError =
+        std.net.Address.ListenError ||
+        std.posix.MMapError ||
+        std.posix.UnexpectedError ||
+        WorkPool.LinuxIoUring.InitError ||
+        WorkPool.LinuxIoUring.EnterError ||
+        error{
+        SubmissionQueueFull,
+        FailedToAcceptMultishot,
+    };
 
     /// The returned result must be pinned to a memory location before calling any methods.
     pub fn init(params: struct {
         /// Must be a thread-safe allocator.
         allocator: std.mem.Allocator,
         logger: sig.trace.Logger,
+        thread_pool: *ThreadPool,
 
         /// Not closed by the `Server`, but must live at least as long as it.
         snapshot_dir: std.fs.Dir,
@@ -47,20 +63,54 @@ pub const Server = struct {
         /// given time with respect to the contents of the specified `snapshot_dir`.
         latest_snapshot_gen_info: *sig.sync.RwMux(?SnapshotGenerationInfo),
 
-        thread_pool: *ThreadPool,
-
         /// The size for the read buffer allocated to every request.
         /// Clamped to be greater than or equal to `MIN_READ_BUFFER_SIZE`.
         read_buffer_size: u32,
         /// The socket address to listen on for incoming HTTP and/or RPC requests.
         socket_addr: std.net.Address,
-    }) std.net.Address.ListenError!Server {
+
+        /// Set to true to disable taking advantage of native work pool strategies (ie io_uring).
+        force_basic_work_pool: bool = false,
+    }) InitError!Server {
         var tcp_server = try params.socket_addr.listen(.{
             // NOTE: ideally we would be doing this nonblockingly, however this doesn't work properly on mac,
             // so for testing purposes we can't test the `serve` functionality directly.
             .force_nonblocking = false,
         });
         errdefer tcp_server.deinit();
+
+        var work_pool: WorkPool = if (params.force_basic_work_pool)
+            .basic
+        else switch (WorkPool.LinuxIoUring.usage) {
+            .no => .basic,
+            .yes, .check => |tag| blk: {
+                var io_uring = IoUring.init(32, 0) catch |err| return switch (err) {
+                    error.SystemOutdated,
+                    error.PermissionDenied,
+                    => |e| switch (tag) {
+                        .yes => e,
+                        .check => break :blk .basic,
+                        .no => comptime unreachable,
+                    },
+                    else => |e| e,
+                };
+                errdefer io_uring.deinit();
+
+                _ = try io_uring.accept_multishot(
+                    @intFromEnum(WorkPool.LinuxIoUring.EntryKind.accept),
+                    tcp_server.stream.handle,
+                    null,
+                    null,
+                    std.os.linux.SOCK.CLOEXEC,
+                );
+                if (try io_uring.submit() != 1) {
+                    return error.FailedToAcceptMultishot;
+                }
+
+                break :blk .{ .linux_io_uring = .{ .io_uring = io_uring } };
+            },
+        };
+        errdefer work_pool.deinit();
 
         return .{
             .allocator = params.allocator,
@@ -71,6 +121,7 @@ pub const Server = struct {
 
             .wait_group = .{},
             .thread_pool = params.thread_pool,
+            .work_pool = work_pool,
 
             .read_buffer_size = @max(params.read_buffer_size, MIN_READ_BUFFER_SIZE),
             .tcp = tcp_server,
@@ -105,19 +156,154 @@ pub const Server = struct {
     pub const AcceptAndServeConnectionError =
         std.mem.Allocator.Error ||
         std.http.Server.ReceiveHeadError ||
-        AcceptConnectionError;
+        std.posix.GetSockNameError ||
+        AcceptConnectionError ||
+        WorkPool.LinuxIoUring.EnterError;
 
     pub fn acceptAndServeConnection(server: *Server) AcceptAndServeConnectionError!void {
-        const conn = (try acceptConnection(&server.tcp, server.logger)).?;
-        errdefer conn.stream.close();
+        switch (server.work_pool) {
+            .basic => {
+                const conn = (try acceptConnection(&server.tcp, server.logger)).?;
+                errdefer conn.stream.close();
 
-        server.wait_group.start();
-        errdefer server.wait_group.finish();
+                server.wait_group.start();
+                errdefer server.wait_group.finish();
 
-        const new_hct = try HandleConnectionTask.createAndReceiveHead(server, conn);
-        errdefer new_hct.destroyAndClose();
+                const new_hct = try HandleConnectionTask.createAndReceiveHead(server, conn);
+                errdefer new_hct.destroyAndClose();
 
-        server.thread_pool.schedule(ThreadPool.Batch.from(&new_hct.task));
+                server.thread_pool.schedule(ThreadPool.Batch.from(&new_hct.task));
+            },
+            .linux_io_uring => |*linux| {
+                _ = try linux.io_uring.submit_and_wait(1);
+
+                var cqes_buf: [256]std.os.linux.io_uring_cqe = undefined;
+                const cqes_count = try linux.io_uring.copy_cqes(&cqes_buf, 0);
+                const cqes = cqes_buf[0..cqes_count];
+                if (cqes.len == 0) return;
+
+                for (cqes) |cqe| {
+                    const kind: WorkPool.LinuxIoUring.EntryKind = @enumFromInt(cqe.user_data);
+                    switch (kind) {
+                        .accept => {
+                            // mostly mimic the error logic of `std.posix.accept`.
+                            switch (cqe.err()) {
+                                .SUCCESS => {},
+
+                                .INTR => continue,
+                                .AGAIN => continue, // WouldBlock
+                                .BADF => unreachable, // always a race condition
+                                .CONNABORTED => {
+                                    server.logger.warn().log("error.ConnectionAborted");
+                                    continue;
+                                },
+                                .FAULT => unreachable,
+                                .INVAL => @panic("Improperly initialized server."),
+                                .NOTSOCK => unreachable,
+                                .MFILE => return error.ProcessFdQuotaExceeded,
+                                .NFILE => return error.SystemFdQuotaExceeded,
+                                .NOBUFS => return error.SystemResources,
+                                .NOMEM => return error.SystemResources,
+                                .OPNOTSUPP => unreachable,
+                                .PROTO => return error.ProtocolFailure,
+                                .PERM => return error.BlockedByFirewall,
+                                else => |err| return std.posix.unexpectedErrno(err),
+                            }
+
+                            const accepted_socket: std.net.Stream = .{ .handle = cqe.res };
+                            errdefer accepted_socket.close();
+
+                            var accepted_addr: std.net.Address = undefined;
+                            var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
+                            try std.posix.getsockname(
+                                accepted_socket.handle,
+                                &accepted_addr.any,
+                                &addr_len,
+                            );
+
+                            const conn: std.net.Server.Connection = .{
+                                .stream = accepted_socket,
+                                .address = accepted_addr,
+                            };
+
+                            server.wait_group.start();
+                            errdefer server.wait_group.finish();
+
+                            const new_hct = try HandleConnectionTask.createAndReceiveHead(server, conn);
+                            errdefer new_hct.destroyAndClose();
+
+                            server.thread_pool.schedule(ThreadPool.Batch.from(&new_hct.task));
+                        },
+                        .other => @panic("TODO"),
+                        _ => |int| {
+                            server.logger.err().logf("Unexpected CQE kind: {}", .{@intFromEnum(int)});
+                            continue;
+                        },
+                    }
+                }
+            },
+        }
+    }
+};
+
+pub const WorkPool = union(enum) {
+    basic,
+    linux_io_uring: switch (LinuxIoUring.usage) {
+        .yes, .check => LinuxIoUring,
+        .no => noreturn,
+    },
+
+    const LinuxIoUring = struct {
+        io_uring: IoUring,
+
+        fn deinit(linux: *LinuxIoUring) void {
+            linux.io_uring.deinit();
+        }
+
+        const usage: enum { no, yes, check } = switch (builtin.os.getVersionRange()) {
+            .linux => |version| usage: {
+                const min_version: std.SemanticVersion = .{ .major = 5, .minor = 1, .patch = 0 };
+                const is_at_least = version.isAtLeast(min_version) orelse break :usage .check;
+                break :usage if (is_at_least) .yes else .no;
+            },
+            else => .no,
+        };
+
+        const EntryKind = enum(u64) {
+            accept,
+            other,
+            _,
+        };
+
+        const InitError = std.posix.MMapError || error{
+            EntriesZero,
+            EntriesNotPowerOfTwo,
+            ParamsOutsideAccessibleAddressSpace,
+            ArgumentsInvalid,
+            ProcessFdQuotaExceeded,
+            SystemFdQuotaExceeded,
+            SystemResources,
+            PermissionDenied,
+            SystemOutdated,
+        };
+        const EnterError = error{
+            SystemResources,
+            FileDescriptorInvalid,
+            FileDescriptorInBadState,
+            CompletionQueueOvercommitted,
+            SubmissionQueueEntryInvalid,
+            BufferInvalid,
+            RingShuttingDown,
+            OpcodeNotSupported,
+            SignalInterrupt,
+        };
+    };
+
+    pub fn deinit(wp: *WorkPool) void {
+        switch (wp.*) {
+            .basic => {},
+            .linux_io_uring => |*linux| linux.deinit(),
+        }
     }
 };
 
@@ -368,6 +554,12 @@ fn acceptConnection(
     };
 
     return conn;
+}
+
+fn FnErrorSet(comptime function: anytype) type {
+    const fn_info = @typeInfo(@TypeOf(function)).Fn;
+    const error_union_info = @typeInfo(fn_info.return_type.?).ErrorUnion;
+    return error_union_info.error_set;
 }
 
 fn methodFmt(method: std.http.Method) MethodFmt {
