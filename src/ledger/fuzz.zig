@@ -98,10 +98,10 @@ fn performDbAction(
         }
 
         _ = try @call(.auto, func, args);
-
-        if ((count.load(.monotonic) - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} {s} actions\n", .{ count.load(.monotonic), action_name });
-            last_print_msg_count = count.load(.monotonic);
+        const current_count = count.load(.monotonic);
+        if ((current_count - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} {s} actions\n", .{ current_count, action_name });
+            last_print_msg_count = current_count;
         }
 
         _ = count.fetchAdd(1, .monotonic);
@@ -222,9 +222,10 @@ fn batchDeleteRange(
         try batch.delete(cf1, key);
         try db.commit(&batch);
 
-        if ((count.load(.monotonic) - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} db action\n", .{count.load(.monotonic)});
-            last_print_msg_count = count.load(.monotonic);
+        const current_count = count.load(.monotonic);
+        if ((current_count - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} db action\n", .{current_count});
+            last_print_msg_count = current_count;
         }
 
         _ = count.fetchAdd(1, .monotonic);
