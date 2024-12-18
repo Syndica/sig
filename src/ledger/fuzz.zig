@@ -14,7 +14,6 @@ const cf1 = ColumnFamily{
     .Value = []const u8,
 };
 const RocksDb = sig.ledger.database.RocksDB(&.{cf1});
-const WriteBatch = sig.ledger.blockstore.BlockstoreDB.WriteBatch;
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const maybe_max_actions_string = args.next();
@@ -39,7 +38,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var prng = std.rand.DefaultPrng.init(seed);
     const random = prng.random();
 
-    const rocksdb_path = try std.fmt.allocPrint(allocator, "{s}/ledger/rocksdb", .{sig.FUZZ_DATA_DIR});
+    const rocksdb_path =
+        try std.fmt.allocPrint(allocator, "{s}/ledger/rocksdb", .{sig.FUZZ_DATA_DIR});
 
     // ensure we start with a clean slate.
     if (std.fs.cwd().access(rocksdb_path, .{})) |_| {
@@ -56,26 +56,54 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer db.deinit();
 
     {
-        var db_put_thread = try std.Thread.spawn(.{}, dbPut, .{ &db, &random, &total_action_count, maybe_max_actions });
+        var db_put_thread = try std.Thread.spawn(
+            .{},
+            dbPut,
+            .{ &db, &random, &total_action_count, maybe_max_actions },
+        );
         defer db_put_thread.join();
 
-        var db_delete_thread = try std.Thread.spawn(.{}, dbDelete, .{ &db, &random, &total_action_count, maybe_max_actions });
+        var db_delete_thread = try std.Thread.spawn(
+            .{},
+            dbDelete,
+            .{ &db, &random, &total_action_count, maybe_max_actions },
+        );
         defer db_delete_thread.join();
 
-        var db_delete_files_in_range = try std.Thread.spawn(.{}, dbDeleteFilesInRange, .{ &db, &random, &total_action_count, maybe_max_actions });
+        var db_delete_files_in_range = try std.Thread.spawn(
+            .{},
+            dbDeleteFilesInRange,
+            .{ &db, &random, &total_action_count, maybe_max_actions },
+        );
         defer db_delete_files_in_range.join();
 
-        var db_get_bytes_thread = try std.Thread.spawn(.{}, dbGetBytes, .{ &db, &random, &total_action_count, maybe_max_actions });
+        var db_get_bytes_thread = try std.Thread.spawn(
+            .{},
+            dbGetBytes,
+            .{ &db, &random, &total_action_count, maybe_max_actions },
+        );
         defer db_get_bytes_thread.join();
 
-        var db_count_thread = try std.Thread.spawn(.{}, dbCount, .{ &db, &total_action_count, maybe_max_actions });
+        var db_count_thread = try std.Thread.spawn(
+            .{},
+            dbCount,
+            .{ &db, &total_action_count, maybe_max_actions },
+        );
         defer db_count_thread.join();
 
-        var db_contains_thread = try std.Thread.spawn(.{}, dbContains, .{ &db, &random, &total_action_count, maybe_max_actions });
+        var db_contains_thread = try std.Thread.spawn(
+            .{},
+            dbContains,
+            .{ &db, &random, &total_action_count, maybe_max_actions },
+        );
         defer db_contains_thread.join();
 
         // Batch API
-        var batch_delete_range_thread = try std.Thread.spawn(.{}, batchDeleteRange, .{ &db, &random, &total_action_count, maybe_max_actions });
+        var batch_delete_range_thread = try std.Thread.spawn(
+            .{},
+            batchDeleteRange,
+            .{ &db, &random, &total_action_count, maybe_max_actions },
+        );
         defer batch_delete_range_thread.join();
     }
 }
@@ -149,7 +177,13 @@ fn dbDeleteFilesInRange(
             break :blk end_;
     };
 
-    try performDbAction("Delete Files in Range", RocksDb.deleteFilesInRange, .{ db, cf1, start, end }, count, max_actions);
+    try performDbAction(
+        "Delete Files in Range",
+        RocksDb.deleteFilesInRange,
+        .{ db, cf1, start, end },
+        count,
+        max_actions,
+    );
 }
 
 fn dbGetBytes(
