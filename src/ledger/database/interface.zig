@@ -290,7 +290,7 @@ pub const BytesRef = struct {
             switch (self) {
                 .allocator => |allocator| allocator.free(data),
                 .rocksdb => |func| func(@ptrCast(@constCast(data))),
-                .rc_slice => |allocator| sig.sync.RcSlice(u8).deinitPayload(data, allocator),
+                .rc_slice => |allocator| sig.sync.RcSlice(u8).fromPayload(data).deinit(allocator),
             }
         }
     };

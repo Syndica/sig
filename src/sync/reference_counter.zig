@@ -94,8 +94,95 @@ pub const ReferenceCounter = extern struct {
     }
 };
 
+/// A reference counted item that is only freed when the last
+/// reference is deinitialized.
+///
+/// See RcBase for lifetime requirements
+pub fn Rc(T: type) type {
+    return struct {
+        ptr: RcBase(T),
+
+        const Self = @This();
+        const Allocator = std.mem.Allocator;
+
+        pub fn create(allocator: Allocator) Allocator.Error!Self {
+            return .{ .ptr = try RcBase(T).alloc(allocator, 1) };
+        }
+
+        pub fn deinit(self: Self, allocator: Allocator) void {
+            self.ptr.deinit(allocator, 1);
+        }
+
+        pub fn acquire(self: Self) Self {
+            _ = self.ptr.acquire();
+            return self;
+        }
+
+        /// on the final release, returns the slice of bytes from
+        /// the initial allocation which need to be freed.
+        pub fn release(self: Self) ?[]align(RcBase(T).alignment) const u8 {
+            return self.ptr.release(1);
+        }
+
+        pub fn payload(self: Self) *T {
+            return @ptrCast(self.ptr.payload());
+        }
+
+        /// input must be the same pointer returned by `payload`
+        /// otherwise this function has undefined behavior
+        pub fn fromPayload(value: *const T) Self {
+            return .{ .ptr = RcBase(T).fromPayload(@ptrCast(value)) };
+        }
+    };
+}
+
 /// A reference counted slice that is only freed when the last
 /// reference is deinitialized.
+///
+/// See RcBase for lifetime requirements
+pub fn RcSlice(T: type) type {
+    return struct {
+        ptr: RcBase(T),
+        /// The number of T elements, *not* the number of bytes.
+        /// For the total number of allocated bytes, use `totalSize`
+        len: usize,
+
+        const Self = @This();
+        const Allocator = std.mem.Allocator;
+
+        pub fn alloc(allocator: Allocator, n: usize) Allocator.Error!Self {
+            return .{ .ptr = try RcBase(T).alloc(allocator, n), .len = n };
+        }
+
+        pub fn deinit(self: Self, allocator: Allocator) void {
+            self.ptr.deinit(allocator, self.len);
+        }
+
+        pub fn acquire(self: Self) Self {
+            _ = self.ptr.acquire();
+            return self;
+        }
+
+        /// on the final release, returns the slice of bytes from
+        /// the initial allocation which need to be freed.
+        pub fn release(self: Self) ?[]align(RcBase(T).alignment) const u8 {
+            return self.ptr.release(self.len);
+        }
+
+        pub fn payload(self: Self) []T {
+            return self.ptr.payload()[0..self.len];
+        }
+
+        /// input must be the exact original slice returned by `payload`
+        /// otherwise this function has undefined behavior
+        pub fn fromPayload(value: []const T) Self {
+            return .{ .ptr = RcBase(T).fromPayload(value.ptr), .len = value.len };
+        }
+    };
+}
+
+/// A reference counted pointer that can be composed for more
+/// specific reference counted types like Rc and RcSlice.
 ///
 /// The reference counter exists behind the pointer that is freed
 /// after checking the reference counter. To use this safely, you
@@ -107,15 +194,12 @@ pub const ReferenceCounter = extern struct {
 /// coincide with a guarantee that the item will never be acquired
 /// again. You may need some kind of synchronization mechanism to
 /// provide this guarantee.
-pub fn RcSlice(T: type) type {
+fn RcBase(T: type) type {
     return struct {
-        /// contains a reference counter followed by an array of T, as in:
+        /// points to a reference counter followed by a number of Ts, as in:
         ///    { ReferenceCounter, T, T, T, T, ..., T }
         /// To access the contained data, use the methods `refCount` or `payload`.
         ptr: [*]align(alignment) u8,
-        /// The number of T elements, *not* the number of bytes.
-        /// For the total number of allocated bytes, use `totalSize`
-        len: usize,
 
         const Self = @This();
         const Allocator = std.mem.Allocator;
@@ -128,26 +212,12 @@ pub fn RcSlice(T: type) type {
             const bytes = try allocator.alignedAlloc(u8, alignment, total_size);
 
             @as(*ReferenceCounter, @ptrCast(bytes.ptr)).* = .{};
-            return .{ .ptr = @alignCast(bytes.ptr), .len = n };
+            return .{ .ptr = @alignCast(bytes.ptr) };
         }
 
-        pub fn deinit(self: Self, allocator: Allocator) void {
-            if (self.refCount().release()) {
-                const total_size = totalSize(self.len) catch unreachable;
-                allocator.free(self.ptr[0..total_size]);
-            }
-        }
-
-        /// value must be the exact original slice returned by `payload`
-        /// otherwise this function has undefined behavior
-        pub fn deinitPayload(value: []const T, allocator: Allocator) void {
-            const value_ptr: [*]u8 = @constCast(@ptrCast(value.ptr));
-            const self = Self{
-                .ptr = @alignCast(value_ptr - reserved_space),
-                .len = value.len,
-            };
-
-            self.deinit(allocator);
+        /// pass the number of items that were originally allocated
+        pub fn deinit(self: Self, allocator: Allocator, n: usize) void {
+            if (self.release(n)) |to_free| allocator.free(to_free);
         }
 
         pub fn acquire(self: Self) Self {
@@ -155,9 +225,26 @@ pub fn RcSlice(T: type) type {
             return self;
         }
 
-        pub fn payload(self: Self) []T {
-            const ptr: [*]T = @ptrCast(self.ptr[reserved_space..]);
-            return ptr[0..self.len];
+        /// on the final release, returns the pointer to bytes from
+        /// the initial allocation which need to be freed. You must
+        /// pass the number of items that were originally allocated
+        pub fn release(self: Self, n: usize) ?[]align(alignment) const u8 {
+            if (self.refCount().release()) {
+                return self.ptr[0 .. totalSize(n) catch unreachable];
+            } else {
+                return null;
+            }
+        }
+
+        pub fn payload(self: Self) [*]T {
+            return @ptrCast(self.ptr[reserved_space..]);
+        }
+
+        /// input must be the same pointer returned by `payload`
+        /// otherwise this function has undefined behavior
+        pub fn fromPayload(value: [*]const T) RcBase(T) {
+            const value_ptr: [*]u8 = @constCast(@ptrCast(value));
+            return Self{ .ptr = @alignCast(value_ptr - reserved_space) };
         }
 
         fn refCount(self: Self) *ReferenceCounter {
