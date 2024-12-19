@@ -258,7 +258,7 @@ fn batchDeleteRange(
 
         const current_count = count.load(.monotonic);
         if ((current_count - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} db action\n", .{current_count});
+            std.debug.print("{d} Batch actions\n", .{current_count});
             last_print_msg_count = current_count;
         }
 
