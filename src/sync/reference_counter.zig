@@ -100,7 +100,7 @@ pub fn Rc(T: type) type {
 
         /// on the final release, returns the slice of bytes from
         /// the initial allocation which need to be freed.
-        pub fn release(self: Self) ?[]const u8 {
+        pub fn release(self: Self) ?[]align(RcBase(T).alignment) const u8 {
             return self.ptr.release(1);
         }
 
@@ -145,7 +145,7 @@ pub fn RcSlice(T: type) type {
 
         /// on the final release, returns the slice of bytes from
         /// the initial allocation which need to be freed.
-        pub fn release(self: Self) ?[]const u8 {
+        pub fn release(self: Self) ?[]align(RcBase(T).alignment) const u8 {
             return self.ptr.release(self.len);
         }
 
@@ -208,7 +208,7 @@ fn RcBase(T: type) type {
         /// on the final release, returns the pointer to bytes from
         /// the initial allocation which need to be freed. You must
         /// pass the number of items that were originally allocated
-        pub fn release(self: Self, n: usize) ?[]const u8 {
+        pub fn release(self: Self, n: usize) ?[]align(alignment) const u8 {
             if (self.refCount().release()) {
                 return self.ptr[0 .. totalSize(n) catch unreachable];
             } else {
