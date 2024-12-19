@@ -81,6 +81,9 @@ jobs:
           wget https://github.com/SimonKagstrom/kcov/releases/download/v42/kcov-amd64.tar.gz
           sudo tar xf kcov-amd64.tar.gz -C /
 
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+
       - name: run kcov
         run: |
           bash scripts/kcov_test.sh
