@@ -7,6 +7,7 @@ const Atomic = std.atomic.Value;
 
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
+const EpochContextManager = sig.adapter.EpochContextManager;
 const Histogram = sig.prometheus.Histogram;
 const Packet = sig.net.Packet;
 const Registry = sig.prometheus.Registry;
