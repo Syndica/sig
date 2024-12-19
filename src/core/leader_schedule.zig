@@ -24,7 +24,7 @@ pub const SlotLeaders = struct {
         getSlotLeader: fn (@TypeOf(state), Slot) ?Pubkey,
     ) SlotLeaders {
         return .{
-            .state = @alignCast(@ptrCast(state)),
+            .state = state,
             .getFn = struct {
                 fn genericFn(generic_state: *anyopaque, slot: Slot) ?Pubkey {
                     return getSlotLeader(@alignCast(@ptrCast(generic_state)), slot);
