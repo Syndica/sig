@@ -7,8 +7,6 @@ const sig = @import("../sig.zig");
 const config = @import("config.zig");
 const zstd = @import("zstd");
 
-const adapter = sig.adapter;
-
 const Allocator = std.mem.Allocator;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const AccountsDB = sig.accounts_db.AccountsDB;
@@ -34,7 +32,6 @@ const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 const SocketTag = sig.gossip.SocketTag;
 const GeyserWriter = sig.geyser.GeyserWriter;
-const ServiceManager = sig.utils.service_manager.ServiceManager;
 
 const getOrInitIdentity = sig.cmd.helpers.getOrInitIdentity;
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;

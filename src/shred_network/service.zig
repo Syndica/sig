@@ -10,7 +10,6 @@ const Random = std.rand.Random;
 const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
-const EpochSchedule = sig.core.EpochSchedule;
 const EpochContextManager = sig.adapter.EpochContextManager;
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger;
@@ -20,7 +19,6 @@ const RwMux = sig.sync.RwMux;
 const Registry = sig.prometheus.Registry;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
-const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
 const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;

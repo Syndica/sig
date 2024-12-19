@@ -14,8 +14,6 @@ const UdpSocket = net.Socket;
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Duration = sig.time.Duration;
-const Epoch = sig.core.Epoch;
-const EpochSchedule = sig.core.EpochSchedule;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
 const Logger = sig.trace.log.Logger;
@@ -25,7 +23,6 @@ const RwMux = sig.sync.RwMux;
 const EpochContextManager = sig.adapter.EpochContextManager;
 const ShredId = sig.ledger.shred.ShredId;
 const Slot = sig.core.Slot;
-const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
 const ShredDeduper = shred_network.shred_deduper.ShredDeduper;
