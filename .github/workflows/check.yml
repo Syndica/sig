@@ -80,9 +80,12 @@ jobs:
         run: |
           wget https://github.com/SimonKagstrom/kcov/releases/download/v42/kcov-amd64.tar.gz
           sudo tar xf kcov-amd64.tar.gz -C /
-
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
+      
+      - name: fix kcov dependencies
+        run: |
+          cd /usr/lib/x86_64-linux-gnu/
+          sudo ln libopcodes-2.42-system.so libopcodes-2.38-system.so || echo libopcodes not found
+          sudo ln libbfd-2.42-system.so libbfd-2.38-system.so || echo libbfd not found
 
       - name: run kcov
         run: |
