@@ -151,3 +151,19 @@ pub const RpcVersionInfo = struct {
 };
 
 pub const Signature = []const u8;
+
+pub const GetVoteAccountsResponse = struct {
+    current: []const VoteAccount,
+    delinquent: []const VoteAccount,
+};
+
+pub const VoteAccount = struct {
+    votePubkey: sig.core.Pubkey,
+    nodePubkey: sig.core.Pubkey,
+    activatedStake: u64,
+    epochVoteAccount: bool,
+    commission: u8,
+    lastVote: u64,
+    epochCredits: []const [3]u64,
+    rootSlot: u64,
+};
