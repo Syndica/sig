@@ -486,6 +486,98 @@ pub fn orderSlices(
     return if (a.len == b.len) .eq else if (a.len > b.len) .gt else .lt;
 }
 
+pub fn Window(T: type) type {
+    return struct {
+        state: []?T,
+        center: usize,
+        offset: usize,
+
+        const Self = @This();
+
+        pub fn init(allocator: Allocator, len: usize, start: usize) !Self {
+            const state = try allocator.alloc(?T, len);
+            @memset(state, null);
+            return .{
+                .state = state,
+                .center = start,
+                .offset = len - (start % len),
+            };
+        }
+
+        pub fn deinit(self: Self, allocator: Allocator) void {
+            allocator.free(self.state);
+        }
+
+        pub fn put(self: *Self, index: usize, item: T) error{OutOfBounds}!?T {
+            if (!self.isInRange(index)) {
+                return error.OutOfBounds;
+            }
+            const ptr = self.getAssumed(index);
+            const old = ptr.*;
+            ptr.* = item;
+            return old;
+        }
+
+        pub fn get(self: *Self, index: usize) ?T {
+            return if (self.isInRange(index)) self.getAssumed(index).* else null;
+        }
+
+        pub fn contains(self: *Self, index: usize) bool {
+            return self.isInRange(index) and self.getAssumed(index).* != null;
+        }
+
+        pub fn realignGet(self: *Self, new_center: usize, deletion_buf: []?T) []?T {
+            return self.realignImpl(new_center, deletion_buf).?;
+        }
+
+        pub fn realign(self: *Self, new_center: usize) void {
+            _ = self.realignImpl(new_center, null);
+        }
+
+        fn realignImpl(self: *Self, new_center: usize, optional_deletion_buf: ?[]?T) ?[]?T {
+            var return_buf: ?[]?T = null;
+            if (self.center < new_center) {
+                const num_to_delete = @min(new_center - self.center, self.state.len);
+                const low = self.lowest();
+                return_buf = self.deleteRange(low, low + num_to_delete, optional_deletion_buf);
+            } else if (self.center > new_center) {
+                const num_to_delete = @min(self.center - new_center, self.state.len);
+                const top = self.highest() + 1;
+                return_buf = self.deleteRange(top - num_to_delete, top, optional_deletion_buf);
+            }
+            self.center = new_center;
+            return return_buf;
+        }
+
+        fn isInRange(self: *const Self, index: usize) bool {
+            return index <= self.highest() and index >= self.lowest();
+        }
+
+        fn highest(self: *const Self) usize {
+            return self.center + self.state.len / 2 - (self.state.len + 1) % 2;
+        }
+
+        fn lowest(self: *const Self) usize {
+            return self.center - self.state.len / 2;
+        }
+
+        fn getAssumed(self: *Self, index: usize) *?T {
+            return &self.state[(index + self.offset) % self.state.len];
+        }
+
+        fn deleteRange(self: *Self, start: usize, end: usize, optional_deletion_buf: ?[]?T) ?[]?T {
+            for (start..end, 0..) |in_index, out_index| {
+                const item = self.getAssumed(in_index);
+                if (optional_deletion_buf) |deletion_buf| {
+                    deletion_buf[out_index] = item.*;
+                }
+                item.* = null;
+            }
+            return if (optional_deletion_buf) |buf| buf[0 .. end - start] else null;
+        }
+    };
+}
+
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
@@ -654,4 +746,100 @@ test "binarySearch slice of slices" {
         BinarySearchResult{ .after = 1 },
         binarySearch([]const u8, &slices, &.{ 0, 0, 21 }, .any, order),
     );
+}
+
+test "Window starts empty" {
+    var mgr = try Window(u64).init(std.testing.allocator, 5, 7);
+    defer mgr.deinit(std.testing.allocator);
+    for (0..20) |i| {
+        try std.testing.expect(null == mgr.get(i));
+    }
+}
+
+test "Window populates and repopulates (odd)" {
+    var mgr = try Window(u64).init(std.testing.allocator, 5, 7);
+    defer mgr.deinit(std.testing.allocator);
+    for (0..20) |i| {
+        const result = mgr.put(i, i * 10);
+        if (i < 5 or i > 9) {
+            try std.testing.expectError(error.OutOfBounds, result);
+        } else {
+            try std.testing.expectEqual(null, try result);
+        }
+    }
+    for (0..20) |i| {
+        const result = mgr.put(i, i * 100);
+        if (i < 5 or i > 9) {
+            try std.testing.expectError(error.OutOfBounds, result);
+        } else {
+            try std.testing.expectEqual(i * 10, try result);
+        }
+    }
+    for (0..20) |i| {
+        const result = mgr.get(i);
+        if (i < 5 or i > 9) {
+            try std.testing.expectEqual(null, result);
+        } else {
+            try std.testing.expectEqual(i * 100, result);
+        }
+    }
+}
+
+test "Window populates (even)" {
+    var mgr = try Window(u64).init(std.testing.allocator, 4, 7);
+    defer mgr.deinit(std.testing.allocator);
+    for (0..20) |i| {
+        const result = mgr.put(i, i * 10);
+        if (i < 5 or i > 8) {
+            try std.testing.expectError(error.OutOfBounds, result);
+        } else {
+            try std.testing.expectEqual(null, try result);
+        }
+    }
+    for (0..20) |i| {
+        const result = mgr.get(i);
+        if (i < 5 or i > 8) {
+            try std.testing.expectEqual(null, result);
+        } else {
+            try std.testing.expectEqual(i * 10, result);
+        }
+    }
+}
+
+test "Window realigns" {
+    var mgr = try Window(u64).init(std.testing.allocator, 4, 7);
+    defer mgr.deinit(std.testing.allocator);
+    for (5..9) |i| {
+        _ = try mgr.put(i, i * 10);
+    }
+    var deletion_buf: [4]?u64 = undefined;
+
+    const deletion = mgr.realignGet(8, deletion_buf[0..]);
+    try std.testing.expectEqual(1, deletion.len);
+    try std.testing.expectEqual(50, deletion[0]);
+
+    const deletion2 = mgr.realignGet(6, deletion_buf[0..]);
+    try std.testing.expectEqual(2, deletion2.len);
+    try std.testing.expectEqual(80, deletion2[0]);
+    try std.testing.expectEqual(null, deletion2[1]);
+
+    for (0..20) |i| {
+        const result = mgr.get(i);
+        if (i < 6 or i > 7) {
+            try std.testing.expectEqual(null, result);
+        } else {
+            try std.testing.expectEqual(i * 10, result);
+        }
+    }
+
+    const deletion3 = mgr.realignGet(20, deletion_buf[0..]);
+    try std.testing.expectEqual(4, deletion3.len);
+    try std.testing.expectEqual(null, deletion3[0]);
+    try std.testing.expectEqual(null, deletion3[1]);
+    try std.testing.expectEqual(60, deletion3[2]);
+    try std.testing.expectEqual(70, deletion3[3]);
+
+    for (0..40) |i| {
+        try std.testing.expectEqual(null, mgr.get(i));
+    }
 }
