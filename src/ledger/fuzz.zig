@@ -8,10 +8,14 @@ var total_action_count: AtomicU64 = AtomicU64.init(0);
 
 const allocator = std.heap.c_allocator;
 
+const Data = struct {
+    value: []const u8,
+};
+
 const cf1 = ColumnFamily{
     .name = "data",
     .Key = u64,
-    .Value = []const u8,
+    .Value = Data,
 };
 const RocksDb = sig.ledger.database.RocksDB(&.{cf1});
 
@@ -84,6 +88,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         );
         defer db_get_bytes_thread.join();
 
+        var db_get_thread = try std.Thread.spawn(
+            .{},
+            dbGet,
+            .{ &db, &random, &total_action_count, maybe_max_actions },
+        );
+        defer db_get_thread.join();
+
         var db_count_thread = try std.Thread.spawn(
             .{},
             dbCount,
@@ -149,7 +160,7 @@ fn dbPut(
         buffer[i] = @intCast(random.int(u8));
     }
     const value: []const u8 = buffer[0..];
-    try performDbAction("Put", RocksDb.put, .{ db, cf1, (key + 1), value }, count, max_actions);
+    try performDbAction("Put", RocksDb.put, .{ db, cf1, (key + 1), Data{ .value = value } }, count, max_actions);
 }
 
 fn dbDelete(
@@ -194,6 +205,16 @@ fn dbGetBytes(
 ) !void {
     const key = random.int(u32);
     try performDbAction("getBytes", RocksDb.getBytes, .{ db, cf1, key }, count, max_actions);
+}
+
+fn dbGet(
+    db: *RocksDb,
+    random: *const std.rand.Random,
+    count: *std.atomic.Value(u64),
+    max_actions: ?usize,
+) !void {
+    const key = random.int(u32);
+    try performDbAction("get", RocksDb.get, .{ db, allocator, cf1, key }, count, max_actions);
 }
 
 fn dbCount(
@@ -251,7 +272,7 @@ fn batchDeleteRange(
         var batch = try db.initWriteBatch();
         defer batch.deinit();
 
-        try batch.put(cf1, key, value);
+        try batch.put(cf1, key, Data{ .value = value });
         try batch.deleteRange(cf1, start, end);
         try batch.delete(cf1, key);
         try db.commit(&batch);
