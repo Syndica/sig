@@ -765,9 +765,6 @@ fn validator() !void {
         errdefer schedule.deinit();
         try leader_schedule_cache.put(loaded_snapshot.collapsed_manifest.bank_fields.epoch, schedule);
     }
-    // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
-    // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
-    const leader_provider = leader_schedule_cache.slotLeaders();
 
     // blockstore
     var blockstore_db = try sig.ledger.BlockstoreDB.open(
@@ -817,6 +814,28 @@ fn validator() !void {
 
     // shred networking
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+
+    const epoch_schedule = loaded_snapshot.collapsed_manifest.bank_fields.epoch_schedule;
+    const epoch = loaded_snapshot.collapsed_manifest.bank_fields.epoch;
+    const staked_nodes = try loaded_snapshot.collapsed_manifest.bank_fields.getStakedNodes(allocator, epoch);
+
+    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
+    try epoch_context_manager.put(epoch, .{
+        .staked_nodes = try staked_nodes.clone(allocator),
+        .leader_schedule = try LeaderSchedule
+            .fromStakedNodes(allocator, epoch, epoch_schedule.slots_per_epoch, staked_nodes),
+    });
+    var rpc_client = sig.rpc.Client.init(allocator, loaded_snapshot.genesis_config.cluster_type, .{});
+    defer rpc_client.deinit();
+    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
+        .init(allocator, app_base.logger.unscoped(), &epoch_context_manager, rpc_client);
+    const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
+        .{},
+        sig.adapter.RpcEpochContextService.run,
+        .{ &rpc_epoch_ctx_service, &app_base.exit },
+    );
+
+    // shred collector
     var shred_col_conf = config.current.shred_network;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse loaded_snapshot.collapsed_manifest.bank_fields.slot;
     var shred_network_manager = try sig.shred_network.start(
@@ -830,17 +849,16 @@ fn validator() !void {
             .exit = &app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .leader_schedule = leader_provider,
+            .epoch_context_mgr = &epoch_context_manager,
             .shred_inserter = shred_inserter,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = config.current.turbine.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
-            .leader_schedule_cache = &leader_schedule_cache,
-            .bank_fields = &loaded_snapshot.collapsed_manifest.bank_fields,
         },
     );
     defer shred_network_manager.deinit();
 
+    rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
 }
@@ -852,6 +870,13 @@ fn shredCollector() !void {
         if (!app_base.closed) app_base.shutdown();
         app_base.deinit();
     }
+
+    const genesis_path = try config.current.genesisFilePath() orelse
+        return error.GenesisPathNotProvided;
+    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
+
+    var rpc_client = sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
+    defer rpc_client.deinit();
 
     const repair_port: u16 = config.current.shred_network.repair_port;
     const turbine_recv_port: u16 = config.current.shred_network.turbine_recv_port;
@@ -866,26 +891,15 @@ fn shredCollector() !void {
         allocator.destroy(gossip_service);
     }
 
-    var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
-        .gossip_service = gossip_service,
-        .geyser_writer = null,
-        .validate_snapshot = true,
-        .metadata_only = config.current.accounts_db.snapshot_metadata_only,
-    });
-    defer loaded_snapshot.deinit();
-
-    // leader schedule
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, loaded_snapshot.collapsed_manifest.bank_fields.epoch_schedule);
-    if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
-        try leader_schedule_cache.put(loaded_snapshot.collapsed_manifest.bank_fields.epoch, leader_schedule[1]);
-    } else {
-        const schedule = try loaded_snapshot.collapsed_manifest.bank_fields.leaderSchedule(allocator);
-        errdefer schedule.deinit();
-        try leader_schedule_cache.put(loaded_snapshot.collapsed_manifest.bank_fields.epoch, schedule);
-    }
-    // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
-    // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
-    const leader_provider = leader_schedule_cache.slotLeaders();
+    var epoch_context_manager = try sig.adapter.EpochContextManager
+        .init(allocator, genesis_config.epoch_schedule);
+    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
+        .init(allocator, app_base.logger.unscoped(), &epoch_context_manager, rpc_client);
+    const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
+        .{},
+        sig.adapter.RpcEpochContextService.run,
+        .{ &rpc_epoch_ctx_service, &app_base.exit },
+    );
 
     // blockstore
     var blockstore_db = try sig.ledger.BlockstoreDB.open(
@@ -936,7 +950,10 @@ fn shredCollector() !void {
 
     // shred networking
     var shred_col_conf = config.current.shred_network;
-    shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
+    shred_col_conf.start_slot = shred_col_conf.start_slot orelse blk: {
+        const response = try rpc_client.getSlot(allocator, .{});
+        break :blk try response.result();
+    };
     var shred_network_manager = try sig.shred_network.start(
         shred_col_conf,
         .{
@@ -948,17 +965,16 @@ fn shredCollector() !void {
             .exit = &app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .leader_schedule = leader_provider,
+            .epoch_context_mgr = &epoch_context_manager,
             .shred_inserter = shred_inserter,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = config.current.turbine.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
-            .leader_schedule_cache = &leader_schedule_cache,
-            .bank_fields = &loaded_snapshot.collapsed_manifest.bank_fields,
         },
     );
     defer shred_network_manager.deinit();
 
+    rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
 }
