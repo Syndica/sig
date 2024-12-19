@@ -149,6 +149,8 @@ pub const GossipService = struct {
     closed: bool,
 
     /// communication between threads
+    pipe_incoming: ?socket_utils.SocketPipe,
+    pipe_outgoing: ?socket_utils.SocketPipe,
     packet_incoming_channel: *Channel(Packet),
     packet_outgoing_channel: *Channel(Packet),
     verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
@@ -289,6 +291,8 @@ pub const GossipService = struct {
             .my_pubkey = my_pubkey,
             .my_shred_version = Atomic(u16).init(my_shred_version),
             .gossip_socket = gossip_socket,
+            .pipe_incoming = null,
+            .pipe_outgoing = null,
             .packet_incoming_channel = packet_incoming_channel,
             .packet_outgoing_channel = packet_outgoing_channel,
             .verified_incoming_channel = verified_incoming_channel,
@@ -324,6 +328,10 @@ pub const GossipService = struct {
 
         // wait for all threads to shutdown correctly
         self.service_manager.deinit();
+
+        // stop piping data to & from the gossip_socket and the channels
+        if (self.pipe_incoming) |*pipe| pipe.deinit(self.allocator);
+        if (self.pipe_outgoing) |*pipe| pipe.deinit(self.allocator);
 
         // assert the channels are empty in order to make sure no data was lost.
         // everything should be cleaned up when the thread-pool joins.
@@ -394,12 +402,14 @@ pub const GossipService = struct {
             },
         };
 
-        try self.service_manager.spawn("[gossip] readSocket", socket_utils.readSocket, .{
+        std.debug.assert(self.pipe_incoming == null);
+        self.pipe_incoming = try socket_utils.SocketPipe.initReceiver(
+            self.allocator,
+            self.logger.unscoped(),
             self.gossip_socket,
             self.packet_incoming_channel,
-            self.logger.unscoped(),
             exit_condition,
-        });
+        );
         exit_condition.ordered.exit_index += 1;
 
         try self.service_manager.spawn("[gossip] verifyPackets", verifyPackets, .{
@@ -424,12 +434,14 @@ pub const GossipService = struct {
             exit_condition.ordered.exit_index += 1;
         }
 
-        try self.service_manager.spawn("[gossip] sendSocket", socket_utils.sendSocket, .{
+        std.debug.assert(self.pipe_outgoing == null);
+        self.pipe_outgoing = try socket_utils.SocketPipe.initReceiver(
+            self.allocator,
+            self.logger.unscoped(),
             self.gossip_socket,
             self.packet_outgoing_channel,
-            self.logger.unscoped(),
             exit_condition,
-        });
+        );
         exit_condition.ordered.exit_index += 1;
 
         if (params.dump) {
