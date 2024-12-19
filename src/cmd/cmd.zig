@@ -767,7 +767,7 @@ fn validator() !void {
     }
     // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
     // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
-    const leader_provider = leader_schedule_cache.slotLeaderProvider();
+    const leader_provider = leader_schedule_cache.slotLeaders();
 
     // blockstore
     var blockstore_db = try sig.ledger.BlockstoreDB.open(
@@ -885,7 +885,7 @@ fn shredCollector() !void {
     }
     // This provider will fail at epoch boundary unless another thread updated the leader schedule cache
     // i.e. called leader_schedule_cache.getSlotLeaderMaybeCompute(slot, bank_fields);
-    const leader_provider = leader_schedule_cache.slotLeaderProvider();
+    const leader_provider = leader_schedule_cache.slotLeaders();
 
     // blockstore
     var blockstore_db = try sig.ledger.BlockstoreDB.open(

@@ -19,7 +19,7 @@ const RwMux = sig.sync.RwMux;
 const Registry = sig.prometheus.Registry;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
-const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
+const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 
 const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
@@ -52,7 +52,7 @@ pub const ShredCollectorDependencies = struct {
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
     my_contact_info: ThreadSafeContactInfo,
-    leader_schedule: SlotLeaderProvider,
+    leader_schedule: SlotLeaders,
     shred_inserter: sig.ledger.ShredInserter,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,

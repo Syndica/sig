@@ -23,7 +23,7 @@ const CodeShred = ledger.shred.CodeShred;
 const DataShred = ledger.shred.DataShred;
 const ReedSolomonCache = lib.recovery.ReedSolomonCache;
 const ShredId = ledger.shred.ShredId;
-const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
+const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SortedSet = sig.utils.collections.SortedSet;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
@@ -145,7 +145,7 @@ pub const ShredInserter = struct {
         self: *Self,
         shreds: []const Shred,
         is_repaired: []const bool,
-        leader_schedule: ?SlotLeaderProvider,
+        maybe_slot_leaders: ?SlotLeaders,
         is_trusted: bool,
         retransmit_sender: ?PointerClosure([]const []const u8, void),
     ) !InsertShredsResult {
@@ -195,7 +195,7 @@ pub const ShredInserter = struct {
                         merkle_root_validator,
                         write_batch,
                         is_trusted,
-                        leader_schedule,
+                        maybe_slot_leaders,
                         shred_source,
                     )) |completed_data_sets| {
                         if (is_repair) {
@@ -239,7 +239,7 @@ pub const ShredInserter = struct {
         var shred_recovery_timer = try Timer.start();
         var valid_recovered_shreds = ArrayList([]const u8).init(allocator);
         defer valid_recovered_shreds.deinit();
-        if (leader_schedule) |slot_leader_provider| {
+        if (maybe_slot_leaders) |slot_leaders| {
             var reed_solomon_cache = try ReedSolomonCache.init(allocator);
             defer reed_solomon_cache.deinit();
             const recovered_shreds = try self.tryShredRecovery(
@@ -259,7 +259,7 @@ pub const ShredInserter = struct {
                 if (shred == .data) {
                     self.metrics.num_recovered.inc();
                 }
-                const leader = slot_leader_provider.call(shred.commonHeader().slot);
+                const leader = slot_leaders.get(shred.commonHeader().slot);
                 if (leader == null) {
                     continue;
                 }
@@ -280,7 +280,7 @@ pub const ShredInserter = struct {
                     merkle_root_validator,
                     write_batch,
                     is_trusted,
-                    leader_schedule,
+                    maybe_slot_leaders,
                     .recovered,
                 )) |completed_data_sets| {
                     defer completed_data_sets.deinit();
@@ -590,7 +590,7 @@ pub const ShredInserter = struct {
         merkle_root_validator: MerkleRootValidator,
         write_batch: *WriteBatch,
         is_trusted: bool,
-        leader_schedule: ?SlotLeaderProvider,
+        leader_schedule: ?SlotLeaders,
         shred_source: ShredSource,
     ) !ArrayList(CompletedDataSetInfo) {
         const slot = shred.common.slot;
@@ -708,7 +708,7 @@ pub const ShredInserter = struct {
         slot_meta: *const SlotMeta,
         shred_store: ShredWorkingStore,
         max_root: Slot,
-        leader_schedule: ?SlotLeaderProvider,
+        leader_schedule: ?SlotLeaders,
         shred_source: ShredSource,
         duplicate_shreds: *ArrayList(PossibleDuplicateShred),
     ) !bool {
@@ -975,8 +975,8 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
     return root <= parent and parent < slot;
 }
 
-fn slotLeader(provider: ?SlotLeaderProvider, slot: Slot) ?Pubkey {
-    return if (provider) |p| if (p.call(slot)) |l| l else null else null;
+fn slotLeader(provider: ?SlotLeaders, slot: Slot) ?Pubkey {
+    return if (provider) |p| if (p.get(slot)) |l| l else null else null;
 }
 
 /// update_slot_meta
@@ -1486,7 +1486,7 @@ test "recovery" {
     const data_shreds = shreds[0..34];
     const code_shreds = shreds[34..68];
 
-    var leader_schedule = OneSlotLeaderProvider{
+    var leader_schedule = OneSlotLeaders{
         .leader = try Pubkey.fromString("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
     };
 
@@ -1512,15 +1512,15 @@ test "recovery" {
     // TODO: verify index integrity
 }
 
-const OneSlotLeaderProvider = struct {
+const OneSlotLeaders = struct {
     leader: Pubkey,
 
-    fn getLeader(self: *OneSlotLeaderProvider, _: Slot) ?Pubkey {
+    fn getLeader(self: *OneSlotLeaders, _: Slot) ?Pubkey {
         return self.leader;
     }
 
-    fn provider(self: *OneSlotLeaderProvider) SlotLeaderProvider {
-        return SlotLeaderProvider.init(self, OneSlotLeaderProvider.getLeader);
+    fn provider(self: *OneSlotLeaders) SlotLeaders {
+        return SlotLeaders.init(self, OneSlotLeaders.getLeader);
     }
 };
 
