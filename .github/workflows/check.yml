@@ -76,6 +76,9 @@ jobs:
       - name: Set up dependencies
         run: sudo apt-get update
 
+      - name: Install libbinutils
+        run: sudo apt install libbinutils
+
       - name: install kcov
         run: |
           wget https://github.com/SimonKagstrom/kcov/releases/download/v42/kcov-amd64.tar.gz
