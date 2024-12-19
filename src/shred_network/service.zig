@@ -29,7 +29,6 @@ const RepairRequester = shred_network.repair_service.RepairRequester;
 const RepairService = shred_network.repair_service.RepairService;
 const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
 const ShredReceiverMetrics = shred_network.shred_receiver.ShredReceiverMetrics;
-const StakedNodes = shred_network.shred_retransmitter.StakedNodes;
 
 /// Settings which instruct the Shred Collector how to behave.
 pub const ShredCollectorConfig = struct {

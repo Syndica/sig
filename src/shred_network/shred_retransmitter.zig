@@ -247,47 +247,6 @@ fn dedupAndGroupShredsBySlot(
     return result;
 }
 
-/// interface to express a dependency on staked nodes
-pub const StakedNodes = struct {
-    state: *anyopaque,
-    getFn: *const fn (*anyopaque, Epoch) anyerror!*const NodeToStakeMap,
-    releaseFn: *const fn (*anyopaque, *const NodeToStakeMap) void,
-
-    pub const NodeToStakeMap = std.AutoArrayHashMapUnmanaged(Pubkey, u64);
-
-    pub fn init(
-        state: anytype,
-        getStakedNodes: fn (@TypeOf(state), Epoch) anyerror!*const NodeToStakeMap,
-        releasePointer: fn (@TypeOf(state), *const NodeToStakeMap) void,
-    ) StakedNodes {
-        return .{
-            .state = @alignCast(@ptrCast(state)),
-            .getFn = struct {
-                fn genericFn(
-                    generic_state: *anyopaque,
-                    epoch: Epoch,
-                ) anyerror!*const NodeToStakeMap {
-                    return getStakedNodes(@alignCast(@ptrCast(generic_state)), epoch);
-                }
-            }.genericFn,
-            .releaseFn = struct {
-                fn genericFn(generic_state: *anyopaque, ptr: *const NodeToStakeMap) void {
-                    return releasePointer(@alignCast(@ptrCast(generic_state)), ptr);
-                }
-            }.genericFn,
-        };
-    }
-
-    /// when done with the pointer, call release.
-    pub fn get(self: StakedNodes, epoch: Epoch) anyerror!*const NodeToStakeMap {
-        return try self.getFn(self.state, epoch);
-    }
-
-    pub fn release(self: StakedNodes, ptr: *const NodeToStakeMap) void {
-        return self.releaseFn(self.state, ptr);
-    }
-};
-
 /// Create and send retransmit info to the retransmit shred threads
 /// Retransmit info contains the slot leader, the shred_id, the shred_packet, and the turbine_tree
 fn createAndSendRetransmitInfo(
