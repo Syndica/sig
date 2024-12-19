@@ -72,6 +72,26 @@ pub const ReferenceCounter = extern struct {
         }
         return false;
     }
+
+    /// Checks that our resource still has references.
+    ///
+    /// Returns:
+    /// - true: there is at least 1 remaining reference
+    /// - false: there are no more references
+    pub fn isAlive(self: *Self) bool {
+        const current: State = @bitCast(self.state.load(.seq_cst));
+        return current.refs >= 1;
+    }
+
+    /// Resets a reference count representing a dead resource (rc=0) to one
+    /// representing an alive resource (rc=1).
+    pub fn reset(self: *Self) void {
+        const prior: State = @bitCast(self.state.load(.acquire));
+        if (prior.refs != 0) {
+            unreachable; // tried to reset alive reference counter
+        }
+        self.state.store(@bitCast(State{ .refs = 1 }), .release);
+    }
 };
 
 /// A reference counted item that is only freed when the last

@@ -22,6 +22,8 @@ pub const utils = @import("utils/lib.zig");
 pub const version = @import("version/version.zig");
 
 pub const VALIDATOR_DIR = "validator/";
+/// subdirectory of {VALIDATOR_DIR} which contains the accounts database
+pub const ACCOUNTS_DB_SUBDIR = "accounts_db/";
 /// persistent data used as test inputs
 pub const TEST_DATA_DIR = "data/test-data/";
 /// ephemeral state produced by tests
