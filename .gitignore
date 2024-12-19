@@ -10,6 +10,7 @@
 /kcov-output
 /results
 /validator
+/logs
 
 # desktop app config
 .DS_Store
