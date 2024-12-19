@@ -34,6 +34,7 @@ const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 const SocketTag = sig.gossip.SocketTag;
 const GeyserWriter = sig.geyser.GeyserWriter;
+const ServiceManager = sig.utils.service_manager.ServiceManager;
 
 const getOrInitIdentity = sig.cmd.helpers.getOrInitIdentity;
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
@@ -816,13 +817,25 @@ fn validator() !void {
     // shred networking
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
-    var retransmit_shred_channel = try sig.sync.Channel(sig.net.Packet).init(allocator);
-    defer retransmit_shred_channel.deinit();
+    const epoch_schedule = snapshot.bank.bank_fields.epoch_schedule;
+    const epoch = snapshot.bank.bank_fields.epoch;
+    const staked_nodes = try snapshot.bank.bank_fields.getStakedNodes(allocator, epoch);
 
-    var bank_staked_nodes = adapter.BankFieldsStakedNodes{
-        .allocator = allocator,
-        .bank_fields = snapshot.bank.bank_fields,
-    };
+    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
+    try epoch_context_manager.put(epoch, .{
+        .staked_nodes = try staked_nodes.clone(allocator),
+        .leader_schedule = try LeaderSchedule
+            .fromStakedNodes(allocator, epoch, epoch_schedule.slots_per_epoch, staked_nodes),
+    });
+    var rpc_client = sig.rpc.Client.init(allocator, snapshot.genesis_config.cluster_type, .{});
+    defer rpc_client.deinit();
+    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
+        .init(allocator, app_base.logger.unscoped(), &epoch_context_manager, rpc_client);
+    const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
+        .{},
+        sig.adapter.RpcEpochContextService.run,
+        .{ &rpc_epoch_ctx_service, &app_base.exit },
+    );
 
     // shred collector
     var shred_col_conf = config.current.shred_network;
@@ -838,9 +851,7 @@ fn validator() !void {
             .exit = &app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_schedule = snapshot.bank.bank_fields.epoch_schedule,
-            .staked_nodes = bank_staked_nodes.stakedNodes(),
-            .slot_leaders = leader_schedule_cache.slotLeaders(),
+            .epoch_context_mgr = &epoch_context_manager,
             .shred_inserter = shred_inserter,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = config.current.turbine.num_retransmit_threads,
@@ -849,6 +860,7 @@ fn validator() !void {
     );
     defer shred_network_manager.deinit();
 
+    rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
 }
@@ -881,12 +893,15 @@ fn shredCollector() !void {
         allocator.destroy(gossip_service);
     }
 
-    // leader schedule
-    var rpc_leaders = adapter.RpcSlotLeaders
-        .init(allocator, app_base.logger.unscoped(), genesis_config.epoch_schedule, rpc_client);
-
-    // staked nodes
-    var rpc_staked_nodes = try adapter.RpcStakedNodes.init(allocator, rpc_client);
+    var epoch_context_manager = try sig.adapter.EpochContextManager
+        .init(allocator, genesis_config.epoch_schedule);
+    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
+        .init(allocator, app_base.logger.unscoped(), &epoch_context_manager, rpc_client);
+    const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
+        .{},
+        sig.adapter.RpcEpochContextService.run,
+        .{ &rpc_epoch_ctx_service, &app_base.exit },
+    );
 
     // blockstore
     var blockstore_db = try sig.ledger.BlockstoreDB.open(
@@ -952,9 +967,7 @@ fn shredCollector() !void {
             .exit = &app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_schedule = genesis_config.epoch_schedule,
-            .staked_nodes = rpc_staked_nodes.stakedNodes(),
-            .slot_leaders = rpc_leaders.slotLeaders(),
+            .epoch_context_mgr = &epoch_context_manager,
             .shred_inserter = shred_inserter,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = config.current.turbine.num_retransmit_threads,
@@ -963,6 +976,7 @@ fn shredCollector() !void {
     );
     defer shred_network_manager.deinit();
 
+    rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
 }

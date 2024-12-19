@@ -7,126 +7,143 @@ const leader_schedule = sig.core.leader_schedule;
 
 const Allocator = std.mem.Allocator;
 
-pub const RpcSlotLeaders = struct {
+const Epoch = sig.core.Epoch;
+const EpochContext = sig.core.EpochContext;
+const EpochSchedule = sig.core.EpochSchedule;
+const Slot = sig.core.Slot;
+
+pub const EpochContextManager = struct {
+    schedule: sig.core.EpochSchedule,
+    contexts: ContextWindow,
+
+    const ContextWindow = sig.sync.SharedPointerWindow(
+        sig.core.EpochContext,
+        sig.core.EpochContext.deinit,
+        std.mem.Allocator,
+    );
+
+    const Self = @This();
+
+    /// all contexts that are `put` into this context manager must be
+    /// allocated using the same allocator passed here.
+    pub fn init(allocator: Allocator, schedule: EpochSchedule) Allocator.Error!Self {
+        return .{
+            .schedule = schedule,
+            .contexts = try ContextWindow.init(allocator, 3, 0, allocator),
+        };
+    }
+
+    pub fn deinit(self: Self) void {
+        self.contexts.deinit();
+    }
+
+    pub fn put(self: *Self, epoch: Epoch, context: sig.core.EpochContext) !void {
+        try self.contexts.put(epoch, context);
+    }
+
+    /// call `release` when done with pointer
+    pub fn get(self: *Self, epoch: Epoch) ?*const sig.core.EpochContext {
+        return self.contexts.get(@intCast(epoch));
+    }
+
+    pub fn contains(self: *Self, epoch: Epoch) bool {
+        return self.contexts.contains(@intCast(epoch));
+    }
+
+    pub fn setEpoch(self: *Self, epoch: Epoch) void {
+        self.contexts.realign(@intCast(epoch));
+    }
+
+    pub fn setSlot(self: *Self, slot: Slot) void {
+        self.contexts.realign(@intCast(self.schedule.getEpoch(slot)));
+    }
+
+    pub fn release(self: *Self, context: *const sig.core.EpochContext) void {
+        self.contexts.release(context);
+    }
+
+    pub fn getLeader(self: *Self, slot: Slot) ?sig.core.Pubkey {
+        const epoch, const slot_index = self.schedule.getEpochAndSlotIndex(slot);
+        const context = self.contexts.get(epoch) orelse return null;
+        defer self.contexts.release(context);
+        return context.leader_schedule[slot_index];
+    }
+
+    pub fn slotLeaders(self: *Self) sig.core.leader_schedule.SlotLeaders {
+        return sig.core.leader_schedule.SlotLeaders.init(self, getLeader);
+    }
+};
+
+pub const RpcEpochContextService = struct {
     allocator: std.mem.Allocator,
     logger: sig.trace.ScopedLogger(@typeName(Self)),
     rpc_client: sig.rpc.Client,
-    cache: leader_schedule.LeaderScheduleCache,
+    state: *EpochContextManager,
 
     const Self = @This();
 
     pub fn init(
         allocator: Allocator,
         logger: sig.trace.Logger,
-        epoch_schedule: sig.core.EpochSchedule,
+        state: *EpochContextManager,
         rpc_client: sig.rpc.Client,
     ) Self {
         return .{
             .allocator = allocator,
             .logger = logger.withScope(@typeName(Self)),
             .rpc_client = rpc_client,
-            .cache = leader_schedule.LeaderScheduleCache.init(allocator, epoch_schedule),
+            .state = state,
         };
     }
 
-    pub fn slotLeaders(self: *Self) leader_schedule.SlotLeaders {
-        return leader_schedule.SlotLeaders.init(self, get);
-    }
-
-    fn get(self: *Self, slot: sig.core.Slot) ?sig.core.Pubkey {
-        return self.getFallible(slot) catch |e| {
-            self.logger.err().logf("error getting leader for slot {} - {}", .{ slot, e });
-            return null;
-        };
-    }
-
-    fn getFallible(self: *Self, slot: sig.core.Slot) !?sig.core.Pubkey {
-        if (self.cache.slotLeader(slot)) |leader| {
-            return leader;
+    pub fn run(self: *Self, exit: *std.atomic.Value(bool)) void {
+        var i: usize = 0;
+        while (!exit.load(.monotonic)) {
+            if (i % 1000 == 0) {
+                self.refresh() catch |e| {
+                    self.logger.err().logf("failed to refresh epoch context via rpc: {}", .{e});
+                };
+            }
+            std.time.sleep(100 * std.time.ns_per_ms);
+            i += 1;
         }
+    }
 
+    fn refresh(self: *Self) !void {
+        const response = try self.rpc_client.getSlot(self.allocator, .{});
+        defer response.deinit();
+        const slot = try response.result() - self.state.schedule.slots_per_epoch;
+        const epoch = self.state.schedule.getEpoch(slot) - 1;
+
+        self.state.setEpoch(epoch);
+
+        const ls1 = try self.getLeaderSchedule(slot);
+        const ctx1 = EpochContext{ .staked_nodes = .{}, .leader_schedule = ls1 };
+        try self.state.put(epoch, ctx1);
+
+        for (0..3) |epoch_offset| {
+            const selected_slot = slot + epoch_offset * self.state.schedule.slots_per_epoch;
+            const selected_epoch = epoch + epoch_offset;
+            std.debug.assert(selected_epoch == self.state.schedule.getEpoch(selected_slot));
+
+            if (self.state.contains(selected_epoch)) {
+                continue;
+            }
+
+            if (self.getLeaderSchedule(selected_slot)) |ls2| {
+                const ctx2 = EpochContext{ .staked_nodes = .{}, .leader_schedule = ls2 };
+                try self.state.put(selected_epoch, ctx2);
+            } else |e| if (selected_epoch == epoch) {
+                return e;
+            }
+        }
+    }
+
+    fn getLeaderSchedule(self: *Self, slot: sig.core.Slot) ![]const sig.core.Pubkey {
         const response = try self.rpc_client.getLeaderSchedule(self.allocator, slot, .{});
         defer response.deinit();
         const rpc_schedule = try response.result();
         const schedule = try leader_schedule.LeaderSchedule.fromMap(self.allocator, rpc_schedule);
-
-        const epoch, const slot_index = self.cache.epoch_schedule.getEpochAndSlotIndex(slot);
-        const leader = schedule.slot_leaders[slot_index];
-        try self.cache.put(epoch, schedule);
-
-        return leader;
+        return schedule.slot_leaders;
     }
-};
-
-pub const RpcStakedNodes = struct {
-    allocator: std.mem.Allocator,
-    rpc_client: sig.rpc.Client,
-    cache: Cache,
-
-    const Self = @This();
-    const StakedNodes = sig.shred_network.shred_retransmitter.StakedNodes;
-    const NodeToStakeMap = StakedNodes.NodeToStakeMap;
-    const Cache = sig.utils.lru.SharedPointerLru(
-        sig.core.Epoch,
-        NodeToStakeMap,
-        Allocator,
-        NodeToStakeMap.deinit,
-    );
-
-    pub fn init(allocator: Allocator, rpc_client: sig.rpc.Client) !Self {
-        return .{
-            .allocator = allocator,
-            .rpc_client = rpc_client,
-            .cache = try Cache.init(allocator, 8, allocator),
-        };
-    }
-
-    pub fn stakedNodes(self: *Self) StakedNodes {
-        return StakedNodes.init(self, get, release);
-    }
-
-    fn get(self: *Self, epoch: sig.core.Epoch) anyerror!*const NodeToStakeMap {
-        if (self.cache.get(epoch)) |staked_nodes| {
-            return staked_nodes;
-        }
-
-        const response = try self.rpc_client.getVoteAccounts(self.allocator, .{});
-        defer response.deinit();
-        const response_inner = try response.result();
-        const all_vote_accounts = .{ response_inner.current, response_inner.delinquent };
-
-        var staked_nodes = std.AutoArrayHashMap(sig.core.Pubkey, u64).init(self.allocator);
-        errdefer staked_nodes.deinit();
-        inline for (all_vote_accounts) |vote_accounts| for (vote_accounts) |vote_account| {
-            const node_entry = try staked_nodes.getOrPut(vote_account.nodePubkey);
-            if (!node_entry.found_existing) {
-                node_entry.value_ptr.* = 0;
-            }
-            node_entry.value_ptr.* += vote_account.activatedStake;
-        };
-
-        return try self.cache.putGet(epoch, staked_nodes.unmanaged);
-    }
-
-    fn release(self: *Self, ptr: *const NodeToStakeMap) void {
-        self.cache.release(ptr);
-    }
-};
-
-pub const BankFieldsStakedNodes = struct {
-    allocator: std.mem.Allocator,
-    bank_fields: *const sig.accounts_db.snapshots.BankFields,
-
-    const Self = @This();
-    const StakedNodes = sig.shred_network.shred_retransmitter.StakedNodes;
-
-    pub fn stakedNodes(self: *Self) StakedNodes {
-        return StakedNodes.init(self, get, release);
-    }
-
-    fn get(self: *Self, epoch: sig.core.Epoch) anyerror!*const StakedNodes.NodeToStakeMap {
-        return try self.bank_fields.getStakedNodes(self.allocator, epoch);
-    }
-
-    fn release(_: *Self, _: *const StakedNodes.NodeToStakeMap) void {}
 };

@@ -1,8 +1,12 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
+
 const Allocator = std.mem.Allocator;
 const TailQueue = std.TailQueue;
 const testing = std.testing;
 const Mutex = std.Thread.Mutex;
+
+const normalizeDeinitFunction = sig.sync.normalizeDeinitFunction;
 
 pub const Kind = enum {
     locking,
@@ -283,134 +287,6 @@ pub fn LruCacheCustom(
             }
             return false;
         }
-    };
-}
-
-/// Thread safe Lru cache that stores a single copy of data that is shared with
-/// readers as a pointer to the underlying data inside the cache.
-///
-/// - the Lru owns the data and is responsible for freeing it
-/// - the lifetime of returned pointer exceeds every read operation of that pointer,
-///   even if another thread evicts it from the cache, as long as `release` is used properly.
-pub fn SharedPointerLru(
-    K: type,
-    V: type,
-    ValueDeinitContext: type,
-    deinitValue_: anytype,
-) type {
-    const deinitValue = normalizeDeinitFunction(V, ValueDeinitContext, deinitValue_);
-    return struct {
-        lru: Lru,
-        mutex: Mutex = .{},
-
-        const Self = @This();
-
-        const Lru = LruCacheCustom(
-            .non_locking,
-            K,
-            *Element,
-            ElementDeinitCtx,
-            Element.deinit,
-        );
-
-        const Element = struct {
-            value: V,
-            ref_count: usize,
-
-            fn deinit(self: *Element, ctx: ElementDeinitCtx) void {
-                self.ref_count -= 0;
-                if (self.ref_count == 0) {
-                    deinitValue(&self.value, ctx.value_ctx);
-                    ctx.allocator.destroy(self);
-                }
-            }
-        };
-
-        const ElementDeinitCtx = struct { allocator: Allocator, value_ctx: ValueDeinitContext };
-
-        pub fn init(
-            allocator: Allocator,
-            max_items: usize,
-            deinit_context: ValueDeinitContext,
-        ) !Self {
-            return .{ .lru = try Lru.initWithContext(allocator, max_items, .{
-                .allocator = allocator,
-                .value_ctx = deinit_context,
-            }) };
-        }
-
-        pub fn put(self: *Self, key: K, value: V) !void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            const ptr = try self.lru.allocator.create(Element);
-            ptr.* = .{ .value = value, .ref_count = 1 };
-            if (self.lru.put(key, ptr)) |old| old.deinit(self.lru.deinit_context);
-        }
-
-        pub fn putGet(self: *Self, key: K, value: V) !*V {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            const element = try self.lru.allocator.create(Element);
-            element.* = .{ .value = value, .ref_count = 2 };
-            if (self.lru.put(key, element)) |old| old.deinit(self.lru.deinit_context);
-
-            return &element.value;
-        }
-
-        /// call `release` when you're done with the pointer
-        pub fn get(self: *Self, key: K) ?*V {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            if (self.lru.get(key)) |element| {
-                element.ref_count += 1;
-                return &element.value;
-            } else {
-                return null;
-            }
-        }
-
-        pub fn release(self: *Self, ptr: *const V) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            // this is ok because it originated as a mutable pointer owned by this struct.
-            const mut_ptr: *V = @constCast(ptr);
-            const element: *Element = @fieldParentPtr("value", mut_ptr);
-            element.deinit(self.lru.deinit_context);
-        }
-    };
-}
-
-fn normalizeDeinitFunction(
-    V: type,
-    DeinitContext: type,
-    deinitFn: anytype,
-) fn (*V, DeinitContext) void {
-    return switch (@TypeOf(deinitFn)) {
-        fn (*V, DeinitContext) void => deinitFn,
-
-        fn (V, DeinitContext) void => struct {
-            fn f(v: *V, ctx: DeinitContext) void {
-                deinitFn(v.*, ctx);
-            }
-        }.f,
-
-        fn (V) void => struct {
-            fn f(v: *V, _: DeinitContext) void {
-                V.deinit(v.*);
-            }
-        }.f,
-
-        fn (*V) void => struct {
-            fn f(v: *V, _: DeinitContext) void {
-                V.deinit(v);
-            }
-        }.f,
-
-        else => @compileError("unsupported deinit function type"),
     };
 }
 

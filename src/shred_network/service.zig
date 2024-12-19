@@ -11,6 +11,7 @@ const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
 const EpochSchedule = sig.core.EpochSchedule;
+const EpochContextManager = sig.adapter.EpochContextManager;
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
@@ -53,9 +54,7 @@ pub const ShredCollectorDependencies = struct {
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
     my_contact_info: ThreadSafeContactInfo,
-    epoch_schedule: EpochSchedule,
-    staked_nodes: StakedNodes,
-    slot_leaders: SlotLeaders,
+    epoch_context_mgr: *EpochContextManager,
     shred_inserter: sig.ledger.ShredInserter,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
@@ -122,7 +121,7 @@ pub fn start(
             unverified_shred_channel,
             verified_shred_channel,
             &retransmit_channel,
-            deps.slot_leaders,
+            deps.epoch_context_mgr.slotLeaders(),
         },
     );
 
@@ -146,7 +145,7 @@ pub fn start(
             verified_shred_channel,
             shred_tracker,
             deps.shred_inserter,
-            deps.slot_leaders,
+            deps.epoch_context_mgr.slotLeaders(),
         },
     );
 
@@ -157,9 +156,7 @@ pub fn start(
         .{.{
             .allocator = deps.allocator,
             .my_contact_info = deps.my_contact_info,
-            .epoch_schedule = deps.epoch_schedule,
-            .staked_nodes = deps.staked_nodes,
-            .slot_leaders = deps.slot_leaders,
+            .epoch_context_mgr = deps.epoch_context_mgr,
             .gossip_table_rw = deps.gossip_table_rw,
             .receiver = &retransmit_channel,
             .maybe_num_retransmit_threads = deps.n_retransmit_threads,

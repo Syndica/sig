@@ -22,6 +22,7 @@ const Logger = sig.trace.log.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
+const EpochContextManager = sig.adapter.EpochContextManager;
 const ShredId = sig.ledger.shred.ShredId;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
@@ -49,9 +50,7 @@ const DEDUPER_NUM_BITS: u64 = 637_534_199;
 pub fn runShredRetransmitter(params: struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
-    epoch_schedule: EpochSchedule,
-    staked_nodes: StakedNodes,
-    slot_leaders: SlotLeaders,
+    epoch_context_mgr: *EpochContextManager,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     receiver: *Channel(Packet),
     maybe_num_retransmit_threads: ?usize,
@@ -91,9 +90,7 @@ pub fn runShredRetransmitter(params: struct {
         .{
             params.allocator,
             params.my_contact_info,
-            params.epoch_schedule,
-            params.staked_nodes,
-            params.slot_leaders,
+            params.epoch_context_mgr,
             params.receiver,
             &receive_to_retransmit_channel,
             params.gossip_table_rw,
@@ -138,9 +135,7 @@ pub fn runShredRetransmitter(params: struct {
 fn receiveShreds(
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
-    epoch_schedule: EpochSchedule,
-    staked_nodes: StakedNodes,
-    slot_leaders: SlotLeaders,
+    epoch_context_mgr: *EpochContextManager,
     receiver: *Channel(Packet),
     sender: *Channel(RetransmitShredInfo),
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
@@ -199,9 +194,7 @@ fn receiveShreds(
                 allocator,
                 grouped_shreds,
                 my_contact_info,
-                epoch_schedule,
-                staked_nodes,
-                slot_leaders,
+                epoch_context_mgr,
                 gossip_table_rw,
                 &turbine_tree_cache,
                 sender,
@@ -301,9 +294,7 @@ fn createAndSendRetransmitInfo(
     allocator: std.mem.Allocator,
     shreds: std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)),
     my_contact_info: ThreadSafeContactInfo,
-    epoch_schedule: EpochSchedule,
-    staked_nodes: StakedNodes,
-    slot_leaders: SlotLeaders,
+    epoch_context_mgr: *EpochContextManager,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     turbine_tree_cache: *TurbineTreeCache,
     retransmit_shred_sender: *Channel(RetransmitShredInfo),
@@ -312,10 +303,12 @@ fn createAndSendRetransmitInfo(
 ) !void {
     var create_and_send_retransmit_info_timer = try sig.time.Timer.start();
     for (shreds.keys(), shreds.values()) |slot, slot_shreds| {
-        const epoch, _ = epoch_schedule.getEpochAndSlotIndex(slot);
+        const epoch, const slot_index = epoch_context_mgr.schedule.getEpochAndSlotIndex(slot);
+        const epoch_context = epoch_context_mgr.get(epoch) orelse continue;
+        defer epoch_context_mgr.release(epoch_context);
 
         var get_slot_leader_timer = try sig.time.Timer.start();
-        const slot_leader = slot_leaders.get(slot) orelse return error.NoLeaderSchedule;
+        const slot_leader = epoch_context.leader_schedule[slot_index];
         metrics.get_slot_leader_nanos.observe(get_slot_leader_timer.read().asNanos());
 
         var get_turbine_tree_timer = try sig.time.Timer.start();
@@ -325,7 +318,7 @@ fn createAndSendRetransmitInfo(
                 allocator,
                 my_contact_info,
                 gossip_table_rw,
-                try staked_nodes.get(epoch),
+                &epoch_context.staked_nodes,
                 overwrite_stake_for_testing,
             );
             try turbine_tree_cache.put(epoch, turbine_tree);
