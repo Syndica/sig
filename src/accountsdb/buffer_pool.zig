@@ -839,6 +839,56 @@ pub const CachedRead = struct {
         }
     }
 
+    /// Requires that all the wanted data is within one frame. Length must be under FRAME_SIZE.
+    ///
+    /// Returns error.StridedBorrow when multiple frame accesses would be required.
+    pub fn borrowSlice(
+        self: CachedRead,
+        file_start_offset: FileOffset,
+        length: FileOffset,
+    ) error{StridedBorrow}![]u8 {
+        if (length > FRAME_SIZE) return error.StridedBorrow;
+        if (length == 0) return &.{};
+        const start_offset = file_start_offset + self.first_frame_start_offset;
+
+        const end_offset = start_offset + length;
+
+        const start_frame_offset: FrameOffset = @intCast(start_offset % FRAME_SIZE);
+        const end_frame_offset: FrameOffset = @intCast(end_offset % FRAME_SIZE);
+
+        // => end is in a different frame to the start
+        if (start_frame_offset > end_frame_offset) return error.StridedBorrow;
+
+        return self.buffer_pool.frames[
+            self.frame_indices[start_offset / FRAME_SIZE]
+        ][start_frame_offset..][0..length];
+    }
+
+    /// Requires that all the wanted data is within one frame. Length must be under FRAME_SIZE.
+    ///
+    /// Returns error.StridedBorrow when multiple frame accesses would be required.
+    pub fn borrowSlice(
+        self: CachedRead,
+        file_start_offset: FileOffset,
+        length: FileOffset,
+    ) error{StridedBorrow}![]u8 {
+        if (length > FRAME_SIZE) return error.StridedBorrow;
+        if (length == 0) return &.{};
+        const start_offset = file_start_offset + self.first_frame_start_offset;
+
+        const end_offset = start_offset + length;
+
+        const start_frame_offset: FrameOffset = @intCast(start_offset % FRAME_SIZE);
+        const end_frame_offset: FrameOffset = @intCast(end_offset % FRAME_SIZE);
+
+        // => end is in a different frame to the start
+        if (start_frame_offset > end_frame_offset) return error.StridedBorrow;
+
+        return self.buffer_pool.frames[
+            self.frame_indices[start_offset / FRAME_SIZE]
+        ][start_frame_offset..][0..length];
+    }
+
     pub fn iterator(self: *const CachedRead) Iterator {
         return .{ .cached_read = self };
     }
@@ -1056,6 +1106,60 @@ test "BufferPool allocation sizes" {
     // is 50 bytes or ~9% of memory usage at a frame size of 512, or 50MB for a
     // million frames.
     try std.testing.expect((total_requested_bytes / frame_count) - 512 <= 64);
+}
+
+test "BufferPool CachedRead borrow slice" {
+    const allocator = std.testing.allocator;
+
+    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    defer file.close();
+    const file_id = FileId.fromInt(1);
+
+    const num_frames = 200;
+
+    const file_size = (try file.stat()).size;
+    if (file_size < FRAME_SIZE * num_frames) @panic("file too small for valid test");
+
+    var bp = try BufferPool.init(std.heap.page_allocator, num_frames);
+    defer bp.deinit(std.heap.page_allocator);
+
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const read = try bp.read(
+        allocator,
+        file,
+        file_id,
+        0,
+        1000,
+    );
+    defer read.deinit(allocator);
+
+    var slices_read: usize = 0;
+    while (slices_read < 5000) : (slices_read += 1) {
+        const start_offset = prng.random().intRangeAtMost(FileOffset, 0, 1000);
+        const length = prng.random().intRangeAtMost(FileOffset, 0, 1000 - start_offset);
+
+        errdefer std.debug.print(
+            "failed on case(reads={}): file[{}..][0..{}]",
+            .{ slices_read, start_offset, length },
+        );
+
+        var expected_error: ?anyerror = null;
+        if (length > FRAME_SIZE) expected_error = error.StridedBorrow;
+        if (start_offset < FRAME_SIZE and start_offset + length >= FRAME_SIZE) {
+            expected_error = error.StridedBorrow;
+        }
+
+        const borrowed_slice = read.borrowSlice(start_offset, length) catch |err| {
+            try std.testing.expectEqual(expected_error.?, err);
+            continue;
+        };
+
+        var buf: Frame = undefined;
+        const file_slice = buf[0..@min(try file.preadAll(&buf, start_offset), length)];
+
+        try std.testing.expectEqualSlices(u8, file_slice, borrowed_slice);
+    }
 }
 
 test "BufferPool filesize > frame_size * num_frames" {
