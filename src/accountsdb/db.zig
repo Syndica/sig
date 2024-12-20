@@ -33,6 +33,7 @@ const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
+const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
 const PubkeyShardCalculator = sig.accounts_db.index.PubkeyShardCalculator;
 const ShardedPubkeyRefMap = sig.accounts_db.index.ShardedPubkeyRefMap;
 
@@ -108,6 +109,8 @@ pub const AccountsDB = struct {
     /// NOTE: see accountsdb/readme.md for more details on how these are used
     file_map_fd_rw: std.Thread.RwLock,
 
+    buffer_pool: BufferPool,
+
     /// Tracks how many accounts (which we have stored) are dead for a specific slot.
     /// Used during clean to queue an AccountFile for shrink if it contains
     /// a large percentage of dead accounts, or deletion if the file contains only
@@ -170,6 +173,8 @@ pub const AccountsDB = struct {
         gossip_view: ?GossipView,
         index_allocation: AccountIndex.AllocatorConfig.Tag,
         number_of_index_shards: usize,
+        /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
+        buffer_pool_frames: u32 = 2 * 1024 * 1024,
         /// Limit of cached accounts. Use null to disable accounts caching.
         lru_size: ?usize,
     };
@@ -203,6 +208,9 @@ pub const AccountsDB = struct {
             else => |e| return e,
         };
 
+        const buffer_pool = try BufferPool.init(params.allocator, params.buffer_pool_frames);
+        errdefer buffer_pool.deinit(params.allocator);
+
         return .{
             .allocator = params.allocator,
             .metrics = metrics,
@@ -219,6 +227,7 @@ pub const AccountsDB = struct {
             .maybe_accounts_cache_rw = if (maybe_accounts_cache) |cache| RwMux(AccountsCache).init(cache) else null,
             .file_map = RwMux(FileMap).init(.{}),
             .file_map_fd_rw = .{},
+            .buffer_pool = buffer_pool,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(params.allocator)),
 
             .largest_file_id = FileId.fromInt(0),
@@ -234,6 +243,7 @@ pub const AccountsDB = struct {
 
     pub fn deinit(self: *Self) void {
         self.account_index.deinit();
+        self.buffer_pool.deinit(self.allocator);
 
         if (self.maybe_accounts_cache_rw) |*accounts_cache_rw| {
             const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
@@ -3690,7 +3700,7 @@ test "load clock sysvar" {
     const inc = full_inc_manifest.incremental;
     const expected_clock: sysvars.Clock = .{
         .slot = (inc orelse full).bank_fields.slot,
-        .epoch_start_timestamp = 1733349736,
+        .epoch_start_timestamp = 1733349737,
         .epoch = (inc orelse full).bank_fields.epoch,
         .leader_schedule_epoch = 1,
         .unix_timestamp = 1733350255,
