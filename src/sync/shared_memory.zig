@@ -69,7 +69,7 @@ pub fn SharedPointerWindow(
         /// call `release` when you're done with the pointer
         pub fn get(self: *Self, index: usize) ?*const T {
             self.lock.lockShared();
-            defer self.lock.lockShared();
+            defer self.lock.unlockShared();
 
             if (self.window.get(index)) |element| {
                 return element.acquire().payload();
@@ -81,7 +81,7 @@ pub fn SharedPointerWindow(
         /// call `release` when you're done with the pointer
         pub fn contains(self: *Self, index: usize) bool {
             self.lock.lockShared();
-            defer self.lock.lockShared();
+            defer self.lock.unlockShared();
 
             return self.window.contains(index);
         }
@@ -91,7 +91,7 @@ pub fn SharedPointerWindow(
 
             const items_to_release = blk: {
                 self.lock.lock();
-                defer self.lock.lock();
+                defer self.lock.unlock();
 
                 self.center.store(new_center, .monotonic);
                 break :blk self.window.realignGet(new_center, self.discard_buf);
