@@ -112,18 +112,18 @@ pub const RpcEpochContextService = struct {
     fn refresh(self: *Self) !void {
         const response = try self.rpc_client.getSlot(self.allocator, .{});
         defer response.deinit();
-        const slot = try response.result() - self.state.schedule.slots_per_epoch;
-        const epoch = self.state.schedule.getEpoch(slot) - 1;
+        const old_slot = try response.result() - self.state.schedule.slots_per_epoch;
+        const last_epoch = self.state.schedule.getEpoch(old_slot);
 
-        self.state.setEpoch(epoch);
+        self.state.setEpoch(last_epoch);
 
-        const ls1 = try self.getLeaderSchedule(slot);
+        const ls1 = try self.getLeaderSchedule(old_slot);
         const ctx1 = EpochContext{ .staked_nodes = .{}, .leader_schedule = ls1 };
-        try self.state.put(epoch, ctx1);
+        try self.state.put(last_epoch, ctx1);
 
         for (0..3) |epoch_offset| {
-            const selected_slot = slot + epoch_offset * self.state.schedule.slots_per_epoch;
-            const selected_epoch = epoch + epoch_offset;
+            const selected_slot = old_slot + epoch_offset * self.state.schedule.slots_per_epoch;
+            const selected_epoch = last_epoch + epoch_offset;
             std.debug.assert(selected_epoch == self.state.schedule.getEpoch(selected_slot));
 
             if (self.state.contains(selected_epoch)) {
@@ -133,7 +133,7 @@ pub const RpcEpochContextService = struct {
             if (self.getLeaderSchedule(selected_slot)) |ls2| {
                 const ctx2 = EpochContext{ .staked_nodes = .{}, .leader_schedule = ls2 };
                 try self.state.put(selected_epoch, ctx2);
-            } else |e| if (selected_epoch == epoch) {
+            } else |e| if (selected_epoch == last_epoch) {
                 return e;
             }
         }
