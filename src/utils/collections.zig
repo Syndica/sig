@@ -581,7 +581,7 @@ pub fn Window(T: type) type {
         }
 
         fn lowest(self: *const Self) usize {
-            return self.center - self.state.len / 2;
+            return self.center -| self.state.len / 2;
         }
 
         fn getAssumed(self: *Self, index: usize) *?T {
@@ -772,18 +772,18 @@ test "binarySearch slice of slices" {
 }
 
 test "Window starts empty" {
-    var mgr = try Window(u64).init(std.testing.allocator, 5, 7);
-    defer mgr.deinit(std.testing.allocator);
+    var window = try Window(u64).init(std.testing.allocator, 5, 7);
+    defer window.deinit(std.testing.allocator);
     for (0..20) |i| {
-        try std.testing.expect(null == mgr.get(i));
+        try std.testing.expect(null == window.get(i));
     }
 }
 
 test "Window populates and repopulates (odd)" {
-    var mgr = try Window(u64).init(std.testing.allocator, 5, 7);
-    defer mgr.deinit(std.testing.allocator);
+    var window = try Window(u64).init(std.testing.allocator, 5, 7);
+    defer window.deinit(std.testing.allocator);
     for (0..20) |i| {
-        const result = mgr.put(i, i * 10);
+        const result = window.put(i, i * 10);
         if (i < 5 or i > 9) {
             try std.testing.expectError(error.OutOfBounds, result);
         } else {
@@ -791,7 +791,7 @@ test "Window populates and repopulates (odd)" {
         }
     }
     for (0..20) |i| {
-        const result = mgr.put(i, i * 100);
+        const result = window.put(i, i * 100);
         if (i < 5 or i > 9) {
             try std.testing.expectError(error.OutOfBounds, result);
         } else {
@@ -799,7 +799,7 @@ test "Window populates and repopulates (odd)" {
         }
     }
     for (0..20) |i| {
-        const result = mgr.get(i);
+        const result = window.get(i);
         if (i < 5 or i > 9) {
             try std.testing.expectEqual(null, result);
         } else {
@@ -809,10 +809,10 @@ test "Window populates and repopulates (odd)" {
 }
 
 test "Window populates (even)" {
-    var mgr = try Window(u64).init(std.testing.allocator, 4, 7);
-    defer mgr.deinit(std.testing.allocator);
+    var window = try Window(u64).init(std.testing.allocator, 4, 7);
+    defer window.deinit(std.testing.allocator);
     for (0..20) |i| {
-        const result = mgr.put(i, i * 10);
+        const result = window.put(i, i * 10);
         if (i < 5 or i > 8) {
             try std.testing.expectError(error.OutOfBounds, result);
         } else {
@@ -820,7 +820,7 @@ test "Window populates (even)" {
         }
     }
     for (0..20) |i| {
-        const result = mgr.get(i);
+        const result = window.get(i);
         if (i < 5 or i > 8) {
             try std.testing.expectEqual(null, result);
         } else {
@@ -830,24 +830,25 @@ test "Window populates (even)" {
 }
 
 test "Window realigns" {
-    var mgr = try Window(u64).init(std.testing.allocator, 4, 7);
-    defer mgr.deinit(std.testing.allocator);
+    var window = try Window(u64).init(std.testing.allocator, 4, 0);
+    defer window.deinit(std.testing.allocator);
+    window.realign(7);
     for (5..9) |i| {
-        _ = try mgr.put(i, i * 10);
+        _ = try window.put(i, i * 10);
     }
     var deletion_buf: [4]?u64 = undefined;
 
-    const deletion = mgr.realignGet(8, deletion_buf[0..]);
+    const deletion = window.realignGet(8, deletion_buf[0..]);
     try std.testing.expectEqual(1, deletion.len);
     try std.testing.expectEqual(50, deletion[0]);
 
-    const deletion2 = mgr.realignGet(6, deletion_buf[0..]);
+    const deletion2 = window.realignGet(6, deletion_buf[0..]);
     try std.testing.expectEqual(2, deletion2.len);
     try std.testing.expectEqual(80, deletion2[0]);
     try std.testing.expectEqual(null, deletion2[1]);
 
     for (0..20) |i| {
-        const result = mgr.get(i);
+        const result = window.get(i);
         if (i < 6 or i > 7) {
             try std.testing.expectEqual(null, result);
         } else {
@@ -855,7 +856,7 @@ test "Window realigns" {
         }
     }
 
-    const deletion3 = mgr.realignGet(20, deletion_buf[0..]);
+    const deletion3 = window.realignGet(20, deletion_buf[0..]);
     try std.testing.expectEqual(4, deletion3.len);
     try std.testing.expectEqual(null, deletion3[0]);
     try std.testing.expectEqual(null, deletion3[1]);
@@ -863,6 +864,6 @@ test "Window realigns" {
     try std.testing.expectEqual(70, deletion3[3]);
 
     for (0..40) |i| {
-        try std.testing.expectEqual(null, mgr.get(i));
+        try std.testing.expectEqual(null, window.get(i));
     }
 }
