@@ -1,8 +1,12 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
+
 const Allocator = std.mem.Allocator;
 const TailQueue = std.TailQueue;
 const testing = std.testing;
 const Mutex = std.Thread.Mutex;
+
+const normalizeDeinitFunction = sig.sync.normalizeDeinitFunction;
 
 pub const Kind = enum {
     locking,
@@ -30,29 +34,7 @@ pub fn LruCacheCustom(
     comptime DeinitContext: type,
     comptime deinitFn_: anytype,
 ) type {
-    const deinitFn = switch (@TypeOf(deinitFn_)) {
-        fn (*V, DeinitContext) void => deinitFn_,
-
-        fn (V, DeinitContext) void => struct {
-            fn f(v: *V, ctx: DeinitContext) void {
-                deinitFn_(v.*, ctx);
-            }
-        }.f,
-
-        fn (V) void => struct {
-            fn f(v: *V, _: DeinitContext) void {
-                V.deinit(v.*);
-            }
-        }.f,
-
-        fn (*V) void => struct {
-            fn f(v: *V, _: DeinitContext) void {
-                V.deinit(v);
-            }
-        }.f,
-
-        else => @compileError("unsupported deinit function type"),
-    };
+    const deinitFn = normalizeDeinitFunction(V, DeinitContext, deinitFn_);
     return struct {
         mux: if (kind == .locking) Mutex else void,
         allocator: Allocator,
