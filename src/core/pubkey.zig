@@ -1,6 +1,9 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const Allocator = std.mem.Allocator;
+const ParseOptions = std.json.ParseOptions;
+
 pub const Pubkey = extern struct {
     data: [size]u8,
     const Self = @This();
@@ -53,6 +56,13 @@ pub const Pubkey = extern struct {
         writer: anytype,
     ) !void {
         return base58.format(self.data, writer);
+    }
+
+    pub fn jsonParse(_: Allocator, source: anytype, _: ParseOptions) !Pubkey {
+        return switch (try source.next()) {
+            .string => |s| .{ .data = base58.decode(s) catch return error.UnexpectedToken },
+            else => error.UnexpectedToken,
+        };
     }
 };
 
