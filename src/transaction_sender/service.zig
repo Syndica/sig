@@ -123,7 +123,9 @@ pub const Service = struct {
         while (!self.exit.load(.monotonic) or
             self.input_channel.len() != 0)
         {
-            while (self.input_channel.tryReceive()) |transaction| {
+            while (self.input_channel
+                .receiveTimeout(sig.CHANNEL_TIMEOUT) catch break) |transaction|
+            {
                 self.metrics.received_count.inc();
 
                 // If the transaction signature isn't in the batch or the pool, add the transaction.
