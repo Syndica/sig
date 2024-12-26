@@ -2,6 +2,41 @@
 
 const std = @import("std");
 
+pub fn getVariant(
+    tagged_union: anytype,
+    variant_tag: anytype,
+) ?UnionFieldType(@TypeOf(tagged_union), variant_tag) {
+    return if (tagged_union == variant_tag)
+        @field(tagged_union, @tagName(variant_tag))
+    else
+        null;
+}
+
+pub fn UnionFieldType(TaggedUnion: type, variant_tag: anytype) type {
+    const tag_name = @tagName(variant_tag);
+    for (@typeInfo(TaggedUnion).Union.fields) |field| {
+        if (std.mem.eql(u8, field.name, tag_name)) {
+            return field.type;
+        }
+    }
+    @compileError("not found: " ++ tag_name);
+}
+
+test getVariant {
+    const Foo = union(enum) {
+        A: u8,
+        B: u16,
+    };
+
+    const a = Foo{ .A = 1 };
+    try std.testing.expectEqual(1, getVariant(a, .A));
+    try std.testing.expectEqual(null, getVariant(a, .B));
+
+    const b = Foo{ .B = 2 };
+    try std.testing.expectEqual(null, getVariant(b, .A));
+    try std.testing.expectEqual(2, getVariant(b, .B));
+}
+
 /// Tuple type representing the args of a function. This is
 /// the type you are required to pass into the @call builtin.
 ///

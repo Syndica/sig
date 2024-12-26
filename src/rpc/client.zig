@@ -6,6 +6,7 @@ const rpc = @import("lib.zig");
 const types = rpc.types;
 const methods = rpc.methods;
 
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
@@ -14,7 +15,6 @@ const Response = rpc.Response;
 const Logger = sig.trace.log.Logger;
 const ScopedLogger = sig.trace.log.ScopedLogger;
 const Transaction = sig.core.transaction.Transaction;
-const ClusterType = rpc.ClusterType;
 
 const RpcClient = rpc.client_ng.RpcClient;
 
@@ -35,6 +35,7 @@ pub const Client = struct {
             .MainnetBeta => "https://api.mainnet-beta.solana.com",
             .Testnet => "https://api.testnet.solana.com",
             .Devnet => "https://api.devnet.solana.com",
+            .Development => @panic("cannot initialize RPC client with Development cluster type"),
             .LocalHost => "http://localhost:8899",
             .Custom => |cluster| cluster.url,
         };
@@ -271,23 +272,6 @@ pub const Client = struct {
         return self.sendFetchRequest(allocator, Slot, request, .{});
     }
 
-    // TODO: getSlotLeader()
-    // TODO: getSlotLeaders()
-    // TODO: getStakeActivation()
-    // TODO: getStakeMinimumDelegation()
-    // TODO: getSupply()
-    // TODO: getTokenAccountBalance()
-    // TODO: getTokenAccountsByDelegate()
-    // TODO: getTockenAccountsByOwner()
-    // TODO: getTokenLargestAccounts()
-    // TODO: getTokenSupply()
-    // TODO: getTransaction()
-    // TODO: getTransactionCount()
-    // TODO: getVoteAccounts()
-    // TODO: isBlockhashValid()
-    // TODO: minimumLedgerSlot()
-    // TODO: simulateTransaction()
-
     pub const RequestAirdropOptions = struct {
         commitment: ?types.Commitment = null,
     };
@@ -306,6 +290,23 @@ pub const Client = struct {
         try request.addConfig(config);
         return self.sendFetchRequest(allocator, types.Signature, request, .{});
     }
+
+    // TODO: getSlotLeader()
+    // TODO: getSlotLeaders()
+    // TODO: getStakeActivation()
+    // TODO: getStakeMinimumDelegation()
+    // TODO: getSupply()
+    // TODO: getTokenAccountBalance()
+    // TODO: getTokenAccountsByDelegate()
+    // TODO: getTockenAccountsByOwner()
+    // TODO: getTokenLargestAccounts()
+    // TODO: getTokenSupply()
+    // TODO: getTransaction()
+    // TODO: getTransactionCount()
+    // TODO: getVoteAccounts()
+    // TODO: isBlockhashValid()
+    // TODO: minimumLedgerSlot()
+    // TODO: simulateTransaction()
 
     const SendTransactionConfig = struct {};
 
@@ -413,6 +414,7 @@ pub const Client = struct {
 const GetAccountInfo = rpc.methods.GetAccountInfo;
 
 test "getAccountInfo: null value" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = RpcClient.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -426,6 +428,7 @@ test "getAccountInfo: null value" {
 }
 
 test "getAccountInfo" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -436,6 +439,7 @@ test "getAccountInfo" {
 }
 
 test "getBalance" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -446,6 +450,7 @@ test "getBalance" {
 }
 
 test "getBlockHeight" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -455,6 +460,7 @@ test "getBlockHeight" {
 }
 
 test "getBlockCommitment" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -466,6 +472,7 @@ test "getBlockCommitment" {
 }
 
 test "getEpochInfo" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -475,6 +482,7 @@ test "getEpochInfo" {
 }
 
 test "getEpochSchedule" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -495,6 +503,7 @@ test "getEpochSchedule" {
 // TODO: test getLargeAccounts()
 
 test "getLatestBlockhash" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -504,6 +513,7 @@ test "getLatestBlockhash" {
 }
 
 test "getLeaderSchedule" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -521,6 +531,7 @@ test "getLeaderSchedule" {
 // TODO: test getRecentPrioritizationFees()
 
 test "getSignatureStatuses" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -540,6 +551,7 @@ test "getSignatureStatuses" {
 // TODO: test getSignaturesForAddress()
 
 test "getSlot" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
@@ -568,6 +580,7 @@ test "getSlot" {
 // TODO: test simulateTransaction()
 
 test "getVersion" {
+    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();

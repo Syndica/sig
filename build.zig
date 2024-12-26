@@ -5,12 +5,14 @@ pub fn build(b: *Build) void {
     defer makeZlsNotInstallAnythingDuringBuildOnSave(b);
 
     // CLI options
-    const target = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{
+        .default_target = defaultTargetDetectM3() orelse .{},
+    });
     const optimize = b.standardOptimizeOption(.{});
     const filters = b.option([]const []const u8, "filter", "List of filters, used for example to filter unit tests by name"); // specified as a series like `-Dfilter="filter1" -Dfilter="filter2"`
     const enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite");
     const no_run = b.option(bool, "no-run", "Do not run the selected step and install it") orelse false;
-    const blockstore_db = b.option(BlockstoreDB, "blockstore-db", "Blockstore database backend") orelse .rocksdb;
+    const blockstore_db = b.option(BlockstoreDB, "blockstore", "Blockstore database backend") orelse .rocksdb;
 
     // Build options
     const build_options = b.addOptions();
@@ -47,6 +49,15 @@ pub fn build(b: *Build) void {
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
 
+    const lsquic_dep = b.dependency("lsquic", dep_opts);
+    const lsquic_mod = lsquic_dep.module("lsquic");
+
+    const ssl_dep = lsquic_dep.builder.dependency("boringssl", dep_opts);
+    const ssl_mod = ssl_dep.module("ssl");
+
+    const xev_dep = b.dependency("xev", dep_opts);
+    const xev_mod = xev_dep.module("xev");
+
     const pretty_table_dep = b.dependency("prettytable", dep_opts);
     const pretty_table_mod = pretty_table_dep.module("prettytable");
 
@@ -81,6 +92,9 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("zig-cli", zig_cli_module);
     sig_exe.root_module.addImport("zig-network", zig_network_module);
     sig_exe.root_module.addImport("zstd", zstd_mod);
+    sig_exe.root_module.addImport("lsquic", lsquic_mod);
+    sig_exe.root_module.addImport("ssl", ssl_mod);
+    sig_exe.root_module.addImport("xev", xev_mod);
     switch (blockstore_db) {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -167,6 +181,7 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("zig-network", zig_network_module);
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
+    benchmark_exe.root_module.addImport("curl", curl_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
     switch (blockstore_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -198,6 +213,11 @@ pub fn build(b: *Build) void {
     if (no_run) geyser_reader_step.dependOn(&b.addInstallArtifact(geyser_reader_exe, .{}).step);
 }
 
+const BlockstoreDB = enum {
+    rocksdb,
+    hashmap,
+};
+
 /// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/
 fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
     const zls_is_build_runner = b.option(bool, "zls-is-build-runner", "" ++
@@ -217,7 +237,33 @@ fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
     }
 }
 
-const BlockstoreDB = enum {
-    rocksdb,
-    hashmap,
-};
+/// TODO: remove after updating to 0.14, where M3/M4 feature detection is fixed.
+/// Ref: https://github.com/ziglang/zig/pull/21116
+fn defaultTargetDetectM3() ?std.Target.Query {
+    const builtin = @import("builtin");
+    if (builtin.os.tag != .macos) return null;
+    switch (builtin.cpu.arch) {
+        .aarch64, .aarch64_be => {},
+        else => return null,
+    }
+    var cpu_family: std.c.CPUFAMILY = undefined;
+    var len: usize = @sizeOf(std.c.CPUFAMILY);
+    std.posix.sysctlbynameZ("hw.cpufamily", &cpu_family, &len, null, 0) catch unreachable;
+
+    // Detects M4 as M3 to get around missing C flag translations when passing the target to dependencies.
+    // https://github.com/Homebrew/brew/blob/64edbe6b7905c47b113c1af9cb1a2009ed57a5c7/Library/Homebrew/extend/os/mac/hardware/cpu.rb#L106
+    const model: *const std.Target.Cpu.Model = switch (@intFromEnum(cpu_family)) {
+        else => return null,
+        0x2876f5b5 => &std.Target.aarch64.cpu.apple_a17, // ARM_COLL
+        0xfa33415e => &std.Target.aarch64.cpu.apple_m3, // ARM_IBIZA
+        0x5f4dea93 => &std.Target.aarch64.cpu.apple_m3, // ARM_LOBOS
+        0x72015832 => &std.Target.aarch64.cpu.apple_m3, // ARM_PALMA
+        0x6f5129ac => &std.Target.aarch64.cpu.apple_m3, // ARM_DONAN (M4)
+        0x17d5b93a => &std.Target.aarch64.cpu.apple_m3, // ARM_BRAVA (M4)
+    };
+
+    return .{
+        .cpu_arch = builtin.cpu.arch,
+        .cpu_model = .{ .explicit = model },
+    };
+}

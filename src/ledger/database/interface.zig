@@ -224,6 +224,22 @@ fn serializer(endian: std.builtin.Endian) type {
             }
         }
 
+        pub fn serializeToBuf(buf: []u8, item: anytype) ![]const u8 {
+            if (@TypeOf(item) == []const u8 or @TypeOf(item) == []u8) {
+                @memcpy(buf, item);
+                return buf;
+            } else {
+                return sig.bincode.writeToSlice(buf, item, .{ .endian = endian });
+            }
+        }
+
+        pub fn serializedSize(item: anytype) usize {
+            return if (@TypeOf(item) == []const u8 or @TypeOf(item) == []u8)
+                item.len
+            else
+                sig.bincode.sizeOf(item, .{});
+        }
+
         /// Returned data may or may not be owned by the caller.
         /// Do both:
         ///  - Assume the data is owned by the scope where `item` originated,
@@ -268,11 +284,13 @@ pub const BytesRef = struct {
     pub const Deinitializer = union(enum) {
         allocator: Allocator,
         rocksdb: *const fn (?*anyopaque) callconv(.C) void,
+        rc_slice: Allocator,
 
         pub fn deinit(self: Deinitializer, data: []const u8) void {
             switch (self) {
                 .allocator => |allocator| allocator.free(data),
                 .rocksdb => |func| func(@ptrCast(@constCast(data))),
+                .rc_slice => |allocator| sig.sync.RcSlice(u8).fromPayload(data).deinit(allocator),
             }
         }
     };

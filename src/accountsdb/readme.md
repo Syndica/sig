@@ -331,7 +331,7 @@ The core logic for generating a snapshot lives in `accounts_db.db.writeSnapshotT
 The procedure consists of writing the version file, the status cache (`snapshots/status_cache`) file, the snapshot manifest (`snapshots/{SLOT}/{SLOT}`),
 and the account files (`accounts/{SLOT}.{FILE_ID}`). This is all written to a stream in the TAR archive format.
 
-The snapshot manifest file content is comprised of the bincoded (bincode-encoded) data structure `SnapshotFields`, which is an aggregate of:
+The snapshot manifest file content is comprised of the bincoded (bincode-encoded) data structure `Manifest`, which is an aggregate of:
 * implicit state: data derived from the current state of AccountsDB, like the file map for all the account which exist at that snapshot, or which have
   changed relative to a full snapshot in an incremental one
 * configuration state: data that is used to communicate details about the snapshot, like the full slot to which an incremental snapshot is relative.

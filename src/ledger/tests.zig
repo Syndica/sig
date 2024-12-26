@@ -189,6 +189,8 @@ pub fn testShreds(allocator: std.mem.Allocator, comptime filename: []const u8) !
 /// ```
 pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred {
     const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
     const reader = file.reader();
     var shreds = std.ArrayList(Shred).init(allocator);
     errdefer {
@@ -334,6 +336,12 @@ pub const TestDB = struct {
 
     pub fn init(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
         return try initCustom(std.testing.allocator, test_src);
+    }
+
+    pub fn reuseBlockstore(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
+        const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
+        try std.fs.cwd().makePath(path);
+        return try BlockstoreDB.open(std.testing.allocator, .noop, path);
     }
 
     pub fn initCustom(

@@ -34,7 +34,7 @@ pub const BenchmarkLedger = struct {
     const SlotMeta = ledger.meta.SlotMeta;
 
     pub const min_iterations = 25;
-    pub const max_iterations = 25;
+    pub const max_iterations = 1_000;
 
     /// Analogous to [bench_write_small](https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L59)
     ///

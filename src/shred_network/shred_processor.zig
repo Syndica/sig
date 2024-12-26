@@ -1,6 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const shred_collector = @import("lib.zig");
+const shred_network = @import("lib.zig");
 
 const layout = sig.ledger.shred.layout;
 
@@ -8,7 +8,7 @@ const Allocator = std.mem.Allocator;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Atomic = std.atomic.Value;
 
-const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
+const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Histogram = sig.prometheus.Histogram;
@@ -17,7 +17,7 @@ const Packet = sig.net.Packet;
 const Registry = sig.prometheus.Registry;
 const Shred = sig.ledger.shred.Shred;
 const ShredInserter = sig.ledger.ShredInserter;
-const SlotOutOfBounds = shred_collector.shred_tracker.SlotOutOfBounds;
+const SlotOutOfBounds = shred_network.shred_tracker.SlotOutOfBounds;
 const VariantCounter = sig.prometheus.VariantCounter;
 
 // The identifier for the scoped logger used in this file.
@@ -33,7 +33,7 @@ pub fn runShredProcessor(
     verified_shred_receiver: *Channel(Packet),
     tracker: *BasicShredTracker,
     shred_inserter_: ShredInserter,
-    leader_schedule: sig.core.leader_schedule.SlotLeaderProvider,
+    leader_schedule: sig.core.leader_schedule.SlotLeaders,
 ) !void {
     const logger = logger_.withScope(LOG_SCOPE);
     var shred_inserter = shred_inserter_;
@@ -47,7 +47,7 @@ pub fn runShredProcessor(
     {
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
-        while (verified_shred_receiver.receive()) |packet| {
+        while (verified_shred_receiver.tryReceive()) |packet| {
             processShred(
                 allocator,
                 tracker,

@@ -19,6 +19,7 @@ const Slot = sig.core.Slot;
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
 const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
+const Atomic = std.atomic.Value;
 
 const globalRegistry = sig.prometheus.globalRegistry;
 
@@ -153,7 +154,7 @@ pub const GeyserWriter = struct {
 
     pub fn IOStreamLoop(self: *Self) !void {
         while (!self.exit.load(.acquire)) {
-            while (self.io_channel.receive()) |payload| {
+            while (self.io_channel.tryReceive()) |payload| {
                 _ = self.writeToPipe(payload) catch |err| {
                     if (err == WritePipeError.PipeBlockedWithExitSignaled) {
                         return;
@@ -248,6 +249,28 @@ pub const GeyserWriter = struct {
         return n_bytes_written_total;
     }
 };
+
+pub fn createGeyserWriterFromConfig(
+    allocator: std.mem.Allocator,
+    geyser_config: sig.cmd.config.GeyserConfig,
+) !*GeyserWriter {
+    if (geyser_config.enable) return error.GeyserWriterIsDisabled;
+
+    const exit = try allocator.create(Atomic(bool));
+    exit.* = Atomic(bool).init(false);
+
+    const geyser_writer = try allocator.create(GeyserWriter);
+    geyser_writer.* = try GeyserWriter.init(
+        allocator,
+        geyser_config.pipe_path,
+        exit,
+        geyser_config.writer_fba_bytes,
+    );
+
+    // start the geyser writer
+    try geyser_writer.spawnIOLoop();
+    return geyser_writer;
+}
 
 pub const GeyserReaderMetrics = struct {
     io_buf_size: *GaugeU64,

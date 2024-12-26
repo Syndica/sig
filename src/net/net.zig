@@ -259,16 +259,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    /// returns:
-    /// - array: the string, plus some extra bytes at the end
-    /// - integer: length of the string within the array
-    pub fn toString(self: Self) struct { [53]u8, usize } {
-        var buf: [53]u8 = undefined;
-        const len = self.toStringBuf(&buf);
-        return .{ buf, len };
-    }
-
-    pub fn toStringBounded(self: Self) std.BoundedArray(u8, 53) {
+    pub fn toString(self: Self) std.BoundedArray(u8, 53) {
         var buf: [53]u8 = undefined;
         const len = self.toStringBuf(&buf);
         return std.BoundedArray(u8, 53).fromSlice(buf[0..len]) catch unreachable;
@@ -532,6 +523,35 @@ pub fn enablePortReuse(self: *network.Socket, enabled: bool) !void {
     const setsockopt_fn = if (builtin.os.tag == .windows) @panic("windows not supported") else std.posix.setsockopt;
     var opt: c_int = if (enabled) 1 else 0;
     try setsockopt_fn(self.internal, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, std.mem.asBytes(&opt));
+}
+
+pub fn resolveSocketAddr(allocator: std.mem.Allocator, host_and_port: []const u8) !SocketAddr {
+    const domain_port_sep = std.mem.indexOfScalar(u8, host_and_port, ':') orelse {
+        return error.PortMissing;
+    };
+    const domain_str = host_and_port[0..domain_port_sep];
+    if (domain_str.len == 0) {
+        return error.DomainNotValid;
+    }
+    // parse port from string
+    const port = std.fmt.parseInt(u16, host_and_port[domain_port_sep + 1 ..], 10) catch {
+        return error.PortNotValid;
+    };
+
+    // get dns address lists
+    const addr_list = try std.net.getAddressList(allocator, domain_str, port);
+    defer addr_list.deinit();
+
+    if (addr_list.addrs.len == 0) {
+        return error.DnsResolutionFailure;
+    }
+
+    // use first A record address
+    const ipv4_addr = addr_list.addrs[0];
+
+    const socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
+    std.debug.assert(socket_addr.port() == port);
+    return socket_addr;
 }
 
 test "invalid ipv4 socket parsing" {

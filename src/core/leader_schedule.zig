@@ -14,7 +14,29 @@ const RwMux = sig.sync.RwMux;
 pub const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
 pub const MAX_CACHED_LEADER_SCHEDULES: usize = 10;
 
-pub const SlotLeaderProvider = sig.utils.closure.PointerClosure(Slot, ?Pubkey);
+/// interface to express a dependency on slot leaders
+pub const SlotLeaders = struct {
+    state: *anyopaque,
+    getFn: *const fn (*anyopaque, Slot) ?Pubkey,
+
+    pub fn init(
+        state: anytype,
+        getSlotLeader: fn (@TypeOf(state), Slot) ?Pubkey,
+    ) SlotLeaders {
+        return .{
+            .state = state,
+            .getFn = struct {
+                fn genericFn(generic_state: *anyopaque, slot: Slot) ?Pubkey {
+                    return getSlotLeader(@alignCast(@ptrCast(generic_state)), slot);
+                }
+            }.genericFn,
+        };
+    }
+
+    pub fn get(self: SlotLeaders, slot: Slot) ?Pubkey {
+        return self.getFn(self.state, slot);
+    }
+};
 
 /// LeaderScheduleCache is a cache of leader schedules for each epoch.
 /// Leader schedules are expensive to compute, so this cache is used to avoid
@@ -22,10 +44,10 @@ pub const SlotLeaderProvider = sig.utils.closure.PointerClosure(Slot, ?Pubkey);
 /// LeaderScheduleCache also keeps a copy of the epoch_schedule so that it can
 /// compute epoch and slot index from a slot.
 /// NOTE: This struct is not really a 'cache', we should consider renaming it
-/// to a SlotLeaderProvider and maybe even moving it outside of the core module.
+/// to a SlotLeaders and maybe even moving it outside of the core module.
 /// This more accurately describes the purpose of this struct as caching is a means
 /// to an end, not the end itself. It may then follow that we could remove the
-/// above pointer closure in favor of passing the SlotLeaderProvider directly.
+/// above pointer closure in favor of passing the SlotLeaders directly.
 pub const LeaderScheduleCache = struct {
     epoch_schedule: EpochSchedule,
     leader_schedules: RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)),
@@ -41,8 +63,8 @@ pub const LeaderScheduleCache = struct {
         };
     }
 
-    pub fn slotLeaderProvider(self: *Self) SlotLeaderProvider {
-        return SlotLeaderProvider.init(self, LeaderScheduleCache.slotLeader);
+    pub fn slotLeaders(self: *Self) SlotLeaders {
+        return SlotLeaders.init(self, LeaderScheduleCache.slotLeader);
     }
 
     pub fn put(self: *Self, epoch: Epoch, leader_schedule: LeaderSchedule) !void {
@@ -63,19 +85,22 @@ pub const LeaderScheduleCache = struct {
         return if (leader_schedules.get(epoch)) |schedule| schedule.slot_leaders[slot_index] else null;
     }
 
-    pub fn uniqueLeaders(self: *Self, allocator: std.mem.Allocator) !std.AutoArrayHashMap(Pubkey, void) {
+    pub fn uniqueLeaders(self: *Self, allocator: std.mem.Allocator) ![]const Pubkey {
         const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
         defer leader_schedules_lg.unlock();
 
         var unique_leaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
-
+        defer unique_leaders.deinit();
         for (leader_schedules.values()) |leader_schedule| {
             for (leader_schedule.slot_leaders) |leader| {
                 try unique_leaders.put(leader, {});
             }
         }
 
-        return unique_leaders;
+        const unqiue_list = try allocator.alloc(Pubkey, unique_leaders.count());
+        @memcpy(unqiue_list, unique_leaders.keys());
+
+        return unqiue_list;
     }
 };
 

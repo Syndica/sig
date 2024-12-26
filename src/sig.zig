@@ -9,7 +9,7 @@ pub const net = @import("net/lib.zig");
 pub const prometheus = @import("prometheus/lib.zig");
 pub const rand = @import("rand/rand.zig");
 pub const rpc = @import("rpc/lib.zig");
-pub const shred_collector = @import("shred_collector/lib.zig");
+pub const shred_network = @import("shred_network/lib.zig");
 pub const sync = @import("sync/lib.zig");
 pub const trace = @import("trace/lib.zig");
 pub const utils = @import("utils/lib.zig");
@@ -18,9 +18,11 @@ pub const time = @import("time/lib.zig");
 pub const common = @import("common/lib.zig");
 pub const geyser = @import("geyser/lib.zig");
 pub const transaction_sender = @import("transaction_sender/lib.zig");
-pub const turbine = @import("turbine/lib.zig");
+pub const cmd = @import("cmd/lib.zig");
 
 pub const VALIDATOR_DIR = "validator/";
+/// subdirectory of {VALIDATOR_DIR} which contains the accounts database
+pub const ACCOUNTS_DB_SUBDIR = "accounts_db/";
 /// persistent data used as test inputs
 pub const TEST_DATA_DIR = "data/test-data/";
 /// ephemeral state produced by tests

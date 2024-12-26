@@ -18,15 +18,15 @@ const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
 const Duration = sig.time.Duration;
-const TurbineTree = sig.turbine.turbine_tree.TurbineTree;
-const TurbineTreeCache = sig.turbine.turbine_tree.TurbineTreeCache;
+const TurbineTree = sig.shred_network.turbine_tree.TurbineTree;
+const TurbineTreeCache = sig.shred_network.turbine_tree.TurbineTreeCache;
 const Channel = sig.sync.Channel;
 const ShredId = sig.ledger.shred.ShredId;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
-const ShredDeduper = sig.turbine.shred_deduper.ShredDeduper;
+const ShredDeduper = sig.shred_network.shred_deduper.ShredDeduper;
 
 const globalRegistry = sig.prometheus.globalRegistry;
 
@@ -43,7 +43,7 @@ const DEDUPER_NUM_BITS: u64 = 637_534_199;
 ///    into RetransmitShredInfo's which are sent to a channel for further processing.
 /// 2. retransmitShreds: runs on N threads and receives RetransmitShredInfo's from the channel, computes the children to retransmit to
 ///    and then constructs and sends packets to the network.
-pub fn run(params: struct {
+pub fn runShredRetransmitter(params: struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
     bank_fields: *const BankFields,
@@ -121,9 +121,7 @@ pub fn run(params: struct {
             retransmit_socket,
             &retransmit_to_socket_channel,
             params.logger,
-            false,
-            params.exit,
-            {},
+            .{ .unordered = params.exit },
         },
     ));
 
@@ -167,7 +165,7 @@ fn receiveShreds(
         shreds.clearRetainingCapacity();
         try shreds.ensureTotalCapacity(receiver_len);
 
-        while (receiver.receive()) |packet| try shreds.append(packet);
+        while (receiver.tryReceive()) |packet| try shreds.append(packet);
 
         if (shreds.items.len == 0) continue;
 
@@ -331,7 +329,7 @@ fn retransmitShreds(
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
-        const retransmit_info: RetransmitShredInfo = receiver.receive() orelse continue;
+        const retransmit_info: RetransmitShredInfo = receiver.tryReceive() orelse continue;
         defer retransmit_info.turbine_tree.releaseUnsafe();
 
         children.clearRetainingCapacity();

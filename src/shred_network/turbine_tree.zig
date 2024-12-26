@@ -152,15 +152,17 @@ pub const TurbineTree = struct {
         staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
         use_stake_hack_for_testing: bool,
     ) !TurbineTree {
-        const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
-        defer gossip_table_lg.unlock();
+        const gossip_peers = blk: {
+            const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
+            defer gossip_table_lg.unlock();
 
-        const gossip_peers = try gossip_table.getThreadSafeContactInfosMatchingShredVersion(
-            allocator,
-            &my_contact_info.pubkey,
-            my_contact_info.shred_version,
-            0,
-        );
+            break :blk try gossip_table.getThreadSafeContactInfosMatchingShredVersion(
+                allocator,
+                &my_contact_info.pubkey,
+                my_contact_info.shred_version,
+                0,
+            );
+        };
         defer gossip_peers.deinit();
 
         const nodes = try collectTvuAndStakedNodes(
@@ -954,7 +956,7 @@ pub fn runTurbineTreeBlackBoxTest() !void {
         191, 82,  231, 195, 46,  182, 188, 220,
     }));
 
-    const my_pubkey = try Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const my_contact_info = ContactInfo.init(std.heap.c_allocator, my_pubkey, 0, 0);
     const my_threadsafe_contact_info = ThreadSafeContactInfo.fromContactInfo(my_contact_info);
 

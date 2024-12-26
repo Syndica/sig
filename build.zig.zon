@@ -32,8 +32,16 @@
             .hash = "1220f70ac854b59315a8512861e039648d677feb4f9677bd873d6b9b7074a5906485",
         },
         .rocksdb = .{
-            .url = "https://github.com/Syndica/rocksdb-zig/archive/5783fb073d45e376be308e9ece32805d71079fe3.tar.gz",
-            .hash = "1220b27e10217b145f498f2af2bc34a4b04aa0b6f4866428fb379ee6580d1d097346",
+            .url = "https://github.com/Syndica/rocksdb-zig/archive/6d4230e131183cccb730a7248bd4ca30c559b8bd.tar.gz",
+            .hash = "12207766d25ba350d6e2f2153fc74a2b3ff204224e1c08adf211cd9e400075033898",
+        },
+        .lsquic = .{
+            .url = "https://github.com/Syndica/lsquic/archive/7c34f2472f390482dffada7a65b8231f6b5b3a3b.tar.gz",
+            .hash = "1220ff572d14b18d9774a298db0b8aeb046800039ccc8e10646992b074e26ea4c38a",
+        },
+        .xev = .{
+            .url = "https://github.com/mitchellh/libxev/archive/b8d1d93e5c899b27abbaa7df23b496c3e6a178c7.tar.gz",
+            .hash = "1220612bc023c21d75234882ec9a8c6a1cbd9d642da3dfb899297f14bb5bd7b6cd78",
         },
         .prettytable = .{
             .url = "https://github.com/dying-will-bullet/prettytable-zig/archive/46b6ad9b5970def35fa43c9613cd244f28862fa9.tar.gz",

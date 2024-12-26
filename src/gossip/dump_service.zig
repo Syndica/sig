@@ -2,12 +2,12 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Value;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipTable = sig.gossip.table.GossipTable;
 const Duration = sig.time.Duration;
 const ScopedLogger = sig.trace.log.ScopedLogger;
 const RwMux = sig.sync.mux.RwMux;
+const ExitCondition = sig.sync.ExitCondition;
 
 pub const DUMP_INTERVAL = Duration.fromSecs(10);
 
@@ -15,15 +15,15 @@ pub const GossipDumpService = struct {
     allocator: Allocator,
     logger: ScopedLogger(@typeName(Self)),
     gossip_table_rw: *RwMux(GossipTable),
-    counter: *Atomic(usize),
+    exit_condition: ExitCondition,
 
     const Self = @This();
 
-    pub fn run(self: Self, idx: usize) !void {
+    pub fn run(self: Self) !void {
         defer {
             // this should be the last service in the chain,
             // but we still kick off anything after it just in case
-            self.counter.store(idx + 1, .release);
+            self.exit_condition.afterExit();
         }
 
         const start_time = std.time.timestamp();
@@ -32,7 +32,7 @@ pub const GossipDumpService = struct {
         var dir = try std.fs.cwd().makeOpenPath(dir_name_bounded.constSlice(), .{});
         defer dir.close();
 
-        while (self.counter.load(.acquire) != idx) {
+        while (self.exit_condition.shouldRun()) {
             try self.dumpGossip(dir, start_time);
             std.time.sleep(DUMP_INTERVAL.asNanos());
         }

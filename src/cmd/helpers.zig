@@ -1,49 +1,66 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
-const Logger = @import("../trace/log.zig").Logger;
-
-const Keypair = std.crypto.sign.Ed25519.KeyPair;
+const Logger = sig.trace.Logger;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
-const AtomicBool = std.atomic.Value(bool);
 
-const IDENTITY_KEYPAIR_DIR = "/.sig";
-const IDENTITY_KEYPAIR_PATH = "/identity.key";
+pub const IDENTITY_KEYPAIR_PATH = "identity.key";
 
-pub fn getOrInitIdentity(allocator: std.mem.Allocator, logger: Logger) !Keypair {
-    const home_dir = try std.process.getEnvVarOwned(allocator, "HOME");
-    defer allocator.free(home_dir);
-    const path = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR, IDENTITY_KEYPAIR_PATH });
+/// Returns the keypair from {app data directory}/{IDENTITY_KEYPAIR_PATH} or creates a new one
+/// if the file does not exist. If the file is invalid, an error is returned.
+pub fn getOrInitIdentity(
+    allocator: std.mem.Allocator,
+    logger: Logger,
+) !KeyPair {
+    const app_data_dir_path = try std.fs.getAppDataDir(allocator, "sig");
+    defer allocator.free(app_data_dir_path);
 
-    if (std.fs.openFileAbsolute(path, .{})) |file| {
-        try file.seekTo(0);
+    if (!std.fs.path.isAbsolute(app_data_dir_path)) {
+        return error.DataDirPathIsNotAbsolute;
+    }
+
+    var app_data_dir = try std.fs.cwd().makeOpenPath(app_data_dir_path, .{});
+    defer app_data_dir.close();
+
+    if (app_data_dir.openFile(IDENTITY_KEYPAIR_PATH, .{
+        // NOTE: the file will never be modified
+        .mode = .read_only,
+    })) |file| {
+        defer file.close();
 
         var buf: [SecretKey.encoded_length]u8 = undefined;
-        _ = try file.readAll(&buf);
 
-        const sk = try SecretKey.fromBytes(buf);
-
-        return try Keypair.fromSecretKey(sk);
-    } else |err| {
-        switch (err) {
-            error.FileNotFound => {
-                // create ~/.sig dir
-                const dir = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR });
-                std.fs.makeDirAbsolute(dir) catch {
-                    logger.debug().log("sig directory already exists...");
-                };
-
-                // create new keypair
-                const file = try std.fs.createFileAbsolute(path, .{ .truncate = true });
-                defer file.close();
-
-                const kp = try Keypair.create(null);
-                try file.writeAll(&kp.secret_key.toBytes());
-
-                return kp;
-            },
-            else => {
-                return err;
-            },
+        const end_pos = try file.getEndPos();
+        if (end_pos != buf.len) {
+            logger.err().logf("Overlong identity file, expected {} bytes, found {}", .{ buf.len, end_pos });
+            return error.InvalidIdentityFile;
         }
+
+        const file_len = try file.readAll(&buf);
+        if (file_len != buf.len) {
+            logger.err().logf("Truncated identity file, expected {} bytes, found {}", .{ buf.len, file_len });
+            return error.InvalidIdentityFile;
+        }
+
+        // NOTE: this should never fail so we can ignore the error
+        const secret_key = SecretKey.fromBytes(buf) catch |err| switch (err) {};
+        const keypair = try KeyPair.fromSecretKey(secret_key);
+
+        return keypair;
+    } else |err| switch (err) {
+        else => |e| return e,
+        error.FileNotFound => {
+            // create the file with a new keypair
+            const file = try app_data_dir.createFile(IDENTITY_KEYPAIR_PATH, .{
+                .truncate = true,
+            });
+            defer file.close();
+
+            const keypair = try KeyPair.create(null);
+            try file.writeAll(&keypair.secret_key.toBytes());
+
+            return keypair;
+        },
     }
 }
