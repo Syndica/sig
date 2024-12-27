@@ -6,6 +6,7 @@ const types = sig.rpc.types;
 
 const Allocator = std.mem.Allocator;
 
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
@@ -21,15 +22,15 @@ pub const RpcClient = struct {
 
     pub fn init(
         allocator: Allocator,
-        cluster_type: types.ClusterType,
+        cluster_type: ClusterType,
         options: HttpFetcher.Options,
     ) RpcClient {
         const http_endpoint = switch (cluster_type) {
             .MainnetBeta => "https://api.mainnet-beta.solana.com",
             .Testnet => "https://api.testnet.solana.com",
             .Devnet => "https://api.devnet.solana.com",
-            .LocalHost => "http://localhost:8899",
             .Custom => |cluster| cluster.url, // TODO lifetime
+            else => "http://localhost:8899",
         };
 
         return .{
@@ -56,7 +57,7 @@ pub const RpcClient = struct {
         const request_json = try rpc.convert.serializeRequest(allocator, request);
         const response_json = try self.fetcher.fetchWithRetries(allocator, request_json);
         defer allocator.free(response_json);
-        return try rpc.convert.deserializeResponse(allocator, @TypeOf(request), response_json);
+        return try Response(@TypeOf(request)).fromJson(allocator, response_json);
     }
 };
 

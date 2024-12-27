@@ -4,6 +4,9 @@ const rpc = @import("lib.zig");
 
 const types = rpc.types;
 
+const Allocator = std.mem.Allocator;
+const ParseOptions = std.json.ParseOptions;
+
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
@@ -12,12 +15,10 @@ pub const GetAccountInfo = struct {
     pubkey: Pubkey,
     config: ?Config = null,
 
-    pub const Params = struct { Pubkey, ?Config };
-
     pub const Config = struct {
         commitment: ?types.Commitment = null,
         minContextSlot: ?u64 = null,
-        encoding: ?[]const u8 = null,
+        encoding: ?enum { base58, base64, @"base64+zstd", jsonParsed } = null,
         dataSlice: ?DataSlice = null,
 
         pub const DataSlice = struct {
@@ -43,12 +44,195 @@ pub const GetAccountInfo = struct {
 
 pub const GetBalance = struct {
     pubkey: Pubkey,
+    config: ?types.CommitmentSlotConfig = null,
+
+    pub const Response = struct {
+        context: types.Context,
+        value: u64,
+    };
 };
+
+pub const GetBlock = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?types.Commitment = null,
+        encoding: ?enum { json, jsonParsed, base58, base64 } = null,
+        transactionDetails: ?[]const u8 = null,
+        maxSupportedTransactionVersion: ?u64 = null,
+        rewards: ?bool = null,
+    };
+
+    // TODO: response
+};
+
+pub const GetBlockCommitment = struct {
+    slot: u64,
+
+    pub const Response = struct {
+        commitment: ?[]const u64 = null,
+        totalStake: u64,
+    };
+};
+
+pub const GetBlockHeight = struct {
+    config: ?types.CommitmentSlotConfig = null,
+
+    pub const Response = u64;
+};
+
+// TODO: getBlockProduction
+// TODO: getBlockTime
+// TODO: getBlocks
+// TODO: getBlocksWithLimit
+
+pub const GetClusterNodes = struct {
+    pub const Response = []const types.RpcContactInfo;
+};
+
+pub const GetEpochInfo = struct {
+    config: ?types.CommitmentSlotConfig = null,
+
+    pub const Response = types.EpochInfo;
+};
+
+pub const GetEpochSchedule = struct {
+    pub const Response = struct {
+        /// The maximum number of slots in each epoch.
+        slotsPerEpoch: u64,
+        /// A number of slots before beginning of an epoch to calculate
+        /// a leader schedule for that epoch.
+        leaderScheduleSlotOffset: u64,
+        /// Whether epochs start short and grow.
+        warmup: bool,
+        /// The first epoch after the warmup period.
+        ///
+        /// Basically: `log2(slots_per_epoch) - log2(MINIMUM_SLOTS_PER_EPOCH)`.
+        firstNormalEpoch: u64,
+        /// The first slot after the warmup period.
+        ///
+        /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
+        firstNormalSlot: u64,
+    };
+};
+
+// TODO: getFeeForMessage
+// TODO: getFirstAvailableBlock
+// TODO: getGenesisHash
+// TODO: getHealth
+// TODO: getHighestSnapshotSlot
+// TODO: getIdentity
+// TODO: getInflationGovernor
+// TODO: getInflationRate
+// TODO: getInflationReward
+// TODO: getLargeAccounts
+
+pub const GetLatestBlockhash = struct {
+    config: ?types.CommitmentSlotConfig = null,
+
+    pub const Response = struct {
+        context: types.Context,
+        value: Value,
+
+        pub const Value = struct {
+            blockhash: []const u8,
+            lastValidBlockHeight: u64,
+        };
+    };
+};
+
+pub const GetLeaderSchedule = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?types.Commitment = null,
+        identity: ?[]const u8 = null,
+    };
+
+    pub const Response = struct {
+        data: std.StringArrayHashMap([]const u64),
+
+        pub fn jsonParse(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            options: std.json.ParseOptions,
+        ) Response {
+            const json_value = try std.json
+                .parseFromTokenSourceLeaky(std.json.Value, allocator, reader, options);
+            const json_object = switch (json_value) {
+                .object => |obj| obj,
+                else => return error.LeaderScheduleResultIsNotAnObject,
+            };
+
+            var result = std.StringArrayHashMap([]const u64).init(allocator);
+            for (json_object.keys(), json_object.values()) |key, value| {
+                const slots = try allocator.alloc(u64, value.array.items.len);
+                for (value.array.items, 0..) |slot, i| {
+                    slots[i] = @intCast(slot.integer);
+                }
+                try result.?.put(key, slots);
+            }
+
+            return result;
+        }
+    };
+};
+
+// TODO: getMaxRetransmitSlot
+// TODO: getMaxShredInsertSlot
+// TODO: getMinimumBalanceForRentExemption
+// TODO: getMultipleAccounts
+// TODO: getProgramAccounts
+// TODO: getRecentPerformanceSamples
+// TODO: getRecentPrioritizationFees
+
+pub const GetSignatureStatuses = struct {
+    signatures: []const Signature,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        searchTransactionHistory: ?bool = null,
+    };
+
+    pub const Response = struct {
+        context: types.Context,
+        value: []const ?TransactionStatus,
+
+        pub const TransactionStatus = struct {
+            slot: u64,
+            confirmations: ?usize = null,
+            // TODO: should transaction_status move to core?
+            err: ?sig.ledger.transaction_status.TransactionError = null,
+            confirmationStatus: ?[]const u8 = null,
+        };
+    };
+};
+
+// TODO: getSignaturesForAddress
+
+pub const GetSlot = struct {
+    config: ?types.CommitmentSlotConfig,
+
+    pub const Response = Slot;
+};
+
+// TODO: getSlotLeader
+// TODO: getSlotLeaders
+// TODO: getStakeActivation
+// TODO: getStakeMinimumDelegation
+// TODO: getSupply
+// TODO: getTokenAccountBalance
+// TODO: getTokenAccountsByDelegate
+// TODO: getTockenAccountsByOwner
+// TODO: getTokenLargestAccounts
+// TODO: getTokenSupply
 
 pub const GetTransaction = struct {
     /// Transaction signature, as base-58 encoded string
     signature: Signature,
-    config: ?struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
         /// processed is not supported.
         commitment: ?enum { confirmed, finalized },
         /// Set the max transaction version to return in responses.
@@ -62,7 +246,7 @@ pub const GetTransaction = struct {
         /// list. If jsonParsed is requested but a parser cannot be found, the instruction
         /// falls back to regular JSON encoding (accounts, data, and programIdIndex fields).
         encoding: ?enum { json, jsonParsed, base64, base58 },
-    } = null,
+    };
 
     pub const Response = struct {
         /// the slot this transaction was processed in
@@ -77,3 +261,57 @@ pub const GetTransaction = struct {
         version: union(enum) { legacy, version: u8, not_defined },
     };
 };
+
+// TODO: getTransactionCount
+
+pub const GetVersion = struct {
+    pub const Response = struct {
+        solana_core: []const u8,
+        feature_set: ?u32 = null,
+
+        pub fn jsonParse(allocator: Allocator, reader: anytype, options: ParseOptions) !Response {
+            const initial_parsed = try std.json.parseFromTokenSource(struct {
+                @"solana-core": []const u8,
+                @"feature-set": ?u32 = null,
+            }, allocator, reader, options);
+            return .{
+                .solana_core = initial_parsed.@"solana-core",
+                .feature_set = initial_parsed.@"feature-set",
+            };
+        }
+
+        pub fn jsonStringify(self: *Response, out_stream: anytype) !void {
+            try std.json.stringify(.{
+                .@"solana-core" = self.solana_core,
+                .@"feature-set" = self.feature_set,
+            }, .{}, out_stream);
+        }
+    };
+};
+
+// TODO: getVoteAccounts
+// TODO: isBlockhashValid
+// TODO: minimumLedgerSlot
+
+pub const RequestAirdrop = struct {
+    pubkey: Pubkey,
+    lamports: u64,
+    config: ?struct { commitment: types.Commitment } = null,
+
+    pub const Response = types.Signature;
+};
+
+pub const SendTransaction = struct {
+    transaction: sig.core.Transaction,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        encoding: ?enum { base58, bas64 } = null,
+        skipPreflight: ?bool = null,
+        preflightCommitment: ?types.Commitment = null,
+        maxRetries: ?usize = null,
+        minContextSlot: ?Slot = null,
+    };
+};
+
+// TODO: simulateTransaction

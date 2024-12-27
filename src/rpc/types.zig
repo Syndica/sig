@@ -13,6 +13,12 @@ pub const Context = struct {
     apiVersion: []const u8,
 };
 
+/// Used to configure several RPC method requests
+pub const CommitmentSlotConfig = struct {
+    commitment: ?Commitment = null,
+    minContextSlot: ?sig.core.Slot = null,
+};
+
 pub const AccountInfo = struct {
     context: Context,
     value: ?Value,

@@ -18,6 +18,35 @@ pub fn Response(comptime Method: type) type {
             err: Error,
         },
 
+        pub fn fromJson(
+            allocator: Allocator,
+            response_json: []const u8,
+        ) !Response(Method) {
+            const arena = try allocator.create(std.heap.ArenaAllocator);
+            arena.* = std.heap.ArenaAllocator.init(allocator);
+            const raw_response = try std.json.parseFromSliceLeaky(
+                struct {
+                    id: u64,
+                    jsonrpc: []const u8,
+                    result: ?Method.Response = null,
+                    @"error": ?Error = null,
+                },
+                allocator,
+                response_json,
+                .{},
+            );
+            return .{
+                .arena = arena,
+                .id = raw_response.id,
+                .jsonrpc = raw_response.jsonrpc,
+                .payload = if (raw_response.@"error") |err| .{
+                    .err = err,
+                } else .{
+                    .result = raw_response.result orelse return error.MalformedResponse,
+                },
+            };
+        }
+
         pub fn deinit(self: Response(Method)) void {
             const allocator = self.arena.child_allocator;
             self.arena.deinit();
@@ -55,36 +84,6 @@ pub fn serializeRequest(allocator: Allocator, request: anytype) ![]const u8 {
         },
         .{ .emit_null_optional_fields = false },
     );
-}
-
-pub fn deserializeResponse(
-    allocator: Allocator,
-    Method: type,
-    response: []const u8,
-) !Response(Method) {
-    const arena = try allocator.create(std.heap.ArenaAllocator);
-    arena.* = std.heap.ArenaAllocator.init(allocator);
-    const raw_response = try std.json.parseFromSliceLeaky(
-        struct {
-            id: u64,
-            jsonrpc: []const u8,
-            result: ?Method.Response = null,
-            @"error": ?Error = null,
-        },
-        allocator,
-        response,
-        .{},
-    );
-    return .{
-        .arena = arena,
-        .id = raw_response.id,
-        .jsonrpc = raw_response.jsonrpc,
-        .payload = if (raw_response.@"error") |err| .{
-            .err = err,
-        } else .{
-            .result = raw_response.result orelse return error.MalformedResponse,
-        },
-    };
 }
 
 fn asTuple(item: anytype) AsTuple(@TypeOf(item)) {
