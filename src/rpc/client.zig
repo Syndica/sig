@@ -36,12 +36,7 @@ pub const Client = struct {
     /// Pass a struct, such as those defined in `rpc.methods`.
     /// Returns data allocated with the contained allocator.
     pub fn fetch(self: *Client, request: anytype) !Response(@TypeOf(request)) {
-        return try fetchRpc(
-            self.fetcher.http_client.allocator,
-            &self.fetcher,
-            HttpFetcher.fetchWithRetries,
-            request,
-        );
+        return try self.fetchAlloc(self.fetcher.http_client.allocator, request);
     }
 
     /// Send a typed RPC request and await a response.
@@ -69,16 +64,17 @@ pub fn rpcUrl(cluster_type: ClusterType) []const u8 {
 /// Fetch the response for an RPC request with an arbitrary fetcher implementation.
 pub fn fetchRpc(
     allocator: Allocator,
-    fetcher: anytype,
-    fetchFn: fn (@TypeOf(fetcher), Allocator, []const u8) @TypeOf(fetcher.*).Error![]const u8,
+    fetch_context: anytype,
+    /// type: fn (@TypeOf(fetcher), Allocator, []const u8) ![]const u8
+    fetchFunction: anytype,
     /// Instance of a struct defined in `rpc.methods`
     request: anytype,
 ) !Response(@TypeOf(request)) {
     const request_json = try rpc.request.serialize(allocator, request);
     defer allocator.free(request_json);
-    const response_json = try fetchFn(fetcher, allocator, request_json);
+    const response_json = try fetchFunction(fetch_context, allocator, request_json);
     defer allocator.free(response_json);
-    return try Response(@TypeOf(request)).init(allocator, response_json);
+    return try Response(@TypeOf(request)).fromJson(allocator, response_json);
 }
 
 pub const HttpFetcher = struct {
