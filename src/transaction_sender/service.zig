@@ -13,6 +13,8 @@ const Packet = sig.net.Packet;
 const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
+const GetBlockHeight = sig.rpc.methods.GetBlockHeight;
+const GetSignatureStatuses = sig.rpc.methods.GetSignatureStatuses;
 const RpcClient = sig.rpc.Client;
 const ClusterType = sig.accounts_db.ClusterType;
 const RwMux = sig.sync.RwMux;
@@ -160,7 +162,7 @@ pub const Service = struct {
     fn processTransactionsThread(self: *Service) !void {
         errdefer self.exit.store(true, .monotonic);
 
-        var rpc_client = RpcClient.init(
+        var rpc_client = try RpcClient.init(
             self.allocator,
             self.config.cluster,
             .{ .max_retries = self.config.rpc_retries, .logger = self.logger.unscoped() },
@@ -188,10 +190,8 @@ pub const Service = struct {
     /// Checks for transactions to retry or drop from the pool
     fn processTransactions(self: *Service, rpc_client: *RpcClient) !void {
         var block_height_timer = try Timer.start();
-        const block_height_response = try rpc_client.getBlockHeight(
-            self.allocator,
-            .{ .commitment = .processed },
-        );
+        const block_height_response = try rpc_client
+            .fetch(GetBlockHeight{ .config = .{ .commitment = .processed } });
         defer block_height_response.deinit();
         const block_height = try block_height_response.result();
         self.metrics.rpc_block_height_millis.set(block_height_timer.read().asMillis());
@@ -203,11 +203,10 @@ pub const Service = struct {
         defer transactions_lg.unlock();
 
         var signature_statuses_timer = try Timer.start();
-        const signature_statuses_response = try rpc_client.getSignatureStatuses(
-            self.allocator,
-            signatures,
-            .{ .searchTransactionHistory = false },
-        );
+        const signature_statuses_response = try rpc_client.fetch(GetSignatureStatuses{
+            .signatures = signatures,
+            .config = .{ .searchTransactionHistory = false },
+        });
         defer signature_statuses_response.deinit();
         const signature_statuses = try signature_statuses_response.result();
         self.metrics.rpc_signature_statuses_millis.set(signature_statuses_timer.read().asMillis());

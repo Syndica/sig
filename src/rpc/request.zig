@@ -1,158 +1,96 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
+const rpc = @import("lib.zig");
 
-/// Request is a struct that represents a JSON-RPC request.
-/// It is used to build a JSON-RPC request and serialize it to a string.
-/// Parameters and config added must contain primitive types, or types
-/// implementing jsonStringify (see std.json.Value.jsonStringify for example)
-pub const Request = struct {
-    id: u64,
-    jsonrpc: []const u8,
-    method: []const u8,
-    params: std.ArrayList(u8),
+const Allocator = std.mem.Allocator;
 
-    const Params = struct {
-        data: std.ArrayList(u8),
-
-        pub fn jsonStringify(self: Params, writer: anytype) !void {
-            if (self.data.items.len > 0) {
-                try writer.write("[");
-                try writer.write();
-                try writer.write("]");
-            }
-        }
-    };
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        method: []const u8,
-    ) !Request {
-        // var params = std.ArrayList(u8).init(allocator);
-        // try params.append('[');
-        return .{
+pub fn serialize(allocator: Allocator, request: anytype) ![]const u8 {
+    return try std.json.stringifyAlloc(
+        allocator,
+        .{
             .id = 1,
             .jsonrpc = "2.0",
-            .method = method,
-            .params = std.ArrayList(u8).init(allocator),
-        };
-    }
+            .method = methodName(request),
+            .params = asTuple(request),
+        },
+        .{ .emit_null_optional_fields = false },
+    );
+}
 
-    pub fn deinit(self: Request) void {
-        self.params.deinit();
+fn asTuple(item: anytype) AsTuple(@TypeOf(item)) {
+    var tuple: AsTuple(@TypeOf(item)) = undefined;
+    inline for (@typeInfo(@TypeOf(item)).Struct.fields, 0..) |*field, i| {
+        tuple[i] = @field(item, field.name);
     }
+    return tuple;
+}
 
-    pub fn from(allocator: std.mem.Allocator, specific_request: anytype) !void {
-        const RequestType = @TypeOf(specific_request);
-        const self = try Request.init(allocator, RequestType.method);
-        inline for (@typeInfo(RequestType).Struct.fields) |field| {
-            if (std.mem.eql(field.name, "config")) {
-                try self.addConfig(@field(specific_request, field.name));
-            } else if (field.type != .Optional or @field(specific_request, field.name) != null) {
-                try self.addParameter(@field(specific_request, field.name));
-            }
+fn methodName(request: anytype) []const u8 {
+    const method_name = comptime blk: {
+        const struct_name = @typeName(@TypeOf(request));
+        var num_chars = 0;
+        for (struct_name) |char| {
+            num_chars += 1;
+            if (char == '.') num_chars = 0;
         }
+        var method_name: [num_chars]u8 = undefined;
+        @memcpy(&method_name, struct_name[struct_name.len - num_chars .. struct_name.len]);
+        method_name[0] = method_name[0] + 0x20;
+        break :blk method_name;
+    };
+    return &method_name;
+}
+
+fn AsTuple(comptime Struct: type) type {
+    var info = @typeInfo(Struct).Struct;
+    var new_fields: [info.fields.len]std.builtin.Type.StructField = undefined;
+    inline for (&new_fields, 0..) |*field, i| {
+        field.* = info.fields[i];
+        field.name = std.fmt.comptimePrint("{}", .{i});
     }
+    info.fields = &new_fields;
+    info.is_tuple = true;
+    info.decls = &.{};
+    return @Type(.{ .Struct = info });
+}
 
-    pub fn addParameter(self: *Request, param: anytype) !void {
-        try std.json.stringify(param, .{}, self.params.writer());
-        try self.params.append(',');
-    }
-
-    pub fn addOptionalParameter(self: *Request, maybe_param: anytype) !void {
-        if (maybe_param) |param| try self.addParameter(param);
-    }
-
-    pub fn addConfig(self: *Request, config: anytype) !void {
-        const default = @TypeOf(config){};
-        if (!std.meta.eql(default, config)) {
-            try std.json.stringify(config, .{ .emit_null_optional_fields = true }, self.params.writer());
-            try self.params.append(',');
-        }
-    }
-
-    pub fn toJsonString(self: Request, allocator: std.mem.Allocator) ![]const u8 {
-        return try std.json.stringifyAlloc(allocator, self, .{});
-    }
-
-    pub fn jsonStringify(self: Request, writer: anytype) !void {
-        // _ = self; // autofix
-        // var stream = std.json.writeStream(writer, .{});
-        var stream = writer;
-        // defer stream.deinit();
-        try stream.beginObject();
-
-        // normal fields
-        try stream.objectField("id");
-        try stream.write(self.id);
-        try stream.objectField("jsonrpc");
-        try stream.write(self.jsonrpc);
-        try stream.objectField("method");
-        try stream.write(self.method);
-
-        // special field
-        if (self.params.items.len > 0) {
-            // try stream.objectField("params");
-            // try stream.valueStart();
-            try writer.stream.print("\"params\": [{s}]", .{self.params.items});
-            // try writer.stream.writeAll();
-            // try writer.stream.writeAll("]");
-            // try stream.valueEnd();
-        }
-
-        try stream.endObject();
-    }
-
-    // pub fn toJsonString(self: Request, allocator: std.mem.Allocator) ![]const u8 {
-    //     if (self.params.items.len > 1) {
-    //         self.params.items[self.params.items.len - 1] = ']';
-    //         return try std.fmt.allocPrint(
-    //             allocator,
-    //             "{{\"id\":{},\"jsonrpc\":\"{s}\",\"method\":\"{s}\",\"params\":{s}}}",
-    //             .{
-    //                 self.id,
-    //                 self.jsonrpc,
-    //                 self.method,
-    //                 self.params.items,
-    //             },
-    //         );
-    //     } else {
-    //         return try std.fmt.allocPrint(
-    //             allocator,
-    //             "{{\"id\":{d},\"jsonrpc\":\"{s}\",\"method\":\"{s}\"}}",
-    //             .{
-    //                 self.id,
-    //                 self.jsonrpc,
-    //                 self.method,
-    //             },
-    //         );
-    //     }
-    // }
-};
-
-test "Request.toJsonString" {
+test "serialize" {
     const allocator = std.testing.allocator;
 
     const Config = struct {
         key: []const u8 = "default",
     };
 
-    var request = try Request.init(allocator, "getAccountInfo");
-    defer request.deinit();
-
     var signatures = std.ArrayList([]const u8).init(allocator);
     defer signatures.deinit();
     try signatures.append("signature1");
     try signatures.append("signature2");
 
-    try request.addParameter("mypubkey");
-    try request.addParameter(35);
-    try request.addParameter(true);
-    try request.addParameter(null);
-    try request.addParameter(signatures.items);
-    try request.addConfig(Config{});
-    try request.addConfig(Config{ .key = "non-default" });
+    const GetAccountInfo = struct {
+        pubkey: []const u8,
+        num: u64,
+        bool: bool,
+        opt: ?u64,
+        sigs: []const []const u8,
+        empty_conf: ?Config,
+        conf: ?Config,
 
-    const expected = "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"getAccountInfo\",\"params\":[\"mypubkey\",35,true,null,[\"signature1\",\"signature2\"],{\"key\":\"non-default\"}]}";
-    const actual = try request.toJsonString(allocator);
+        const method = "getAccountInfo";
+    };
+
+    const my_request = GetAccountInfo{
+        .pubkey = "mypubkey",
+        .num = 35,
+        .bool = true,
+        .opt = null,
+        .sigs = signatures.items,
+        .empty_conf = null,
+        .conf = Config{ .key = "non-default" },
+    };
+
+    const expected = "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"getAccountInfo\",\"params\":" ++
+        "[\"mypubkey\",35,true,[\"signature1\",\"signature2\"],{\"key\":\"non-default\"}]}";
+    const actual = try serialize(allocator, my_request);
     defer allocator.free(actual);
 
     try std.testing.expectEqualSlices(u8, expected, actual);

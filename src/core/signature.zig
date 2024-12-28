@@ -77,7 +77,15 @@ pub const Signature = struct {
         try writer.print("\"{s}\"", .{self.base58String().slice()});
     }
 
-    pub fn jsonParse(_: std.mem.Allocator, reader: anytype, _: std.json.ParseOptions) !Self {
-        return try base58.decodeStream(&reader);
+    pub fn jsonParse(
+        allocator: std.mem.Allocator,
+        source: anytype,
+        options: std.json.ParseOptions,
+    ) !Self {
+        const value = try std.json.Value.jsonParse(allocator, source, options);
+        return if (value == .string)
+            .{ .data = base58.decode(value.string) catch return error.InvalidNumber }
+        else
+            error.UnexpectedToken;
     }
 };

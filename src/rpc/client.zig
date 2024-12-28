@@ -6,390 +6,159 @@ const rpc = @import("lib.zig");
 const types = rpc.types;
 const methods = rpc.methods;
 
+const Allocator = std.mem.Allocator;
+
 const ClusterType = sig.accounts_db.genesis_config.ClusterType;
-const Slot = sig.core.Slot;
-const Pubkey = sig.core.Pubkey;
-const Signature = sig.core.Signature;
-const Request = rpc.Request;
-const Response = rpc.Response;
+const ErrorReturn = sig.utils.types.ErrorReturn;
 const Logger = sig.trace.log.Logger;
 const ScopedLogger = sig.trace.log.ScopedLogger;
-const Transaction = sig.core.transaction.Transaction;
 
-const RpcClient = rpc.client_ng.RpcClient;
+const Response = rpc.response.Response;
 
 pub const Client = struct {
-    client: RpcClient,
+    fetcher: HttpFetcher,
 
-    http_endpoint: []const u8,
-    http_client: std.http.Client,
-    max_retries: usize,
-    logger: ScopedLogger(@typeName(Self)),
+    pub const Options = HttpFetcher.Options;
 
-    const Self = @This();
-
-    pub const Options = RpcClient.Options;
-
-    pub fn init(allocator: std.mem.Allocator, cluster_type: ClusterType, options: Options) Client {
-        const http_endpoint = switch (cluster_type) {
-            .MainnetBeta => "https://api.mainnet-beta.solana.com",
-            .Testnet => "https://api.testnet.solana.com",
-            .Devnet => "https://api.devnet.solana.com",
-            .Development => @panic("cannot initialize RPC client with Development cluster type"),
-            .LocalHost => "http://localhost:8899",
-            .Custom => |cluster| cluster.url,
-        };
-
-        var client: Client = .{
-            .client = RpcClient.init(allocator, cluster_type, options),
-            .http_endpoint = http_endpoint,
-            .http_client = std.http.Client{ .allocator = allocator },
-            .max_retries = options.max_retries,
-            .logger = options.logger.withScope(@typeName(Client)),
-        };
-
-        client.logVersion(allocator) catch |err| {
-            client.logger.err().logf("Failed to log RPC version: error={any}", .{err});
-        };
-        return client;
+    pub fn init(
+        allocator: Allocator,
+        cluster_type: ClusterType,
+        options: HttpFetcher.Options,
+    ) Allocator.Error!Client {
+        return .{ .fetcher = try HttpFetcher.init(allocator, rpcUrl(cluster_type), options) };
     }
 
     pub fn deinit(self: *Client) void {
-        self.http_client.deinit();
+        self.fetcher.deinit();
     }
 
-    /// Log the RPC version were connected to
-    pub fn logVersion(self: *Client, allocator: std.mem.Allocator) !void {
-        const response = try self.getVersion(allocator);
-        defer response.deinit();
-        const version = try response.result();
-        self.logger.info().logf("RPC version: {s}", .{version.@"solana-core"});
+    /// Send a typed RPC request and await a response.
+    /// Pass a struct, such as those defined in `rpc.methods`.
+    /// Returns data allocated with the contained allocator.
+    pub fn fetch(self: *Client, request: anytype) !Response(@TypeOf(request)) {
+        return try fetchRpc(
+            self.fetcher.http_client.allocator,
+            &self.fetcher,
+            HttpFetcher.fetchWithRetries,
+            request,
+        );
     }
 
-    pub fn getAccountInfo(
+    /// Send a typed RPC request and await a response.
+    /// Pass a struct, such as those defined in `rpc.methods`.
+    /// Returns data allocated with the passed allocator.
+    pub fn fetchAlloc(
         self: *Client,
-        allocator: std.mem.Allocator,
-        pubkey: Pubkey,
-        config: methods.GetAccountInfo.Config,
-    ) !rpc.convert.Response(rpc.methods.GetAccountInfo) {
-        return try self.client.fetch(allocator, rpc.methods.GetAccountInfo{
-            .pubkey = pubkey,
-            .config = config,
-        });
+        allocator: Allocator,
+        request: anytype,
+    ) !Response(@TypeOf(request)) {
+        return try fetchRpc(allocator, &self.fetcher, HttpFetcher.fetchWithRetries, request);
     }
+};
 
-    pub const GetBalanceConfig = struct {
-        commitment: ?types.Commitment = null,
-        minContextSlot: ?u64 = null,
+pub fn rpcUrl(cluster_type: ClusterType) []const u8 {
+    return switch (cluster_type) {
+        .MainnetBeta => "https://api.mainnet-beta.solana.com",
+        .Testnet => "https://api.testnet.solana.com",
+        .Devnet => "https://api.devnet.solana.com",
+        .Custom => |cluster| cluster.url,
+        else => "http://localhost:8899",
+    };
+}
+
+/// Fetch the response for an RPC request with an arbitrary fetcher implementation.
+pub fn fetchRpc(
+    allocator: Allocator,
+    fetcher: anytype,
+    fetchFn: fn (@TypeOf(fetcher), Allocator, []const u8) @TypeOf(fetcher.*).Error![]const u8,
+    /// Instance of a struct defined in `rpc.methods`
+    request: anytype,
+) !Response(@TypeOf(request)) {
+    const request_json = try rpc.request.serialize(allocator, request);
+    defer allocator.free(request_json);
+    const response_json = try fetchFn(fetcher, allocator, request_json);
+    defer allocator.free(response_json);
+    return try Response(@TypeOf(request)).init(allocator, response_json);
+}
+
+pub const HttpFetcher = struct {
+    http_client: std.http.Client,
+    base_url: []const u8,
+    logger: Logger,
+    max_retries: usize,
+
+    pub const Options = struct {
+        max_retries: usize = 0,
+        logger: Logger = .noop,
     };
 
-    pub fn getBalance(self: *Client, allocator: std.mem.Allocator, pubkey: Pubkey, config: GetBalanceConfig) !Response(types.Balance) {
-        var request = try Request.init(allocator, "getBalance");
-        defer request.deinit();
-        try request.addParameter(pubkey.string().slice());
-        try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.Balance, request, .{});
-    }
+    const Self = @This();
 
-    pub const GetBlockConfig = struct {
-        commitment: ?types.Commitment = null,
-        encoding: ?[]const u8 = null,
-        transactionDetails: ?[]const u8 = null,
-        maxSupportedTransactionVersion: ?u64 = null,
-        rewards: ?bool = null,
-    };
+    pub const Error = error{HttpRequestFailed} ||
+        ErrorReturn(std.http.Client.fetch) || Allocator.Error;
 
-    pub fn getBlockCommitment(self: *Client, allocator: std.mem.Allocator, block: u64) !Response(types.BlockCommitment) {
-        var request = try Request.init(allocator, "getBlockCommitment");
-        defer request.deinit();
-        try request.addParameter(block);
-        return self.sendFetchRequest(allocator, types.BlockCommitment, request, .{});
-    }
-
-    pub const GetBlockHeightConfig = struct {
-        commitment: ?types.Commitment = null,
-        minContextSlot: ?u64 = null,
-    };
-
-    pub fn getBlockHeight(self: *Client, allocator: std.mem.Allocator, config: GetBlockHeightConfig) !Response(u64) {
-        var request = try Request.init(allocator, "getBlockHeight");
-        defer request.deinit();
-        try request.addConfig(config);
-        return self.sendFetchRequest(allocator, u64, request, .{});
-    }
-
-    // TODO: getBlockProduction()
-    // TODO: getBlockTime()
-    // TODO: getBlocks()
-    // TODO: getBlocksWithLimit()
-
-    pub fn getClusterNodes(self: *Client, allocator: std.mem.Allocator) !Response([]const types.RpcContactInfo) {
-        var request = try Request.init(allocator, "getClusterNodes");
-        defer request.deinit();
-        return self.sendFetchRequest(allocator, []const types.RpcContactInfo, request, .{
-            .ignore_unknown_fields = true,
-        });
-    }
-
-    pub const GetEpochInfoConfig = struct {
-        commitment: ?types.Commitment = null,
-        minContextSlot: ?u64 = null,
-    };
-
-    pub fn getEpochInfo(self: *Client, allocator: std.mem.Allocator, config: GetEpochInfoConfig) !Response(types.EpochInfo) {
-        var request = try Request.init(allocator, "getEpochInfo");
-        defer request.deinit();
-        try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.EpochInfo, request, .{});
-    }
-
-    pub fn getEpochSchedule(self: *Client, allocator: std.mem.Allocator) !Response(types.EpochSchedule) {
-        var request = try Request.init(allocator, "getEpochSchedule");
-        defer request.deinit();
-        return self.sendFetchRequest(allocator, types.EpochSchedule, request, .{});
-    }
-
-    // TODO: getFeeForMessage()
-    // TODO: getFirstAvailableBlock()
-    // TODO: getGenesisHash()
-    // TODO: getHealth()
-    // TODO: getHighestSnapshotSlot()
-    // TODO: getIdentity()
-    // TODO: getInflationGovernor()
-    // TODO: getInflationRate()
-    // TODO: getInflationReward()
-    // TODO: getLargeAccounts()
-
-    pub const GetLatestBlockhashConfig = struct {
-        commitment: ?types.Commitment = null,
-        minContextSlot: ?Slot = null,
-    };
-
-    pub fn getLatestBlockhash(self: *Client, allocator: std.mem.Allocator, config: GetLatestBlockhashConfig) !Response(types.LatestBlockhash) {
-        var request = try Request.init(allocator, "getLatestBlockhash");
-        defer request.deinit();
-        try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.LatestBlockhash, request, .{});
-    }
-
-    pub const GetLeaderScheduleConfig = struct {
-        commitment: ?types.Commitment = null,
-        identity: ?[]const u8 = null,
-    };
-
-    /// NOTE: Is there a way in zig to implement your own methods on a type from an external library?
-    /// For example I would like to impelement jsonParse for the RPC return type of leader schedule which is:
-    /// pub const LeaderSchedule = std.StringArrayHashMap([]const u64);
-    /// I could use a wrapper like
-    /// pub const LeaderSchedule = struct {
-    ///    inner: std.StringArrayHashMap([]const u64),
-    ///    pub fn jsonParse(...) !void
-    /// }
-    /// however, this introduces another layer of indirection.
-    /// Not a big deal here but I am curious if there is a way to do this.
-    pub fn getLeaderSchedule(
-        self: *Client,
-        allocator: std.mem.Allocator,
-        maybe_slot: ?Slot,
-        config: GetLeaderScheduleConfig,
-    ) !Response(types.LeaderSchedule) {
-        var request = try Request.init(allocator, "getLeaderSchedule");
-        defer request.deinit();
-        try request.addParameter(maybe_slot);
-        try request.addConfig(config);
-        const json_response = try self.sendFetchRequest(allocator, std.json.Value, request, .{});
-
-        // Convert the result type from std.json.Value to types.LeaderSchedule
-        var type_converted_result: ?types.LeaderSchedule = null;
-        if (json_response.parsed.result) |json_value| {
-            // The json result should always be an object
-            const json_object = switch (json_value) {
-                .object => |obj| obj,
-                else => return error.LeaderScheduleResultIsNotAnObject,
-            };
-
-            // Convert the json object to the LeaderSchedule type
-            type_converted_result = types.LeaderSchedule.init(json_response.arena.allocator());
-            for (json_object.keys(), json_object.values()) |key, value| {
-                const slots = try json_response.arena.allocator().alloc(u64, value.array.items.len);
-                for (value.array.items, 0..) |slot, i| {
-                    slots[i] = @intCast(slot.integer);
-                }
-                try type_converted_result.?.put(key, slots);
-            }
-        }
-
-        // Return the response with the type converted result
+    pub fn init(allocator: Allocator, base_url: []const u8, options: Options) Allocator.Error!Self {
         return .{
-            .arena = json_response.arena,
-            .bytes = json_response.bytes,
-            .parsed = .{
-                .id = json_response.parsed.id,
-                .jsonrpc = json_response.parsed.jsonrpc,
-                .result = type_converted_result,
-                .@"error" = json_response.parsed.@"error",
-            },
-            .parse_options = json_response.parse_options,
+            .base_url = try allocator.dupe(u8, base_url),
+            .http_client = std.http.Client{ .allocator = allocator },
+            .logger = options.logger,
+            .max_retries = options.max_retries,
         };
     }
 
-    // TODO: getMaxRetransmitSlot()
-    // TODO: getMaxShredInsertSlot()
-    // TODO: getMinimumBalanceForRentExemption()
-    // TODO: getMultipleAccounts()
-    // TODO: getProgramAccounts()
-    // TODO: getRecentPerformanceSamples()
-    // TODO: getRecentPrioritizationFees()
-
-    pub const GetSignatureStatusesConfig = struct {
-        searchTransactionHistory: ?bool = null,
-    };
-
-    pub fn getSignatureStatuses(
-        self: *Client,
-        allocator: std.mem.Allocator,
-        signatures: []const Signature,
-        config: GetSignatureStatusesConfig,
-    ) !Response(types.SignatureStatuses) {
-        var request = try Request.init(allocator, "getSignatureStatuses");
-        defer request.deinit();
-        try request.addParameter(signatures);
-        try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.SignatureStatuses, request, .{ .ignore_unknown_fields = true });
-    }
-
-    // TODO: getSignaturesForAddress()
-
-    pub const GetSlotConfig = struct {
-        commitment: ?types.Commitment = null,
-        minContextSlot: ?Slot = null,
-    };
-
-    pub fn getSlot(self: *Client, allocator: std.mem.Allocator, config: GetSlotConfig) !Response(Slot) {
-        var request = try Request.init(allocator, "getSlot");
-        defer request.deinit();
-        try request.addConfig(config);
-        return self.sendFetchRequest(allocator, Slot, request, .{});
-    }
-
-    pub const RequestAirdropOptions = struct {
-        commitment: ?types.Commitment = null,
-    };
-
-    pub fn requestAirDrop(
-        self: *Client,
-        allocator: std.mem.Allocator,
-        pubkey: Pubkey,
-        lamports: u64,
-        config: RequestAirdropOptions,
-    ) !Response(types.Signature) {
-        var request = try Request.init(allocator, "requestAirdrop");
-        defer request.deinit();
-        try request.addParameter(pubkey.string().slice());
-        try request.addParameter(lamports);
-        try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.Signature, request, .{});
-    }
-
-    // TODO: getSlotLeader()
-    // TODO: getSlotLeaders()
-    // TODO: getStakeActivation()
-    // TODO: getStakeMinimumDelegation()
-    // TODO: getSupply()
-    // TODO: getTokenAccountBalance()
-    // TODO: getTokenAccountsByDelegate()
-    // TODO: getTockenAccountsByOwner()
-    // TODO: getTokenLargestAccounts()
-    // TODO: getTokenSupply()
-    // TODO: getTransaction()
-    // TODO: getTransactionCount()
-    // TODO: getVoteAccounts()
-    // TODO: isBlockhashValid()
-    // TODO: minimumLedgerSlot()
-    // TODO: simulateTransaction()
-
-    const SendTransactionConfig = struct {};
-
-    pub fn sendTransaction(
-        self: *Client,
-        allocator: std.mem.Allocator,
-        transaction: Transaction,
-        config: SendTransactionConfig,
-    ) !Response(types.Signature) {
-        var request = try Request.init(allocator, "sendTransaction");
-        defer request.deinit();
-
-        var buffer: [sig.net.PACKET_DATA_SIZE]u8 = undefined;
-        const written = try sig.bincode.writeToSlice(&buffer, transaction, .{});
-
-        const sized = sig.crypto.base58.Base58Sized(sig.net.PACKET_DATA_SIZE);
-        var encode_buffer: [sized.max_encoded_size]u8 = undefined;
-
-        var encoder = base58.Encoder.init(.{});
-        const length = try encoder.encode(written, &encode_buffer);
-
-        try request.addParameter(encode_buffer[0..length]);
-        try request.addConfig(config);
-
-        return self.sendFetchRequest(allocator, types.Signature, request, .{});
-    }
-
-    pub fn getVersion(self: *Client, allocator: std.mem.Allocator) !Response(types.RpcVersionInfo) {
-        var request = try Request.init(allocator, "getVersion");
-        defer request.deinit();
-        return self.sendFetchRequest(allocator, types.RpcVersionInfo, request, .{});
+    pub fn deinit(self: *HttpFetcher) void {
+        self.http_client.allocator.free(self.base_url);
+        self.http_client.deinit();
     }
 
     /// Sends a JSON-RPC request to the HTTP endpoint and parses the response.
-    /// If the request fails, it will be retried up to `max_retries` times, restarting the HTTP client
-    /// if necessary. If the response fails to parse, an error will be returned.
-    fn sendFetchRequest(
-        self: *Client,
+    /// If the request fails, it will be retried up to `max_retries` times,
+    /// If the response fails to parse, an error will be returned.
+    pub fn fetchWithRetries(
+        self: *Self,
         allocator: std.mem.Allocator,
-        comptime T: type,
-        request: Request,
-        response_parse_options: std.json.ParseOptions,
-    ) !Response(T) {
-        var response = try Response(T).init(allocator, response_parse_options);
+        request: []const u8,
+    ) Error![]const u8 {
+        var response = std.ArrayList(u8).init(allocator);
         errdefer response.deinit();
 
-        const payload = try request.toJsonString(allocator);
-        defer allocator.free(payload);
+        var last_error: ?Error = null;
 
         for (0..self.max_retries + 1) |curr_retries| {
-            const result = self.fetchRequest(payload, &response.bytes) catch |fetch_error| {
-                self.logger.warn().logf("HTTP client error, attempting reinitialisation: error={any}", .{fetch_error});
-                if (curr_retries == self.max_retries) return fetch_error;
-                response.bytes.clearRetainingCapacity();
+            const result = self.fetchOnce(request, &response) catch |fetch_error| {
+                last_error = fetch_error;
+                self.logger.warn().logf(
+                    "HTTP client error, attempting reinitialisation: error={any}",
+                    .{fetch_error},
+                );
+                response.clearRetainingCapacity();
                 self.restartHttpClient();
                 continue;
             };
 
             if (result.status != .ok) {
-                self.logger.warn().logf("HTTP request failed ({d}/{d}): {}", .{ curr_retries, self.max_retries, result.status });
-                if (curr_retries == self.max_retries) return error.HttpRequestFailed;
-                response.bytes.clearRetainingCapacity();
+                last_error = error.HttpRequestFailed;
+                self.logger.warn().logf(
+                    "HTTP request failed ({d}/{d}): {}",
+                    .{ curr_retries, self.max_retries, result.status },
+                );
+                response.clearRetainingCapacity();
                 continue;
             }
 
-            break;
+            return try response.toOwnedSlice();
         }
 
-        response.parse() catch |err| {
-            self.logger.err().logf("Failed to parse response: error={} request_payload={s} response={s}", .{ err, payload, response.bytes.items });
-            return err;
-        };
-
-        return response;
+        return last_error.?;
     }
 
-    fn fetchRequest(
-        self: *Client,
+    pub fn fetchOnce(
+        self: *Self,
         request_payload: []const u8,
         response_payload: *std.ArrayList(u8),
-    ) !std.http.Client.FetchResult {
+    ) ErrorReturn(std.http.Client.fetch)!std.http.Client.FetchResult {
         return self.http_client.fetch(.{
-            .location = .{ .url = self.http_endpoint },
+            .location = .{ .url = self.base_url },
             .method = .POST,
             .headers = .{
                 .content_type = .{
@@ -405,186 +174,8 @@ pub const Client = struct {
         });
     }
 
-    fn restartHttpClient(self: *Client) void {
+    fn restartHttpClient(self: *Self) void {
         self.http_client.deinit();
         self.http_client = std.http.Client{ .allocator = self.http_client.allocator };
     }
 };
-
-const GetAccountInfo = rpc.methods.GetAccountInfo;
-
-test "getAccountInfo: null value" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = RpcClient.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    // random pubkey that should not exist
-    const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWn");
-    const response = try client.fetch(allocator, GetAccountInfo{ .pubkey = pubkey });
-    defer response.deinit();
-    const x = try response.result();
-
-    try std.testing.expectEqual(null, x.value);
-}
-
-test "getAccountInfo" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
-    const response = try client.getAccountInfo(allocator, pubkey, .{});
-    defer response.deinit();
-    _ = try response.result();
-}
-
-test "getBalance" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
-    const response = try client.getBalance(allocator, pubkey, .{});
-    defer response.deinit();
-    _ = try response.result();
-}
-
-test "getBlockHeight" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const response = try client.getBlockHeight(allocator, .{});
-    defer response.deinit();
-    _ = try response.result();
-}
-
-test "getBlockCommitment" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const slot_response = try client.getSlot(allocator, .{ .commitment = .finalized });
-    defer slot_response.deinit();
-    const response = try client.getBlockCommitment(allocator, slot_response.parsed.result.?);
-    defer response.deinit();
-    _ = try response.result();
-}
-
-test "getEpochInfo" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const response = try client.getEpochInfo(allocator, .{});
-    defer response.deinit();
-    _ = try response.result();
-}
-
-test "getEpochSchedule" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const response = try client.getEpochSchedule(allocator);
-    defer response.deinit();
-    _ = try response.result();
-}
-
-// TODO: test getFeeForMessage()
-// TODO: test getFirstAvailableBlock()
-// TODO: test getGenesisHash()
-// TODO: test getHealth()
-// TODO: test getHighestSnapshotSlot()
-// TODO: test getIdentity()
-// TODO: test getInflationGovernor()
-// TODO: test getInflationRate()
-// TODO: test getInflationReward()
-// TODO: test getLargeAccounts()
-
-test "getLatestBlockhash" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const response = try client.getLatestBlockhash(allocator, .{});
-    defer response.deinit();
-    _ = try response.result();
-}
-
-test "getLeaderSchedule" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const response = try client.getLeaderSchedule(allocator, null, .{});
-    defer response.deinit();
-    _ = try response.result();
-}
-
-// TODO: test getMaxRetransmitSlot()
-// TODO: test getMaxShredInsertSlot()
-// TODO: test getMinimumBalanceForRentExemption()
-// TODO: test getMultipleAccounts()
-// TODO: test getProgramAccounts()
-// TODO: test getRecentPerformanceSamples()
-// TODO: test getRecentPrioritizationFees()
-
-test "getSignatureStatuses" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    var signatures = try allocator.alloc(Signature, 2);
-    defer allocator.free(signatures);
-    signatures[0] = try Signature.fromString(
-        "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
-    );
-    signatures[1] = try Signature.fromString(
-        "4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz",
-    );
-    const response = try client.getSignatureStatuses(allocator, signatures, .{});
-    defer response.deinit();
-    _ = try response.result();
-}
-
-// TODO: test getSignaturesForAddress()
-
-test "getSlot" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const response = try client.getSlot(allocator, .{});
-    defer response.deinit();
-    _ = try response.result();
-}
-
-// TODO: test getSlotLeader()
-// TODO: test getSlotLeaders()
-// TODO: test getStakeActivation()
-// TODO: test getStakeMinimumDelegation()
-// TODO: test getSupply()
-// TODO: test getTokenAccountBalance()
-// TODO: test getTokenAccountsByDelegate()
-// TODO: test getTockenAccountsByOwner()
-// TODO: test getTokenLargestAccounts()
-// TODO: test getTokenSupply()
-// TODO: test getTransaction()
-// TODO: test getTransactionCount()
-// TODO: test getVoteAccounts()
-// TODO: test isBlockhashValid()
-// TODO: test minimumLedgerSlot()
-// TODO: test requestAirdrop()
-// TODO: test sendTransaction()
-// TODO: test simulateTransaction()
-
-test "getVersion" {
-    if (true) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const response = try client.getVersion(allocator);
-    defer response.deinit();
-    _ = try response.result();
-}

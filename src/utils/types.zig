@@ -77,6 +77,11 @@ pub fn ReturnType(comptime FnPtr: type) type {
     };
 }
 
+/// Gets the error set from the return type of a function
+pub fn ErrorReturn(function: anytype) type {
+    return @typeInfo(ReturnType(@TypeOf(function))).ErrorUnion.error_set;
+}
+
 pub const AllocManagement = enum {
     managed,
     unmanaged,

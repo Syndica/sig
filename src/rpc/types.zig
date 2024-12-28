@@ -48,6 +48,7 @@ pub const BlockCommitment = struct {
 // TODO: Blocks
 // TODO: BlocksWithLimit
 
+// TODO field types
 pub const RpcContactInfo = struct {
     /// Pubkey of the node as a base-58 string
     pubkey: []const u8,

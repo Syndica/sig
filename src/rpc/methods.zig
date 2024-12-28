@@ -142,6 +142,7 @@ pub const GetLatestBlockhash = struct {
 };
 
 pub const GetLeaderSchedule = struct {
+    slot: ?u64 = null,
     config: ?Config = null,
 
     pub const Config = struct {
@@ -150,30 +151,29 @@ pub const GetLeaderSchedule = struct {
     };
 
     pub const Response = struct {
-        data: std.StringArrayHashMap([]const u64),
+        value: std.AutoArrayHashMapUnmanaged(Pubkey, []const u64),
 
         pub fn jsonParse(
             allocator: std.mem.Allocator,
-            reader: anytype,
+            source: anytype,
             options: std.json.ParseOptions,
-        ) Response {
-            const json_value = try std.json
-                .parseFromTokenSourceLeaky(std.json.Value, allocator, reader, options);
-            const json_object = switch (json_value) {
+        ) std.json.ParseError(@TypeOf(source.*))!Response {
+            const json_object = switch (try std.json.Value.jsonParse(allocator, source, options)) {
                 .object => |obj| obj,
-                else => return error.LeaderScheduleResultIsNotAnObject,
+                else => return error.UnexpectedToken,
             };
 
-            var result = std.StringArrayHashMap([]const u64).init(allocator);
+            var map = std.AutoArrayHashMapUnmanaged(Pubkey, []const u64){};
             for (json_object.keys(), json_object.values()) |key, value| {
                 const slots = try allocator.alloc(u64, value.array.items.len);
                 for (value.array.items, 0..) |slot, i| {
                     slots[i] = @intCast(slot.integer);
                 }
-                try result.?.put(key, slots);
+                const pubkey = Pubkey.fromString(key) catch return error.InvalidNumber;
+                try map.put(allocator, pubkey, slots);
             }
 
-            return result;
+            return .{ .value = map };
         }
     };
 };
@@ -211,7 +211,7 @@ pub const GetSignatureStatuses = struct {
 // TODO: getSignaturesForAddress
 
 pub const GetSlot = struct {
-    config: ?types.CommitmentSlotConfig,
+    config: ?types.CommitmentSlotConfig = null,
 
     pub const Response = Slot;
 };
@@ -223,7 +223,7 @@ pub const GetSlot = struct {
 // TODO: getSupply
 // TODO: getTokenAccountBalance
 // TODO: getTokenAccountsByDelegate
-// TODO: getTockenAccountsByOwner
+// TODO: getTokenAccountsByOwner
 // TODO: getTokenLargestAccounts
 // TODO: getTokenSupply
 
@@ -270,13 +270,14 @@ pub const GetVersion = struct {
         feature_set: ?u32 = null,
 
         pub fn jsonParse(allocator: Allocator, reader: anytype, options: ParseOptions) !Response {
-            const initial_parsed = try std.json.parseFromTokenSource(struct {
+            const value = try std.json.Value.jsonParse(allocator, reader, options);
+            const initial_parsed = try std.json.parseFromValue(struct {
                 @"solana-core": []const u8,
                 @"feature-set": ?u32 = null,
-            }, allocator, reader, options);
+            }, allocator, value, options);
             return .{
-                .solana_core = initial_parsed.@"solana-core",
-                .feature_set = initial_parsed.@"feature-set",
+                .solana_core = initial_parsed.value.@"solana-core",
+                .feature_set = initial_parsed.value.@"feature-set",
             };
         }
 
@@ -298,7 +299,7 @@ pub const RequestAirdrop = struct {
     lamports: u64,
     config: ?struct { commitment: types.Commitment } = null,
 
-    pub const Response = types.Signature;
+    pub const Response = sig.core.Signature;
 };
 
 pub const SendTransaction = struct {
@@ -312,6 +313,8 @@ pub const SendTransaction = struct {
         maxRetries: ?usize = null,
         minContextSlot: ?Slot = null,
     };
+
+    pub const Response = sig.core.Signature;
 };
 
 // TODO: simulateTransaction

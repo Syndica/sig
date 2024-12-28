@@ -23,7 +23,7 @@ pub fn Base58Sized(decoded_size: usize) type {
         }
 
         pub fn decodeStream(reader: anytype) ![decoded_size]u8 {
-            var encoded: [base58.max_encoded_size]usize = undefined;
+            var encoded: [max_encoded_size]usize = undefined;
             reader.readAll(&encoded);
             return decode(&encoded);
         }
