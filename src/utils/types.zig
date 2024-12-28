@@ -318,7 +318,7 @@ pub const EqlConfig = struct {
 ///
 /// see eqlCustom for more information.
 /// use eqlCustom to customize the behavior.
-pub inline fn eql(a: anytype, b: @TypeOf(a)) bool {
+pub fn eql(a: anytype, b: @TypeOf(a)) bool {
     return eqlCustom(a, b, .{});
 }
 
@@ -414,6 +414,11 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
                 return sliceEql(pointer.child, a, b, config);
             } else {
                 return a.len == b.len and a.ptr == b.ptr;
+            },
+            .Many => if (config.follow_pointers == .yes) {
+                @compileError("cannot compare data behind many item pointers: " ++ @typeName(T));
+            } else {
+                return a == b;
             },
             else => if (config.follow_pointers == .yes) {
                 return eqlCustom(a.*, b.*, config);

@@ -5,13 +5,22 @@ const rpc = @import("lib.zig");
 const Allocator = std.mem.Allocator;
 
 pub fn serialize(allocator: Allocator, request: anytype) ![]const u8 {
+    const formatted = if (@hasDecl(@TypeOf(request), "jsonStringify"))
+        request
+    else
+        asTuple(request);
+
+    return try serializeTuple(allocator, methodName(request), formatted);
+}
+
+pub fn serializeTuple(allocator: Allocator, method: []const u8, params: anytype) ![]const u8 {
     return try std.json.stringifyAlloc(
         allocator,
         .{
-            .id = 1,
+            .id = 1, //TODO allow customization?
             .jsonrpc = "2.0",
-            .method = methodName(request),
-            .params = asTuple(request),
+            .method = method,
+            .params = params,
         },
         .{ .emit_null_optional_fields = false },
     );

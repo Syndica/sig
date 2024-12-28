@@ -2,24 +2,25 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-/// Wraps a parsed response from the RPC server with an arena
-/// used for request, response, and json parsing allocations
-/// The bytes field contains the raw bytes from the response
-/// The value field contains a ParsedResponse which may reference
-/// memory from the bytes field to avoid copying and hence the
-/// bytes field must remain valid for the lifetime of the value field.
+/// Wraps a parsed response from the RPC server with an arena that owns all
+/// contained pointers.
+///
+/// TODO: tuple arena + separate struct?
 pub fn Response(comptime Method: type) type {
     return struct {
         arena: *std.heap.ArenaAllocator,
         id: u64,
         jsonrpc: []const u8,
-        payload: union(enum) {
+        payload: Payload,
+
+        pub const Payload = union(enum) {
             result: Method.Response,
             err: Error,
-        },
+        };
 
-        pub fn init(allocator: Allocator, response_json: []const u8) !Response(Method) {
+        pub fn fromJson(allocator: Allocator, response_json: []const u8) !Response(Method) {
             const arena = try allocator.create(std.heap.ArenaAllocator);
+            errdefer allocator.destroy(arena);
             arena.* = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
             const raw_response = try std.json.parseFromSliceLeaky(
@@ -40,7 +41,7 @@ pub fn Response(comptime Method: type) type {
                 .payload = if (raw_response.@"error") |err| .{
                     .err = err,
                 } else .{
-                    .result = raw_response.result orelse return error.MalformedResponse,
+                    .result = raw_response.result orelse return error.MissingResult,
                 },
             };
         }
@@ -63,10 +64,13 @@ pub fn Response(comptime Method: type) type {
 pub const Error = struct {
     code: i64,
     message: []const u8,
-    data: ?std.json.Value = null,
+    // data: ?std.json.Value = null,
 
     // TODO: Replace data with structured data
     pub fn dataAsString(self: *const Error, allocator: std.mem.Allocator) ![]const u8 {
-        return std.json.stringifyAlloc(allocator, self.data.?, .{});
+        _ = self; // autofix
+        _ = allocator; // autofix
+        // return std.json.stringifyAlloc(allocator, self.data.?, .{});
+        return "";
     }
 };

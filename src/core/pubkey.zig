@@ -58,6 +58,13 @@ pub const Pubkey = extern struct {
     pub fn jsonStringify(self: Self, write_stream: anytype) !void {
         try write_stream.write(base58.encode(self.data).slice());
     }
+
+    pub fn jsonParse(_: anytype, source: anytype, _: anytype) !Pubkey {
+        return switch (try source.next()) {
+            .string => |s| .{ .data = base58.decode(s) catch return error.UnexpectedToken },
+            else => error.UnexpectedToken,
+        };
+    }
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };

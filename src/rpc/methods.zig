@@ -35,7 +35,7 @@ pub const GetAccountInfo = struct {
             data: []const u8,
             executable: bool,
             lamports: u64,
-            owner: []const u8,
+            owner: Pubkey,
             rentEpoch: u64,
             space: u64,
         };
