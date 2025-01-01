@@ -11,7 +11,7 @@ pub const shred = @import("shred.zig");
 pub const shredder = @import("shredder.zig");
 pub const transaction_status = @import("transaction_status.zig");
 pub const tests = @import("tests.zig");
-pub const fuzz_rocksdb = @import("fuzz.zig");
+pub const fuzz_ledger = @import("fuzz.zig");
 
 pub const BlockstoreDB = blockstore.BlockstoreDB;
 pub const ShredInserter = shred_inserter.ShredInserter;

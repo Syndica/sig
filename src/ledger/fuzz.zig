@@ -17,7 +17,13 @@ const cf1 = ColumnFamily{
     .Key = u64,
     .Value = Data,
 };
-const RocksDb = sig.ledger.database.RocksDB(&.{cf1});
+pub const BlockstoreDB = switch (build_options.blockstore_db) {
+    .rocksdb => ledger.database.RocksDB(&.{cf1}),
+    .hashmap => ledger.database.SharedHashMapDB(&.{cf1}),
+};
+
+const build_options = @import("build-options");
+const ledger = @import("lib.zig");
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const maybe_max_actions_string = args.next();
@@ -51,7 +57,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     } else |_| {}
     try std.fs.cwd().makePath(rocksdb_path);
 
-    var db: RocksDb = try RocksDb.open(
+    var db: BlockstoreDB = try BlockstoreDB.open(
         allocator,
         logger,
         rocksdb_path,
@@ -148,7 +154,7 @@ fn performDbAction(
 }
 
 fn dbPut(
-    db: *RocksDb,
+    db: *BlockstoreDB,
     random: *const std.rand.Random,
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
@@ -162,7 +168,7 @@ fn dbPut(
     const value: []const u8 = buffer[0..];
     try performDbAction(
         "RocksDb.put",
-        RocksDb.put,
+        BlockstoreDB.put,
         .{ db, cf1, (key + 1), Data{ .value = value } },
         count,
         max_actions,
@@ -170,7 +176,7 @@ fn dbPut(
 }
 
 fn dbDelete(
-    db: *RocksDb,
+    db: *BlockstoreDB,
     random: *const std.rand.Random,
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
@@ -178,7 +184,7 @@ fn dbDelete(
     const key = random.int(u32);
     try performDbAction(
         "RocksDb.delete",
-        RocksDb.delete,
+        BlockstoreDB.delete,
         .{ db, cf1, key },
         count,
         max_actions,
@@ -186,7 +192,7 @@ fn dbDelete(
 }
 
 fn dbDeleteFilesInRange(
-    db: *RocksDb,
+    db: *BlockstoreDB,
     random: *const std.rand.Random,
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
@@ -202,7 +208,7 @@ fn dbDeleteFilesInRange(
 
     try performDbAction(
         "RocksDb.deleteFilesInRange",
-        RocksDb.deleteFilesInRange,
+        BlockstoreDB.deleteFilesInRange,
         .{ db, cf1, start, end },
         count,
         max_actions,
@@ -210,7 +216,7 @@ fn dbDeleteFilesInRange(
 }
 
 fn dbGetBytes(
-    db: *RocksDb,
+    db: *BlockstoreDB,
     random: *const std.rand.Random,
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
@@ -218,7 +224,7 @@ fn dbGetBytes(
     const key = random.int(u32);
     try performDbAction(
         "RocksDb.getBytes",
-        RocksDb.getBytes,
+        BlockstoreDB.getBytes,
         .{ db, cf1, key },
         count,
         max_actions,
@@ -226,7 +232,7 @@ fn dbGetBytes(
 }
 
 fn dbGet(
-    db: *RocksDb,
+    db: *BlockstoreDB,
     random: *const std.rand.Random,
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
@@ -234,7 +240,7 @@ fn dbGet(
     const key = random.int(u32);
     try performDbAction(
         "RocksDb.get",
-        RocksDb.get,
+        BlockstoreDB.get,
         .{ db, allocator, cf1, key },
         count,
         max_actions,
@@ -242,13 +248,13 @@ fn dbGet(
 }
 
 fn dbCount(
-    db: *RocksDb,
+    db: *BlockstoreDB,
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
     try performDbAction(
         "RocksDb.count",
-        RocksDb.count,
+        BlockstoreDB.count,
         .{ db, cf1 },
         count,
         max_actions,
@@ -256,7 +262,7 @@ fn dbCount(
 }
 
 fn dbContains(
-    db: *RocksDb,
+    db: *BlockstoreDB,
     random: *const std.rand.Random,
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
@@ -264,7 +270,7 @@ fn dbContains(
     const key = random.int(u32);
     try performDbAction(
         "RocksDb.contains",
-        RocksDb.contains,
+        BlockstoreDB.contains,
         .{ db, cf1, key },
         count,
         max_actions,
@@ -273,7 +279,7 @@ fn dbContains(
 
 // Batch API
 fn batchDeleteRange(
-    db: *RocksDb,
+    db: *BlockstoreDB,
     random: *const std.rand.Random,
     count: *std.atomic.Value(u64),
     max_actions: ?usize,
