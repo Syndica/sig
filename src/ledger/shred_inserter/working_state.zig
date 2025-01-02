@@ -15,7 +15,7 @@ const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
-const BlockstoreInsertionMetrics = shred_inserter.shred_inserter.BlockstoreInsertionMetrics;
+const ShredInserterMetrics = shred_inserter.shred_inserter.ShredInserterMetrics;
 const BytesRef = ledger.database.BytesRef;
 const CodeShred = ledger.shred.CodeShred;
 const ColumnFamily = ledger.database.ColumnFamily;
@@ -85,7 +85,7 @@ pub const PendingInsertShredsState = struct {
     slot_meta_working_set: AutoHashMap(u64, SlotMetaWorkingSetEntry),
     index_working_set: AutoHashMap(u64, IndexMetaWorkingSetEntry),
     duplicate_shreds: ArrayList(PossibleDuplicateShred),
-    metrics: BlockstoreInsertionMetrics,
+    metrics: ShredInserterMetrics,
 
     // TODO unmanaged
 
@@ -95,7 +95,7 @@ pub const PendingInsertShredsState = struct {
         allocator: Allocator,
         logger: sig.trace.Logger,
         db: *BlockstoreDB,
-        metrics: BlockstoreInsertionMetrics,
+        metrics: ShredInserterMetrics,
     ) !Self {
         return .{
             .allocator = allocator,

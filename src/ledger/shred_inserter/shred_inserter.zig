@@ -27,6 +27,7 @@ const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SortedSet = sig.utils.collections.SortedSet;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
+const VariantCounter = sig.prometheus.VariantCounter;
 
 const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const BytesRef = ledger.database.BytesRef;
@@ -56,7 +57,7 @@ pub const ShredInserter = struct {
     db: BlockstoreDB,
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
-    metrics: BlockstoreInsertionMetrics,
+    metrics: ShredInserterMetrics,
 
     const Self = @This();
 
@@ -72,7 +73,7 @@ pub const ShredInserter = struct {
             .db = db,
             .lock = .{},
             .max_root = Atomic(u64).init(0), // TODO read this from the database
-            .metrics = try registry.initStruct(BlockstoreInsertionMetrics),
+            .metrics = try registry.initStruct(ShredInserterMetrics),
         };
     }
 
@@ -866,11 +867,16 @@ pub const ShredInserter = struct {
                     reed_solomon_cache,
                 ),
                 .data_full => {
-                    self.submitRecoveryMetrics(erasure_set.slot, erasure_meta, false, "complete", 0);
+                    self.submitRecoveryMetrics(erasure_set.slot, erasure_meta, false, .complete, 0);
                 },
                 .still_need => |needed| {
-                    const str = sig.utils.fmt.boundedFmt("still need: {}", .{needed});
-                    self.submitRecoveryMetrics(erasure_set.slot, erasure_meta, false, str.slice(), 0);
+                    self.submitRecoveryMetrics(
+                        erasure_set.slot,
+                        erasure_meta,
+                        false,
+                        .{ .still_need = needed },
+                        0,
+                    );
                 },
             }
         }
@@ -912,11 +918,11 @@ pub const ShredInserter = struct {
             available_shreds.items,
             reed_solomon_cache,
         )) |shreds| {
-            self.submitRecoveryMetrics(index.slot, erasure_meta, true, "complete", shreds.items.len);
+            self.submitRecoveryMetrics(index.slot, erasure_meta, true, .complete, shreds.items.len);
             return shreds;
         } else |e| {
             self.logger.err().logf("shred recovery error: {}", .{e});
-            self.submitRecoveryMetrics(index.slot, erasure_meta, true, "incomplete", 0);
+            self.submitRecoveryMetrics(index.slot, erasure_meta, true, .incomplete, 0);
             return std.ArrayList(Shred).init(self.allocator);
         }
     }
@@ -943,17 +949,17 @@ pub const ShredInserter = struct {
         slot: Slot,
         erasure_meta: *const ErasureMeta,
         attempted: bool,
-        status: []const u8,
+        status: union(enum) { complete, incomplete, still_need: usize },
         recovered: usize,
     ) void {
         const start, const end = erasure_meta.dataShredsIndices();
-        self.logger.debug().logf(
+        self.logger.trace().logf(
             \\datapoint: blockstore-erasure
             \\    slot: {[slot]}
             \\    start_index: {[start_index]}
             \\    end_index: {[end_index]}
             \\    recovery_attempted: {[recovery_attempted]}
-            \\    recovery_status: {[recovery_status]s}
+            \\    recovery_status: {[recovery_status]any}
             \\    recovered: {[recovered]}
         , .{
             .slot = slot,
@@ -962,6 +968,11 @@ pub const ShredInserter = struct {
             .recovery_attempted = attempted,
             .recovery_status = status,
             .recovered = recovered,
+        });
+        self.metrics.recovery_outcome.observe(switch (status) {
+            .complete => if (attempted) .success else .already_complete,
+            .incomplete => if (attempted) .fail else .not_enough,
+            .still_need => .not_enough,
         });
     }
 };
@@ -1077,7 +1088,7 @@ pub const CompletedDataSetInfo = struct {
     end_index: u32,
 };
 
-pub const BlockstoreInsertionMetrics = struct {
+pub const ShredInserterMetrics = struct {
     insert_lock_elapsed_us: *Counter, // u64
     insert_shreds_elapsed_us: *Counter, // u64
     shred_recovery_elapsed_us: *Counter, // u64
@@ -1104,6 +1115,17 @@ pub const BlockstoreInsertionMetrics = struct {
     num_code_shreds_invalid: *Counter, // usize
     num_code_shreds_invalid_erasure_config: *Counter, // usize
     num_code_shreds_inserted: *Counter, // usize
+
+    recovery_outcome: *VariantCounter(enum {
+        /// we already had every shred. recovery is not needed.
+        already_complete,
+        /// don't have enough shreds from the erasure set to perform a recovery.
+        not_enough,
+        /// successfully recovered shreds.
+        success,
+        /// failed to recover the shreds.
+        fail,
+    }),
 
     pub const prefix = "shred_inserter";
 };
@@ -1327,7 +1349,7 @@ test "merkle root metas coding" {
     var state = try ShredInserterTestState.initWithLogger(std.testing.allocator, @src(), .noop);
     defer state.deinit();
     const allocator = state.allocator();
-    const metrics = try sig.prometheus.globalRegistry().initStruct(BlockstoreInsertionMetrics);
+    const metrics = try sig.prometheus.globalRegistry().initStruct(ShredInserterMetrics);
 
     const slot = 1;
     const start_index = 0;
