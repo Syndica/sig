@@ -369,28 +369,29 @@ pub const TurbineTree = struct {
     ) !std.ArrayList(Node) {
         var nodes = try std.ArrayList(Node).initCapacity(
             allocator,
-            gossip_peers.len + staked_nodes.count(),
+            gossip_peers.len + staked_nodes.count() + 1, // 1 for self
         );
         defer nodes.deinit();
 
         var pubkeys = std.AutoArrayHashMap(Pubkey, void).init(allocator);
         defer pubkeys.deinit();
 
-        // Add ourself to the list of nodes
-        if (use_stake_hack_for_testing) {
+        const my_stake = if (use_stake_hack_for_testing) blk: {
             var max_stake: u64 = 0;
             for (staked_nodes.values()) |stake| if (stake > max_stake) {
                 max_stake = stake;
             };
-            nodes.appendAssumeCapacity(
-                .{ .id = .{ .contact_info = my_contact_info }, .stake = @divFloor(max_stake, 2) },
-            );
-        } else {
-            try nodes.append(.{
-                .id = .{ .contact_info = my_contact_info },
-                .stake = if (staked_nodes.get(my_contact_info.pubkey)) |stake| stake else 0,
-            });
-        }
+            break :blk @divFloor(max_stake, 2);
+        } else if (staked_nodes.get(my_contact_info.pubkey)) |stake|
+            stake
+        else
+            0;
+
+        // Add ourself to the list of nodes
+        nodes.appendAssumeCapacity(.{
+            .id = .{ .contact_info = my_contact_info },
+            .stake = my_stake,
+        });
         try pubkeys.put(my_contact_info.pubkey, void{});
 
         // Add all TVU peers directly to the list of nodes
