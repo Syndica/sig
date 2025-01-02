@@ -290,7 +290,33 @@ pub const GetVersion = struct {
     };
 };
 
-// TODO: getVoteAccounts
+const GetVoteAccounts = struct {
+    config: ?Config,
+
+    const Config = struct {
+        commitment: ?types.Commitment = null,
+        votePubkey: ?Pubkey = null,
+        keepUnstakedDelinquents: ?bool = null,
+        delinquintSlotDistance: ?u64 = null,
+    };
+
+    pub const Response = struct {
+        current: []const VoteAccount,
+        delinquent: []const VoteAccount,
+    };
+
+    pub const VoteAccount = struct {
+        votePubkey: sig.core.Pubkey,
+        nodePubkey: sig.core.Pubkey,
+        activatedStake: u64,
+        epochVoteAccount: bool,
+        commission: u8,
+        lastVote: u64,
+        epochCredits: []const [3]u64,
+        rootSlot: u64,
+    };
+};
+
 // TODO: isBlockhashValid
 // TODO: minimumLedgerSlot
 

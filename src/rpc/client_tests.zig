@@ -29,6 +29,7 @@ const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSlot = methods.GetSlot;
 const GetVersion = methods.GetVersion;
+const GetVoteAccounts = methods.GetVoteAccounts;
 
 const Response = rpc.response.Response;
 
@@ -276,4 +277,51 @@ test GetVersion {
         \\{"jsonrpc":"2.0","result":{"feature-set":1793238286,"solana-core":"2.1.6"},"id":1}
         ,
     );
+}
+
+test GetVoteAccounts {
+    const response_json =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "result": {
+        \\    "current": [
+        \\      {
+        \\        "commission": 0,
+        \\        "epochVoteAccount": true,
+        \\        "epochCredits": [
+        \\          [1, 64, 0],
+        \\          [2, 192, 64]
+        \\        ],
+        \\        "nodePubkey": "B97CCUW3AEZFGy6uUg6zUdnNYvnVq5VG8PUtb2HayTDD",
+        \\        "lastVote": 147,
+        \\        "activatedStake": 42,
+        \\        "votePubkey": "3ZT31jkAGhUaw8jsy4bTknwBMP8i4Eueh52By4zXcsVw",
+        \\        "rootSlot": 100
+        \\      }
+        \\    ],
+        \\    "delinquent": []
+        \\  },
+        \\  "id": 1
+        \\}
+    ;
+
+    var response = try Response(types.GetVoteAccountsResponse).init(std.testing.allocator, .{});
+    try response.bytes.appendSlice(response_json);
+    defer response.deinit();
+    try response.parse();
+    const actual = try response.result();
+    const expected = types.GetVoteAccountsResponse{
+        .current = &.{.{
+            .commission = 0,
+            .epochVoteAccount = true,
+            .epochCredits = &.{ .{ 1, 64, 0 }, .{ 2, 192, 64 } },
+            .nodePubkey = try Pubkey.fromString("B97CCUW3AEZFGy6uUg6zUdnNYvnVq5VG8PUtb2HayTDD"),
+            .lastVote = 147,
+            .activatedStake = 42,
+            .votePubkey = try Pubkey.fromString("3ZT31jkAGhUaw8jsy4bTknwBMP8i4Eueh52By4zXcsVw"),
+            .rootSlot = 100,
+        }},
+        .delinquent = &.{},
+    };
+    try std.testing.expect(sig.utils.types.eql(expected, actual));
 }
