@@ -290,7 +290,7 @@ pub const GetVersion = struct {
     };
 };
 
-const GetVoteAccounts = struct {
+pub const GetVoteAccounts = struct {
     config: ?Config,
 
     const Config = struct {

@@ -280,7 +280,21 @@ test GetVersion {
 }
 
 test GetVoteAccounts {
-    const response_json =
+    try testResponse(
+        GetVoteAccounts,
+        .{ .result = .{
+            .current = &.{.{
+                .commission = 0,
+                .epochVoteAccount = true,
+                .epochCredits = &.{ .{ 1, 64, 0 }, .{ 2, 192, 64 } },
+                .nodePubkey = try Pubkey.fromString("B97CCUW3AEZFGy6uUg6zUdnNYvnVq5VG8PUtb2HayTDD"),
+                .lastVote = 147,
+                .activatedStake = 42,
+                .votePubkey = try Pubkey.fromString("3ZT31jkAGhUaw8jsy4bTknwBMP8i4Eueh52By4zXcsVw"),
+                .rootSlot = 100,
+            }},
+            .delinquent = &.{},
+        } },
         \\{
         \\  "jsonrpc": "2.0",
         \\  "result": {
@@ -303,25 +317,6 @@ test GetVoteAccounts {
         \\  },
         \\  "id": 1
         \\}
-    ;
-
-    var response = try Response(types.GetVoteAccountsResponse).init(std.testing.allocator, .{});
-    try response.bytes.appendSlice(response_json);
-    defer response.deinit();
-    try response.parse();
-    const actual = try response.result();
-    const expected = types.GetVoteAccountsResponse{
-        .current = &.{.{
-            .commission = 0,
-            .epochVoteAccount = true,
-            .epochCredits = &.{ .{ 1, 64, 0 }, .{ 2, 192, 64 } },
-            .nodePubkey = try Pubkey.fromString("B97CCUW3AEZFGy6uUg6zUdnNYvnVq5VG8PUtb2HayTDD"),
-            .lastVote = 147,
-            .activatedStake = 42,
-            .votePubkey = try Pubkey.fromString("3ZT31jkAGhUaw8jsy4bTknwBMP8i4Eueh52By4zXcsVw"),
-            .rootSlot = 100,
-        }},
-        .delinquent = &.{},
-    };
-    try std.testing.expect(sig.utils.types.eql(expected, actual));
+        ,
+    );
 }
