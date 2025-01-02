@@ -4,8 +4,6 @@ const Allocator = std.mem.Allocator;
 
 /// Wraps a parsed response from the RPC server with an arena that owns all
 /// contained pointers.
-///
-/// TODO: tuple arena + separate struct?
 pub fn Response(comptime Method: type) type {
     return struct {
         arena: *std.heap.ArenaAllocator,
@@ -64,13 +62,10 @@ pub fn Response(comptime Method: type) type {
 pub const Error = struct {
     code: i64,
     message: []const u8,
-    // data: ?std.json.Value = null,
+    data: ?std.json.Value = null,
 
     // TODO: Replace data with structured data
     pub fn dataAsString(self: *const Error, allocator: std.mem.Allocator) ![]const u8 {
-        _ = self; // autofix
-        _ = allocator; // autofix
-        // return std.json.stringifyAlloc(allocator, self.data.?, .{});
-        return "";
+        return std.json.stringifyAlloc(allocator, self.data.?, .{});
     }
 };
