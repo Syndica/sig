@@ -254,7 +254,7 @@ pub fn createGeyserWriterFromConfig(
     allocator: std.mem.Allocator,
     geyser_config: sig.cmd.config.GeyserConfig,
 ) !*GeyserWriter {
-    if (geyser_config.enable) return error.GeyserWriterIsDisabled;
+    if (!geyser_config.enable) return error.GeyserWriterIsDisabled;
 
     const exit = try allocator.create(Atomic(bool));
     exit.* = Atomic(bool).init(false);
