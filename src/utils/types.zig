@@ -78,8 +78,29 @@ pub fn ReturnType(comptime FnPtr: type) type {
 }
 
 /// Gets the error set from the return type of a function
-pub fn ErrorReturn(function: anytype) type {
-    return @typeInfo(ReturnType(@TypeOf(function))).ErrorUnion.error_set;
+pub fn ErrorReturn(function: anytype) ?type {
+    const info = @typeInfo(ReturnType(@TypeOf(function)));
+    return if (info == .ErrorUnion) info.ErrorUnion.error_set else null;
+}
+
+/// Converts item to an error union.
+/// - If it's already an error union, this returns the item as-is.
+/// - If it's not an error union, this function converts it into an
+///   error union with the empty error set.
+///
+/// This is useful in a generic context when you are calling a function
+/// which you think might return an error, and you need to unwrap its
+/// non-error return type using `try`. But you're not actually sure
+/// about the return type of the function, and it might not actually be
+/// an error union. In that case, it would be a compiler error to use
+/// `try`. By wrapping the function call with `tryable`, you can rest
+/// assured that `try` will unwrap the output without triggering any
+/// type errors, regardless of whether the function is fallible.
+pub fn tryable(item: anytype) if (@typeInfo(@TypeOf(item)) == .ErrorUnion)
+    @TypeOf(item)
+else
+    error{}!@TypeOf(item) {
+    return item;
 }
 
 pub const AllocManagement = enum {

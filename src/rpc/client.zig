@@ -91,7 +91,7 @@ pub const HttpFetcher = struct {
     const Self = @This();
 
     pub const Error = error{HttpRequestFailed} ||
-        ErrorReturn(std.http.Client.fetch) || Allocator.Error;
+        ErrorReturn(std.http.Client.fetch).? || Allocator.Error;
 
     pub fn init(allocator: Allocator, base_url: []const u8, options: Options) Allocator.Error!Self {
         return .{
@@ -152,7 +152,7 @@ pub const HttpFetcher = struct {
         self: *Self,
         request_payload: []const u8,
         response_payload: *std.ArrayList(u8),
-    ) ErrorReturn(std.http.Client.fetch)!std.http.Client.FetchResult {
+    ) ErrorReturn(std.http.Client.fetch).?!std.http.Client.FetchResult {
         return self.http_client.fetch(.{
             .location = .{ .url = self.base_url },
             .method = .POST,

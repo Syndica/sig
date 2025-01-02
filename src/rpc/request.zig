@@ -26,6 +26,12 @@ pub fn serializeTuple(allocator: Allocator, method: []const u8, params: anytype)
     );
 }
 
+pub fn deserializeLeaky(Request: type, allocator: Allocator, request: []const u8) Request {
+    _ = allocator; // autofix
+    _ = request; // autofix
+
+}
+
 fn asTuple(item: anytype) AsTuple(@TypeOf(item)) {
     var tuple: AsTuple(@TypeOf(item)) = undefined;
     inline for (@typeInfo(@TypeOf(item)).Struct.fields, 0..) |*field, i| {
