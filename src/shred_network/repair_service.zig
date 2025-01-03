@@ -29,7 +29,7 @@ const Registry = sig.prometheus.Registry;
 const RwMux = sig.sync.RwMux;
 const SignedGossipData = sig.gossip.SignedGossipData;
 const SocketAddr = sig.net.SocketAddr;
-const SocketThread = sig.net.SocketThread;
+const SocketChannel = sig.net.SocketChannel;
 const Slot = sig.core.Slot;
 
 const RepairRequest = shred_network.repair_message.RepairRequest;
@@ -251,7 +251,7 @@ pub const RepairRequester = struct {
     logger: ScopedLogger(@typeName(Self)),
     random: Random,
     keypair: *const KeyPair,
-    sender: SocketThread,
+    sender: SocketChannel,
     metrics: Metrics,
 
     const Self = @This();
@@ -272,7 +272,9 @@ pub const RepairRequester = struct {
         udp_send_socket: Socket,
         exit: *Atomic(bool),
     ) !Self {
-        const sndr = try SocketThread.initSender(allocator, logger, udp_send_socket, exit);
+        const sndr = try SocketChannel.initSender(allocator, logger, udp_send_socket, exit);
+        errdefer sndr.deinit(allocator);
+
         return .{
             .allocator = allocator,
             .logger = logger.withScope(@typeName(Self)),
@@ -309,7 +311,7 @@ pub const RepairRequester = struct {
                 self.random.int(Nonce),
             );
             packet.size = data.len;
-            try self.sender.channel.send(packet);
+            try self.sender.send(packet);
             self.metrics.pending_requests.dec();
             self.metrics.sent_request_count.inc();
         }

@@ -20,7 +20,7 @@ const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
 const RepairMessage = shred_network.repair_message.RepairMessage;
 const Slot = sig.core.Slot;
-const SocketThread = sig.net.SocketThread;
+const SocketChannel = sig.net.SocketChannel;
 const VariantCounter = sig.prometheus.VariantCounter;
 
 const NUM_TVU_RECEIVERS = 2;
@@ -47,38 +47,34 @@ pub const ShredReceiver = struct {
         defer self.logger.err().log("exiting shred receiver");
         errdefer self.logger.err().log("error in shred receiver");
 
-        var response_sender = try SocketThread
+        const response_sender = try SocketChannel
             .initSender(self.allocator, self.logger.unscoped(), self.repair_socket, self.exit);
         defer response_sender.deinit(self.allocator);
-        var repair_receiver = try SocketThread
+        const repair_receiver = try SocketChannel
             .initReceiver(self.allocator, self.logger.unscoped(), self.repair_socket, self.exit);
         defer repair_receiver.deinit(self.allocator);
 
-        var turbine_receivers: [NUM_TVU_RECEIVERS]SocketThread = undefined;
-        for (0..NUM_TVU_RECEIVERS) |i| {
-            turbine_receivers[i] = try SocketThread.initReceiver(
+        var turbine_receivers: std.BoundedArray(SocketChannel, NUM_TVU_RECEIVERS) = .{};
+        defer for (turbine_receivers.slice()) |r| r.deinit(self.allocator);
+
+        for (0..NUM_TVU_RECEIVERS) |_| {
+            turbine_receivers.append(try SocketChannel.initReceiver(
                 self.allocator,
                 self.logger.unscoped(),
                 self.turbine_socket,
                 self.exit,
-            );
-        }
-        defer for (turbine_receivers) |r| r.deinit(self.allocator);
-
-        var turbine_channels: [NUM_TVU_RECEIVERS]*Channel(Packet) = undefined;
-        for (&turbine_receivers, &turbine_channels) |*receiver, *channel| {
-            channel.* = receiver.channel;
+            )) catch unreachable;
         }
 
         const turbine_thread = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, &turbine_channels, response_sender.channel, false },
+            .{ self, turbine_receivers.slice(), response_sender, false },
         );
         const receiver_thread = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, &.{repair_receiver.channel}, response_sender.channel, true },
+            .{ self, &.{repair_receiver}, response_sender, true },
         );
         turbine_thread.join();
         receiver_thread.join();
@@ -88,8 +84,8 @@ pub const ShredReceiver = struct {
     /// Returns when exit is set to true.
     fn runPacketHandler(
         self: *Self,
-        receivers: []const *Channel(Packet),
-        response_sender: *Channel(Packet),
+        receivers: []const SocketChannel,
+        response_sender: SocketChannel,
         comptime is_repair: bool,
     ) !void {
         while (!self.exit.load(.acquire)) {
@@ -109,7 +105,7 @@ pub const ShredReceiver = struct {
     fn handlePacket(
         self: Self,
         packet: Packet,
-        response_sender: *Channel(Packet),
+        response_sender: SocketChannel,
         comptime is_repair: bool,
     ) !void {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
