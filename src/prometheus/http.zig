@@ -41,6 +41,7 @@ pub fn getMetrics(
     _: *httpz.Request,
     response: *httpz.Response,
 ) !void {
+    response.content_type = .TEXT; // expected by prometheus
     try self.registry.write(self.allocator, response.writer());
 }
 
