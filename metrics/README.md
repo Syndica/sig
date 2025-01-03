@@ -43,6 +43,14 @@ linux: `docker compose down`
 
 `./zig-out/bin/sig gossip -n testnet 2>&1 | tee -a logs/sig.log`
 
+## Setting up Alerts
+
+Set the slack webhook url env variable in `/metrics/.env` file.
+
+```
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+```
+
 ## Expected result
 
 ```

@@ -1,0 +1,17 @@
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: slack-sig-alerts
+    editable: true
+    receivers:
+      - uid: ae8wvbjn9bncxe
+        type: slack
+        settings:
+          recipient: sig
+          url: ${SLACK_WEBHOOK_URL}
+          text: |-
+            {{ range .Alerts.Firing}}
+              {{ index .Labels "message"}}
+            {{ end }}
+          title: "{{ len .Alerts.Firing }} Alert(s) Firing"
+        disableResolveMessage: false

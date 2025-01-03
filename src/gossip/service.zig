@@ -169,11 +169,13 @@ pub const GossipService = struct {
     thread_pool: ThreadPool,
     // TODO: fix when http server is working
     // echo_server: EchoServer,
-    logger: ScopedLogger(@typeName(GossipService)),
+    logger: ScopedLogger(LOG_SCOPE),
     metrics: GossipMetrics,
     service_manager: ServiceManager,
 
     const Self = @This();
+
+    pub const LOG_SCOPE = "gossip_service";
 
     const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
 
@@ -211,7 +213,7 @@ pub const GossipService = struct {
         maybe_entrypoints: ?[]const SocketAddr,
         logger: Logger,
     ) !Self {
-        const gossip_logger = logger.withScope(@typeName(GossipService));
+        const gossip_logger = logger.withScope(LOG_SCOPE);
 
         // setup channels for communication between threads
         var packet_incoming_channel = try Channel(Packet).create(allocator);
@@ -235,7 +237,7 @@ pub const GossipService = struct {
             .max_threads = @intCast(n_threads),
             .stack_size = 2 * 1024 * 1024,
         });
-        gossip_logger.debug().logf("using n_threads in gossip: {}", .{n_threads});
+        gossip_logger.info().logf("starting threadpool with {} threads", .{n_threads});
 
         // setup the table
         var gossip_table = try GossipTable.init(gossip_value_allocator);
@@ -2096,7 +2098,7 @@ pub const GossipMetrics = struct {
     // logging details
     _logging_fields: struct {
         // Scoping to GossipService instead of logging fields struct.
-        logger: ScopedLogger(@typeName(GossipService)),
+        logger: ScopedLogger(GossipService.LOG_SCOPE),
         log_interval_micros: i64 = 10 * std.time.us_per_s,
         last_log: i64 = 0,
         last_logged_snapshot: StatsToLog = .{},
@@ -2133,7 +2135,7 @@ pub const GossipMetrics = struct {
         5000, 10000,
     };
 
-    pub fn init(logger: ScopedLogger(@typeName(GossipService))) GetMetricError!Self {
+    pub fn init(logger: ScopedLogger(GossipService.LOG_SCOPE)) GetMetricError!Self {
         var self: Self = undefined;
         const registry = globalRegistry();
         std.debug.assert(try registry.initFields(&self) == 1);
@@ -2177,7 +2179,7 @@ pub const GossipMetrics = struct {
         };
 
         logging_fields.logger.info().logf(
-            "gossip: recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
+            "recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
                 current_stats.gossip_packets_received_total - logging_fields.last_logged_snapshot.gossip_packets_received_total,
                 current_stats.ping_messages_recv - logging_fields.last_logged_snapshot.ping_messages_recv,
@@ -2189,7 +2191,7 @@ pub const GossipMetrics = struct {
             },
         );
         logging_fields.logger.info().logf(
-            "gossip: sent: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
+            "sent: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
                 current_stats.ping_messages_sent - logging_fields.last_logged_snapshot.ping_messages_sent,
                 current_stats.pong_messages_sent - logging_fields.last_logged_snapshot.pong_messages_sent,
