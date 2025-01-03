@@ -161,6 +161,11 @@ pub fn build(b: *Build) void {
     fuzz_exe.root_module.addImport("zig-network", zig_network_module);
     fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
+    fuzz_exe.root_module.addOptions("build-options", build_options);
+    switch (blockstore_db) {
+        .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
     fuzz_exe.linkLibC();
 
     const fuzz_exe_run = b.addRunArtifact(fuzz_exe);
