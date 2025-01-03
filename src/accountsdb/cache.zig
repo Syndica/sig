@@ -33,7 +33,7 @@ pub const AccountsCache = struct {
             const buf = try allocator.alignedAlloc(
                 u8,
                 @alignOf(CachedAccount),
-                @sizeOf(CachedAccount) + account.data.len,
+                @sizeOf(CachedAccount) + account.data.len(),
             );
             const new_entry = @as(*CachedAccount, @ptrCast(buf.ptr));
             const account_data = buf[@sizeOf(CachedAccount)..];
@@ -55,7 +55,7 @@ pub const AccountsCache = struct {
             const buf: []align(8) u8 = @as(
                 [*]align(8) u8,
                 @ptrCast(self),
-            )[0 .. @sizeOf(CachedAccount) + self.account.data.len];
+            )[0 .. @sizeOf(CachedAccount) + self.account.data.len()];
             @memset(buf, undefined);
             allocator.free(buf);
         }
