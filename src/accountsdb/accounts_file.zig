@@ -8,6 +8,10 @@ const Slot = sig.core.time.Slot;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
 const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
+const ReadHandle = sig.accounts_db.buffer_pool.ReadHandle;
+const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
+
+const FRAME_SIZE = sig.accounts_db.buffer_pool.FRAME_SIZE;
 
 const writeIntLittleMem = sig.core.account.writeIntLittleMem;
 
@@ -79,10 +83,11 @@ pub const FileId = enum(Int) {
 /// Analogous to [StoredAccountMeta::AppendVec](https://github.com/anza-xyz/agave/blob/f8067ea7883e04bdfc1a82b0779f7363b71bf548/accounts-db/src/account_storage/meta.rs#L21)
 pub const AccountInFile = struct {
     // pointers to mmap contents
-    store_info: *StorageInfo,
-    account_info: *AccountInfo,
-    hash_ptr: *Hash,
-    data: []u8,
+    store_info: StorageInfo,
+    account_info: AccountInfo,
+    hash: Hash,
+
+    data: ReadHandle,
 
     // other info (used when parsing accounts out)
     offset: usize = 0,
@@ -165,22 +170,22 @@ pub const AccountInFile = struct {
     pub fn getSizeInFile(self: *const Self) u64 {
         return std.mem.alignForward(
             usize,
-            AccountInFile.STATIC_SIZE + self.data.len,
+            AccountInFile.STATIC_SIZE + self.data.len(),
             @sizeOf(u64),
         );
     }
 
     pub fn validate(self: *const Self) ValidateError!void {
         // make sure upper bits are zero
-        const exec_byte = @as(*u8, @ptrCast(self.executable()));
-        const valid_exec = exec_byte.* & ~@as(u8, 1) == 0;
+        const exec_byte = @as(*const u8, @ptrCast(self.executable())).*;
+        const valid_exec = exec_byte & ~@as(u8, 1) == 0;
         if (!valid_exec) {
             return error.InvalidExecutableFlag;
         }
 
         const valid_lamports = self.account_info.lamports != 0 or (
         // ie, is default account
-            self.data.len == 0 and
+            self.data.len() == 0 and
             self.owner().isZeroed() and
             self.executable().* == false and
             self.rent_epoch().* == 0);
@@ -213,32 +218,32 @@ pub const AccountInFile = struct {
         };
     }
 
-    pub inline fn pubkey(self: *const Self) *Pubkey {
+    pub inline fn pubkey(self: *const Self) *const Pubkey {
         return &self.store_info.pubkey;
     }
 
-    pub inline fn lamports(self: *const Self) *u64 {
+    pub inline fn lamports(self: *const Self) *const u64 {
         return &self.account_info.lamports;
     }
 
-    pub inline fn owner(self: *const Self) *Pubkey {
+    pub inline fn owner(self: *const Self) *const Pubkey {
         return &self.account_info.owner;
     }
 
-    pub inline fn executable(self: *const Self) *bool {
+    pub inline fn executable(self: *const Self) *const bool {
         return &self.account_info.executable;
     }
 
-    pub inline fn rent_epoch(self: *const Self) *Epoch {
+    pub inline fn rent_epoch(self: *const Self) *const Epoch {
         return &self.account_info.rent_epoch;
     }
 
-    pub inline fn hash(self: *const Self) *Hash {
-        return self.hash_ptr;
+    pub inline fn hash(self: *const Self) *const Hash {
+        return &self.hash;
     }
 
     pub fn writeToBuf(self: *const Self, buf: []u8) usize {
-        std.debug.assert(buf.len >= STATIC_SIZE + self.data.len);
+        std.debug.assert(buf.len >= STATIC_SIZE + self.data.len());
 
         var offset: usize = 0;
         offset += self.store_info.writeToBuf(buf[offset..]);
@@ -258,8 +263,11 @@ pub const AccountInFile = struct {
 
 /// Analogous to [AccountStorageEntry](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1069)
 pub const AccountFile = struct {
+
     // file contents
     memory: []align(std.mem.page_size) u8,
+    file: std.fs.File,
+
     id: FileId,
     slot: Slot,
     // number of bytes used
@@ -287,6 +295,7 @@ pub const AccountFile = struct {
 
         return .{
             .memory = memory,
+            .file = file,
             .length = accounts_file_info.length,
             .id = accounts_file_info.id,
             .slot = slot,
@@ -376,14 +385,81 @@ pub const AccountFile = struct {
         const len = offset - start_offset;
 
         return AccountInFile{
-            .store_info = store_info,
-            .account_info = account_info,
-            .hash_ptr = hash,
+            .store_info = store_info.*,
+            .account_info = account_info.*,
+            .hash = hash.*,
             .data = data,
             .len = len,
             .offset = start_offset,
         };
     }
+
+    pub fn newRead(
+        self: *const Self,
+        buffer_pool: *BufferPool,
+        metadata_allocator: std.mem.Allocator,
+        start_offset: u32,
+        length: u32,
+    ) !ReadHandle {
+        const end_offset_exclusive, const overflow_flag = @addWithOverflow(start_offset, length);
+
+        if (overflow_flag == 1 or end_offset_exclusive > self.length) {
+            return error.EOF;
+        }
+
+        return try buffer_pool.read(metadata_allocator, self.file, self.id, start_offset, end_offset_exclusive);
+    }
+
+    // pub fn readRange(
+    //     self: *const Self,
+    //     buffer_pool: *BufferPool,
+    //     metadata_allocator: std.mem.Allocator,
+    //     start_offset: u32,
+    //     length: u32,
+    // ) !ReadHandle {
+    //     const end_offset_exclusive, const overflow_flag = @addWithOverflow(start_offset, length);
+
+    //     if (overflow_flag == 1 or end_offset_exclusive > self.length) {
+    //         return error.EOF;
+    //     }
+
+    //     return try buffer_pool.read(metadata_allocator, self.file, self.id, start_offset, end_offset_exclusive);
+    // }
+
+    pub fn readTypeCopy(
+        self: *const Self,
+        buffer_pool: *BufferPool,
+        metadata_allocator: std.mem.Allocator,
+        start_offset: u32,
+        comptime T: type,
+    ) !T {
+        const length = @sizeOf(T);
+        const read = try self.readRange(buffer_pool, metadata_allocator, start_offset, length);
+        defer read.deinit(metadata_allocator);
+
+        var data: T = undefined;
+        try read.readAll(std.mem.asBytes(&data));
+
+        return data;
+    }
+
+    // /// User is expected to deinit ReadHandle once done reading from pointer.
+    // /// Type in file should be well aligned - function will fail if the value
+    // /// "strides" buffer
+    // pub fn readTypeBorrowed(
+    //     self: *const Self,
+    //     buffer_pool: *BufferPool,
+    //     metadata_allocator: std.mem.Allocator,
+    //     start_offset: u32,
+    //     comptime T: type,
+    // ) !struct { *T, ReadHandle } {
+    //     const length = @sizeOf(T);
+
+    //     const read = try self.readSlice(buffer_pool, metadata_allocator, start_offset, length);
+    //     errdefer read.deinit(metadata_allocator);
+
+    //     const slice: []const T = try read.borrowSlice(start_offset, length);
+    // }
 
     pub fn getSlice(self: *const Self, start_index_ptr: *usize, length: usize) error{EOF}![]u8 {
         const start_index = start_index_ptr.*;
@@ -442,5 +518,5 @@ test "core.accounts_file: verify accounts file" {
     const hash_and_lamports = try accounts_file.getAccountHashAndLamports(0);
 
     try std.testing.expectEqual(account.lamports().*, hash_and_lamports.lamports.*);
-    try std.testing.expectEqual(account.hash().*, hash_and_lamports.hash.*);
+    try std.testing.expectEqual(account.hash, hash_and_lamports.hash.*);
 }
