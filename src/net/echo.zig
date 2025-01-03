@@ -33,10 +33,10 @@ pub fn getShredAndIPFromEchoServer(
                 my_ip = response.address;
 
             if (response.shred_version) |shred_version| {
-                logger.info().logf(
-                    "shred version: {} - from entrypoint ip echo: {s}",
-                    .{ shred_version.value, socket_addr.toString().constSlice() },
-                );
+                logger.info()
+                    .field("shred_version", shred_version.value)
+                    .field("ip", socket_addr.toString().constSlice())
+                    .log("ip echo response");
                 my_shred_version = shred_version.value;
             }
 
