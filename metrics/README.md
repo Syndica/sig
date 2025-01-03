@@ -1,19 +1,19 @@
 original src: https://github.com/docker/awesome-compose/tree/master/prometheus-grafana
 
-## Setup 
+## Setup
 
-requirements: 
-- `docker compose` 
+requirements:
+- `docker compose`
   - [https://docs.docker.com/engine/install/ubuntu/](https://docs.docker.com/engine/install/ubuntu/)
-- either mac or linux supported 
+- either mac or linux supported
 
-modify `/etc/hosts` to include the following line: 
+modify `/etc/hosts` to include the following line:
 ```
 127.0.0.1 prometheus
+127.0.0.1 loki
 ```
 
-
-## Running 
+## Running
 
 mac: `docker compose -f compose_mac.yaml up -d`
 linux: `docker compose -f compose_linux.yaml up -d`
@@ -21,7 +21,7 @@ linux: `docker compose -f compose_linux.yaml up -d`
 - grafana will be accessable on `localhost:3000`
   - note: `username: admin password: grafana`
 - prometheus will be accessable on `localhost:9090`
-- sig metrics will be published to localhost:12345 (if you change this on the sig cli, you will 
+- sig metrics will be published to localhost:12345 (if you change this on the sig cli, you will
 need to also modify the prometheus `target` to point to the different port).
 
 ## Shutting down
@@ -37,31 +37,19 @@ Project structure:
 .
 ├── compose_linux.yaml
 ├── compose_mac.yaml
+├── alloy -- this scrapes logs/ and pushes to loki
+├── loki -- log database
 ├── grafana
 │   └── dashboards/ -- this is where the sig dashboard lives (will need to copy .json export of dashboard from running container and push through git for any dashboard changes)
 │   └── datasources/ -- this points to prometheus docker
 ├── prometheus
-│   └── prometheus.yml 
+│   └── prometheus.yml
 └── README.md
 ```
 
-[_compose.yaml_](compose.yaml)
-```
-services:
-  prometheus:
-    image: prom/prometheus
-    ...
-    ports:
-      - 9090:9090
-  grafana:
-    image: grafana/grafana
-    ...
-    ports:
-      - 3000:3000
-```
-The compose file defines a stack with two services `prometheus` and `grafana`.
-When deploying the stack, docker compose maps port the default ports for each service to the equivalent ports on the host in order to inspect easier the web interface of each service.
-Make sure the ports 9090 and 3000 on the host are not already in use.
+## Run with logs
+
+`./zig-out/bin/sig gossip -n testnet 2>&1 | tee -a logs/sig.log`
 
 ## Deploy with docker compose
 
