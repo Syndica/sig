@@ -2384,7 +2384,7 @@ pub const AccountsDB = struct {
                 defer bhs_lg.unlock();
                 bhs.update(.{
                     .lamports = account_in_file.lamports().*,
-                    .data_len = account_in_file.data.len,
+                    .data_len = account_in_file.data.len(),
                     .executable = account_in_file.executable().*,
                 });
             }

@@ -3,10 +3,11 @@ const sig = @import("../sig.zig");
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
+const ReadHandle = sig.accounts_db.buffer_pool.ReadHandle;
 
 pub const Account = struct {
     lamports: u64,
-    data: []u8,
+    data: ReadHandle,
     owner: Pubkey,
     executable: bool,
     rent_epoch: Epoch,
@@ -16,8 +17,8 @@ pub const Account = struct {
     }
 
     pub fn initRandom(allocator: std.mem.Allocator, random: std.Random, data_len: usize) !Account {
-        const data = try allocator.alloc(u8, data_len);
-        random.bytes(data);
+        const data = try ReadHandle.initUncached(allocator, data_len);
+        random.bytes(data.inner.allocated);
 
         return .{
             .lamports = random.int(u64),
@@ -30,10 +31,11 @@ pub const Account = struct {
 
     // creates a copy of the account. most important is the copy of the data slice.
     pub fn clone(self: *const Account, allocator: std.mem.Allocator) !Account {
-        const data = try allocator.dupe(u8, self.data);
+        _ = allocator;
+
         return .{
             .lamports = self.lamports,
-            .data = data,
+            .data = self.data.dupe(),
             .owner = self.owner,
             .executable = self.executable,
             .rent_epoch = self.rent_epoch,
@@ -52,7 +54,7 @@ pub const Account = struct {
     pub fn getSizeInFile(self: *const Account) usize {
         return std.mem.alignForward(
             usize,
-            AccountInFile.STATIC_SIZE + self.data.len,
+            AccountInFile.STATIC_SIZE + self.data.len(),
             @sizeOf(u64),
         );
     }
