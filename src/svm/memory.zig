@@ -231,7 +231,7 @@ test "aligned region" {
     );
     try expectError(
         error.AccessNotMapped,
-        m.region(INPUT_START + 4),
+        m.region(INPUT_START + 3),
     );
 }
 
