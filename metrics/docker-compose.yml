@@ -1,19 +1,23 @@
 services:
   prometheus:
-    network_mode: "host" # -- only linux
     image: prom/prometheus
     container_name: prometheus
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
+    restart: unless-stopped
     ports:
       - 9090:9090
-    restart: unless-stopped
     volumes:
       - ./prometheus:/etc/prometheus
       - prom_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      # "--log.level=debug" # Not receiving metrics? Consider uncommenting
+
+    # Prometheus needs to be able to connect to the host network as "sig" isn't
+    # containerised. No other service should talk to the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   loki:
-    network_mode: "host" # -- only linux
     image: grafana/loki:3.0.0
     container_name: loki
     ports:
@@ -24,8 +28,8 @@ services:
       - "--config.file=/etc/loki/loki.yml"
 
   alloy:
-    network_mode: "host" # -- only linux
     image: grafana/alloy:v1.3.1
+    container_name: alloy
     ports:
       - "3200:3200"
     volumes:
@@ -37,11 +41,8 @@ services:
         "--server.http.listen-addr=0.0.0.0:3200",
         "/etc/alloy/config.alloy",
       ]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   grafana:
-    network_mode: "host" # -- only linux
     image: grafana/grafana
     container_name: grafana
     ports:
@@ -61,5 +62,6 @@ services:
     ports:
       - 9100:9100
     restart: unless-stopped
+
 volumes:
   prom_data:
