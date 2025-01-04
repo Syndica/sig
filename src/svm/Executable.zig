@@ -2,6 +2,7 @@ const std = @import("std");
 const ebpf = @import("ebpf.zig");
 const Elf = @import("Elf.zig");
 const memory = @import("memory.zig");
+const syscalls = @import("syscalls.zig");
 const Vm = @import("Vm.zig");
 const Executable = @This();
 
@@ -487,16 +488,8 @@ pub fn Registry(T: type) type {
     };
 }
 
-pub const SyscallError = error{
-    InvalidVirtualAddress,
-    AccessNotMapped,
-    SyscallAbort,
-    AccessViolation,
-    VirtualAccessTooLong,
-};
-
 pub const BuiltinProgram = struct {
-    functions: Registry(*const fn (*Vm) SyscallError!void) = .{},
+    functions: Registry(*const fn (*Vm) syscalls.Error!void) = .{},
 
     pub fn deinit(program: *BuiltinProgram, allocator: std.mem.Allocator) void {
         program.functions.deinit(allocator);

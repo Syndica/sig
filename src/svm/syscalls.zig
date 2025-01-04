@@ -6,8 +6,21 @@ const Executable = @import("Executable.zig");
 
 const Pubkey = sig.core.Pubkey;
 
+pub const Syscall = struct {
+    name: []const u8,
+    builtin_fn: *const fn (*Vm) Error!void,
+};
+
+pub const Error = error{
+    InvalidVirtualAddress,
+    AccessNotMapped,
+    SyscallAbort,
+    AccessViolation,
+    VirtualAccessTooLong,
+};
+
 // logging
-pub fn printString(vm: *Vm) Executable.SyscallError!void {
+pub fn printString(vm: *Vm) Error!void {
     const vm_addr = vm.registers.get(.r1);
     const len = vm.registers.get(.r2);
     const host_addr = try vm.memory_map.vmap(.constant, vm_addr, len);
@@ -15,14 +28,14 @@ pub fn printString(vm: *Vm) Executable.SyscallError!void {
     if (!builtin.is_test) std.debug.print("{s}", .{string});
 }
 
-pub fn log(vm: *Vm) Executable.SyscallError!void {
+pub fn log(vm: *Vm) Error!void {
     const vm_addr = vm.registers.get(.r1);
     const len = vm.registers.get(.r2);
     const host_addr = try vm.memory_map.vmap(.constant, vm_addr, len);
     std.debug.print("log: {s}\n", .{host_addr});
 }
 
-pub fn log64(vm: *Vm) Executable.SyscallError!void {
+pub fn log64(vm: *Vm) Error!void {
     const arg1 = vm.registers.get(.r1);
     const arg2 = vm.registers.get(.r2);
     const arg3 = vm.registers.get(.r3);
@@ -35,19 +48,19 @@ pub fn log64(vm: *Vm) Executable.SyscallError!void {
     );
 }
 
-pub fn logPubkey(vm: *Vm) Executable.SyscallError!void {
+pub fn logPubkey(vm: *Vm) Error!void {
     const pubkey_addr = vm.registers.get(.r1);
     const pubkey_bytes = try vm.memory_map.vmap(.constant, pubkey_addr, @sizeOf(Pubkey));
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
     std.debug.print("log: {}\n", .{pubkey});
 }
 
-pub fn logComputeUnits(_: *Vm) Executable.SyscallError!void {
+pub fn logComputeUnits(_: *Vm) Error!void {
     std.debug.print("TODO: compute budget calculations\n", .{});
 }
 
 // memory operators
-pub fn memset(vm: *Vm) Executable.SyscallError!void {
+pub fn memset(vm: *Vm) Error!void {
     const dst_addr = vm.registers.get(.r1);
     const scalar = vm.registers.get(.r2);
     const len = vm.registers.get(.r3);
@@ -56,7 +69,7 @@ pub fn memset(vm: *Vm) Executable.SyscallError!void {
     @memset(host_addr, @truncate(scalar));
 }
 
-pub fn memcpy(vm: *Vm) Executable.SyscallError!void {
+pub fn memcpy(vm: *Vm) Error!void {
     const dst_addr = vm.registers.get(.r1);
     const src_addr = vm.registers.get(.r2);
     const len = vm.registers.get(.r3);
@@ -67,6 +80,6 @@ pub fn memcpy(vm: *Vm) Executable.SyscallError!void {
 }
 
 // special
-pub fn abort(_: *Vm) Executable.SyscallError!void {
+pub fn abort(_: *Vm) Error!void {
     return error.SyscallAbort;
 }
