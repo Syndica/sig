@@ -538,15 +538,13 @@ test "streaming accounts" {
         pubkeys[i] = Pubkey.initRandom(random);
     }
 
-    const exit = try allocator.create(std.atomic.Value(bool));
-    defer allocator.destroy(exit);
-    exit.* = std.atomic.Value(bool).init(false);
+    var exit = std.atomic.Value(bool).init(false);
 
     // setup writer
     var stream_writer = try GeyserWriter.init(
         allocator,
         sig.TEST_DATA_DIR ++ "stream_test.pipe",
-        exit,
+        &exit,
         1 << 18,
     );
     defer stream_writer.deinit();
