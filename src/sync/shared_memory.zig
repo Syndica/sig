@@ -24,7 +24,7 @@ pub fn SharedPointerWindow(
         center: std.atomic.Value(usize),
         lock: std.Thread.RwLock = .{},
         deinit_context: DeinitContext,
-        discard_buf: []?Rc(T),
+        discard_buf: std.atomic.Value(?[*]?Rc(T)),
 
         const Self = @This();
 
@@ -34,13 +34,12 @@ pub fn SharedPointerWindow(
             start: usize,
             deinit_context: DeinitContext,
         ) !Self {
-            const discard_buf = try allocator.alloc(?Rc(T), len);
             return .{
                 .allocator = allocator,
                 .window = try Window(Rc(T)).init(allocator, len, start),
                 .deinit_context = deinit_context,
                 .center = std.atomic.Value(usize).init(start),
-                .discard_buf = discard_buf,
+                .discard_buf = std.atomic.Value(?[*]?Rc(T)).init(null),
             };
         }
 
@@ -48,17 +47,21 @@ pub fn SharedPointerWindow(
             for (self.window.state) |maybe_item| if (maybe_item) |item| {
                 self.releaseItem(item);
             };
-            self.window.deinit();
+            self.window.deinit(self.allocator);
+            if (self.discard_buf.load(.monotonic)) |buf| {
+                self.allocator.free(buf[0..self.window.state.len]);
+            }
         }
 
         pub fn put(self: *Self, index: usize, value: T) !void {
             const ptr = try Rc(T).create(self.allocator);
+            errdefer ptr.deinit(self.allocator);
             ptr.payload().* = value;
 
             const item_to_release = blk: {
                 self.lock.lock();
                 defer self.lock.unlock();
-                break :blk self.window.put(index, ptr) catch null;
+                break :blk try self.window.put(index, ptr);
             };
 
             if (item_to_release) |old| {
@@ -86,15 +89,17 @@ pub fn SharedPointerWindow(
             return self.window.contains(index);
         }
 
-        pub fn realign(self: *Self, new_center: usize) void {
+        pub fn realign(self: *Self, new_center: usize) !void {
             if (new_center == self.center.load(.monotonic)) return;
+            const discard_buf = try self.acquireDiscardBuf();
+            defer self.releaseDiscardBuf(discard_buf);
 
             const items_to_release = blk: {
                 self.lock.lock();
                 defer self.lock.unlock();
 
                 self.center.store(new_center, .monotonic);
-                break :blk self.window.realignGet(new_center, self.discard_buf);
+                break :blk self.window.realignGet(new_center, discard_buf);
             };
 
             for (items_to_release) |maybe_item| {
@@ -112,6 +117,19 @@ pub fn SharedPointerWindow(
             if (item.release()) |bytes_to_free| {
                 deinitItem(item.payload(), self.deinit_context);
                 self.allocator.free(bytes_to_free);
+            }
+        }
+
+        fn acquireDiscardBuf(self: *Self) ![]?Rc(T) {
+            return if (self.discard_buf.swap(null, .acquire)) |buf|
+                buf[0..self.window.state.len]
+            else
+                try self.allocator.alloc(?Rc(T), self.window.state.len);
+        }
+
+        fn releaseDiscardBuf(self: *Self, buf: []?Rc(T)) void {
+            if (self.discard_buf.swap(buf.ptr, .release)) |extra_buf| {
+                self.allocator.free(extra_buf[0..self.window.state.len]);
             }
         }
     };
@@ -143,6 +161,29 @@ pub fn normalizeDeinitFunction(
             }
         }.f,
 
-        else => @compileError("unsupported deinit function type"),
+        else => if (DeinitContext == Allocator and
+            @TypeOf(deinitFn) == @TypeOf(Allocator.free) and deinitFn == Allocator.free)
+            struct {
+                fn free(v: *V, allocator: Allocator) void {
+                    allocator.free(v.*);
+                }
+            }.free
+        else
+            @compileError("unsupported deinit function type"),
     };
+}
+
+test "SharedPointerWindow frees memory" {
+    const allocator = std.testing.allocator;
+    var window = try SharedPointerWindow([]u8, Allocator.free, Allocator)
+        .init(allocator, 3, 1, allocator);
+    defer window.deinit();
+    const first = try allocator.alloc(u8, 1);
+    try window.put(0, first);
+    const second = try allocator.alloc(u8, 1);
+    try window.put(0, second);
+    const third = try allocator.alloc(u8, 1);
+    try window.put(1, third);
+    const fourth = try allocator.alloc(u8, 1);
+    try window.put(2, fourth);
 }
