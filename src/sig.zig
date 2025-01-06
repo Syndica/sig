@@ -31,3 +31,12 @@ pub const TEST_STATE_DIR = "data/test-state/";
 pub const FUZZ_DATA_DIR = "data/fuzz-data/";
 pub const BENCHMARK_RESULTS_DIR = "results/";
 pub const GENESIS_DIR = "data/genesis-files/";
+
+comptime {
+    // sig's global assertions/assumptions
+
+    const target = @import("builtin").target;
+    if (target.ptrBitWidth() != 64) {
+        @compileError("sig only supports 64-bit targets");
+    }
+}
