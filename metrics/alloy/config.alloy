@@ -28,6 +28,7 @@ loki.process "add_label" {
         values = {
             "level" = "",
             "scope" = "",
+            "message" = "",
         }
     }
 

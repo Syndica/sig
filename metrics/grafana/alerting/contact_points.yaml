@@ -10,8 +10,8 @@ contactPoints:
           recipient: sig
           url: ${SLACK_WEBHOOK_URL}
           text: |-
-            {{ range .Alerts.Firing}}
-              {{ index .Labels "message"}}
+            {{ range .Alerts.Firing }}
+              {{ .Annotations.summary }} -- {{ .PanelURL }}
             {{ end }}
           title: "{{ len .Alerts.Firing }} Alert(s) Firing"
         disableResolveMessage: false

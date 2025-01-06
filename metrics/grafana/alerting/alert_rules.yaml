@@ -1,13 +1,11 @@
 apiVersion: 1
 groups:
   - orgId: 1
-    editable: true
     name: sig-alert-evaluation-group
     folder: sig-alert-rule
     interval: 1m
     rules:
       - uid: ce8wwpcp2dkowb
-        editable: true
         title: log-error-alert
         condition: C
         data:
@@ -83,15 +81,19 @@ groups:
               maxDataPoints: 43200
               refId: C
               type: threshold
+        dashboardUid: jBuN47BVz
+        panelId: 26
         noDataState: NoData
         execErrState: Error
         for: 0s
         annotations:
+          __dashboardUid__: jBuN47BVz
+          __panelId__: "26"
           description: ""
           runbook_url: ""
-          summary: ""
+          summary: "error: [{{ $labels.scope }}]: {{ $labels.message }} "
         labels:
-          message: ""
+          "": ""
         isPaused: false
         notification_settings:
           receiver: slack-sig-alerts
