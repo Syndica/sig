@@ -23,7 +23,7 @@ services:
     ports:
       - "3100:3100"
     volumes:
-      - ./loki:/etc/loki
+      - ./loki:/etc/loki:ro
     command:
       - "--config.file=/etc/loki/loki.yml"
 
@@ -33,8 +33,8 @@ services:
     ports:
       - "3200:3200"
     volumes:
-      - "./alloy/config.alloy:/etc/alloy/config.alloy"
-      - "../logs:/var/log/alloy"
+      - "./alloy/config.alloy:/etc/alloy/config.alloy:ro"
+      - "../logs:/var/log/alloy:ro"
     command:
       [
         "run",
