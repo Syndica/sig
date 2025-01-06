@@ -73,7 +73,7 @@ pub fn main() !void {
         if (assemble) {
             break :exec try Executable.fromAsm(allocator, bytes);
         } else {
-            const elf = try Elf.parse(bytes, allocator, &loader);
+            const elf = try Elf.parse(allocator, bytes, &loader);
             break :exec try Executable.fromElf(allocator, &elf);
         }
     };

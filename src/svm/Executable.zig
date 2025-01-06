@@ -54,17 +54,17 @@ pub fn fromAsm(allocator: std.mem.Allocator, source: []const u8) !Executable {
 /// We need to guarantee that the instructions are aligned to `ebpf.Instruction` rather
 /// than 1 like they would be if we created the executable from the Elf file. The GPA
 /// requires allocations and deallocations to be made with the same semantic alignment.
-pub fn deinit(exec: *Executable, allocator: std.mem.Allocator) void {
-    if (!exec.from_elf) allocator.free(@as(
+pub fn deinit(self: *Executable, allocator: std.mem.Allocator) void {
+    if (!self.from_elf) allocator.free(@as(
         []const ebpf.Instruction,
-        @alignCast(exec.instructions),
+        @alignCast(self.instructions),
     ));
 
-    switch (exec.ro_section) {
+    switch (self.ro_section) {
         .owned => |owned| allocator.free(owned.data),
         else => {},
     }
-    exec.function_registry.deinit(allocator);
+    self.function_registry.deinit(allocator);
 }
 
 pub fn getRoRegion(exec: *const Executable) memory.Region {

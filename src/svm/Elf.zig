@@ -1,4 +1,4 @@
-//! Represents the input ELF file
+//! Represents the self ELF file
 
 const std = @import("std");
 const ebpf = @import("ebpf.zig");
@@ -24,13 +24,13 @@ version: ebpf.SBPFVersion,
 function_registry: Executable.Registry(u32),
 
 pub fn parse(
-    bytes: []u8,
     allocator: std.mem.Allocator,
+    bytes: []u8,
     loader: *Executable.BuiltinProgram,
 ) !Elf {
     const header_buffer = bytes[0..@sizeOf(elf.Elf64_Ehdr)];
 
-    var input: Elf = .{
+    var self: Elf = .{
         .bytes = bytes,
         .header = @as(*align(1) const elf.Elf64_Ehdr, @ptrCast(header_buffer)).*,
         .entry_pc = 0,
@@ -43,54 +43,54 @@ pub fn parse(
         .dynamic_symbol_table = &.{},
         .function_registry = .{},
     };
-    errdefer input.function_registry.deinit(allocator);
+    errdefer self.function_registry.deinit(allocator);
 
-    try input.parseHeader();
-    try input.parseDynamic();
+    try self.parseHeader();
+    try self.parseDynamic();
 
-    try input.validate();
-    try input.relocate(allocator, loader);
+    try self.validate();
+    try self.relocate(allocator, loader);
 
-    return input;
+    return self;
 }
 
-fn parseHeader(input: *Elf) !void {
+fn parseHeader(self: *Elf) !void {
     {
-        const shoff = input.header.e_shoff;
-        const shnum = input.header.e_shnum;
+        const shoff = self.header.e_shoff;
+        const shnum = self.header.e_shnum;
         const shsize = shnum * @sizeOf(elf.Elf64_Shdr);
-        input.shdrs = std.mem.bytesAsSlice(elf.Elf64_Shdr, input.bytes[shoff..][0..shsize]);
+        self.shdrs = std.mem.bytesAsSlice(elf.Elf64_Shdr, self.bytes[shoff..][0..shsize]);
     }
 
     {
-        const phoff = input.header.e_phoff;
-        const phnum = input.header.e_phnum;
+        const phoff = self.header.e_phoff;
+        const phnum = self.header.e_phnum;
         const phsize = phnum * @sizeOf(elf.Elf64_Phdr);
-        input.phdrs = std.mem.bytesAsSlice(elf.Elf64_Phdr, input.bytes[phoff..][0..phsize]);
+        self.phdrs = std.mem.bytesAsSlice(elf.Elf64_Phdr, self.bytes[phoff..][0..phsize]);
     }
 
-    input.strtab = input.shdrSlice(input.header.e_shstrndx);
+    self.strtab = self.shdrSlice(self.header.e_shstrndx);
 
-    const text_section = input.getShdrByName(".text") orelse return error.NoTextSection;
-    const offset = input.header.e_entry -| text_section.sh_addr;
-    input.entry_pc = try std.math.divExact(u64, offset, 8);
+    const text_section = self.getShdrByName(".text") orelse return error.NoTextSection;
+    const offset = self.header.e_entry -| text_section.sh_addr;
+    self.entry_pc = try std.math.divExact(u64, offset, 8);
 
-    const sbpf_version: ebpf.SBPFVersion = if (input.header.e_flags == ebpf.EF_SBPF_V2)
+    const sbpf_version: ebpf.SBPFVersion = if (self.header.e_flags == ebpf.EF_SBPF_V2)
         .v2
     else
         .v1;
     if (sbpf_version != .v1)
         std.debug.panic("found sbpf version: {s}, support it!", .{@tagName(sbpf_version)});
-    input.version = sbpf_version;
+    self.version = sbpf_version;
 }
 
 fn parseDynamic(
-    input: *Elf,
+    self: *Elf,
 ) !void {
     var dynamic_table: ?[]align(1) const elf.Elf64_Dyn = &.{};
 
-    if (input.getPhdrIndexByType(elf.PT_DYNAMIC)) |index| {
-        dynamic_table = std.mem.bytesAsSlice(elf.Elf64_Dyn, input.phdrSlice(index));
+    if (self.getPhdrIndexByType(elf.PT_DYNAMIC)) |index| {
+        dynamic_table = std.mem.bytesAsSlice(elf.Elf64_Dyn, self.phdrSlice(index));
     }
 
     // if PT_DYNAMIC doesn't exist or is invalid, fallback to parsing
@@ -106,26 +106,26 @@ fn parseDynamic(
         if (dyn.d_tag == elf.DT_NULL) break;
         if (dyn.d_tag >= elf.DT_NUM) continue; // we don't parse any reversed tags
 
-        input.dynamic_table[@as(u64, @bitCast(dyn.d_tag))] = dyn.d_val;
+        self.dynamic_table[@as(u64, @bitCast(dyn.d_tag))] = dyn.d_val;
     }
 
-    try input.parseDynamicRelocations();
-    try input.parseDynamicSymbolTable();
+    try self.parseDynamicRelocations();
+    try self.parseDynamicSymbolTable();
 }
 
-fn parseDynamicRelocations(input: *Elf) !void {
-    const vaddr = input.dynamic_table[elf.DT_REL];
+fn parseDynamicRelocations(self: *Elf) !void {
+    const vaddr = self.dynamic_table[elf.DT_REL];
     if (vaddr == 0) return;
 
-    if (input.dynamic_table[elf.DT_RELENT] != @sizeOf(elf.Elf64_Rel)) {
+    if (self.dynamic_table[elf.DT_RELENT] != @sizeOf(elf.Elf64_Rel)) {
         return error.InvalidDynamicSectionTable;
     }
 
-    const size = input.dynamic_table[elf.DT_RELSZ];
+    const size = self.dynamic_table[elf.DT_RELSZ];
     if (size == 0) return error.InvalidDynamicSectionTable;
 
     var offset: u64 = 0;
-    for (input.phdrs) |phdr| {
+    for (self.phdrs) |phdr| {
         const p_vaddr = phdr.p_vaddr;
         const p_memsz = phdr.p_memsz;
 
@@ -135,32 +135,32 @@ fn parseDynamicRelocations(input: *Elf) !void {
         }
     } else @panic("invalid dynamic section, investigate special case");
 
-    input.dynamic_relocations_table = std.mem.bytesAsSlice(
+    self.dynamic_relocations_table = std.mem.bytesAsSlice(
         elf.Elf64_Rel,
-        input.bytes[offset..][0..size],
+        self.bytes[offset..][0..size],
     );
 }
 
-fn parseDynamicSymbolTable(input: *Elf) !void {
-    const vaddr = input.dynamic_table[elf.DT_SYMTAB];
+fn parseDynamicSymbolTable(self: *Elf) !void {
+    const vaddr = self.dynamic_table[elf.DT_SYMTAB];
     if (vaddr == 0) return;
 
-    for (input.shdrs, 0..) |shdr, i| {
+    for (self.shdrs, 0..) |shdr, i| {
         if (shdr.sh_addr != vaddr) continue;
 
         if (shdr.sh_type != elf.SHT_SYMTAB and shdr.sh_type != elf.SHT_DYNSYM) {
             return error.InvalidSectionHeader;
         }
 
-        input.dynamic_symbol_table = std.mem.bytesAsSlice(
+        self.dynamic_symbol_table = std.mem.bytesAsSlice(
             elf.Elf64_Sym,
-            input.shdrSlice(@intCast(i)),
+            self.shdrSlice(@intCast(i)),
         );
         return;
     } else return error.InvalidDynamicSectionTable;
 }
 
-pub fn parseRoSections(input: *const Elf, gpa: std.mem.Allocator) !Executable.Section {
+pub fn parseRoSections(self: *const Elf, gpa: std.mem.Allocator) !Executable.Section {
     const ro_names: []const []const u8 = &.{
         ".text",
         ".rodata",
@@ -181,11 +181,11 @@ pub fn parseRoSections(input: *const Elf, gpa: std.mem.Allocator) !Executable.Se
     var ro_slices = try std.ArrayListUnmanaged(struct {
         usize,
         []const u8,
-    }).initCapacity(gpa, input.shdrs.len);
+    }).initCapacity(gpa, self.shdrs.len);
     defer ro_slices.deinit(gpa);
 
-    for (input.shdrs, 0..) |shdr, i| {
-        const name = input.getString(shdr.sh_name);
+    for (self.shdrs, 0..) |shdr, i| {
+        const name = self.getString(shdr.sh_name);
         for (ro_names) |ro_name| {
             if (std.mem.eql(u8, ro_name, name)) break;
         } else continue;
@@ -207,7 +207,7 @@ pub fn parseRoSections(input: *const Elf, gpa: std.mem.Allocator) !Executable.Se
             return error.ValueOutOfBounds;
         }
 
-        const section_data = input.shdrSlice(@intCast(i));
+        const section_data = self.shdrSlice(@intCast(i));
         lowest_addr = @min(lowest_addr, section_addr);
         highest_addr = @max(highest_addr, section_addr +| section_data.len);
         ro_fill_length +|= section_data.len;
@@ -222,7 +222,7 @@ pub fn parseRoSections(input: *const Elf, gpa: std.mem.Allocator) !Executable.Se
 
     lowest_addr = 0;
     const buf_len = highest_addr;
-    if (buf_len > input.bytes.len) {
+    if (buf_len > self.bytes.len) {
         return error.ValueOutOfBounds;
     }
 
@@ -237,8 +237,8 @@ pub fn parseRoSections(input: *const Elf, gpa: std.mem.Allocator) !Executable.Se
 }
 
 /// Validates the Elf. Returns errors for issues encountered.
-fn validate(input: *Elf) !void {
-    const header = input.header;
+fn validate(self: *Elf) !void {
+    const header = self.header;
 
     // ensure 64-bit class
     if (header.e_ident[elf.EI_CLASS] != elf.ELFCLASS64) {
@@ -264,8 +264,8 @@ fn validate(input: *Elf) !void {
     // ensure there is only one ".text" section
     {
         var count: u32 = 0;
-        for (input.shdrs) |shdr| {
-            if (std.mem.eql(u8, input.getString(shdr.sh_name), ".text")) {
+        for (self.shdrs) |shdr| {
+            if (std.mem.eql(u8, self.getString(shdr.sh_name), ".text")) {
                 count += 1;
             }
         }
@@ -277,8 +277,8 @@ fn validate(input: *Elf) !void {
     // writable sections are not supported in our usecase
     // that will include ".bss", and ".data" sections that are writable
     // ".data.rel" is allowed though.
-    for (input.shdrs) |shdr| {
-        const name = input.getString(shdr.sh_name);
+    for (self.shdrs) |shdr| {
+        const name = self.getString(shdr.sh_name);
         if (std.mem.startsWith(u8, name, ".bss")) {
             return error.WritableSectionsNotSupported;
         }
@@ -291,17 +291,17 @@ fn validate(input: *Elf) !void {
     }
 
     // ensure all of the section headers are within bounds
-    for (input.shdrs) |shdr| {
+    for (self.shdrs) |shdr| {
         const start = shdr.sh_offset;
         const end = try std.math.add(u64, start, shdr.sh_size);
 
-        const file_size = input.bytes.len;
+        const file_size = self.bytes.len;
         if (start > file_size or end > file_size) return error.Oob;
     }
 
     // ensure that the entry point is inside of the ".text" section
     const entrypoint = header.e_entry;
-    const text_section = input.getShdrByName(".text") orelse
+    const text_section = self.getShdrByName(".text") orelse
         return error.ShdrNotFound;
 
     if (entrypoint < text_section.sh_addr or
@@ -312,23 +312,23 @@ fn validate(input: *Elf) !void {
 }
 
 fn relocate(
-    input: *Elf,
+    self: *Elf,
     allocator: std.mem.Allocator,
     loader: *Executable.BuiltinProgram,
 ) !void {
-    const text_section_index = input.getShdrIndexByName(".text") orelse
+    const text_section_index = self.getShdrIndexByName(".text") orelse
         return error.ShdrNotFound;
-    const text_section = input.shdrs[text_section_index];
+    const text_section = self.shdrs[text_section_index];
 
     // fixup PC-relative call instructions
-    const text_bytes: []u8 = input.bytes[text_section.sh_offset..][0..text_section.sh_size];
-    const instructions = try input.getInstructions();
+    const text_bytes: []u8 = self.bytes[text_section.sh_offset..][0..text_section.sh_size];
+    const instructions = try self.getInstructions();
     for (instructions, 0..) |inst, i| {
         if (inst.opcode == .call_imm and inst.imm != ~@as(u32, 0)) {
             const target_pc = @as(i64, @intCast(i)) +| 1 +| @as(i32, @bitCast(inst.imm));
             if (target_pc < 0 or target_pc >= instructions.len)
                 return error.RelativeJumpOutOfBounds;
-            const key = try input.function_registry.registerFunctionHashedLegacy(
+            const key = try self.function_registry.registerFunctionHashedLegacy(
                 allocator,
                 &.{},
                 @intCast(target_pc),
@@ -340,8 +340,8 @@ fn relocate(
         }
     }
 
-    for (input.dynamic_relocations_table) |reloc| {
-        if (input.version != .v1) @panic("TODO here");
+    for (self.dynamic_relocations_table) |reloc| {
+        if (self.version != .v1) @panic("TODO here");
         const r_offset = reloc.r_offset;
 
         switch (@as(elf.R_X86_64, @enumFromInt(reloc.r_type()))) {
@@ -353,8 +353,8 @@ fn relocate(
                 // section
                 const imm_offset = r_offset + 4;
 
-                const ref_addr = std.mem.readInt(u32, input.bytes[imm_offset..][0..4], .little);
-                const symbol = input.dynamic_symbol_table[reloc.r_sym()];
+                const ref_addr = std.mem.readInt(u32, self.bytes[imm_offset..][0..4], .little);
+                const symbol = self.dynamic_symbol_table[reloc.r_sym()];
 
                 var addr = symbol.st_value +| ref_addr;
                 if (addr < memory.PROGRAM_START) {
@@ -363,13 +363,13 @@ fn relocate(
 
                 {
                     const imm_low_offset = imm_offset;
-                    const imm_slice = input.bytes[imm_low_offset..][0..4];
+                    const imm_slice = self.bytes[imm_low_offset..][0..4];
                     std.mem.writeInt(u32, imm_slice, @truncate(addr), .little);
                 }
 
                 {
                     const imm_high_offset = imm_offset +| 8;
-                    const imm_slice = input.bytes[imm_high_offset..][0..4];
+                    const imm_slice = self.bytes[imm_high_offset..][0..4];
                     std.mem.writeInt(u32, imm_slice, @intCast(addr >> 32), .little);
                 }
             },
@@ -384,13 +384,13 @@ fn relocate(
                     // slots
 
                     const va_low = val: {
-                        const imm_slice = input.bytes[imm_offset..][0..4];
+                        const imm_slice = self.bytes[imm_offset..][0..4];
                         break :val std.mem.readInt(u32, imm_slice, .little);
                     };
 
                     const va_high = val: {
                         const imm_high_offset = r_offset +| 12;
-                        const imm_slice = input.bytes[imm_high_offset..][0..4];
+                        const imm_slice = self.bytes[imm_high_offset..][0..4];
                         break :val std.mem.readInt(u32, imm_slice, .little);
                     };
 
@@ -402,48 +402,51 @@ fn relocate(
                     }
 
                     {
-                        const imm_slice = input.bytes[imm_offset..][0..4];
+                        const imm_slice = self.bytes[imm_offset..][0..4];
                         std.mem.writeInt(u32, imm_slice, @truncate(ref_addr), .little);
                     }
 
                     {
                         const imm_high_offset = r_offset +| 12;
-                        const imm_slice = input.bytes[imm_high_offset..][0..4];
+                        const imm_slice = self.bytes[imm_high_offset..][0..4];
                         std.mem.writeInt(u32, imm_slice, @intCast(ref_addr >> 32), .little);
                     }
                 } else {
-                    if (input.version == .v1) {
-                        const address = std.mem.readInt(
-                            u32,
-                            input.bytes[imm_offset..][0..4],
-                            .little,
-                        );
-                        const ref_addr = memory.PROGRAM_START +| address;
-                        std.mem.writeInt(u64, input.bytes[r_offset..][0..8], ref_addr, .little);
-                    } else @panic("TODO");
+                    switch (self.version) {
+                        .v1 => {
+                            const address = std.mem.readInt(
+                                u32,
+                                self.bytes[imm_offset..][0..4],
+                                .little,
+                            );
+                            const ref_addr = memory.PROGRAM_START +| address;
+                            std.mem.writeInt(u64, self.bytes[r_offset..][0..8], ref_addr, .little);
+                        },
+                        else => @panic("TODO"),
+                    }
                 }
             },
             .@"32" => {
                 // This relocation handles resolving calls to symbols
                 // Hash the symbol name with Murmur and relocate the instruction's imm field.
                 const imm_offset = r_offset +| 4;
-                if (reloc.r_sym() >= input.dynamic_symbol_table.len) return error.UnknownSymbol;
-                const symbol = input.dynamic_symbol_table[reloc.r_sym()];
+                if (reloc.r_sym() >= self.dynamic_symbol_table.len) return error.UnknownSymbol;
+                const symbol = self.dynamic_symbol_table[reloc.r_sym()];
 
-                const dynstr_index = input.getShdrIndexByName(".dynstr") orelse
+                const dynstr_index = self.getShdrIndexByName(".dynstr") orelse
                     return error.NoDynStrSection;
-                const dynstr = input.shdrSlice(dynstr_index);
+                const dynstr = self.shdrSlice(dynstr_index);
                 const symbol_name = std.mem.sliceTo(dynstr[symbol.st_name..], 0);
 
                 // If the symbol is defined, this is a bpf-to-bpf call.
                 if (symbol.st_type() == elf.STT_FUNC and symbol.st_value != 0) {
                     const target_pc = (symbol.st_value -| text_section.sh_addr) / 8;
-                    const key = try input.function_registry.registerFunctionHashedLegacy(
+                    const key = try self.function_registry.registerFunctionHashedLegacy(
                         allocator,
                         symbol_name,
                         @intCast(target_pc),
                     );
-                    const slice = input.bytes[imm_offset..][0..4];
+                    const slice = self.bytes[imm_offset..][0..4];
                     std.mem.writeInt(u32, slice, key, .little);
                 } else {
                     const hash = ebpf.hashSymbolName(symbol_name);
@@ -451,19 +454,19 @@ fn relocate(
                         // return error.UnresolvedSymbol;
                         @panic(symbol_name);
                     }
-                    const slice = input.bytes[imm_offset..][0..4];
+                    const slice = self.bytes[imm_offset..][0..4];
                     std.mem.writeInt(u32, slice, hash, .little);
                 }
             },
-            else => |t| std.debug.panic("TODO: handle relocation {s}", .{@tagName(t)}),
+            else => return error.UnknownRelocation,
         }
     }
 }
 
-pub fn getInstructions(input: *const Elf) ![]align(1) const ebpf.Instruction {
-    const text_section_index = input.getShdrIndexByName(".text") orelse
+pub fn getInstructions(self: *const Elf) ![]align(1) const ebpf.Instruction {
+    const text_section_index = self.getShdrIndexByName(".text") orelse
         return error.ShdrNotFound;
-    const text_bytes: []const u8 = input.shdrSlice(text_section_index);
+    const text_bytes: []const u8 = self.shdrSlice(text_section_index);
     return std.mem.bytesAsSlice(ebpf.Instruction, text_bytes);
 }
 

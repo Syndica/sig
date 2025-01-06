@@ -1570,7 +1570,7 @@ fn testElfWithSyscalls(
         );
     }
 
-    const elf = try Elf.parse(bytes, allocator, &loader);
+    const elf = try Elf.parse(allocator, bytes, &loader);
 
     var executable = try Executable.fromElf(allocator, &elf);
     defer executable.deinit(allocator);

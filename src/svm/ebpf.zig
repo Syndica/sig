@@ -1,4 +1,7 @@
 //! Constants to do with Solana's EBPF
+const std = @import("std");
+const memory = @import("memory.zig");
+const assert = std.debug.assert;
 
 pub const EF_SBPF_V2: u32 = 0x20;
 
@@ -517,7 +520,6 @@ pub const Instruction = packed struct(u64) {
         writer: anytype,
     ) !void {
         comptime assert(fmt.len == 0);
-
         try writer.print("{s}", .{@tagName(inst.opcode)});
     }
 };
@@ -525,7 +527,3 @@ pub const Instruction = packed struct(u64) {
 pub fn hashSymbolName(name: []const u8) u32 {
    return std.hash.Murmur3_32.hash(name);
 }
-
-const std = @import("std");
-const memory = @import("memory.zig");
-const assert = std.debug.assert;
