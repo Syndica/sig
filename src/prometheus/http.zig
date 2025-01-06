@@ -16,7 +16,7 @@ pub fn servePrometheus(
     };
     var server = try httpz.ServerCtx(*const MetricsEndpoint, *const MetricsEndpoint).init(
         allocator,
-        .{ .port = port },
+        .{ .port = port, .address = "0.0.0.0" },
         &endpoint,
     );
     var router = server.router();
