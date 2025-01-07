@@ -12,8 +12,6 @@ const syscalls = svm.syscalls;
 
 const MemoryMap = memory.MemoryMap;
 
-const TEST_INPUT = @embedFile("test_input.hex");
-
 pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }) = .{};
     defer _ = gpa.deinit();
@@ -79,10 +77,6 @@ pub fn main() !void {
     };
     defer executable.deinit(allocator);
 
-    const input_mem = try allocator.alloc(u8, TEST_INPUT.len);
-    defer allocator.free(input_mem);
-    @memcpy(input_mem, TEST_INPUT);
-
     const heap_mem = try allocator.alloc(u8, 0x40000);
     defer allocator.free(heap_mem);
     @memset(heap_mem, 0x00);
@@ -95,7 +89,7 @@ pub fn main() !void {
         executable.getProgramRegion(),
         memory.Region.init(.mutable, stack_memory, memory.STACK_START),
         memory.Region.init(.mutable, heap_mem, memory.HEAP_START),
-        memory.Region.init(.mutable, input_mem, memory.INPUT_START),
+        memory.Region.init(.mutable, &.{}, memory.INPUT_START),
     }, executable.version);
 
     var vm = try Vm.init(allocator, &executable, m, &loader);
