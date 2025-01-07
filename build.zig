@@ -85,6 +85,12 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
         .sanitize_thread = enable_tsan,
     });
+
+    // make sure pyroscope's got enough info to profile
+    sig_exe.build_id = .fast;
+    sig_exe.root_module.omit_frame_pointer = false;
+    sig_exe.root_module.strip = false;
+
     b.installArtifact(sig_exe);
     sig_exe.root_module.addImport("base58-zig", base58_module);
     sig_exe.root_module.addImport("curl", curl_mod);

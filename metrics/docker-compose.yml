@@ -30,6 +30,11 @@ services:
   alloy:
     image: grafana/alloy:v1.3.1
     container_name: alloy
+
+    # needed to access sig process
+    pid: "host"
+    privileged: true
+
     ports:
       - "3200:3200"
     volumes:
@@ -41,6 +46,8 @@ services:
         "--server.http.listen-addr=0.0.0.0:3200",
         "/etc/alloy/config.alloy",
       ]
+    environment:
+      - SIG_PID=${SIG_PID}
 
   grafana:
     image: grafana/grafana
@@ -62,6 +69,14 @@ services:
     ports:
       - 9100:9100
     restart: unless-stopped
+
+  pyroscope:
+    image: grafana/pyroscope:1.11.0
+    container_name: pyroscope
+    ports:
+      - "4040:4040"
+    environment:
+      - STORAGE_DRIVER=in-memory
 
 volumes:
   prom_data:
