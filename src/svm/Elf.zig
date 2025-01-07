@@ -22,11 +22,13 @@ dynamic_symbol_table: []align(1) const elf.Elf64_Sym,
 entry_pc: u64,
 version: ebpf.SBPFVersion,
 function_registry: Executable.Registry(u32),
+config: Executable.Config,
 
 pub fn parse(
     allocator: std.mem.Allocator,
     bytes: []u8,
     loader: *Executable.BuiltinProgram,
+    config: Executable.Config,
 ) !Elf {
     const header_buffer = bytes[0..@sizeOf(elf.Elf64_Ehdr)];
 
@@ -42,6 +44,7 @@ pub fn parse(
         .dynamic_relocations_table = &.{},
         .dynamic_symbol_table = &.{},
         .function_registry = .{},
+        .config = config,
     };
     errdefer self.function_registry.deinit(allocator);
 
@@ -79,8 +82,6 @@ fn parseHeader(self: *Elf) !void {
         .v2
     else
         .v1;
-    if (sbpf_version != .v1)
-        std.debug.panic("found sbpf version: {s}, support it!", .{@tagName(sbpf_version)});
     self.version = sbpf_version;
 }
 
@@ -161,6 +162,7 @@ fn parseDynamicSymbolTable(self: *Elf) !void {
 }
 
 pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executable.Section {
+    const version = self.version;
     const ro_names: []const []const u8 = &.{
         ".text",
         ".rodata",
@@ -184,6 +186,8 @@ pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executab
     }).initCapacity(allocator, self.shdrs.len);
     defer ro_slices.deinit(allocator);
 
+    var addr_file_offset: ?u64 = null;
+
     for (self.shdrs, 0..) |shdr, i| {
         const name = self.getString(shdr.sh_name);
         for (ro_names) |ro_name| {
@@ -199,11 +203,27 @@ pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executab
         const section_addr = shdr.sh_addr;
 
         if (!invalid_offsets) {
-            if (section_addr != shdr.sh_offset) invalid_offsets = true;
+            if (version.enableElfVaddr()) {
+                assert(self.config.optimize_rodata);
+                if (section_addr < shdr.sh_offset) {
+                    invalid_offsets = true;
+                } else {
+                    const offset = section_addr -| shdr.sh_offset;
+                    addr_file_offset = addr_file_offset orelse offset;
+                    if (addr_file_offset.? != offset) {
+                        invalid_offsets = true;
+                    }
+                }
+            } else if (section_addr != shdr.sh_offset) {
+                invalid_offsets = true;
+            }
         }
 
-        const vaddr_end = section_addr +| memory.PROGRAM_START;
-        if (vaddr_end > memory.STACK_START) {
+        const vaddr_end = if (version.enableElfVaddr() and section_addr >= memory.PROGRAM_START)
+            section_addr
+        else
+            section_addr +| memory.PROGRAM_START;
+        if (invalid_offsets or vaddr_end > memory.STACK_START) {
             return error.ValueOutOfBounds;
         }
 
@@ -215,25 +235,55 @@ pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executab
         ro_slices.appendAssumeCapacity(.{ section_addr, section_data });
     }
 
-    // NOTE: this check isn't valid for SBFv1, just here for sanity. will need to remove for testing.
     if (lowest_addr +| ro_fill_length > highest_addr) {
         return error.ValueOutOfBounds;
     }
 
-    lowest_addr = 0;
-    const buf_len = highest_addr;
-    if (buf_len > self.bytes.len) {
-        return error.ValueOutOfBounds;
-    }
+    const can_borrow = !invalid_offsets and
+        last_ro_section +| 1 -| first_ro_section == n_ro_sections;
+    const ro_section: Executable.Section = if (self.config.optimize_rodata and can_borrow) ro: {
+        const file_offset = addr_file_offset orelse 0;
+        const start = lowest_addr -| file_offset;
+        const end = highest_addr -| file_offset;
 
-    const ro_section = try allocator.alloc(u8, buf_len);
-    for (ro_slices.items) |ro_slice| {
-        const section_addr, const slice = ro_slice;
-        const buf_offset_start = section_addr -| lowest_addr;
-        @memcpy(ro_section[buf_offset_start..][0..slice.len], slice);
-    }
+        if (lowest_addr >= memory.PROGRAM_START) {
+            const addr_offset = lowest_addr -| memory.PROGRAM_START;
+            break :ro .{ .borrowed = .{
+                .offset = addr_offset,
+                .start = start,
+                .end = end,
+            } };
+        } else {
+            if (version.enableElfVaddr()) {
+                return error.ValueOutOfBounds;
+            }
+            break :ro .{ .borrowed = .{
+                .offset = lowest_addr,
+                .start = start,
+                .end = end,
+            } };
+        }
+    } else ro: {
+        if (self.config.optimize_rodata) {
+            highest_addr -|= lowest_addr;
+        } else {
+            lowest_addr = 0;
+        }
 
-    return .{ .owned = .{ .offset = lowest_addr, .data = ro_section } };
+        const buf_len = highest_addr;
+        if (buf_len > self.bytes.len) {
+            return error.ValueOutOfBounds;
+        }
+
+        const ro_section = try allocator.alloc(u8, buf_len);
+        for (ro_slices.items) |ro_slice| {
+            const section_addr, const slice = ro_slice;
+            const buf_offset_start = section_addr -| lowest_addr;
+            @memcpy(ro_section[buf_offset_start..][0..slice.len], slice);
+        }
+        break :ro .{ .owned = .{ .offset = lowest_addr, .data = ro_section } };
+    };
+    return ro_section;
 }
 
 /// Validates the Elf. Returns errors for issues encountered.
@@ -316,6 +366,7 @@ fn relocate(
     allocator: std.mem.Allocator,
     loader: *Executable.BuiltinProgram,
 ) !void {
+    const version = self.version;
     const text_section_index = self.getShdrIndexByName(".text") orelse
         return error.ShdrNotFound;
     const text_section = self.shdrs[text_section_index];
@@ -324,7 +375,10 @@ fn relocate(
     const text_bytes: []u8 = self.bytes[text_section.sh_offset..][0..text_section.sh_size];
     const instructions = try self.getInstructions();
     for (instructions, 0..) |inst, i| {
-        if (inst.opcode == .call_imm and inst.imm != ~@as(u32, 0)) {
+        if (inst.opcode == .call_imm and
+            inst.imm != ~@as(u32, 0) and
+            !(version.usesStaticSyscalls() and inst.src == .r0))
+        {
             const target_pc = @as(i64, @intCast(i)) +| @as(i32, @bitCast(inst.imm)) +| 1;
             if (target_pc < 0 or target_pc >= instructions.len)
                 return error.RelativeJumpOutOfBounds;
@@ -340,12 +394,37 @@ fn relocate(
         }
     }
 
+    var phdr: ?elf.Elf64_Phdr = null;
+
     for (self.dynamic_relocations_table) |reloc| {
-        if (self.version != .v1) @panic("TODO here");
-        const r_offset = reloc.r_offset;
+        var r_offset = reloc.r_offset;
+
+        if (version.enableElfVaddr()) {
+            const found = if (phdr) |header| found: {
+                if (r_offset >= header.p_vaddr and
+                    r_offset < header.p_vaddr + header.p_memsz)
+                {
+                    break :found true;
+                }
+                break :found false;
+            } else false;
+            if (!found) {
+                phdr = for (self.phdrs) |header| {
+                    if (r_offset >= header.p_vaddr and
+                        r_offset < header.p_vaddr + header.p_memsz)
+                    {
+                        break header;
+                    }
+                } else null;
+            }
+            const header = phdr orelse return error.ValueOutOfBounds;
+            r_offset = r_offset -| header.p_vaddr +| header.p_offset;
+        }
 
         switch (@as(elf.R_X86_64, @enumFromInt(reloc.r_type()))) {
             .@"64" => {
+                if (version != .v1) @panic("TODO");
+
                 // if the relocation is addressing an instruction inside of the
                 // text section, we'll need to offset it by the offset of the immediate
                 // field into the instruction.
@@ -412,7 +491,7 @@ fn relocate(
                         std.mem.writeInt(u32, imm_slice, @intCast(ref_addr >> 32), .little);
                     }
                 } else {
-                    switch (self.version) {
+                    switch (version) {
                         .v1 => {
                             const address = std.mem.readInt(
                                 u32,
@@ -427,6 +506,7 @@ fn relocate(
                 }
             },
             .@"32" => {
+                if (version != .v1) @panic("TODO");
                 // This relocation handles resolving calls to symbols
                 // Hash the symbol name with Murmur and relocate the instruction's imm field.
                 const imm_offset = r_offset +| 4;

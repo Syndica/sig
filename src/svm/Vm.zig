@@ -65,6 +65,7 @@ pub fn run(vm: *Vm) !u64 {
 }
 
 fn step(vm: *Vm) !bool {
+    const version = vm.executable.version;
     const registers = &vm.registers;
     const pc = registers.get(.pc);
     var next_pc: u64 = pc + 1;
@@ -117,6 +118,7 @@ fn step(vm: *Vm) !bool {
         .arsh64_imm,
         .arsh32_reg,
         .arsh32_imm,
+        .hor64_imm,
         .lsh64_reg,
         .lsh64_imm,
         .lsh32_reg,
@@ -128,8 +130,8 @@ fn step(vm: *Vm) !bool {
         => {
             const lhs_large = registers.get(inst.dst);
             const rhs_large = if (opcode.isReg()) registers.get(inst.src) else extend(inst.imm);
-            const lhs = if (opcode.is64()) lhs_large else @as(u32, @truncate(lhs_large));
-            const rhs = if (opcode.is64()) rhs_large else @as(u32, @truncate(rhs_large));
+            const lhs: u64 = if (opcode.is64()) lhs_large else @as(u32, @truncate(lhs_large));
+            const rhs: u64 = if (opcode.is64()) rhs_large else @as(u32, @truncate(rhs_large));
 
             var result: u64 = switch (@intFromEnum(opcode) & 0xF0) {
                 // zig fmt: off
@@ -166,6 +168,9 @@ fn step(vm: *Vm) !bool {
                         break :value shifted;
                     }
                 },
+                Instruction.hor => if (!version.enableLDDW()) value: {
+                    break :value lhs_large | @as(u64, inst.imm) << 32;
+                } else return error.UnknownInstruction,
                 else => unreachable,
             };
 
@@ -319,13 +324,29 @@ fn step(vm: *Vm) !bool {
             next_pc = frame.return_pc;
         },
         .call_imm => {
-            if (vm.executable.function_registry.lookupKey(inst.imm)) |entry| {
-                try vm.pushCallFrame();
-                next_pc = entry.value;
-            } else if (vm.loader.functions.lookupKey(inst.imm)) |entry| {
-                const builtin_fn = entry.value;
-                try builtin_fn(vm);
-            } else {
+            var resolved = false;
+            const external, const internal = if (version.enableStaticSyscalls())
+                .{ inst.src == .r0, inst.src != .r0 }
+            else
+                .{ true, true };
+
+            if (external) {
+                if (vm.loader.functions.lookupKey(inst.imm)) |entry| {
+                    resolved = true;
+                    const builtin_fn = entry.value;
+                    try builtin_fn(vm);
+                }
+            }
+
+            if (internal) {
+                if (vm.executable.function_registry.lookupKey(inst.imm)) |entry| {
+                    resolved = true;
+                    try vm.pushCallFrame();
+                    next_pc = entry.value;
+                }
+            }
+
+            if (!resolved) {
                 return error.UnresolvedFunction;
             }
         },
@@ -338,11 +359,12 @@ fn step(vm: *Vm) !bool {
 
         // other instructions
         .ld_dw_imm => {
-            assert(vm.executable.version == .v1);
+            if (!version.enableLDDW()) return error.UnknownInstruction;
             const value: u64 = (@as(u64, instructions[next_pc].imm) << 32) | inst.imm;
             registers.set(inst.dst, value);
             next_pc += 1;
         },
+        else => return error.UnknownInstruction,
     }
 
     if (next_pc >= instructions.len) return error.PcOutOfBounds;

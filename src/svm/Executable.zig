@@ -14,21 +14,27 @@ from_elf: bool,
 ro_section: Section,
 text_vaddr: u64,
 function_registry: Registry(u32),
+config: Config,
 
 pub const Section = union(enum) {
     owned: Owned,
-    assembly: Assembly,
+    borrowed: Borrowed,
 
     const Owned = struct {
         offset: u64,
         data: []const u8,
     };
 
-    const Assembly = struct {
+    const Borrowed = struct {
         offset: u64,
         start: u64,
         end: u64,
     };
+};
+
+pub const Config = struct {
+    optimize_rodata: bool = true,
+    minimum_version: ebpf.SBPFVersion = .v2,
 };
 
 pub fn fromElf(allocator: std.mem.Allocator, elf: *const Elf) !Executable {
@@ -41,11 +47,16 @@ pub fn fromElf(allocator: std.mem.Allocator, elf: *const Elf) !Executable {
         .from_elf = true,
         .text_vaddr = elf.getShdrByName(".text").?.sh_addr,
         .function_registry = elf.function_registry,
+        .config = elf.config,
     };
 }
 
-pub fn fromAsm(allocator: std.mem.Allocator, source: []const u8) !Executable {
-    return Assembler.parse(allocator, source);
+pub fn fromAsm(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    config: Config,
+) !Executable {
+    return Assembler.parse(allocator, source, config);
 }
 
 /// When the executable comes from the assembler, we need to guarantee that the
@@ -68,7 +79,7 @@ pub fn deinit(self: *Executable, allocator: std.mem.Allocator) void {
 pub fn getProgramRegion(self: *const Executable) memory.Region {
     const offset, const ro_data = switch (self.ro_section) {
         .owned => |o| .{ o.offset, o.data },
-        .assembly => |a| .{ a.offset, self.bytes[a.start..a.end] },
+        .borrowed => |b| .{ b.offset, self.bytes[b.start..b.end] },
     };
     return memory.Region.init(.constant, ro_data, memory.PROGRAM_START +| offset);
 }
@@ -98,7 +109,11 @@ const Assembler = struct {
         };
     };
 
-    fn parse(allocator: std.mem.Allocator, source: []const u8) !Executable {
+    fn parse(
+        allocator: std.mem.Allocator,
+        source: []const u8,
+        config: Executable.Config,
+    ) !Executable {
         var assembler: Assembler = .{ .source = source };
         const statements = try assembler.tokenize(allocator);
         defer {
@@ -326,13 +341,14 @@ const Assembler = struct {
 
         return .{
             .bytes = source,
-            .ro_section = .{ .assembly = .{ .offset = 0, .start = 0, .end = source.len } },
+            .ro_section = .{ .borrowed = .{ .offset = 0, .start = 0, .end = source.len } },
             .instructions = try instructions.toOwnedSlice(allocator),
-            .version = .v1,
+            .version = config.minimum_version,
             .entry_pc = entry_pc,
             .from_elf = false,
             .text_vaddr = memory.PROGRAM_START,
             .function_registry = function_registry,
+            .config = config,
         };
     }
 
