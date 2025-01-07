@@ -13,12 +13,15 @@ pub const Account = struct {
     rent_epoch: Epoch,
 
     pub fn deinit(self: Account, allocator: std.mem.Allocator) void {
-        allocator.free(self.data);
+        self.data.deinit(allocator);
     }
 
     pub fn initRandom(allocator: std.mem.Allocator, random: std.Random, data_len: usize) !Account {
-        const data = try ReadHandle.initUncached(allocator, data_len);
-        random.bytes(data.inner.allocated);
+        const data_buf = try allocator.alloc(u8, data_len);
+        errdefer allocator.free(data_buf);
+
+        random.bytes(data_buf);
+        const data = ReadHandle.initExternalOwned(data_buf);
 
         return .{
             .lamports = random.int(u64),
@@ -43,7 +46,7 @@ pub const Account = struct {
     }
 
     pub fn equals(self: *const Account, other: *const Account) bool {
-        return std.mem.eql(u8, self.data, other.data) and
+        return self.data.eql(other.data) and
             self.lamports == other.lamports and
             self.owner.equals(&other.owner) and
             self.executable == other.executable and
@@ -61,9 +64,10 @@ pub const Account = struct {
 
     /// computes the hash of the account
     pub fn hash(self: *const Account, pubkey: *const Pubkey) Hash {
+        var iter = self.data.iterator();
         return hashAccount(
             self.lamports,
-            self.data,
+            &iter,
             &self.owner.data,
             self.executable,
             self.rent_epoch,
@@ -77,7 +81,7 @@ pub const Account = struct {
 
         const storage_info = AccountInFile.StorageInfo{
             .write_version_obsolete = 0,
-            .data_len = self.data.len,
+            .data_len = self.data.len(),
             .pubkey = pubkey.*,
         };
         offset += storage_info.writeToBuf(buf[offset..]);
@@ -95,8 +99,10 @@ pub const Account = struct {
         offset += 32;
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
-        @memcpy(buf[offset..(offset + self.data.len)], self.data);
-        offset += self.data.len;
+        self.data.readAll(buf[offset..][0..self.data.len()]) catch
+            unreachable; // invalid args
+
+        offset += self.data.len();
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
         return offset;
@@ -120,7 +126,7 @@ const Hash = @import("hash.zig").Hash;
 
 pub fn hashAccount(
     lamports: u64,
-    data: []const u8,
+    data: *ReadHandle.Iterator,
     owner_pubkey_data: []const u8,
     executable: bool,
     rent_epoch: u64,
@@ -136,7 +142,7 @@ pub fn hashAccount(
     std.mem.writeInt(u64, &int_buf, rent_epoch, .little);
     hasher.update(&int_buf);
 
-    hasher.update(data);
+    while (data.next()) |byte| hasher.update((&byte)[0..1]);
 
     if (executable) {
         hasher.update(&[_]u8{1});
@@ -159,16 +165,17 @@ test "core.account: test account hash matches rust" {
     var data: [3]u8 = .{ 1, 2, 3 };
     var account: Account = .{
         .lamports = 10,
-        .data = &data,
+        .data = ReadHandle.initExternal(&data),
         .owner = Pubkey.ZEROES,
         .executable = false,
         .rent_epoch = 20,
     };
     const pubkey = Pubkey.ZEROES;
 
+    var iter = account.data.iterator();
     const hash = hashAccount(
         account.lamports,
-        account.data,
+        &iter,
         &account.owner.data,
         account.executable,
         account.rent_epoch,

@@ -264,7 +264,7 @@ pub fn csvDump() !void {
                     continue;
                 }
             }
-            fmt_count += 120 + 5 * account.data.len;
+            fmt_count += 120 + 5 * account.data.len();
         }
 
         const csv_string = try recycle_fba.allocator().alloc(u8, fmt_count);

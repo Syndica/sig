@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 
 const ReferenceCounter = sig.sync.reference_counter.ReferenceCounter;
 const FileId = sig.accounts_db.accounts_file.FileId;
+const bincode = sig.bincode;
 
 /// arbitrarily chosen, I believe >95% of accounts will be <= 512 bytes
 pub const FRAME_SIZE = 512;
@@ -42,6 +43,35 @@ const FileIdFileOffset = packed struct(u64) {
     file_offset: FileOffset,
 };
 
+fn readError() type {
+    var ReadError = error{
+        InvalidArgument,
+        OutOfMemory,
+        InvalidKey,
+        CannotResetAlive,
+        CannotOverwriteAliveInfo,
+        OffsetsOutOfBounds,
+    };
+
+    if (use_io_uring) {
+        const called_fns = &.{
+            std.os.linux.IoUring.read,
+            std.os.linux.IoUring.submit_and_wait,
+            std.os.linux.IoUring.copy_cqes,
+        };
+        inline for (called_fns) |func| {
+            const ErrorSet = @typeInfo(
+                @typeInfo(@TypeOf(func)).Fn.return_type.?,
+            ).ErrorUnion.error_set;
+            ReadError = ReadError || ErrorSet;
+        }
+    }
+
+    ReadError = ReadError || std.posix.PReadError;
+
+    return ReadError;
+}
+
 /// Used for obtaining cached reads.
 ///
 /// Design details:
@@ -59,6 +89,7 @@ pub const BufferPool = struct {
         FileIdFileOffset,
         sig.sync.reference_counter.RcSlice(u8),
     );
+    pub const ReadError = readError();
 
     /// indices of all free frames
     /// free frames have a refcount of 0 *and* have been evicted
@@ -272,7 +303,7 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) !ReadHandle {
+    ) ReadError!ReadHandle {
         return if (use_io_uring)
             self.readIoUringSubmitAndWait(
                 allocator,
@@ -301,7 +332,7 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) !ReadHandle {
+    ) ReadError!ReadHandle {
         if (!use_io_uring) @compileError("io_uring disabled");
 
         const frame_indices = try self.computeFrameIndices(
@@ -382,8 +413,7 @@ pub const BufferPool = struct {
             }
         }
 
-        return try ReadHandle.initCached(
-            allocator,
+        return ReadHandle.initCached(
             self,
             frame_indices,
             @intCast(file_offset_start % FRAME_SIZE),
@@ -401,14 +431,7 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) (error{
-        InvalidArgument,
-        OutOfMemory,
-        InvalidKey,
-        CannotResetAlive,
-        CannotOverwriteAliveInfo,
-        OffsetsOutOfBounds,
-    } || std.posix.PReadError)!ReadHandle {
+    ) ReadError!ReadHandle {
         const frame_indices = try self.computeFrameIndices(
             file_id,
             allocator,
@@ -455,8 +478,7 @@ pub const BufferPool = struct {
             try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
         }
 
-        return try ReadHandle.initCached(
-            allocator,
+        return ReadHandle.initCached(
             self,
             frame_indices,
             @intCast(file_offset_start % FRAME_SIZE),
@@ -743,19 +765,40 @@ pub const HierarchicalFIFO = struct {
 /// slice-like datatype
 /// view over one or more buffers owned by the BufferPool
 pub const ReadHandle = struct {
-    buffer_pool: *BufferPool,
-
-    /// Not to be confused with the refcounters of BufferPool. Used for subreads.
-    ref_count: *ReferenceCounter,
-
     inner: Inner,
 
+    pub const @"!bincode-config:inner" = bincode.FieldConfig(Inner){
+        .deserializer = bincodeDeserialize,
+        .serializer = bincodeSerialize,
+        .free = bincodeFree,
+    };
+
+    fn bincodeSerialize(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
+        _ = writer;
+        _ = data;
+        _ = params;
+        @panic("todo");
+    }
+
+    fn bincodeDeserialize(alloc: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!Inner {
+        _ = alloc;
+        _ = reader;
+        _ = params;
+        @panic("todo");
+    }
+
+    fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
+        _ = allocator;
+        _ = data;
+        @panic("todo");
+    }
+
     const Inner = union(enum) {
-        // data owned by BufferPool
+        /// data owned by BufferPool
         cached: CachedRead,
-        // data externally allocated (large read)
-        allocated: []u8,
-        // data owned by parent
+        /// data allocated elsewhere
+        external: External,
+        /// data owned by parent ReadHandle
         sub_read: SubRead,
 
         const SubRead = packed struct(u128) {
@@ -765,7 +808,14 @@ pub const ReadHandle = struct {
             end: u32,
         };
 
+        const External = struct {
+            slice: []u8,
+            /// owned => ReadHandle will free the slice
+            owned: bool,
+        };
+
         const CachedRead = struct {
+            buffer_pool: *BufferPool,
             frame_indices: []const FrameIndex,
             /// inclusive, the offset into the first frame
             first_frame_start_offset: FrameOffset,
@@ -773,7 +823,7 @@ pub const ReadHandle = struct {
             last_frame_end_offset: FrameOffset,
         };
 
-        pub fn len(self: Inner) u32 {
+        pub inline fn len(self: Inner) u32 {
             return switch (self) {
                 .sub_read => |sr| sr.end - sr.start,
                 .cached => |cached| {
@@ -781,13 +831,12 @@ pub const ReadHandle = struct {
                     return (@as(u32, @intCast(cached.frame_indices.len)) - 1) *
                         FRAME_SIZE + cached.last_frame_end_offset - cached.first_frame_start_offset;
                 },
-                .allocated => |allocated| @intCast(allocated.len),
+                .external => |allocated| @intCast(allocated.slice.len),
             };
         }
 
-        fn deinit(self: *Inner, allocator: std.mem.Allocator) void {
-            switch (self.*) {
-                .sub_read => |sr| sr.parent.deinit(allocator),
+        fn deinit(self: Inner, allocator: std.mem.Allocator) void {
+            switch (self) {
                 .cached => |cached| {
                     for (cached.frame_indices) |frame_index| {
                         std.debug.assert(frame_index != INVALID_FRAME);
@@ -799,18 +848,19 @@ pub const ReadHandle = struct {
                     }
                     allocator.free(cached.frame_indices);
                 },
-                .allocated => |allocated| {
-                    allocator.free(allocated);
+                .sub_read => |_| {},
+                .external => |external| {
+                    if (external.owned) allocator.free(external.slice);
                 },
             }
         }
     };
 
+    pub const Reader = std.io.GenericReader(*Iterator, error{}, Iterator.readBytes);
+
     pub const Iterator = struct {
         cached_read: *const ReadHandle,
         bytes_read: u32 = 0,
-
-        const Reader = std.io.GenericReader(*Iterator, error{}, readBytes);
 
         pub fn next(self: *Iterator) ?u8 {
             if (self.bytes_read == self.cached_read.len()) {
@@ -838,10 +888,10 @@ pub const ReadHandle = struct {
     };
 
     pub fn readByte(self: ReadHandle, index: usize) u8 {
-        switch (self.inner) {
+        return switch (self.inner) {
             .cached => |cached| blk: {
                 std.debug.assert(cached.frame_indices.len != 0);
-                std.debug.assert(index < cached.len());
+                std.debug.assert(index < self.len());
                 const offset = index + cached.first_frame_start_offset;
                 std.debug.assert(offset >= cached.first_frame_start_offset);
 
@@ -849,61 +899,49 @@ pub const ReadHandle = struct {
                     cached.frame_indices[offset / FRAME_SIZE]
                 ][offset % FRAME_SIZE];
             },
-            .sub_slice => |sub_slice| sub_slice.parent.readByte(index + sub_slice.start),
-            .allocated => |allocated| allocated.data[index],
-        }
+            .sub_read => |sub_read| sub_read.parent.readByte(index + sub_read.start),
+            .external => |external| external.slice[index],
+        };
     }
 
-    pub fn initUncached(allocator: std.mem.Allocator, n_bytes: usize) !ReadHandle {
-        const rc = try allocator.create(ReferenceCounter);
-        errdefer allocator.destroy(rc);
-        rc.* = .{};
-
+    /// External to the BufferPool
+    pub fn initExternal(data: []u8) ReadHandle {
         return ReadHandle{
-            .buffer_pool = undefined,
-            .inner = .{
-                .allocated = try allocator.alloc(u8, n_bytes),
-            },
-            .ref_count = rc,
+            .inner = .{ .external = .{ .slice = data, .owned = false } },
+        };
+    }
+
+    /// External to the BufferPool, data will be freed upon .deinit
+    pub fn initExternalOwned(data: []u8) ReadHandle {
+        return ReadHandle{
+            .inner = .{ .external = .{ .slice = data, .owned = true } },
         };
     }
 
     fn initCached(
-        allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
         frame_indices: []const FrameIndex,
         first_frame_start_offset: FrameOffset,
         last_frame_end_offset: FrameOffset,
-    ) !ReadHandle {
-        const rc = try allocator.create(ReferenceCounter);
-        rc.* = .{};
-
-        return ReadHandle{
-            .buffer_pool = buffer_pool,
+    ) ReadHandle {
+        return .{
             .inner = .{
                 .cached = .{
+                    .buffer_pool = buffer_pool,
                     .frame_indices = frame_indices,
                     .first_frame_start_offset = first_frame_start_offset,
                     .last_frame_end_offset = last_frame_end_offset,
                 },
             },
-            .ref_count = rc,
         };
     }
 
     pub fn dupe(self: ReadHandle) ReadHandle {
-        if (!self.ref_count.acquire()) @panic("tried to ReadHandle.dupe dead handle");
         return self;
     }
 
-    pub fn slice(self: *ReadHandle, allocator: std.mem.Allocator, start: usize, end: usize) !ReadHandle {
-        const rc = try allocator.create(ReferenceCounter);
-        rc.* = .{};
-
-        _ = self.ref_count.acquire();
-
+    pub fn slice(self: *ReadHandle, start: usize, end: usize) !ReadHandle {
         return ReadHandle{
-            .buffer_pool = undefined,
             .inner = .{
                 .sub_read = .{
                     .end = end,
@@ -911,59 +949,130 @@ pub const ReadHandle = struct {
                     .self = self,
                 },
             },
-            .ref_count = rc,
         };
     }
 
+    /// testing purposes only
+    pub fn expectEqual(expected: ReadHandle, actual: ReadHandle) !void {
+        const expected_buf = try expected.readAllocate(std.testing.allocator, 0, expected.len());
+        defer std.testing.allocator.free(expected_buf);
+        const actual_buf = try actual.readAllocate(std.testing.allocator, 0, actual.len());
+        defer std.testing.allocator.free(actual_buf);
+        try std.testing.expectEqualSlices(u8, expected_buf, actual_buf);
+    }
+
+    pub fn eql(h1: ReadHandle, h2: ReadHandle) bool {
+        if (std.meta.eql(h1.inner, h2.inner)) return true;
+        if (h1.len() != h2.len()) return false;
+
+        var h1_iter = h1.iterator();
+        var h2_iter = h2.iterator();
+
+        while (h1_iter.next()) |h1_byte| {
+            const h2_byte = h2_iter.next().?;
+            if (h1_byte != h2_byte) return false;
+        }
+
+        return true;
+    }
+
+    pub fn eqlSlice(self: ReadHandle, data: []const u8) bool {
+        if (self.len() != data.len) return false;
+
+        var iter = self.iterator();
+        var i: u32 = 0;
+        while (iter.next()) |byte| : (i += 1) {
+            if (byte != data[i]) return false;
+        }
+
+        return true;
+    }
+
+    pub fn readAllAllocate(self: ReadHandle, allocator: std.mem.Allocator) ![]u8 {
+        return self.readAllocate(allocator, 0, self.len());
+    }
+
+    pub fn readAllocate(self: ReadHandle, allocator: std.mem.Allocator, start: FileOffset, end: FileOffset) ![]u8 {
+        const buf = try allocator.alloc(u8, end - start);
+        self.read(start, end, buf) catch unreachable; // invalid account?
+        return buf;
+    }
+
     /// Copies entire read into specified buffer. Must be correct length.
-    pub fn readAll(
+    pub fn readAll(self: ReadHandle, buf: []u8) error{InvalidArgument}!void {
+        try self.read(0, self.len(), buf);
+    }
+
+    /// Copies entire read into specified buffer. Must be correct length.
+    pub fn read(
         self: ReadHandle,
+        start: FileOffset,
+        end: FileOffset,
         buf: []u8,
     ) error{InvalidArgument}!void {
-        if (buf.len != self.len()) return error.InvalidArgument;
-        var bytes_copied: usize = 0;
+        const range_len = end - start;
+        if (buf.len - start != range_len) return error.InvalidArgument;
 
-        for (0.., self.frame_indices) |i, f_idx| {
+        switch (self.inner) {
+            .external => |a| return @memcpy(buf, a.slice[start..end]),
+            .sub_read => |sb| return sb.parent.read(sb.start + start, sb.start + end, buf),
+            .cached => {},
+        }
+
+        var buf_offset: usize = 0;
+
+        const cached = self.inner.cached;
+
+        for (0.., cached.frame_indices) |i, f_idx| {
+            if (start < (i + 1) * FRAME_SIZE) continue;
+
             const is_first_frame: u2 = @intFromBool(i == 0);
-            const is_last_frame: u2 = @intFromBool(i == self.frame_indices.len - 1);
+            const is_last_frame: u2 = @intFromBool(i == cached.frame_indices.len - 1);
+
+            const range_start_offset = if (start > i * FRAME_SIZE and start < (i + 1) * FRAME_SIZE)
+                start % FRAME_SIZE
+            else
+                0;
+
+            const bytes_left = end - (i * FRAME_SIZE); // prevent buf overflow
 
             switch (is_first_frame << 1 | is_last_frame) {
                 0b00 => { // !first, !last (middle frame)
-                    const read_len = FRAME_SIZE;
+                    const read_len = @min(bytes_left, FRAME_SIZE);
                     @memcpy(
-                        buf[bytes_copied..][0..read_len],
-                        &self.buffer_pool.frames[f_idx],
+                        buf[buf_offset..][0..read_len],
+                        cached.buffer_pool.frames[f_idx][range_start_offset..],
                     );
-                    bytes_copied += read_len;
+                    buf_offset += read_len;
                 },
                 0b10 => { // first, !last (first frame)
                     std.debug.assert(i == 0);
-                    const read_len = FRAME_SIZE - self.first_frame_start_offset;
+                    const read_len = @min(bytes_left, FRAME_SIZE - cached.first_frame_start_offset);
                     @memcpy(
                         buf[0..read_len],
-                        self.buffer_pool.frames[f_idx][self.first_frame_start_offset..],
+                        cached.buffer_pool.frames[f_idx][cached.first_frame_start_offset + range_start_offset ..],
                     );
-                    bytes_copied += read_len;
+                    buf_offset += read_len;
                 },
                 0b01 => { // !first, last (last frame)
-                    const read_len = self.last_frame_end_offset;
+                    const read_len = @min(bytes_left, cached.last_frame_end_offset);
                     @memcpy(
-                        buf[bytes_copied..][0..read_len],
-                        self.buffer_pool.frames[f_idx][0..read_len],
+                        buf[buf_offset..][0..read_len],
+                        cached.buffer_pool.frames[f_idx][range_start_offset..read_len],
                     );
-                    bytes_copied += read_len;
-                    std.debug.assert(bytes_copied == self.len());
+                    buf_offset += read_len;
+                    std.debug.assert(buf_offset == self.len());
                 },
                 0b11 => { // first, last (only frame)
-                    std.debug.assert(self.frame_indices.len == 1);
-                    const readable_len = self.len();
+                    std.debug.assert(cached.frame_indices.len == 1);
+                    const readable_len = @min(bytes_left, self.len());
                     @memcpy(
                         buf[0..readable_len],
-                        self.buffer_pool.frames[
+                        cached.buffer_pool.frames[
                             f_idx
-                        ][self.first_frame_start_offset..self.last_frame_end_offset],
+                        ][cached.first_frame_start_offset + range_start_offset ..][0..readable_len],
                     );
-                    bytes_copied += self.len();
+                    buf_offset += self.len();
                 },
             }
         }
@@ -978,12 +1087,20 @@ pub const ReadHandle = struct {
     /// Returns error.CantZeroCopyStrided when multiple frame accesses would be required.
     pub fn zeroCopySlice(
         self: ReadHandle,
-        file_start_offset: FileOffset,
+        start: FileOffset,
         length: FileOffset,
-    ) error{CantZeroCopyStrided}![]const u8 {
+    ) error{ InvalidArgument, CantZeroCopyStrided }![]const u8 {
+        switch (self.inner) {
+            .external => |a| return a.slice[start..][0..length],
+            .sub_read => |sr| return sr.parent.zeroCopySlice(sr.start + start, sr.start + start + length),
+            .cached => {},
+        }
+
+        const cached = self.inner.cached;
+
         if (length > FRAME_SIZE) return error.CantZeroCopyStrided;
         if (length == 0) return &.{};
-        const start_offset = file_start_offset + self.first_frame_start_offset;
+        const start_offset = start + cached.first_frame_start_offset;
 
         const end_offset = start_offset + length;
 
@@ -993,8 +1110,8 @@ pub const ReadHandle = struct {
         // => end is in a different frame to the start
         if (start_frame_offset > end_frame_offset) return error.CantZeroCopyStrided;
 
-        return self.buffer_pool.frames[
-            self.frame_indices[start_offset / FRAME_SIZE]
+        return cached.buffer_pool.frames[
+            cached.frame_indices[start_offset / FRAME_SIZE]
         ][start_frame_offset..][0..length];
     }
 
@@ -1002,8 +1119,8 @@ pub const ReadHandle = struct {
         return .{ .cached_read = self };
     }
 
-    pub fn deinit(self: *ReadHandle, allocator: std.mem.Allocator) void {
-        if (self.ref_count.release()) self.inner.deinit(allocator);
+    pub fn deinit(self: ReadHandle, allocator: std.mem.Allocator) void {
+        self.inner.deinit(allocator);
     }
 };
 
@@ -1151,8 +1268,8 @@ test "BufferPool basic usage" {
     const read = try bp.read(fba.allocator(), file, file_id, 0, 1000);
     defer read.deinit(fba.allocator());
 
-    try std.testing.expectEqual(2, read.frame_indices.len);
-    for (read.frame_indices) |f_idx| try std.testing.expect(f_idx != INVALID_FRAME);
+    try std.testing.expectEqual(2, read.inner.cached.frame_indices.len);
+    for (read.inner.cached.frame_indices) |f_idx| try std.testing.expect(f_idx != INVALID_FRAME);
 
     {
         var iter1 = read.iterator();
@@ -1295,12 +1412,12 @@ test "BufferPool filesize > frame_size * num_frames" {
             offset + FRAME_SIZE,
         );
 
-        try std.testing.expectEqual(1, read_frame.frame_indices.len);
+        try std.testing.expectEqual(1, read_frame.inner.cached.frame_indices.len);
 
         const frame: []const u8 = bp.frames[
-            read_frame.frame_indices[0]
+            read_frame.inner.cached.frame_indices[0]
         ][0..bp.frames_metadata.size[
-            read_frame.frame_indices[0]
+            read_frame.inner.cached.frame_indices[0]
         ]];
 
         var frame2: [FRAME_SIZE]u8 = undefined;
@@ -1359,14 +1476,14 @@ test "BufferPool random read" {
             defer read2.deinit(gpa.allocator());
 
             try std.testing.expect(
-                read.first_frame_start_offset == read2.first_frame_start_offset,
+                read.inner.cached.first_frame_start_offset == read2.inner.cached.first_frame_start_offset,
             );
-            try std.testing.expect(read.last_frame_end_offset == read2.last_frame_end_offset);
-            try std.testing.expectEqualSlices(u32, read.frame_indices, read2.frame_indices);
+            try std.testing.expect(read.inner.cached.last_frame_end_offset == read2.inner.cached.last_frame_end_offset);
+            try std.testing.expectEqualSlices(u32, read.inner.cached.frame_indices, read2.inner.cached.frame_indices);
         }
 
         var total_bytes_read: u32 = 0;
-        for (read.frame_indices) |f_idx| total_bytes_read += bp.frames_metadata.size[f_idx];
+        for (read.inner.cached.frame_indices) |f_idx| total_bytes_read += bp.frames_metadata.size[f_idx];
         const read_data_bp_iter = try allocator.alloc(u8, read.len());
         defer allocator.free(read_data_bp_iter);
         {
