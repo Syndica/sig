@@ -1,5 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const build_options = @import("build-options");
+const ledger = @import("lib.zig");
 
 const ColumnFamily = sig.ledger.database.ColumnFamily;
 const AtomicU64 = std.atomic.Value(u64);
@@ -22,8 +24,6 @@ pub const BlockstoreDB = switch (build_options.blockstore_db) {
     .hashmap => ledger.database.SharedHashMapDB(&.{cf1}),
 };
 
-const build_options = @import("build-options");
-const ledger = @import("lib.zig");
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const maybe_max_actions_string = args.next();
