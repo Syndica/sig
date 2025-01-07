@@ -9,6 +9,7 @@ const Executable = svm.Executable;
 const Vm = svm.Vm;
 const sbpf = svm.sbpf;
 const syscalls = svm.syscalls;
+const Config = svm.Config;
 
 const MemoryMap = memory.MemoryMap;
 
@@ -67,10 +68,13 @@ pub fn main() !void {
         );
     }
 
+    const config: Config = .{
+        .minimum_version = if (assemble) .v2 else .v1,
+    };
     var executable = if (assemble)
-        try Executable.fromAsm(allocator, bytes)
+        try Executable.fromAsm(allocator, bytes, config)
     else exec: {
-        const elf = try Elf.parse(allocator, bytes, &loader);
+        var elf = try Elf.parse(allocator, bytes, &loader, config);
         break :exec try Executable.fromElf(allocator, &elf);
     };
     defer executable.deinit(allocator);
@@ -79,7 +83,7 @@ pub fn main() !void {
     defer allocator.free(heap_mem);
     @memset(heap_mem, 0x00);
 
-    const stack_memory = try allocator.alloc(u8, 4096 * 64);
+    const stack_memory = try allocator.alloc(u8, config.stackSize());
     defer allocator.free(stack_memory);
     @memset(stack_memory, 0);
 
@@ -90,7 +94,7 @@ pub fn main() !void {
         memory.Region.init(.mutable, &.{}, memory.INPUT_START),
     }, executable.version);
 
-    var vm = try Vm.init(allocator, &executable, m, &loader);
+    var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
     defer vm.deinit();
     const result = try vm.run();
 
