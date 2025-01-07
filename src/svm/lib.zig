@@ -10,5 +10,6 @@ pub const Executable = executable.Executable;
 pub const BuiltinProgram = executable.BuiltinProgram;
 pub const Registry = executable.Registry;
 pub const Assembler = executable.Assembler;
+pub const Config = executable.Config;
 pub const Vm = vm.Vm;
 pub const Elf = elf.Elf;
