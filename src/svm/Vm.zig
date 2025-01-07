@@ -7,7 +7,6 @@ const MemoryMap = memory.MemoryMap;
 const Vm = @This();
 
 const assert = std.debug.assert;
-const log = std.log.scoped(.vm);
 
 allocator: std.mem.Allocator,
 executable: *const Executable,

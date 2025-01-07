@@ -87,7 +87,7 @@ fn parseHeader(self: *Elf) !void {
 fn parseDynamic(
     self: *Elf,
 ) !void {
-    var dynamic_table: ?[]align(1) const elf.Elf64_Dyn = &.{};
+    var dynamic_table: ?[]align(1) const elf.Elf64_Dyn = null;
 
     if (self.getPhdrIndexByType(elf.PT_DYNAMIC)) |index| {
         dynamic_table = std.mem.bytesAsSlice(elf.Elf64_Dyn, self.phdrSlice(index));
@@ -160,7 +160,7 @@ fn parseDynamicSymbolTable(self: *Elf) !void {
     } else return error.InvalidDynamicSectionTable;
 }
 
-pub fn parseRoSections(self: *const Elf, gpa: std.mem.Allocator) !Executable.Section {
+pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executable.Section {
     const ro_names: []const []const u8 = &.{
         ".text",
         ".rodata",
@@ -181,8 +181,8 @@ pub fn parseRoSections(self: *const Elf, gpa: std.mem.Allocator) !Executable.Sec
     var ro_slices = try std.ArrayListUnmanaged(struct {
         usize,
         []const u8,
-    }).initCapacity(gpa, self.shdrs.len);
-    defer ro_slices.deinit(gpa);
+    }).initCapacity(allocator, self.shdrs.len);
+    defer ro_slices.deinit(allocator);
 
     for (self.shdrs, 0..) |shdr, i| {
         const name = self.getString(shdr.sh_name);
@@ -226,7 +226,7 @@ pub fn parseRoSections(self: *const Elf, gpa: std.mem.Allocator) !Executable.Sec
         return error.ValueOutOfBounds;
     }
 
-    const ro_section = try gpa.alloc(u8, buf_len);
+    const ro_section = try allocator.alloc(u8, buf_len);
     for (ro_slices.items) |ro_slice| {
         const section_addr, const slice = ro_slice;
         const buf_offset_start = section_addr -| lowest_addr;
@@ -296,7 +296,7 @@ fn validate(self: *Elf) !void {
         const end = try std.math.add(u64, start, shdr.sh_size);
 
         const file_size = self.bytes.len;
-        if (start > file_size or end > file_size) return error.Oob;
+        if (start > file_size or end > file_size) return error.SectionHeaderOutOfBounds;
     }
 
     // ensure that the entry point is inside of the ".text" section
