@@ -14,3 +14,7 @@ datasources:
     isDefault: false
     version: 1
     editable: false
+
+  - name: Pyroscope
+    type: grafana-pyroscope-datasource
+    url: http://pyroscope:4040

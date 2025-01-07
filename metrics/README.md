@@ -18,6 +18,7 @@ linux: `docker compose up -d`
 - prometheus will be accessable on `localhost:9090`
 - sig metrics will be published to localhost:12345 (if you change this on the sig cli, you will
   need to also modify the prometheus `target` to point to the different port).
+- To enable profiling, optionally supply SIG_PID `e.g. SIG_PID=$(pgrep sig) docker compose up -d`
 
 ## Shutting down
 

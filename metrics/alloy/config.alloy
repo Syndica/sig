@@ -46,3 +46,18 @@ loki.write "grafana_loki" {
         url = "http://loki:3100/loki/api/v1/push"
     }
 }
+
+pyroscope.ebpf "instance" {
+    forward_to = [pyroscope.write.endpoint.receiver]
+    targets    = [{
+        __process_pid__ = env("SIG_PID"),
+        service_name = "sig",
+    }]
+    
+}
+
+pyroscope.write "endpoint" {
+    endpoint {
+        url = "http://pyroscope:4040"
+    }
+}

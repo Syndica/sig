@@ -878,6 +878,12 @@ fn shredCollector() !void {
     var rpc_client = sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
 
+    var shred_network_conf = config.current.shred_network;
+    shred_network_conf.start_slot = shred_network_conf.start_slot orelse blk: {
+        const response = try rpc_client.getSlot(allocator, .{});
+        break :blk try response.result();
+    };
+
     const repair_port: u16 = config.current.shred_network.repair_port;
     const turbine_recv_port: u16 = config.current.shred_network.turbine_recv_port;
 
@@ -949,13 +955,8 @@ fn shredCollector() !void {
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
-    var shred_col_conf = config.current.shred_network;
-    shred_col_conf.start_slot = shred_col_conf.start_slot orelse blk: {
-        const response = try rpc_client.getSlot(allocator, .{});
-        break :blk try response.result();
-    };
     var shred_network_manager = try sig.shred_network.start(
-        shred_col_conf,
+        shred_network_conf,
         .{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
