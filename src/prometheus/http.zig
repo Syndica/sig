@@ -16,7 +16,7 @@ pub fn servePrometheus(
     };
     var server = try httpz.ServerCtx(*const MetricsEndpoint, *const MetricsEndpoint).init(
         allocator,
-        .{ .port = port },
+        .{ .port = port, .address = "0.0.0.0" },
         &endpoint,
     );
     var router = server.router();
@@ -41,6 +41,7 @@ pub fn getMetrics(
     _: *httpz.Request,
     response: *httpz.Response,
 ) !void {
+    response.content_type = .TEXT; // expected by prometheus
     try self.registry.write(self.allocator, response.writer());
 }
 
