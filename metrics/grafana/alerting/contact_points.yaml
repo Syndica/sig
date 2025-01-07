@@ -8,7 +8,7 @@ contactPoints:
         type: slack
         settings:
           recipient: sig
-          url: ${SLACK_WEBHOOK_URL}
+          url: https://${SLACK_WEBHOOK_URL}
           text: |-
             {{ range .Alerts.Firing }}
               {{ .Annotations.summary }} -- {{ .PanelURL }}

@@ -45,10 +45,10 @@ linux: `docker compose down`
 
 ## Setting up Alerts
 
-Set the slack webhook url env variable in `/metrics/.env` file.
+Set the slack webhook url env variable in a `/metrics/.env` file.
 
 ```
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+SLACK_WEBHOOK_URL=hooks.slack.com/services/AAA/BBB/CCC
 ```
 
 ## Expected result
