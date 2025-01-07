@@ -92,7 +92,7 @@ pub fn main() !void {
     @memset(stack_memory, 0);
 
     const m = try MemoryMap.init(&.{
-        executable.getRoRegion(),
+        executable.getProgramRegion(),
         memory.Region.init(.mutable, stack_memory, memory.STACK_START),
         memory.Region.init(.mutable, heap_mem, memory.HEAP_START),
         memory.Region.init(.mutable, input_mem, memory.INPUT_START),

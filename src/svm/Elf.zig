@@ -325,7 +325,7 @@ fn relocate(
     const instructions = try self.getInstructions();
     for (instructions, 0..) |inst, i| {
         if (inst.opcode == .call_imm and inst.imm != ~@as(u32, 0)) {
-            const target_pc = @as(i64, @intCast(i)) +| 1 +| @as(i32, @bitCast(inst.imm));
+            const target_pc = @as(i64, @intCast(i)) +| @as(i32, @bitCast(inst.imm)) +| 1;
             if (target_pc < 0 or target_pc >= instructions.len)
                 return error.RelativeJumpOutOfBounds;
             const key = try self.function_registry.registerHashedLegacy(

@@ -22,6 +22,12 @@ call_frames: std.ArrayListUnmanaged(CallFrame),
 depth: u64,
 instruction_count: u64,
 
+const CallFrame = struct {
+    caller_saved_regs: [4]u64,
+    fp: u64,
+    return_pc: u64,
+};
+
 pub fn init(
     allocator: std.mem.Allocator,
     executable: *const Executable,
@@ -357,9 +363,11 @@ fn store(vm: *Vm, T: type, vm_addr: u64, value: T) !void {
 
 fn pushCallFrame(vm: *Vm) !void {
     const frame = vm.call_frames.addOneAssumeCapacity();
-    @memcpy(&frame.caller_saved_regs, vm.registers.values[6..][0..4]);
-    frame.fp = vm.registers.get(.r10);
-    frame.return_pc = vm.registers.get(.pc) + 1;
+    frame.* = .{
+        .caller_saved_regs = vm.registers.values[6..][0..4].*,
+        .fp = vm.registers.get(.r10),
+        .return_pc = vm.registers.get(.pc) + 1,
+    };
 
     vm.depth += 1;
     if (vm.depth == 64) {
@@ -379,9 +387,3 @@ fn extend(input: anytype) u64 {
     const extended: i64 = signed;
     return @bitCast(extended);
 }
-
-const CallFrame = struct {
-    caller_saved_regs: [4]u64,
-    fp: u64,
-    return_pc: u64,
-};

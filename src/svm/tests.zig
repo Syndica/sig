@@ -1490,6 +1490,38 @@ test "entrypoint exit" {
     , 42);
 }
 
+test "call depth in bounds" {
+    try testAsm(
+        \\entrypoint:
+        \\  mov r1, 0
+        \\  mov r2, 63
+        \\  call function_foo
+        \\  mov r0, r1
+        \\  exit
+        \\function_foo:
+        \\  add r1, 1
+        \\  jeq r1, r2, +1
+        \\  call function_foo
+        \\  exit
+    , 63);
+}
+
+test "call depth out of bounds" {
+    try testAsm(
+        \\entrypoint:
+        \\  mov r1, 0
+        \\  mov r2, 64
+        \\  call function_foo
+        \\  mov r0, r1
+        \\  exit
+        \\function_foo:
+        \\  add r1, 1
+        \\  jeq r1, r2, +1
+        \\  call function_foo
+        \\  exit
+    , error.CallDepthExceeded);
+}
+
 test "callx imm" {
     try testAsm(
         \\entrypoint:
@@ -1579,7 +1611,7 @@ fn testElfWithSyscalls(
     defer allocator.free(stack_memory);
 
     const m = try MemoryMap.init(&.{
-        executable.getRoRegion(),
+        executable.getProgramRegion(),
         Region.init(.mutable, stack_memory, memory.STACK_START),
         Region.init(.constant, &.{}, memory.HEAP_START),
         Region.init(.mutable, &.{}, memory.INPUT_START),

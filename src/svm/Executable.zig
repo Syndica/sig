@@ -48,12 +48,10 @@ pub fn fromAsm(allocator: std.mem.Allocator, source: []const u8) !Executable {
     return Assembler.parse(allocator, source);
 }
 
-/// Only call `deinit` if the executable was created with `fromAsm`.
-/// We don't own the Elf file and cannot deinit the instructions for it.
-///
-/// We need to guarantee that the instructions are aligned to `ebpf.Instruction` rather
-/// than 1 like they would be if we created the executable from the Elf file. The GPA
-/// requires allocations and deallocations to be made with the same semantic alignment.
+/// When the executable comes from the assembler, we need to guarantee that the
+/// instructions are aligned to `ebpf.Instruction` rather than 1 like they would be
+/// if we created the executable from the Elf file. The GPA requires allocations and
+/// deallocations to be made with the same semantic alignment.
 pub fn deinit(self: *Executable, allocator: std.mem.Allocator) void {
     if (!self.from_elf) allocator.free(@as(
         []const ebpf.Instruction,
@@ -67,10 +65,10 @@ pub fn deinit(self: *Executable, allocator: std.mem.Allocator) void {
     self.function_registry.deinit(allocator);
 }
 
-pub fn getRoRegion(exec: *const Executable) memory.Region {
-    const offset, const ro_data = switch (exec.ro_section) {
+pub fn getProgramRegion(self: *const Executable) memory.Region {
+    const offset, const ro_data = switch (self.ro_section) {
         .owned => |o| .{ o.offset, o.data },
-        .assembly => |a| .{ a.offset, exec.bytes[a.start..a.end] },
+        .assembly => |a| .{ a.offset, self.bytes[a.start..a.end] },
     };
     return memory.Region.init(.constant, ro_data, memory.PROGRAM_START +| offset);
 }
@@ -367,7 +365,6 @@ const Assembler = struct {
                     const reg = std.meta.stringToEnum(ebpf.Instruction.Register, op) orelse
                         @panic("unknown register");
                     try operands.append(allocator, .{ .register = reg });
-                    continue;
                 } else if (std.mem.startsWith(u8, op, "[")) {
                     const left_bracket = std.mem.indexOfScalar(u8, op, '[').?;
                     const right_bracket = std.mem.indexOfScalar(u8, op, ']') orelse
@@ -379,8 +376,7 @@ const Assembler = struct {
 
                     // does it have a + or -
                     // this can appear in [r1+10] for example
-                    const maybe_symbol_offset = std.mem.indexOfAny(u8, base, "+-");
-                    if (maybe_symbol_offset) |symbol_offset| {
+                    if (std.mem.indexOfAny(u8, base, "+-")) |symbol_offset| {
                         const symbol = base[symbol_offset..];
                         base = base[0..symbol_offset];
                         offset = try std.fmt.parseInt(i16, symbol, 0);
@@ -394,12 +390,13 @@ const Assembler = struct {
                         .base = reg,
                         .offset = offset,
                     } });
-                    continue;
                 } else if (std.mem.startsWith(u8, op, "function_")) {
                     try operands.append(allocator, .{ .label = op });
-                } else if (std.fmt.parseInt(i64, op, 0)) |int| {
-                    try operands.append(allocator, .{ .integer = int });
-                } else |err| std.debug.panic("err: {s}", .{@errorName(err)});
+                } else {
+                    if (std.fmt.parseInt(i64, op, 0)) |int| {
+                        try operands.append(allocator, .{ .integer = int });
+                    } else |err| std.debug.panic("err: {s}", .{@errorName(err)});
+                }
             }
 
             try statements.append(allocator, .{ .instruction = .{
