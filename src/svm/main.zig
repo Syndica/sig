@@ -62,7 +62,7 @@ pub fn main() !void {
         .{ "abort", syscalls.abort },
     }) |entry| {
         const name, const function = entry;
-        _ = try loader.functions.registerFunctionHashed(
+        _ = try loader.functions.registerHashed(
             allocator,
             name,
             function,

@@ -328,7 +328,7 @@ fn relocate(
             const target_pc = @as(i64, @intCast(i)) +| 1 +| @as(i32, @bitCast(inst.imm));
             if (target_pc < 0 or target_pc >= instructions.len)
                 return error.RelativeJumpOutOfBounds;
-            const key = try self.function_registry.registerFunctionHashedLegacy(
+            const key = try self.function_registry.registerHashedLegacy(
                 allocator,
                 &.{},
                 @intCast(target_pc),
@@ -441,7 +441,7 @@ fn relocate(
                 // If the symbol is defined, this is a bpf-to-bpf call.
                 if (symbol.st_type() == elf.STT_FUNC and symbol.st_value != 0) {
                     const target_pc = (symbol.st_value -| text_section.sh_addr) / 8;
-                    const key = try self.function_registry.registerFunctionHashedLegacy(
+                    const key = try self.function_registry.registerHashedLegacy(
                         allocator,
                         symbol_name,
                         @intCast(target_pc),

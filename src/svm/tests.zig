@@ -1563,7 +1563,7 @@ fn testElfWithSyscalls(
     defer loader.deinit(allocator);
 
     for (extra_syscalls) |syscall| {
-        _ = try loader.functions.registerFunctionHashed(
+        _ = try loader.functions.registerHashed(
             allocator,
             syscall.name,
             syscall.builtin_fn,

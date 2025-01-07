@@ -126,7 +126,7 @@ const Assembler = struct {
                     if (std.mem.startsWith(u8, name, "function_") or
                         std.mem.eql(u8, name, "entrypoint"))
                     {
-                        try function_registry.registerFunction(
+                        try function_registry.register(
                             allocator,
                             inst_ptr,
                             name,
@@ -272,7 +272,7 @@ const Assembler = struct {
                                     .{target_pc},
                                 );
                                 defer allocator.free(label);
-                                try function_registry.registerFunction(
+                                try function_registry.register(
                                     allocator,
                                     target_pc,
                                     label,
@@ -322,7 +322,7 @@ const Assembler = struct {
         const entry_pc = if (function_registry.lookupName("entrypoint")) |entry|
             entry.value
         else pc: {
-            _ = try function_registry.registerFunctionHashedLegacy(allocator, "entrypoint", 0);
+            _ = try function_registry.registerHashedLegacy(allocator, "entrypoint", 0);
             break :pc 0;
         };
 
@@ -423,7 +423,7 @@ pub fn Registry(T: type) type {
         const Self = @This();
 
         /// Duplicates `name` to free later.
-        fn registerFunction(
+        fn register(
             registry: *Self,
             allocator: std.mem.Allocator,
             key: u32,
@@ -440,18 +440,18 @@ pub fn Registry(T: type) type {
             }
         }
 
-        pub fn registerFunctionHashed(
+        pub fn registerHashed(
             registry: *Self,
             allocator: std.mem.Allocator,
             name: []const u8,
             value: T,
         ) !u32 {
             const key = ebpf.hashSymbolName(name);
-            try registry.registerFunction(allocator, key, name, value);
+            try registry.register(allocator, key, name, value);
             return key;
         }
 
-        pub fn registerFunctionHashedLegacy(
+        pub fn registerHashedLegacy(
             registry: *Self,
             allocator: std.mem.Allocator,
             name: []const u8,
@@ -461,7 +461,7 @@ pub fn Registry(T: type) type {
                 ebpf.hashSymbolName(name)
             else
                 ebpf.hashSymbolName(&std.mem.toBytes(value));
-            try registry.registerFunction(allocator, hash, &.{}, value);
+            try registry.register(allocator, hash, &.{}, value);
             return hash;
         }
 
