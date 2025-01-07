@@ -87,7 +87,7 @@ pub const AccountInFile = struct {
     account_info: AccountInfo,
     hash: Hash,
 
-    data: ReadHandle,
+    data: ReadHandle, // TODO: deinit AccountInFiles
 
     // other info (used when parsing accounts out)
     offset: usize = 0,
@@ -198,9 +198,8 @@ pub const AccountInFile = struct {
         self: *const Self,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!Account {
-        const owned_data = try allocator.dupe(u8, self.data);
         return .{
-            .data = owned_data,
+            .data = ReadHandle.initExternalOwned(try self.data.readAllAllocate(allocator)),
             .executable = self.executable().*,
             .lamports = self.lamports().*,
             .owner = self.owner().*,
@@ -249,12 +248,14 @@ pub const AccountInFile = struct {
         offset += self.store_info.writeToBuf(buf[offset..]);
         offset += self.account_info.writeToBuf(buf[offset..]);
 
-        @memcpy(buf[offset..(offset + 32)], &self.hash().data);
+        @memcpy(buf[offset..(offset + 32)], &self.hash.data);
         offset += 32;
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
-        @memcpy(buf[offset..(offset + self.data.len)], self.data);
-        offset += self.data.len;
+        self.data.readAll(buf[offset..][0..self.data.len()]) catch
+            unreachable; // invalid args
+
+        offset += self.data.len();
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
         return offset;
@@ -263,9 +264,7 @@ pub const AccountInFile = struct {
 
 /// Analogous to [AccountStorageEntry](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1069)
 pub const AccountFile = struct {
-
     // file contents
-    memory: []align(std.mem.page_size) u8,
     file: std.fs.File,
 
     id: FileId,
@@ -284,17 +283,7 @@ pub const AccountFile = struct {
 
         try accounts_file_info.validate(file_size);
 
-        const memory = try std.posix.mmap(
-            null,
-            file_size,
-            std.posix.PROT.READ,
-            std.posix.MAP{ .TYPE = .PRIVATE },
-            file.handle,
-            0,
-        );
-
         return .{
-            .memory = memory,
             .file = file,
             .length = accounts_file_info.length,
             .id = accounts_file_info.id,
@@ -303,16 +292,24 @@ pub const AccountFile = struct {
     }
 
     pub fn deinit(self: Self) void {
-        std.posix.munmap(self.memory);
+        self.file.close();
     }
 
-    pub fn validate(self: *const Self) !usize {
+    pub fn validate(self: *const Self, metadata_allocator: std.mem.Allocator, buffer_pool: *BufferPool) !usize {
         var offset: usize = 0;
         var number_of_accounts: usize = 0;
         var account_bytes: usize = 0;
 
         while (true) {
-            const account = self.readAccount(offset) catch break;
+            const account = self.readAccount(
+                metadata_allocator,
+                buffer_pool,
+                offset,
+            ) catch |err| switch (err) {
+                error.EOF => break,
+                else => return err,
+            };
+
             try account.validate();
             offset = offset + account.len;
             number_of_accounts += 1;
@@ -330,19 +327,21 @@ pub const AccountFile = struct {
     /// (used when computing account hashes for snapshot validation)
     pub fn getAccountHashAndLamports(
         self: *const Self,
+        metadata_allocator: std.mem.Allocator,
+        buffer_pool: *BufferPool,
         start_offset: usize,
-    ) error{EOF}!struct { hash: *Hash, lamports: *u64 } {
+    ) !struct { hash: Hash, lamports: u64 } {
         var offset = start_offset;
 
         offset += @sizeOf(AccountInFile.StorageInfo);
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
-        const lamports = try self.getType(&offset, u64);
+        const lamports = try self.getType(metadata_allocator, buffer_pool, &offset, u64);
 
         offset += @sizeOf(AccountInFile.AccountInfo) - @sizeOf(u64);
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
-        const hash = try self.getType(&offset, Hash);
+        const hash = try self.getType(metadata_allocator, buffer_pool, &offset, Hash);
 
         return .{
             .hash = hash,
@@ -374,20 +373,27 @@ pub const AccountFile = struct {
         };
     }
 
-    pub fn readAccount(self: *const Self, start_offset: usize) error{EOF}!AccountInFile {
+    pub fn readAccount(
+        self: *const Self,
+        metadata_allocator: std.mem.Allocator,
+        buffer_pool: *BufferPool,
+        start_offset: usize,
+    ) !AccountInFile {
         var offset = start_offset;
 
-        const store_info = try self.getType(&offset, AccountInFile.StorageInfo);
-        const account_info = try self.getType(&offset, AccountInFile.AccountInfo);
-        const hash = try self.getType(&offset, Hash);
-        const data = try self.getSlice(&offset, store_info.data_len);
+        // TODO efficiency: could reduce this to one buffer_pool call, and slice that
+        const store_info = try self.getType(metadata_allocator, buffer_pool, &offset, AccountInFile.StorageInfo);
+        const account_info = try self.getType(metadata_allocator, buffer_pool, &offset, AccountInFile.AccountInfo);
+        const hash = try self.getType(metadata_allocator, buffer_pool, &offset, Hash);
+        const data = try self.getSlice(metadata_allocator, buffer_pool, &offset, store_info.data_len);
+        errdefer data.deinit(metadata_allocator);
 
         const len = offset - start_offset;
 
         return AccountInFile{
-            .store_info = store_info.*,
-            .account_info = account_info.*,
-            .hash = hash.*,
+            .store_info = store_info,
+            .account_info = account_info,
+            .hash = hash,
             .data = data,
             .len = len,
             .offset = start_offset,
@@ -461,7 +467,13 @@ pub const AccountFile = struct {
     //     const slice: []const T = try read.borrowSlice(start_offset, length);
     // }
 
-    pub fn getSlice(self: *const Self, start_index_ptr: *usize, length: usize) error{EOF}![]u8 {
+    pub fn getSlice(
+        self: *const Self,
+        metadata_allocator: std.mem.Allocator,
+        buffer_pool: *BufferPool,
+        start_index_ptr: *usize,
+        length: usize,
+    ) !ReadHandle {
         const start_index = start_index_ptr.*;
         const result = @addWithOverflow(start_index, length);
         const end_index = result[0];
@@ -470,22 +482,44 @@ pub const AccountFile = struct {
         if (overflow_flag == 1 or end_index > self.length) {
             return error.EOF;
         }
+
         start_index_ptr.* = std.mem.alignForward(usize, end_index, @sizeOf(u64));
-        return @ptrCast(self.memory[start_index..end_index]);
+        return try buffer_pool.read(metadata_allocator, self.file, self.id, @intCast(start_index), @intCast(end_index));
     }
 
-    pub fn getType(self: *const Self, start_index_ptr: *usize, comptime T: type) error{EOF}!*T {
+    pub fn getType(
+        self: *const Self,
+        metadata_allocator: std.mem.Allocator,
+        buffer_pool: *BufferPool,
+        start_index_ptr: *usize,
+        comptime T: type,
+    ) !T {
         const length = @sizeOf(T);
-        return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
+
+        const read = try self.getSlice(metadata_allocator, buffer_pool, start_index_ptr, length);
+        defer read.deinit(metadata_allocator);
+
+        var buf: T = undefined;
+        try read.readAll(std.mem.asBytes(&buf));
+        return buf;
     }
 
     pub const Iterator = struct {
         accounts_file: *const AccountFile,
+        metadata_allocator: std.mem.Allocator,
+        buffer_pool: *BufferPool,
         offset: usize = 0,
 
-        pub fn next(self: *Iterator) ?AccountInFile {
+        pub fn next(self: *Iterator) !?AccountInFile {
             while (true) {
-                const account = self.accounts_file.readAccount(self.offset) catch break;
+                const account = self.accounts_file.readAccount(
+                    self.metadata_allocator,
+                    self.buffer_pool,
+                    self.offset,
+                ) catch |err| switch (err) {
+                    error.EOF => break,
+                    else => return err,
+                };
                 self.offset = self.offset + account.len;
                 return account;
             }
@@ -497,8 +531,16 @@ pub const AccountFile = struct {
         }
     };
 
-    pub fn iterator(self: *const Self) Iterator {
-        return .{ .accounts_file = self };
+    pub fn iterator(
+        self: *const Self,
+        metadata_allocator: std.mem.Allocator,
+        buffer_pool: *BufferPool,
+    ) Iterator {
+        return .{
+            .accounts_file = self,
+            .metadata_allocator = metadata_allocator,
+            .buffer_pool = buffer_pool,
+        };
     }
 };
 
@@ -509,14 +551,18 @@ test "core.accounts_file: verify accounts file" {
         .id = FileId.fromInt(0),
         .length = 162224,
     };
+
+    var bp = try BufferPool.init(std.testing.allocator, 100);
+    defer bp.deinit(std.testing.allocator);
+
     var accounts_file = try AccountFile.init(file, file_info, 10);
     defer accounts_file.deinit();
 
-    _ = try accounts_file.validate();
+    _ = try accounts_file.validate(std.testing.allocator, &bp);
 
-    const account = try accounts_file.readAccount(0);
-    const hash_and_lamports = try accounts_file.getAccountHashAndLamports(0);
+    const account = try accounts_file.readAccount(std.testing.allocator, &bp, 0);
+    const hash_and_lamports = try accounts_file.getAccountHashAndLamports(std.testing.allocator, &bp, 0);
 
-    try std.testing.expectEqual(account.lamports().*, hash_and_lamports.lamports.*);
-    try std.testing.expectEqual(account.hash, hash_and_lamports.hash.*);
+    try std.testing.expectEqual(account.lamports().*, hash_and_lamports.lamports);
+    try std.testing.expectEqual(account.hash, hash_and_lamports.hash);
 }

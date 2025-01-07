@@ -9,6 +9,7 @@ const LruCacheCustom = sig.common.lru.LruCacheCustom;
 const ReferenceCounter = sig.sync.reference_counter.ReferenceCounter;
 const Slot = sig.core.Slot;
 const Counter = sig.prometheus.counter.Counter;
+const ReadHandle = sig.accounts_db.buffer_pool.ReadHandle;
 
 /// Stores read-only in-memory copies of commonly used *rooted* accounts
 pub const AccountsCache = struct {
@@ -39,8 +40,10 @@ pub const AccountsCache = struct {
             const account_data = buf[@sizeOf(CachedAccount)..];
 
             var new_account = account;
-            new_account.data = account_data;
-            @memcpy(new_account.data, account.data);
+            new_account.data = ReadHandle.initExternal(account_data);
+
+            account.data.read(0, account.data.len(), account_data) catch
+                unreachable; // account.data invalid?
 
             new_entry.* = .{
                 .account = new_account,
@@ -206,7 +209,7 @@ test "AccountsCache put and get account" {
     defer if (cached_account) |cached| cached.releaseOrDestroy(allocator);
 
     try std.testing.expect(cached_account != null);
-    try std.testing.expectEqualSlices(u8, account.data, cached_account.?.account.data);
+    try ReadHandle.expectEqual(account.data, cached_account.?.account.data);
 }
 
 test "AccountsCache returns null when account is missing" {
