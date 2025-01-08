@@ -658,7 +658,9 @@ pub const AccountsDB = struct {
                     });
                     return err;
                 };
-                defer accounts_file.close();
+
+                std.debug.print("file_name_bounded: {s}\n", .{file_name_bounded.constSlice()});
+                std.debug.print("accounts_file: {}\n", .{accounts_file});
 
                 break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
                     self.logger.err().logf("failed to *open* AccountsFile {s}: {s}\n", .{
@@ -3169,6 +3171,7 @@ pub const GeyserTmpStorage = struct {
     pub const Error = error{
         OutOfGeyserFBAMemory,
         OutOfGeyserArrayMemory,
+        OutOfMemory, // feels odd adding this, but unfamiliar with geyser - sebastian
     };
 
     pub fn init(allocator: std.mem.Allocator, n_accounts_estimate: usize) !Self {
@@ -3188,10 +3191,9 @@ pub const GeyserTmpStorage = struct {
         self.pubkeys.clearRetainingCapacity();
     }
 
-    pub fn cloneAndTrack(self: *Self, account_in_file: AccountInFile) Error!void {
-        // NOTE: this works because we mmap the account files - this will not work once we remove mmaps
-        const account = account_in_file.toAccount();
-
+    pub fn cloneAndTrack(self: *Self, allocator: std.mem.Allocator, account_in_file: AccountInFile) Error!void {
+        // doesn't feel great allocating this?
+        const account = try account_in_file.toOwnedAccount(allocator);
         self.accounts.append(account) catch return Error.OutOfGeyserArrayMemory;
         self.pubkeys.append(account_in_file.pubkey().*) catch return Error.OutOfGeyserArrayMemory;
     }
@@ -3205,7 +3207,7 @@ pub const ValidateAccountFileError = error{
 } || AccountInFile.ValidateError || GeyserTmpStorage.Error || BufferPool.ReadError;
 
 pub fn indexAndValidateAccountFile(
-    metadata_allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     buffer_pool: *BufferPool,
     accounts_file: *AccountFile,
     shard_calculator: PubkeyShardCalculator,
@@ -3222,18 +3224,19 @@ pub fn indexAndValidateAccountFile(
 
     while (true) {
         const account = accounts_file.readAccount(
-            metadata_allocator,
+            allocator,
             buffer_pool,
             offset,
         ) catch |err| switch (err) {
             error.EOF => break,
             else => |e| return e,
         };
+        defer account.deinit(allocator);
 
         try account.validate();
 
         if (geyser_storage) |storage| {
-            try storage.cloneAndTrack(account);
+            try storage.cloneAndTrack(allocator, account);
         }
 
         if (account_refs.capacity == account_refs.items.len) {
