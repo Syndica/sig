@@ -70,10 +70,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         batchDeleteRange,
     };
 
-    const maybe_max_action = if (maybe_max_actions) |max| max / functions.len else null;
-
     inline for (functions) |function| {
-        const fn_args = .{ &db, &random, maybe_max_action };
+        const fn_args = .{ &db, &random, maybe_max_actions };
         _ = try @call(.auto, function, fn_args);
     }
 }
