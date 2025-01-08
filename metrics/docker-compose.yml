@@ -50,7 +50,7 @@ services:
       - SIG_PID=${SIG_PID}
 
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:11.4.0
     container_name: grafana
     ports:
       - 3000:3000
@@ -58,10 +58,12 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=grafana
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
     volumes:
       - ./grafana/datasources:/etc/grafana/provisioning/datasources
       - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
       - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/alerting:/etc/grafana/provisioning/alerting
 
   node-exporter:
     image: prom/node-exporter
