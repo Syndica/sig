@@ -4,9 +4,6 @@ const build_options = @import("build-options");
 const ledger = @import("lib.zig");
 
 const ColumnFamily = sig.ledger.database.ColumnFamily;
-const AtomicU64 = std.atomic.Value(u64);
-
-var total_action_count: AtomicU64 = AtomicU64.init(0);
 
 const allocator = std.heap.c_allocator;
 
@@ -33,9 +30,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             break :blk null;
         }
     };
-    defer {
-        _ = total_action_count.fetchAdd(1, .monotonic);
-    }
 
     // NOTE: change to trace for full logs
     var std_logger = sig.trace.DirectPrintLogger.init(
@@ -64,63 +58,23 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     defer db.deinit();
 
-    {
-        var db_put_thread = try std.Thread.spawn(
-            .{},
-            dbPut,
-            .{ &db, &random, &total_action_count, maybe_max_actions },
-        );
-        defer db_put_thread.join();
-
-        var db_delete_thread = try std.Thread.spawn(
-            .{},
-            dbDelete,
-            .{ &db, &random, &total_action_count, maybe_max_actions },
-        );
-        defer db_delete_thread.join();
-
-        var db_delete_files_in_range = try std.Thread.spawn(
-            .{},
-            dbDeleteFilesInRange,
-            .{ &db, &random, &total_action_count, maybe_max_actions },
-        );
-        defer db_delete_files_in_range.join();
-
-        var db_get_bytes_thread = try std.Thread.spawn(
-            .{},
-            dbGetBytes,
-            .{ &db, &random, &total_action_count, maybe_max_actions },
-        );
-        defer db_get_bytes_thread.join();
-
-        var db_get_thread = try std.Thread.spawn(
-            .{},
-            dbGet,
-            .{ &db, &random, &total_action_count, maybe_max_actions },
-        );
-        defer db_get_thread.join();
-
-        var db_count_thread = try std.Thread.spawn(
-            .{},
-            dbCount,
-            .{ &db, &total_action_count, maybe_max_actions },
-        );
-        defer db_count_thread.join();
-
-        var db_contains_thread = try std.Thread.spawn(
-            .{},
-            dbContains,
-            .{ &db, &random, &total_action_count, maybe_max_actions },
-        );
-        defer db_contains_thread.join();
-
+    const functions = .{
+        dbPut,
+        dbDelete,
+        dbDeleteFilesInRange,
+        dbGetBytes,
+        dbGet,
+        dbCount,
+        dbContains,
         // Batch API
-        var batch_delete_range_thread = try std.Thread.spawn(
-            .{},
-            batchDeleteRange,
-            .{ &db, &random, &total_action_count, maybe_max_actions },
-        );
-        defer batch_delete_range_thread.join();
+        batchDeleteRange,
+    };
+
+    const maybe_max_action = if (maybe_max_actions) |max| max / functions.len else null;
+
+    inline for (functions) |function| {
+        const fn_args = .{ &db, &random, maybe_max_action };
+        _ = try @call(.auto, function, fn_args);
     }
 }
 
@@ -128,34 +82,32 @@ fn performDbAction(
     action_name: []const u8,
     comptime func: anytype,
     args: anytype,
-    count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
+    var count: u64 = 0;
     var last_print_msg_count: u64 = 0;
 
     while (true) {
         if (max_actions) |max| {
-            if (count.load(.monotonic) >= max) {
+            if (count >= max) {
                 std.debug.print("{s} reached max actions: {}\n", .{ action_name, max });
                 break;
             }
         }
 
         _ = try @call(.auto, func, args);
-        const current_count = count.load(.monotonic);
-        if ((current_count - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} {s} actions\n", .{ current_count, action_name });
-            last_print_msg_count = current_count;
+        if ((count - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} {s} actions\n", .{ count, action_name });
+            last_print_msg_count = count;
         }
 
-        _ = count.fetchAdd(1, .monotonic);
+        count += 1;
     }
 }
 
 fn dbPut(
     db: *BlockstoreDB,
     random: *const std.rand.Random,
-    count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
     const key = random.int(u32);
@@ -169,7 +121,6 @@ fn dbPut(
         "RocksDb.put",
         BlockstoreDB.put,
         .{ db, cf1, (key + 1), Data{ .value = value } },
-        count,
         max_actions,
     );
 }
@@ -177,7 +128,6 @@ fn dbPut(
 fn dbDelete(
     db: *BlockstoreDB,
     random: *const std.rand.Random,
-    count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
     const key = random.int(u32);
@@ -185,7 +135,6 @@ fn dbDelete(
         "RocksDb.delete",
         BlockstoreDB.delete,
         .{ db, cf1, key },
-        count,
         max_actions,
     );
 }
@@ -193,7 +142,6 @@ fn dbDelete(
 fn dbDeleteFilesInRange(
     db: *BlockstoreDB,
     random: *const std.rand.Random,
-    count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
     const start = random.int(u32);
@@ -209,7 +157,6 @@ fn dbDeleteFilesInRange(
         "RocksDb.deleteFilesInRange",
         BlockstoreDB.deleteFilesInRange,
         .{ db, cf1, start, end },
-        count,
         max_actions,
     );
 }
@@ -217,7 +164,6 @@ fn dbDeleteFilesInRange(
 fn dbGetBytes(
     db: *BlockstoreDB,
     random: *const std.rand.Random,
-    count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
     const key = random.int(u32);
@@ -225,7 +171,6 @@ fn dbGetBytes(
         "RocksDb.getBytes",
         BlockstoreDB.getBytes,
         .{ db, cf1, key },
-        count,
         max_actions,
     );
 }
@@ -233,7 +178,6 @@ fn dbGetBytes(
 fn dbGet(
     db: *BlockstoreDB,
     random: *const std.rand.Random,
-    count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
     const key = random.int(u32);
@@ -241,21 +185,21 @@ fn dbGet(
         "RocksDb.get",
         BlockstoreDB.get,
         .{ db, allocator, cf1, key },
-        count,
         max_actions,
     );
 }
 
 fn dbCount(
     db: *BlockstoreDB,
-    count: *std.atomic.Value(u64),
+    // Unused. Listed to allow uniform call
+    // via @call with the rest of the functions.
+    _: *const std.rand.Random,
     max_actions: ?usize,
 ) !void {
     try performDbAction(
         "RocksDb.count",
         BlockstoreDB.count,
         .{ db, cf1 },
-        count,
         max_actions,
     );
 }
@@ -263,7 +207,6 @@ fn dbCount(
 fn dbContains(
     db: *BlockstoreDB,
     random: *const std.rand.Random,
-    count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
     const key = random.int(u32);
@@ -271,7 +214,6 @@ fn dbContains(
         "RocksDb.contains",
         BlockstoreDB.contains,
         .{ db, cf1, key },
-        count,
         max_actions,
     );
 }
@@ -280,13 +222,13 @@ fn dbContains(
 fn batchDeleteRange(
     db: *BlockstoreDB,
     random: *const std.rand.Random,
-    count: *std.atomic.Value(u64),
     max_actions: ?usize,
 ) !void {
+    var count: u64 = 0;
     var last_print_msg_count: u64 = 0;
     while (true) {
         if (max_actions) |max| {
-            if (count.load(.monotonic) >= max) {
+            if (count >= max) {
                 std.debug.print("Batch actions reached max actions: {}\n", .{max});
                 break;
             }
@@ -318,12 +260,11 @@ fn batchDeleteRange(
         try batch.delete(cf1, key);
         try db.commit(&batch);
 
-        const current_count = count.load(.monotonic);
-        if ((current_count - last_print_msg_count) >= 1_000) {
-            std.debug.print("{d} Batch actions\n", .{current_count});
-            last_print_msg_count = current_count;
+        if ((count - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} Batch actions\n", .{count});
+            last_print_msg_count = count;
         }
 
-        _ = count.fetchAdd(1, .monotonic);
+        count += 1;
     }
 }
