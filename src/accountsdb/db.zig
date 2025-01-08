@@ -291,9 +291,8 @@ pub const AccountsDB = struct {
             var timer = try sig.time.Timer.start();
             var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
             defer fastload_dir.close();
-            self.logger.info().log("fast loading accountsdb...");
             try self.fastload(fastload_dir, collapsed_manifest.accounts_db_fields);
-            self.logger.info().logf("loaded from snapshot in {s}", .{timer.read()});
+            self.logger.info().logf("fastload: total time: {s}", .{timer.read()});
         } else {
             const load_duration = try self.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
@@ -301,15 +300,14 @@ pub const AccountsDB = struct {
                 allocator,
                 accounts_per_file_estimate,
             );
-            self.logger.info().logf("loaded from snapshot in {s}", .{load_duration});
+            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_duration});
         }
 
         // no need to re-save if we just loaded from a fastload
-        if (!should_fastload and save_index) {
-            var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
-            defer fastload_dir.close();
-
-            try self.account_index.saveToDisk(fastload_dir);
+        if (save_index and !should_fastload) {
+            var timer = try sig.time.Timer.start();
+            _ = try self.saveStateForFastload();
+            self.logger.info().logf("saveStateForFastload: total time: {s}", .{timer.read()});
         }
 
         if (validate) {
@@ -331,10 +329,19 @@ pub const AccountsDB = struct {
                     .capitalization = inc_persistence.incremental_capitalization,
                 } else null,
             });
-            self.logger.info().logf("validated from snapshot in {s}", .{validate_timer.read()});
+            self.logger.info().logf("validateLoadFromSnapshot: total time: {s}", .{validate_timer.read()});
         }
 
         return collapsed_manifest;
+    }
+
+    pub fn saveStateForFastload(
+        self: *Self,
+    ) !void {
+        self.logger.info().log("running saveStateForFastload...");
+        var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
+        defer fastload_dir.close();
+        try self.account_index.saveToDisk(fastload_dir);
     }
 
     pub fn fastload(
@@ -342,6 +349,8 @@ pub const AccountsDB = struct {
         dir: std.fs.Dir,
         snapshot_manifest: AccountsDbFields,
     ) !void {
+        self.logger.info().log("running fastload...");
+
         var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
         defer accounts_dir.close();
 
@@ -383,7 +392,6 @@ pub const AccountsDB = struct {
         }
 
         // NOTE: index loading was the most expensive part which we fastload here
-        self.logger.info().log("loading account index");
         try self.account_index.loadFromDisk(dir);
     }
 
@@ -397,7 +405,7 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
     ) !sig.time.Duration {
-        self.logger.info().log("loading from snapshot...");
+        self.logger.info().log("running loadFromSnapshot...");
 
         // used to read account files
         const n_parse_threads = n_threads;
@@ -472,12 +480,11 @@ pub const AccountsDB = struct {
             try geyser_writer.writePayloadToPipe(end_of_snapshot);
         }
 
-        self.logger.info().logf("[{d} threads]: merging thread indexes...", .{n_combine_threads});
         var merge_timer = try sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads, n_combine_threads);
-        self.logger.debug().logf("merging thread indexes took: {}", .{merge_timer.read()});
+        self.logger.debug().logf("mergeMultipleDBs: total time: {}", .{merge_timer.read()});
 
-        self.logger.debug().logf("total time: {s}", .{timer.read()});
+        self.logger.debug().logf("loadFromSnapshot: total time: {s}", .{timer.read()});
         return timer.read();
     }
 
@@ -768,6 +775,8 @@ pub const AccountsDB = struct {
         thread_dbs: []AccountsDB,
         n_threads: usize,
     ) !void {
+        self.logger.info().logf("[{d} threads]: running mergeMultipleDBs...", .{n_threads});
+
         var merge_indexes_wg: std.Thread.WaitGroup = .{};
         defer merge_indexes_wg.wait();
         try spawnThreadTasks(mergeThreadIndexesMultiThread, .{
@@ -928,8 +937,8 @@ pub const AccountsDB = struct {
     ) !struct { Hash, u64 } {
         var timer = try sig.time.Timer.start();
         // TODO: make cli arg
-        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
-        // const n_threads = 1;
+        // const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
+        const n_threads = 4;
 
         // alloc the result
         const hashes = try self.allocator.alloc(std.ArrayListUnmanaged(Hash), n_threads);
@@ -944,7 +953,10 @@ pub const AccountsDB = struct {
         @memset(lamports, 0);
 
         // split processing the bins over muliple threads
-        self.logger.info().logf("collecting hashes from accounts...", .{});
+        self.logger.info().logf(
+            "collecting hashes from accounts using {} threads...",
+            .{n_threads},
+        );
         if (n_threads == 1) {
             try getHashesFromIndex(
                 self,
@@ -1044,17 +1056,17 @@ pub const AccountsDB = struct {
 
         if (params.expected_full.accounts_hash.order(&accounts_hash) != .eq) {
             self.logger.err().logf(
-                \\ incorrect accounts hash
-                \\ expected vs calculated: {d} vs {d}
-            , .{ params.expected_full.accounts_hash, accounts_hash });
+                "incorrect accounts hash: expected vs calculated: {d} vs {d}",
+                .{ params.expected_full.accounts_hash, accounts_hash },
+            );
             return error.IncorrectAccountsHash;
         }
 
         if (params.expected_full.capitalization != total_lamports) {
             self.logger.err().logf(
-                \\ incorrect total lamports
-                \\ expected vs calculated: {d} vs {d}
-            , .{ params.expected_full.capitalization, total_lamports });
+                "incorrect total lamports: expected vs calculated: {d} vs {d}",
+                .{ params.expected_full.capitalization, total_lamports },
+            );
             return error.IncorrectTotalLamports;
         }
 
@@ -1093,17 +1105,17 @@ pub const AccountsDB = struct {
 
             if (expected_incremental.capitalization != incremental_lamports) {
                 self.logger.err().logf(
-                    \\ incorrect incremental lamports
-                    \\ expected vs calculated: {d} vs {d}
-                , .{ expected_incremental.capitalization, incremental_lamports });
+                    "incorrect incremental lamports: expected vs calculated: {d} vs {d}",
+                    .{ expected_incremental.capitalization, incremental_lamports },
+                );
                 return error.IncorrectIncrementalLamports;
             }
 
             if (expected_incremental.accounts_hash.order(&accounts_delta_hash) != .eq) {
                 self.logger.err().logf(
-                    \\ incorrect accounts delta hash
-                    \\ expected vs calculated: {d} vs {d}
-                , .{ expected_incremental.accounts_hash, accounts_delta_hash });
+                    "incorrect accounts delta hash: expected vs calculated: {d} vs {d}",
+                    .{ expected_incremental.accounts_hash, accounts_delta_hash },
+                );
                 return error.IncorrectAccountsDeltaHash;
             }
 
@@ -4425,13 +4437,18 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
     pub fn loadAndVerifySnapshot(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
         load_time: u64,
         validate_time: u64,
+        fastload_save_time: u64,
+        fastload_time: u64,
     } {
         const allocator = std.heap.c_allocator;
         var print_logger = sig.trace.DirectPrintLogger.init(allocator, .debug);
         const logger = print_logger.logger();
 
         // unpack the snapshot
-        var snapshot_dir = std.fs.cwd().openDir(SNAPSHOT_DIR_PATH, .{ .iterate = true }) catch {
+        var snapshot_dir = std.fs.cwd().openDir(
+            SNAPSHOT_DIR_PATH ++ sig.ACCOUNTS_DB_SUBDIR,
+            .{ .iterate = true },
+        ) catch {
             // not snapshot -> early exit
             std.debug.print(
                 "need to setup a snapshot in {s} for this benchmark...\n",
@@ -4441,6 +4458,8 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             return .{
                 .load_time = zero_duration.asNanos(),
                 .validate_time = zero_duration.asNanos(),
+                .fastload_save_time = zero_duration.asNanos(),
+                .fastload_time = zero_duration.asNanos(),
             };
         };
         defer snapshot_dir.close();
@@ -4474,6 +4493,12 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             try getAccountPerFileEstimateFromCluster(bench_args.cluster),
         );
 
+        const fastload_save_duration = blk: {
+            var timer = try sig.time.Timer.start();
+            try accounts_db.saveStateForFastload();
+            break :blk timer.read();
+        };
+
         const full_snapshot = full_inc_manifest.full;
         var validate_timer = try sig.time.Timer.start();
         try accounts_db.validateLoadFromSnapshot(.{
@@ -4489,9 +4514,32 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         });
         const validate_duration = validate_timer.read();
 
+        const fastload_duration = blk: {
+            var fastload_accounts_db = try AccountsDB.init(.{
+                .allocator = allocator,
+                .logger = logger,
+                .snapshot_dir = snapshot_dir,
+                .geyser_writer = null,
+                .gossip_view = null,
+                .index_allocation = if (bench_args.use_disk) .disk else .ram,
+                .number_of_index_shards = 32,
+                .lru_size = null,
+            });
+            defer fastload_accounts_db.deinit();
+
+            var fastload_dir = try snapshot_dir.makeOpenPath("fastload_state", .{});
+            defer fastload_dir.close();
+
+            var fastload_timer = try sig.time.Timer.start();
+            try fastload_accounts_db.fastload(fastload_dir, collapsed_manifest.accounts_db_fields);
+            break :blk fastload_timer.read();
+        };
+
         return .{
             .load_time = units.convertDuration(loading_duration),
             .validate_time = units.convertDuration(validate_duration),
+            .fastload_save_time = units.convertDuration(fastload_save_duration),
+            .fastload_time = units.convertDuration(fastload_duration),
         };
     }
 };

@@ -292,9 +292,9 @@ pub fn run() !void {
         .long_name = "accounts-per-file-estimate",
         .short_alias = 'a',
         .help =
-        \\number of accounts to estimate inside of account files (used for pre-allocation).
-        \\Safer to set it larger than smaller.
-        \\(approx values we found work well testnet/devnet: 1_500, mainnet: 3_000)"
+        \\number of accounts to estimate inside of account files (used for pre-allocation).\
+        \\Safer to set it larger than smaller.\
+        \\(approx values we found work well testnet/devnet: 300, mainnet: TODO?)"
         ,
         .value_ref = cli.mkRef(&config.current.accounts_db.accounts_per_file_estimate),
         .required = false,
@@ -1538,6 +1538,7 @@ fn downloadSnapshot() !void {
         gossip_service,
         snapshot_dir,
         @intCast(min_mb_per_sec),
+        config.current.accounts_db.max_number_of_snapshot_download_attempts,
     );
 }
 

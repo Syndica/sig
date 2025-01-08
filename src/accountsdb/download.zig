@@ -174,6 +174,7 @@ pub fn downloadSnapshotsFromGossip(
     gossip_service: *GossipService,
     output_dir: std.fs.Dir,
     min_mb_per_sec: usize,
+    max_number_of_download_attempts: u64,
 ) !void {
     const logger = logger_.withScope(LOG_SCOPE);
     logger
@@ -191,8 +192,14 @@ pub fn downloadSnapshotsFromGossip(
     var slow_peer_pubkeys = std.ArrayList(Pubkey).init(allocator);
     defer slow_peer_pubkeys.deinit();
 
+    var download_attempts: u64 = 0;
     while (true) {
         std.time.sleep(std.time.ns_per_s * 5); // wait while gossip table updates
+
+        if (download_attempts > max_number_of_download_attempts) {
+            logger.err().logf("exceeded max download attempts: {d}", .{max_number_of_download_attempts});
+            return error.UnableToDownloadSnapshot;
+        }
 
         // only hold gossip table lock for this block
         {
@@ -250,6 +257,7 @@ pub fn downloadSnapshotsFromGossip(
                 .info()
                 .logf("downloading full_snapshot from: {s}", .{snapshot_url});
 
+            defer download_attempts += 1;
             downloadFile(
                 allocator,
                 logger,
@@ -544,6 +552,8 @@ fn downloadFile(
     }
 }
 
+const default_adb_config = sig.cmd.config.AccountsDBConfig{};
+
 pub fn getOrDownloadAndUnpackSnapshot(
     allocator: std.mem.Allocator,
     logger_: Logger,
@@ -560,6 +570,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         num_threads_snapshot_unpack: u16 = 0,
         min_snapshot_download_speed_mbs: usize = 20,
         trusted_validators: ?[]const Pubkey = null,
+        max_number_of_download_attempts: u64 = default_adb_config.max_number_of_snapshot_download_attempts,
     },
 ) !struct { FullAndIncrementalManifest, SnapshotFiles } {
     const logger = logger_.withScope(LOG_SCOPE);
@@ -596,8 +607,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
 
     // download a new snapshot if required
     const snapshot_exists = blk: {
-        _ = SnapshotFiles.find(allocator, snapshot_dir) catch |err| {
-            std.debug.print("failed to find snapshot files: {}\n", .{err});
+        _ = SnapshotFiles.find(allocator, snapshot_dir) catch {
             break :blk false;
         };
         break :blk true;
@@ -616,6 +626,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
             gossip_service,
             snapshot_dir,
             @intCast(min_mb_per_sec),
+            options.max_number_of_download_attempts,
         );
     }
 

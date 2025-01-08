@@ -143,6 +143,8 @@ pub const AccountsDBConfig = struct {
     save_index: bool = false,
     /// only load snapshot metadata when starting up
     snapshot_metadata_only: bool = false,
+    /// maximum number of snapshot download attempts befor failing
+    max_number_of_snapshot_download_attempts: u64 = 1_000,
 };
 
 pub const GeyserConfig = struct {
