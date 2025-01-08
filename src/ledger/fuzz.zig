@@ -56,7 +56,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     } else |_| {}
     try std.fs.cwd().makePath(rocksdb_path);
 
-    var db: BlockstoreDB = try BlockstoreDB.open(
+    var db = try BlockstoreDB.open(
         allocator,
         logger,
         rocksdb_path,
