@@ -24,7 +24,6 @@ pub const BlockstoreDB = switch (build_options.blockstore_db) {
     .hashmap => ledger.database.SharedHashMapDB(&.{cf1}),
 };
 
-
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const maybe_max_actions_string = args.next();
     const maybe_max_actions = blk: {
