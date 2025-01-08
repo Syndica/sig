@@ -143,6 +143,11 @@ pub const BufferPool = struct {
 
         const frame_map_rw = sig.sync.RwMux(FrameMap).init(frame_map);
 
+        std.debug.print("\ninitialised bufferpool, frame range: [{*}..{*}]\n\n", .{
+            frames.ptr,
+            &frames[frames.len - 1][511],
+        });
+
         return .{
             .frames = frames,
             .frames_metadata = frames_metadata,
@@ -162,6 +167,8 @@ pub const BufferPool = struct {
         const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
         frame_map.deinit(init_allocator);
         frame_map_lg.unlock();
+
+        std.debug.print("\ndeinitialised bufferpool\n\n", .{});
     }
 
     pub fn computeNumberofFrameIndices(
@@ -402,7 +409,7 @@ pub const BufferPool = struct {
             std.debug.assert(cqe_count == n_submitted); // why did we not receive them all?
             for (0.., cqes) |i, cqe| {
                 if (cqe.err() != .SUCCESS) {
-                    std.debug.panic("cqe err: {}, i: {}", .{ cqe, i });
+                    std.debug.panic("cqe: {}, err: {}, i: {}, file: {}", .{ cqe, cqe.err(), i, file });
                 }
                 const f_idx = cqe.user_data;
                 const bytes_read: FrameOffset = @intCast(cqe.res);
@@ -773,24 +780,19 @@ pub const ReadHandle = struct {
         .free = bincodeFree,
     };
 
-    fn bincodeSerialize(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
-        _ = writer;
-        _ = data;
+    fn bincodeSerialize(writer: anytype, inner: anytype, params: bincode.Params) anyerror!void {
         _ = params;
-        @panic("todo");
+        var iter = (ReadHandle{ .inner = inner }).iterator();
+        while (iter.next()) |byte| try writer.writeByte(byte);
     }
 
     fn bincodeDeserialize(alloc: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!Inner {
-        _ = alloc;
-        _ = reader;
-        _ = params;
-        @panic("todo");
+        const data = try bincode.read(alloc, []u8, reader, params);
+        return ReadHandle.initExternalOwned(data).inner;
     }
 
-    fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
-        _ = allocator;
-        _ = data;
-        @panic("todo");
+    fn bincodeFree(allocator: std.mem.Allocator, inner: anytype) void {
+        (ReadHandle{ .inner = inner }).deinit(allocator);
     }
 
     const Inner = union(enum) {
@@ -894,6 +896,13 @@ pub const ReadHandle = struct {
                 std.debug.assert(index < self.len());
                 const offset = index + cached.first_frame_start_offset;
                 std.debug.assert(offset >= cached.first_frame_start_offset);
+                std.debug.assert(offset / FRAME_SIZE < cached.frame_indices.len);
+                std.debug.assert(cached.frame_indices[offset / FRAME_SIZE] < cached.buffer_pool.frames.len);
+
+                // std.debug.print("valid frame range: [{*}..{*}]\n\n", .{
+                //     cached.buffer_pool.frames.ptr,
+                //     &cached.buffer_pool.frames[cached.buffer_pool.frames.len - 1][FRAME_SIZE - 1],
+                // });
 
                 break :blk cached.buffer_pool.frames[
                     cached.frame_indices[offset / FRAME_SIZE]
@@ -1024,7 +1033,7 @@ pub const ReadHandle = struct {
         const cached = self.inner.cached;
 
         for (0.., cached.frame_indices) |i, f_idx| {
-            if (start < (i + 1) * FRAME_SIZE) continue;
+            if ((i + 1) * FRAME_SIZE < start) continue;
 
             const is_first_frame: u2 = @intFromBool(i == 0);
             const is_last_frame: u2 = @intFromBool(i == cached.frame_indices.len - 1);
@@ -1034,14 +1043,15 @@ pub const ReadHandle = struct {
             else
                 0;
 
-            const bytes_left = end - (i * FRAME_SIZE); // prevent buf overflow
+            const bytes_left = range_len - buf_offset;
+            if (bytes_left == 0) break;
 
             switch (is_first_frame << 1 | is_last_frame) {
                 0b00 => { // !first, !last (middle frame)
                     const read_len = @min(bytes_left, FRAME_SIZE);
                     @memcpy(
                         buf[buf_offset..][0..read_len],
-                        cached.buffer_pool.frames[f_idx][range_start_offset..],
+                        cached.buffer_pool.frames[f_idx][range_start_offset..][0..read_len],
                     );
                     buf_offset += read_len;
                 },
@@ -1050,7 +1060,7 @@ pub const ReadHandle = struct {
                     const read_len = @min(bytes_left, FRAME_SIZE - cached.first_frame_start_offset);
                     @memcpy(
                         buf[0..read_len],
-                        cached.buffer_pool.frames[f_idx][cached.first_frame_start_offset + range_start_offset ..],
+                        cached.buffer_pool.frames[f_idx][cached.first_frame_start_offset + range_start_offset ..][0..read_len],
                     );
                     buf_offset += read_len;
                 },
@@ -1058,7 +1068,7 @@ pub const ReadHandle = struct {
                     const read_len = @min(bytes_left, cached.last_frame_end_offset);
                     @memcpy(
                         buf[buf_offset..][0..read_len],
-                        cached.buffer_pool.frames[f_idx][range_start_offset..read_len],
+                        cached.buffer_pool.frames[f_idx][range_start_offset..][0..read_len],
                     );
                     buf_offset += read_len;
                     std.debug.assert(buf_offset == self.len());
@@ -1455,6 +1465,11 @@ test "BufferPool random read" {
             u32,
             range_start,
             @min(file_size, range_start + num_frames * FRAME_SIZE),
+        );
+
+        errdefer std.debug.print(
+            "failed on case(reads={}): file[{}..{}]\n",
+            .{ reads, range_start, range_end },
         );
 
         if (try BufferPool.computeNumberofFrameIndices(range_start, range_end) > num_frames) {

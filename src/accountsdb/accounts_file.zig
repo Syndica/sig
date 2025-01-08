@@ -167,6 +167,10 @@ pub const AccountInFile = struct {
 
     const Self = @This();
 
+    pub fn deinit(self: AccountInFile, allocator: std.mem.Allocator) void {
+        self.data.deinit(allocator);
+    }
+
     pub fn getSizeInFile(self: *const Self) u64 {
         return std.mem.alignForward(
             usize,
@@ -309,6 +313,7 @@ pub const AccountFile = struct {
                 error.EOF => break,
                 else => return err,
             };
+            defer account.deinit(metadata_allocator);
 
             try account.validate();
             offset = offset + account.len;
@@ -412,6 +417,7 @@ pub const AccountFile = struct {
         if (overflow_flag == 1 or end_offset_exclusive > self.length) {
             return error.EOF;
         }
+        errdefer std.debug.print("failed with file: {}\n", .{self.file});
 
         return try buffer_pool.read(metadata_allocator, self.file, self.id, start_offset, end_offset_exclusive);
     }
@@ -552,7 +558,7 @@ test "core.accounts_file: verify accounts file" {
         .length = 162224,
     };
 
-    var bp = try BufferPool.init(std.testing.allocator, 100);
+    var bp = try BufferPool.init(std.testing.allocator, 1000);
     defer bp.deinit(std.testing.allocator);
 
     var accounts_file = try AccountFile.init(file, file_info, 10);
@@ -561,6 +567,8 @@ test "core.accounts_file: verify accounts file" {
     _ = try accounts_file.validate(std.testing.allocator, &bp);
 
     const account = try accounts_file.readAccount(std.testing.allocator, &bp, 0);
+    defer account.deinit(std.testing.allocator);
+
     const hash_and_lamports = try accounts_file.getAccountHashAndLamports(std.testing.allocator, &bp, 0);
 
     try std.testing.expectEqual(account.lamports().*, hash_and_lamports.lamports);
