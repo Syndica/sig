@@ -6,7 +6,6 @@ pub const response = @import("response.zig");
 pub const types = @import("types.zig");
 
 pub const Client = client.Client;
-pub const Server = server.Server;
 
 pub const Request = request.Request;
 pub const Response = response.Response;
