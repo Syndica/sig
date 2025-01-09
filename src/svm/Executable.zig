@@ -29,12 +29,22 @@ pub const Section = union(enum) {
         start: u64,
         end: u64,
     };
+
+    pub fn deinit(section: *Section, allocator: std.mem.Allocator) void {
+        switch (section) {
+            .owned => |*owned| allocator.free(owned.data),
+            .assembly => {},
+        }
+    }
 };
 
 pub fn fromElf(allocator: std.mem.Allocator, elf: *const Elf) !Executable {
+    const ro_section = try elf.parseRoSections(allocator);
+    errdefer ro_section.deinit(allocator);
+
     return .{
         .bytes = elf.bytes,
-        .ro_section = try elf.parseRoSections(allocator),
+        .ro_section = ro_section,
         .instructions = try elf.getInstructions(),
         .version = elf.version,
         .entry_pc = elf.entry_pc,
@@ -58,10 +68,7 @@ pub fn deinit(self: *Executable, allocator: std.mem.Allocator) void {
         @alignCast(self.instructions),
     ));
 
-    switch (self.ro_section) {
-        .owned => |owned| allocator.free(owned.data),
-        else => {},
-    }
+    self.ro_section.deinit(allocator);
     self.function_registry.deinit(allocator);
 }
 
