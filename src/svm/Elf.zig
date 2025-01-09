@@ -242,7 +242,6 @@ pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executab
     var highest_addr: usize = 0;
 
     var ro_fill_length: usize = 0;
-    var invalid_offsets: bool = false;
 
     var first_ro_section: usize = 0;
     var last_ro_section: usize = 0;
@@ -267,10 +266,6 @@ pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executab
         n_ro_sections = n_ro_sections +| 1;
 
         const section_addr = shdr.sh_addr;
-
-        if (!invalid_offsets) {
-            if (section_addr != shdr.sh_offset) invalid_offsets = true;
-        }
 
         const vaddr_end = section_addr +| memory.PROGRAM_START;
         if (vaddr_end > memory.STACK_START) {
