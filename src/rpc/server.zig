@@ -1,13 +1,16 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
+
+const connection = @import("server/connection.zig");
+const requests = @import("server/requests.zig");
+
+const IoUring = std.os.linux.IoUring;
 
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
 const ThreadPool = sig.sync.ThreadPool;
-
-const LOGGER_SCOPE = "rpc.Server";
-const ScopedLogger = sig.trace.log.ScopedLogger(LOGGER_SCOPE);
 
 pub const Server = struct {
     //! Basic usage:
@@ -15,7 +18,7 @@ pub const Server = struct {
     //! var server = try Server.init(.{...});
     //! defer server.joinDeinit();
     //!
-    //! try server.serveSpawnDetached(); // or `.serveDirect`, if the caller can block or is managing the separate thread themselves.
+    //! try server.serve(); // or `.serveSpawn` to spawn a thread and return its handle.
     //! ```
 
     allocator: std.mem.Allocator,
@@ -27,13 +30,27 @@ pub const Server = struct {
     /// Wait group for all currently running tasks, used to wait for
     /// all of them to finish before deinitializing.
     wait_group: std.Thread.WaitGroup,
-    thread_pool: *ThreadPool,
+    work_pool: WorkPool,
 
+    tcp: std.net.Server,
     /// Must not be mutated.
     read_buffer_size: usize,
-    tcp: std.net.Server,
 
-    pub const MIN_READ_BUFFER_SIZE = 256;
+    pub const LOGGER_SCOPE = "rpc.Server";
+    pub const ScopedLogger = sig.trace.log.ScopedLogger(LOGGER_SCOPE);
+
+    pub const MIN_READ_BUFFER_SIZE = 4096;
+
+    pub const InitError =
+        std.net.Address.ListenError ||
+        std.posix.MMapError ||
+        std.posix.UnexpectedError ||
+        WorkPool.LinuxIoUring.InitError ||
+        WorkPool.LinuxIoUring.EnterError ||
+        error{
+        SubmissionQueueFull,
+        FailedToAcceptMultishot,
+    };
 
     /// The returned result must be pinned to a memory location before calling any methods.
     pub fn init(params: struct {
@@ -47,20 +64,54 @@ pub const Server = struct {
         /// given time with respect to the contents of the specified `snapshot_dir`.
         latest_snapshot_gen_info: *sig.sync.RwMux(?SnapshotGenerationInfo),
 
-        thread_pool: *ThreadPool,
-
         /// The size for the read buffer allocated to every request.
         /// Clamped to be greater than or equal to `MIN_READ_BUFFER_SIZE`.
         read_buffer_size: u32,
         /// The socket address to listen on for incoming HTTP and/or RPC requests.
         socket_addr: std.net.Address,
-    }) std.net.Address.ListenError!Server {
+
+        /// Set to true to disable taking advantage of native work pool strategies (ie io_uring).
+        force_basic_work_pool: bool = false,
+    }) InitError!Server {
         var tcp_server = try params.socket_addr.listen(.{
             // NOTE: ideally we would be doing this nonblockingly, however this doesn't work properly on mac,
             // so for testing purposes we can't test the `serve` functionality directly.
             .force_nonblocking = false,
         });
         errdefer tcp_server.deinit();
+
+        var work_pool: WorkPool = if (params.force_basic_work_pool)
+            .basic
+        else switch (WorkPool.LinuxIoUring.can_use) {
+            .no => .basic,
+            .yes, .check => |can_use| blk: {
+                var io_uring = IoUring.init(32, 0) catch |err| return switch (err) {
+                    error.SystemOutdated,
+                    error.PermissionDenied,
+                    => |e| switch (can_use) {
+                        .yes => e,
+                        .check => break :blk .basic,
+                        .no => comptime unreachable,
+                    },
+                    else => |e| e,
+                };
+                errdefer io_uring.deinit();
+
+                _ = try io_uring.accept_multishot(
+                    @bitCast(WorkPool.LinuxIoUring.Entry.ACCEPT),
+                    tcp_server.stream.handle,
+                    null,
+                    null,
+                    std.os.linux.SOCK.CLOEXEC,
+                );
+                if (try io_uring.submit() != 1) {
+                    return error.FailedToAcceptMultishot;
+                }
+
+                break :blk .{ .linux_io_uring = .{ .io_uring = io_uring } };
+            },
+        };
+        errdefer work_pool.deinit();
 
         return .{
             .allocator = params.allocator,
@@ -70,7 +121,7 @@ pub const Server = struct {
             .latest_snapshot_gen_info = params.latest_snapshot_gen_info,
 
             .wait_group = .{},
-            .thread_pool = params.thread_pool,
+            .work_pool = work_pool,
 
             .read_buffer_size = @max(params.read_buffer_size, MIN_READ_BUFFER_SIZE),
             .tcp = tcp_server,
@@ -98,295 +149,99 @@ pub const Server = struct {
         exit: *std.atomic.Value(bool),
     ) AcceptAndServeConnectionError!void {
         while (!exit.load(.acquire)) {
-            try server.acceptAndServeConnection();
+            try server.acceptAndServeConnection(.{});
         }
     }
 
     pub const AcceptAndServeConnectionError =
         std.mem.Allocator.Error ||
         std.http.Server.ReceiveHeadError ||
-        AcceptConnectionError;
+        WorkPool.LinuxIoUring.EnterError ||
+        WorkPool.LinuxIoUring.AcceptAndServeConnectionsError ||
+        AcceptHandledError ||
+        requests.HandleRequestError;
 
-    pub fn acceptAndServeConnection(server: *Server) AcceptAndServeConnectionError!void {
-        const conn = (try acceptConnection(&server.tcp, server.logger)).?;
-        errdefer conn.stream.close();
-
-        server.wait_group.start();
-        errdefer server.wait_group.finish();
-
-        const new_hct = try HandleConnectionTask.createAndReceiveHead(server, conn);
-        errdefer new_hct.destroyAndClose();
-
-        server.thread_pool.schedule(ThreadPool.Batch.from(&new_hct.task));
-    }
-};
-
-const HandleConnectionTask = struct {
-    task: ThreadPool.Task,
-    server: *Server,
-    http_server: std.http.Server,
-    request: std.http.Server.Request,
-
-    fn createAndReceiveHead(
+    pub fn acceptAndServeConnection(
         server: *Server,
-        conn: std.net.Server.Connection,
-    ) (std.http.Server.ReceiveHeadError || std.mem.Allocator.Error)!*HandleConnectionTask {
-        const allocator = server.allocator;
+        options: struct {
+            /// The maximum number of connections to handle during this call.
+            max_connections_to_handle: u8 = std.math.maxInt(u8),
+        },
+    ) AcceptAndServeConnectionError!void {
+        switch (server.work_pool) {
+            .basic => {
+                const conn = try acceptHandled(&server.tcp);
+                defer conn.stream.close();
 
-        const hct_buf_align = @alignOf(HandleConnectionTask);
-        const hct_buf_size = initBufferSize(server.read_buffer_size);
+                server.wait_group.start();
+                defer server.wait_group.finish();
 
-        const hct_buffer = try allocator.alignedAlloc(u8, hct_buf_align, hct_buf_size);
-        errdefer server.allocator.free(hct_buffer);
+                const buffer = try server.allocator.alloc(u8, server.read_buffer_size);
+                defer server.allocator.free(buffer);
 
-        const hct: *HandleConnectionTask = std.mem.bytesAsValue(
-            HandleConnectionTask,
-            hct_buffer[0..@sizeOf(HandleConnectionTask)],
-        );
-        hct.* = .{
-            .task = .{ .callback = callback },
-            .server = server,
-            .http_server = std.http.Server.init(conn, getReadBuffer(server.read_buffer_size, hct)),
-            .request = try hct.http_server.receiveHead(),
-        };
+                var http_server = std.http.Server.init(conn, buffer);
+                var request = try http_server.receiveHead();
 
-        return hct;
-    }
-
-    /// Does not release the connection.
-    fn destroyAndClose(hct: *HandleConnectionTask) void {
-        const allocator = hct.server.allocator;
-
-        const full_buffer = getFullBuffer(hct.server.read_buffer_size, hct);
-        defer allocator.free(full_buffer);
-
-        const connection = hct.http_server.connection;
-        defer connection.stream.close();
-    }
-
-    fn initBufferSize(read_buffer_size: usize) usize {
-        return @sizeOf(HandleConnectionTask) + read_buffer_size;
-    }
-
-    fn getFullBuffer(
-        read_buffer_size: usize,
-        hct: *HandleConnectionTask,
-    ) []align(@alignOf(HandleConnectionTask)) u8 {
-        const ptr: [*]align(@alignOf(HandleConnectionTask)) u8 = @ptrCast(hct);
-        return ptr[0..initBufferSize(read_buffer_size)];
-    }
-
-    fn getReadBuffer(
-        read_buffer_size: usize,
-        hct: *HandleConnectionTask,
-    ) []u8 {
-        return getFullBuffer(read_buffer_size, hct)[@sizeOf(HandleConnectionTask)..];
-    }
-
-    fn callback(task: *ThreadPool.Task) void {
-        const hct: *HandleConnectionTask = @fieldParentPtr("task", task);
-        defer hct.destroyAndClose();
-
-        const server = hct.server;
-        const logger = server.logger;
-
-        const wait_group = &server.wait_group;
-        defer wait_group.finish();
-
-        handleRequest(
-            logger,
-            &hct.request,
-            server.snapshot_dir,
-            server.latest_snapshot_gen_info,
-        ) catch |err| {
-            if (@errorReturnTrace()) |stack_trace| {
-                logger.err().logf("{s}\n{}", .{ @errorName(err), stack_trace });
-            } else {
-                logger.err().logf("{s}", .{@errorName(err)});
-            }
-        };
+                try requests.handleRequest(
+                    server.logger,
+                    &request,
+                    server.snapshot_dir,
+                    server.latest_snapshot_gen_info,
+                );
+            },
+            .linux_io_uring => |*linux| {
+                try linux.acceptAndServeConnections(server, options.max_connections_to_handle);
+            },
+        }
     }
 };
 
-fn handleRequest(
-    logger: ScopedLogger,
-    request: *std.http.Server.Request,
-    snapshot_dir: std.fs.Dir,
-    latest_snapshot_gen_info_rw: *sig.sync.RwMux(?SnapshotGenerationInfo),
-) !void {
-    const conn_address = request.server.connection.address;
+pub const WorkPool = union(enum) {
+    basic,
+    linux_io_uring: switch (LinuxIoUring.can_use) {
+        .yes, .check => LinuxIoUring,
+        .no => noreturn,
+    },
 
-    logger.info().logf("Responding to request from {}: {} {s}", .{
-        conn_address, methodFmt(request.head.method), request.head.target,
-    });
-    switch (request.head.method) {
-        .POST => {
-            logger.err().logf("{} tried to invoke our RPC", .{conn_address});
-            return try request.respond("RPCs are not yet implemented", .{
-                .status = .service_unavailable,
-                .keep_alive = false,
-            });
-        },
-        .GET => get_blk: {
-            if (!std.mem.startsWith(u8, request.head.target, "/")) break :get_blk;
-            const path = request.head.target[1..];
+    const LinuxIoUring = @import("server/LinuxIoUring.zig");
 
-            // we hold the lock for the entirety of this process in order to prevent
-            // the snapshot generation process from deleting the associated snapshot.
-            const maybe_latest_snapshot_gen_info, //
-            var latest_snapshot_info_lg //
-            = latest_snapshot_gen_info_rw.readWithLock();
-            defer latest_snapshot_info_lg.unlock();
-
-            const full_info: ?FullSnapshotFileInfo, //
-            const inc_info: ?IncrementalSnapshotFileInfo //
-            = blk: {
-                const latest_snapshot_gen_info = maybe_latest_snapshot_gen_info.* orelse
-                    break :blk .{ null, null };
-                const latest_full = latest_snapshot_gen_info.full;
-                const full_info: FullSnapshotFileInfo = .{
-                    .slot = latest_full.slot,
-                    .hash = latest_full.hash,
-                };
-                const latest_incremental = latest_snapshot_gen_info.inc orelse
-                    break :blk .{ full_info, null };
-                const inc_info: IncrementalSnapshotFileInfo = .{
-                    .base_slot = latest_full.slot,
-                    .slot = latest_incremental.slot,
-                    .hash = latest_incremental.hash,
-                };
-                break :blk .{ full_info, inc_info };
-            };
-
-            logger.debug().logf("Available full: {?s}", .{
-                if (full_info) |info| info.snapshotArchiveName().constSlice() else null,
-            });
-            logger.debug().logf("Available inc: {?s}", .{
-                if (inc_info) |info| info.snapshotArchiveName().constSlice() else null,
-            });
-
-            if (full_info) |full| {
-                const full_archive_name_bounded = full.snapshotArchiveName();
-                const full_archive_name = full_archive_name_bounded.constSlice();
-                if (std.mem.eql(u8, path, full_archive_name)) {
-                    const archive_file = try snapshot_dir.openFile(full_archive_name, .{});
-                    defer archive_file.close();
-                    var send_buffer: [4096]u8 = undefined;
-                    try httpResponseSendFile(request, archive_file, &send_buffer);
-                    return;
-                }
-            }
-
-            if (inc_info) |inc| {
-                const inc_archive_name_bounded = inc.snapshotArchiveName();
-                const inc_archive_name = inc_archive_name_bounded.constSlice();
-                if (std.mem.eql(u8, path, inc_archive_name)) {
-                    const archive_file = try snapshot_dir.openFile(inc_archive_name, .{});
-                    defer archive_file.close();
-                    var send_buffer: [4096]u8 = undefined;
-                    try httpResponseSendFile(request, archive_file, &send_buffer);
-                    return;
-                }
-            }
-        },
-        else => {},
+    pub fn deinit(wp: *WorkPool) void {
+        switch (wp.*) {
+            .basic => {},
+            .linux_io_uring => |*linux| linux.deinit(),
+        }
     }
+};
 
-    logger.err().logf(
-        "{} made an unrecognized request '{} {s}'",
-        .{ conn_address, methodFmt(request.head.method), request.head.target },
-    );
-    try request.respond("", .{
-        .status = .not_found,
-        .keep_alive = false,
-    });
-}
-
-fn httpResponseSendFile(
-    request: *std.http.Server.Request,
-    archive_file: std.fs.File,
-    send_buffer: []u8,
-) !void {
-    const archive_len = try archive_file.getEndPos();
-
-    var response = request.respondStreaming(.{
-        .send_buffer = send_buffer,
-        .content_length = archive_len,
-    });
-    const writer = sig.utils.io.narrowAnyWriter(
-        response.writer(),
-        std.http.Server.Response.WriteError,
-    );
-
-    const Fifo = std.fifo.LinearFifo(u8, .{ .Static = 1 });
-    var fifo: Fifo = Fifo.init();
-    try archive_file.seekTo(0);
-    try fifo.pump(archive_file.reader(), writer);
-
-    try response.end();
-}
-
-const AcceptConnectionError = error{
-    ProcessFdQuotaExceeded,
-    SystemFdQuotaExceeded,
-    SystemResources,
-    ProtocolFailure,
-    BlockedByFirewall,
-    NetworkSubsystemFailed,
-} || std.posix.UnexpectedError;
-
-fn acceptConnection(
+const AcceptHandledError = connection.HandleAcceptError || error{ConnectionAborted};
+fn acceptHandled(
     tcp_server: *std.net.Server,
-    logger: ScopedLogger,
-) AcceptConnectionError!?std.net.Server.Connection {
-    const conn = tcp_server.accept() catch |err| switch (err) {
-        error.Unexpected,
-        => |e| return e,
+) AcceptHandledError!std.net.Server.Connection {
+    while (true) {
+        var addr: std.net.Address = .{ .any = undefined };
+        var addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(addr.any));
+        const rc = if (!builtin.target.isDarwin()) std.posix.system.accept4(
+            tcp_server.stream.handle,
+            &addr.any,
+            &addr_len,
+            std.posix.SOCK.CLOEXEC,
+        ) else std.posix.system.accept(
+            tcp_server.stream.handle,
+            &addr.any,
+            &addr_len,
+        );
 
-        error.ProcessFdQuotaExceeded,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.ProtocolFailure,
-        error.BlockedByFirewall,
-        error.NetworkSubsystemFailed,
-        => |e| return e,
-
-        error.FileDescriptorNotASocket,
-        error.SocketNotListening,
-        error.OperationNotSupported,
-        => @panic("Improperly initialized server."),
-
-        error.WouldBlock,
-        => return null,
-
-        error.ConnectionResetByPeer,
-        error.ConnectionAborted,
-        => |e| {
-            logger.warn().logf("{}", .{e});
-            return null;
-        },
-    };
-
-    return conn;
-}
-
-fn methodFmt(method: std.http.Method) MethodFmt {
-    return .{ .method = method };
-}
-
-const MethodFmt = struct {
-    method: std.http.Method,
-    pub fn format(
-        fmt: MethodFmt,
-        comptime fmt_str: []const u8,
-        fmt_options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        _ = fmt_options;
-        if (fmt_str.len != 0) std.fmt.invalidFmtError(fmt_str, fmt);
-        try fmt.method.write(writer);
+        return switch (try connection.handleAcceptResult(std.posix.errno(rc))) {
+            .intr => continue,
+            .conn_aborted => return error.ConnectionAborted,
+            .again => std.debug.panic("We're not using nonblock, but encountered EAGAIN.", .{}),
+            .success => return .{
+                .stream = .{ .handle = rc },
+                .address = addr,
+            },
+        };
     }
-};
+}
 
 test Server {
     const allocator = std.testing.allocator;
@@ -481,9 +336,9 @@ test Server {
         .logger = logger,
         .snapshot_dir = snap_dir,
         .latest_snapshot_gen_info = &accountsdb.latest_snapshot_gen_info,
-        .thread_pool = &thread_pool,
         .socket_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
         .read_buffer_size = 4096,
+        .force_basic_work_pool = false,
     });
     defer rpc_server.joinDeinit();
 
@@ -517,7 +372,7 @@ fn testExpectSnapshotResponse(
     );
     const snap_url = try std.Uri.parse(snap_url_str_bounded.constSlice());
 
-    const serve_thread = try std.Thread.spawn(.{}, Server.acceptAndServeConnection, .{rpc_server});
+    const serve_thread = try std.Thread.spawn(.{}, Server.acceptAndServeConnection, .{ rpc_server, .{} });
     const actual_data = try testDownloadSelfSnapshot(allocator, snap_url);
     defer allocator.free(actual_data);
     serve_thread.join();
