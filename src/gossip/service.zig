@@ -53,6 +53,7 @@ const PingAndSocketAddr = sig.gossip.ping_pong.PingAndSocketAddr;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Duration = sig.time.Duration;
 const ExitCondition = sig.sync.ExitCondition;
+const SocketPipe = sig.net.SocketPipe;
 
 const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
@@ -104,7 +105,7 @@ const GOSSIP_PRNG_SEED = 19;
 
 /// The flow of data goes as follows:
 ///
-/// `readSocket` ->
+/// `SocketPipe` ->
 ///         - reads from the gossip socket
 ///         - puts the new packet onto `packet_incoming_channel`
 ///         - repeat until exit
@@ -120,14 +121,14 @@ const GOSSIP_PRNG_SEED = 19;
 ///         - processes the verified message it has received
 ///         - depending on the type of message received, it may put something onto `packet_outgoing_channel`
 ///
-///  `sendSocket` ->
+///  `SocketPipe` ->
 ///         - receives from `packet_outgoing_channel`
 ///         - sends the outgoing packet onto the gossip socket
 ///         - repeats while `exit` is false and `packet_outgoing_channel`
-///         - when `sendSocket` sees that `exit` has become `true`, it will begin waiting on
+///         - when `SocketPipe` sees that `exit` has become `true`, it will begin waiting on
 ///           the previous thing in the chain to close, that usually being `processMessages`.
 ///           this ensures that `processMessages` doesn't add new items to `packet_outgoing_channel`
-///           after the `sendSocket` thread exits.
+///           after the `SocketPipe` thread exits.
 ///
 pub const GossipService = struct {
     /// used for general allocation purposes
@@ -148,11 +149,17 @@ pub const GossipService = struct {
     /// Indicates if the gossip service is closed.
     closed: bool,
 
+    /// Piping between the gossip_socket
+    incoming_pipe: ?*SocketPipe = null,
+    outgoing_pipe: ?*SocketPipe = null,
+
     /// communication between threads
+    packet_incoming_signal: Channel(Packet).SendSignal = .{},
     packet_incoming_channel: *Channel(Packet),
     packet_outgoing_channel: *Channel(Packet),
+    verified_incoming_signal: Channel(GossipMessageWithEndpoint).SendSignal = .{},
     verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
-
+    
     /// table to store gossip values
     gossip_table_rw: RwMux(GossipTable),
     /// manages push message peers
@@ -218,13 +225,13 @@ pub const GossipService = struct {
 
         // setup channels for communication between threads
         var packet_incoming_channel = try Channel(Packet).create(allocator);
-        errdefer packet_incoming_channel.deinit();
+        errdefer packet_incoming_channel.destroy();
 
         var packet_outgoing_channel = try Channel(Packet).create(allocator);
-        errdefer packet_outgoing_channel.deinit();
+        errdefer packet_outgoing_channel.destroy();
 
         var verified_incoming_channel = try Channel(GossipMessageWithEndpoint).create(allocator);
-        errdefer verified_incoming_channel.deinit();
+        errdefer verified_incoming_channel.destroy();
 
         // setup the socket (bind with read-timeout)
         const gossip_address = my_contact_info.getSocket(.gossip) orelse return error.GossipAddrUnspecified;
@@ -328,19 +335,20 @@ pub const GossipService = struct {
         // wait for all threads to shutdown correctly
         self.service_manager.deinit();
 
+        // Wait for pipes to shutdown if any
+        if (self.incoming_pipe) |pipe| pipe.deinit(self.allocator);
+        if (self.outgoing_pipe) |pipe| pipe.deinit(self.allocator);
+
         // assert the channels are empty in order to make sure no data was lost.
         // everything should be cleaned up when the thread-pool joins.
-        std.debug.assert(self.packet_incoming_channel.len() == 0);
-        self.packet_incoming_channel.deinit();
-        self.allocator.destroy(self.packet_incoming_channel);
+        std.debug.assert(self.packet_incoming_channel.isEmpty());
+        self.packet_incoming_channel.destroy();
 
-        std.debug.assert(self.packet_outgoing_channel.len() == 0);
-        self.packet_outgoing_channel.deinit();
-        self.allocator.destroy(self.packet_outgoing_channel);
+        std.debug.assert(self.packet_outgoing_channel.isEmpty());
+        self.packet_outgoing_channel.destroy();
 
-        std.debug.assert(self.verified_incoming_channel.len() == 0);
-        self.verified_incoming_channel.deinit();
-        self.allocator.destroy(self.verified_incoming_channel);
+        std.debug.assert(self.verified_incoming_channel.isEmpty());
+        self.verified_incoming_channel.destroy();
 
         self.gossip_socket.close();
 
@@ -387,7 +395,7 @@ pub const GossipService = struct {
     pub fn start(
         self: *Self,
         params: RunThreadsParams,
-    ) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
+    ) !void {
         // NOTE: this is stack copied on each spawn() call below so we can modify it without
         // affecting other threads
         var exit_condition = sig.sync.ExitCondition{
@@ -397,12 +405,15 @@ pub const GossipService = struct {
             },
         };
 
-        try self.service_manager.spawn("[gossip] readSocket", socket_utils.readSocket, .{
+        self.packet_incoming_channel.send_hook = &self.packet_incoming_signal.hook;
+        self.incoming_pipe = try SocketPipe.init(
+            self.allocator,
+            .receiver,
+            self.logger.unscoped(),
             self.gossip_socket,
             self.packet_incoming_channel,
-            self.logger.unscoped(),
             exit_condition,
-        });
+        );
         exit_condition.ordered.exit_index += 1;
 
         try self.service_manager.spawn("[gossip] verifyPackets", verifyPackets, .{
@@ -411,6 +422,7 @@ pub const GossipService = struct {
         });
         exit_condition.ordered.exit_index += 1;
 
+        self.verified_incoming_channel.send_hook = &self.verified_incoming_signal.hook;
         try self.service_manager.spawn("[gossip] processMessages", processMessages, .{
             self,
             GOSSIP_PRNG_SEED,
@@ -427,12 +439,15 @@ pub const GossipService = struct {
             exit_condition.ordered.exit_index += 1;
         }
 
-        try self.service_manager.spawn("[gossip] sendSocket", socket_utils.sendSocket, .{
+        // SocketPipe overrides `packet_outgoing_channel.send_hook`
+        self.outgoing_pipe = try SocketPipe.init(
+            self.allocator,
+            .sender,
+            self.logger.unscoped(),
             self.gossip_socket,
             self.packet_outgoing_channel,
-            self.logger.unscoped(),
             exit_condition,
-        });
+        );
         exit_condition.ordered.exit_index += 1;
 
         if (params.dump) {
@@ -514,7 +529,9 @@ pub const GossipService = struct {
         }
 
         // loop until the previous service closes and triggers us to close
-        while (exit_condition.shouldRun()) {
+        while (true) {
+            self.packet_incoming_signal.wait(exit_condition) catch break;
+
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
             var task_search_start_idx: usize = 0;
@@ -609,7 +626,9 @@ pub const GossipService = struct {
         // keep waiting for new data until,
         // - `exit` isn't set,
         // - there isn't any data to process in the input channel, in order to block the join until we've finished
-        while (exit_condition.shouldRun()) {
+        while (true) {
+            self.verified_incoming_signal.wait(exit_condition) catch break;
+
             var msg_count: usize = 0;
             while (self.verified_incoming_channel.tryReceive()) |message| {
                 msg_count += 1;

@@ -5,14 +5,43 @@ const Backoff = @import("backoff.zig").Backoff;
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 
+const ExitCondition = sig.sync.ExitCondition;
+
 pub fn Channel(T: type) type {
     return struct {
         head: Position,
         tail: Position,
         closed: Atomic(bool) = Atomic(bool).init(false),
         allocator: Allocator,
-        mutex: std.Thread.Mutex = .{},
-        condition: std.Thread.Condition = .{},
+        send_hook: ?*SendHook = null,
+
+        pub const SendHook = struct {
+            before_send: *const fn (*SendHook, *Self, T) bool = defaultBeforeSend,
+            after_send: *const fn (*SendHook, *Self) void = defaultAfterSend,
+
+            fn defaultAfterSend(_: *SendHook, _: *Self) void {}
+            fn defaultBeforeSend(_: *SendHook, _: *Self, _: T) bool {
+                return true;
+            }
+        };
+
+        pub const SendSignal = struct {
+            event: std.Thread.ResetEvent = .{},
+            hook: SendHook = .{ .after_send = afterSend },
+
+            fn afterSend(hook: *SendHook, _: *Self) void {
+                const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
+                self.event.set();
+            }
+
+            pub fn wait(self: *SendSignal, exit: ExitCondition) error{Exit}!void {
+                while (true) {
+                    self.event.timedWait(1 * std.time.ns_per_s) catch {};
+                    if (exit.shouldExit()) return error.Exit;
+                    if (self.event.isSet()) return self.event.reset();
+                }
+            }
+        };
 
         const Self = @This();
         const BLOCK_CAP = 31;
@@ -128,19 +157,27 @@ pub fn Channel(T: type) type {
 
         /// to deinit channels created with `create`
         pub fn destroy(channel: *Self) void {
+            const allocator = channel.allocator; // read allocator from channel before freeing it
             channel.deinit();
-            channel.allocator.destroy(channel);
+            allocator.destroy(channel);
         }
 
         pub fn close(channel: *Self) void {
             channel.closed.store(true, .monotonic);
-            channel.condition.broadcast();
         }
 
         pub fn send(channel: *Self, value: T) !void {
             if (channel.closed.load(.monotonic)) {
                 return error.ChannelClosed;
             }
+
+            const send_hook = channel.send_hook;
+            if (send_hook) |hook| {
+                if (!hook.before_send(hook, channel, value)) {
+                    return;
+                }
+            }
+
             var backoff: Backoff = .{};
             var tail = channel.tail.index.load(.acquire);
             var block = channel.tail.block.load(.acquire);
@@ -195,58 +232,10 @@ pub fn Channel(T: type) type {
                     // to read the data we've just assigned.
                     _ = slot.state.fetchOr(WRITTEN_TO, .release);
 
-                    channel.mutex.lock();
-                    channel.condition.signal();
-                    channel.mutex.unlock();
+                    if (send_hook) |hook| hook.after_send(hook, channel);
+
                     return;
                 }
-            }
-        }
-
-        /// Attempt to receive an item. If the channel is empty, waits until
-        /// an item is available or the channel is closed.
-        ///
-        /// Returns:
-        /// - T: when an item is available.
-        /// - error.ChannelClosed: if the channel is both empty and closed.
-        pub fn receive(channel: *Self) error{ChannelClosed}!T {
-            while (true) {
-                if (channel.tryReceive()) |item| {
-                    return item;
-                } else if (channel.closed.load(.monotonic)) {
-                    return error.ChannelClosed;
-                }
-                channel.mutex.lock();
-                channel.condition.wait(&channel.mutex);
-                channel.mutex.unlock();
-            }
-        }
-
-        /// Attempt to receive an item. If the channel is empty, waits until
-        /// the timeout, an item is available, or the channel is closed.
-        ///
-        /// Returns:
-        /// - T: if item was available before the timeout.
-        /// - null: if empty and timed out before an item arrived.
-        /// - error.ChannelClosed: if the channel is both empty and closed.
-        pub fn receiveTimeout(channel: *Self, timeout: sig.time.Duration) error{ChannelClosed}!?T {
-            const end = std.time.nanoTimestamp() + timeout.asNanos();
-            while (true) {
-                if (channel.tryReceive()) |item| {
-                    return item;
-                } else if (channel.closed.load(.monotonic)) {
-                    return error.ChannelClosed;
-                }
-                const now = std.time.nanoTimestamp();
-                if (now > end) {
-                    return null;
-                }
-                channel.mutex.lock();
-                defer channel.mutex.unlock();
-                channel.condition.timedWait(&channel.mutex, @intCast(end - now)) catch |e|
-                    switch (e) {
-                    error.Timeout => return null,
-                };
             }
         }
 
@@ -473,47 +462,46 @@ test "spsc" {
     producer.join();
 }
 
-test "blocking receive" {
-    const S = struct {
-        fn producer(ch: *Channel(u64)) !void {
-            try ch.send(123);
-        }
+test "send-hook" {
+    const Intercept = struct {
+        collect: *std.ArrayList(u64),
+        hook: Channel(u64).SendHook = .{ .before_send = beforeSend },
 
-        fn consumer(ch: *Channel(u64)) void {
-            std.debug.assert(123 == ch.receive() catch @panic("error receiving"));
+        fn beforeSend(hook: *Channel(u64).SendHook, _: *Channel(u64), value: u64) bool {
+            const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
+            self.collect.append(value) catch @panic("oom");
+            return false;
         }
     };
+
+    const Reaction = struct {
+        sent: *std.ArrayList(u64),
+        hook: Channel(u64).SendHook = .{ .after_send = afterSend },
+
+        fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
+            const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
+            const value = channel.tryReceive() orelse @panic("empty channel after send");
+            self.collect.append(value) catch @panic("oom");
+        }
+    }; 
 
     var ch = try Channel(u64).init(std.testing.allocator);
     defer ch.deinit();
 
-    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
-    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
+    var list = std.ArrayList(u64).init(std.testing.allocator);
+    defer list.deinit();
 
-    consumer.join();
-    producer.join();
-}
+    inline for (.{ Intercept, Reaction }) |HookImpl| {
+        const to_send = 100;
+        list.clearRetainingCapacity();
 
-test "timeout receive receives" {
-    const S = struct {
-        fn producer(ch: *Channel(u64)) !void {
-            try ch.send(123);
-        }
+        var hook_impl = HookImpl{ .collect = &list };
+        ch.send_hook = &hook_impl.hook;
 
-        fn consumer(ch: *Channel(u64)) void {
-            std.debug.assert(123 == ch.receiveTimeout(sig.time.Duration.fromSecs(1)) catch
-                @panic("error receiving"));
-        }
-    };
-
-    var ch = try Channel(u64).init(std.testing.allocator);
-    defer ch.deinit();
-
-    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
-    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
-
-    consumer.join();
-    producer.join();
+        for (0..to_send) |i| try ch.send(i);
+        try expect(ch.isEmpty());
+        try expect(list.items.len == to_send);
+    }
 }
 
 test "timeout receive times out" {

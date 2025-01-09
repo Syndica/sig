@@ -20,7 +20,8 @@ const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
 const RepairMessage = shred_network.repair_message.RepairMessage;
 const Slot = sig.core.Slot;
-const SocketThread = sig.net.SocketThread;
+const SocketPipe = sig.net.SocketPipe;
+const ExitCondition = sig.sync.ExitCondition;
 const VariantCounter = sig.prometheus.VariantCounter;
 
 const NUM_TVU_RECEIVERS = 2;
@@ -47,62 +48,55 @@ pub const ShredReceiver = struct {
         defer self.logger.err().log("exiting shred receiver");
         errdefer self.logger.err().log("error in shred receiver");
 
-        var response_sender = try SocketThread
-            .initSender(self.allocator, self.logger.unscoped(), self.repair_socket, self.exit);
-        defer response_sender.deinit(self.allocator);
-        var repair_receiver = try SocketThread
-            .initReceiver(self.allocator, self.logger.unscoped(), self.repair_socket, self.exit);
-        defer repair_receiver.deinit(self.allocator);
+        var receive_signal: Channel(Packet).SendSignal = .{};
+        const exit = ExitCondition{ .unordered = self.exit };
 
-        var turbine_receivers: [NUM_TVU_RECEIVERS]SocketThread = undefined;
-        for (0..NUM_TVU_RECEIVERS) |i| {
-            turbine_receivers[i] = try SocketThread.initReceiver(
-                self.allocator,
-                self.logger.unscoped(),
-                self.turbine_socket,
-                self.exit,
-            );
+        // Cretae pipe from response_sender (SocketPipe overrides .send_hook) -> repair_socket
+        const response_sender = try Channel(Packet).create(self.allocator);
+        defer response_sender.destroy();
+        const response_sender_pipe = try SocketPipe.init(self.allocator, .sender, self.logger.unscoped(), self.repair_socket, response_sender, exit);
+        defer response_sender_pipe.deinit(self.allocator);
+        
+        // Create pipe from repair_socket -> response_receiver (SendSignal overrides .send_hook)
+        const response_receiver = try Channel(Packet).create(self.allocator);
+        response_receiver.send_hook = &receive_signal.hook;
+        defer response_receiver.destroy();
+
+        const response_receiver_pipe = try SocketPipe.init(self.allocator, .receiver, self.logger.unscoped(), self.repair_socket, response_receiver, exit);
+        defer response_receiver_pipe.deinit(self.allocator);
+
+        // Create N pipes from turbine_socket -> turbine_receiver (SendSignal overrides .send_hook)
+        const turbine_receiver = try Channel(Packet).create(self.allocator);
+        turbine_receiver.send_hook = &receive_signal.hook;
+        defer turbine_receiver.destroy();
+
+        var turbine_receiver_pipes: [NUM_TVU_RECEIVERS]*SocketPipe = undefined;
+        for (&turbine_receiver_pipes) |*pipe| {
+            pipe.* = try SocketPipe.init(self.allocator, .receiver, self.logger.unscoped(), self.turbine_socket, turbine_receiver, .{ .unordered = self.exit });
         }
-        defer for (turbine_receivers) |r| r.deinit(self.allocator);
+        defer for (turbine_receiver_pipes) |pipe| pipe.deinit(self.allocator);
 
-        var turbine_channels: [NUM_TVU_RECEIVERS]*Channel(Packet) = undefined;
-        for (&turbine_receivers, &turbine_channels) |*receiver, *channel| {
-            channel.* = receiver.channel;
+        // Run thread to handle incoming packets. Stops when exit is set.
+        while (true) {
+            receive_signal.wait(exit) catch break;
+            try self.runPacketHandler(response_sender, response_receiver, true);
+            try self.runPacketHandler(response_sender, turbine_receiver, false);
         }
-
-        const turbine_thread = try std.Thread.spawn(
-            .{},
-            Self.runPacketHandler,
-            .{ self, &turbine_channels, response_sender.channel, false },
-        );
-        const receiver_thread = try std.Thread.spawn(
-            .{},
-            Self.runPacketHandler,
-            .{ self, &.{repair_receiver.channel}, response_sender.channel, true },
-        );
-        turbine_thread.join();
-        receiver_thread.join();
     }
 
-    /// Keep looping over packet channel and process the incoming packets.
-    /// Returns when exit is set to true.
     fn runPacketHandler(
         self: *Self,
-        receivers: []const *Channel(Packet),
         response_sender: *Channel(Packet),
+        receiver: *Channel(Packet),
         comptime is_repair: bool,
     ) !void {
-        while (!self.exit.load(.acquire)) {
-            for (receivers) |receiver| {
-                var packet_count: usize = 0;
-                while (receiver.tryReceive()) |packet| {
-                    self.metrics.incReceived(is_repair);
-                    packet_count += 1;
-                    try self.handlePacket(packet, response_sender, is_repair);
-                }
-                self.metrics.observeBatchSize(is_repair, packet_count);
-            }
+        var packet_count: usize = 0;
+        while (receiver.tryReceive()) |packet| {
+            self.metrics.incReceived(is_repair);
+            packet_count += 1;
+            try self.handlePacket(packet, response_sender, is_repair);
         }
+        self.metrics.observeBatchSize(is_repair, packet_count);
     }
 
     /// Handle a single packet and return.
