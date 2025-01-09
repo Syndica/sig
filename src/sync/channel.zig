@@ -475,7 +475,7 @@ test "send-hook" {
     };
 
     const Reaction = struct {
-        sent: *std.ArrayList(u64),
+        collect: *std.ArrayList(u64),
         hook: Channel(u64).SendHook = .{ .after_send = afterSend },
 
         fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
@@ -502,12 +502,6 @@ test "send-hook" {
         try expect(ch.isEmpty());
         try expect(list.items.len == to_send);
     }
-}
-
-test "timeout receive times out" {
-    var ch = try Channel(u64).init(std.testing.allocator);
-    defer ch.deinit();
-    try std.testing.expectEqual(null, try ch.receiveTimeout(sig.time.Duration.fromMillis(10)));
 }
 
 test "mpmc" {

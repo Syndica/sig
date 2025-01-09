@@ -277,8 +277,8 @@ pub const RepairRequester = struct {
         const chan = try Channel(Packet).create(allocator);
         errdefer chan.destroy();
 
-        const pipe = try SocketPipe.init(allocator, .sender, logger, udp_send_socket, .{ .unordered = exit });
-        errdefer pipe.deinit();
+        const pipe = try SocketPipe.init(allocator, .sender, logger, udp_send_socket, chan, .{ .unordered = exit });
+        errdefer pipe.deinit(allocator);
 
         return .{
             .allocator = allocator,
