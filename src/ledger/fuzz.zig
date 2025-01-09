@@ -25,6 +25,23 @@ pub const BlockstoreDB = switch (build_options.blockstore_db) {
     .hashmap => ledger.database.SharedHashMapDB(&.{cf1}),
 };
 
+fn createBlockstoreDB() !BlockstoreDB {
+    const rocksdb_path =
+        try std.fmt.allocPrint(allocator, "{s}/ledger/rocksdb", .{sig.FUZZ_DATA_DIR});
+
+    // ensure we start with a clean slate.
+    if (std.fs.cwd().access(rocksdb_path, .{})) |_| {
+        try std.fs.cwd().deleteTree(rocksdb_path);
+    } else |_| {}
+    try std.fs.cwd().makePath(rocksdb_path);
+
+    return try BlockstoreDB.open(
+        allocator,
+        .noop,
+        rocksdb_path,
+    );
+}
+
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const maybe_max_actions_string = args.next();
     const maybe_max_actions = blk: {
@@ -34,13 +51,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             break :blk null;
         }
     };
-
-    // NOTE: change to trace for full logs
-    var std_logger = sig.trace.DirectPrintLogger.init(
-        allocator,
-        .debug,
-    );
-    const logger = std_logger.logger();
 
     var prng = std.rand.DefaultPrng.init(seed);
     const random = prng.random();
@@ -54,11 +64,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     } else |_| {}
     try std.fs.cwd().makePath(rocksdb_path);
 
-    var db = try BlockstoreDB.open(
-        allocator,
-        logger,
-        rocksdb_path,
-    );
+    var db = try createBlockstoreDB();
 
     defer db.deinit();
 
@@ -69,7 +75,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         // dbCount,
         dbContains,
         dbDelete,
-        // dbDeleteFilesInRange,
+        dbDeleteFilesInRange,
         // Batch API
         batchOps,
     };
@@ -110,7 +116,6 @@ fn dbPut(
 
         try BlockstoreDB.put(db, cf1, key, data);
         try dataMap.put(key, data);
-        std.debug.print("insert key {d}, max {d}\n", .{ key, std.math.maxInt(u32) });
         try dataKeys.append(key);
 
         if ((count - last_print_msg_count) >= 1_000) {
@@ -258,6 +263,10 @@ fn dbDeleteFilesInRange(
     random: std.rand.Random,
     max_actions: ?usize,
 ) !void {
+    // deleteFilesInRange is not implemented in hashmap implementation.
+    if (build_options.blockstore_db == .hashmap) {
+        return;
+    }
     var count: u64 = 0;
     var last_print_msg_count: u64 = 0;
     const action_name = "deleteFilesInRange";
@@ -275,6 +284,10 @@ fn dbDeleteFilesInRange(
         const endKey = startKey +| @as(u32, random.int(u8));
 
         try BlockstoreDB.deleteFilesInRange(db, cf1, startKey, endKey);
+        // Need to flush memtable to disk to be able to see result of deleteFilesInRange.
+        // We do that by deiniting the current db, which triggers the flushing.
+        db.deinit();
+        db.* = try createBlockstoreDB();
 
         for (startKey..endKey) |key| {
             const actual = try BlockstoreDB.get(db, allocator, cf1, key) orelse null;
