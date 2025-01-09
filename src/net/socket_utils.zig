@@ -46,10 +46,10 @@ pub const SocketPipe = struct {
             .sender => {
                 self.outgoing_signal = .{};
                 channel.send_hook = &self.outgoing_signal.hook;
-                self.handle = try std.Thread.spawn(.{}, runSender, .{self, logger, socket, channel, exit});
+                self.handle = try std.Thread.spawn(.{}, runSender, .{ self, logger, socket, channel, exit });
             },
             .receiver => {
-                self.handle = try std.Thread.spawn(.{}, runReceiver, .{logger, socket, channel, exit});
+                self.handle = try std.Thread.spawn(.{}, runReceiver, .{ logger, socket, channel, exit });
             },
         }
 
@@ -152,7 +152,7 @@ pub const BenchmarkPacketProcessing = struct {
         const exit_condition = ExitCondition{ .unordered = &exit_flag };
 
         // Setup incoming
-        
+
         var incoming_channel = try Channel(Packet).init(allocator);
         defer incoming_channel.deinit();
 
@@ -197,11 +197,11 @@ pub const BenchmarkPacketProcessing = struct {
         const outgoing_pipe = try SocketPipe.init(allocator, .sender, .noop, socket, &outgoing_channel, exit_condition);
         defer outgoing_pipe.deinit(allocator);
 
-        const outgoing_handle = try std.Thread.spawn(.{}, S.runSender, .{&outgoing_channel, to_endpoint, exit_condition});
+        const outgoing_handle = try std.Thread.spawn(.{}, S.runSender, .{ &outgoing_channel, to_endpoint, exit_condition });
         defer outgoing_handle.join();
 
         // run incoming until received n_packets
-        
+
         var packets_to_recv = n_packets;
         var timer = try sig.time.Timer.start();
         while (packets_to_recv > 0) {

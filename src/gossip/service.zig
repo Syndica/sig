@@ -159,7 +159,7 @@ pub const GossipService = struct {
     packet_outgoing_channel: *Channel(Packet),
     verified_incoming_signal: Channel(GossipMessageWithEndpoint).SendSignal = .{},
     verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
-    
+
     /// table to store gossip values
     gossip_table_rw: RwMux(GossipTable),
     /// manages push message peers

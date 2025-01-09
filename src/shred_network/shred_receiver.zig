@@ -56,7 +56,7 @@ pub const ShredReceiver = struct {
         defer response_sender.destroy();
         const response_sender_pipe = try SocketPipe.init(self.allocator, .sender, self.logger.unscoped(), self.repair_socket, response_sender, exit);
         defer response_sender_pipe.deinit(self.allocator);
-        
+
         // Create pipe from repair_socket -> response_receiver (SendSignal overrides .send_hook)
         const response_receiver = try Channel(Packet).create(self.allocator);
         response_receiver.send_hook = &receive_signal.hook;
