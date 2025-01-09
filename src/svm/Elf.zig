@@ -243,10 +243,6 @@ pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executab
 
     var ro_fill_length: usize = 0;
 
-    var first_ro_section: usize = 0;
-    var last_ro_section: usize = 0;
-    var n_ro_sections: usize = 0;
-
     var ro_slices = try std.ArrayListUnmanaged(struct {
         usize,
         []const u8,
@@ -259,13 +255,11 @@ pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executab
             if (std.mem.eql(u8, ro_name, name)) break;
         } else continue;
 
-        if (n_ro_sections == 0) {
-            first_ro_section = i;
-        }
-        last_ro_section = i;
-        n_ro_sections = n_ro_sections +| 1;
-
         const section_addr = shdr.sh_addr;
+
+        if (section_addr != shdr.sh_offset) {
+            return error.InvalidOffset;
+        }
 
         const vaddr_end = section_addr +| memory.PROGRAM_START;
         if (vaddr_end > memory.STACK_START) {
@@ -292,6 +286,7 @@ pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executab
     }
 
     const ro_section = try allocator.alloc(u8, buf_len);
+    @memset(ro_section, 0);
     for (ro_slices.items) |ro_slice| {
         const section_addr, const slice = ro_slice;
         const buf_offset_start = section_addr -| lowest_addr;
