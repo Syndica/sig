@@ -16,6 +16,10 @@ const cf1 = ColumnFamily{
     .Key = u64,
     .Value = Data,
 };
+
+var dataMap = std.AutoHashMap(u32, Data).init(allocator);
+var dataKeys = std.ArrayList(u32).init(allocator);
+
 pub const BlockstoreDB = switch (build_options.blockstore_db) {
     .rocksdb => ledger.database.RocksDB(&.{cf1}),
     .hashmap => ledger.database.SharedHashMapDB(&.{cf1}),
@@ -60,14 +64,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const functions = .{
         dbPut,
-        dbDelete,
-        dbDeleteFilesInRange,
-        dbGetBytes,
         dbGet,
-        dbCount,
+        dbGetBytes,
+        // dbCount,
         dbContains,
+        dbDelete,
+        // dbDeleteFilesInRange,
         // Batch API
-        batchDeleteRange,
+        batchOps,
     };
 
     inline for (functions) |function| {
@@ -76,14 +80,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     }
 }
 
-fn performDbAction(
-    action_name: []const u8,
-    comptime func: anytype,
-    args: anytype,
+fn dbPut(
+    db: *BlockstoreDB,
+    random: *const std.rand.Random,
     max_actions: ?usize,
 ) !void {
     var count: u64 = 0;
     var last_print_msg_count: u64 = 0;
+    const action_name = "put";
 
     while (true) {
         if (max_actions) |max| {
@@ -93,7 +97,22 @@ fn performDbAction(
             }
         }
 
-        _ = try @call(.auto, func, args);
+        const key = random.int(u32);
+        var buffer: [61]u8 = undefined;
+
+        // Fill the buffer with random bytes
+        for (0..buffer.len) |i| {
+            buffer[i] = @intCast(random.int(u8));
+        }
+
+        const value: []const u8 = try allocator.dupe(u8, buffer[0..]);
+        const data = Data{ .value = value };
+
+        try BlockstoreDB.put(db, cf1, key, data);
+        try dataMap.put(key, data);
+        std.debug.print("insert key {d}, max {d}\n", .{ key, std.math.maxInt(u32) });
+        try dataKeys.append(key);
+
         if ((count - last_print_msg_count) >= 1_000) {
             std.debug.print("{d} {s} actions\n", .{ count, action_name });
             last_print_msg_count = count;
@@ -103,60 +122,37 @@ fn performDbAction(
     }
 }
 
-fn dbPut(
+fn dbGet(
     db: *BlockstoreDB,
     random: *const std.rand.Random,
     max_actions: ?usize,
 ) !void {
-    const key = random.int(u32);
-    var buffer: [61]u8 = undefined;
-    // Fill the buffer with random bytes
-    for (0..buffer.len) |i| {
-        buffer[i] = @intCast(random.int(u8));
+    var count: u64 = 0;
+    var last_print_msg_count: u64 = 0;
+    const action_name = "get";
+
+    while (true) {
+        if (max_actions) |max| {
+            if (count >= max) {
+                std.debug.print("{s} reached max actions: {}\n", .{ action_name, max });
+                break;
+            }
+        }
+
+        const random_index = random.uintLessThan(usize, dataKeys.items.len);
+        const key = dataKeys.items[random_index];
+        const expected = dataMap.get(key) orelse return error.KeyNotFoundError;
+
+        const actual = try BlockstoreDB.get(db, allocator, cf1, key) orelse return error.KeyNotFoundError;
+
+        try std.testing.expect(std.mem.eql(u8, expected.value, actual.value));
+        if ((count - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} {s} actions\n", .{ count, action_name });
+            last_print_msg_count = count;
+        }
+
+        count += 1;
     }
-    const value: []const u8 = buffer[0..];
-    try performDbAction(
-        "RocksDb.put",
-        BlockstoreDB.put,
-        .{ db, cf1, (key + 1), Data{ .value = value } },
-        max_actions,
-    );
-}
-
-fn dbDelete(
-    db: *BlockstoreDB,
-    random: *const std.rand.Random,
-    max_actions: ?usize,
-) !void {
-    const key = random.int(u32);
-    try performDbAction(
-        "RocksDb.delete",
-        BlockstoreDB.delete,
-        .{ db, cf1, key },
-        max_actions,
-    );
-}
-
-fn dbDeleteFilesInRange(
-    db: *BlockstoreDB,
-    random: *const std.rand.Random,
-    max_actions: ?usize,
-) !void {
-    const start = random.int(u32);
-    const end = blk: {
-        const end_ = random.int(u32);
-        if (end_ < start)
-            break :blk (end_ +| start)
-        else
-            break :blk end_;
-    };
-
-    try performDbAction(
-        "RocksDb.deleteFilesInRange",
-        BlockstoreDB.deleteFilesInRange,
-        .{ db, cf1, start, end },
-        max_actions,
-    );
 }
 
 fn dbGetBytes(
@@ -164,27 +160,33 @@ fn dbGetBytes(
     random: *const std.rand.Random,
     max_actions: ?usize,
 ) !void {
-    const key = random.int(u32);
-    try performDbAction(
-        "RocksDb.getBytes",
-        BlockstoreDB.getBytes,
-        .{ db, cf1, key },
-        max_actions,
-    );
-}
+    var count: u64 = 0;
+    var last_print_msg_count: u64 = 0;
+    const action_name = "getBytes";
 
-fn dbGet(
-    db: *BlockstoreDB,
-    random: *const std.rand.Random,
-    max_actions: ?usize,
-) !void {
-    const key = random.int(u32);
-    try performDbAction(
-        "RocksDb.get",
-        BlockstoreDB.get,
-        .{ db, allocator, cf1, key },
-        max_actions,
-    );
+    while (true) {
+        if (max_actions) |max| {
+            if (count >= max) {
+                std.debug.print("{s} reached max actions: {}\n", .{ action_name, max });
+                break;
+            }
+        }
+
+        const random_index = random.uintLessThan(usize, dataKeys.items.len);
+        const key = dataKeys.items[random_index];
+        const expected = dataMap.get(key) orelse return error.KeyNotFoundError;
+
+        const actualBytes = try BlockstoreDB.getBytes(db, cf1, key) orelse return error.KeyNotFoundError;
+        const actual = try ledger.database.value_serializer.deserialize(cf1.Value, allocator, actualBytes.data);
+
+        try std.testing.expect(std.mem.eql(u8, expected.value, actual.value));
+        if ((count - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} {s} actions\n", .{ count, action_name });
+            last_print_msg_count = count;
+        }
+
+        count += 1;
+    }
 }
 
 fn dbCount(
@@ -194,12 +196,29 @@ fn dbCount(
     _: *const std.rand.Random,
     max_actions: ?usize,
 ) !void {
-    try performDbAction(
-        "RocksDb.count",
-        BlockstoreDB.count,
-        .{ db, cf1 },
-        max_actions,
-    );
+    var count: u64 = 0;
+    var last_print_msg_count: u64 = 0;
+    const action_name = "count";
+
+    while (true) {
+        if (max_actions) |max| {
+            if (count >= max) {
+                std.debug.print("{s} reached max actions: {}\n", .{ action_name, max });
+                break;
+            }
+        }
+
+        const expected = dataKeys.items.len;
+        const actual = try BlockstoreDB.count(db, cf1);
+
+        try std.testing.expectEqual(expected, actual);
+        if ((count - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} {s} actions\n", .{ count, action_name });
+            last_print_msg_count = count;
+        }
+
+        count += 1;
+    }
 }
 
 fn dbContains(
@@ -207,21 +226,113 @@ fn dbContains(
     random: *const std.rand.Random,
     max_actions: ?usize,
 ) !void {
-    const key = random.int(u32);
-    try performDbAction(
-        "RocksDb.contains",
-        BlockstoreDB.contains,
-        .{ db, cf1, key },
-        max_actions,
-    );
+    var count: u64 = 0;
+    var last_print_msg_count: u64 = 0;
+    const action_name = "contains";
+
+    while (true) {
+        if (max_actions) |max| {
+            if (count >= max) {
+                std.debug.print("{s} reached max actions: {}\n", .{ action_name, max });
+                break;
+            }
+        }
+
+        const random_index = random.uintLessThan(usize, dataKeys.items.len);
+        const key = dataKeys.items[random_index];
+
+        const actual = try BlockstoreDB.contains(db, cf1, key);
+
+        try std.testing.expect(actual);
+        if ((count - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} {s} actions\n", .{ count, action_name });
+            last_print_msg_count = count;
+        }
+
+        count += 1;
+    }
 }
 
-// Batch API
-fn batchDeleteRange(
+fn dbDeleteFilesInRange(
     db: *BlockstoreDB,
     random: *const std.rand.Random,
     max_actions: ?usize,
 ) !void {
+    var count: u64 = 0;
+    var last_print_msg_count: u64 = 0;
+    const action_name = "deleteFilesInRange";
+
+    while (true) {
+        if (max_actions) |max| {
+            if (count >= max) {
+                std.debug.print("{s} reached max actions: {}\n", .{ action_name, max });
+                break;
+            }
+        }
+
+        const random_index = random.uintLessThan(usize, dataKeys.items.len);
+        const startKey = dataKeys.items[random_index];
+        const endKey = startKey +| @as(u32, random.int(u8));
+
+        try BlockstoreDB.deleteFilesInRange(db, cf1, startKey, endKey);
+
+        for (startKey..endKey) |key| {
+            const actual = try BlockstoreDB.get(db, allocator, cf1, key) orelse null;
+            try std.testing.expectEqual(null, actual);
+        }
+
+        if ((count - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} {s} actions\n", .{ count, action_name });
+            last_print_msg_count = count;
+        }
+
+        count += 1;
+    }
+}
+
+fn dbDelete(
+    db: *BlockstoreDB,
+    random: *const std.rand.Random,
+    max_actions: ?usize,
+) !void {
+    var count: u64 = 0;
+    var last_print_msg_count: u64 = 0;
+    const action_name = "delete";
+
+    while (true) {
+        if (max_actions) |max| {
+            if (count >= max) {
+                std.debug.print("{s} reached max actions: {}\n", .{ action_name, max });
+                break;
+            }
+        }
+
+        const random_index = random.uintLessThan(usize, dataKeys.items.len);
+        const key = dataKeys.items[random_index];
+
+        try BlockstoreDB.delete(db, cf1, key);
+
+        const actual = try BlockstoreDB.get(db, allocator, cf1, key) orelse null;
+        try std.testing.expectEqual(null, actual);
+
+        if ((count - last_print_msg_count) >= 1_000) {
+            std.debug.print("{d} {s} actions\n", .{ count, action_name });
+            last_print_msg_count = count;
+        }
+
+        count += 1;
+    }
+}
+
+// Batch API
+fn batchOps(
+    db: *BlockstoreDB,
+    random: *const std.rand.Random,
+    max_actions: ?usize,
+) !void {
+    // Repurpose the gloabl map.
+    dataMap.clearAndFree();
+
     var count: u64 = 0;
     var last_print_msg_count: u64 = 0;
     while (true) {
@@ -231,32 +342,91 @@ fn batchDeleteRange(
                 break;
             }
         }
-        const start = random.int(u32);
-        const end = blk: {
-            const end_ = random.int(u32);
-            if (end_ < start)
-                break :blk (end_ +| start)
-            else
-                break :blk end_;
-        };
 
-        const key = random.int(u32);
-        var buffer: [61]u8 = undefined;
+        // Batch put
+        {
+            const startKey = random.int(u32);
+            const endKey = startKey +| @as(u32, random.int(u8));
+            var buffer: [61]u8 = undefined;
+            var batch = try db.initWriteBatch();
+            defer batch.deinit();
+            defer dataMap.clearAndFree();
+            for (startKey..endKey) |key| {
+                // Fill the buffer with random bytes for each key.
+                for (0..buffer.len) |i| {
+                    buffer[i] = @intCast(random.int(u8));
+                }
 
-        // Fill the buffer with random bytes
-        for (0..buffer.len) |i| {
-            buffer[i] = @intCast(random.int(u8));
+                const value: []const u8 = try allocator.dupe(u8, buffer[0..]);
+                const data = Data{ .value = value };
+
+                try batch.put(cf1, key, data);
+                try dataMap.put(@as(u32, @intCast(key)), data);
+            }
+            // Commit batch put.
+            try db.commit(&batch);
+            var it = dataMap.iterator();
+            while (it.next()) |entry| {
+                const entryKey = entry.key_ptr.*;
+                const expected = entry.value_ptr.*;
+                const actual = try BlockstoreDB.get(db, allocator, cf1, entryKey) orelse return error.KeyNotFoundError;
+                try std.testing.expect(std.mem.eql(u8, expected.value, actual.value));
+            }
         }
 
-        const value: []const u8 = buffer[0..];
+        // Batch delete.
+        {
+            const startKey = random.int(u32);
+            const endKey = startKey +| @as(u32, random.int(u8));
+            var buffer: [61]u8 = undefined;
+            var batch = try db.initWriteBatch();
+            defer batch.deinit();
+            for (startKey..endKey) |key| {
+                // Fill the buffer with random bytes for each key.
+                for (0..buffer.len) |i| {
+                    buffer[i] = @intCast(random.int(u8));
+                }
 
-        var batch = try db.initWriteBatch();
-        defer batch.deinit();
+                const value: []const u8 = try allocator.dupe(u8, buffer[0..]);
+                const data = Data{ .value = value };
 
-        try batch.put(cf1, key, Data{ .value = value });
-        try batch.deleteRange(cf1, start, end);
-        try batch.delete(cf1, key);
-        try db.commit(&batch);
+                try batch.put(cf1, key, data);
+                try batch.delete(cf1, key);
+            }
+            // Commit batch put and delete.
+            try db.commit(&batch);
+            for (startKey..endKey) |key| {
+                const actual = try BlockstoreDB.get(db, allocator, cf1, @as(u32, @intCast(key)));
+                try std.testing.expectEqual(null, actual);
+            }
+        }
+
+        // Batch delete range.
+        {
+            const startKey = random.int(u32);
+            const endKey = startKey +| @as(u32, random.int(u8));
+            var buffer: [61]u8 = undefined;
+            var batch = try db.initWriteBatch();
+            defer batch.deinit();
+            for (startKey..endKey) |key| {
+                // Fill the buffer with random bytes for each key.
+                for (0..buffer.len) |i| {
+                    buffer[i] = @intCast(random.int(u8));
+                }
+
+                const value: []const u8 = try allocator.dupe(u8, buffer[0..]);
+                const data = Data{ .value = value };
+
+                try batch.put(cf1, key, data);
+            }
+            try batch.deleteRange(cf1, startKey, endKey);
+            // Commit batch put and delete range.
+            try db.commit(&batch);
+            for (startKey..endKey) |key| {
+                const actual = try BlockstoreDB.get(db, allocator, cf1, @as(u32, @intCast(key)));
+                try std.testing.expectEqual(null, actual);
+            }
+        }
 
         if ((count - last_print_msg_count) >= 1_000) {
             std.debug.print("{d} Batch actions\n", .{count});
