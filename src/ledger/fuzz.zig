@@ -114,7 +114,7 @@ fn dbPut(
         const value: []const u8 = try allocator.dupe(u8, buffer[0..]);
         const data = Data{ .value = value };
 
-        try BlockstoreDB.put(db, cf1, key, data);
+        try db.put(cf1, key, data);
         try dataMap.put(key, data);
         try dataKeys.append(key);
 
@@ -148,7 +148,7 @@ fn dbGet(
         const key = dataKeys.items[random_index];
         const expected = dataMap.get(key) orelse return error.KeyNotFoundError;
 
-        const actual = try BlockstoreDB.get(db, allocator, cf1, key) orelse return error.KeyNotFoundError;
+        const actual = try db.get(allocator, cf1, key) orelse return error.KeyNotFoundError;
 
         try std.testing.expect(std.mem.eql(u8, expected.value, actual.value));
         if ((count - last_print_msg_count) >= 1_000) {
@@ -181,7 +181,7 @@ fn dbGetBytes(
         const key = dataKeys.items[random_index];
         const expected = dataMap.get(key) orelse return error.KeyNotFoundError;
 
-        const actualBytes = try BlockstoreDB.getBytes(db, cf1, key) orelse return error.KeyNotFoundError;
+        const actualBytes = try db.getBytes(cf1, key) orelse return error.KeyNotFoundError;
         const actual = try ledger.database.value_serializer.deserialize(cf1.Value, allocator, actualBytes.data);
 
         try std.testing.expect(std.mem.eql(u8, expected.value, actual.value));
@@ -214,7 +214,7 @@ fn dbCount(
         }
 
         const expected = dataKeys.items.len;
-        const actual = try BlockstoreDB.count(db, cf1);
+        const actual = try db.count(cf1);
 
         try std.testing.expectEqual(expected, actual);
         if ((count - last_print_msg_count) >= 1_000) {
@@ -246,7 +246,7 @@ fn dbContains(
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
 
-        const actual = try BlockstoreDB.contains(db, cf1, key);
+        const actual = try db.contains(cf1, key);
 
         try std.testing.expect(actual);
         if ((count - last_print_msg_count) >= 1_000) {
@@ -283,14 +283,14 @@ fn dbDeleteFilesInRange(
         const startKey = dataKeys.items[random_index];
         const endKey = startKey +| @as(u32, random.int(u8));
 
-        try BlockstoreDB.deleteFilesInRange(db, cf1, startKey, endKey);
+        try db.deleteFilesInRange(cf1, startKey, endKey);
         // Need to flush memtable to disk to be able to see result of deleteFilesInRange.
         // We do that by deiniting the current db, which triggers the flushing.
         db.deinit();
         db.* = try createBlockstoreDB();
 
         for (startKey..endKey) |key| {
-            const actual = try BlockstoreDB.get(db, allocator, cf1, key) orelse null;
+            const actual = try db.get(allocator, cf1, key) orelse null;
             try std.testing.expectEqual(null, actual);
         }
 
@@ -323,9 +323,9 @@ fn dbDelete(
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
 
-        try BlockstoreDB.delete(db, cf1, key);
+        try db.delete(cf1, key);
 
-        const actual = try BlockstoreDB.get(db, allocator, cf1, key) orelse null;
+        const actual = try db.get(allocator, cf1, key) orelse null;
         try std.testing.expectEqual(null, actual);
 
         if ((count - last_print_msg_count) >= 1_000) {
@@ -382,7 +382,7 @@ fn batchOps(
             while (it.next()) |entry| {
                 const entryKey = entry.key_ptr.*;
                 const expected = entry.value_ptr.*;
-                const actual = try BlockstoreDB.get(db, allocator, cf1, entryKey) orelse return error.KeyNotFoundError;
+                const actual = try db.get(allocator, cf1, entryKey) orelse return error.KeyNotFoundError;
                 try std.testing.expect(std.mem.eql(u8, expected.value, actual.value));
             }
         }
@@ -409,7 +409,7 @@ fn batchOps(
             // Commit batch put and delete.
             try db.commit(&batch);
             for (startKey..endKey) |key| {
-                const actual = try BlockstoreDB.get(db, allocator, cf1, @as(u32, @intCast(key)));
+                const actual = try db.get(allocator, cf1, @as(u32, @intCast(key)));
                 try std.testing.expectEqual(null, actual);
             }
         }
@@ -436,7 +436,7 @@ fn batchOps(
             // Commit batch put and delete range.
             try db.commit(&batch);
             for (startKey..endKey) |key| {
-                const actual = try BlockstoreDB.get(db, allocator, cf1, @as(u32, @intCast(key)));
+                const actual = try db.get(allocator, cf1, @as(u32, @intCast(key)));
                 try std.testing.expectEqual(null, actual);
             }
         }
