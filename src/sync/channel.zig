@@ -16,7 +16,10 @@ pub fn Channel(T: type) type {
         send_hook: ?*SendHook = null,
 
         pub const SendHook = struct {
+            /// Called before a value is sent to a channel.
+            /// If it returns false, the value ia not pushed to the channel.
             before_send: *const fn (*SendHook, *Self, T) bool = defaultBeforeSend,
+            /// Called after the channel has pushed the value.
             after_send: *const fn (*SendHook, *Self) void = defaultAfterSend,
 
             fn defaultAfterSend(_: *SendHook, _: *Self) void {}
@@ -28,6 +31,16 @@ pub fn Channel(T: type) type {
         pub const SendSignal = struct {
             event: std.Thread.ResetEvent = .{},
             hook: SendHook = .{ .after_send = afterSend },
+
+            pub fn create(allocator: Allocator) !*SendSignal {
+                const self = try allocator.create(SendSignal);
+                self.* = .{};
+                return self;
+            }
+
+            pub fn destroy(self: *SendSignal, allocator: Allocator) void {
+                allocator.destroy(self);
+            }
 
             fn afterSend(hook: *SendHook, _: *Self) void {
                 const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
@@ -483,7 +496,7 @@ test "send-hook" {
             const value = channel.tryReceive() orelse @panic("empty channel after send");
             self.collect.append(value) catch @panic("oom");
         }
-    }; 
+    };
 
     var ch = try Channel(u64).init(std.testing.allocator);
     defer ch.deinit();

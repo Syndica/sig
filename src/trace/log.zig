@@ -120,7 +120,8 @@ pub const ChannelPrintLogger = struct {
     log_allocator: Allocator,
     log_allocator_state: *RecycleFBA(.{}),
     max_buffer: u64,
-    channel: *Channel([]const u8),
+    channel: Channel([]const u8),
+    signal: Channel([]const u8).SendSignal,
     handle: ?std.Thread,
 
     const Self = @This();
@@ -132,6 +133,7 @@ pub const ChannelPrintLogger = struct {
             .records_allocator = config.allocator,
             .bytes_allocator = config.allocator,
         }, max_buffer);
+
         const self = try config.allocator.create(Self);
         self.* = .{
             .allocator = config.allocator,
@@ -141,8 +143,11 @@ pub const ChannelPrintLogger = struct {
             .exit = AtomicBool.init(false),
             .max_level = config.max_level,
             .handle = null,
-            .channel = try Channel([]const u8).create(config.allocator),
+            .channel = Channel([]const u8).init(config.allocator),
+            .signal = .{},
         };
+
+        self.channel = &self.signal.hook;
         self.handle = try std.Thread.spawn(.{}, run, .{self});
         return self;
     }
@@ -153,9 +158,9 @@ pub const ChannelPrintLogger = struct {
             self.exit.store(true, .seq_cst);
             handle.join();
         }
+
         self.channel.deinit();
         self.log_allocator_state.deinit();
-        self.allocator.destroy(self.channel);
         self.allocator.destroy(self.log_allocator_state);
         self.allocator.destroy(self);
     }
@@ -169,7 +174,9 @@ pub const ChannelPrintLogger = struct {
     }
 
     pub fn run(self: *Self) void {
-        while (!self.exit.load(.acquire)) {
+        while (true) {
+            self.signal.wait(.{ .unordered = self.exit }) catch break;
+
             while (self.channel.tryReceive()) |message| {
                 defer self.log_allocator.free(message);
                 const writer = std.io.getStdErr().writer();

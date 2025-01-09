@@ -84,13 +84,23 @@ pub fn start(
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
-    // channels
+    // channels (cant use arena as they need to alloc/free frequently & potentially from multiple sender threads)
     const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
     try defers.deferCall(Channel(Packet).destroy, .{unverified_shred_channel});
     const shreds_to_insert_channel = try Channel(Packet).create(deps.allocator);
     try defers.deferCall(Channel(Packet).destroy, .{shreds_to_insert_channel});
-    const retransmit_channel = try Channel(sig.net.Packet).create(deps.allocator);
+    const retransmit_channel = try Channel(Packet).create(deps.allocator);
     try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
+
+    // signals (used to wait for channel senders)
+    const unverified_shred_signal = try Channel(Packet).SendSignal.create(arena);
+    unverified_shred_channel.send_hook = &unverified_shred_signal.hook;
+
+    const shreds_to_insert_signal = try Channel(Packet).SendSignal.create(arena);
+    shreds_to_insert_channel.send_hook = &shreds_to_insert_signal.hook;
+
+    const retransmit_signal = try Channel(Packet).SendSignal.create(arena);
+    retransmit_channel.send_hook = &retransmit_signal.hook;
 
     // receiver (threads)
     const shred_receiver = try arena.create(ShredReceiver);
@@ -120,6 +130,7 @@ pub fn start(
             deps.exit,
             deps.registry,
             unverified_shred_channel,
+            unverified_shred_signal,
             shreds_to_insert_channel,
             retransmit_channel,
             deps.epoch_context_mgr.slotLeaders(),
@@ -144,6 +155,7 @@ pub fn start(
             deps.logger.unscoped(),
             deps.registry,
             shreds_to_insert_channel,
+            shreds_to_insert_signal,
             shred_tracker,
             deps.shred_inserter,
             deps.epoch_context_mgr.slotLeaders(),
@@ -160,6 +172,7 @@ pub fn start(
             .epoch_context_mgr = deps.epoch_context_mgr,
             .gossip_table_rw = deps.gossip_table_rw,
             .receiver = retransmit_channel,
+            .signal = retransmit_signal,
             .maybe_num_retransmit_threads = deps.n_retransmit_threads,
             .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
             .exit = deps.exit,

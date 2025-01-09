@@ -47,6 +47,7 @@ pub const Service = struct {
     send_channel: *Channel(Packet),
     /// Put transactions onto this channel to send them.
     input_channel: *Channel(TransactionInfo),
+    input_signal: *Channel(TransactionInfo).SendSignal,
     exit: *AtomicBool,
     logger: ScopedLogger(@typeName(Self)),
 
@@ -61,6 +62,13 @@ pub const Service = struct {
         epoch_schedule: EpochSchedule,
         exit: *AtomicBool,
     ) !Service {
+        const send_channel = try Channel(Packet).create(allocator);
+        errdefer send_channel.destroy();
+
+        const input_signal = try allocator.create(Channel(TransactionInfo).SendSignal);
+        input_signal.* = .{};
+        input_channel.send_hook = &input_signal.hook;
+
         return .{
             .allocator = allocator,
             .config = config,
@@ -76,8 +84,9 @@ pub const Service = struct {
                 gossip_table_rw,
                 epoch_schedule,
             )),
-            .send_channel = try Channel(Packet).create(allocator),
+            .send_channel = send_channel,
             .input_channel = input_channel,
+            .input_signal = input_signal,
             .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
         };
@@ -120,9 +129,11 @@ pub const Service = struct {
         var transaction_batch = std.AutoArrayHashMap(Signature, TransactionInfo).init(self.allocator);
         defer transaction_batch.deinit();
 
-        while (!self.exit.load(.monotonic) or
-            self.input_channel.len() != 0)
-        {
+        while (true) {
+            self.input_signal.wait(.{ .unordered = self.exit }) catch |e| switch (e) {
+                error.Exit => if (self.input_channel.isEmpty()) break,
+            };
+
             while (self.input_channel.tryReceive()) |transaction| {
                 self.metrics.received_count.inc();
 
