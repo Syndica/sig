@@ -75,14 +75,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     };
 
     inline for (functions) |function| {
-        const fn_args = .{ &db, &random, maybe_max_actions };
+        const fn_args = .{ &db, random, maybe_max_actions };
         _ = try @call(.auto, function, fn_args);
     }
 }
 
 fn dbPut(
     db: *BlockstoreDB,
-    random: *const std.rand.Random,
+    random: std.rand.Random,
     max_actions: ?usize,
 ) !void {
     var count: u64 = 0;
@@ -124,7 +124,7 @@ fn dbPut(
 
 fn dbGet(
     db: *BlockstoreDB,
-    random: *const std.rand.Random,
+    random: std.rand.Random,
     max_actions: ?usize,
 ) !void {
     var count: u64 = 0;
@@ -157,7 +157,7 @@ fn dbGet(
 
 fn dbGetBytes(
     db: *BlockstoreDB,
-    random: *const std.rand.Random,
+    random: std.rand.Random,
     max_actions: ?usize,
 ) !void {
     var count: u64 = 0;
@@ -193,7 +193,7 @@ fn dbCount(
     db: *BlockstoreDB,
     // Unused. Listed to allow uniform call
     // via @call with the rest of the functions.
-    _: *const std.rand.Random,
+    _: std.rand.Random,
     max_actions: ?usize,
 ) !void {
     var count: u64 = 0;
@@ -223,7 +223,7 @@ fn dbCount(
 
 fn dbContains(
     db: *BlockstoreDB,
-    random: *const std.rand.Random,
+    random: std.rand.Random,
     max_actions: ?usize,
 ) !void {
     var count: u64 = 0;
@@ -255,7 +255,7 @@ fn dbContains(
 
 fn dbDeleteFilesInRange(
     db: *BlockstoreDB,
-    random: *const std.rand.Random,
+    random: std.rand.Random,
     max_actions: ?usize,
 ) !void {
     var count: u64 = 0;
@@ -292,7 +292,7 @@ fn dbDeleteFilesInRange(
 
 fn dbDelete(
     db: *BlockstoreDB,
-    random: *const std.rand.Random,
+    random: std.rand.Random,
     max_actions: ?usize,
 ) !void {
     var count: u64 = 0;
@@ -327,7 +327,7 @@ fn dbDelete(
 // Batch API
 fn batchOps(
     db: *BlockstoreDB,
-    random: *const std.rand.Random,
+    random: std.rand.Random,
     max_actions: ?usize,
 ) !void {
     // Repurpose the gloabl map.
