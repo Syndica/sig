@@ -30,9 +30,9 @@ pub const Section = union(enum) {
         end: u64,
     };
 
-    pub fn deinit(section: *Section, allocator: std.mem.Allocator) void {
+    pub fn deinit(section: Section, allocator: std.mem.Allocator) void {
         switch (section) {
-            .owned => |*owned| allocator.free(owned.data),
+            .owned => |owned| allocator.free(owned.data),
             .assembly => {},
         }
     }
