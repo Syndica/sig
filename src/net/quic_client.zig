@@ -19,11 +19,11 @@ pub fn runClient(
     exit: ExitCondition,
 ) !void {
     var client = try Client(20, 20).create(allocator, receiver, logger, exit);
-    try client.run();
     defer {
         client.deinit();
         allocator.destroy(client);
     }
+    try client.run();
 }
 
 pub fn Client(
