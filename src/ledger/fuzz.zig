@@ -77,7 +77,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         dbDelete,
         dbDeleteFilesInRange,
         // Batch API
-        batchOps,
+        // - batch.put
+        // - batch.delete
+        // - batch.deleteRange
+        batchAPI,
     };
 
     inline for (functions) |function| {
@@ -344,7 +347,7 @@ fn dbDelete(
 }
 
 // Batch API
-fn batchOps(
+fn batchAPI(
     db: *BlockstoreDB,
     random: std.rand.Random,
     max_actions: ?usize,
