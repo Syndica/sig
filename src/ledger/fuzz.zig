@@ -44,13 +44,11 @@ fn createBlockstoreDB() !BlockstoreDB {
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const maybe_max_actions_string = args.next();
-    const maybe_max_actions = blk: {
-        if (maybe_max_actions_string) |max_actions_str| {
-            break :blk try std.fmt.parseInt(usize, max_actions_str, 10);
-        } else {
-            break :blk null;
-        }
-    };
+
+    const maybe_max_actions = if (maybe_max_actions_string) |max_actions_str|
+        try std.fmt.parseInt(usize, max_actions_str, 10)
+    else
+        null;
 
     var prng = std.rand.DefaultPrng.init(seed);
     const random = prng.random();
