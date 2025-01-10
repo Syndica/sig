@@ -143,11 +143,11 @@ pub const ChannelPrintLogger = struct {
             .exit = AtomicBool.init(false),
             .max_level = config.max_level,
             .handle = null,
-            .channel = Channel([]const u8).init(config.allocator),
+            .channel = try Channel([]const u8).init(config.allocator),
             .signal = .{},
         };
 
-        self.channel = &self.signal.hook;
+        self.channel.send_hook = &self.signal.hook;
         self.handle = try std.Thread.spawn(.{}, run, .{self});
         return self;
     }
@@ -175,7 +175,7 @@ pub const ChannelPrintLogger = struct {
 
     pub fn run(self: *Self) void {
         while (true) {
-            self.signal.wait(.{ .unordered = self.exit }) catch break;
+            self.signal.wait(.{ .unordered = &self.exit }) catch break;
 
             while (self.channel.tryReceive()) |message| {
                 defer self.log_allocator.free(message);
