@@ -107,6 +107,7 @@ pub const SocketPipe = struct {
         while (true) {
             self.outgoing_signal.wait(exit) catch break;
             while (outgoing_channel.tryReceive()) |p| {
+                if (exit.shouldExit()) break; // drop the rest (like above) if exit prematurely.
                 const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                     logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
                     continue;
