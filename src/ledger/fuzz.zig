@@ -185,7 +185,11 @@ fn dbGetBytes(
         const expected = dataMap.get(key) orelse return error.KeyNotFoundError;
 
         const actualBytes = try db.getBytes(cf1, key) orelse return error.KeyNotFoundError;
-        const actual = try ledger.database.value_serializer.deserialize(cf1.Value, allocator, actualBytes.data);
+        const actual = try ledger.database.value_serializer.deserialize(
+            cf1.Value,
+            allocator,
+            actualBytes.data,
+        );
 
         try std.testing.expect(std.mem.eql(u8, expected.value, actual.value));
         if ((count - last_print_msg_count) >= 1_000) {
@@ -391,7 +395,11 @@ fn batchAPI(
             while (it.next()) |entry| {
                 const entryKey = entry.key_ptr.*;
                 const expected = entry.value_ptr.*;
-                const actual = try db.get(allocator, cf1, entryKey) orelse return error.KeyNotFoundError;
+                const actual = try db.get(
+                    allocator,
+                    cf1,
+                    entryKey,
+                ) orelse return error.KeyNotFoundError;
                 try std.testing.expect(std.mem.eql(u8, expected.value, actual.value));
             }
         }
