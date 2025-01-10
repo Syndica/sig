@@ -72,7 +72,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         dbPut,
         dbGet,
         dbGetBytes,
-        // dbCount,
+        dbCount,
         dbContains,
         dbDelete,
         dbDeleteFilesInRange,
@@ -201,6 +201,12 @@ fn dbCount(
     _: std.rand.Random,
     max_actions: ?usize,
 ) !void {
+    // TODO Fix why changes are not reflected in count with rocksdb implementation,
+    // but it does with hashmap.
+    if (build_options.blockstore_db == .rocksdb) {
+        return;
+    }
+
     var count: u64 = 0;
     var last_print_msg_count: u64 = 0;
     const action_name = "count";
