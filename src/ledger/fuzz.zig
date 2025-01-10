@@ -26,19 +26,19 @@ pub const BlockstoreDB = switch (build_options.blockstore_db) {
 };
 
 fn createBlockstoreDB() !BlockstoreDB {
-    const rocksdb_path =
-        try std.fmt.allocPrint(allocator, "{s}/ledger/rocksdb", .{sig.FUZZ_DATA_DIR});
+    const ledger_path =
+        try std.fmt.allocPrint(allocator, "{s}/ledger", .{sig.FUZZ_DATA_DIR});
 
     // ensure we start with a clean slate.
-    if (std.fs.cwd().access(rocksdb_path, .{})) |_| {
-        try std.fs.cwd().deleteTree(rocksdb_path);
+    if (std.fs.cwd().access(ledger_path, .{})) |_| {
+        try std.fs.cwd().deleteTree(ledger_path);
     } else |_| {}
-    try std.fs.cwd().makePath(rocksdb_path);
+    try std.fs.cwd().makePath(ledger_path);
 
     return try BlockstoreDB.open(
         allocator,
         .noop,
-        rocksdb_path,
+        ledger_path,
     );
 }
 
@@ -53,14 +53,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var prng = std.rand.DefaultPrng.init(seed);
     const random = prng.random();
 
-    const rocksdb_path =
-        try std.fmt.allocPrint(allocator, "{s}/ledger/rocksdb", .{sig.FUZZ_DATA_DIR});
+    const ledger_path =
+        try std.fmt.allocPrint(allocator, "{s}/ledger", .{sig.FUZZ_DATA_DIR});
 
     // ensure we start with a clean slate.
-    if (std.fs.cwd().access(rocksdb_path, .{})) |_| {
-        try std.fs.cwd().deleteTree(rocksdb_path);
+    if (std.fs.cwd().access(ledger_path, .{})) |_| {
+        try std.fs.cwd().deleteTree(ledger_path);
     } else |_| {}
-    try std.fs.cwd().makePath(rocksdb_path);
+    try std.fs.cwd().makePath(ledger_path);
 
     var db = try createBlockstoreDB();
 
