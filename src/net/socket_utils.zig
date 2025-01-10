@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Value;
 
 const sig = @import("../sig.zig");
 const Packet = sig.net.Packet;
@@ -46,10 +45,18 @@ pub const SocketPipe = struct {
             .sender => {
                 self.outgoing_signal = .{};
                 channel.send_hook = &self.outgoing_signal.hook;
-                self.handle = try std.Thread.spawn(.{}, runSender, .{ self, logger, socket, channel, exit });
+                self.handle = try std.Thread.spawn(
+                    .{},
+                    runSender,
+                    .{ self, logger, socket, channel, exit },
+                );
             },
             .receiver => {
-                self.handle = try std.Thread.spawn(.{}, runReceiver, .{ logger, socket, channel, exit });
+                self.handle = try std.Thread.spawn(
+                    .{},
+                    runReceiver,
+                    .{ logger, socket, channel, exit },
+                );
             },
         }
 
@@ -160,13 +167,14 @@ pub const BenchmarkPacketProcessing = struct {
         var incoming_signal: Channel(Packet).SendSignal = .{};
         incoming_channel.send_hook = &incoming_signal.hook;
 
-        const incoming_pipe = try SocketPipe.init(allocator, .receiver, .noop, socket, &incoming_channel, exit_condition);
+        const incoming_pipe = try SocketPipe
+            .init(allocator, .receiver, .noop, socket, &incoming_channel, exit_condition);
         defer incoming_pipe.deinit(allocator);
 
         // Start outgoing
 
         const S = struct {
-            fn runSender(channel: *Channel(Packet), addr: network.EndPoint, e: ExitCondition) !void {
+            fn sender(channel: *Channel(Packet), addr: network.EndPoint, e: ExitCondition) !void {
                 var i: usize = 0;
                 var packet: Packet = undefined;
                 var prng = std.rand.DefaultPrng.init(0);
@@ -175,7 +183,7 @@ pub const BenchmarkPacketProcessing = struct {
                 while (e.shouldRun()) {
                     prng.fill(&packet.data);
                     packet.addr = addr;
-                    packet.size = packet.data.len;
+                    packet.size = PACKET_DATA_SIZE;
                     try channel.send(packet);
 
                     // 10Kb per second, until one second
@@ -195,10 +203,15 @@ pub const BenchmarkPacketProcessing = struct {
         var outgoing_channel = try Channel(Packet).init(allocator);
         defer outgoing_channel.deinit();
 
-        const outgoing_pipe = try SocketPipe.init(allocator, .sender, .noop, socket, &outgoing_channel, exit_condition);
+        const outgoing_pipe = try SocketPipe
+            .init(allocator, .sender, .noop, socket, &outgoing_channel, exit_condition);
         defer outgoing_pipe.deinit(allocator);
 
-        const outgoing_handle = try std.Thread.spawn(.{}, S.runSender, .{ &outgoing_channel, to_endpoint, exit_condition });
+        const outgoing_handle = try std.Thread.spawn(
+            .{},
+            S.sender,
+            .{ &outgoing_channel, to_endpoint, exit_condition },
+        );
         defer outgoing_handle.join();
 
         // run incoming until received n_packets

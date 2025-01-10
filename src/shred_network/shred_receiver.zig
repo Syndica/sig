@@ -54,7 +54,15 @@ pub const ShredReceiver = struct {
         // Cretae pipe from response_sender (SocketPipe overrides .send_hook) -> repair_socket
         const response_sender = try Channel(Packet).create(self.allocator);
         defer response_sender.destroy();
-        const response_sender_pipe = try SocketPipe.init(self.allocator, .sender, self.logger.unscoped(), self.repair_socket, response_sender, exit);
+
+        const response_sender_pipe = try SocketPipe.init(
+            self.allocator,
+            .sender,
+            self.logger.unscoped(),
+            self.repair_socket,
+            response_sender,
+            exit,
+        );
         defer response_sender_pipe.deinit(self.allocator);
 
         // Create pipe from repair_socket -> response_receiver (SendSignal overrides .send_hook)
@@ -62,7 +70,14 @@ pub const ShredReceiver = struct {
         response_receiver.send_hook = &receive_signal.hook;
         defer response_receiver.destroy();
 
-        const response_receiver_pipe = try SocketPipe.init(self.allocator, .receiver, self.logger.unscoped(), self.repair_socket, response_receiver, exit);
+        const response_receiver_pipe = try SocketPipe.init(
+            self.allocator,
+            .receiver,
+            self.logger.unscoped(),
+            self.repair_socket,
+            response_receiver,
+            exit,
+        );
         defer response_receiver_pipe.deinit(self.allocator);
 
         // Create N pipes from turbine_socket -> turbine_receiver (SendSignal overrides .send_hook)
@@ -70,11 +85,19 @@ pub const ShredReceiver = struct {
         turbine_receiver.send_hook = &receive_signal.hook;
         defer turbine_receiver.destroy();
 
-        var turbine_receiver_pipes: [NUM_TVU_RECEIVERS]*SocketPipe = undefined;
-        for (&turbine_receiver_pipes) |*pipe| {
-            pipe.* = try SocketPipe.init(self.allocator, .receiver, self.logger.unscoped(), self.turbine_socket, turbine_receiver, .{ .unordered = self.exit });
+        var turbine_receiver_pipes: std.BoundedArray(*SocketPipe, NUM_TVU_RECEIVERS) = .{};
+        defer for (turbine_receiver_pipes.slice()) |pipe| pipe.deinit(self.allocator);
+
+        for (0..NUM_TVU_RECEIVERS) |_| {
+            try turbine_receiver_pipes.append(try SocketPipe.init(
+                self.allocator,
+                .receiver,
+                self.logger.unscoped(),
+                self.turbine_socket,
+                turbine_receiver,
+                .{ .unordered = self.exit },
+            ));
         }
-        defer for (turbine_receiver_pipes) |pipe| pipe.deinit(self.allocator);
 
         // Run thread to handle incoming packets. Stops when exit is set.
         while (true) {
