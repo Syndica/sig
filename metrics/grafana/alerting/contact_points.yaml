@@ -11,7 +11,7 @@ contactPoints:
           url: https://${SLACK_WEBHOOK_URL}
           text: |-
             {{ range .Alerts.Firing }}
-              {{ .Annotations.summary }} -- {{ .PanelURL }}
+              {{ .Annotations.summary }}
             {{ end }}
           title: "{{ len .Alerts.Firing }} Alert(s) Firing"
         disableResolveMessage: false

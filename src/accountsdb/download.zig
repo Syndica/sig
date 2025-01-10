@@ -19,7 +19,9 @@ const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 
-const DOWNLOAD_PROGRESS_UPDATES_NS = 6 * std.time.ns_per_s;
+// NOTE: this also represents the amount of time a connection is given
+// to warm up before we start checking the download speed
+const DOWNLOAD_PROGRESS_UPDATES_NS = 20 * std.time.ns_per_s;
 
 // The identifier for the scoped logger used in this file.
 const LOG_SCOPE = "accountsdb.download";
@@ -271,7 +273,6 @@ pub fn downloadSnapshotsFromGossip(
                     // downloadFile function
                     error.Unexpected => {},
                     error.TooSlow => {
-                        logger.info().logf("peer is too slow, skipping", .{});
                         try slow_peer_pubkeys.append(peer.contact_info.pubkey);
                     },
                     else => {

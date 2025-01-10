@@ -937,8 +937,8 @@ pub const AccountsDB = struct {
     ) !struct { Hash, u64 } {
         var timer = try sig.time.Timer.start();
         // TODO: make cli arg
-        // const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
-        const n_threads = 4;
+        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
+        // const n_threads = 4;
 
         // alloc the result
         const hashes = try self.allocator.alloc(std.ArrayListUnmanaged(Hash), n_threads);
@@ -3211,6 +3211,15 @@ pub fn indexAndValidateAccountFile(
     accounts_file.number_of_accounts = number_of_accounts;
 }
 
+pub fn getAccountPerFileEstimateFromCluster(
+    cluster: sig.core.Cluster,
+) error{NotImplementedYet}!u64 {
+    return switch (cluster) {
+        .testnet => 1_000,
+        else => error.NotImplementedYet,
+    };
+}
+
 /// All entries in `manifest.accounts_db_fields.file_map` must correspond to an entry in `file_map`,
 /// with the association defined by the file id (a field of the value of the former, the key of the latter).
 pub fn writeSnapshotTarWithFields(
@@ -4400,15 +4409,6 @@ test "generate snapshot & update gossip snapshot hashes" {
             );
         }
     }
-}
-
-pub fn getAccountPerFileEstimateFromCluster(
-    cluster: sig.core.Cluster,
-) error{NotImplementedYet}!u64 {
-    return switch (cluster) {
-        .testnet => 500,
-        else => error.NotImplementedYet,
-    };
 }
 
 pub const BenchmarkAccountsDBSnapshotLoad = struct {

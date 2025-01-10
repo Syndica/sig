@@ -49,12 +49,11 @@ groups:
               maxDataPoints: 43200
               refId: C
               type: threshold
-        noDataState: NoData
+        noDataState: KeepLast
         execErrState: Error
         for: 1m
         annotations:
           summary: "sig memory warning: using {{ $values.A.Value }}% of RAM"
-        labels: {}
         isPaused: false
         notification_settings:
           receiver: slack-sig-alerts
@@ -137,17 +136,14 @@ groups:
               type: threshold
         dashboardUid: jBuN47BVz
         panelId: 26
-        noDataState: NoData
+        noDataState: KeepLast
+        for: 1m
         execErrState: Error
-        for: 0s
         annotations:
           __dashboardUid__: jBuN47BVz
           __panelId__: "26"
-          description: ""
-          runbook_url: ""
-          summary: "error: [{{ $labels.scope }}]: {{ $labels.message }} "
-        labels:
-          "": ""
+          summary: "error: [{{ $labels.scope }}]: {{ $labels.message }}"
+        labels: {}
         isPaused: false
         notification_settings:
           receiver: slack-sig-alerts

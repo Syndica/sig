@@ -247,6 +247,7 @@ pub fn main() !void {
                         .gossip_service = gossip_service,
                         .force_new_snapshot_download = true,
                         .max_number_of_download_attempts = 50,
+                        .min_snapshot_download_speed_mbs = 10,
                     },
                 ) catch |err| {
                     switch (err) {

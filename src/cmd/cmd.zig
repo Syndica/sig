@@ -1377,7 +1377,7 @@ fn loadSnapshot(
 ) !LoadedSnapshot {
     const logger = unscoped_logger.withScope(@typeName(@This()) ++ "." ++ @src().fn_name);
 
-    var validator_dir = try std.fs.cwd().openDir(sig.VALIDATOR_DIR, .{});
+    var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});
     defer validator_dir.close();
 
     const genesis_file_path = try config.current.genesisFilePath() orelse
