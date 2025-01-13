@@ -1,3 +1,7 @@
+# doc:
+# this script will modify your server's crontab
+# to run the collect_benchmarks.sh script at 6am everyday
+
 SCRIPT_DIR=$(dirname "$(readlink -f "$0")")/..
 
 # 6am everyday

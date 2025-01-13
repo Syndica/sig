@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 
+# doc:
+# this script will pull the latest change of the local repo
+# and run the benchmark to collect metrics which are
+# saved as results/output.json file. they are then
+# moved to results/metrics/output-{commit}-{timestamp}.json
+#
+# these output files are then compared/visualized using the
+# scripts/benchmark_server.py script
+
 # now in the scripts/ dir
 cd "$(dirname "$0")"
 # now in the sig dir

@@ -241,8 +241,7 @@ pub fn main() !void {
                 var snapshot_manifests, _ = sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
                     allocator,
                     logger,
-                    snapshot_dir,
-                    null,
+                    BENCH_SNAPSHOT_DIR_PATH,
                     .{
                         .gossip_service = gossip_service,
                         .force_new_snapshot_download = true,

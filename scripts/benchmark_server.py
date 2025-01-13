@@ -1,3 +1,7 @@
+# doc:
+# this script scrapes the results/metrics directory for json files
+# and generates a graph for each metric in the json file
+
 import os
 import json
 import plotly.express as px

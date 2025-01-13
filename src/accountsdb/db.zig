@@ -4446,7 +4446,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
         // unpack the snapshot
         var snapshot_dir = std.fs.cwd().openDir(
-            SNAPSHOT_DIR_PATH ++ sig.ACCOUNTS_DB_SUBDIR,
+            SNAPSHOT_DIR_PATH,
             .{ .iterate = true },
         ) catch {
             // not snapshot -> early exit
@@ -4474,45 +4474,49 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         defer full_inc_manifest.deinit(allocator);
         const collapsed_manifest = try full_inc_manifest.collapse(allocator);
 
-        var accounts_db = try AccountsDB.init(.{
-            .allocator = allocator,
-            .logger = logger,
-            .snapshot_dir = snapshot_dir,
-            .geyser_writer = null,
-            .gossip_view = null,
-            .index_allocation = if (bench_args.use_disk) .disk else .ram,
-            .number_of_index_shards = 32,
-            .lru_size = null,
-        });
-        defer accounts_db.deinit();
+        const loading_duration, const fastload_save_duration, const validate_duration = duration_blk: {
+            var accounts_db = try AccountsDB.init(.{
+                .allocator = allocator,
+                .logger = logger,
+                .snapshot_dir = snapshot_dir,
+                .geyser_writer = null,
+                .gossip_view = null,
+                .index_allocation = if (bench_args.use_disk) .disk else .ram,
+                .number_of_index_shards = 32,
+                .lru_size = null,
+            });
+            defer accounts_db.deinit();
 
-        const loading_duration = try accounts_db.loadFromSnapshot(
-            collapsed_manifest.accounts_db_fields,
-            bench_args.n_threads,
-            allocator,
-            try getAccountPerFileEstimateFromCluster(bench_args.cluster),
-        );
+            const loading_duration = try accounts_db.loadFromSnapshot(
+                collapsed_manifest.accounts_db_fields,
+                bench_args.n_threads,
+                allocator,
+                try getAccountPerFileEstimateFromCluster(bench_args.cluster),
+            );
 
-        const fastload_save_duration = blk: {
-            var timer = try sig.time.Timer.start();
-            try accounts_db.saveStateForFastload();
-            break :blk timer.read();
+            const fastload_save_duration = blk: {
+                var timer = try sig.time.Timer.start();
+                try accounts_db.saveStateForFastload();
+                break :blk timer.read();
+            };
+
+            const full_snapshot = full_inc_manifest.full;
+            var validate_timer = try sig.time.Timer.start();
+            try accounts_db.validateLoadFromSnapshot(.{
+                .full_slot = full_snapshot.bank_fields.slot,
+                .expected_full = .{
+                    .accounts_hash = collapsed_manifest.accounts_db_fields.bank_hash_info.accounts_hash,
+                    .capitalization = full_snapshot.bank_fields.capitalization,
+                },
+                .expected_incremental = if (collapsed_manifest.bank_extra.snapshot_persistence) |inc_persistence| .{
+                    .accounts_hash = inc_persistence.incremental_hash,
+                    .capitalization = inc_persistence.incremental_capitalization,
+                } else null,
+            });
+            const validate_duration = validate_timer.read();
+
+            break :duration_blk .{ loading_duration, fastload_save_duration, validate_duration };
         };
-
-        const full_snapshot = full_inc_manifest.full;
-        var validate_timer = try sig.time.Timer.start();
-        try accounts_db.validateLoadFromSnapshot(.{
-            .full_slot = full_snapshot.bank_fields.slot,
-            .expected_full = .{
-                .accounts_hash = collapsed_manifest.accounts_db_fields.bank_hash_info.accounts_hash,
-                .capitalization = full_snapshot.bank_fields.capitalization,
-            },
-            .expected_incremental = if (collapsed_manifest.bank_extra.snapshot_persistence) |inc_persistence| .{
-                .accounts_hash = inc_persistence.incremental_hash,
-                .capitalization = inc_persistence.incremental_capitalization,
-            } else null,
-        });
-        const validate_duration = validate_timer.read();
 
         const fastload_duration = blk: {
             var fastload_accounts_db = try AccountsDB.init(.{
