@@ -287,6 +287,7 @@ fn batchAPI(
             try data_map.put(@as(u32, @intCast(key)), data);
         }
         // Commit batch put.
+        // Note: Returns void so no confirmation needed.
         try db.commit(&batch);
         var it = data_map.iterator();
         while (it.next()) |entry| {
@@ -321,6 +322,7 @@ fn batchAPI(
             try batch.delete(cf1, key);
         }
         // Commit batch put and delete.
+        // Note: Returns void so no confirmation needed.
         try db.commit(&batch);
         for (startKey..endKey) |key| {
             const actual = try db.get(allocator, cf1, @as(u32, @intCast(key)));
@@ -348,6 +350,7 @@ fn batchAPI(
         }
         try batch.deleteRange(cf1, startKey, endKey);
         // Commit batch put and delete range.
+        // Note: Returns void so no confirmation needed.
         try db.commit(&batch);
         for (startKey..endKey) |key| {
             const actual = try db.get(allocator, cf1, @as(u32, @intCast(key)));
