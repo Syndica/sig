@@ -27,6 +27,9 @@ pub const BlockstoreDB = switch (build_options.blockstore_db) {
     .hashmap => ledger.database.SharedHashMapDB(&.{cf1}),
 };
 
+// Note: deleteFilesInRange is not included in the fuzzing as it is not
+// implemented in the hashmap implementation, and the RocksDB implementation
+// requires manual flushing of the memtable to disk to make the changes visible.
 const Actions = enum {
     put,
     get,
