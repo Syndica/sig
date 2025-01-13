@@ -128,7 +128,7 @@ fn dbPut(
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
-    try executed_actions.put(Actions.put, void{});
+    try executed_actions.put(Actions.put, {});
     const key = random.int(u32);
     var buffer: [61]u8 = undefined;
 
@@ -148,7 +148,7 @@ fn dbGet(
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
-    try executed_actions.put(Actions.get, void{});
+    try executed_actions.put(Actions.get, {});
     const dataKeys = try getKeys(&data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
@@ -170,7 +170,7 @@ fn dbGetBytes(
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
-    try executed_actions.put(Actions.get_bytes, void{});
+    try executed_actions.put(Actions.get_bytes, {});
     const dataKeys = try getKeys(&data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
@@ -196,7 +196,7 @@ fn dbGetBytes(
 fn dbCount(
     db: *BlockstoreDB,
 ) !void {
-    try executed_actions.put(Actions.count, void{});
+    try executed_actions.put(Actions.count, {});
     // TODO Fix why changes are not reflected in count with rocksdb implementation,
     // but it does with hashmap.
     if (build_options.blockstore_db == .rocksdb) {
@@ -213,7 +213,7 @@ fn dbContains(
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
-    try executed_actions.put(Actions.contains, void{});
+    try executed_actions.put(Actions.contains, {});
     const dataKeys = try getKeys(&data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
@@ -234,7 +234,7 @@ fn dbDelete(
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
-    try executed_actions.put(Actions.delete, void{});
+    try executed_actions.put(Actions.delete, {});
     const dataKeys = try getKeys(&data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
@@ -258,7 +258,7 @@ fn batchAPI(
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
-    try executed_actions.put(Actions.batch, void{});
+    try executed_actions.put(Actions.batch, {});
     // Batch put
     {
         const startKey = random.int(u32);
