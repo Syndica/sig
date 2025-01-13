@@ -100,15 +100,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             }
         }
 
-        const action = random.enumValue(enum {
-            put,
-            get,
-            get_bytes,
-            count,
-            contains,
-            delete,
-            batch,
-        });
+        const action = random.enumValue(Actions);
 
         switch (action) {
             .put => try dbPut(&db, random),
