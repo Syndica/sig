@@ -17,7 +17,9 @@ const cf1 = ColumnFamily{
     .Value = Data,
 };
 
-var dataMap = std.AutoHashMap(u32, Data).init(allocator);
+// Note: This is a simpler blockstore which is used to make sure
+// the method calls being fuzzed return expected data.
+var data_map = std.AutoHashMap(u32, Data).init(allocator);
 var executed_actions = std.AutoHashMap(Actions, void).init(allocator);
 
 pub const BlockstoreDB = switch (build_options.blockstore_db) {
@@ -144,7 +146,7 @@ fn dbPut(
     const data = Data{ .value = value };
 
     try db.put(cf1, key, data);
-    try dataMap.put(key, data);
+    try data_map.put(key, data);
 }
 
 fn dbGet(
@@ -152,11 +154,11 @@ fn dbGet(
     random: std.rand.Random,
 ) !void {
     try executed_actions.put(Actions.get, void{});
-    const dataKeys = try getKeys(&dataMap);
+    const dataKeys = try getKeys(&data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
-        const expected = dataMap.get(key) orelse return error.KeyNotFoundError;
+        const expected = data_map.get(key) orelse return error.KeyNotFoundError;
 
         const actual = try db.get(allocator, cf1, key) orelse return error.KeyNotFoundError;
 
@@ -174,11 +176,11 @@ fn dbGetBytes(
     random: std.rand.Random,
 ) !void {
     try executed_actions.put(Actions.get_bytes, void{});
-    const dataKeys = try getKeys(&dataMap);
+    const dataKeys = try getKeys(&data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
-        const expected = dataMap.get(key) orelse return error.KeyNotFoundError;
+        const expected = data_map.get(key) orelse return error.KeyNotFoundError;
 
         const actualBytes = try db.getBytes(cf1, key) orelse return error.KeyNotFoundError;
         const actual = try ledger.database.value_serializer.deserialize(
@@ -206,7 +208,7 @@ fn dbCount(
         return;
     }
 
-    const expected = dataMap.count();
+    const expected = data_map.count();
     const actual = try db.count(cf1);
 
     try std.testing.expectEqual(expected, actual);
@@ -217,7 +219,7 @@ fn dbContains(
     random: std.rand.Random,
 ) !void {
     try executed_actions.put(Actions.contains, void{});
-    const dataKeys = try getKeys(&dataMap);
+    const dataKeys = try getKeys(&data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
@@ -238,7 +240,7 @@ fn dbDelete(
     random: std.rand.Random,
 ) !void {
     try executed_actions.put(Actions.delete, void{});
-    const dataKeys = try getKeys(&dataMap);
+    const dataKeys = try getKeys(&data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
@@ -248,7 +250,7 @@ fn dbDelete(
         const actual = try db.get(allocator, cf1, key) orelse null;
         try std.testing.expectEqual(null, actual);
         // Remove the keys from the global map.
-        _ = dataMap.remove(key);
+        _ = data_map.remove(key);
     } else {
         // If there are no keys, we should get a null value.
         const key = random.int(u32);
@@ -279,11 +281,11 @@ fn batchAPI(
             const data = Data{ .value = value };
 
             try batch.put(cf1, key, data);
-            try dataMap.put(@as(u32, @intCast(key)), data);
+            try data_map.put(@as(u32, @intCast(key)), data);
         }
         // Commit batch put.
         try db.commit(&batch);
-        var it = dataMap.iterator();
+        var it = data_map.iterator();
         while (it.next()) |entry| {
             const entryKey = entry.key_ptr.*;
             const expected = entry.value_ptr.*;
