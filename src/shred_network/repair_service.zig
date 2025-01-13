@@ -17,6 +17,7 @@ const ContactInfo = sig.gossip.ContactInfo;
 const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const GossipTable = sig.gossip.GossipTable;
+const Histogram = sig.prometheus.Histogram;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
@@ -37,7 +38,7 @@ const RepairMessage = shred_network.repair_message.RepairMessage;
 
 const serializeRepairRequest = shred_network.repair_message.serializeRepairRequest;
 
-const NUM_REQUESTER_THREADS = 4;
+const MAX_DATA_SHREDS_PER_SLOT = sig.ledger.shred.data_shred_constants.max_per_slot;
 
 /// Identifies which repairs are needed and sends them
 /// - delegates to RepairPeerProvider to identify repair peers.
@@ -51,7 +52,8 @@ pub const RepairService = struct {
     shred_tracker: *BasicShredTracker,
     logger: ScopedLogger(@typeName(Self)),
     exit: *Atomic(bool),
-    last_big_request_timestamp_ms: i64 = 0,
+    last_look_ahead_timestamp_ms: i64 = 0,
+    num_look_aheads: u64 = 0,
     /// memory to re-use across iterations. initialized to empty
     report: MultiSlotReport,
     thread_pool: RequestBatchThreadPool,
@@ -67,14 +69,27 @@ pub const RepairService = struct {
     });
 
     const Metrics = struct {
-        repair_request_count: *Counter,
-        requests_in_latest_batch: *Gauge(u64),
+        request_count: *Counter,
         oldest_slot_needing_repair: *Gauge(u64),
         newest_slot_needing_repair: *Gauge(u64),
         newest_slot_to_request: *Gauge(u64),
         oldest_slot_to_request: *Gauge(u64),
 
-        const prefix = "repair";
+        batch_size: *Histogram,
+        batch_process_time: *Histogram,
+        last_batch_size: *Gauge(u64),
+        last_batch_process_time: *Gauge(f64),
+
+        pub const prefix = "repair_service";
+
+        pub fn histogramBucketsForField(name: []const u8) []const f64 {
+            return if (std.mem.eql(u8, name, "batch_size"))
+                &.{ 0, 1, 3, 10, 30, 100, 300, 1000, 3_000, 10_000, 30_000, 100_000 }
+            else if (std.mem.eql(u8, name, "batch_process_time"))
+                &.{ 0, 0.000_1, 0.001, 0.01, 0.1, 1, 10, 100, 1_000 }
+            else
+                unreachable;
+        }
     };
 
     const Self = @This();
@@ -96,7 +111,7 @@ pub const RepairService = struct {
             .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
-            .thread_pool = RequestBatchThreadPool.init(allocator, NUM_REQUESTER_THREADS),
+            .thread_pool = RequestBatchThreadPool.init(allocator, maxRequesterThreads()),
             .metrics = try registry.initStruct(Metrics),
         };
     }
@@ -109,14 +124,17 @@ pub const RepairService = struct {
         self.report.deinit();
     }
 
-    const min_loop_duration_ns = 100 * std.time.ns_per_ms;
+    const min_loop_duration_ns = 500 * std.time.ns_per_ms;
 
     pub fn run(self: *Self) !void {
         var waiting_for_peers = false;
         var timer = try std.time.Timer.start();
         var last_iteration: u64 = 0;
         while (!self.exit.load(.acquire)) {
-            if (self.sendNecessaryRepairs()) |_| {
+            _ = timer.read();
+            var num_repairs_sent: usize = 0;
+            if (self.sendNecessaryRepairs()) |count| {
+                num_repairs_sent = count;
                 if (waiting_for_peers) {
                     waiting_for_peers = false;
                     self.logger.info().logf("Acquired some repair peers.", .{});
@@ -129,26 +147,34 @@ pub const RepairService = struct {
                 else => return e,
             }
             last_iteration = timer.lap();
-            std.time.sleep(min_loop_duration_ns -| last_iteration);
+            const last_iteration_seconds = @as(f64, @floatFromInt(last_iteration)) /
+                @as(f64, @floatFromInt(std.time.ns_per_s));
+
+            self.metrics.batch_size.observe(num_repairs_sent);
+            self.metrics.batch_process_time.observe(last_iteration_seconds);
+            self.metrics.last_batch_size.set(num_repairs_sent);
+            self.metrics.last_batch_process_time.set(last_iteration_seconds);
+
+            sleepRepair(num_repairs_sent, last_iteration);
         }
     }
 
     /// Identifies which repairs are needed based on the current state,
     /// and sends those repairs, then returns.
-    pub fn sendNecessaryRepairs(self: *Self) !void {
+    pub fn sendNecessaryRepairs(self: *Self) !usize {
         const repair_requests = try self.getRepairs();
         defer repair_requests.deinit();
-        self.metrics.repair_request_count.add(repair_requests.items.len);
+        self.metrics.request_count.add(repair_requests.items.len);
         const addressed_requests = try self.assignRequestsToPeers(repair_requests.items);
         defer addressed_requests.deinit();
 
         if (addressed_requests.items.len < 4) {
-            self.metrics.requests_in_latest_batch.set(addressed_requests.items.len);
             try self.requester.sendRepairRequestBatch(addressed_requests.items);
         } else {
-            for (0..4) |i| {
-                const start = (addressed_requests.items.len * i) / 4;
-                const end = (addressed_requests.items.len * (i + 1)) / 4;
+            const num_threads = numRequesterThreads(addressed_requests.items.len);
+            for (0..num_threads) |i| {
+                const start = (addressed_requests.items.len * i) / num_threads;
+                const end = (addressed_requests.items.len * (i + 1)) / num_threads;
                 try self.thread_pool.schedule(.{
                     .requester = &self.requester,
                     .requests = addressed_requests.items[start..end],
@@ -164,11 +190,15 @@ pub const RepairService = struct {
                 .{addressed_requests.items.len},
             );
         }
+        return addressed_requests.items.len;
     }
 
-    const MAX_SHRED_REPAIRS = 1000;
-    const MIN_HIGHEST_REPAIRS = 10;
-    const MAX_HIGHEST_REPAIRS = 200;
+    /// The maximum number of `.Shred` repairs to request.
+    ///
+    /// Supports the maximum number of shreds that could possibly be generated
+    /// during a repair loop iteration. This ensures it is always possible to
+    /// catch up, assuming the current hardware is powerful enough.
+    const MAX_SHRED_REPAIRS = (MAX_DATA_SHREDS_PER_SLOT * MAX_REPAIR_DELAY_MILLIS) / 400;
 
     fn getRepairs(self: *Self) !ArrayList(RepairRequest) {
         var oldest_slot_needing_repair: u64 = 0;
@@ -181,47 +211,64 @@ pub const RepairService = struct {
         var highest_count: usize = 0;
         var slot: Slot = 0;
 
-        var num_highest_repairs: usize = MIN_HIGHEST_REPAIRS;
-        if (self.last_big_request_timestamp_ms + 5_000 < std.time.milliTimestamp()) {
-            self.last_big_request_timestamp_ms = std.time.milliTimestamp();
-            num_highest_repairs = MAX_HIGHEST_REPAIRS;
-        }
-
-        for (self.report.items()) |*report| outer: {
+        // request every shred that is reported missing, up to MAX_SHRED_REPAIRS
+        for (self.report.items()) |*report| {
             slot = report.slot;
             oldest_slot_needing_repair = @min(slot, oldest_slot_needing_repair);
             newest_slot_needing_repair = @max(slot, newest_slot_needing_repair);
-            for (report.missing_shreds.items) |shred_window| {
-                if (shred_window.end) |end| {
-                    for (shred_window.start..end) |i| {
-                        individual_count += 1;
-                        try repairs.append(.{ .Shred = .{ slot, i } });
-                        if (individual_count > MAX_SHRED_REPAIRS) {
-                            break :outer;
+            if (individual_count < MAX_SHRED_REPAIRS) {
+                // slots_repaired += 1;
+                for (report.missing_shreds.items) |shred_window| mid_loop: {
+                    if (shred_window.end) |end| {
+                        for (shred_window.start..end) |i| {
+                            if (individual_count > MAX_SHRED_REPAIRS) break :mid_loop;
+                            individual_count += 1;
+                            try repairs.append(.{ .Shred = .{ slot, i } });
                         }
                     }
                 }
             }
-            if (highest_count < num_highest_repairs) {
-                highest_count += 1;
-                try repairs.append(.{ .HighestShred = .{ slot, 0 } });
-            }
+            highest_count += 1;
+            try repairs.append(.{ .HighestShred = .{ slot, 0 } });
         }
 
-        var newest_slot_to_request: u64 = newest_slot_needing_repair;
-        var oldest_slot_to_request: u64 = oldest_slot_needing_repair;
-        if (highest_count < num_highest_repairs) {
-            for (slot..slot + num_highest_repairs - highest_count) |s| {
-                newest_slot_to_request = @max(slot, newest_slot_to_request);
-                oldest_slot_to_request = @min(slot, oldest_slot_to_request);
-                try repairs.append(.{ .HighestShred = .{ s, 0 } });
+        // eagerly request the next unknown slot in case turbine is laggy
+        slot += 1;
+        try repairs.append(.{ .HighestShred = .{ slot, 0 } });
+
+        // Explore the unknown regions of shreds to get a better high-level
+        // view. This is intended to solve any misconceptions that may be
+        // clogging up the shred collector.
+        const now = std.time.milliTimestamp();
+        if (self.last_look_ahead_timestamp_ms + 1_000 < now) {
+            self.last_look_ahead_timestamp_ms = now;
+            const num_requests: usize, const slot_interval: usize =
+                if (self.num_look_aheads % 10 == 0)
+                // Check the next 100 slots. This helps detect skipped slots by
+                // revisiting many consecutive slots to see if they declare
+                // previous slots as skipped. Without this, occasionally we get
+                // stuck on a slot because we don't realize it has been skipped.
+                // This is usually only an issue when multiple slots in a row have been skipped.
+                .{ 100, 1 }
+            else
+                // This helps detect how far behind we are. This looks ~10
+                // seconds into the future after the highest known slot,
+                // requesting any shreds from 20 evenly spaced slots. This
+                // allows repair to catch up from behind even if turbine is not
+                // working.
+                .{ 20, 10 };
+            self.num_look_aheads += 1;
+
+            for (0..num_requests) |_| {
+                slot += slot_interval;
+                try repairs.append(.{ .HighestShred = .{ slot, 0 } });
             }
         }
 
         self.metrics.oldest_slot_needing_repair.set(oldest_slot_needing_repair);
         self.metrics.newest_slot_needing_repair.set(newest_slot_needing_repair);
-        self.metrics.newest_slot_to_request.set(newest_slot_to_request);
-        self.metrics.oldest_slot_to_request.set(oldest_slot_to_request);
+        self.metrics.newest_slot_to_request.set(@max(newest_slot_needing_repair, slot));
+        self.metrics.oldest_slot_to_request.set(oldest_slot_needing_repair);
 
         return repairs;
     }
@@ -480,6 +527,49 @@ pub const RepairPeerProvider = struct {
         return try allocator.realloc(buf, compatible_peers);
     }
 };
+
+/// Returns the number of threads that should be used to send this many repair
+/// requests.
+///
+/// Allows the number of repair requester threads to scale up when a lot of
+/// repairs are necessary, and scale down during normal operation.
+fn numRequesterThreads(num_requests: usize) usize {
+    const target_requests_per_thread = 100;
+    const target_threads = num_requests / target_requests_per_thread;
+    return @max(1, @min(target_threads, maxRequesterThreads()));
+}
+
+fn maxRequesterThreads() u32 {
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    return @min(16, cpu_count / 2);
+}
+
+/// Sleeps an appropriate duration after sending some repair requests.
+///
+/// This avoids sending massive numbers of redundant requests when we're far
+/// behind, while allowing low latency to fill small gaps when we're caught up.
+/// It also ensures the repair service does not hog resources 100% of the time,
+/// so turbine can get a chance to start keeping up on its own.
+fn sleepRepair(num_requests: u64, last_iteration_ns: u64) void {
+    const min = 200; // so the repair service is not too greedy/eager/redundant
+    const target_millis = num_requests / 8;
+    const bounded_target_ms: u64 = @max(min, @min(MAX_REPAIR_DELAY_MILLIS, target_millis));
+    const bounded_target_ns = bounded_target_ms * std.time.ns_per_ms;
+    const remaining_sleep_for_target = bounded_target_ns -| last_iteration_ns;
+
+    // sets a bare minimum sleep of 100 ms to do other work.
+    const floor = std.time.ns_per_s / 10;
+
+    // if overwhelmed by generating many repair requests, this ensures there is
+    // a pause between them to process some incoming shreds.
+    const take_a_break = last_iteration_ns / 4;
+
+    std.time.sleep(@max(remaining_sleep_for_target, floor, take_a_break));
+}
+
+/// The maximum time to wait between repair loop iterations.
+/// Sort of like a timeout for repair responses.
+const MAX_REPAIR_DELAY_MILLIS = 1_000;
 
 test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
