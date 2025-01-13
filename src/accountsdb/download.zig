@@ -22,6 +22,7 @@ const DOWNLOAD_PROGRESS_UPDATES_NS = 6 * std.time.ns_per_s;
 
 const BYTE_PER_KIB = 1024;
 const BYTE_PER_MIB = 1024 * BYTE_PER_KIB;
+const BYTE_PER_GIB = 1024 * BYTE_PER_MIB;
 
 /// The scope for the logger used in this file.
 pub const LOG_SCOPE = "accountsdb.download";
@@ -234,7 +235,7 @@ pub fn downloadSnapshotsFromGossip(
         const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
         const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
 
-        const download_buffer = try allocator.alloc(u8, DOWNLOAD_FILE_BUFFER_SIZE);
+        const download_buffer = try allocator.alloc(u8, 1 * BYTE_PER_MIB);
         defer allocator.free(download_buffer);
 
         for (available_snapshot_peers.items) |peer| {
@@ -325,7 +326,6 @@ pub fn downloadSnapshotsFromGossip(
     }
 }
 
-const DOWNLOAD_FILE_BUFFER_SIZE = 1 * BYTE_PER_MIB + 4096;
 /// downloads a file from a url into output_dir/filename
 /// returns error if it fails.
 /// the main errors include {HeaderRequestFailed, NoContentLength, TooSlow} or a curl-related error
@@ -336,17 +336,16 @@ fn downloadFile(
     output_dir: std.fs.Dir,
     filename: []const u8,
     maybe_min_mib_per_second: ?usize,
+    /// Used as an intermediate buffer to read the response body before writing to disk.
+    /// Recommended size is at least 1 MiB for payloads which are expected to occupy 1 GiB or more.
     download_buffer: []u8,
 ) !std.fs.File {
     var http_client: std.http.Client = .{ .allocator = allocator };
     defer http_client.deinit();
 
-    std.debug.assert(download_buffer.len == DOWNLOAD_FILE_BUFFER_SIZE);
-    const mib_buffer = download_buffer[0 .. 1 * BYTE_PER_MIB];
-    const server_header_buffer = download_buffer[1 * BYTE_PER_MIB ..];
-
+    var server_header_buffer: [4096]u8 = undefined;
     var request = try http_client.open(.GET, uri, .{
-        .server_header_buffer = server_header_buffer,
+        .server_header_buffer = &server_header_buffer,
     });
     defer request.deinit();
 
@@ -356,6 +355,16 @@ fn downloadFile(
 
     const download_size = request.response.content_length orelse
         return error.NoContentLength;
+
+    if (download_buffer.len < 1 * BYTE_PER_MIB and
+        download_size >= BYTE_PER_GIB)
+    {
+        logger.warn().logf("Downloading file of size {} using a buffer of size {};" ++
+            " recommended buffer size for such a payload is at least 1 MiB.", .{
+            std.fmt.fmtIntSizeBin(download_size),
+            std.fmt.fmtIntSizeBin(download_buffer.len),
+        });
+    }
 
     const output_file = try output_dir.createFile(filename, .{});
     errdefer output_file.close();
@@ -368,11 +377,11 @@ fn downloadFile(
     var checked_speed = false;
 
     while (true) {
-        const max_bytes_to_read = @min(mib_buffer.len, download_size - total_bytes_read);
-        const bytes_read = try request.readAll(mib_buffer[0..max_bytes_to_read]);
+        const max_bytes_to_read = @min(download_buffer.len, download_size - total_bytes_read);
+        const bytes_read = try request.readAll(download_buffer[0..max_bytes_to_read]);
         total_bytes_read += bytes_read;
 
-        try buffered_out.writer().writeAll(mib_buffer[0..bytes_read]);
+        try buffered_out.writer().writeAll(download_buffer[0..bytes_read]);
         if (total_bytes_read == download_size) break;
         std.debug.assert(total_bytes_read < download_size);
 
