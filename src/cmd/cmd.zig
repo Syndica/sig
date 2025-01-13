@@ -1531,7 +1531,7 @@ fn downloadSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    try downloadSnapshotsFromGossip(
+    const full_file, const maybe_inc_file = try downloadSnapshotsFromGossip(
         gpa_allocator,
         app_base.logger.unscoped(),
         if (trusted_validators) |trusted| trusted.items else null,
@@ -1539,6 +1539,8 @@ fn downloadSnapshot() !void {
         snapshot_dir,
         @intCast(min_mb_per_sec),
     );
+    defer full_file.close();
+    defer if (maybe_inc_file) |inc_file| inc_file.close();
 }
 
 fn getTrustedValidators(allocator: Allocator) !?std.ArrayList(Pubkey) {
