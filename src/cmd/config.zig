@@ -15,7 +15,7 @@ const getAccountPerFileEstimateFromCluster =
 pub const Config = struct {
     identity: IdentityConfig = .{},
     gossip: GossipConfig = .{},
-    shred_network: ShredCollectorConfig = shred_network_defaults,
+    shred_network: ShredNetworkCliArgs = .{},
     accounts_db: AccountsDBConfig = .{},
     geyser: GeyserConfig = .{},
     turbine: TurbineConfig = .{},
@@ -110,10 +110,22 @@ pub const GossipConfig = struct {
     }
 };
 
-pub const shred_network_defaults = ShredCollectorConfig{
-    .turbine_recv_port = 8002,
-    .repair_port = 8003,
-    .start_slot = null,
+const ShredNetworkCliArgs = struct {
+    start_slot: ?sig.core.Slot = null,
+    repair_port: u16 = 8003,
+    turbine_recv_port: u16 = 8002,
+    no_retransmit: bool = true,
+    dump_shred_tracker: bool = false,
+
+    pub fn toConfig(self: ShredNetworkCliArgs, fallback_slot: sig.core.Slot) ShredCollectorConfig {
+        return .{
+            .start_slot = self.start_slot orelse fallback_slot,
+            .repair_port = self.repair_port,
+            .turbine_recv_port = self.turbine_recv_port,
+            .retransmit = !self.no_retransmit,
+            .dump_shred_tracker = self.dump_shred_tracker,
+        };
+    }
 };
 
 /// Analogous to [AccountsDbConfig](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L597)

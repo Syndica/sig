@@ -11,16 +11,19 @@ const Slot = sig.core.Slot;
 
 const MAX_SHREDS_PER_SLOT: usize = sig.ledger.shred.MAX_SHREDS_PER_SLOT;
 
-const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: u64 = 200;
+const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: u64 = 600;
 
 pub const Range = struct {
     start: usize,
     end: ?usize,
 };
 
-/// This is a temporary placeholder that will be replaced by the Blockstore
-/// once it is implemented. This struct tracks shreds linearly with no regard
-/// for forking. The Blockstore will fix this by tracking forks.
+/// This is a temporary placeholder that will be replaced by a solution that
+/// depends on the ledger and consensus. This struct optimistically discards
+/// slots that another slot claims to be skipped, even if consensus has not yet
+/// rooted that slot. This is necessary to keep up with turbine while consensus
+/// is not yet implemented. A complete implementation in the future should
+/// continue pursuing missing shreds unless a later slot is rooted.
 pub const BasicShredTracker = struct {
     logger: sig.trace.ScopedLogger(@typeName(Self)),
     mux: Mutex = .{},
@@ -29,9 +32,9 @@ pub const BasicShredTracker = struct {
     /// The oldest slot still being tracked, which hasn't yet been finished
     current_bottom_slot: Slot,
     /// The highest slot for which a shred has been received and processed successfully.
-    max_slot_processed: Slot = 0,
+    max_slot_processed: Slot,
     /// The highest slot that has been seen at all.
-    max_slot_seen: Slot = 0,
+    max_slot_seen: Slot,
     /// ring buffer
     slots: [num_slots]MonitoredSlot = .{.{}} ** num_slots,
     metrics: Metrics,
@@ -47,47 +50,37 @@ pub const BasicShredTracker = struct {
 
     const Self = @This();
 
-    pub fn init(slot: ?Slot, logger: sig.trace.Logger, registry: *Registry(.{})) !Self {
+    pub fn init(slot: Slot, logger: sig.trace.Logger, registry: *Registry(.{})) !Self {
+        const metrics = try registry.initStruct(Metrics);
+        metrics.finished_slots_through.set(slot);
+        metrics.max_slot_processed.set(slot);
         return .{
             .start_slot = slot,
-            .current_bottom_slot = slot orelse 0,
+            .current_bottom_slot = slot,
+            .max_slot_processed = slot,
+            .max_slot_seen = slot,
             .logger = logger.withScope(@typeName(Self)),
             .metrics = try registry.initStruct(Metrics),
         };
     }
 
-    pub fn maybeSetStart(self: *Self, start_slot: Slot) void {
-        if (self.start_slot == null) {
-            self.start_slot = start_slot;
-            self.current_bottom_slot = start_slot;
-        }
-    }
-
-    pub fn skipSlots(
+    pub fn registerDataShred(
         self: *Self,
-        start_inclusive: Slot,
-        end_exclusive: Slot,
-    ) SlotOutOfBounds!void {
-        self.mux.lock();
-        defer self.mux.unlock();
-
-        for (start_inclusive..end_exclusive) |slot| {
-            const monitored_slot = try self.observeSlot(slot);
-            if (!monitored_slot.is_complete) {
-                monitored_slot.is_complete = true;
-                self.logger.info().logf("skipping slot: {}", .{slot});
-                if (slot > self.max_slot_processed) {
-                    self.max_slot_processed = slot;
-                    self.metrics.max_slot_processed.set(slot);
-                }
-            }
-        }
+        shred: *const sig.ledger.shred.DataShred,
+    ) !void {
+        const parent = try shred.parent();
+        const is_last_in_slot = shred.custom.flags.isSet(.last_shred_in_slot);
+        const slot = shred.common.slot;
+        const index = shred.common.index;
+        try self.registerShred(slot, index, parent, is_last_in_slot);
     }
 
     pub fn registerShred(
         self: *Self,
         slot: Slot,
         shred_index: u64,
+        parent_slot: Slot,
+        is_last_in_slot: bool,
     ) SlotOutOfBounds!void {
         self.mux.lock();
         defer self.mux.unlock();
@@ -99,18 +92,73 @@ pub const BasicShredTracker = struct {
             self.max_slot_processed = slot;
             self.metrics.max_slot_processed.set(slot);
         }
+
+        if (monitored_slot.parent_slot != null and monitored_slot.parent_slot != parent_slot) {
+            self.logger.warn().logf(
+                "parent conflict for slot {}. prior parent is {?}. index {} specifies parent {}",
+                .{ slot, monitored_slot.parent_slot, shred_index, parent_slot },
+            );
+        }
+        monitored_slot.parent_slot = parent_slot;
+
+        // set last shred
+        if (is_last_in_slot) if (monitored_slot.last_shred) |old_last| {
+            monitored_slot.last_shred = @min(old_last, shred_index);
+        } else {
+            monitored_slot.last_shred = shred_index;
+        };
+
+        // identify skipped slots
+        if (parent_slot + 1 != slot) {
+            for (parent_slot + 1..slot) |slot_to_skip| {
+                const monitored_slot_to_skip = self.observeSlot(slot_to_skip) catch continue;
+                if (!monitored_slot_to_skip.is_complete) {
+                    monitored_slot_to_skip.is_complete = true;
+                    self.logger.info().logf("skipping slot: {}", .{slot_to_skip});
+                    if (slot_to_skip > self.max_slot_processed) {
+                        self.max_slot_processed = slot_to_skip;
+                        self.metrics.max_slot_processed.set(slot_to_skip);
+                    }
+                }
+            }
+        }
     }
 
-    pub fn setLastShred(self: *Self, slot: Slot, index: usize) SlotOutOfBounds!void {
-        self.mux.lock();
-        defer self.mux.unlock();
-
-        const monitored_slot = try self.observeSlot(slot);
-        if (monitored_slot.last_shred) |old_last| {
-            monitored_slot.last_shred = @min(old_last, index);
-        } else {
-            monitored_slot.last_shred = index;
+    /// Writes the contents of the monitored slots as progress bars.
+    /// Returns the number of slots printed.
+    pub fn print(self: *Self, writer: anytype) !Slot {
+        const start = self.current_bottom_slot;
+        const end = @max(self.max_slot_seen + 1, self.current_bottom_slot);
+        var found_incomplete = false;
+        for (start..end) |slot| {
+            const monitored_slot = self.getMonitoredSlot(slot) catch break;
+            if (monitored_slot.is_complete and !found_incomplete) {
+                // the tracker may have some completed slots at the beginning
+                // that it hasn't cleared yet.
+                continue;
+            }
+            found_incomplete = true;
+            try writer.print("slot {} (parent {?}): ", .{ slot, monitored_slot.parent_slot });
+            if (monitored_slot.last_shred orelse monitored_slot.max_seen) |last_shred| {
+                for (0..last_shred + 1) |index| {
+                    if (monitored_slot.shreds.isSet(index)) {
+                        try writer.print("█", .{});
+                    } else {
+                        try writer.print("🭹", .{});
+                    }
+                }
+                if (monitored_slot.last_shred == null) {
+                    try writer.print(" ???\n", .{});
+                } else {
+                    try writer.print(" END\n", .{});
+                }
+            } else if (monitored_slot.is_complete) {
+                try writer.print("SKIPPED\n", .{});
+            } else {
+                try writer.print("EMPTY\n", .{});
+            }
         }
+        return end - start;
     }
 
     /// returns whether it makes sense to send any repair requests
@@ -129,7 +177,7 @@ pub const BasicShredTracker = struct {
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getMonitoredSlot(slot);
             if (monitored_slot.first_received_timestamp_ms +
-                MIN_SLOT_AGE_TO_REPORT_AS_MISSING > timestamp)
+                MIN_SLOT_AGE_TO_REPORT_AS_MISSING > timestamp) //fix
             {
                 continue;
             }
@@ -138,36 +186,31 @@ pub const BasicShredTracker = struct {
             try monitored_slot.identifyMissing(&slot_report.missing_shreds);
             if (slot_report.missing_shreds.items.len > 0) {
                 found_an_incomplete_slot = true;
-            } else {
-                slot_reports.drop(1);
             }
             if (!found_an_incomplete_slot) {
-                if (slot % 20 == 0) {
-                    self.logger.info().logf(
-                        "shred tracker: received all shreds up to slot {}",
-                        .{slot},
-                    );
-                } else {
-                    self.logger.debug().logf(
-                        "shred tracker: received all shreds up to slot {}",
-                        .{slot},
-                    );
-                }
-                self.current_bottom_slot = @max(self.current_bottom_slot, slot + 1);
-                self.metrics.finished_slots_through.set(slot);
-                monitored_slot.* = .{};
+                (if (slot % 20 == 0) self.logger.info() else self.logger.debug())
+                    .logf("received all shreds up to slot {}", .{slot});
+                self.setBottom(slot);
             }
         }
         return true;
     }
 
+    /// assumes lock is held
+    fn setBottom(self: *Self, slot: usize) void {
+        for (self.current_bottom_slot..slot) |slot_to_wipe| {
+            const monitored_slot = self.getMonitoredSlot(slot_to_wipe) catch unreachable;
+            monitored_slot.* = .{};
+        }
+        self.current_bottom_slot = @max(self.current_bottom_slot, slot);
+        self.metrics.finished_slots_through.max(slot -| 1);
+    }
+
     /// - Record that a slot has been observed.
     /// - Acquire the slot's status for mutation.
     fn observeSlot(self: *Self, slot: Slot) SlotOutOfBounds!*MonitoredSlot {
-        self.maybeSetStart(slot);
         self.max_slot_seen = @max(self.max_slot_seen, slot);
-        const monitored_slot = try self.getMonitoredSlot(slot);
-        return monitored_slot;
+        return try self.getMonitoredSlot(slot);
     }
 
     fn getMonitoredSlot(self: *Self, slot: Slot) SlotOutOfBounds!*MonitoredSlot {
@@ -219,6 +262,7 @@ const MonitoredSlot = struct {
     last_shred: ?usize = null,
     first_received_timestamp_ms: i64 = 0,
     is_complete: bool = false,
+    parent_slot: ?Slot = null,
 
     const Self = @This();
 
@@ -286,7 +330,7 @@ test "1 registered shred is identified" {
     defer msr.deinit();
 
     var tracker = try BasicShredTracker.init(13579, .noop, sig.prometheus.globalRegistry());
-    try tracker.registerShred(13579, 123);
+    try tracker.registerShred(13579, 123, 13578, false);
     std.time.sleep(210 * std.time.ns_per_ms);
 
     _ = try tracker.identifyMissing(&msr);
