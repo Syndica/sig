@@ -84,11 +84,11 @@ pub const ShredReceiver = struct {
         );
         defer response_sender_pipe.deinit(self.allocator);
 
-         // Create pipe from repair_socket -> response_receiver.
+        // Create pipe from repair_socket -> response_receiver.
         const response_receiver = try Channel(Packet).create(self.allocator);
         response_receiver.send_hook = &receive_signal.hook;
         defer response_receiver.destroy();
-       
+
         const response_receiver_pipe = try SocketPipe.init(
             self.allocator,
             .receiver,
