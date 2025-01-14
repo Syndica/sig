@@ -24,6 +24,8 @@ pub const AccountsCache = struct {
         /// the slot that this version of the account originates from
         slot: Slot,
 
+        const Buf = []align(@alignOf(CachedAccount)) u8;
+
         /// Makes use of the fact that CachedAccount needs to live on the heap & shares its lifetime
         /// with .ref_count in order to allocate once instead of twice.
         pub fn initCreate(
@@ -31,7 +33,7 @@ pub const AccountsCache = struct {
             account: Account,
             slot: Slot,
         ) error{OutOfMemory}!*CachedAccount {
-            const buf = try allocator.alignedAlloc(
+            const buf: Buf = try allocator.alignedAlloc(
                 u8,
                 @alignOf(CachedAccount),
                 @sizeOf(CachedAccount) + account.data.len(),
@@ -39,11 +41,11 @@ pub const AccountsCache = struct {
             const new_entry = @as(*CachedAccount, @ptrCast(buf.ptr));
             const account_data = buf[@sizeOf(CachedAccount)..];
 
-            var new_account = account;
-            new_account.data = ReadHandle.initExternal(account_data);
-
             account.data.read(0, account.data.len(), account_data) catch
                 unreachable; // account.data invalid?
+
+            var new_account = account;
+            new_account.data = ReadHandle.initExternal(account_data);
 
             new_entry.* = .{
                 .account = new_account,
@@ -55,8 +57,8 @@ pub const AccountsCache = struct {
         }
 
         pub fn deinitDestroy(self: *CachedAccount, allocator: std.mem.Allocator) void {
-            const buf: []align(8) u8 = @as(
-                [*]align(8) u8,
+            const buf: Buf = @as(
+                [*]align(@alignOf(CachedAccount)) u8,
                 @ptrCast(self),
             )[0 .. @sizeOf(CachedAccount) + self.account.data.len()];
             @memset(buf, undefined);

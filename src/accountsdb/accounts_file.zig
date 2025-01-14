@@ -203,7 +203,7 @@ pub const AccountInFile = struct {
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!Account {
         return .{
-            .data = ReadHandle.initExternalOwned(try self.data.readAllAllocate(allocator)),
+            .data = try self.data.dupeExternalOwned(allocator),
             .executable = self.executable().*,
             .lamports = self.lamports().*,
             .owner = self.owner().*,
@@ -281,6 +281,7 @@ pub const AccountFile = struct {
 
     const Self = @This();
 
+    // TODO: document the difference between .length and the file size, this tripped me up
     pub fn init(file: std.fs.File, accounts_file_info: AccountFileInfo, slot: Slot) !Self {
         const file_stat = try file.stat();
         const file_size: u64 = @intCast(file_stat.size);
@@ -289,7 +290,7 @@ pub const AccountFile = struct {
 
         return .{
             .file = file,
-            .length = accounts_file_info.length,
+            .length = accounts_file_info.length, // is this wrong?
             .id = accounts_file_info.id,
             .slot = slot,
         };
