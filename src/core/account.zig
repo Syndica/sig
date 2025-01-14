@@ -34,11 +34,9 @@ pub const Account = struct {
 
     // creates a copy of the account. most important is the copy of the data slice.
     pub fn clone(self: *const Account, allocator: std.mem.Allocator) !Account {
-        _ = allocator;
-
         return .{
             .lamports = self.lamports,
-            .data = self.data.dupe(),
+            .data = try self.data.dupeExternalOwned(allocator),
             .owner = self.owner,
             .executable = self.executable,
             .rent_epoch = self.rent_epoch,

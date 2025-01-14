@@ -267,6 +267,7 @@ pub const AccountsDB = struct {
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
+            for (file_map.values()) |file| file.deinit(); //
             file_map.deinit(self.allocator);
         }
         {
@@ -560,6 +561,7 @@ pub const AccountsDB = struct {
                 defer accounts_cache_lg.unlock();
                 accounts_cache.deinit();
             }
+            loading_thread.buffer_pool.deinit(per_thread_allocator);
         }
     }
 
@@ -636,7 +638,7 @@ pub const AccountsDB = struct {
         }
         defer {
             if (geyser_slot_storage) |storage| {
-                storage.deinit();
+                storage.deinit(self.allocator);
                 self.allocator.destroy(storage);
             }
         }
@@ -659,8 +661,8 @@ pub const AccountsDB = struct {
                     return err;
                 };
 
-                std.debug.print("file_name_bounded: {s}\n", .{file_name_bounded.constSlice()});
-                std.debug.print("accounts_file: {}\n", .{accounts_file});
+                // std.debug.print("file_name_bounded: {s}\n", .{file_name_bounded.constSlice()});
+                // std.debug.print("accounts_file: {}\n", .{accounts_file});
 
                 break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
                     self.logger.err().logf("failed to *open* AccountsFile {s}: {s}\n", .{
@@ -1250,7 +1252,13 @@ pub const AccountsDB = struct {
                     // hashes aren't always stored correctly in snapshots
                     if (account_hash.eql(Hash.ZEROES)) {
                         const account, var lock_guard = try self.getAccountFromRefWithReadLock(max_slot_ref);
-                        defer lock_guard.unlock();
+                        defer {
+                            lock_guard.unlock();
+                            switch (account) {
+                                .file => |in_file_account| in_file_account.deinit(self.allocator),
+                                .unrooted_map => {},
+                            }
+                        }
 
                         account_hash = switch (account) {
                             .file => |in_file_account| blk: {
@@ -1527,7 +1535,7 @@ pub const AccountsDB = struct {
         }
 
         const file, const file_id = try self.createAccountFile(size, slot);
-        defer file.close();
+        errdefer file.close(); //
 
         const offsets = try self.allocator.alloc(u64, accounts.len);
         defer self.allocator.free(offsets);
@@ -1663,7 +1671,11 @@ pub const AccountsDB = struct {
 
             var account_iter = account_file.iterator(self.allocator, &self.buffer_pool);
             while (try account_iter.next()) |account| {
+                defer account.deinit(self.allocator);
                 const pubkey = account.pubkey().*;
+
+                var x: u1 = 1;
+                x = x;
 
                 // check if already cleaned
                 if (try cleaned_pubkeys.fetchPut(pubkey, {}) != null) continue;
@@ -1908,6 +1920,8 @@ pub const AccountsDB = struct {
             var accounts_dead_size: u64 = 0;
             var account_iter = shrink_account_file.iterator(self.allocator, &self.buffer_pool);
             while (try account_iter.next()) |*account_in_file| {
+                defer account_in_file.deinit(self.allocator);
+
                 const pubkey = account_in_file.pubkey();
                 // account is dead if it is not in the index; dead accounts
                 // are removed from the index during cleaning
@@ -2345,7 +2359,13 @@ pub const AccountsDB = struct {
     ) GetTypeFromAccountError!T {
         const account, var lock_guard = try self.getAccountWithReadLock(pubkey);
         // NOTE: bincode will copy heap memory so its safe to unlock at the end of the function
-        defer lock_guard.unlock();
+        defer {
+            switch (account) {
+                .file => |file| file.deinit(allocator),
+                .unrooted_map => {},
+            }
+            lock_guard.unlock();
+        }
 
         const file_data: ReadHandle = switch (account) {
             .file => |in_file_account| in_file_account.data,
@@ -3181,7 +3201,11 @@ pub const GeyserTmpStorage = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(
+        self: *Self,
+        allocator: std.mem.Allocator,
+    ) void {
+        for (self.accounts.items) |account| account.deinit(allocator);
         self.accounts.deinit();
         self.pubkeys.deinit();
     }
@@ -3194,6 +3218,7 @@ pub const GeyserTmpStorage = struct {
     pub fn cloneAndTrack(self: *Self, allocator: std.mem.Allocator, account_in_file: AccountInFile) Error!void {
         // doesn't feel great allocating this?
         const account = try account_in_file.toOwnedAccount(allocator);
+        errdefer account.deinit(allocator);
         self.accounts.append(account) catch return Error.OutOfGeyserArrayMemory;
         self.pubkeys.append(account_in_file.pubkey().*) catch return Error.OutOfGeyserArrayMemory;
     }
@@ -3302,11 +3327,13 @@ pub fn writeSnapshotTarWithFields(
         var fifo = std.fifo.LinearFifo(u8, .{ .Static = std.mem.page_size }).init();
         try fifo.pump(account_file.file.reader(), archive_writer_counted);
 
-        try snapgen.writeAccountFilePadding(archive_writer_counted, account_file.length);
+        try snapgen.writeAccountFilePadding(archive_writer_counted, (try account_file.file.stat()).size); // feels silly, should probably store this
     }
 
     try archive_writer_counted.writeAll(&sig.utils.tar.sentinel_blocks);
     if (std.debug.runtime_safety) {
+        if (counting_state.bytes_written % 512 != 0) std.debug.print("counting_state.bytes_written: {}\n", .{counting_state.bytes_written});
+
         std.debug.assert(counting_state.bytes_written % 512 == 0);
     }
 }
@@ -3754,19 +3781,17 @@ test "load clock sysvar" {
         .leader_schedule_epoch = 1,
         .unix_timestamp = 1733350255,
     };
-    try std.testing.expectEqual(expected_clock, try accounts_db.getTypeFromAccount(allocator, sysvars.Clock, &sysvars.IDS.clock));
+
+    const found_clock = try accounts_db.getTypeFromAccount(allocator, sysvars.Clock, &sysvars.IDS.clock);
+
+    // if (found_clock.epoch_start_timestamp == expected_clock.epoch_start_timestamp - 1) return error.SkipZigTest; // how the hell?
+    try std.testing.expectEqual(expected_clock, found_clock);
 }
 
 test "load other sysvars" {
     var gpa_state: std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 64 }) = .{};
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
-    // const allocator = std.testing.allocator;
-    const panic_allocator = sig.utils.allocators.failing.allocator(.{
-        .alloc = .panics,
-        .resize = .panics,
-        .free = .panics,
-    });
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -3780,9 +3805,9 @@ test "load other sysvars" {
     }
 
     const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
-    _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
-    _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.Rent, &sysvars.IDS.rent);
-    _ = try accounts_db.getTypeFromAccount(panic_allocator, SlotAndHash, &sysvars.IDS.slot_hashes);
+    _ = try accounts_db.getTypeFromAccount(allocator, sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
+    _ = try accounts_db.getTypeFromAccount(allocator, sysvars.Rent, &sysvars.IDS.rent);
+    _ = try accounts_db.getTypeFromAccount(allocator, SlotAndHash, &sysvars.IDS.slot_hashes);
 
     const stake_history = try accounts_db.getTypeFromAccount(allocator, sysvars.StakeHistory, &sysvars.IDS.stake_history);
     defer sig.bincode.free(allocator, stake_history);
@@ -3791,8 +3816,8 @@ test "load other sysvars" {
     defer sig.bincode.free(allocator, slot_history);
 
     // // not always included in local snapshot
-    // _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
-    // _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
+    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
+    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
 }
 
 test "flushing slots works" {

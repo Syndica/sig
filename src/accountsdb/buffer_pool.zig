@@ -25,7 +25,7 @@ const LinuxIoMode = enum {
     Blocking,
     IoUring,
 };
-const linux_io_mode: LinuxIoMode = .IoUring;
+const linux_io_mode: LinuxIoMode = .Blocking;
 
 const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
 
@@ -143,11 +143,6 @@ pub const BufferPool = struct {
 
         const frame_map_rw = sig.sync.RwMux(FrameMap).init(frame_map);
 
-        std.debug.print("\ninitialised bufferpool, frame range: [{*}..{*}]\n\n", .{
-            frames.ptr,
-            &frames[frames.len - 1][511],
-        });
-
         return .{
             .frames = frames,
             .frames_metadata = frames_metadata,
@@ -167,8 +162,6 @@ pub const BufferPool = struct {
         const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
         frame_map.deinit(init_allocator);
         frame_map_lg.unlock();
-
-        std.debug.print("\ndeinitialised bufferpool\n\n", .{});
     }
 
     pub fn computeNumberofFrameIndices(
@@ -350,6 +343,10 @@ pub const BufferPool = struct {
         );
         errdefer allocator.free(frame_indices);
 
+        // if (frame_indices.len == 0) @breakpoint();
+
+        // std.debug.print("reading frames: {any}\n", .{frame_indices});
+
         // update found frames in the LFU (we don't want to evict these in the next loop)
         var n_invalid_indices: u32 = 0;
         for (frame_indices) |f_idx| {
@@ -391,6 +388,8 @@ pub const BufferPool = struct {
             try self.overwriteDeadFrameInfoNoSize(f_idx.*, file_id, frame_aligned_file_offset);
             try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
         }
+
+        // for (frame_indices) |f_idx| if (f_idx == 2094403) @breakpoint();
 
         // Wait for our file reads to complete, filling the read length into the metadata as we go.
         // (This read length will almost always be FRAME_SIZE, however it will likely be less than
@@ -485,6 +484,8 @@ pub const BufferPool = struct {
             try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
         }
 
+        // for (frame_indices) |f_idx| if (f_idx == 2097144) @breakpoint();
+
         return ReadHandle.initCached(
             self,
             frame_indices,
@@ -551,9 +552,11 @@ pub const FramesMetadata = struct {
 
     fn deinit(self: *FramesMetadata, allocator: std.mem.Allocator) void {
         // NOTE: this check itself is racy, but should never happen
-        for (self.rc) |*rc| {
+        for (0.., self.rc) |i, *rc| {
+            // if (i == 2097144) @breakpoint();
+
             if (rc.isAlive()) {
-                @panic("BufferPool deinitialised with alive handles");
+                std.debug.panic("BufferPool deinitialised with alive handle: {}\n", .{i});
             }
         }
         allocator.free(self.rc);
@@ -840,8 +843,11 @@ pub const ReadHandle = struct {
         fn deinit(self: Inner, allocator: std.mem.Allocator) void {
             switch (self) {
                 .cached => |cached| {
+                    // std.debug.print("freeing frames: {any}\n", .{cached.frame_indices});
+
                     for (cached.frame_indices) |frame_index| {
                         std.debug.assert(frame_index != INVALID_FRAME);
+                        // if (frame_index == 2097144) @breakpoint();
 
                         if (cached.buffer_pool.frames_metadata.rc[frame_index].release()) {
                             // notably, the frame remains in memory, and its hashmap entry
@@ -945,8 +951,9 @@ pub const ReadHandle = struct {
         };
     }
 
-    pub fn dupe(self: ReadHandle) ReadHandle {
-        return self;
+    pub fn dupeExternalOwned(self: ReadHandle, allocator: std.mem.Allocator) !ReadHandle {
+        const data_copy = try self.readAllAllocate(allocator);
+        return initExternalOwned(data_copy);
     }
 
     pub fn slice(self: *ReadHandle, start: usize, end: usize) !ReadHandle {
@@ -1369,7 +1376,7 @@ test "BufferPool ReadHandle zero-copy slice" {
         var expected_error: ?anyerror = null;
         if (length > FRAME_SIZE) expected_error = error.StridedBorrow;
         if (start_offset < FRAME_SIZE and start_offset + length >= FRAME_SIZE) {
-            expected_error = error.StridedBorrow;
+            expected_error = error.CantZeroCopyStrided;
         }
 
         const borrowed_slice = read.zeroCopySlice(start_offset, length) catch |err| {
