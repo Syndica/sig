@@ -48,7 +48,6 @@ pub fn runShredProcessor(
         is_repaired.clearRetainingCapacity();
         while (verified_shred_receiver.tryReceive()) |packet| {
             const shred_payload = layout.getShred(&packet) orelse return error.InvalidVerifiedShred;
-
             const shred = try shreds.addOne(allocator);
             errdefer _ = shreds.pop();
             shred.* = Shred.fromPayload(allocator, shred_payload) catch |e| {
