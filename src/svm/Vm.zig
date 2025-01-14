@@ -130,7 +130,10 @@ pub const Vm = struct {
             .rsh32_imm,
             => {
                 const lhs_large = registers.get(inst.dst);
-                const rhs_large = if (opcode.isReg()) registers.get(inst.src) else extend(inst.imm);
+                const rhs_large = if (opcode.isReg())
+                    registers.get(inst.src)
+                else
+                    extend(inst.imm);
                 const lhs = if (opcode.is64()) lhs_large else @as(u32, @truncate(lhs_large));
                 const rhs = if (opcode.is64()) rhs_large else @as(u32, @truncate(rhs_large));
 
@@ -222,8 +225,9 @@ pub const Vm = struct {
                 };
 
                 const access = code.accessType();
-                const address = if (access == .constant) inst.src else inst.dst;
-                const vaddr: u64 = @bitCast(@as(i64, @bitCast(registers.get(address))) +% inst.off);
+                const addr_reg = if (access == .constant) inst.src else inst.dst;
+                const address: i64 = @bitCast(registers.get(addr_reg));
+                const vaddr: u64 = @bitCast(address +% inst.off);
 
                 switch (access) {
                     .constant => registers.set(inst.dst, try self.load(T, vaddr)),

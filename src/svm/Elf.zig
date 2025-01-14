@@ -204,7 +204,8 @@ pub const Elf = struct {
         const headers = Headers.parse(bytes);
         const data = try Data.parse(headers);
 
-        const text_section = data.getShdrByName(headers, ".text") orelse return error.NoTextSection;
+        const text_section = data.getShdrByName(headers, ".text") orelse
+            return error.NoTextSection;
         const offset = headers.header.e_entry -| text_section.sh_addr;
         const entry_pc = try std.math.divExact(u64, offset, 8);
 
@@ -344,9 +345,13 @@ pub const Elf = struct {
             if (std.mem.startsWith(u8, name, ".bss")) {
                 return error.WritableSectionsNotSupported;
             }
-            if (std.mem.startsWith(u8, name, ".data") and !std.mem.startsWith(u8, name, ".data.rel")) {
+            if (std.mem.startsWith(u8, name, ".data") and
+                !std.mem.startsWith(u8, name, ".data.rel"))
+            {
                 // TODO: use a packed struct here, this is ugly
-                if (shdr.sh_flags & (elf.SHF_ALLOC | elf.SHF_WRITE) == elf.SHF_ALLOC | elf.SHF_WRITE) {
+                if (shdr.sh_flags & (elf.SHF_ALLOC | elf.SHF_WRITE) ==
+                    elf.SHF_ALLOC | elf.SHF_WRITE)
+                {
                     return error.WritableSectionsNotSupported;
                 }
             }
@@ -482,7 +487,12 @@ pub const Elf = struct {
                                     .little,
                                 );
                                 const ref_addr = memory.PROGRAM_START +| address;
-                                std.mem.writeInt(u64, self.bytes[r_offset..][0..8], ref_addr, .little);
+                                std.mem.writeInt(
+                                    u64,
+                                    self.bytes[r_offset..][0..8],
+                                    ref_addr,
+                                    .little,
+                                );
                             },
                             else => @panic("TODO"),
                         }
