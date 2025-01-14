@@ -1,8 +1,8 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
-const Vm = @import("Vm.zig");
-const Executable = @import("Executable.zig");
+const Vm = @import("vm.zig").Vm;
+const Executable = @import("executable.zig").Executable;
 
 const Pubkey = sig.core.Pubkey;
 

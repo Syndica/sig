@@ -1,12 +1,14 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const Executable = @import("Executable.zig");
+const lib = @import("lib.zig");
 const memory = @import("memory.zig");
-const Vm = @import("Vm.zig");
+const Vm = @import("vm.zig").Vm;
 const syscalls = @import("syscalls.zig");
 const ebpf = @import("ebpf.zig");
-const Elf = @import("Elf.zig");
+const Elf = @import("elf.zig").Elf;
 
+const Executable = lib.Executable;
+const BuiltinProgram = lib.BuiltinProgram;
 const Region = memory.Region;
 const MemoryMap = memory.MemoryMap;
 const expectEqual = std.testing.expectEqual;
@@ -33,7 +35,7 @@ fn testAsmWithMemory(source: []const u8, program_memory: []const u8, expected: a
         Region.init(.mutable, mutable, memory.INPUT_START),
     }, .v1);
 
-    var loader: Executable.BuiltinProgram = .{};
+    var loader: BuiltinProgram = .{};
     var vm = try Vm.init(allocator, &executable, m, &loader);
     defer vm.deinit();
 
@@ -1591,7 +1593,7 @@ fn testElfWithSyscalls(
     const bytes = try input_file.readToEndAlloc(allocator, ebpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: Executable.BuiltinProgram = .{};
+    var loader: BuiltinProgram = .{};
     defer loader.deinit(allocator);
 
     for (extra_syscalls) |syscall| {

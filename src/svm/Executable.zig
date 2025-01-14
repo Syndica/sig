@@ -1,86 +1,87 @@
 const std = @import("std");
 const ebpf = @import("ebpf.zig");
-const Elf = @import("Elf.zig");
+const Elf = @import("elf.zig").Elf;
 const memory = @import("memory.zig");
 const syscalls = @import("syscalls.zig");
-const Vm = @import("Vm.zig");
-const Executable = @This();
+const Vm = @import("vm.zig").Vm;
 
-bytes: []const u8,
-instructions: []align(1) const ebpf.Instruction,
-version: ebpf.SBPFVersion,
-entry_pc: u64,
-from_elf: bool,
-ro_section: Section,
-text_vaddr: u64,
-function_registry: Registry(u32),
+pub const Executable = struct {
+    bytes: []const u8,
+    instructions: []align(1) const ebpf.Instruction,
+    version: ebpf.SBPFVersion,
+    entry_pc: u64,
+    from_elf: bool,
+    ro_section: Section,
+    text_vaddr: u64,
+    function_registry: Registry(u32),
 
-pub const Section = union(enum) {
-    owned: Owned,
-    assembly: Assembly,
+    pub const Section = union(enum) {
+        owned: Owned,
+        assembly: Assembly,
 
-    const Owned = struct {
-        offset: u64,
-        data: []const u8,
-    };
+        const Owned = struct {
+            offset: u64,
+            data: []const u8,
+        };
 
-    const Assembly = struct {
-        offset: u64,
-        start: u64,
-        end: u64,
-    };
+        const Assembly = struct {
+            offset: u64,
+            start: u64,
+            end: u64,
+        };
 
-    pub fn deinit(section: Section, allocator: std.mem.Allocator) void {
-        switch (section) {
-            .owned => |owned| allocator.free(owned.data),
-            .assembly => {},
+        pub fn deinit(section: Section, allocator: std.mem.Allocator) void {
+            switch (section) {
+                .owned => |owned| allocator.free(owned.data),
+                .assembly => {},
+            }
         }
+    };
+
+    pub fn fromElf(allocator: std.mem.Allocator, elf: *const Elf) !Executable {
+        const ro_section = try elf.parseRoSections(allocator);
+        errdefer ro_section.deinit(allocator);
+
+        return .{
+            .bytes = elf.bytes,
+            .ro_section = ro_section,
+            .instructions = try elf.getInstructions(),
+            .version = elf.version,
+            .entry_pc = elf.entry_pc,
+            .from_elf = true,
+            .text_vaddr = elf.getShdrByName(".text").?.sh_addr,
+            .function_registry = elf.function_registry,
+        };
+    }
+
+    pub fn fromAsm(allocator: std.mem.Allocator, source: []const u8) !Executable {
+        return Assembler.parse(allocator, source);
+    }
+
+    /// When the executable comes from the assembler, we need to guarantee that the
+    /// instructions are aligned to `ebpf.Instruction` rather than 1 like they would be
+    /// if we created the executable from the Elf file. The GPA requires allocations and
+    /// deallocations to be made with the same semantic alignment.
+    pub fn deinit(self: *Executable, allocator: std.mem.Allocator) void {
+        if (!self.from_elf) allocator.free(@as(
+            []const ebpf.Instruction,
+            @alignCast(self.instructions),
+        ));
+
+        self.ro_section.deinit(allocator);
+        self.function_registry.deinit(allocator);
+    }
+
+    pub fn getProgramRegion(self: *const Executable) memory.Region {
+        const offset, const ro_data = switch (self.ro_section) {
+            .owned => |o| .{ o.offset, o.data },
+            .assembly => |a| .{ a.offset, self.bytes[a.start..a.end] },
+        };
+        return memory.Region.init(.constant, ro_data, memory.PROGRAM_START +| offset);
     }
 };
 
-pub fn fromElf(allocator: std.mem.Allocator, elf: *const Elf) !Executable {
-    const ro_section = try elf.parseRoSections(allocator);
-    errdefer ro_section.deinit(allocator);
-
-    return .{
-        .bytes = elf.bytes,
-        .ro_section = ro_section,
-        .instructions = try elf.getInstructions(),
-        .version = elf.version,
-        .entry_pc = elf.entry_pc,
-        .from_elf = true,
-        .text_vaddr = elf.getShdrByName(".text").?.sh_addr,
-        .function_registry = elf.function_registry,
-    };
-}
-
-pub fn fromAsm(allocator: std.mem.Allocator, source: []const u8) !Executable {
-    return Assembler.parse(allocator, source);
-}
-
-/// When the executable comes from the assembler, we need to guarantee that the
-/// instructions are aligned to `ebpf.Instruction` rather than 1 like they would be
-/// if we created the executable from the Elf file. The GPA requires allocations and
-/// deallocations to be made with the same semantic alignment.
-pub fn deinit(self: *Executable, allocator: std.mem.Allocator) void {
-    if (!self.from_elf) allocator.free(@as(
-        []const ebpf.Instruction,
-        @alignCast(self.instructions),
-    ));
-
-    self.ro_section.deinit(allocator);
-    self.function_registry.deinit(allocator);
-}
-
-pub fn getProgramRegion(self: *const Executable) memory.Region {
-    const offset, const ro_data = switch (self.ro_section) {
-        .owned => |o| .{ o.offset, o.data },
-        .assembly => |a| .{ a.offset, self.bytes[a.start..a.end] },
-    };
-    return memory.Region.init(.constant, ro_data, memory.PROGRAM_START +| offset);
-}
-
-const Assembler = struct {
+pub const Assembler = struct {
     source: []const u8,
 
     const Statement = union(enum) {

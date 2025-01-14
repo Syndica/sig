@@ -47,7 +47,7 @@ pub fn main() !void {
     const bytes = try input_file.readToEndAlloc(allocator, ebpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: Executable.BuiltinProgram = .{};
+    var loader: svm.BuiltinProgram = .{};
     defer loader.deinit(allocator);
 
     inline for (.{

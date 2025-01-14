@@ -1,7 +1,14 @@
+const executable = @import("executable.zig");
 pub const ebpf = @import("ebpf.zig");
-pub const Elf = @import("Elf.zig");
-pub const Executable = @import("Executable.zig");
+pub const elf = @import("elf.zig");
 pub const memory = @import("memory.zig");
 pub const syscalls = @import("syscalls.zig");
-pub const Vm = @import("Vm.zig");
 pub const tests = @import("tests.zig");
+pub const vm = @import("vm.zig");
+
+pub const Executable = executable.Executable;
+pub const BuiltinProgram = executable.BuiltinProgram;
+pub const Registry = executable.Registry;
+pub const Assembler = executable.Assembler;
+pub const Vm = vm.Vm;
+pub const Elf = elf.Elf;
