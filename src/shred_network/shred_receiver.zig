@@ -42,16 +42,35 @@ pub const ShredReceiver = struct {
 
     const Self = @This();
 
+    /// A shared instance of an event to support waiting on multiple Channels.
+    const ReceiverSignal = struct {
+        event: std.Thread.ResetEvent = .{},
+        hook: Channel(Packet).SendHook = .{ .after_send = afterSend },
+
+        fn afterSend(hook: *Channel(Packet).SendHook, _: *Channel(Packet)) void {
+            const signal: *ReceiverSignal = @alignCast(@fieldParentPtr("hook", hook));
+            signal.event.set();
+        }
+
+        fn wait(signal: *ReceiverSignal, exit: ExitCondition) error{Exit}!void {
+            while (true) {
+                signal.event.timedWait(1 * std.time.ns_per_s) catch {};
+                if (exit.shouldExit()) return error.Exit;
+                if (signal.event.isSet()) return signal.event.reset();
+            }
+        }
+    };
+
     /// Run threads to listen/send over socket and handle all incoming packets.
     /// Returns when exit is set to true.
     pub fn run(self: *Self) !void {
         defer self.logger.err().log("exiting shred receiver");
         errdefer self.logger.err().log("error in shred receiver");
 
-        var receive_signal: Channel(Packet).SendSignal = .{};
+        var receive_signal = ReceiverSignal{};
         const exit = ExitCondition{ .unordered = self.exit };
 
-        // Cretae pipe from response_sender (SocketPipe overrides .send_hook) -> repair_socket
+        // Cretae pipe from response_sender -> repair_socket
         const response_sender = try Channel(Packet).create(self.allocator);
         defer response_sender.destroy();
 
@@ -65,11 +84,11 @@ pub const ShredReceiver = struct {
         );
         defer response_sender_pipe.deinit(self.allocator);
 
-        // Create pipe from repair_socket -> response_receiver (SendSignal overrides .send_hook)
+         // Create pipe from repair_socket -> response_receiver.
         const response_receiver = try Channel(Packet).create(self.allocator);
         response_receiver.send_hook = &receive_signal.hook;
         defer response_receiver.destroy();
-
+       
         const response_receiver_pipe = try SocketPipe.init(
             self.allocator,
             .receiver,
@@ -80,14 +99,13 @@ pub const ShredReceiver = struct {
         );
         defer response_receiver_pipe.deinit(self.allocator);
 
-        // Create N pipes from turbine_socket -> turbine_receiver (SendSignal overrides .send_hook)
+        // Create N pipes from turbine_socket -> turbine_receiver.
         const turbine_receiver = try Channel(Packet).create(self.allocator);
         turbine_receiver.send_hook = &receive_signal.hook;
         defer turbine_receiver.destroy();
 
         var turbine_receiver_pipes: std.BoundedArray(*SocketPipe, NUM_TVU_RECEIVERS) = .{};
         defer for (turbine_receiver_pipes.slice()) |pipe| pipe.deinit(self.allocator);
-
         for (0..NUM_TVU_RECEIVERS) |_| {
             try turbine_receiver_pipes.append(try SocketPipe.init(
                 self.allocator,

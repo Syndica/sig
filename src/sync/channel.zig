@@ -13,6 +13,7 @@ pub fn Channel(T: type) type {
         tail: Position,
         closed: Atomic(bool) = Atomic(bool).init(false),
         allocator: Allocator,
+        event: std.Thread.ResetEvent = .{},
         send_hook: ?*SendHook = null,
 
         pub const SendHook = struct {
@@ -25,34 +26,6 @@ pub fn Channel(T: type) type {
             fn defaultAfterSend(_: *SendHook, _: *Self) void {}
             fn defaultBeforeSend(_: *SendHook, _: *Self, _: T) bool {
                 return true;
-            }
-        };
-
-        pub const SendSignal = struct {
-            event: std.Thread.ResetEvent = .{},
-            hook: SendHook = .{ .after_send = afterSend },
-
-            pub fn create(allocator: Allocator) !*SendSignal {
-                const self = try allocator.create(SendSignal);
-                self.* = .{};
-                return self;
-            }
-
-            pub fn destroy(self: *SendSignal, allocator: Allocator) void {
-                allocator.destroy(self);
-            }
-
-            fn afterSend(hook: *SendHook, _: *Self) void {
-                const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
-                self.event.set();
-            }
-
-            pub fn wait(self: *SendSignal, exit: ExitCondition) error{Exit}!void {
-                while (true) {
-                    self.event.timedWait(1 * std.time.ns_per_s) catch {};
-                    if (exit.shouldExit()) return error.Exit;
-                    if (self.event.isSet()) return self.event.reset();
-                }
             }
         };
 
@@ -245,10 +218,22 @@ pub fn Channel(T: type) type {
                     // to read the data we've just assigned.
                     _ = slot.state.fetchOr(WRITTEN_TO, .release);
 
+                    channel.event.set();
+
                     if (send_hook) |hook| hook.after_send(hook, channel);
 
                     return;
                 }
+            }
+        }
+
+        /// Waits untli the channel potentially has items, periodically checking for the ExitCondition.
+        /// Must be called by only one receiver thread at a time.
+        pub fn wait(channel: *Self, exit: ExitCondition) error{Exit}!void {
+            while (true) {
+                channel.event.timedWait(1 * std.time.ns_per_s) catch {};
+                if (exit.shouldExit()) return error.Exit;
+                if (channel.event.isSet()) return channel.event.reset();
             }
         }
 
