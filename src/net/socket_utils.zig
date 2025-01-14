@@ -40,13 +40,12 @@ pub const SocketPipe = struct {
         const self = try allocator.create(Self);
         errdefer allocator.destroy(self);
 
-        self.* = .{
-            .handle = switch (direction) {
-                .sender => try std.Thread.spawn(.{}, runSend, .{ logger, socket, channel, exit }),
-                .receiver => try std.Thread.spawn(.{}, runRecv, .{ logger, socket, channel, exit }),
-            },
+        const handle = switch (direction) {
+            .sender => try std.Thread.spawn(.{}, runSend, .{ logger, socket, channel, exit }),
+            .receiver => try std.Thread.spawn(.{}, runRecv, .{ logger, socket, channel, exit }),
         };
 
+        self.* = .{ .handle = handle };
         return self;
     }
 
