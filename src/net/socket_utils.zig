@@ -20,7 +20,6 @@ const LOG_SCOPE: []const u8 = "socket_utils";
 
 pub const SocketPipe = struct {
     handle: std.Thread,
-    outgoing_signal: Channel(Packet).SendSignal,
 
     const Self = @This();
 
@@ -41,29 +40,17 @@ pub const SocketPipe = struct {
         const self = try allocator.create(Self);
         errdefer allocator.destroy(self);
 
-        switch (direction) {
-            .sender => {
-                self.outgoing_signal = .{};
-                channel.send_hook = &self.outgoing_signal.hook;
-                self.handle = try std.Thread.spawn(
-                    .{},
-                    runSender,
-                    .{ self, logger, socket, channel, exit },
-                );
+        self.* = .{
+            .handle = switch (direction) {
+                .sender => try std.Thread.spawn(.{}, runSend, .{ logger, socket, channel, exit }),
+                .receiver => try std.Thread.spawn(.{}, runRecv, .{ logger, socket, channel, exit }),
             },
-            .receiver => {
-                self.handle = try std.Thread.spawn(
-                    .{},
-                    runReceiver,
-                    .{ logger, socket, channel, exit },
-                );
-            },
-        }
+        };
 
         return self;
     }
 
-    fn runReceiver(
+    fn runRecv(
         logger_: Logger,
         socket_: UdpSocket,
         incoming_channel: *Channel(Packet),
@@ -96,8 +83,7 @@ pub const SocketPipe = struct {
         }
     }
 
-    fn runSender(
-        self: *Self,
+    fn runSend(
         logger_: Logger,
         socket: UdpSocket,
         outgoing_channel: *Channel(Packet),
@@ -112,7 +98,7 @@ pub const SocketPipe = struct {
         }
 
         while (true) {
-            self.outgoing_signal.wait(exit) catch break;
+            outgoing_channel.wait(exit) catch break;
             while (outgoing_channel.tryReceive()) |p| {
                 if (exit.shouldExit()) break; // drop the rest (like above) if exit prematurely.
                 const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
@@ -163,9 +149,6 @@ pub const BenchmarkPacketProcessing = struct {
 
         var incoming_channel = try Channel(Packet).init(allocator);
         defer incoming_channel.deinit();
-
-        var incoming_signal: Channel(Packet).SendSignal = .{};
-        incoming_channel.send_hook = &incoming_signal.hook;
 
         const incoming_pipe = try SocketPipe
             .init(allocator, .receiver, .noop, socket, &incoming_channel, exit_condition);
@@ -219,7 +202,7 @@ pub const BenchmarkPacketProcessing = struct {
         var packets_to_recv = n_packets;
         var timer = try sig.time.Timer.start();
         while (packets_to_recv > 0) {
-            incoming_signal.wait(exit_condition) catch break;
+            incoming_channel.wait(exit_condition) catch break;
             while (incoming_channel.tryReceive()) |_| {
                 packets_to_recv -|= 1;
             }

@@ -21,7 +21,6 @@ pub fn runShredVerifier(
     registry: *Registry(.{}),
     /// shred receiver --> me
     unverified_shred_receiver: *Channel(Packet),
-    unverified_shred_signal: *Channel(Packet).SendSignal,
     /// me --> shred processor
     verified_shred_sender: *Channel(Packet),
     /// me --> retransmit service
@@ -31,7 +30,7 @@ pub fn runShredVerifier(
     const metrics = try registry.initStruct(Metrics);
     var verified_merkle_roots = try VerifiedMerkleRoots.init(std.heap.c_allocator, 1024);
     while (true) {
-        unverified_shred_signal.wait(.{ .unordered = exit }) catch |e| switch (e) {
+        unverified_shred_receiver.wait(.{ .unordered = exit }) catch |e| switch (e) {
             error.Exit => if (unverified_shred_receiver.isEmpty()) break,
         };
 

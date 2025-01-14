@@ -50,7 +50,6 @@ pub fn runShredRetransmitter(params: struct {
     epoch_context_mgr: *EpochContextManager,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     receiver: *Channel(Packet),
-    signal: *Channel(Packet).SendSignal,
     maybe_num_retransmit_threads: ?usize,
     overwrite_stake_for_testing: bool,
     exit: *AtomicBool,
@@ -90,7 +89,6 @@ pub fn runShredRetransmitter(params: struct {
             params.my_contact_info,
             params.epoch_context_mgr,
             params.receiver,
-            params.signal,
             &receive_to_retransmit_channel,
             params.gossip_table_rw,
             params.rand,
@@ -135,7 +133,6 @@ fn receiveShreds(
     my_contact_info: ThreadSafeContactInfo,
     epoch_context_mgr: *EpochContextManager,
     receiver: *Channel(Packet),
-    signal: *Channel(Packet).SendSignal,
     sender: *Channel(RetransmitShredInfo),
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     rand: Random,
@@ -158,7 +155,7 @@ fn receiveShreds(
     var receive_shreds_timer = try sig.time.Timer.start();
 
     while (true) {
-        signal.wait(.{ .unordered = exit }) catch break;
+        receiver.wait(.{ .unordered = exit }) catch break;
         receive_shreds_timer.reset();
 
         const receiver_len = receiver.len();
@@ -327,7 +324,7 @@ fn retransmitShreds(
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
-        // NOTE: multiple `retransmitShreds` run concurrently so there's no single receiver to use SendSignal with.
+        // NOTE: multiple `retransmitShreds` run concurrently can't use receiver.wait() here.
         const retransmit_info: RetransmitShredInfo = receiver.tryReceive() orelse continue;
         defer retransmit_info.turbine_tree.releaseUnsafe();
 

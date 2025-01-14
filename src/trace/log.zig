@@ -121,7 +121,6 @@ pub const ChannelPrintLogger = struct {
     log_allocator_state: *RecycleFBA(.{}),
     max_buffer: u64,
     channel: Channel([]const u8),
-    signal: Channel([]const u8).SendSignal,
     handle: ?std.Thread,
 
     const Self = @This();
@@ -144,10 +143,8 @@ pub const ChannelPrintLogger = struct {
             .max_level = config.max_level,
             .handle = null,
             .channel = try Channel([]const u8).init(config.allocator),
-            .signal = .{},
         };
 
-        self.channel.send_hook = &self.signal.hook;
         self.handle = try std.Thread.spawn(.{}, run, .{self});
         return self;
     }
@@ -175,7 +172,7 @@ pub const ChannelPrintLogger = struct {
 
     pub fn run(self: *Self) void {
         while (true) {
-            self.signal.wait(.{ .unordered = &self.exit }) catch break;
+            self.channel.wait(.{ .unordered = &self.exit }) catch break;
 
             while (self.channel.tryReceive()) |message| {
                 defer self.log_allocator.free(message);

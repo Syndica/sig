@@ -31,7 +31,6 @@ pub fn runShredProcessor(
     registry: *Registry(.{}),
     // shred verifier --> me
     verified_shred_receiver: *Channel(Packet),
-    verified_shred_signal: *Channel(Packet).SendSignal,
     tracker: *BasicShredTracker,
     shred_inserter_: ShredInserter,
     leader_schedule: sig.core.leader_schedule.SlotLeaders,
@@ -44,7 +43,7 @@ pub fn runShredProcessor(
     const metrics = try registry.initStruct(Metrics);
 
     while (true) {
-        verified_shred_signal.wait(.{ .unordered = exit }) catch |e| switch (e) {
+        verified_shred_receiver.wait(.{ .unordered = exit }) catch |e| switch (e) {
             error.Exit => if (verified_shred_receiver.isEmpty()) break,
         };
 
