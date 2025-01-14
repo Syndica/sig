@@ -235,7 +235,7 @@ pub fn parseRoSections(self: *const Elf, allocator: std.mem.Allocator) !Executab
         ".text",
         ".rodata",
         ".data.rel.ro",
-        // ".eh_frame",
+        ".eh_frame",
     };
 
     var lowest_addr: usize = std.math.maxInt(usize);

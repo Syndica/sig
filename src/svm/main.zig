@@ -67,13 +67,11 @@ pub fn main() !void {
         );
     }
 
-    var executable = exec: {
-        if (assemble) {
-            break :exec try Executable.fromAsm(allocator, bytes);
-        } else {
-            const elf = try Elf.parse(allocator, bytes, &loader);
-            break :exec try Executable.fromElf(allocator, &elf);
-        }
+    var executable = if (assemble)
+        try Executable.fromAsm(allocator, bytes)
+    else exec: {
+        const elf = try Elf.parse(allocator, bytes, &loader);
+        break :exec try Executable.fromElf(allocator, &elf);
     };
     defer executable.deinit(allocator);
 

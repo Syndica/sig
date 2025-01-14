@@ -33,7 +33,7 @@ pub fn init(
     memory_map: MemoryMap,
     loader: *const Executable.BuiltinProgram,
 ) !Vm {
-    var vm: Vm = .{
+    var self: Vm = .{
         .executable = executable,
         .allocator = allocator,
         .registers = std.EnumArray(ebpf.Instruction.Register, u64).initFill(0),
@@ -46,30 +46,30 @@ pub fn init(
         .loader = loader,
     };
 
-    vm.registers.set(.r10, memory.STACK_START + 4096);
-    vm.registers.set(.r1, memory.INPUT_START);
-    vm.registers.set(.pc, executable.entry_pc);
+    self.registers.set(.r10, memory.STACK_START + 4096);
+    self.registers.set(.r1, memory.INPUT_START);
+    self.registers.set(.pc, executable.entry_pc);
 
-    return vm;
+    return self;
 }
 
-pub fn deinit(vm: *Vm) void {
-    vm.call_frames.deinit(vm.allocator);
+pub fn deinit(self: *Vm) void {
+    self.call_frames.deinit(self.allocator);
 }
 
-pub fn run(vm: *Vm) !u64 {
-    while (try vm.step()) {
-        vm.instruction_count += 1;
+pub fn run(self: *Vm) !u64 {
+    while (try self.step()) {
+        self.instruction_count += 1;
     }
-    return vm.registers.get(.r0);
+    return self.registers.get(.r0);
 }
 
-fn step(vm: *Vm) !bool {
-    const registers = &vm.registers;
+fn step(self: *Vm) !bool {
+    const registers = &self.registers;
     const pc = registers.get(.pc);
     var next_pc: u64 = pc + 1;
 
-    const instructions = vm.executable.instructions;
+    const instructions = self.executable.instructions;
     const inst = instructions[pc];
     const opcode = inst.opcode;
 
@@ -223,14 +223,14 @@ fn step(vm: *Vm) !bool {
             const vaddr: u64 = @bitCast(@as(i64, @bitCast(registers.get(address))) +% inst.off);
 
             switch (access) {
-                .constant => registers.set(inst.dst, try vm.load(T, vaddr)),
+                .constant => registers.set(inst.dst, try self.load(T, vaddr)),
                 .mutable => {
                     const operand = switch (@as(u3, @truncate(@intFromEnum(opcode)))) {
                         Instruction.stx => registers.get(inst.src),
                         Instruction.st => inst.imm,
                         else => unreachable,
                     };
-                    try vm.store(T, vaddr, @truncate(operand));
+                    try self.store(T, vaddr, @truncate(operand));
                 },
             }
         },
@@ -308,37 +308,37 @@ fn step(vm: *Vm) !bool {
 
         // calling
         .exit => {
-            if (vm.depth == 0) {
+            if (self.depth == 0) {
                 return false;
             }
-            vm.depth -= 1;
-            const frame = vm.call_frames.pop();
-            vm.registers.set(.r10, frame.fp);
-            @memcpy(vm.registers.values[6..][0..4], &frame.caller_saved_regs);
-            vm.stack_pointer -= 4096;
+            self.depth -= 1;
+            const frame = self.call_frames.pop();
+            self.registers.set(.r10, frame.fp);
+            @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
+            self.stack_pointer -= 4096;
             next_pc = frame.return_pc;
         },
         .call_imm => {
-            if (vm.executable.function_registry.lookupKey(inst.imm)) |entry| {
-                try vm.pushCallFrame();
+            if (self.executable.function_registry.lookupKey(inst.imm)) |entry| {
+                try self.pushCallFrame();
                 next_pc = entry.value;
-            } else if (vm.loader.functions.lookupKey(inst.imm)) |entry| {
+            } else if (self.loader.functions.lookupKey(inst.imm)) |entry| {
                 const builtin_fn = entry.value;
-                try builtin_fn(vm);
+                try builtin_fn(self);
             } else {
                 return error.UnresolvedFunction;
             }
         },
         .call_reg => {
-            try vm.pushCallFrame();
+            try self.pushCallFrame();
 
             const target_pc = registers.get(@enumFromInt(inst.imm));
-            next_pc = (target_pc -% vm.vm_addr) / 8;
+            next_pc = (target_pc -% self.vm_addr) / 8;
         },
 
         // other instructions
         .ld_dw_imm => {
-            assert(vm.executable.version == .v1);
+            assert(self.executable.version == .v1);
             const value: u64 = (@as(u64, instructions[next_pc].imm) << 32) | inst.imm;
             registers.set(inst.dst, value);
             next_pc += 1;
@@ -346,35 +346,35 @@ fn step(vm: *Vm) !bool {
     }
 
     if (next_pc >= instructions.len) return error.PcOutOfBounds;
-    vm.registers.set(.pc, next_pc);
+    self.registers.set(.pc, next_pc);
     return true;
 }
 
-fn load(vm: *Vm, T: type, vm_addr: u64) !T {
-    const slice = try vm.memory_map.vmap(.constant, vm_addr, @sizeOf(T));
+fn load(self: *Vm, T: type, vm_addr: u64) !T {
+    const slice = try self.memory_map.vmap(.constant, vm_addr, @sizeOf(T));
     return std.mem.readInt(T, slice[0..@sizeOf(T)], .little);
 }
 
-fn store(vm: *Vm, T: type, vm_addr: u64, value: T) !void {
-    const slice = try vm.memory_map.vmap(.mutable, vm_addr, @sizeOf(T));
+fn store(self: *Vm, T: type, vm_addr: u64, value: T) !void {
+    const slice = try self.memory_map.vmap(.mutable, vm_addr, @sizeOf(T));
     slice[0..@sizeOf(T)].* = @bitCast(value);
 }
 
-fn pushCallFrame(vm: *Vm) !void {
-    const frame = vm.call_frames.addOneAssumeCapacity();
+fn pushCallFrame(self: *Vm) !void {
+    const frame = self.call_frames.addOneAssumeCapacity();
     frame.* = .{
-        .caller_saved_regs = vm.registers.values[6..][0..4].*,
-        .fp = vm.registers.get(.r10),
-        .return_pc = vm.registers.get(.pc) + 1,
+        .caller_saved_regs = self.registers.values[6..][0..4].*,
+        .fp = self.registers.get(.r10),
+        .return_pc = self.registers.get(.pc) + 1,
     };
 
-    vm.depth += 1;
-    if (vm.depth == 64) {
+    self.depth += 1;
+    if (self.depth == 64) {
         return error.CallDepthExceeded;
     }
 
-    vm.stack_pointer += 4096;
-    vm.registers.set(.r10, vm.stack_pointer);
+    self.stack_pointer += 4096;
+    self.registers.set(.r10, self.stack_pointer);
 }
 
 /// Performs a i64 sign-extension. This is commonly needed in SBPV1.
