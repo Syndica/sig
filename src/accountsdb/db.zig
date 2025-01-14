@@ -3784,7 +3784,6 @@ test "load clock sysvar" {
 
     const found_clock = try accounts_db.getTypeFromAccount(allocator, sysvars.Clock, &sysvars.IDS.clock);
 
-    // if (found_clock.epoch_start_timestamp == expected_clock.epoch_start_timestamp - 1) return error.SkipZigTest; // how the hell?
     try std.testing.expectEqual(expected_clock, found_clock);
 }
 
