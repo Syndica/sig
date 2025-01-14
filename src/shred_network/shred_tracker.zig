@@ -180,7 +180,7 @@ pub const BasicShredTracker = struct {
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getMonitoredSlot(slot);
             if (monitored_slot.first_received_timestamp_ms +
-                MIN_SLOT_AGE_TO_REPORT_AS_MISSING > milli_timestamp) //fix
+                MIN_SLOT_AGE_TO_REPORT_AS_MISSING > milli_timestamp)
             {
                 continue;
             }
@@ -347,7 +347,7 @@ test "trivial happy path" {
 
     var tracker = try BasicShredTracker.init(13579, .noop, sig.prometheus.globalRegistry());
 
-    _ = try tracker.identifyMissing(&msr, 0);
+    _ = try tracker.identifyMissing(&msr, 1_000);
 
     try std.testing.expect(1 == msr.len);
     const report = msr.items()[0];
