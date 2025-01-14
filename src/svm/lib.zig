@@ -1,5 +1,5 @@
 const executable = @import("executable.zig");
-pub const ebpf = @import("ebpf.zig");
+pub const sbpf = @import("sbpf.zig");
 pub const elf = @import("elf.zig");
 pub const memory = @import("memory.zig");
 pub const syscalls = @import("syscalls.zig");

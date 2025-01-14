@@ -3,7 +3,7 @@
 //! Elf Spec: http://refspecs.linux-foundation.org/LSB_4.1.0/LSB-Core-generic/LSB-Core-generic.html
 
 const std = @import("std");
-const ebpf = @import("ebpf.zig");
+const sbpf = @import("sbpf.zig");
 const memory = @import("memory.zig");
 
 const lib = @import("lib.zig");
@@ -19,7 +19,7 @@ pub const Elf = struct {
     headers: Headers,
     data: Data,
     entry_pc: u64,
-    version: ebpf.SBPFVersion,
+    version: sbpf.SBPFVersion,
     function_registry: Registry(u32),
 
     /// Contains immutable headers parsed from the ELF file.
@@ -209,7 +209,7 @@ pub const Elf = struct {
         const offset = headers.header.e_entry -| text_section.sh_addr;
         const entry_pc = try std.math.divExact(u64, offset, 8);
 
-        const sbpf_version: ebpf.SBPFVersion = if (headers.header.e_flags == ebpf.EF_SBPF_V2)
+        const sbpf_version: sbpf.SBPFVersion = if (headers.header.e_flags == sbpf.EF_SBPF_V2)
             .v2
         else
             .v1;
@@ -312,11 +312,11 @@ pub const Elf = struct {
             return error.WrongEndianess;
         }
         // ensure no OS_ABI was set
-        if (header.e_ident[ebpf.EI_OSABI] != ebpf.ELFOSABI_NONE) {
+        if (header.e_ident[sbpf.EI_OSABI] != sbpf.ELFOSABI_NONE) {
             return error.WrongAbi;
         }
         // ensure the ELF was compiled for BPF or possibly the custom SBPF machine number
-        if (header.e_machine != elf.EM.BPF and @intFromEnum(header.e_machine) != ebpf.EM_SBPF) {
+        if (header.e_machine != elf.EM.BPF and @intFromEnum(header.e_machine) != sbpf.EM_SBPF) {
             return error.WrongMachine;
         }
         // ensure that this is a `.so`, dynamic library file
@@ -521,7 +521,7 @@ pub const Elf = struct {
                         const slice = self.bytes[imm_offset..][0..4];
                         std.mem.writeInt(u32, slice, key, .little);
                     } else {
-                        const hash = ebpf.hashSymbolName(symbol_name);
+                        const hash = sbpf.hashSymbolName(symbol_name);
                         if (loader.functions.lookupKey(hash) == null) {
                             // return error.UnresolvedSymbol;
                             @panic(symbol_name);
@@ -535,11 +535,11 @@ pub const Elf = struct {
         }
     }
 
-    pub fn getInstructions(self: Elf) ![]align(1) const ebpf.Instruction {
+    pub fn getInstructions(self: Elf) ![]align(1) const sbpf.Instruction {
         const text_section_index = self.getShdrIndexByName(".text") orelse
             return error.ShdrNotFound;
         const text_bytes: []const u8 = self.headers.shdrSlice(text_section_index);
-        return std.mem.bytesAsSlice(ebpf.Instruction, text_bytes);
+        return std.mem.bytesAsSlice(sbpf.Instruction, text_bytes);
     }
 
     fn getShdrIndexByName(self: Elf, name: []const u8) ?u32 {

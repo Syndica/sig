@@ -1,4 +1,4 @@
-//! Constants to do with Solana's EBPF
+//! Constants to do with Solana's sbpf
 const std = @import("std");
 const memory = @import("memory.zig");
 const assert = std.debug.assert;

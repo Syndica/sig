@@ -1,10 +1,10 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-const ebpf = @import("ebpf.zig");
+const sbpf = @import("sbpf.zig");
 const memory = @import("memory.zig");
 
 const MemoryMap = memory.MemoryMap;
-const Instruction = ebpf.Instruction;
+const Instruction = sbpf.Instruction;
 const Executable = lib.Executable;
 const BuiltinProgram = lib.BuiltinProgram;
 
@@ -14,7 +14,7 @@ pub const Vm = struct {
     allocator: std.mem.Allocator,
     executable: *const Executable,
 
-    registers: std.EnumArray(ebpf.Instruction.Register, u64),
+    registers: std.EnumArray(sbpf.Instruction.Register, u64),
     memory_map: MemoryMap,
     loader: *const BuiltinProgram,
 
@@ -39,7 +39,7 @@ pub const Vm = struct {
         var self: Vm = .{
             .executable = executable,
             .allocator = allocator,
-            .registers = std.EnumArray(ebpf.Instruction.Register, u64).initFill(0),
+            .registers = std.EnumArray(sbpf.Instruction.Register, u64).initFill(0),
             .memory_map = memory_map,
             .stack_pointer = memory.STACK_START + 4096,
             .depth = 0,

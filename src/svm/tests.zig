@@ -4,7 +4,7 @@ const lib = @import("lib.zig");
 const memory = @import("memory.zig");
 const Vm = @import("vm.zig").Vm;
 const syscalls = @import("syscalls.zig");
-const ebpf = @import("ebpf.zig");
+const sbpf = @import("sbpf.zig");
 const Elf = @import("elf.zig").Elf;
 
 const Executable = lib.Executable;
@@ -1590,7 +1590,7 @@ fn testElfWithSyscalls(
     const allocator = std.testing.allocator;
 
     const input_file = try std.fs.cwd().openFile(path, .{});
-    const bytes = try input_file.readToEndAlloc(allocator, ebpf.MAX_FILE_SIZE);
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
     var loader: BuiltinProgram = .{};

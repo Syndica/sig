@@ -1,5 +1,5 @@
 const std = @import("std");
-const ebpf = @import("ebpf.zig");
+const sbpf = @import("sbpf.zig");
 const Elf = @import("elf.zig").Elf;
 const memory = @import("memory.zig");
 const syscalls = @import("syscalls.zig");
@@ -7,8 +7,8 @@ const Vm = @import("vm.zig").Vm;
 
 pub const Executable = struct {
     bytes: []const u8,
-    instructions: []align(1) const ebpf.Instruction,
-    version: ebpf.SBPFVersion,
+    instructions: []align(1) const sbpf.Instruction,
+    version: sbpf.SBPFVersion,
     entry_pc: u64,
     from_elf: bool,
     ro_section: Section,
@@ -59,12 +59,12 @@ pub const Executable = struct {
     }
 
     /// When the executable comes from the assembler, we need to guarantee that the
-    /// instructions are aligned to `ebpf.Instruction` rather than 1 like they would be
+    /// instructions are aligned to `sbpf.Instruction` rather than 1 like they would be
     /// if we created the executable from the Elf file. The GPA requires allocations and
     /// deallocations to be made with the same semantic alignment.
     pub fn deinit(self: *Executable, allocator: std.mem.Allocator) void {
         if (!self.from_elf) allocator.free(@as(
-            []const ebpf.Instruction,
+            []const sbpf.Instruction,
             @alignCast(self.instructions),
         ));
 
@@ -95,13 +95,13 @@ pub const Assembler = struct {
     };
 
     const Operand = union(enum) {
-        register: ebpf.Instruction.Register,
+        register: sbpf.Instruction.Register,
         integer: i64,
         memory: Memory,
         label: []const u8,
 
         const Memory = struct {
-            base: ebpf.Instruction.Register,
+            base: sbpf.Instruction.Register,
             offset: i16,
         };
     };
@@ -147,7 +147,7 @@ pub const Assembler = struct {
             }
         }
 
-        var instructions: std.ArrayListUnmanaged(ebpf.Instruction) = .{};
+        var instructions: std.ArrayListUnmanaged(sbpf.Instruction) = .{};
         defer instructions.deinit(allocator);
         inst_ptr = 0;
 
@@ -158,20 +158,20 @@ pub const Assembler = struct {
                     const name = inst.name;
                     const operands = inst.operands;
 
-                    const bind = ebpf.Instruction.map.get(name) orelse
+                    const bind = sbpf.Instruction.map.get(name) orelse
                         std.debug.panic("invalid instruction: {s}", .{name});
 
-                    const instruction: ebpf.Instruction = switch (bind.inst) {
+                    const instruction: sbpf.Instruction = switch (bind.inst) {
                         .alu_binary => inst: {
                             const is_immediate = operands[1] == .integer;
                             break :inst if (is_immediate) .{
-                                .opcode = @enumFromInt(bind.opc | ebpf.Instruction.k),
+                                .opcode = @enumFromInt(bind.opc | sbpf.Instruction.k),
                                 .dst = operands[0].register,
                                 .src = .r0,
                                 .off = 0,
                                 .imm = @bitCast(@as(i32, @intCast(operands[1].integer))),
                             } else .{
-                                .opcode = @enumFromInt(bind.opc | ebpf.Instruction.x),
+                                .opcode = @enumFromInt(bind.opc | sbpf.Instruction.x),
                                 .dst = operands[0].register,
                                 .src = operands[1].register,
                                 .off = 0,
@@ -200,13 +200,13 @@ pub const Assembler = struct {
                                 @panic("TODO: label jump");
                             } else {
                                 break :inst if (is_immediate) .{
-                                    .opcode = @enumFromInt(bind.opc | ebpf.Instruction.k),
+                                    .opcode = @enumFromInt(bind.opc | sbpf.Instruction.k),
                                     .dst = operands[0].register,
                                     .src = .r0,
                                     .off = @intCast(operands[2].integer),
                                     .imm = @bitCast(@as(i32, @intCast(operands[1].integer))),
                                 } else .{
-                                    .opcode = @enumFromInt(bind.opc | ebpf.Instruction.x),
+                                    .opcode = @enumFromInt(bind.opc | sbpf.Instruction.x),
                                     .dst = operands[0].register,
                                     .src = operands[1].register,
                                     .off = @intCast(operands[2].integer),
@@ -370,7 +370,7 @@ pub const Assembler = struct {
 
             while (iter.next()) |op| {
                 if (std.mem.startsWith(u8, op, "r")) {
-                    const reg = std.meta.stringToEnum(ebpf.Instruction.Register, op) orelse
+                    const reg = std.meta.stringToEnum(sbpf.Instruction.Register, op) orelse
                         @panic("unknown register");
                     try operands.append(allocator, .{ .register = reg });
                 } else if (std.mem.startsWith(u8, op, "[")) {
@@ -391,7 +391,7 @@ pub const Assembler = struct {
                     }
 
                     // otherwise it's just an address register argument
-                    const reg = std.meta.stringToEnum(ebpf.Instruction.Register, base) orelse
+                    const reg = std.meta.stringToEnum(sbpf.Instruction.Register, base) orelse
                         @panic("unknown register");
 
                     try operands.append(allocator, .{ .memory = .{
@@ -451,7 +451,7 @@ pub fn Registry(T: type) type {
             name: []const u8,
             value: T,
         ) !u32 {
-            const key = ebpf.hashSymbolName(name);
+            const key = sbpf.hashSymbolName(name);
             try registry.register(allocator, key, name, value);
             return key;
         }
@@ -463,9 +463,9 @@ pub fn Registry(T: type) type {
             value: T,
         ) !u32 {
             const hash = if (std.mem.eql(u8, name, "entrypoint"))
-                ebpf.hashSymbolName(name)
+                sbpf.hashSymbolName(name)
             else
-                ebpf.hashSymbolName(&std.mem.toBytes(value));
+                sbpf.hashSymbolName(&std.mem.toBytes(value));
             try registry.register(allocator, hash, &.{}, value);
             return hash;
         }

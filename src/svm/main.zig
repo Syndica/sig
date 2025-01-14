@@ -7,7 +7,7 @@ const Elf = svm.Elf;
 const memory = svm.memory;
 const Executable = svm.Executable;
 const Vm = svm.Vm;
-const ebpf = svm.ebpf;
+const sbpf = svm.sbpf;
 const syscalls = svm.syscalls;
 
 const MemoryMap = memory.MemoryMap;
@@ -44,7 +44,7 @@ pub fn main() !void {
     const input_file = try std.fs.cwd().openFile(input_path.?, .{});
     defer input_file.close();
 
-    const bytes = try input_file.readToEndAlloc(allocator, ebpf.MAX_FILE_SIZE);
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
     var loader: svm.BuiltinProgram = .{};

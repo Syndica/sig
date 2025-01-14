@@ -1,5 +1,5 @@
 const std = @import("std");
-const ebpf = @import("ebpf.zig");
+const sbpf = @import("sbpf.zig");
 
 pub const PROGRAM_START: u64 = 0x100000000;
 pub const STACK_START: u64 = 0x200000000;
@@ -11,7 +11,7 @@ pub const MemoryMap = union(enum) {
     aligned: AlignedMemoryMap,
     // TODO: unaligned memory map?
 
-    pub fn init(regions: []const Region, version: ebpf.SBPFVersion) !MemoryMap {
+    pub fn init(regions: []const Region, version: sbpf.SBPFVersion) !MemoryMap {
         return .{ .aligned = try AlignedMemoryMap.init(regions, version) };
     }
 
@@ -113,9 +113,9 @@ pub const Region = struct {
 
 const AlignedMemoryMap = struct {
     regions: []const Region,
-    version: ebpf.SBPFVersion,
+    version: sbpf.SBPFVersion,
 
-    fn init(regions: []const Region, version: ebpf.SBPFVersion) !AlignedMemoryMap {
+    fn init(regions: []const Region, version: sbpf.SBPFVersion) !AlignedMemoryMap {
         for (regions, 1..) |reg, index| {
             if (reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS != index) {
                 return error.InvalidMemoryRegion;
