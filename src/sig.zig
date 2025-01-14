@@ -4,6 +4,7 @@ pub const bincode = @import("bincode/bincode.zig");
 pub const bloom = @import("bloom/lib.zig");
 pub const cmd = @import("cmd/lib.zig");
 pub const common = @import("common/lib.zig");
+pub const consensus = @import("consensus/lib.zig");
 pub const core = @import("core/lib.zig");
 pub const crypto = @import("crypto/lib.zig");
 pub const geyser = @import("geyser/lib.zig");
