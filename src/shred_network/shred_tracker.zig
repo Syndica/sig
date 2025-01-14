@@ -67,12 +67,13 @@ pub const BasicShredTracker = struct {
     pub fn registerDataShred(
         self: *Self,
         shred: *const sig.ledger.shred.DataShred,
+        milli_timestamp: i64,
     ) !void {
         const parent = try shred.parent();
         const is_last_in_slot = shred.custom.flags.isSet(.last_shred_in_slot);
         const slot = shred.common.slot;
         const index = shred.common.index;
-        try self.registerShred(slot, index, parent, is_last_in_slot);
+        try self.registerShred(slot, index, parent, is_last_in_slot, milli_timestamp);
     }
 
     pub fn registerShred(
@@ -81,13 +82,15 @@ pub const BasicShredTracker = struct {
         shred_index: u32,
         parent_slot: Slot,
         is_last_in_slot: bool,
+        milli_timestamp: i64,
     ) SlotOutOfBounds!void {
         self.mux.lock();
         defer self.mux.unlock();
 
         const monitored_slot = try self.observeSlot(slot);
 
-        const slot_is_complete = monitored_slot.record(shred_index, is_last_in_slot);
+        const slot_is_complete = monitored_slot
+            .record(shred_index, is_last_in_slot, milli_timestamp);
 
         if (slot > self.max_slot_processed) {
             self.max_slot_processed = slot;
@@ -165,6 +168,7 @@ pub const BasicShredTracker = struct {
     pub fn identifyMissing(
         self: *Self,
         slot_reports: *MultiSlotReport,
+        milli_timestamp: i64,
     ) (Allocator.Error || SlotOutOfBounds)!bool {
         if (self.start_slot == null) return false;
         self.mux.lock();
@@ -172,12 +176,11 @@ pub const BasicShredTracker = struct {
 
         var found_an_incomplete_slot = false;
         slot_reports.clearRetainingCapacity();
-        const timestamp = std.time.milliTimestamp();
         const last_slot_to_check = @max(self.max_slot_processed, self.current_bottom_slot);
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getMonitoredSlot(slot);
             if (monitored_slot.first_received_timestamp_ms +
-                MIN_SLOT_AGE_TO_REPORT_AS_MISSING > timestamp) //fix
+                MIN_SLOT_AGE_TO_REPORT_AS_MISSING > milli_timestamp) //fix
             {
                 continue;
             }
@@ -283,7 +286,7 @@ const MonitoredSlot = struct {
     const Self = @This();
 
     /// returns if the slot is *definitely* complete (there may be false negatives)
-    pub fn record(self: *Self, shred_index: u32, is_last_in_slot: bool) bool {
+    pub fn record(self: *Self, shred_index: u32, is_last_in_slot: bool, milli_timestamp: i64) bool {
         if (self.is_complete) return false;
         if (!bit_set.setAndWasSet(&self.shreds, shred_index)) self.unique_observed_count += 1;
 
@@ -295,7 +298,7 @@ const MonitoredSlot = struct {
 
         if (self.max_seen == null) {
             self.max_seen = shred_index;
-            self.first_received_timestamp_ms = std.time.milliTimestamp();
+            self.first_received_timestamp_ms = milli_timestamp;
         } else {
             self.max_seen = @max(self.max_seen.?, shred_index);
         }
@@ -344,7 +347,7 @@ test "trivial happy path" {
 
     var tracker = try BasicShredTracker.init(13579, .noop, sig.prometheus.globalRegistry());
 
-    _ = try tracker.identifyMissing(&msr);
+    _ = try tracker.identifyMissing(&msr, 0);
 
     try std.testing.expect(1 == msr.len);
     const report = msr.items()[0];
@@ -361,12 +364,14 @@ test "1 registered shred is identified" {
     defer msr.deinit();
 
     var tracker = try BasicShredTracker.init(13579, .noop, sig.prometheus.globalRegistry());
-    try tracker.registerShred(13579, 123, 13578, false);
-    std.time.sleep(210 * std.time.ns_per_ms);
+    try tracker.registerShred(13579, 123, 13578, false, 0);
 
-    _ = try tracker.identifyMissing(&msr);
+    _ = try tracker.identifyMissing(&msr, 0);
+    try std.testing.expectEqual(0, msr.len);
 
-    try std.testing.expect(1 == msr.len);
+    _ = try tracker.identifyMissing(&msr, 1_000);
+    try std.testing.expectEqual(1, msr.len);
+
     const report = msr.items()[0];
     try std.testing.expect(13579 == report.slot);
     try std.testing.expect(2 == report.missing_shreds.items.len);

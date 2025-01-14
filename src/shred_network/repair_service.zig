@@ -156,7 +156,7 @@ pub const RepairService = struct {
     }
 
     /// Identifies which repairs are needed based on the current state,
-    /// and sends those repairs, then returns.
+    /// and sends those repairs, then returns the number of repairs.
     pub fn sendNecessaryRepairs(self: *Self) !usize {
         const repair_requests = try self.getRepairs();
         defer repair_requests.deinit();
@@ -193,7 +193,7 @@ pub const RepairService = struct {
         var oldest_slot_needing_repair: u64 = 0;
         var newest_slot_needing_repair: u64 = 0;
         var repairs = ArrayList(RepairRequest).init(self.allocator);
-        if (!try self.shred_tracker.identifyMissing(&self.report)) {
+        if (!try self.shred_tracker.identifyMissing(&self.report, std.time.milliTimestamp())) {
             return repairs;
         }
         var individual_count: usize = 0;
@@ -609,7 +609,7 @@ test "RepairService sends repair request to gossip peer" {
     defer service.deinit();
 
     // run test
-    try service.sendNecessaryRepairs();
+    _ = try service.sendNecessaryRepairs();
     var buf: [200]u8 = undefined;
     const size = peer_socket.receive(&buf) catch 0;
 

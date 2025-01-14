@@ -150,6 +150,7 @@ pub const ShredInserter = struct {
         retransmit_sender: ?PointerClosure([]const []const u8, void),
         shred_tracker: ?*sig.shred_network.shred_tracker.BasicShredTracker,
     ) !InsertShredsResult {
+        const milli_timestamp = std.time.milliTimestamp();
         ///////////////////////////
         // check inputs for validity and edge cases
         //
@@ -191,7 +192,8 @@ pub const ShredInserter = struct {
             switch (shred) {
                 .data => |data_shred| {
                     if (shred_tracker) |tracker| {
-                        tracker.registerDataShred(&shred.data) catch |err| switch (err) {
+                        tracker.registerDataShred(&shred.data, milli_timestamp) catch |err|
+                            switch (err) {
                             error.SlotUnderflow, error.SlotOverflow => {
                                 self.metrics.register_shred_error.observe(@errorCast(err));
                             },
@@ -284,7 +286,8 @@ pub const ShredInserter = struct {
                     continue;
                 }
                 if (shred_tracker) |tracker| {
-                    tracker.registerDataShred(&shred.data) catch |err| switch (err) {
+                    tracker.registerDataShred(&shred.data, milli_timestamp) catch |err|
+                        switch (err) {
                         error.SlotUnderflow, error.SlotOverflow => {
                             self.metrics.register_shred_error.observe(@errorCast(err));
                         },
@@ -1257,7 +1260,7 @@ test "insertShreds 100 shreds from mainnet" {
         try shreds.append(shred);
     }
     _ = try state.inserter
-        .insertShreds(shreds.items, &(.{false} ** shred_bytes.len), null, false, null);
+        .insertShreds(shreds.items, &(.{false} ** shred_bytes.len), null, false, null, null);
     for (shreds.items) |shred| {
         const bytes = try state.db.getBytes(
             schema.data_shred,
