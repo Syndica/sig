@@ -52,8 +52,6 @@ pub const RepairService = struct {
     shred_tracker: *BasicShredTracker,
     logger: ScopedLogger(@typeName(Self)),
     exit: *Atomic(bool),
-    last_look_ahead_timestamp_ms: i64 = 0,
-    num_look_aheads: u64 = 0,
     /// memory to re-use across iterations. initialized to empty
     report: MultiSlotReport,
     thread_pool: RequestBatchThreadPool,
@@ -72,8 +70,6 @@ pub const RepairService = struct {
         request_count: *Counter,
         oldest_slot_needing_repair: *Gauge(u64),
         newest_slot_needing_repair: *Gauge(u64),
-        newest_slot_to_request: *Gauge(u64),
-        oldest_slot_to_request: *Gauge(u64),
 
         batch_size: *Histogram,
         batch_process_time: *Histogram,
@@ -183,13 +179,6 @@ pub const RepairService = struct {
             }
         }
 
-        // TODO less often
-        if (addressed_requests.items.len > 0) {
-            self.logger.debug().logf(
-                "sent {} repair requests",
-                .{addressed_requests.items.len},
-            );
-        }
         return addressed_requests.items.len;
     }
 
@@ -217,7 +206,6 @@ pub const RepairService = struct {
             oldest_slot_needing_repair = @min(slot, oldest_slot_needing_repair);
             newest_slot_needing_repair = @max(slot, newest_slot_needing_repair);
             if (individual_count < MAX_SHRED_REPAIRS) {
-                // slots_repaired += 1;
                 for (report.missing_shreds.items) |shred_window| mid_loop: {
                     if (shred_window.end) |end| {
                         for (shred_window.start..end) |i| {
@@ -233,42 +221,12 @@ pub const RepairService = struct {
         }
 
         // eagerly request the next unknown slot in case turbine is laggy
-        slot += 1;
-        try repairs.append(.{ .HighestShred = .{ slot, 0 } });
-
-        // Explore the unknown regions of shreds to get a better high-level
-        // view. This is intended to solve any misconceptions that may be
-        // clogging up the shred collector.
-        const now = std.time.milliTimestamp();
-        if (self.last_look_ahead_timestamp_ms + 1_000 < now) {
-            self.last_look_ahead_timestamp_ms = now;
-            const num_requests: usize, const slot_interval: usize =
-                if (self.num_look_aheads % 10 == 0)
-                // Check the next 100 slots. This helps detect skipped slots by
-                // revisiting many consecutive slots to see if they declare
-                // previous slots as skipped. Without this, occasionally we get
-                // stuck on a slot because we don't realize it has been skipped.
-                // This is usually only an issue when multiple slots in a row have been skipped.
-                .{ 100, 1 }
-            else
-                // This helps detect how far behind we are. This looks ~10
-                // seconds into the future after the highest known slot,
-                // requesting any shreds from 20 evenly spaced slots. This
-                // allows repair to catch up from behind even if turbine is not
-                // working.
-                .{ 20, 10 };
-            self.num_look_aheads += 1;
-
-            for (0..num_requests) |_| {
-                slot += slot_interval;
-                try repairs.append(.{ .HighestShred = .{ slot, 0 } });
-            }
-        }
+        try repairs.append(.{ .HighestShred = .{ slot + 1, 0 } });
+        // request 10 seconds ahead to detect if caught behind
+        try repairs.append(.{ .HighestShred = .{ slot + 25, 0 } });
 
         self.metrics.oldest_slot_needing_repair.set(oldest_slot_needing_repair);
         self.metrics.newest_slot_needing_repair.set(newest_slot_needing_repair);
-        self.metrics.newest_slot_to_request.set(@max(newest_slot_needing_repair, slot));
-        self.metrics.oldest_slot_to_request.set(oldest_slot_needing_repair);
 
         return repairs;
     }
@@ -291,6 +249,47 @@ pub const RepairService = struct {
         return addressed;
     }
 };
+
+/// Returns the number of threads that should be used to send this many repair
+/// requests.
+///
+/// Allows the number of repair requester threads to scale up when a lot of
+/// repairs are necessary, and scale down during normal operation.
+fn numRequesterThreads(num_requests: usize) usize {
+    const target_requests_per_thread = 100;
+    const target_threads = num_requests / target_requests_per_thread;
+    return @max(1, @min(target_threads, maxRequesterThreads()));
+}
+
+/// Sets the maximum number of repair threads to either 16 or half the cpu
+/// count, whatever is less.
+fn maxRequesterThreads() u32 {
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    return @min(16, cpu_count / 2);
+}
+
+/// Sleeps an appropriate duration after sending some repair requests.
+///
+/// This avoids sending massive numbers of redundant requests when we're far
+/// behind, while allowing low latency to fill small gaps when we're caught up.
+/// It also ensures the repair service does not hog resources 100% of the time,
+/// so turbine can get a chance to start keeping up on its own.
+fn sleepRepair(num_requests: u64, last_iteration_ns: u64) void {
+    const min = 200; // so the repair service is not too greedy/eager/redundant
+    const target_millis = num_requests / 8;
+    const bounded_target_ms: u64 = @max(min, @min(MAX_REPAIR_DELAY_MILLIS, target_millis));
+    const bounded_target_ns = bounded_target_ms * std.time.ns_per_ms;
+    const remaining_sleep_for_target = bounded_target_ns -| last_iteration_ns;
+
+    // sets a bare minimum sleep of 100 ms to do other work.
+    const floor = std.time.ns_per_s / 5;
+
+    // if overwhelmed by generating many repair requests, this ensures there is
+    // a pause between them to process some incoming shreds.
+    const take_a_break = last_iteration_ns / 4;
+
+    std.time.sleep(@max(remaining_sleep_for_target, floor, take_a_break));
+}
 
 /// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
@@ -527,45 +526,6 @@ pub const RepairPeerProvider = struct {
         return try allocator.realloc(buf, compatible_peers);
     }
 };
-
-/// Returns the number of threads that should be used to send this many repair
-/// requests.
-///
-/// Allows the number of repair requester threads to scale up when a lot of
-/// repairs are necessary, and scale down during normal operation.
-fn numRequesterThreads(num_requests: usize) usize {
-    const target_requests_per_thread = 100;
-    const target_threads = num_requests / target_requests_per_thread;
-    return @max(1, @min(target_threads, maxRequesterThreads()));
-}
-
-fn maxRequesterThreads() u32 {
-    const cpu_count = std.Thread.getCpuCount() catch 1;
-    return @min(16, cpu_count / 2);
-}
-
-/// Sleeps an appropriate duration after sending some repair requests.
-///
-/// This avoids sending massive numbers of redundant requests when we're far
-/// behind, while allowing low latency to fill small gaps when we're caught up.
-/// It also ensures the repair service does not hog resources 100% of the time,
-/// so turbine can get a chance to start keeping up on its own.
-fn sleepRepair(num_requests: u64, last_iteration_ns: u64) void {
-    const min = 200; // so the repair service is not too greedy/eager/redundant
-    const target_millis = num_requests / 8;
-    const bounded_target_ms: u64 = @max(min, @min(MAX_REPAIR_DELAY_MILLIS, target_millis));
-    const bounded_target_ns = bounded_target_ms * std.time.ns_per_ms;
-    const remaining_sleep_for_target = bounded_target_ns -| last_iteration_ns;
-
-    // sets a bare minimum sleep of 100 ms to do other work.
-    const floor = std.time.ns_per_s / 10;
-
-    // if overwhelmed by generating many repair requests, this ensures there is
-    // a pause between them to process some incoming shreds.
-    const take_a_break = last_iteration_ns / 4;
-
-    std.time.sleep(@max(remaining_sleep_for_target, floor, take_a_break));
-}
 
 /// The maximum time to wait between repair loop iterations.
 /// Sort of like a timeout for repair responses.

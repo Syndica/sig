@@ -14,8 +14,8 @@ const MAX_SHREDS_PER_SLOT: usize = sig.ledger.shred.MAX_SHREDS_PER_SLOT;
 const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: u64 = 600;
 
 pub const Range = struct {
-    start: usize,
-    end: ?usize,
+    start: u32,
+    end: ?u32,
 };
 
 /// This is a temporary placeholder that will be replaced by a solution that
@@ -78,7 +78,7 @@ pub const BasicShredTracker = struct {
     pub fn registerShred(
         self: *Self,
         slot: Slot,
-        shred_index: u64,
+        shred_index: u32,
         parent_slot: Slot,
         is_last_in_slot: bool,
     ) SlotOutOfBounds!void {
@@ -86,8 +86,9 @@ pub const BasicShredTracker = struct {
         defer self.mux.unlock();
 
         const monitored_slot = try self.observeSlot(slot);
-        const new = monitored_slot.record(shred_index);
-        if (new) self.logger.debug().logf("new slot: {}", .{slot});
+
+        const slot_is_complete = monitored_slot.record(shred_index, is_last_in_slot);
+
         if (slot > self.max_slot_processed) {
             self.max_slot_processed = slot;
             self.metrics.max_slot_processed.set(slot);
@@ -101,12 +102,7 @@ pub const BasicShredTracker = struct {
         }
         monitored_slot.parent_slot = parent_slot;
 
-        // set last shred
-        if (is_last_in_slot) if (monitored_slot.last_shred) |old_last| {
-            monitored_slot.last_shred = @min(old_last, shred_index);
-        } else {
-            monitored_slot.last_shred = shred_index;
-        };
+        var new_bottom = self.current_bottom_slot;
 
         // identify skipped slots
         if (parent_slot + 1 != slot) {
@@ -114,14 +110,18 @@ pub const BasicShredTracker = struct {
                 const monitored_slot_to_skip = self.observeSlot(slot_to_skip) catch continue;
                 if (!monitored_slot_to_skip.is_complete) {
                     monitored_slot_to_skip.is_complete = true;
-                    self.logger.info().logf("skipping slot: {}", .{slot_to_skip});
                     if (slot_to_skip > self.max_slot_processed) {
                         self.max_slot_processed = slot_to_skip;
                         self.metrics.max_slot_processed.set(slot_to_skip);
                     }
+                    if (slot_to_skip == new_bottom) new_bottom += 1;
                 }
             }
         }
+
+        if (slot_is_complete and slot == new_bottom) new_bottom += 1;
+
+        if (self.current_bottom_slot != new_bottom) self.setBottom(new_bottom);
     }
 
     /// Writes the contents of the monitored slots as progress bars.
@@ -188,8 +188,6 @@ pub const BasicShredTracker = struct {
                 found_an_incomplete_slot = true;
             }
             if (!found_an_incomplete_slot) {
-                (if (slot % 20 == 0) self.logger.info() else self.logger.debug())
-                    .logf("received all shreds up to slot {}", .{slot});
                 self.setBottom(slot);
             }
         }
@@ -254,28 +252,61 @@ pub const SlotReport = struct {
 
 const ShredSet = std.bit_set.ArrayBitSet(usize, MAX_SHREDS_PER_SLOT / 10);
 
+const bit_set = struct {
+    pub fn setAndWasSet(self: *ShredSet, index: usize) bool {
+        std.debug.assert(index < ShredSet.bit_length);
+        const mask_bit = maskBit(index);
+        const mask_index = maskIndex(index);
+        defer self.masks[mask_index] |= mask_bit;
+        return self.masks[mask_index] & mask_bit != 0;
+    }
+
+    fn maskBit(index: usize) ShredSet.MaskInt {
+        return @as(ShredSet.MaskInt, 1) << @as(ShredSet.ShiftInt, @truncate(index));
+    }
+    fn maskIndex(index: usize) usize {
+        return index >> @bitSizeOf(ShredSet.ShiftInt);
+    }
+};
+
 pub const SlotOutOfBounds = error{ SlotUnderflow, SlotOverflow };
 
 const MonitoredSlot = struct {
     shreds: ShredSet = ShredSet.initEmpty(),
-    max_seen: ?usize = null,
-    last_shred: ?usize = null,
+    max_seen: ?u32 = null,
+    last_shred: ?u32 = null,
     first_received_timestamp_ms: i64 = 0,
     is_complete: bool = false,
     parent_slot: ?Slot = null,
+    unique_observed_count: u32 = 0,
 
     const Self = @This();
 
-    /// returns whether this is the first shred received for the slot
-    pub fn record(self: *Self, shred_index: usize) bool {
+    /// returns if the slot is *definitely* complete (there may be false negatives)
+    pub fn record(self: *Self, shred_index: u32, is_last_in_slot: bool) bool {
         if (self.is_complete) return false;
-        self.shreds.set(shred_index);
+        if (!bit_set.setAndWasSet(&self.shreds, shred_index)) self.unique_observed_count += 1;
+
+        if (is_last_in_slot) if (self.last_shred) |old_last| {
+            self.last_shred = @min(old_last, shred_index);
+        } else {
+            self.last_shred = shred_index;
+        };
+
         if (self.max_seen == null) {
             self.max_seen = shred_index;
             self.first_received_timestamp_ms = std.time.milliTimestamp();
-            return true;
+        } else {
+            self.max_seen = @max(self.max_seen.?, shred_index);
         }
-        self.max_seen = @max(self.max_seen.?, shred_index);
+
+        if (self.last_shred) |last| if (self.max_seen) |max| {
+            if (self.unique_observed_count == last and last < max) {
+                self.is_complete = true;
+                return true;
+            }
+        };
+
         return false;
     }
 
@@ -287,7 +318,7 @@ const MonitoredSlot = struct {
         for (0..highest_shred_to_check + 1) |i| {
             if (self.shreds.isSet(i)) {
                 if (gap_start) |start| {
-                    try missing_shreds.append(.{ .start = start, .end = i });
+                    try missing_shreds.append(.{ .start = @intCast(start), .end = @intCast(i) });
                     gap_start = null;
                 }
             } else if (gap_start == null) {
