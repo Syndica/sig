@@ -15,19 +15,19 @@ pub const MemoryMap = union(enum) {
         return .{ .aligned = try AlignedMemoryMap.init(regions, version) };
     }
 
-    pub fn region(map: MemoryMap, vm_addr: u64) !Region {
-        return switch (map) {
+    pub fn region(self: MemoryMap, vm_addr: u64) !Region {
+        return switch (self) {
             .aligned => |aligned| aligned.region(vm_addr),
         };
     }
 
     pub fn vmap(
-        map: MemoryMap,
+        self: MemoryMap,
         comptime state: MemoryState,
         vm_addr: u64,
         len: u64,
     ) !state.Slice() {
-        return switch (map) {
+        return switch (self) {
             .aligned => |aligned| aligned.vmap(state, vm_addr, len),
         };
     }
@@ -37,15 +37,15 @@ pub const MemoryState = enum {
     mutable,
     constant,
 
-    fn Slice(state: MemoryState) type {
-        return switch (state) {
+    fn Slice(self: MemoryState) type {
+        return switch (self) {
             .constant => []const u8,
             .mutable => []u8,
         };
     }
 
-    fn Many(access: MemoryState) type {
-        return switch (access) {
+    fn Many(self: MemoryState) type {
+        return switch (self) {
             .constant => [*]const u8,
             .mutable => [*]u8,
         };
@@ -56,9 +56,9 @@ const HostMemory = union(MemoryState) {
     mutable: []u8,
     constant: []const u8,
 
-    fn getSlice(host: HostMemory, comptime state: MemoryState) !state.Slice() {
-        if (host != state) return error.AccessViolation;
-        return @field(host, @tagName(state));
+    fn getSlice(self: HostMemory, comptime state: MemoryState) !state.Slice() {
+        if (self != state) return error.AccessViolation;
+        return @field(self, @tagName(state));
     }
 };
 
@@ -80,13 +80,13 @@ pub const Region = struct {
     /// Get the underlying host slice of memory.
     ///
     /// Returns an error if you're trying to get mutable access to a constant region.
-    pub fn getSlice(reg: Region, comptime state: MemoryState) !state.Slice() {
+    pub fn getSlice(self: Region, comptime state: MemoryState) !state.Slice() {
         return switch (state) {
-            .constant => switch (reg.host_memory) {
+            .constant => switch (self.host_memory) {
                 .constant => |constant| constant,
                 .mutable => |mutable| mutable,
             },
-            .mutable => switch (reg.host_memory) {
+            .mutable => switch (self.host_memory) {
                 .constant => return error.AccessViolation,
                 .mutable => |mutable| mutable,
             },
@@ -94,15 +94,15 @@ pub const Region = struct {
     }
 
     fn translate(
-        reg: Region,
+        self: Region,
         comptime state: MemoryState,
         vm_addr: u64,
         len: u64,
     ) !state.Slice() {
-        if (vm_addr < reg.vm_addr_start) return error.InvalidVirtualAddress;
+        if (vm_addr < self.vm_addr_start) return error.InvalidVirtualAddress;
 
-        const host_slice = try reg.getSlice(state);
-        const begin_offset = vm_addr -| reg.vm_addr_start;
+        const host_slice = try self.getSlice(state);
+        const begin_offset = vm_addr -| self.vm_addr_start;
         if (begin_offset + len <= host_slice.len) {
             return host_slice[begin_offset..][0..len];
         }
@@ -128,11 +128,11 @@ const AlignedMemoryMap = struct {
         };
     }
 
-    fn region(map: *const AlignedMemoryMap, vm_addr: u64) !Region {
+    fn region(self: *const AlignedMemoryMap, vm_addr: u64) !Region {
         const index = vm_addr >> VIRTUAL_ADDRESS_BITS;
 
-        if (index >= 1 and index <= map.regions.len) {
-            const reg = map.regions[index - 1];
+        if (index >= 1 and index <= self.regions.len) {
+            const reg = self.regions[index - 1];
             if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
                 return reg;
             }
@@ -142,12 +142,12 @@ const AlignedMemoryMap = struct {
     }
 
     fn vmap(
-        map: *const AlignedMemoryMap,
+        self: *const AlignedMemoryMap,
         comptime state: MemoryState,
         vm_addr: u64,
         len: u64,
     ) !state.Slice() {
-        const reg = try map.region(vm_addr);
+        const reg = try self.region(vm_addr);
         return reg.translate(state, vm_addr, len);
     }
 };

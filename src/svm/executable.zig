@@ -344,11 +344,11 @@ pub const Assembler = struct {
         };
     }
 
-    fn tokenize(assembler: *Assembler, allocator: std.mem.Allocator) ![]const Statement {
+    fn tokenize(self: *Assembler, allocator: std.mem.Allocator) ![]const Statement {
         var statements: std.ArrayListUnmanaged(Statement) = .{};
         defer statements.deinit(allocator);
 
-        var lines = std.mem.splitScalar(u8, assembler.source, '\n');
+        var lines = std.mem.splitScalar(u8, self.source, '\n');
         while (lines.next()) |line| {
             if (line.len == 0) continue; // empty line, skip
 
@@ -429,13 +429,13 @@ pub fn Registry(T: type) type {
 
         /// Duplicates `name` to free later.
         fn register(
-            registry: *Self,
+            self: *Self,
             allocator: std.mem.Allocator,
             key: u32,
             name: []const u8,
             value: T,
         ) !void {
-            const gop = try registry.map.getOrPut(allocator, key);
+            const gop = try self.map.getOrPut(allocator, key);
             if (gop.found_existing) {
                 if (!std.mem.eql(u8, gop.value_ptr.name, name)) {
                     return error.SymbolHashCollision;
@@ -446,18 +446,18 @@ pub fn Registry(T: type) type {
         }
 
         pub fn registerHashed(
-            registry: *Self,
+            self: *Self,
             allocator: std.mem.Allocator,
             name: []const u8,
             value: T,
         ) !u32 {
             const key = sbpf.hashSymbolName(name);
-            try registry.register(allocator, key, name, value);
+            try self.register(allocator, key, name, value);
             return key;
         }
 
         pub fn registerHashedLegacy(
-            registry: *Self,
+            self: *Self,
             allocator: std.mem.Allocator,
             name: []const u8,
             value: T,
@@ -466,29 +466,29 @@ pub fn Registry(T: type) type {
                 sbpf.hashSymbolName(name)
             else
                 sbpf.hashSymbolName(&std.mem.toBytes(value));
-            try registry.register(allocator, hash, &.{}, value);
+            try self.register(allocator, hash, &.{}, value);
             return hash;
         }
 
-        pub fn lookupKey(registry: *const Self, key: u32) ?Entry {
-            return registry.map.get(key);
+        pub fn lookupKey(self: *const Self, key: u32) ?Entry {
+            return self.map.get(key);
         }
 
         // TODO: this can be sped up by using a bidirectional map
-        pub fn lookupName(registry: *const Self, name: []const u8) ?Entry {
-            var iter = registry.map.valueIterator();
+        pub fn lookupName(self: *const Self, name: []const u8) ?Entry {
+            var iter = self.map.valueIterator();
             while (iter.next()) |entry| {
                 if (std.mem.eql(u8, entry.name, name)) return entry.*;
             }
             return null;
         }
 
-        pub fn deinit(registry: *Self, allocator: std.mem.Allocator) void {
-            var iter = registry.map.valueIterator();
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            var iter = self.map.valueIterator();
             while (iter.next()) |entry| {
                 allocator.free(entry.name);
             }
-            registry.map.deinit(allocator);
+            self.map.deinit(allocator);
         }
     };
 }
@@ -496,7 +496,7 @@ pub fn Registry(T: type) type {
 pub const BuiltinProgram = struct {
     functions: Registry(*const fn (*Vm) syscalls.Error!void) = .{},
 
-    pub fn deinit(program: *BuiltinProgram, allocator: std.mem.Allocator) void {
-        program.functions.deinit(allocator);
+    pub fn deinit(self: *BuiltinProgram, allocator: std.mem.Allocator) void {
+        self.functions.deinit(allocator);
     }
 };
