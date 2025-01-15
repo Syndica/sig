@@ -107,7 +107,6 @@ pub fn main() !void {
             continue;
         } else if (std.mem.startsWith(u8, arg, "-e")) {
             run_expensive_benchmarks = true;
-            collect_metrics = true; // by default collect metrics when running expensive benchmarks
             continue;
         } else if (std.mem.startsWith(u8, arg, "-f")) {
             force_fresh_state = true;
@@ -129,6 +128,17 @@ pub fn main() !void {
         logger.info().log("running all benchmarks");
     } else {
         logger.info().logf("running benchmark with filter: {s}", .{@tagName(filter)});
+    }
+    if (collect_metrics) {
+        logger.info().log("collecting metrics");
+    }
+    if (run_expensive_benchmarks) {
+        logger.info().log("running expensive benchmarks");
+    }
+    if (force_fresh_state) {
+        logger.info().log("forcing fresh state for expensive benchmarks");
+    } else {
+        logger.info().log("re-using state for expensive benchmarks");
     }
 
     const max_time_per_bench = Duration.fromSecs(5); // !!
@@ -179,7 +189,7 @@ pub fn main() !void {
             logger.warn().log("[accounts_db_snapshot]: skipping benchmark, use -e to run");
         }
 
-        if ((filter == .accounts_db_snapshot or run_all) and run_expensive_benchmarks) {
+        if ((filter == .accounts_db_snapshot or run_all) and run_expensive_benchmarks) snapshot_benchmark: {
             // NOTE: snapshot must exist in this directory for the benchmark to run
             // NOTE: also need to increase file limits to run this benchmark (see debugging.md)
             const BENCH_SNAPSHOT_DIR_PATH = @import("accountsdb/db.zig")
@@ -197,12 +207,13 @@ pub fn main() !void {
             if (download_new_snapshot) {
                 // delete existing snapshot dir
                 if (test_snapshot_exists) {
-                    std.debug.print("deleting snapshot dir...\n", .{});
+                    logger.info().log("deleting snapshot dir...");
                     std.fs.cwd().deleteTreeMinStackSize(BENCH_SNAPSHOT_DIR_PATH) catch |err| {
-                        std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{
+                        logger.err().logf("failed to delete snapshot dir ('{s}'): {}", .{
                             BENCH_SNAPSHOT_DIR_PATH,
                             err,
                         });
+                        return err;
                     };
                 }
 
@@ -227,16 +238,25 @@ pub fn main() !void {
                 try gossip_service.start(.{});
 
                 // download and unpack snapshot
-                var snapshot_manifests, _ = try sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
+                var snapshot_manifests, _ = sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
                     allocator,
                     logger,
-                    snapshot_dir,
-                    null,
+                    BENCH_SNAPSHOT_DIR_PATH,
                     .{
                         .gossip_service = gossip_service,
                         .force_new_snapshot_download = true,
+                        .max_number_of_download_attempts = 50,
+                        .min_snapshot_download_speed_mbs = 10,
                     },
-                );
+                ) catch |err| {
+                    switch (err) {
+                        error.UnableToDownloadSnapshot => {
+                            logger.err().log("unable to download snapshot, skipping benchmark...");
+                            break :snapshot_benchmark;
+                        },
+                        else => return err,
+                    }
+                };
                 defer snapshot_manifests.deinit(allocator);
             }
 

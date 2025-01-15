@@ -311,7 +311,7 @@ pub const AccountIndex = struct {
         // manager must be empty
         std.debug.assert(self.reference_manager.capacity == 0);
 
-        self.logger.info().log("loading state from disk...");
+        self.logger.info().log("running account_index.loadFromDisk");
         const reference_file = try dir.openFile("index.bin", .{});
         const size = (try reference_file.stat()).size;
         const index_memory = try std.posix.mmap(
