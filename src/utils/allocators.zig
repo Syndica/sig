@@ -1266,6 +1266,7 @@ test "fuzzBatchAllocator - past failures" {
 
 /// args "[allocator] [max_actions]"
 pub fn runFuzzer(seed: u64, args: *std.process.ArgIterator) !void {
+    std.debug.print("Running allocator fuzzer with initial seed: {}\n", .{seed});
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
     // parse args
