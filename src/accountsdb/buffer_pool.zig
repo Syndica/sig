@@ -162,6 +162,32 @@ pub const BufferPool = struct {
         const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
         frame_map.deinit(init_allocator);
         frame_map_lg.unlock();
+
+        lifetime_probe(0, .reset_all);
+    }
+
+    const ProbeKind = enum(u8) { init, deinit, reset_all };
+    noinline fn lifetime_probe(frame: FrameIndex, kind: ProbeKind) callconv(.C) void {
+        std.mem.doNotOptimizeAway(frame);
+        std.mem.doNotOptimizeAway(kind);
+    }
+    comptime {
+        @export(lifetime_probe, .{
+            .name = "sig_bufferpool_lifetime_probe",
+        });
+
+        lifetime_probe(0, .reset_all);
+    }
+
+    const ProbeKind = enum(u8) { init, deinit, reset_all };
+    noinline fn lifetime_probe(frame: FrameIndex, kind: ProbeKind) callconv(.C) void {
+        std.mem.doNotOptimizeAway(frame);
+        std.mem.doNotOptimizeAway(kind);
+    }
+    comptime {
+        @export(lifetime_probe, .{
+            .name = "sig_bufferpool_lifetime_probe",
+        });
     }
 
     pub fn computeNumberofFrameIndices(
@@ -419,6 +445,8 @@ pub const BufferPool = struct {
             }
         }
 
+        for (frame_indices) |f_idx| lifetime_probe(f_idx, .init);
+
         return ReadHandle.initCached(
             self,
             frame_indices,
@@ -484,7 +512,7 @@ pub const BufferPool = struct {
             try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
         }
 
-        // for (frame_indices) |f_idx| if (f_idx == 2097144) @breakpoint();
+        for (frame_indices) |f_idx| lifetime_probe(f_idx, .init);
 
         return ReadHandle.initCached(
             self,
