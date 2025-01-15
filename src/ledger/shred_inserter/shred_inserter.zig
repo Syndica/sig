@@ -947,7 +947,7 @@ pub const ShredInserter = struct {
         recovered: usize,
     ) void {
         const start, const end = erasure_meta.dataShredsIndices();
-        self.logger.debug().logf(
+        self.logger.trace().logf(
             \\datapoint: blockstore-erasure
             \\    slot: {[slot]}
             \\    start_index: {[start_index]}

@@ -17,7 +17,7 @@ const ScopedLogger = sig.trace.ScopedLogger;
 /// You can add threads or state, then await all threads and
 /// clean up their state.
 pub const ServiceManager = struct {
-    logger: ScopedLogger(@typeName(Self)),
+    logger: ScopedLogger(LOG_SCOPE),
     /// Threads to join.
     threads: ArrayListUnmanaged(std.Thread),
     exit: *Atomic(bool),
@@ -31,6 +31,8 @@ pub const ServiceManager = struct {
 
     const Self = @This();
 
+    pub const LOG_SCOPE = "service_manager";
+
     pub fn init(
         backing_allocator: Allocator,
         logger: Logger,
@@ -40,7 +42,7 @@ pub const ServiceManager = struct {
         default_spawn_config: std.Thread.SpawnConfig,
     ) Self {
         return .{
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(LOG_SCOPE),
             .exit = exit,
             .threads = .{},
             .arena = ArenaAllocator.init(backing_allocator),
@@ -147,7 +149,7 @@ pub const ReturnHandler = struct {
 /// It's guaranteed to run at least once in order to not race initialization with
 /// the `exit` flag.
 pub fn runService(
-    logger: ScopedLogger(@typeName(ServiceManager)),
+    logger: ScopedLogger(ServiceManager.LOG_SCOPE),
     exit: *Atomic(bool),
     maybe_name: ?[]const u8,
     config: RunConfig,
@@ -160,7 +162,7 @@ pub fn runService(
         "thread {d}",
         .{std.Thread.getCurrentId()},
     );
-    logger.info().logf("Starting {s}", .{name});
+    logger.info().logf("starting {s}", .{name});
     var timer = try std.time.Timer.start();
     var last_iteration: u64 = 0;
     var num_oks: u64 = 0;

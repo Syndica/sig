@@ -1,0 +1,84 @@
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - 9090:9090
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prom_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      # "--log.level=debug" # Not receiving metrics? Consider uncommenting
+
+    # Prometheus needs to be able to connect to the host network as "sig" isn't
+    # containerised. No other service should talk to the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki:/etc/loki:ro
+    command:
+      - "--config.file=/etc/loki/loki.yml"
+
+  alloy:
+    image: grafana/alloy:v1.3.1
+    container_name: alloy
+
+    # needed to access sig process
+    pid: "host"
+    privileged: true
+
+    ports:
+      - "3200:3200"
+    volumes:
+      - "./alloy/config.alloy:/etc/alloy/config.alloy:ro"
+      - "../logs:/var/log/alloy:ro"
+    command:
+      [
+        "run",
+        "--server.http.listen-addr=0.0.0.0:3200",
+        "/etc/alloy/config.alloy",
+      ]
+    environment:
+      - SIG_PID=${SIG_PID}
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: grafana
+    ports:
+      - 3000:3000
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=grafana
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    volumes:
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/alerting:/etc/grafana/provisioning/alerting
+
+  node-exporter:
+    image: prom/node-exporter
+    container_name: node-exporter
+    ports:
+      - 9100:9100
+    restart: unless-stopped
+
+  pyroscope:
+    image: grafana/pyroscope:1.11.0
+    container_name: pyroscope
+    ports:
+      - "4040:4040"
+    environment:
+      - STORAGE_DRIVER=in-memory
+
+volumes:
+  prom_data:

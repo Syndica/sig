@@ -1,7 +1,6 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../sig.zig");
-const Bloom = @import("../bloom/bloom.zig").Bloom;
 
 const bincode = sig.bincode;
 const socket_utils = sig.net.socket_utils;
@@ -15,10 +14,10 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const EndPoint = network.EndPoint;
 const UdpSocket = network.Socket;
 
+const Bloom = sig.bloom.Bloom;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Logger = sig.trace.log.Logger;
-const ScopedLogger = sig.trace.log.ScopedLogger;
 const Packet = sig.net.Packet;
 const EchoServer = sig.net.echo.Server;
 const SocketAddr = sig.net.SocketAddr;
@@ -169,11 +168,14 @@ pub const GossipService = struct {
     thread_pool: ThreadPool,
     // TODO: fix when http server is working
     // echo_server: EchoServer,
-    logger: ScopedLogger(@typeName(GossipService)),
+    logger: ScopedLogger,
     metrics: GossipMetrics,
     service_manager: ServiceManager,
 
     const Self = @This();
+
+    pub const LOG_SCOPE = "gossip_service";
+    pub const ScopedLogger = sig.trace.log.ScopedLogger(LOG_SCOPE);
 
     const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
 
@@ -211,7 +213,7 @@ pub const GossipService = struct {
         maybe_entrypoints: ?[]const SocketAddr,
         logger: Logger,
     ) !Self {
-        const gossip_logger = logger.withScope(@typeName(GossipService));
+        const gossip_logger = logger.withScope(LOG_SCOPE);
 
         // setup channels for communication between threads
         var packet_incoming_channel = try Channel(Packet).create(allocator);
@@ -235,7 +237,7 @@ pub const GossipService = struct {
             .max_threads = @intCast(n_threads),
             .stack_size = 2 * 1024 * 1024,
         });
-        gossip_logger.debug().logf("using n_threads in gossip: {}", .{n_threads});
+        gossip_logger.info().logf("starting threadpool with {} threads", .{n_threads});
 
         // setup the table
         var gossip_table = try GossipTable.init(gossip_value_allocator);
@@ -448,7 +450,7 @@ pub const GossipService = struct {
         gossip_value_allocator: std.mem.Allocator,
         packet: Packet,
         verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
-        logger: ScopedLogger(@typeName(VerifyMessageEntry)),
+        logger: ScopedLogger,
 
         pub fn callback(self: *VerifyMessageEntry) !void {
             const packet = self.packet;
@@ -458,19 +460,19 @@ pub const GossipService = struct {
                 packet.data[0..packet.size],
                 bincode.Params.standard,
             ) catch |e| {
-                self.logger.err().logf("gossip: packet_verify: failed to deserialize: {s}", .{@errorName(e)});
+                self.logger.err().logf("packet_verify: failed to deserialize: {s}", .{@errorName(e)});
                 return;
             };
 
             message.sanitize() catch |e| {
-                self.logger.err().logf("gossip: packet_verify: failed to sanitize: {s}", .{@errorName(e)});
+                self.logger.err().logf("packet_verify: failed to sanitize: {s}", .{@errorName(e)});
                 bincode.free(self.gossip_value_allocator, message);
                 return;
             };
 
             message.verifySignature() catch |e| {
                 self.logger.err().logf(
-                    "gossip: packet_verify: failed to verify signature from {}: {s}",
+                    "packet_verify: failed to verify signature from {}: {s}",
                     .{ packet.addr, @errorName(e) },
                 );
                 bincode.free(self.gossip_value_allocator, message);
@@ -506,7 +508,7 @@ pub const GossipService = struct {
                 .gossip_value_allocator = self.gossip_value_allocator,
                 .verified_incoming_channel = self.verified_incoming_channel,
                 .packet = undefined,
-                .logger = self.logger.withScope(@typeName(VerifyMessageEntry)),
+                .logger = self.logger,
             };
         }
 
@@ -848,7 +850,7 @@ pub const GossipService = struct {
             var x_timer = sig.time.Timer.start() catch unreachable;
             const now = getWallclockMs();
             const n_pubkeys_dropped = gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY) catch |err| err_blk: {
-                self.logger.warn().logf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
+                self.logger.err().logf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
                 break :err_blk 0;
             };
             const elapsed = x_timer.read().asMillis();
@@ -1428,7 +1430,7 @@ pub const GossipService = struct {
         for (tasks) |*task| {
             packet_loop: for (task.output.items) |output| {
                 self.packet_outgoing_channel.send(output) catch {
-                    self.logger.err().log("failed to send outgoing packet");
+                    self.logger.err().log("handleBatchPullRequest: failed to send outgoing packet");
                     break :packet_loop;
                 };
                 self.metrics.pull_responses_sent.add(1);
@@ -1842,10 +1844,11 @@ pub const GossipService = struct {
         for (self.entrypoints.items) |entrypoint| {
             if (entrypoint.info) |info| {
                 if (info.shred_version != 0) {
-                    self.logger.info().logf(
-                        "shred version: {} - from entrypoint contact info: {s}",
-                        .{ info.shred_version, entrypoint.addr.toString().constSlice() },
-                    );
+                    self.logger.info()
+                        .field("shred_version", info.shred_version)
+                        .field("entrypoint", entrypoint.addr.toString().constSlice())
+                        .log("shred_version_from_entrypoint");
+
                     self.my_shred_version.store(info.shred_version, .monotonic);
                     self.my_contact_info.shred_version = info.shred_version;
                     return true;
@@ -2096,7 +2099,7 @@ pub const GossipMetrics = struct {
     // logging details
     _logging_fields: struct {
         // Scoping to GossipService instead of logging fields struct.
-        logger: ScopedLogger(@typeName(GossipService)),
+        logger: GossipService.ScopedLogger,
         log_interval_micros: i64 = 10 * std.time.us_per_s,
         last_log: i64 = 0,
         last_logged_snapshot: StatsToLog = .{},
@@ -2133,7 +2136,7 @@ pub const GossipMetrics = struct {
         5000, 10000,
     };
 
-    pub fn init(logger: ScopedLogger(@typeName(GossipService))) GetMetricError!Self {
+    pub fn init(logger: GossipService.ScopedLogger) GetMetricError!Self {
         var self: Self = undefined;
         const registry = globalRegistry();
         std.debug.assert(try registry.initFields(&self) == 1);
@@ -2177,7 +2180,7 @@ pub const GossipMetrics = struct {
         };
 
         logging_fields.logger.info().logf(
-            "gossip: recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
+            "recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
                 current_stats.gossip_packets_received_total - logging_fields.last_logged_snapshot.gossip_packets_received_total,
                 current_stats.ping_messages_recv - logging_fields.last_logged_snapshot.ping_messages_recv,
@@ -2189,7 +2192,7 @@ pub const GossipMetrics = struct {
             },
         );
         logging_fields.logger.info().logf(
-            "gossip: sent: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
+            "sent: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
                 current_stats.ping_messages_sent - logging_fields.last_logged_snapshot.ping_messages_sent,
                 current_stats.pong_messages_sent - logging_fields.last_logged_snapshot.pong_messages_sent,

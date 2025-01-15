@@ -10,8 +10,8 @@ const Random = std.rand.Random;
 const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
+const EpochContextManager = sig.adapter.EpochContextManager;
 const GossipTable = sig.gossip.GossipTable;
-const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
@@ -19,8 +19,7 @@ const RwMux = sig.sync.RwMux;
 const Registry = sig.prometheus.Registry;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
-const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
-const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
 const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
@@ -52,12 +51,10 @@ pub const ShredCollectorDependencies = struct {
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
     my_contact_info: ThreadSafeContactInfo,
-    leader_schedule: SlotLeaders,
+    epoch_context_mgr: *EpochContextManager,
     shred_inserter: sig.ledger.ShredInserter,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
-    leader_schedule_cache: *LeaderScheduleCache,
-    bank_fields: *const sig.accounts_db.snapshots.BankFields,
 };
 
 /// Start the Shred Collector.
@@ -82,16 +79,20 @@ pub fn start(
         .{},
     );
     var arena = service_manager.arena.allocator();
+    const defers = &service_manager.defers; // use this instead of defer statements
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
-    var retransmit_channel = try sig.sync.Channel(sig.net.Packet).init(deps.allocator);
-    defer retransmit_channel.deinit();
+    // channels
+    const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
+    try defers.deferCall(Channel(Packet).destroy, .{unverified_shred_channel});
+    const shreds_to_insert_channel = try Channel(Packet).create(deps.allocator);
+    try defers.deferCall(Channel(Packet).destroy, .{shreds_to_insert_channel});
+    const retransmit_channel = try Channel(sig.net.Packet).create(deps.allocator);
+    try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
 
     // receiver (threads)
-    const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
-    const verified_shred_channel = try Channel(Packet).create(deps.allocator);
     const shred_receiver = try arena.create(ShredReceiver);
     shred_receiver.* = .{
         .allocator = deps.allocator,
@@ -119,9 +120,9 @@ pub fn start(
             deps.exit,
             deps.registry,
             unverified_shred_channel,
-            verified_shred_channel,
-            &retransmit_channel,
-            deps.leader_schedule,
+            shreds_to_insert_channel,
+            retransmit_channel,
+            deps.epoch_context_mgr.slotLeaders(),
         },
     );
 
@@ -142,10 +143,10 @@ pub fn start(
             deps.exit,
             deps.logger.unscoped(),
             deps.registry,
-            verified_shred_channel,
+            shreds_to_insert_channel,
             shred_tracker,
             deps.shred_inserter,
-            deps.leader_schedule,
+            deps.epoch_context_mgr.slotLeaders(),
         },
     );
 
@@ -156,10 +157,9 @@ pub fn start(
         .{.{
             .allocator = deps.allocator,
             .my_contact_info = deps.my_contact_info,
-            .bank_fields = deps.bank_fields,
-            .leader_schedule_cache = deps.leader_schedule_cache,
+            .epoch_context_mgr = deps.epoch_context_mgr,
             .gossip_table_rw = deps.gossip_table_rw,
-            .receiver = &retransmit_channel,
+            .receiver = retransmit_channel,
             .maybe_num_retransmit_threads = deps.n_retransmit_threads,
             .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
             .exit = deps.exit,
@@ -187,7 +187,7 @@ pub fn start(
         deps.exit,
     );
     const repair_svc = try arena.create(RepairService);
-    try service_manager.defers.deferCall(RepairService.deinit, .{repair_svc});
+    try defers.deferCall(RepairService.deinit, .{repair_svc});
     repair_svc.* = try RepairService.init(
         deps.allocator,
         deps.logger.unscoped(),
