@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 
-const ReferenceCounter = sig.sync.reference_counter.ReferenceCounter;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const bincode = sig.bincode;
 
@@ -417,7 +416,12 @@ pub const BufferPool = struct {
             std.debug.assert(cqe_count == n_submitted); // why did we not receive them all?
             for (0.., cqes) |i, cqe| {
                 if (cqe.err() != .SUCCESS) {
-                    std.debug.panic("cqe: {}, err: {}, i: {}, file: {}", .{ cqe, cqe.err(), i, file });
+                    std.debug.panic("cqe: {}, err: {}, i: {}, file: {}", .{
+                        cqe,
+                        cqe.err(),
+                        i,
+                        file,
+                    });
                 }
                 const f_idx = cqe.user_data;
                 const bytes_read: FrameOffset = @intCast(cqe.res);
@@ -801,7 +805,11 @@ pub const ReadHandle = struct {
         }
     }
 
-    fn bincodeDeserialize(alloc: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!Inner {
+    fn bincodeDeserialize(
+        alloc: std.mem.Allocator,
+        reader: anytype,
+        params: bincode.Params,
+    ) anyerror!Inner {
         const data = try bincode.read(alloc, []u8, reader, params);
         return ReadHandle.initExternalOwned(data).inner;
     }
@@ -846,7 +854,8 @@ pub const ReadHandle = struct {
                 .cached => |cached| {
                     if (cached.frame_indices.len == 0) return 0;
                     return (@as(u32, @intCast(cached.frame_indices.len)) - 1) *
-                        FRAME_SIZE + cached.last_frame_end_offset - cached.first_frame_start_offset;
+                        FRAME_SIZE +
+                        cached.last_frame_end_offset - cached.first_frame_start_offset;
                 },
                 .external => |allocated| @intCast(allocated.slice.len),
             };
@@ -914,7 +923,9 @@ pub const ReadHandle = struct {
                 const offset = index + cached.first_frame_start_offset;
                 std.debug.assert(offset >= cached.first_frame_start_offset);
                 std.debug.assert(offset / FRAME_SIZE < cached.frame_indices.len);
-                std.debug.assert(cached.frame_indices[offset / FRAME_SIZE] < cached.buffer_pool.frames.len);
+                std.debug.assert(
+                    cached.frame_indices[offset / FRAME_SIZE] < cached.buffer_pool.frames.len,
+                );
 
                 break :blk cached.buffer_pool.frames[
                     cached.frame_indices[offset / FRAME_SIZE]
@@ -1014,7 +1025,12 @@ pub const ReadHandle = struct {
         return self.readAllocate(allocator, 0, self.len());
     }
 
-    pub fn readAllocate(self: ReadHandle, allocator: std.mem.Allocator, start: FileOffset, end: FileOffset) ![]u8 {
+    pub fn readAllocate(
+        self: ReadHandle,
+        allocator: std.mem.Allocator,
+        start: FileOffset,
+        end: FileOffset,
+    ) ![]u8 {
         const buf = try allocator.alloc(u8, end - start);
         self.read(start, end, buf) catch unreachable; // invalid account?
         return buf;
@@ -1070,10 +1086,15 @@ pub const ReadHandle = struct {
                 },
                 0b10 => { // first, !last (first frame)
                     std.debug.assert(i == 0);
-                    const read_len = @min(bytes_left, FRAME_SIZE - cached.first_frame_start_offset);
+                    const read_len = @min(
+                        bytes_left,
+                        FRAME_SIZE - cached.first_frame_start_offset,
+                    );
                     @memcpy(
                         buf[0..read_len],
-                        cached.buffer_pool.frames[f_idx][cached.first_frame_start_offset + range_start_offset ..][0..read_len],
+                        cached.buffer_pool.frames[
+                            f_idx
+                        ][cached.first_frame_start_offset + range_start_offset ..][0..read_len],
                     );
                     buf_offset += read_len;
                 },
@@ -1093,7 +1114,8 @@ pub const ReadHandle = struct {
                         buf[0..readable_len],
                         cached.buffer_pool.frames[
                             f_idx
-                        ][cached.first_frame_start_offset + range_start_offset ..][0..readable_len],
+                        ][cached.first_frame_start_offset +
+                            range_start_offset ..][0..readable_len],
                     );
                     buf_offset += self.len();
                 },
@@ -1115,7 +1137,10 @@ pub const ReadHandle = struct {
     ) error{ InvalidArgument, CantZeroCopyStrided }![]const u8 {
         switch (self.inner) {
             .external => |a| return a.slice[start..][0..length],
-            .sub_read => |sr| return sr.parent.zeroCopySlice(sr.start + start, sr.start + start + length),
+            .sub_read => |sr| return sr.parent.zeroCopySlice(
+                sr.start + start,
+                sr.start + start + length,
+            ),
             .cached => {},
         }
 
@@ -1503,15 +1528,25 @@ test "BufferPool random read" {
             );
             defer read2.deinit(gpa.allocator());
 
-            try std.testing.expect(
-                read.inner.cached.first_frame_start_offset == read2.inner.cached.first_frame_start_offset,
+            try std.testing.expectEqual(
+                read.inner.cached.first_frame_start_offset,
+                read2.inner.cached.first_frame_start_offset,
             );
-            try std.testing.expect(read.inner.cached.last_frame_end_offset == read2.inner.cached.last_frame_end_offset);
-            try std.testing.expectEqualSlices(u32, read.inner.cached.frame_indices, read2.inner.cached.frame_indices);
+            try std.testing.expectEqual(
+                read.inner.cached.last_frame_end_offset,
+                read2.inner.cached.last_frame_end_offset,
+            );
+            try std.testing.expectEqualSlices(
+                u32,
+                read.inner.cached.frame_indices,
+                read2.inner.cached.frame_indices,
+            );
         }
 
         var total_bytes_read: u32 = 0;
-        for (read.inner.cached.frame_indices) |f_idx| total_bytes_read += bp.frames_metadata.size[f_idx];
+        for (read.inner.cached.frame_indices) |f_idx| {
+            total_bytes_read += bp.frames_metadata.size[f_idx];
+        }
         const read_data_bp_iter = try allocator.alloc(u8, read.len());
         defer allocator.free(read_data_bp_iter);
         {
@@ -1576,10 +1611,19 @@ test "ReadHandle bincode" {
 
         try bincode.write(serialised_from_slice.writer(), read_data, .{});
 
-        const deserialised_from_slice = try bincode.readFromSlice(allocator, ReadHandle, serialised_from_slice.items, .{});
+        const deserialised_from_slice = try bincode.readFromSlice(
+            allocator,
+            ReadHandle,
+            serialised_from_slice.items,
+            .{},
+        );
         defer deserialised_from_slice.deinit(allocator);
 
-        try std.testing.expectEqualSlices(u8, read_data, deserialised_from_slice.inner.external.slice);
+        try std.testing.expectEqualSlices(
+            u8,
+            read_data,
+            deserialised_from_slice.inner.external.slice,
+        );
     }
 
     {
@@ -1588,9 +1632,18 @@ test "ReadHandle bincode" {
 
         try bincode.write(serialised_from_handle.writer(), read, .{});
 
-        const deserialised_from_handle = try bincode.readFromSlice(allocator, ReadHandle, serialised_from_handle.items, .{});
+        const deserialised_from_handle = try bincode.readFromSlice(
+            allocator,
+            ReadHandle,
+            serialised_from_handle.items,
+            .{},
+        );
         defer deserialised_from_handle.deinit(allocator);
 
-        try std.testing.expectEqualSlices(u8, read_data, deserialised_from_handle.inner.external.slice);
+        try std.testing.expectEqualSlices(
+            u8,
+            read_data,
+            deserialised_from_handle.inner.external.slice,
+        );
     }
 }
