@@ -523,6 +523,7 @@ pub const FramesMetadata = struct {
 
     /// frequency for the S3_FIFO
     /// Yes, really, only 0, 1, 2, 3.
+    /// Atomic - do not access directly.
     freq: []u2,
 
     /// which S3_FIFO queue this frame exists in
@@ -589,6 +590,35 @@ pub const FramesMetadata = struct {
         self.in_queue[index] = .none;
         self.size[index] = 0;
         self.key[index] = FileIdFileOffset.INVALID;
+    }
+
+    fn freqIncrement(self: FramesMetadata, index: FrameIndex) void {
+        // note for reviewers: I myself do not trust this code, have a think about it
+
+        const old_freq = @atomicRmw(u2, &self.freq[index], .Add, 1, .acq_rel);
+        if (old_freq == 0) {
+            // we overflowed (3->0), set back to max
+            @atomicStore(u2, &self.freq[index], 3, .release);
+        }
+    }
+
+    fn freqDecrement(self: FramesMetadata, index: FrameIndex) void {
+        const old_freq = @atomicRmw(u2, &self.freq[index], .Add, 1, .acq_rel);
+        if (old_freq == 3) {
+            // we overflowed (0->3), set back to min
+            @atomicStore(u2, &self.freq[index], 0, .release);
+        }
+    }
+
+    fn freqIsZero(self: FramesMetadata, index: FrameIndex) bool {
+        // note for reviewers: I myself do not trust this code, have a think about it
+        const freq = @atomicLoad(u2, &self.freq[index], .acquire);
+        return freq == 0;
+    }
+
+    fn freqSetToOne(self: FramesMetadata, index: FrameIndex) void {
+        // note for reviewers: I myself do not trust this code, have a think about it
+        @atomicStore(u2, &self.freq[index], 1, .release);
     }
 };
 
@@ -658,11 +688,11 @@ pub const HierarchicalFIFO = struct {
 
         switch (metadata.in_queue[key]) {
             .main, .small => {
-                metadata.freq[key] +|= 1;
+                metadata.freqIncrement(key);
             },
             .ghost => {
-                std.debug.assert(metadata.freq[key] == 0);
-                metadata.freq[key] = 1;
+                std.debug.assert(metadata.freqIsZero(key));
+                metadata.freqSetToOne(key);
                 // Add key to main too - important to note that the key *still*
                 // exists within ghost, but from now on we'll ignore that entry.
                 self.main.writeItemAssumeCapacity(key);
@@ -672,7 +702,7 @@ pub const HierarchicalFIFO = struct {
                 if (self.small.writableLength() == 0) {
                     const popped_small = self.small.readItem().?;
 
-                    if (metadata.freq[popped_small] == 0) {
+                    if (metadata.freqIsZero(popped_small)) {
                         self.ghost.writeItemAssumeCapacity(popped_small);
                         metadata.in_queue[popped_small] = .ghost;
                     } else {
@@ -719,7 +749,7 @@ pub const HierarchicalFIFO = struct {
 
             // alive evicted keys are reinserted, we try again
             if (metadata.rc[evicted].isAlive()) {
-                metadata.freq[evicted] = 1;
+                metadata.freqSetToOne(evicted);
                 self.main.writeItemAssumeCapacity(evicted);
                 metadata.in_queue[evicted] = .main;
                 alive_eviction_attempts += 1;
@@ -773,10 +803,10 @@ pub const HierarchicalFIFO = struct {
                 .main => if (metadata.in_queue[popped_key] != .main) unreachable,
             }
 
-            if (metadata.freq[popped_key] == 0) {
+            if (metadata.freqIsZero(popped_key)) {
                 break popped_key;
             } else {
-                metadata.freq[popped_key] -|= 1;
+                metadata.freqDecrement(popped_key);
                 queue.writeItemAssumeCapacity(popped_key);
             }
         } else null;
