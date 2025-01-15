@@ -113,16 +113,14 @@ pub fn runShredRetransmitter(params: struct {
         ));
     }
 
-    try thread_handles.append(try std.Thread.spawn(
-        .{},
-        socket_utils.sendSocket,
-        .{
-            retransmit_socket,
-            &retransmit_to_socket_channel,
-            params.logger,
-            .{ .unordered = params.exit },
-        },
-    ));
+    const pipe = try socket_utils.SocketPipe.initSender(
+        params.allocator,
+        params.logger,
+        retransmit_socket,
+        &retransmit_to_socket_channel,
+        .{ .unordered = params.exit },
+    );
+    defer pipe.deinit(params.allocator);
 
     for (thread_handles.items) |thread| thread.join();
 }
@@ -153,9 +151,11 @@ fn receiveShreds(
     defer deduper.deinit();
 
     var shreds = std.ArrayList(Packet).init(allocator);
+    var receive_shreds_timer = try sig.time.Timer.start();
 
-    while (!exit.load(.acquire)) {
-        var receive_shreds_timer = try sig.time.Timer.start();
+    while (true) {
+        receiver.wait(.{ .unordered = exit }) catch break;
+        receive_shreds_timer.reset();
 
         const receiver_len = receiver.len();
         if (receiver_len == 0) continue;
@@ -323,6 +323,7 @@ fn retransmitShreds(
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
+        // NOTE: multiple `retransmitShreds` run concurrently can't use receiver.wait() here.
         const retransmit_info: RetransmitShredInfo = receiver.tryReceive() orelse continue;
         defer retransmit_info.turbine_tree.releaseUnsafe();
 
