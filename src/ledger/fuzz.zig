@@ -149,7 +149,7 @@ fn dbPut(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.R
 fn dbGet(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.Random) !void {
     try executed_actions.put(Actions.get, {});
     const dataKeys = try getKeys(data_map);
-    if (dataKeys.items.len > 0) {
+    if (dataKeys.items.len > 0 and random.boolean()) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
         const expected = data_map.get(key) orelse return error.KeyNotFoundError;
@@ -159,7 +159,8 @@ fn dbGet(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.R
         try std.testing.expect(std.mem.eql(u8, expected.value, actual.value));
     } else {
         // If there are no keys, we should get a null value.
-        const key = random.int(u32);
+        var key: u32 = random.int(u32);
+        while (data_map.contains(key)) key = random.int(u32);
         const actual = try db.get(allocator, cf1, key);
         try std.testing.expectEqual(null, actual);
     }
@@ -168,7 +169,7 @@ fn dbGet(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.R
 fn dbGetBytes(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.Random) !void {
     try executed_actions.put(Actions.get_bytes, {});
     const dataKeys = try getKeys(data_map);
-    if (dataKeys.items.len > 0) {
+    if (dataKeys.items.len > 0 and random.boolean()) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
         const expected = data_map.get(key) orelse return error.KeyNotFoundError;
@@ -183,7 +184,8 @@ fn dbGetBytes(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: 
         try std.testing.expect(std.mem.eql(u8, expected.value, actual.value));
     } else {
         // If there are no keys, we should get a null value.
-        const key = random.int(u32);
+        var key: u32 = random.int(u32);
+        while (data_map.contains(key)) key = random.int(u32);
         const actual = try db.getBytes(cf1, key);
         try std.testing.expectEqual(null, actual);
     }
@@ -209,7 +211,7 @@ fn dbCount(
 fn dbContains(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.Random) !void {
     try executed_actions.put(Actions.contains, {});
     const dataKeys = try getKeys(data_map);
-    if (dataKeys.items.len > 0) {
+    if (dataKeys.items.len > 0 and random.boolean()) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
 
@@ -218,7 +220,8 @@ fn dbContains(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: 
         try std.testing.expect(actual);
     } else {
         // If there are no keys, we should get a null value.
-        const key = random.int(u32);
+        var key: u32 = random.int(u32);
+        while (data_map.contains(key)) key = random.int(u32);
         const actual = try db.contains(cf1, key);
         try std.testing.expect(!actual);
     }
@@ -227,7 +230,7 @@ fn dbContains(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: 
 fn dbDelete(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.Random) !void {
     try executed_actions.put(Actions.delete, {});
     const dataKeys = try getKeys(data_map);
-    if (dataKeys.items.len > 0) {
+    if (dataKeys.items.len > 0 and random.boolean()) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
 
@@ -239,7 +242,8 @@ fn dbDelete(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: st
         _ = data_map.remove(key);
     } else {
         // If there are no keys, we should get a null value.
-        const key = random.int(u32);
+        var key: u32 = random.int(u32);
+        while (data_map.contains(key)) key = random.int(u32);
         try db.delete(cf1, key);
     }
 }
