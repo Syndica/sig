@@ -17,9 +17,6 @@ const cf1 = ColumnFamily{
     .Value = Data,
 };
 
-// Note: This is a simpler blockstore which is used to make sure
-// the method calls being fuzzed return expected data.
-var data_map = std.AutoHashMap(u32, Data).init(allocator);
 var executed_actions = std.AutoHashMap(Actions, void).init(allocator);
 
 pub const BlockstoreDB = switch (build_options.blockstore_db) {
@@ -66,16 +63,14 @@ fn createBlockstoreDB() !BlockstoreDB {
     );
 }
 
-pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
+pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
+    var seed = initial_seed;
     const maybe_max_actions_string = args.next();
 
     const maybe_max_actions = if (maybe_max_actions_string) |max_actions_str|
         try std.fmt.parseInt(usize, max_actions_str, 10)
     else
         null;
-
-    var prng = std.rand.DefaultPrng.init(seed);
-    const random = prng.random();
 
     const ledger_path =
         try std.fmt.allocPrint(allocator, "{s}/ledger", .{sig.FUZZ_DATA_DIR});
@@ -92,27 +87,37 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var count: u64 = 0;
 
-    while (true) {
-        if (maybe_max_actions) |max| {
-            if (count >= max) {
-                std.debug.print("{s} reached max actions: {}\n", .{ "action_name", max });
-                break;
+    while (true) outer: {
+        var prng = std.rand.DefaultPrng.init(seed);
+        const random = prng.random();
+        // This is a simpler blockstore which is used to make sure
+        // the method calls being fuzzed return expected data.
+        var data_map = std.AutoHashMap(u32, Data).init(allocator);
+        defer data_map.deinit();
+        for (0..1_000) |_| {
+            if (maybe_max_actions) |max| {
+                if (count >= max) {
+                    std.debug.print("{s} reached max actions: {}\n", .{ "action_name", max });
+                    break :outer;
+                }
             }
+
+            const action = random.enumValue(Actions);
+
+            switch (action) {
+                .put => try dbPut(&data_map, &db, random),
+                .get => try dbGet(&data_map, &db, random),
+                .get_bytes => try dbGetBytes(&data_map, &db, random),
+                .count => try dbCount(&data_map, &db),
+                .contains => try dbContains(&data_map, &db, random),
+                .delete => try dbDelete(&data_map, &db, random),
+                .batch => try batchAPI(&data_map, &db, random),
+            }
+
+            count += 1;
         }
-
-        const action = random.enumValue(Actions);
-
-        switch (action) {
-            .put => try dbPut(&db, random),
-            .get => try dbGet(&db, random),
-            .get_bytes => try dbGetBytes(&db, random),
-            .count => try dbCount(&db),
-            .contains => try dbContains(&db, random),
-            .delete => try dbDelete(&db, random),
-            .batch => try batchAPI(&db, random),
-        }
-
-        count += 1;
+        seed += 1;
+        std.debug.print("using seed: {}\n", .{seed});
     }
 
     inline for (@typeInfo(Actions).Enum.fields) |field| {
@@ -125,6 +130,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 }
 
 fn dbPut(
+    data_map: *std.AutoHashMap(u32, Data),
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
@@ -145,11 +151,12 @@ fn dbPut(
 }
 
 fn dbGet(
+    data_map: *std.AutoHashMap(u32, Data),
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
     try executed_actions.put(Actions.get, {});
-    const dataKeys = try getKeys(&data_map);
+    const dataKeys = try getKeys(data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
@@ -167,11 +174,12 @@ fn dbGet(
 }
 
 fn dbGetBytes(
+    data_map: *std.AutoHashMap(u32, Data),
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
     try executed_actions.put(Actions.get_bytes, {});
-    const dataKeys = try getKeys(&data_map);
+    const dataKeys = try getKeys(data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
@@ -194,6 +202,7 @@ fn dbGetBytes(
 }
 
 fn dbCount(
+    data_map: *std.AutoHashMap(u32, Data),
     db: *BlockstoreDB,
 ) !void {
     try executed_actions.put(Actions.count, {});
@@ -210,11 +219,12 @@ fn dbCount(
 }
 
 fn dbContains(
+    data_map: *std.AutoHashMap(u32, Data),
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
     try executed_actions.put(Actions.contains, {});
-    const dataKeys = try getKeys(&data_map);
+    const dataKeys = try getKeys(data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
@@ -231,11 +241,12 @@ fn dbContains(
 }
 
 fn dbDelete(
+    data_map: *std.AutoHashMap(u32, Data),
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
     try executed_actions.put(Actions.delete, {});
-    const dataKeys = try getKeys(&data_map);
+    const dataKeys = try getKeys(data_map);
     if (dataKeys.items.len > 0) {
         const random_index = random.uintLessThan(usize, dataKeys.items.len);
         const key = dataKeys.items[random_index];
@@ -255,6 +266,7 @@ fn dbDelete(
 
 // Batch API
 fn batchAPI(
+    data_map: *std.AutoHashMap(u32, Data),
     db: *BlockstoreDB,
     random: std.rand.Random,
 ) !void {
