@@ -11,8 +11,6 @@ const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
 const ReadHandle = sig.accounts_db.buffer_pool.ReadHandle;
 const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
 
-const FRAME_SIZE = sig.accounts_db.buffer_pool.FRAME_SIZE;
-
 const writeIntLittleMem = sig.core.account.writeIntLittleMem;
 
 /// Simple strictly-typed alias for an integer, used to represent a file ID.
@@ -300,7 +298,11 @@ pub const AccountFile = struct {
         self.file.close();
     }
 
-    pub fn validate(self: *const Self, metadata_allocator: std.mem.Allocator, buffer_pool: *BufferPool) !usize {
+    pub fn validate(
+        self: *const Self,
+        metadata_allocator: std.mem.Allocator,
+        buffer_pool: *BufferPool,
+    ) !usize {
         var offset: usize = 0;
         var number_of_accounts: usize = 0;
         var account_bytes: usize = 0;
@@ -388,10 +390,25 @@ pub const AccountFile = struct {
         var offset = start_offset;
 
         // TODO efficiency: could reduce this to one buffer_pool call, and slice that
-        const store_info = try self.getType(metadata_allocator, buffer_pool, &offset, AccountInFile.StorageInfo);
-        const account_info = try self.getType(metadata_allocator, buffer_pool, &offset, AccountInFile.AccountInfo);
+        const store_info = try self.getType(
+            metadata_allocator,
+            buffer_pool,
+            &offset,
+            AccountInFile.StorageInfo,
+        );
+        const account_info = try self.getType(
+            metadata_allocator,
+            buffer_pool,
+            &offset,
+            AccountInFile.AccountInfo,
+        );
         const hash = try self.getType(metadata_allocator, buffer_pool, &offset, Hash);
-        const data = try self.getSlice(metadata_allocator, buffer_pool, &offset, store_info.data_len);
+        const data = try self.getSlice(
+            metadata_allocator,
+            buffer_pool,
+            &offset,
+            store_info.data_len,
+        );
         errdefer data.deinit(metadata_allocator);
 
         const len = offset - start_offset;
@@ -420,7 +437,13 @@ pub const AccountFile = struct {
         }
         errdefer std.debug.print("failed with file: {}\n", .{self.file});
 
-        return try buffer_pool.read(metadata_allocator, self.file, self.id, start_offset, end_offset_exclusive);
+        return try buffer_pool.read(
+            metadata_allocator,
+            self.file,
+            self.id,
+            start_offset,
+            end_offset_exclusive,
+        );
     }
 
     pub fn readTypeCopy(
@@ -457,7 +480,13 @@ pub const AccountFile = struct {
         }
 
         start_index_ptr.* = std.mem.alignForward(usize, end_index, @sizeOf(u64));
-        return try buffer_pool.read(metadata_allocator, self.file, self.id, @intCast(start_index), @intCast(end_index));
+        return try buffer_pool.read(
+            metadata_allocator,
+            self.file,
+            self.id,
+            @intCast(start_index),
+            @intCast(end_index),
+        );
     }
 
     pub fn getType(
@@ -536,7 +565,11 @@ test "core.accounts_file: verify accounts file" {
     const account = try accounts_file.readAccount(std.testing.allocator, &bp, 0);
     defer account.deinit(std.testing.allocator);
 
-    const hash_and_lamports = try accounts_file.getAccountHashAndLamports(std.testing.allocator, &bp, 0);
+    const hash_and_lamports = try accounts_file.getAccountHashAndLamports(
+        std.testing.allocator,
+        &bp,
+        0,
+    );
 
     try std.testing.expectEqual(account.lamports().*, hash_and_lamports.lamports);
     try std.testing.expectEqual(account.hash, hash_and_lamports.hash);
