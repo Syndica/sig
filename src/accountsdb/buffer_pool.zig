@@ -25,7 +25,7 @@ const LinuxIoMode = enum {
     Blocking,
     IoUring,
 };
-const linux_io_mode: LinuxIoMode = .Blocking;
+const linux_io_mode: LinuxIoMode = .IoUring;
 
 const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
 
@@ -162,19 +162,6 @@ pub const BufferPool = struct {
         const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
         frame_map.deinit(init_allocator);
         frame_map_lg.unlock();
-
-        lifetime_probe(0, .reset_all);
-    }
-
-    const ProbeKind = enum(u8) { init, deinit, reset_all };
-    noinline fn lifetime_probe(frame: FrameIndex, kind: ProbeKind) callconv(.C) void {
-        std.mem.doNotOptimizeAway(frame);
-        std.mem.doNotOptimizeAway(kind);
-    }
-    comptime {
-        @export(lifetime_probe, .{
-            .name = "sig_bufferpool_lifetime_probe",
-        });
 
         lifetime_probe(0, .reset_all);
     }
@@ -330,7 +317,7 @@ pub const BufferPool = struct {
         /// exclusive
         file_offset_end: FileOffset,
     ) ReadError!ReadHandle {
-        return if (use_io_uring)
+        const handle = try if (use_io_uring)
             self.readIoUringSubmitAndWait(
                 allocator,
                 file,
@@ -346,6 +333,8 @@ pub const BufferPool = struct {
                 file_offset_start,
                 file_offset_end,
             );
+
+        return handle;
     }
 
     fn readIoUringSubmitAndWait(
@@ -812,14 +801,7 @@ pub const ReadHandle = struct {
     };
 
     fn bincodeSerialize(writer: anytype, inner: anytype, params: bincode.Params) anyerror!void {
-        _ = params;
         var iter = (ReadHandle{ .inner = inner }).iterator();
-
-        try bincode.write(writer, @as(u64, iter.cached_read.len()), params);
-        while (iter.next()) |byte| {
-            try writer.writeByte(byte);
-        }
-        while (iter.next()) |byte| try writer.writeByte(byte);
 
         try bincode.write(writer, @as(u64, iter.cached_read.len()), params);
         while (iter.next()) |byte| {
@@ -881,11 +863,10 @@ pub const ReadHandle = struct {
         fn deinit(self: Inner, allocator: std.mem.Allocator) void {
             switch (self) {
                 .cached => |cached| {
-                    // std.debug.print("freeing frames: {any}\n", .{cached.frame_indices});
-
                     for (cached.frame_indices) |frame_index| {
+                        BufferPool.lifetime_probe(frame_index, .deinit);
+
                         std.debug.assert(frame_index != INVALID_FRAME);
-                        // if (frame_index == 2097144) @breakpoint();
 
                         if (cached.buffer_pool.frames_metadata.rc[frame_index].release()) {
                             // notably, the frame remains in memory, and its hashmap entry
