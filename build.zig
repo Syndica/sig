@@ -24,6 +24,7 @@ pub fn build(b: *Build) void {
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
     const benchmark_step = b.step("benchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
+    const svm_step = b.step("svm", "Run the SVM client");
 
     // Dependencies
     const dep_opts = .{ .target = target, .optimize = optimize };
@@ -161,6 +162,11 @@ pub fn build(b: *Build) void {
     fuzz_exe.root_module.addImport("zig-network", zig_network_module);
     fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
+    fuzz_exe.root_module.addOptions("build-options", build_options);
+    switch (blockstore_db) {
+        .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
     fuzz_exe.linkLibC();
 
     const fuzz_exe_run = b.addRunArtifact(fuzz_exe);
@@ -210,6 +216,21 @@ pub fn build(b: *Build) void {
     geyser_reader_exe_run.addArgs(b.args orelse &.{});
     if (!no_run) geyser_reader_step.dependOn(&geyser_reader_exe_run.step);
     if (no_run) geyser_reader_step.dependOn(&b.addInstallArtifact(geyser_reader_exe, .{}).step);
+
+    const svm_exe = b.addExecutable(.{
+        .name = "svm",
+        .root_source_file = b.path("src/svm/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .sanitize_thread = enable_tsan,
+    });
+    b.installArtifact(svm_exe);
+    svm_exe.root_module.addImport("sig", sig_mod);
+
+    const svm_exe_run = b.addRunArtifact(svm_exe);
+    svm_exe_run.addArgs(b.args orelse &.{});
+    if (!no_run) svm_step.dependOn(&svm_exe_run.step);
+    if (no_run) svm_step.dependOn(&b.addInstallArtifact(svm_exe, .{}).step);
 }
 
 const BlockstoreDB = enum {
