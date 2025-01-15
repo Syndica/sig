@@ -463,14 +463,21 @@ pub fn getOrDownloadAndUnpackSnapshot(
     }
 
     // check if we need to download a fresh snapshot
+    var should_delete_dir = false;
     if (std.fs.cwd().openDir(snapshot_path, .{ .iterate = true })) |dir| {
         defer std.posix.close(dir.fd);
-        // clear old snapshots, if we will download a new one
         if (force_new_snapshot_download) {
-            logger.info().log("deleting accounts_db dir...");
-            try dir.deleteTreeMinStackSize("accounts_db");
+            // clear old snapshots, if we will download a new one
+            should_delete_dir = true;
         }
     } else |_| {}
+
+    if (should_delete_dir) {
+        logger.info().log("deleting snapshot dir...");
+        std.fs.cwd().deleteTree(snapshot_path) catch |err| {
+            logger.warn().logf("failed to delete snapshot directory: {s}", .{err});
+        };
+    }
 
     const snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_path, .{
         .iterate = true,
