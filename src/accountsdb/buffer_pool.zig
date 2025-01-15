@@ -358,10 +358,6 @@ pub const BufferPool = struct {
         );
         errdefer allocator.free(frame_indices);
 
-        // if (frame_indices.len == 0) @breakpoint();
-
-        // std.debug.print("reading frames: {any}\n", .{frame_indices});
-
         // update found frames in the LFU (we don't want to evict these in the next loop)
         var n_invalid_indices: u32 = 0;
         for (frame_indices) |f_idx| {
@@ -403,8 +399,6 @@ pub const BufferPool = struct {
             try self.overwriteDeadFrameInfoNoSize(f_idx.*, file_id, frame_aligned_file_offset);
             try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
         }
-
-        // for (frame_indices) |f_idx| if (f_idx == 2094403) @breakpoint();
 
         // Wait for our file reads to complete, filling the read length into the metadata as we go.
         // (This read length will almost always be FRAME_SIZE, however it will likely be less than
@@ -570,8 +564,6 @@ pub const FramesMetadata = struct {
     fn deinit(self: *FramesMetadata, allocator: std.mem.Allocator) void {
         // NOTE: this check itself is racy, but should never happen
         for (0.., self.rc) |i, *rc| {
-            // if (i == 2097144) @breakpoint();
-
             if (rc.isAlive()) {
                 std.debug.panic("BufferPool deinitialised with alive handle: {}\n", .{i});
             }
@@ -923,11 +915,6 @@ pub const ReadHandle = struct {
                 std.debug.assert(offset >= cached.first_frame_start_offset);
                 std.debug.assert(offset / FRAME_SIZE < cached.frame_indices.len);
                 std.debug.assert(cached.frame_indices[offset / FRAME_SIZE] < cached.buffer_pool.frames.len);
-
-                // std.debug.print("valid frame range: [{*}..{*}]\n\n", .{
-                //     cached.buffer_pool.frames.ptr,
-                //     &cached.buffer_pool.frames[cached.buffer_pool.frames.len - 1][FRAME_SIZE - 1],
-                // });
 
                 break :blk cached.buffer_pool.frames[
                     cached.frame_indices[offset / FRAME_SIZE]

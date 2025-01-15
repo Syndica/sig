@@ -652,9 +652,7 @@ pub const AccountsDB = struct {
                     });
                     return err;
                 };
-
-                // std.debug.print("file_name_bounded: {s}\n", .{file_name_bounded.constSlice()});
-                // std.debug.print("accounts_file: {}\n", .{accounts_file});
+                errdefer accounts_file.close();
 
                 break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
                     self.logger.err().logf("failed to *open* AccountsFile {s}: {s}\n", .{
@@ -4842,7 +4840,7 @@ pub const BenchmarkAccountsDB = struct {
                 .disk => {
                     var account_files = try ArrayList(AccountFile).initCapacity(allocator, slot_list_len);
                     defer {
-                        // don't each deinit account_file here - they are taken in by putAccountFile
+                        // don't deinit each account_file here - they are taken by putAccountFile
                         account_files.deinit();
                     }
 
