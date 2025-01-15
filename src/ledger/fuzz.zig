@@ -87,7 +87,7 @@ pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
 
     var count: u64 = 0;
 
-    while (true) outer: {
+    outer: while (true) {
         var prng = std.Random.DefaultPrng.init(seed);
         const random = prng.random();
         // This is a simpler blockstore which is used to make sure
@@ -97,7 +97,7 @@ pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
         for (0..1_000) |_| {
             if (maybe_max_actions) |max| {
                 if (count >= max) {
-                    std.debug.print("{s} reached max actions: {}\n", .{ "action_name", max });
+                    std.debug.print("reached max actions: {}\n", .{max});
                     break :outer;
                 }
             }
