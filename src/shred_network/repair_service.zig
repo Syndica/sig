@@ -274,10 +274,16 @@ pub const RepairRequester = struct {
         udp_send_socket: Socket,
         exit: *Atomic(bool),
     ) !Self {
-        const chan = try Channel(Packet).create(allocator);
-        errdefer chan.destroy();
+        const channel = try Channel(Packet).create(allocator);
+        errdefer channel.destroy();
 
-        const pipe = try SocketPipe.init(allocator, .sender, logger, udp_send_socket, chan, .{ .unordered = exit });
+        const pipe = try SocketPipe.initSender(
+            allocator,
+            logger,
+            udp_send_socket,
+            channel,
+            .{ .unordered = exit },
+        );
         errdefer pipe.deinit(allocator);
 
         return .{
@@ -286,7 +292,7 @@ pub const RepairRequester = struct {
             .random = random,
             .keypair = keypair,
             .sender_pipe = pipe,
-            .sender_channel = chan,
+            .sender_channel = channel,
             .metrics = try registry.initStruct(Metrics),
         };
     }

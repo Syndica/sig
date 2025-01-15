@@ -149,7 +149,8 @@ pub const GossipService = struct {
     /// Indicates if the gossip service is closed.
     closed: bool,
 
-    /// Piping between the gossip_socket
+    /// Piping between the gossip_socket. 
+    /// Set to null until start() is called as they represent threads.
     incoming_pipe: ?*SocketPipe = null,
     outgoing_pipe: ?*SocketPipe = null,
 
@@ -403,9 +404,8 @@ pub const GossipService = struct {
             },
         };
 
-        self.incoming_pipe = try SocketPipe.init(
+        self.incoming_pipe = try SocketPipe.initReceiver(
             self.allocator,
-            .receiver,
             self.logger.unscoped(),
             self.gossip_socket,
             self.packet_incoming_channel,
@@ -435,10 +435,8 @@ pub const GossipService = struct {
             exit_condition.ordered.exit_index += 1;
         }
 
-        // SocketPipe overrides `packet_outgoing_channel.send_hook`
-        self.outgoing_pipe = try SocketPipe.init(
+        self.outgoing_pipe = try SocketPipe.initSender(
             self.allocator,
-            .sender,
             self.logger.unscoped(),
             self.gossip_socket,
             self.packet_outgoing_channel,

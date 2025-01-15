@@ -1,16 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Allocator = std.mem.Allocator;
-
 const sig = @import("../sig.zig");
+const network = @import("zig-network");
+
+const Allocator = std.mem.Allocator;
+const UdpSocket = network.Socket;
+
 const Packet = sig.net.Packet;
 const PACKET_DATA_SIZE = sig.net.PACKET_DATA_SIZE;
 const Channel = sig.sync.Channel;
 const Logger = sig.trace.Logger;
 const ExitCondition = sig.sync.ExitCondition;
-
-const network = @import("zig-network");
-const UdpSocket = network.Socket;
 
 pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
@@ -23,33 +23,47 @@ pub const SocketPipe = struct {
 
     const Self = @This();
 
-    pub const Direction = enum {
-        sender,
-        receiver,
-    };
-
-    pub fn init(
+    pub fn initSender(
         allocator: Allocator,
-        direction: Direction,
         logger: Logger,
         socket: UdpSocket,
-        channel: *Channel(Packet),
+        outgoing_channel: *Channel(Packet),
         exit: ExitCondition,
     ) !*Self {
-        // TODO(king): store event-lop data in SocketPipe (hence, heap-alloc)..
+        // TODO(king): store event-loop data in SocketPipe (hence, heap-alloc)..
         const self = try allocator.create(Self);
         errdefer allocator.destroy(self);
 
-        const handle = switch (direction) {
-            .sender => try std.Thread.spawn(.{}, runSend, .{ logger, socket, channel, exit }),
-            .receiver => try std.Thread.spawn(.{}, runRecv, .{ logger, socket, channel, exit }),
-        };
+        self.handle = try std.Thread.spawn(
+            .{},
+            runSender,
+            .{ logger, socket, outgoing_channel, exit },
+        );
 
-        self.* = .{ .handle = handle };
-        return self;
+        return self; 
     }
 
-    fn runRecv(
+    pub fn initReceiver(
+        allocator: Allocator,
+        logger: Logger,
+        socket: UdpSocket,
+        incoming_channel: *Channel(Packet),
+        exit: ExitCondition,
+    ) !*Self {
+        // TODO(king): store event-loop data in SocketPipe (hence, heap-alloc)..
+        const self = try allocator.create(Self);
+        errdefer allocator.destroy(self);
+
+        self.handle = try std.Thread.spawn(
+            .{},
+            runReceiver,
+            .{ logger, socket, incoming_channel, exit },
+        );
+
+        return self; 
+    }
+
+    fn runReceiver(
         logger_: Logger,
         socket_: UdpSocket,
         incoming_channel: *Channel(Packet),
@@ -82,7 +96,7 @@ pub const SocketPipe = struct {
         }
     }
 
-    fn runSend(
+    fn runSender(
         logger_: Logger,
         socket: UdpSocket,
         outgoing_channel: *Channel(Packet),
@@ -98,8 +112,9 @@ pub const SocketPipe = struct {
 
         while (true) {
             outgoing_channel.wait(exit) catch break;
+
             while (outgoing_channel.tryReceive()) |p| {
-                if (exit.shouldExit()) break; // drop the rest (like above) if exit prematurely.
+                if (exit.shouldExit()) return; // drop the rest (like above) if exit prematurely.
                 const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                     logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
                     continue;
