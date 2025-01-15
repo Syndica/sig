@@ -10,7 +10,6 @@ const Logger = sig.trace.Logger;
 const ExitCondition = sig.sync.ExitCondition;
 
 const xev = @import("xev");
-
 const network = @import("zig-network");
 const UdpSocket = network.Socket;
 
@@ -20,250 +19,14 @@ pub const PACKETS_PER_BATCH: usize = 64;
 // The identifier for the scoped logger used in this file.
 const LOG_SCOPE: []const u8 = "socket_utils";
 
-const XevLoop = struct {
-    const Udp = struct {
-        socket: xev.UDP,
-        state: xev.UDP.State = undefined,
-        completion: xev.Completion = undefined,
-
-        fn init(socket: UdpSocket) Udp {
-            return .{ .socket = xev.UDP.initFd(socket.internal) };
-        }
-    };
-
-    var event: xev.Async = undefined;
-    var loop: xev.Loop = undefined;
-
-    fn spawn() !std.Thread {
-        event = try xev.Async.init();
-        return std.Thread.spawn(.{}, run, .{});
-    }
-
-    fn run() !void {
-        loop = try xev.Loop.init(.{});
-        defer loop.deinit();
-
-        var completion: xev.Completion = undefined;
-        event.wait(&loop, &completion, void, null, onEventNotified);
-
-        try loop.run(.until_done);
-    }
-
-    fn notify() void {
-        event.notify() catch |e| std.debug.panic("Loop notification failed: {}", .{e});
-    }
-
-    fn onEventNotified(
-        _: ?*void,
-        _: *xev.Loop,
-        completion: *xev.Completion,
-        result: xev.Async.WaitError!void,
-    ) xev.CallbackAction {
-        result catch |e| std.debug.panic("Loop notification event wait failed: {}", .{e});
-        if (SocketPipe.tick()) {
-            event.wait(&loop, completion, void, null, onEventNotified);
-        } else {
-            loop.stop();
-        }
-        return .disarm;
-    }
-
-    fn poll(pipe: *SocketPipe) !void {
-        return pollWith(pipe, null);
-    }
-
-    const RecvResult = struct {
-        bytes: usize,
-        addr: std.net.Address,
-    };
-
-    fn pollWith(pipe: *SocketPipe, maybe_result_ptr: ?*const anyopaque) !void {
-        const logger = pipe.logger.withScope(LOG_SCOPE);
-        errdefer |err| {
-            // Sender drains the channel when closing.
-            if (pipe.direction == .sender) {
-                while (pipe.channel.tryReceive()) |_| {}
-            }
-
-            pipe.exit.afterExit();
-            logger.debug().logf("{s} loop closed: {}", .{ @tagName(pipe.direction), err });
-            SocketPipe.close(pipe);
-        }
-
-        if (pipe.exit.shouldExit()) {
-            return error.Exit;
-        }
-
-        switch (pipe.direction) {
-            .sender => {
-                if (maybe_result_ptr) |ptr| {
-                    const bytes = try @as(*const anyerror!usize, @alignCast(@ptrCast(ptr))).*;
-                    std.debug.assert(bytes == pipe.active.?.size);
-                    pipe.active = null;
-                } else if (pipe.active != null) {
-                    return;
-                }
-
-                pipe.active = pipe.channel.tryReceive() orelse return;
-                pipe.udp.socket.write(
-                    &loop,
-                    &pipe.udp.completion,
-                    &pipe.udp.state,
-                    b: {
-                        var buf = std.BoundedArray(u8, 256){};
-                        try buf.writer().print("{}", .{pipe.active.?.addr.address});
-                        break :b try std.net.Address.parseIp(buf.slice(), pipe.active.?.addr.port);
-                    },
-                    .{ .slice = pipe.active.?.data[0..pipe.active.?.size] },
-                    SocketPipe,
-                    pipe,
-                    onSend,
-                );
-            },
-            .receiver => {
-                if (maybe_result_ptr) |ptr| {
-                    const result = try @as(*const anyerror!RecvResult, @alignCast(@ptrCast(ptr))).*;
-                    pipe.active.?.size = result.bytes;
-                    pipe.active.?.addr = blk: {
-                        var buf = std.BoundedArray(u8, 256){};
-                        try buf.writer().print("{}", .{result.addr});
-                        break :blk try network.EndPoint.parse(buf.slice());
-                    };
-                    try pipe.channel.send(pipe.active.?);
-                } else if (pipe.active != null) {
-                    return;
-                }
-
-                pipe.active = Packet.default();
-                pipe.udp.socket.read(
-                    &loop,
-                    &pipe.udp.completion,
-                    &pipe.udp.state,
-                    .{ .slice = &pipe.active.?.data },
-                    SocketPipe,
-                    pipe,
-                    onRecv,
-                );
-            },
-        }
-    }
-
-    fn onSend(
-        maybe_pipe: ?*SocketPipe,
-        _: *xev.Loop,
-        _: *xev.Completion,
-        _: *xev.UDP.State,
-        _: xev.UDP,
-        _: xev.WriteBuffer,
-        xev_result: xev.UDP.WriteError!usize,
-    ) xev.CallbackAction {
-        const pipe = maybe_pipe.?;
-        const result: anyerror!usize = xev_result;
-        pollWith(pipe, &result) catch {};
-        return .disarm;
-    }
-
-    fn onRecv(
-        maybe_pipe: ?*SocketPipe,
-        _: *xev.Loop,
-        _: *xev.Completion,
-        _: *xev.UDP.State,
-        peer_addr: std.net.Address,
-        _: xev.UDP,
-        _: xev.ReadBuffer,
-        xev_result: xev.UDP.ReadError!usize,
-    ) xev.CallbackAction {
-        const pipe = maybe_pipe.?;
-        const result: anyerror!RecvResult = blk: {
-            const bytes = xev_result catch |err| break :blk err;
-            break :blk RecvResult{ .bytes = bytes, .addr = peer_addr };
-        };
-        pollWith(pipe, &result) catch {};
-        return .disarm;
-    }
-};
-
-const SyscallLoop = struct {
-    // TODO: on error.WouldBlock, register to std.posix.poll(). Write to pipe on notify() to wake.
-    const Udp = struct {
-        fn init(_: UdpSocket) Udp {
-            return .{};
-        }
-    };
-
-    fn spawn() !std.Thread {
-        return std.Thread.spawn(.{}, run, .{});
-    }
-
-    fn run() !void {
-        while (SocketPipe.tick()) {}
-    }
-
-    fn notify() void {
-        // Empty. See todo above.
-    }
-
-    fn poll(pipe: *SocketPipe) !void {
-        const logger = pipe.logger.withScope(LOG_SCOPE);
-        errdefer |err| {
-            // Sender drains the channel when closing.
-            if (pipe.direction == .sender) {
-                while (pipe.channel.tryReceive()) |_| {}
-            }
-            pipe.exit.afterExit();
-            logger.debug().logf("{s} loop closed: {}", .{ @tagName(pipe.direction), err });
-            SocketPipe.close(pipe);
-        }
-
-        if (pipe.exit.shouldExit()) {
-            return error.Exit;
-        }
-
-        switch (pipe.direction) {
-            .sender => while (true) {
-                const p = pipe.active orelse pipe.channel.tryReceive() orelse return;
-                pipe.active = p;
-
-                const sent = pipe.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| switch (e) {
-                    error.WouldBlock => return,
-                    else => |err| {
-                        logger.err().logf("send socket error: {s}", .{@errorName(err)});
-                        continue;
-                    },
-                };
-                std.debug.assert(sent == p.size);
-                pipe.active = null;
-                return;
-            },
-            .receiver => {
-                var p = Packet.default();
-                const recv = pipe.socket.receiveFrom(&p.data) catch |e| switch (e) {
-                    error.WouldBlock => return,
-                    else => |err| {
-                        logger.err().logf("recv socket error: {s}", .{@errorName(err)});
-                        return err;
-                    },
-                };
-                p.size = recv.numberOfBytes;
-                p.addr = recv.sender;
-                try pipe.channel.send(p);
-            },
-        }
-    }
-};
-
-const Loop = switch (builtin.os.tag) {
-    .linux => XevLoop,
-    else => SyscallLoop,
-};
-
 pub const SocketPipe = struct {
     direction: Direction,
     logger: Logger,
-    socket: UdpSocket,
     channel: *Channel(Packet),
     exit: ExitCondition,
-    udp: Loop.Udp,
+    udp: xev.UDP,
+    state: xev.UDP.State = undefined,
+    completion: xev.Completion = undefined,
     active: ?Packet = null,
     closed: std.Thread.ResetEvent = .{},
 
@@ -274,6 +37,7 @@ pub const SocketPipe = struct {
     var ref_count = std.atomic.Value(usize).init(0);
     var notified = std.atomic.Value(bool).init(false);
     var handle: std.Thread = undefined;
+    var event: xev.Async = undefined;
     var active = List{};
 
     pub const Direction = enum {
@@ -301,27 +65,28 @@ pub const SocketPipe = struct {
             .data = .{
                 .direction = direction,
                 .logger = logger,
-                .socket = socket,
                 .channel = channel,
                 .exit = exit,
-                .udp = Loop.Udp.init(socket),
+                .udp = xev.UDP.initFd(socket.internal),
             },
         };
 
         // Reference the global event loop and start it if we're the first one.
         if (ref_count.fetchAdd(2, .acquire) == 0) {
-            handle = try Loop.spawn();
+            event = try xev.Async.init();
+            handle = try std.Thread.spawn(.{}, runEventLoop, .{});
         }
 
         // Push the node to the register stack & notify the loop to start using it.
         node.next = register.load(.monotonic);
         while (true) {
             node.next = register.cmpxchgWeak(node.next, node, .release, .monotonic) orelse {
-                if (!notified.swap(true, .release)) Loop.notify();
+                notifyEventLoop();
                 break;
             };
         }
 
+        // When a sender channel receives a message, tell the event loop to wake up to send it.
         if (direction == .sender) {
             channel.send_hook = &send_hook;
         }
@@ -330,11 +95,58 @@ pub const SocketPipe = struct {
     }
 
     fn afterSend(_: *Channel(Packet).SendHook, _: *Channel(Packet)) void {
-        if (!notified.swap(true, .release)) Loop.notify();
+        notifyEventLoop();
     }
 
-    fn tick() bool {
+    fn notifyEventLoop() void {
+        if (!notified.swap(true, .release)) {
+            event.notify() catch @panic("failed to notify global event loop");
+        }
+    }
+
+    fn runEventLoop() !void {
+        var loop = try xev.Loop.init(.{});
+        defer loop.deinit();
+
+        // on channel sends or shutdown, trigger pollEventLoop.
+        var event_completion: xev.Completion = undefined;
+        event.wait(&loop, &event_completion, void, null, onEventLoopNotify);
+
+        // Every once in a while, trigger pollEventLoop to check SocketPipe.exit flags.
+        var timer = try xev.Timer.init();
+        defer timer.deinit();
+        var timer_completion: xev.Completion = undefined;
+        timer.run(&loop, &timer_completion, SOCKET_TIMEOUT_US, void, null, onEventLoopTick);
+
+        try loop.run(.until_done);
+    }
+
+    fn onEventLoopTick(
+        _: ?*void,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        result: xev.Timer.RunError!void,
+    ) xev.CallbackAction {
+        result catch |e| std.debug.panic("event loop timer failed: {}", .{e});
+        return if (pollEventLoop(loop)) .rearm else .disarm;
+    }
+
+    fn onEventLoopNotify(
+        _: ?*void,
+        loop: *xev.Loop,
+        completion: *xev.Completion,
+        result: xev.Async.WaitError!void,
+    ) xev.CallbackAction {
+        result catch |e| std.debug.panic("event loop wait failed: {}", .{e});
+        if (pollEventLoop(loop)) {
+            event.wait(loop, completion, void, null, onEventLoopNotify);
+        }
+        return .disarm;
+    }
+
+    fn pollEventLoop(loop: *xev.Loop) bool {
         // Reset notified state & move all registered SocketPipes into active.
+        const shutdown = ref_count.load(.monotonic) == 1;
         if (notified.load(.acquire)) {
             notified.store(false, .monotonic);
             var added = register.swap(null, .acquire);
@@ -344,22 +156,127 @@ pub const SocketPipe = struct {
             }
         }
 
-        // Iterate active SocketPipes, polling them or cancelling them.
-        const shutdown = ref_count.load(.monotonic) == 1;
+        // Iterate active SocketPipes, polling or closing them.
         var iter = active.first;
         while (iter) |node| {
             iter = node.next;
             if (shutdown) {
-                close(&node.data);
+                node.data.close(error.LoopShutdown);
             } else {
-                Loop.poll(&node.data) catch {};
+                node.data.poll(loop) catch |err| node.data.close(err);
             }
         }
 
+        if (shutdown) loop.stop();
         return !shutdown;
     }
 
-    fn close(self: *SocketPipe) void {
+    fn poll(self: *SocketPipe, loop: *xev.Loop) !void {
+        if (self.exit.shouldExit()) return error.Exit;
+        if (self.active != null) return;
+        switch (self.direction) {
+            .sender => {
+                self.active = self.channel.tryReceive() orelse return;
+                self.udp.write(
+                    loop,
+                    &self.completion,
+                    &self.state,
+                    b: {
+                        var buf = std.BoundedArray(u8, 256){};
+                        try buf.writer().print("{}", .{self.active.?.addr.address});
+                        break :b try std.net.Address.parseIp(buf.slice(), self.active.?.addr.port);
+                    },
+                    .{ .slice = self.active.?.data[0..self.active.?.size] },
+                    SocketPipe,
+                    self,
+                    onSend,
+                );
+            },
+            .receiver => {
+                self.active = Packet.default();
+                self.udp.read(
+                    loop,
+                    &self.completion,
+                    &self.state,
+                    .{ .slice = &self.active.?.data },
+                    SocketPipe,
+                    self,
+                    onRecv,
+                );
+            },
+        }
+    }
+
+    fn onSend(
+        maybe_self: ?*SocketPipe,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        _: *xev.UDP.State,
+        _: xev.UDP,
+        _: xev.WriteBuffer,
+        xev_result: xev.UDP.WriteError!usize,
+    ) xev.CallbackAction {
+        const self = maybe_self.?;
+        self.handleSend(loop, xev_result) catch |err| self.close(err);
+        return .disarm;
+    }
+
+    fn handleSend(self: *SocketPipe, loop: *xev.Loop, result: xev.UDP.WriteError!usize) !void {
+        if (result) |bytes| {
+            std.debug.assert(bytes == self.active.?.size);
+        } else |err| {
+            const logger = self.logger.withScope(LOG_SCOPE);
+            logger.err().logf("send socket error: {}", .{err});
+        }
+
+        self.active = null;
+        try self.poll(loop);
+    }
+
+    fn onRecv(
+        maybe_self: ?*SocketPipe,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        _: *xev.UDP.State,
+        peer_addr: std.net.Address,
+        _: xev.UDP,
+        _: xev.ReadBuffer,
+        xev_result: xev.UDP.ReadError!usize,
+    ) xev.CallbackAction {
+        const self = maybe_self.?;
+        self.handleReceive(loop, peer_addr, xev_result) catch |err| self.close(err);
+        return .disarm;
+    }
+
+    fn handleReceive(
+        self: *SocketPipe,
+        loop: *xev.Loop,
+        address: std.net.Address,
+        result: xev.UDP.ReadError!usize,
+    ) !void {
+        const bytes = try result;
+        self.active.?.size = bytes;
+        self.active.?.addr = b: {
+            var buf = std.BoundedArray(u8, 256){};
+            try buf.writer().print("{}", .{address});
+            break :b try network.EndPoint.parse(buf.slice());
+        };
+
+        try self.channel.send(self.active.?);
+        self.active = null;
+        try self.poll(loop);
+    }
+
+    fn close(self: *SocketPipe, err: anyerror) void {
+        // Sender drains the channel when closing.
+        // if (self.direction == .sender) {
+        //     while (self.channel.tryReceive()) |_| {}
+        // }
+
+        const logger = self.logger.withScope(LOG_SCOPE);
+        self.exit.afterExit();
+        logger.debug().logf("{s} loop closed: {}", .{ @tagName(self.direction), err });
+
         const node: *List.Node = @alignCast(@fieldParentPtr("data", self));
         active.remove(node);
         self.closed.set();
@@ -368,8 +285,9 @@ pub const SocketPipe = struct {
     pub fn deinit(self: *SocketPipe, allocator: Allocator) void {
         if (ref_count.fetchSub(2, .release) == 2) {
             std.debug.assert(ref_count.swap(1, .acquire) == 0);
-            if (!notified.swap(true, .release)) Loop.notify();
+            notifyEventLoop();
             handle.join();
+            event.deinit();
             std.debug.assert(ref_count.swap(0, .release) == 1);
         }
 
