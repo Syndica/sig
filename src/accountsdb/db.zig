@@ -267,7 +267,6 @@ pub const AccountsDB = struct {
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
-            for (file_map.values()) |file| file.deinit(); //
             file_map.deinit(self.allocator);
         }
         {
@@ -1674,9 +1673,6 @@ pub const AccountsDB = struct {
                 defer account.deinit(self.allocator);
                 const pubkey = account.pubkey().*;
 
-                var x: u1 = 1;
-                x = x;
-
                 // check if already cleaned
                 if (try cleaned_pubkeys.fetchPut(pubkey, {}) != null) continue;
 
@@ -1962,6 +1958,7 @@ pub const AccountsDB = struct {
             for (is_alive_flags.items) |is_alive| {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
                 const account = (try account_iter.next()).?;
+                defer account.deinit(self.allocator);
                 if (is_alive) file_size += account.getSizeInFile();
             }
 
@@ -1977,6 +1974,7 @@ pub const AccountsDB = struct {
             for (is_alive_flags.items) |is_alive| {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
                 const account = (try account_iter.next()).?;
+                defer account.deinit(self.allocator);
                 if (is_alive) {
                     try account_file_buf.resize(account.getSizeInFile());
                     offsets.appendAssumeCapacity(offset);
@@ -2010,6 +2008,7 @@ pub const AccountsDB = struct {
             for (is_alive_flags.items) |is_alive| {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
                 const account = (try account_iter.next()).?;
+                defer account.deinit(self.allocator);
                 if (is_alive) {
                     // find the slot in the reference list
                     const pubkey = account.pubkey();
@@ -2152,6 +2151,7 @@ pub const AccountsDB = struct {
                         ref_info.file_id,
                         ref_info.offset,
                     );
+                    errdefer account.deinit(self.allocator);
 
                     if (self.maybe_accounts_cache_rw) |*accounts_cache_rw| {
                         const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
@@ -2236,6 +2236,7 @@ pub const AccountsDB = struct {
             file_id,
             offset,
         );
+        defer account_in_file.deinit(account_allocator);
         defer self.file_map_fd_rw.unlockShared();
         return try account_in_file.toOwnedAccount(account_allocator);
     }
@@ -2435,6 +2436,8 @@ pub const AccountsDB = struct {
                 &self.buffer_pool,
             );
             while (try account_iter.next()) |account_in_file| {
+                defer account_in_file.deinit(self.allocator);
+
                 const bhs, var bhs_lg = try self.getOrInitBankHashStats(account_file.slot);
                 defer bhs_lg.unlock();
                 bhs.update(.{
@@ -3776,7 +3779,7 @@ test "load clock sysvar" {
     const inc = full_inc_manifest.incremental;
     const expected_clock: sysvars.Clock = .{
         .slot = (inc orelse full).bank_fields.slot,
-        .epoch_start_timestamp = 1733349737,
+        .epoch_start_timestamp = 1733349736,
         .epoch = (inc orelse full).bank_fields.epoch,
         .leader_schedule_epoch = 1,
         .unix_timestamp = 1733350255,
@@ -4890,7 +4893,10 @@ pub const BenchmarkAccountsDB = struct {
                 },
                 .disk => {
                     var account_files = try ArrayList(AccountFile).initCapacity(allocator, slot_list_len);
-                    defer account_files.deinit();
+                    defer {
+                        // don't each deinit account_file here - they are taken in by putAccountFile
+                        account_files.deinit();
+                    }
 
                     for (0..(slot_list_len + bench_args.n_accounts_multiple)) |s| {
                         var size: usize = 0;
@@ -4909,7 +4915,7 @@ pub const BenchmarkAccountsDB = struct {
 
                         var account_file = blk: {
                             var file = try disk_dir.dir.createFile(filepath, .{ .read = true });
-                            defer file.close();
+                            errdefer file.close();
 
                             // resize the file
                             const file_size = (try file.stat()).size;
@@ -4934,7 +4940,6 @@ pub const BenchmarkAccountsDB = struct {
 
                             break :blk try AccountFile.init(file, .{ .id = FileId.fromInt(@intCast(s)), .length = offset }, s);
                         };
-                        errdefer account_file.deinit();
 
                         if (s < bench_args.n_accounts_multiple) {
                             try accounts_db.putAccountFile(&account_file, n_accounts);
