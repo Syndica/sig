@@ -176,6 +176,26 @@ jobs:
       - name: run
         run: ./zig-out/bin/fuzz allocators 19 10000
 
+  ledger_fuzz:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{matrix.os}}
+    timeout-minutes: 60
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+      - name: setup zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+      - name: build
+        run: zig build -Doptimize=ReleaseSafe -Dno-run fuzz
+      - name: run
+        run: ./zig-out/bin/fuzz ledger 19 10000
+
   # benchmarks:
   #   if: ${{ github.ref != 'refs/heads/main' }}
   #   strategy:
