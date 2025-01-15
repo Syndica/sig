@@ -50,12 +50,12 @@ pub const EpochContextManager = struct {
         return self.contexts.contains(@intCast(epoch));
     }
 
-    pub fn setEpoch(self: *Self, epoch: Epoch) void {
-        self.contexts.realign(@intCast(epoch));
+    pub fn setEpoch(self: *Self, epoch: Epoch) !void {
+        try self.contexts.realign(@intCast(epoch));
     }
 
-    pub fn setSlot(self: *Self, slot: Slot) void {
-        self.contexts.realign(@intCast(self.schedule.getEpoch(slot)));
+    pub fn setSlot(self: *Self, slot: Slot) !void {
+        try self.contexts.realign(@intCast(self.schedule.getEpoch(slot)));
     }
 
     pub fn release(self: *Self, context: *const sig.core.EpochContext) void {
@@ -112,18 +112,15 @@ pub const RpcEpochContextService = struct {
     fn refresh(self: *Self) !void {
         const response = try self.rpc_client.getSlot(self.allocator, .{});
         defer response.deinit();
-        const old_slot = try response.result() - self.state.schedule.slots_per_epoch;
-        const last_epoch = self.state.schedule.getEpoch(old_slot);
+        const this_slot = try response.result();
+        const this_epoch = self.state.schedule.getEpoch(this_slot);
+        const old_slot = this_slot -| self.state.schedule.slots_per_epoch;
 
-        self.state.setEpoch(last_epoch);
-
-        const ls1 = try self.getLeaderSchedule(old_slot);
-        const ctx1 = EpochContext{ .staked_nodes = .{}, .leader_schedule = ls1 };
-        try self.state.put(last_epoch, ctx1);
+        try self.state.setEpoch(this_epoch);
 
         for (0..3) |epoch_offset| {
             const selected_slot = old_slot + epoch_offset * self.state.schedule.slots_per_epoch;
-            const selected_epoch = last_epoch + epoch_offset;
+            const selected_epoch = this_epoch + epoch_offset -| 1;
             std.debug.assert(selected_epoch == self.state.schedule.getEpoch(selected_slot));
 
             if (self.state.contains(selected_epoch)) {
@@ -132,8 +129,9 @@ pub const RpcEpochContextService = struct {
 
             if (self.getLeaderSchedule(selected_slot)) |ls2| {
                 const ctx2 = EpochContext{ .staked_nodes = .{}, .leader_schedule = ls2 };
+                errdefer self.allocator.free(ls2);
                 try self.state.put(selected_epoch, ctx2);
-            } else |e| if (selected_epoch == last_epoch) {
+            } else |e| if (selected_epoch == this_epoch) {
                 return e;
             }
         }
@@ -147,3 +145,23 @@ pub const RpcEpochContextService = struct {
         return schedule.slot_leaders;
     }
 };
+
+test "epochctx" {
+    if (true) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
+    const genesis_config = try sig.accounts_db.GenesisConfig
+        .init(allocator, "data/genesis-files/testnet_genesis.bin");
+    defer genesis_config.deinit(allocator);
+
+    var rpc_client = sig.rpc.Client.init(allocator, .Testnet, .{});
+    defer rpc_client.deinit();
+
+    var epoch_context_manager = try sig.adapter.EpochContextManager
+        .init(allocator, genesis_config.epoch_schedule);
+    defer epoch_context_manager.deinit();
+    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
+        .init(allocator, .noop, &epoch_context_manager, rpc_client);
+
+    try rpc_epoch_ctx_service.refresh();
+}

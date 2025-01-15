@@ -44,9 +44,6 @@ pub fn build(b: *Build) void {
     const zstd_dep = b.dependency("zstd", dep_opts);
     const zstd_mod = zstd_dep.module("zstd");
 
-    const curl_dep = b.dependency("curl", dep_opts);
-    const curl_mod = curl_dep.module("curl");
-
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
 
@@ -71,7 +68,6 @@ pub fn build(b: *Build) void {
     sig_mod.addImport("zig-cli", zig_cli_module);
     sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
-    sig_mod.addImport("curl", curl_mod);
     switch (blockstore_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -86,9 +82,14 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
         .sanitize_thread = enable_tsan,
     });
+
+    // make sure pyroscope's got enough info to profile
+    sig_exe.build_id = .fast;
+    sig_exe.root_module.omit_frame_pointer = false;
+    sig_exe.root_module.strip = false;
+
     b.installArtifact(sig_exe);
     sig_exe.root_module.addImport("base58-zig", base58_module);
-    sig_exe.root_module.addImport("curl", curl_mod);
     sig_exe.root_module.addImport("httpz", httpz_mod);
     sig_exe.root_module.addImport("zig-cli", zig_cli_module);
     sig_exe.root_module.addImport("zig-network", zig_network_module);
@@ -134,7 +135,6 @@ pub fn build(b: *Build) void {
     });
     b.installArtifact(unit_tests_exe);
     unit_tests_exe.root_module.addImport("base58-zig", base58_module);
-    unit_tests_exe.root_module.addImport("curl", curl_mod);
     unit_tests_exe.root_module.addImport("httpz", httpz_mod);
     unit_tests_exe.root_module.addImport("zig-network", zig_network_module);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
@@ -162,6 +162,11 @@ pub fn build(b: *Build) void {
     fuzz_exe.root_module.addImport("zig-network", zig_network_module);
     fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
+    fuzz_exe.root_module.addOptions("build-options", build_options);
+    switch (blockstore_db) {
+        .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
     fuzz_exe.linkLibC();
 
     const fuzz_exe_run = b.addRunArtifact(fuzz_exe);
@@ -182,7 +187,6 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("zig-network", zig_network_module);
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
-    benchmark_exe.root_module.addImport("curl", curl_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
     switch (blockstore_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),

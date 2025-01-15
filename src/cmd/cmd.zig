@@ -878,6 +878,12 @@ fn shredCollector() !void {
     var rpc_client = sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
 
+    var shred_network_conf = config.current.shred_network;
+    shred_network_conf.start_slot = shred_network_conf.start_slot orelse blk: {
+        const response = try rpc_client.getSlot(allocator, .{});
+        break :blk try response.result();
+    };
+
     const repair_port: u16 = config.current.shred_network.repair_port;
     const turbine_recv_port: u16 = config.current.shred_network.turbine_recv_port;
 
@@ -949,13 +955,8 @@ fn shredCollector() !void {
     const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
-    var shred_col_conf = config.current.shred_network;
-    shred_col_conf.start_slot = shred_col_conf.start_slot orelse blk: {
-        const response = try rpc_client.getSlot(allocator, .{});
-        break :blk try response.result();
-    };
     var shred_network_manager = try sig.shred_network.start(
-        shred_col_conf,
+        shred_network_conf,
         .{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
@@ -1241,14 +1242,11 @@ const AppBase = struct {
         const metrics_registry = globalRegistry();
         const metrics_thread = try spawnMetrics(allocator, config.current.metrics_port);
         errdefer metrics_thread.detach();
-        logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
 
         const my_keypair = try getOrInitIdentity(allocator, logger.unscoped());
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-        logger.info().logf("identity: {s}", .{my_pubkey});
 
         const entrypoints = try config.current.gossip.getEntrypointAddrs(allocator);
-        logger.info().logf("entrypoints: {any}", .{entrypoints});
 
         const echo_data = try getShredAndIPFromEchoServer(
             logger.unscoped(),
@@ -1256,13 +1254,18 @@ const AppBase = struct {
             entrypoints,
         );
         const my_shred_version = echo_data.shred_version orelse 0;
-        logger.info().logf("my shred version: {d}", .{my_shred_version});
 
         const config_host = config.current.gossip.getHost() catch null;
         const my_ip = config_host orelse echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
-        logger.info().logf("my ip: {any}", .{my_ip});
 
         const my_port = config.current.gossip.port;
+
+        logger.info()
+            .field("metrics_port", config.current.metrics_port)
+            .field("identity", my_pubkey)
+            .field("entrypoints", entrypoints)
+            .field("shred_version", my_shred_version)
+            .log("app setup");
 
         return .{
             .allocator = allocator,
@@ -1299,8 +1302,10 @@ fn startGossip(
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
 ) !*GossipService {
-    app_base.logger.info().logf("gossip host: {any}", .{app_base.my_ip});
-    app_base.logger.info().logf("gossip port: {d}", .{app_base.my_port});
+    app_base.logger.info()
+        .field("host", app_base.my_ip)
+        .field("port", app_base.my_port)
+        .log("gossip setup");
 
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
@@ -1526,7 +1531,7 @@ fn downloadSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    try downloadSnapshotsFromGossip(
+    const full_file, const maybe_inc_file = try downloadSnapshotsFromGossip(
         gpa_allocator,
         app_base.logger.unscoped(),
         if (trusted_validators) |trusted| trusted.items else null,
@@ -1534,6 +1539,8 @@ fn downloadSnapshot() !void {
         snapshot_dir,
         @intCast(min_mb_per_sec),
     );
+    defer full_file.close();
+    defer if (maybe_inc_file) |inc_file| inc_file.close();
 }
 
 fn getTrustedValidators(allocator: Allocator) !?std.ArrayList(Pubkey) {

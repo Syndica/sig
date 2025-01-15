@@ -38,7 +38,10 @@ pub fn readSocket(
         var packet: Packet = Packet.default();
         const recv_meta = socket.receiveFrom(&packet.data) catch |err| switch (err) {
             error.WouldBlock => continue,
-            else => |e| return e,
+            else => |e| {
+                logger.err().logf("readSocket error: {s}", .{@errorName(e)});
+                return e;
+            },
         };
         const bytes_read = recv_meta.numberOfBytes;
         if (bytes_read == 0) return error.SocketClosed;
@@ -65,7 +68,7 @@ pub fn sendSocket(
     while (exit.shouldRun()) {
         while (outgoing_channel.tryReceive()) |p| {
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
-                logger.debug().logf("send_socket error: {s}", .{@errorName(e)});
+                logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
                 continue;
             };
             std.debug.assert(bytes_sent == p.size);

@@ -79,16 +79,20 @@ pub fn start(
         .{},
     );
     var arena = service_manager.arena.allocator();
+    const defers = &service_manager.defers; // use this instead of defer statements
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
-    var retransmit_channel = try sig.sync.Channel(sig.net.Packet).init(deps.allocator);
-    defer retransmit_channel.deinit();
+    // channels
+    const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
+    try defers.deferCall(Channel(Packet).destroy, .{unverified_shred_channel});
+    const shreds_to_insert_channel = try Channel(Packet).create(deps.allocator);
+    try defers.deferCall(Channel(Packet).destroy, .{shreds_to_insert_channel});
+    const retransmit_channel = try Channel(sig.net.Packet).create(deps.allocator);
+    try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
 
     // receiver (threads)
-    const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
-    const verified_shred_channel = try Channel(Packet).create(deps.allocator);
     const shred_receiver = try arena.create(ShredReceiver);
     shred_receiver.* = .{
         .allocator = deps.allocator,
@@ -116,8 +120,8 @@ pub fn start(
             deps.exit,
             deps.registry,
             unverified_shred_channel,
-            verified_shred_channel,
-            &retransmit_channel,
+            shreds_to_insert_channel,
+            retransmit_channel,
             deps.epoch_context_mgr.slotLeaders(),
         },
     );
@@ -139,7 +143,7 @@ pub fn start(
             deps.exit,
             deps.logger.unscoped(),
             deps.registry,
-            verified_shred_channel,
+            shreds_to_insert_channel,
             shred_tracker,
             deps.shred_inserter,
             deps.epoch_context_mgr.slotLeaders(),
@@ -155,7 +159,7 @@ pub fn start(
             .my_contact_info = deps.my_contact_info,
             .epoch_context_mgr = deps.epoch_context_mgr,
             .gossip_table_rw = deps.gossip_table_rw,
-            .receiver = &retransmit_channel,
+            .receiver = retransmit_channel,
             .maybe_num_retransmit_threads = deps.n_retransmit_threads,
             .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
             .exit = deps.exit,
@@ -183,7 +187,7 @@ pub fn start(
         deps.exit,
     );
     const repair_svc = try arena.create(RepairService);
-    try service_manager.defers.deferCall(RepairService.deinit, .{repair_svc});
+    try defers.deferCall(RepairService.deinit, .{repair_svc});
     repair_svc.* = try RepairService.init(
         deps.allocator,
         deps.logger.unscoped(),

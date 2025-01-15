@@ -28,18 +28,14 @@ pub fn writeLog(
     comptime fmt: []const u8,
     args: anytype,
 ) !void {
+    try std.fmt.format(writer, "level={s} ", .{level.asText()});
+
     if (maybe_scope) |scope| {
-        try std.fmt.format(writer, "[{s}] ", .{scope});
+        try std.fmt.format(writer, "scope={s} ", .{scope});
     }
 
-    // format time as ISO8601
-    const utc_format = "YYYY-MM-DDTHH:mm:ss.SSS";
-    const now = time.DateTime.now();
-    try std.fmt.format(writer, "time=", .{});
-    try now.format(utc_format, .{}, writer);
-    try std.fmt.format(writer, "Z ", .{});
-
-    try std.fmt.format(writer, "level={s} ", .{level.asText()});
+    try std.fmt.format(writer, "message=\"", .{});
+    try std.fmt.format(writer, fmt ++ "\" ", args);
 
     inline for (@typeInfo(@TypeOf(fields)).Struct.fields) |field| {
         try std.fmt.format(writer, fieldFmtString(field.type), .{
@@ -48,7 +44,12 @@ pub fn writeLog(
         });
     }
 
-    try std.fmt.format(writer, fmt ++ "\n", args);
+    // format time as ISO8601
+    const utc_format = "YYYY-MM-DDTHH:mm:ss.SSS";
+    try std.fmt.format(writer, "time=", .{});
+    const now = time.DateTime.now();
+    try now.format(utc_format, .{}, writer);
+    try std.fmt.format(writer, "Z\n", .{});
 }
 
 /// Returns the number of bytes needed to format the log message.
@@ -61,7 +62,7 @@ pub fn countLog(
 ) usize {
     var count: usize = 30; // timestamp is 30 chars
 
-    if (maybe_scope) |scope| count += std.fmt.count("[{s}] ", .{scope});
+    if (maybe_scope) |scope| count += std.fmt.count("scope={s} ", .{scope});
 
     count += std.fmt.count("level={s} ", .{level.asText()});
 
@@ -72,7 +73,9 @@ pub fn countLog(
         });
     }
 
-    count += std.fmt.count(fmt ++ "\n", args);
+    count += std.fmt.count("message=\"", .{});
+    count += std.fmt.count(fmt ++ "\"\n", args);
+
     return count;
 }
 

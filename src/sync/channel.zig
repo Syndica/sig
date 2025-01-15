@@ -95,10 +95,41 @@ pub fn Channel(T: type) type {
             };
         }
 
+        pub fn deinit(channel: *Self) void {
+            var head = channel.head.index.raw;
+            var tail = channel.tail.index.raw;
+            var block = channel.head.block.raw;
+
+            head &= ~((@as(usize, 1) << SHIFT) - 1);
+            tail &= ~((@as(usize, 1) << SHIFT) - 1);
+
+            while (head != tail) {
+                const offset = (head >> SHIFT) % LAP;
+
+                if (offset >= BLOCK_CAP) {
+                    const next = block.?.next.raw;
+                    channel.allocator.destroy(block.?);
+                    block = next;
+                }
+
+                head +%= (1 << SHIFT);
+            }
+
+            if (block) |b| {
+                channel.allocator.destroy(b);
+            }
+        }
+
         pub fn create(allocator: Allocator) !*Self {
             const channel = try allocator.create(Self);
             channel.* = try Self.init(allocator);
             return channel;
+        }
+
+        /// to deinit channels created with `create`
+        pub fn destroy(channel: *Self) void {
+            channel.deinit();
+            channel.allocator.destroy(channel);
         }
 
         pub fn close(channel: *Self) void {
@@ -355,31 +386,6 @@ pub fn Channel(T: type) type {
             const tail = channel.tail.index.load(.seq_cst);
             // The channel is empty if the indices are pointing at the same slot.
             return (head >> SHIFT) == (tail >> SHIFT);
-        }
-
-        pub fn deinit(channel: *Self) void {
-            var head = channel.head.index.raw;
-            var tail = channel.tail.index.raw;
-            var block = channel.head.block.raw;
-
-            head &= ~((@as(usize, 1) << SHIFT) - 1);
-            tail &= ~((@as(usize, 1) << SHIFT) - 1);
-
-            while (head != tail) {
-                const offset = (head >> SHIFT) % LAP;
-
-                if (offset >= BLOCK_CAP) {
-                    const next = block.?.next.raw;
-                    channel.allocator.destroy(block.?);
-                    block = next;
-                }
-
-                head +%= (1 << SHIFT);
-            }
-
-            if (block) |b| {
-                channel.allocator.destroy(b);
-            }
         }
     };
 }
