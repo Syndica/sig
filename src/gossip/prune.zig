@@ -75,28 +75,34 @@ pub const PruneData = struct {
     }
 
     pub fn signWithoutPrefix(self: *PruneData, keypair: *const KeyPair) !void {
-        var slice: [PACKET_DATA_SIZE]u8 = undefined;
         const signable_data = PruneSignableData{
             .pubkey = self.pubkey,
             .prunes = self.prunes,
             .destination = self.destination,
             .wallclock = self.wallclock,
         };
-        const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
-        var signature = try keypair.sign(out, null);
+
+        // serialize
+        var d: [PACKET_DATA_SIZE]u8 = undefined;
+        const data = try bincode.writeToSlice(&d, signable_data, .{});
+        // sign
+        var signature = try keypair.sign(data, null);
         self.signature.data = signature.toBytes();
     }
 
     pub fn signWithPrefix(self: *PruneData, keypair: *const KeyPair) !void {
-        var slice: [PACKET_DATA_SIZE]u8 = undefined;
         const signable_data = PruneSignableDataWithPrefix{
             .pubkey = self.pubkey,
             .prunes = self.prunes,
             .destination = self.destination,
             .wallclock = self.wallclock,
         };
-        const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
-        var signature = try keypair.sign(out, null);
+
+        // serialize
+        var d: [PACKET_DATA_SIZE]u8 = undefined;
+        const data = try bincode.writeToSlice(&d, signable_data, .{});
+        // sign
+        var signature = try keypair.sign(data, null);
         self.signature.data = signature.toBytes();
     }
 
@@ -108,31 +114,35 @@ pub const PruneData = struct {
     }
 
     pub fn verifyWithoutPrefix(self: *const PruneData) !void {
-        var slice: [PACKET_DATA_SIZE]u8 = undefined;
         const signable_data = PruneSignableData{
             .pubkey = self.pubkey,
             .prunes = self.prunes,
             .destination = self.destination,
             .wallclock = self.wallclock,
         };
-        const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
-        if (!try self.signature.verify(self.pubkey, out)) {
+
+        // serialize
+        var d: [PACKET_DATA_SIZE]u8 = undefined;
+        const data = try bincode.writeToSlice(&d, signable_data, .{});
+        // verify
+        if (!try self.signature.verify(self.pubkey, data))
             return error.InvalidSignature;
-        }
     }
 
     pub fn verifyWithPrefix(self: *const PruneData) !void {
-        var slice: [PACKET_DATA_SIZE]u8 = undefined;
         const signable_data = PruneSignableDataWithPrefix{
             .pubkey = self.pubkey,
             .prunes = self.prunes,
             .destination = self.destination,
             .wallclock = self.wallclock,
         };
-        const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
-        if (!try self.signature.verify(self.pubkey, out)) {
+
+        // serialize
+        var d: [PACKET_DATA_SIZE]u8 = undefined;
+        const data = try bincode.writeToSlice(&d, signable_data, .{});
+        // verify
+        if (!try self.signature.verify(self.pubkey, data))
             return error.InvalidSignature;
-        }
     }
 };
 
