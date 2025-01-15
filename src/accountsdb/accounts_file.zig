@@ -87,7 +87,7 @@ pub const AccountInFile = struct {
     account_info: AccountInfo,
     hash: Hash,
 
-    data: ReadHandle, // TODO: deinit AccountInFiles
+    data: ReadHandle,
 
     // other info (used when parsing accounts out)
     offset: usize = 0,
@@ -423,22 +423,6 @@ pub const AccountFile = struct {
         return try buffer_pool.read(metadata_allocator, self.file, self.id, start_offset, end_offset_exclusive);
     }
 
-    // pub fn readRange(
-    //     self: *const Self,
-    //     buffer_pool: *BufferPool,
-    //     metadata_allocator: std.mem.Allocator,
-    //     start_offset: u32,
-    //     length: u32,
-    // ) !ReadHandle {
-    //     const end_offset_exclusive, const overflow_flag = @addWithOverflow(start_offset, length);
-
-    //     if (overflow_flag == 1 or end_offset_exclusive > self.length) {
-    //         return error.EOF;
-    //     }
-
-    //     return try buffer_pool.read(metadata_allocator, self.file, self.id, start_offset, end_offset_exclusive);
-    // }
-
     pub fn readTypeCopy(
         self: *const Self,
         buffer_pool: *BufferPool,
@@ -455,24 +439,6 @@ pub const AccountFile = struct {
 
         return data;
     }
-
-    // /// User is expected to deinit ReadHandle once done reading from pointer.
-    // /// Type in file should be well aligned - function will fail if the value
-    // /// "strides" buffer
-    // pub fn readTypeBorrowed(
-    //     self: *const Self,
-    //     buffer_pool: *BufferPool,
-    //     metadata_allocator: std.mem.Allocator,
-    //     start_offset: u32,
-    //     comptime T: type,
-    // ) !struct { *T, ReadHandle } {
-    //     const length = @sizeOf(T);
-
-    //     const read = try self.readSlice(buffer_pool, metadata_allocator, start_offset, length);
-    //     errdefer read.deinit(metadata_allocator);
-
-    //     const slice: []const T = try read.borrowSlice(start_offset, length);
-    // }
 
     pub fn getSlice(
         self: *const Self,

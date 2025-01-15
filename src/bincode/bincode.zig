@@ -88,12 +88,7 @@ pub fn readWithConfig(
         .Bool => return switch (try reader.readByte()) {
             0 => false,
             1 => true,
-            else => |b| {
-                std.debug.panic("byte: {0x}\n", .{b});
-
-                // @panic("bad");
-                // break :blk error.BadBoolean;
-            },
+            else => error.BadBoolean,
         },
         .Enum => |_| {
             comptime var SerializedSize = u32;
