@@ -18,7 +18,8 @@ const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 
-const DOWNLOAD_PROGRESS_UPDATES_NS = 6 * std.time.ns_per_s;
+// NOTE: this also represents the interval at which progress updates are issued
+const DOWNLOAD_WARMUP_TIME = sig.time.Duration.fromSecs(20);
 
 const BYTE_PER_KIB = 1024;
 const BYTE_PER_MIB = 1024 * BYTE_PER_KIB;
@@ -177,6 +178,7 @@ pub fn downloadSnapshotsFromGossip(
     gossip_service: *GossipService,
     output_dir: std.fs.Dir,
     min_mb_per_sec: usize,
+    max_number_of_download_attempts: u64,
 ) !struct { std.fs.File, ?std.fs.File } {
     const logger = logger_.withScope(LOG_SCOPE);
     logger
@@ -194,8 +196,14 @@ pub fn downloadSnapshotsFromGossip(
     var slow_peer_pubkeys = std.ArrayList(Pubkey).init(allocator);
     defer slow_peer_pubkeys.deinit();
 
+    var download_attempts: u64 = 0;
     while (true) {
         std.time.sleep(5 * std.time.ns_per_s); // wait while gossip table updates
+
+        if (download_attempts > max_number_of_download_attempts) {
+            logger.err().logf("exceeded max download attempts: {d}", .{max_number_of_download_attempts});
+            return error.UnableToDownloadSnapshot;
+        }
 
         // only hold gossip table lock for this block
         {
@@ -259,6 +267,8 @@ pub fn downloadSnapshotsFromGossip(
                 "downloading full_snapshot from: {s}",
                 .{snapshot_url.constSlice()},
             );
+
+            defer download_attempts += 1;
             const full_archive_file = downloadFile(
                 allocator,
                 logger,
@@ -270,7 +280,6 @@ pub fn downloadSnapshotsFromGossip(
             ) catch |err| {
                 switch (err) {
                     error.TooSlow => {
-                        logger.info().logf("peer is too slow, skipping", .{});
                         try slow_peer_pubkeys.append(peer.contact_info.pubkey);
                     },
                     else => logger.info().logf(
@@ -387,7 +396,7 @@ fn downloadFile(
 
         const elapsed_since_start = full_timer.read();
         const elapsed_since_prev_lap = lap_timer.read();
-        if (elapsed_since_prev_lap.asNanos() <= DOWNLOAD_PROGRESS_UPDATES_NS) continue;
+        if (elapsed_since_prev_lap.asNanos() <= DOWNLOAD_WARMUP_TIME.asNanos()) continue;
         defer lap_timer.reset(); // reset at the end of the iteration, after the update, right before the next read & write.
 
         const total_bytes_left = download_size - total_bytes_read;
@@ -422,12 +431,13 @@ fn downloadFile(
     return output_file;
 }
 
+const default_adb_config = sig.cmd.config.AccountsDBConfig{};
+
 pub fn getOrDownloadAndUnpackSnapshot(
     allocator: std.mem.Allocator,
     logger_: Logger,
-    validator_dir: std.fs.Dir,
     /// dir which stores the snapshot files to unpack into {validator_dir}/accounts_db
-    maybe_snapshot_dir: ?std.fs.Dir,
+    snapshot_path: []const u8,
     options: struct {
         /// gossip service is not needed when loading from an existing snapshot.
         /// but when we need to download a new snapshot (force_new_snapshot_download flag),
@@ -438,6 +448,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         num_threads_snapshot_unpack: u16 = 0,
         min_snapshot_download_speed_mbs: usize = 20,
         trusted_validators: ?[]const Pubkey = null,
+        max_number_of_download_attempts: u64 = default_adb_config.max_number_of_snapshot_download_attempts,
     },
 ) !struct { FullAndIncrementalManifest, SnapshotFiles } {
     const logger = logger_.withScope(LOG_SCOPE);
@@ -451,31 +462,29 @@ pub fn getOrDownloadAndUnpackSnapshot(
     }
 
     // check if we need to download a fresh snapshot
-    var accounts_db_exists = blk: {
-        if (validator_dir.openDir(sig.ACCOUNTS_DB_SUBDIR, .{ .iterate = true })) |dir| {
-            std.posix.close(dir.fd);
-            break :blk true;
-        } else |_| {
-            break :blk false;
+    var should_delete_dir = false;
+    if (std.fs.cwd().openDir(snapshot_path, .{ .iterate = true })) |dir| {
+        defer std.posix.close(dir.fd);
+        if (force_new_snapshot_download) {
+            // clear old snapshots, if we will download a new one
+            should_delete_dir = true;
         }
-    };
+    } else |_| {}
 
-    // clear old snapshots, if we will download a new one
-    if (force_new_snapshot_download and accounts_db_exists) {
-        logger.info().log("deleting accounts_db dir...");
-        try validator_dir.deleteTreeMinStackSize("accounts_db");
-        accounts_db_exists = false;
+    if (should_delete_dir) {
+        logger.info().log("deleting snapshot dir...");
+        std.fs.cwd().deleteTree(snapshot_path) catch |err| {
+            logger.warn().logf("failed to delete snapshot directory: {}", .{err});
+        };
     }
 
-    const accounts_db_dir = try validator_dir.makeOpenPath(sig.ACCOUNTS_DB_SUBDIR, .{
+    const snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_path, .{
         .iterate = true,
     });
-    const snapshot_dir = maybe_snapshot_dir orelse accounts_db_dir;
 
     // download a new snapshot if required
     const snapshot_exists = blk: {
-        _ = SnapshotFiles.find(allocator, snapshot_dir) catch |err| {
-            std.debug.print("failed to find snapshot files: {}\n", .{err});
+        _ = SnapshotFiles.find(allocator, snapshot_dir) catch {
             break :blk false;
         };
         break :blk true;
@@ -494,6 +503,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
             gossip_service,
             snapshot_dir,
             @intCast(min_mb_per_sec),
+            options.max_number_of_download_attempts,
         );
         defer full.close();
         defer if (maybe_inc) |inc| inc.close();
@@ -506,7 +516,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         // do a quick sanity check on the number of files in accounts/
         // NOTE: this is sometimes the case that you unpacked only a portion
         // of the snapshot
-        var accounts_dir = accounts_db_dir.openDir("accounts", .{}) catch |err| switch (err) {
+        var accounts_dir = snapshot_dir.openDir("accounts", .{}) catch |err| switch (err) {
             // accounts folder doesnt exist, so its invalid
             error.FileNotFound => break :blk false,
             else => return err,
@@ -557,7 +567,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
                 allocator,
                 logger.unscoped(),
                 archive_file,
-                accounts_db_dir,
+                snapshot_dir,
                 n_threads_snapshot_unpack,
                 true,
             );
@@ -576,7 +586,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
                 allocator,
                 logger.unscoped(),
                 archive_file,
-                accounts_db_dir,
+                snapshot_dir,
                 n_threads_snapshot_unpack,
                 false,
             );
@@ -592,7 +602,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
     const snapshot_fields = try FullAndIncrementalManifest.fromFiles(
         allocator,
         logger.unscoped(),
-        accounts_db_dir,
+        snapshot_dir,
         snapshot_files,
     );
     logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});

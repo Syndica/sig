@@ -98,6 +98,7 @@ const DEFAULT_EPOCH_DURATION = Duration.fromMillis(172_800_000);
 
 pub const VERIFY_PACKET_PARALLEL_TASKS = 4;
 
+const THREAD_POOL_SIZE = 4;
 const MAX_PROCESS_BATCH_SIZE = 64;
 const GOSSIP_PRNG_SEED = 19;
 
@@ -232,7 +233,7 @@ pub const GossipService = struct {
         gossip_socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT_US) catch return error.SocketSetTimeoutFailed; // 1 second
 
         // setup the threadpool for processing messages
-        const n_threads: usize = @min(std.Thread.getCpuCount() catch 1, 8);
+        const n_threads: usize = @min(std.Thread.getCpuCount() catch 1, THREAD_POOL_SIZE);
         const thread_pool = ThreadPool.init(.{
             .max_threads = @intCast(n_threads),
             .stack_size = 2 * 1024 * 1024,
@@ -266,7 +267,7 @@ pub const GossipService = struct {
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
         const my_shred_version = my_contact_info.shred_version;
         const failed_pull_hashes = HashTimeQueue.init(allocator);
-        const metrics = try GossipMetrics.init(gossip_logger);
+        const metrics = try GossipMetrics.init();
 
         const exit_counter = try allocator.create(Atomic(u64));
         exit_counter.* = Atomic(u64).init(0);
@@ -736,8 +737,6 @@ pub const GossipService = struct {
 
             // only add the count once we've finished processing
             defer self.metrics.gossip_packets_processed_total.add(gossip_packets_processed_total);
-
-            self.metrics.maybeLog();
 
             // handle batch messages
             if (push_messages.items.len > 0) {
@@ -2096,36 +2095,7 @@ pub const GossipMetrics = struct {
     table_pubkeys_dropped: *Counter,
     table_old_values_removed: *Counter,
 
-    // logging details
-    _logging_fields: struct {
-        // Scoping to GossipService instead of logging fields struct.
-        logger: GossipService.ScopedLogger,
-        log_interval_micros: i64 = 10 * std.time.us_per_s,
-        last_log: i64 = 0,
-        last_logged_snapshot: StatsToLog = .{},
-        updates_since_last: u64 = 0,
-    },
-
     const GaugeU64 = Gauge(u64);
-
-    const StatsToLog = struct {
-        gossip_packets_received_total: u64 = 0,
-
-        ping_messages_recv: u64 = 0,
-        pong_messages_recv: u64 = 0,
-        push_messages_recv: u64 = 0,
-        pull_requests_recv: u64 = 0,
-        pull_responses_recv: u64 = 0,
-        prune_messages_recv: u64 = 0,
-
-        ping_messages_sent: u64 = 0,
-        pong_messages_sent: u64 = 0,
-        push_messages_sent: u64 = 0,
-        pull_requests_sent: u64 = 0,
-        pull_responses_sent: u64 = 0,
-        prune_messages_sent: u64 = 0,
-    };
-
     const Self = @This();
 
     pub const histogram_buckets: [10]f64 = .{
@@ -2136,75 +2106,17 @@ pub const GossipMetrics = struct {
         5000, 10000,
     };
 
-    pub fn init(logger: GossipService.ScopedLogger) GetMetricError!Self {
+    pub fn init() GetMetricError!Self {
         var self: Self = undefined;
         const registry = globalRegistry();
-        std.debug.assert(try registry.initFields(&self) == 1);
-        self._logging_fields = .{ .logger = logger };
+        std.debug.assert(try registry.initFields(&self) == 0);
         return self;
     }
 
     pub fn reset(self: *Self) void {
         inline for (@typeInfo(GossipMetrics).Struct.fields) |field| {
-            if (field.name[0] != '_') {
-                @field(self, field.name).reset();
-            }
+            @field(self, field.name).reset();
         }
-    }
-
-    /// If log_interval_millis has passed since the last log,
-    /// then log the number of events since then.
-    fn maybeLog(
-        self: *Self,
-    ) void {
-        const now = std.time.microTimestamp();
-        const logging_fields = self._logging_fields;
-        const interval = @as(u64, @intCast(now -| logging_fields.last_log));
-        if (interval < logging_fields.log_interval_micros) return;
-
-        const current_stats = StatsToLog{
-            .gossip_packets_received_total = self.gossip_packets_received_total.get(),
-            .ping_messages_recv = self.ping_messages_recv.get(),
-            .pong_messages_recv = self.pong_messages_recv.get(),
-            .push_messages_recv = self.push_messages_recv.get(),
-            .pull_requests_recv = self.pull_requests_recv.get(),
-            .pull_responses_recv = self.pull_responses_recv.get(),
-            .prune_messages_recv = self.prune_messages_recv.get(),
-
-            .ping_messages_sent = self.ping_messages_sent.get(),
-            .pong_messages_sent = self.pong_messages_sent.get(),
-            .push_messages_sent = self.push_messages_sent.get(),
-            .pull_requests_sent = self.pull_requests_sent.get(),
-            .pull_responses_sent = self.pull_responses_sent.get(),
-            .prune_messages_sent = self.prune_messages_sent.get(),
-        };
-
-        logging_fields.logger.info().logf(
-            "recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
-            .{
-                current_stats.gossip_packets_received_total - logging_fields.last_logged_snapshot.gossip_packets_received_total,
-                current_stats.ping_messages_recv - logging_fields.last_logged_snapshot.ping_messages_recv,
-                current_stats.pong_messages_recv - logging_fields.last_logged_snapshot.pong_messages_recv,
-                current_stats.push_messages_recv - logging_fields.last_logged_snapshot.push_messages_recv,
-                current_stats.pull_requests_recv - logging_fields.last_logged_snapshot.pull_requests_recv,
-                current_stats.pull_responses_recv - logging_fields.last_logged_snapshot.pull_responses_recv,
-                current_stats.prune_messages_recv - logging_fields.last_logged_snapshot.prune_messages_recv,
-            },
-        );
-        logging_fields.logger.info().logf(
-            "sent: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
-            .{
-                current_stats.ping_messages_sent - logging_fields.last_logged_snapshot.ping_messages_sent,
-                current_stats.pong_messages_sent - logging_fields.last_logged_snapshot.pong_messages_sent,
-                current_stats.push_messages_sent - logging_fields.last_logged_snapshot.push_messages_sent,
-                current_stats.pull_requests_sent - logging_fields.last_logged_snapshot.pull_requests_sent,
-                current_stats.pull_responses_sent - logging_fields.last_logged_snapshot.pull_responses_sent,
-                current_stats.prune_messages_sent - logging_fields.last_logged_snapshot.prune_messages_sent,
-            },
-        );
-        self._logging_fields.last_logged_snapshot = current_stats;
-        self._logging_fields.last_log = now;
-        self._logging_fields.updates_since_last = 0;
     }
 };
 

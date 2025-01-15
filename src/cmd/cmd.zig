@@ -291,11 +291,7 @@ pub fn run() !void {
     var accounts_per_file_estimate = cli.Option{
         .long_name = "accounts-per-file-estimate",
         .short_alias = 'a',
-        .help =
-        \\number of accounts to estimate inside of account files (used for pre-allocation).
-        \\Safer to set it larger than smaller.
-        \\(approx values we found work well testnet/devnet: 1_500, mainnet: 3_000)"
-        ,
+        .help = "number of accounts to estimate inside of account files (used for pre-allocation)",
         .value_ref = cli.mkRef(&config.current.accounts_db.accounts_per_file_estimate),
         .required = false,
         .value_name = "accounts_per_file_estimate",
@@ -1377,21 +1373,18 @@ fn loadSnapshot(
 ) !LoadedSnapshot {
     const logger = unscoped_logger.withScope(@typeName(@This()) ++ "." ++ @src().fn_name);
 
-    var validator_dir = try std.fs.cwd().openDir(sig.VALIDATOR_DIR, .{});
+    var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});
     defer validator_dir.close();
 
     const genesis_file_path = try config.current.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
 
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
-    defer snapshot_dir.close();
 
     const combined_manifest, const snapshot_files = try sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
         allocator,
         logger.unscoped(),
-        validator_dir,
-        snapshot_dir,
+        snapshot_dir_str,
         .{
             .gossip_service = options.gossip_service,
             .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
@@ -1400,6 +1393,9 @@ fn loadSnapshot(
             .min_snapshot_download_speed_mbs = config.current.accounts_db.min_snapshot_download_speed_mbs,
         },
     );
+
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
+    defer snapshot_dir.close();
 
     logger.info().logf("full snapshot: {s}", .{
         sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full.snapshotArchiveName().constSlice()),
@@ -1538,6 +1534,7 @@ fn downloadSnapshot() !void {
         gossip_service,
         snapshot_dir,
         @intCast(min_mb_per_sec),
+        config.current.accounts_db.max_number_of_snapshot_download_attempts,
     );
     defer full_file.close();
     defer if (maybe_inc_file) |inc_file| inc_file.close();
