@@ -56,6 +56,7 @@ pub const RepairService = struct {
     report: MultiSlotReport,
     thread_pool: RequestBatchThreadPool,
     metrics: Metrics,
+    rng: std.Random.DefaultPrng,
 
     pub const RequestBatchThreadPool = HomogeneousThreadPool(struct {
         requester: *RepairRequester,
@@ -109,6 +110,7 @@ pub const RepairService = struct {
             .report = MultiSlotReport.init(allocator),
             .thread_pool = RequestBatchThreadPool.init(allocator, maxRequesterThreads()),
             .metrics = try registry.initStruct(Metrics),
+            .rng = std.Random.DefaultPrng.init(0),
         };
     }
 
@@ -222,8 +224,10 @@ pub const RepairService = struct {
 
         // eagerly request the next unknown slot in case turbine is laggy
         try repairs.append(.{ .HighestShred = .{ slot + 1, 0 } });
-        // request 10 seconds ahead to detect if caught behind
-        try repairs.append(.{ .HighestShred = .{ slot + 25, 0 } });
+
+        // request ahead to detect if caught behind. use jitter to avoid skipped slots
+        const num_slots_ahead = self.rng.random().intRangeAtMost(u32, 10, 50);
+        try repairs.append(.{ .HighestShred = .{ slot + num_slots_ahead, 0 } });
 
         self.metrics.oldest_slot_needing_repair.set(oldest_slot_needing_repair);
         self.metrics.newest_slot_needing_repair.set(newest_slot_needing_repair);
