@@ -19,6 +19,7 @@ const getVariant = sig.utils.types.getVariant;
 const TRIM_INTERVAL = Duration.fromSecs(2);
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
+    std.debug.print("Running gossip_table fuzzer with seed: {}\n", .{seed});
     const maybe_max_actions_string = args.next();
     const maybe_max_actions = blk: {
         if (maybe_max_actions_string) |max_actions_str| {
