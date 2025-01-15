@@ -269,6 +269,7 @@ pub const SocketPipe = struct {
 
     const List = std.DoublyLinkedList(SocketPipe);
 
+    var send_hook: Channel(Packet).SendHook = .{ .after_send = afterSend };
     var register = std.atomic.Value(?*List.Node).init(null);
     var ref_count = std.atomic.Value(usize).init(0);
     var notified = std.atomic.Value(bool).init(false);
@@ -321,7 +322,15 @@ pub const SocketPipe = struct {
             };
         }
 
+        if (direction == .sender) {
+            channel.send_hook = &send_hook;
+        }
+
         return &node.data;
+    }
+
+    fn afterSend(_: *Channel(Packet).SendHook, _: *Channel(Packet)) void {
+        if (!notified.swap(true, .release)) Loop.notify();
     }
 
     fn tick() bool {
