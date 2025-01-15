@@ -8,6 +8,8 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
 
+const MAX_ROOT_PRINT_SECONDS: u64 = 60 * 60; // 1 hour
+
 const SlotHashKey = struct {
     slot: Slot,
     hash: Hash,
@@ -49,4 +51,68 @@ pub const HeaviestSubtreeForkChoice = struct {
     last_root_time: Instant,
 
     const Self = @This();
+
+    pub fn new(allocator: *std.mem.Allocator, tree_root: SlotHashKey) Self {
+        const heaviest_subtree_fork_choice = .{
+            .fork_infos = AutoHashMap(SlotHashKey, ForkInfo).init(allocator),
+            .latest_votes = AutoHashMap(Pubkey, SlotHashKey).init(allocator),
+            .tree_root = tree_root,
+            .last_root_time = Instant.now(),
+        };
+
+        return heaviest_subtree_fork_choice;
+    }
+
+    pub fn addNewLeafSlot(self: *Self, slot_hash_key: SlotHashKey, maybe_parent: ?SlotHashKey) void {
+        if (self.last_root_time.since(Instant.now()) > MAX_ROOT_PRINT_SECONDS) {
+            // TODO implement self.print_state();
+            self.last_root_time = Instant.now();
+        }
+
+        const parent_latest_invalid_ancestor = if (maybe_parent) |p| self.latest_invalid_ancestor(p) else null;
+        if (self.fork_infos.getPtr(slot_hash_key)) |fork_info| {
+            // Modify existing entry
+            fork_info.parent = maybe_parent;
+        } else {
+            // Insert new entry
+            const new_fork_info = ForkInfo{
+                .stake_voted_at = 0,
+                .stake_voted_subtree = 0,
+                .height = 1,
+                // The `best_slot` and `deepest_slot` of a leaf is itself
+                .best_slot = slot_hash_key,
+                .deepest_slot = slot_hash_key,
+                .children = SortedMap(SlotHashKey, void).init(std.heap.page_allocator),
+                .parent = maybe_parent,
+                .latest_invalid_ancestor = parent_latest_invalid_ancestor,
+                // If the parent is none, then this is the root, which implies this must
+                // have reached the duplicate confirmed threshold
+                .is_duplicate_confirmed = (maybe_parent == null),
+            };
+
+            self.fork_infos.put(slot_hash_key, new_fork_info) catch unreachable;
+        }
+
+        const parent = if (maybe_parent) |parent| parent else return null;
+
+        self.fork_infos.get(&parent).?.*.children.put(slot_hash_key, {}) catch {
+            // Handle the error if `parent` does not exist or `put` fails
+            return error.InvalidParent;
+        };
+    }
+
+    pub fn latest_invalid_ancestor(self: *const Self, slot_hash_key: SlotHashKey) ?Slot {
+        if (self.fork_infos.get(slot_hash_key)) |fork_info| {
+            return fork_info.latest_invalid_ancestor;
+        }
+        return null;
+    }
+    
+
+    pub fn bestSlot(self: *const Self, slot_hash_key: SlotHashKey) ?SlotHashKey {
+        if (self.fork_infos.get(slot_hash_key)) |fork_info| {
+            return fork_info.best_slot;
+        }
+        return null;
+    }
 };
