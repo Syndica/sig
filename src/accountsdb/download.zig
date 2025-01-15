@@ -474,7 +474,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
     if (should_delete_dir) {
         logger.info().log("deleting snapshot dir...");
         std.fs.cwd().deleteTree(snapshot_path) catch |err| {
-            logger.warn().logf("failed to delete snapshot directory: {s}", .{err});
+            logger.warn().logf("failed to delete snapshot directory: {}", .{err});
         };
     }
 
