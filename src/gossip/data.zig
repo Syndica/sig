@@ -1255,7 +1255,13 @@ pub const ContactInfo = struct {
                 .ipv6 => SocketAddr.initIpv6(addr.asV6(), port),
             };
             socket.sanitize() catch continue;
-            self.cache[@intFromEnum(socket_entry.key)] = socket;
+
+            const cache_index = @intFromEnum(socket_entry.key);
+            if (cache_index >= SOCKET_CACHE_SIZE) {
+                // warn
+                continue;
+            }
+            self.cache[cache_index] = socket;
         }
     }
 
