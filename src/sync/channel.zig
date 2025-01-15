@@ -17,16 +17,10 @@ pub fn Channel(T: type) type {
         send_hook: ?*SendHook = null,
 
         pub const SendHook = struct {
-            /// Called before a value is sent to a channel.
-            /// If it returns false, the value ia not pushed to the channel.
-            before_send: *const fn (*SendHook, *Self, T) bool = defaultBeforeSend,
             /// Called after the channel has pushed the value.
             after_send: *const fn (*SendHook, *Self) void = defaultAfterSend,
 
             fn defaultAfterSend(_: *SendHook, _: *Self) void {}
-            fn defaultBeforeSend(_: *SendHook, _: *Self, _: T) bool {
-                return true;
-            }
         };
 
         const Self = @This();
@@ -143,9 +137,8 @@ pub fn Channel(T: type) type {
 
         /// to deinit channels created with `create`
         pub fn destroy(channel: *Self) void {
-            const allocator = channel.allocator; // read allocator from channel before freeing it
             channel.deinit();
-            allocator.destroy(channel);
+            channel.allocator.destroy(channel);
         }
 
         pub fn close(channel: *Self) void {
@@ -158,11 +151,6 @@ pub fn Channel(T: type) type {
             }
 
             const send_hook = channel.send_hook;
-            if (send_hook) |hook| {
-                if (!hook.before_send(hook, channel, value)) {
-                    return;
-                }
-            }
 
             var backoff: Backoff = .{};
             var tail = channel.tail.index.load(.acquire);
@@ -220,7 +208,9 @@ pub fn Channel(T: type) type {
 
                     channel.event.set();
 
-                    if (send_hook) |hook| hook.after_send(hook, channel);
+                    if (send_hook) |hook| {
+                        hook.after_send(hook, channel);
+                    }
 
                     return;
                 }

@@ -113,9 +113,8 @@ pub fn runShredRetransmitter(params: struct {
         ));
     }
 
-    const pipe = try socket_utils.SocketPipe.init(
+    const pipe = try socket_utils.SocketPipe.initSender(
         params.allocator,
-        .sender,
         params.logger,
         retransmit_socket,
         &retransmit_to_socket_channel,
