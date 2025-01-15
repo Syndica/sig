@@ -31,6 +31,23 @@ There are two main guidelines to keep in mind when naming interfaces and interfa
   - As an example, a generic implementation of `std.Random` which is a pseudo-random number generator should be named `prng` (ie this is relevant when making appropriate use of `std.Random.DefaultPrng`).
   - As another example, an instance of `std.heap.GeneralPurposeAllocator(config)` should be called `gpa_state`, `std.heap.ArenaAllocator` `arena_state`, and so on.
 
+#### Method Parameters
+The first parameter of a method should be named `self`. The type should be the name of the struct. 
+For example:
+
+```zig
+const MyStruct = struct {
+    state: u8,
+
+    fn write(self: *MyStruct, new_state: u8) void {
+        self.state = new_state;
+    }
+};
+```
+
+If the type name is not available (for example in anonymous structs), define `const Self = @This()` 
+and use that as the type.
+
 ### Files as Structs
 We prohibit usage of files as instantiable struct types in the codebase.
 
