@@ -20,6 +20,38 @@ pub const SBPFVersion = enum {
     v2,
     // v3,
     // reserved,
+
+    pub fn usesStaticSyscalls(version: SBPFVersion) bool {
+        return version != .v1;
+    }
+
+    pub fn enableDynamicStackFrames(version: SBPFVersion) bool {
+        return version != .v1;
+    }
+
+    pub fn enableElfVaddr(version: SBPFVersion) bool {
+        return version != .v1;
+    }
+
+    pub fn enableLDDW(version: SBPFVersion) bool {
+        return version == .v1;
+    }
+
+    pub fn enableStaticSyscalls(version: SBPFVersion) bool {
+        return version != .v1;
+    }
+
+    pub fn enableNegation(version: SBPFVersion) bool {
+        return version == .v1;
+    }
+
+    pub fn enableLe(version: SBPFVersion) bool {
+        return version == .v1;
+    }
+
+    pub fn rejectRodataStackOverlap(version: SBPFVersion) bool {
+        return version != .v1;
+    }
 };
 
 pub const Instruction = packed struct(u64) {
@@ -174,6 +206,8 @@ pub const Instruction = packed struct(u64) {
         arsh64_imm = alu64 | k | arsh,
         /// bpf opcode: `arsh64 dst, src` /// `dst >>= src (arithmetic)`.
         arsh64_reg = alu64 | x | arsh,
+        /// bpf opcode: `hor64 dst, imm` /// `dst |= imm << 32`.
+        hor64_imm = alu64 | k | hor,
 
         /// bpf opcode: `ja +off` /// `pc += off`.
         ja = jmp | 0x0,
@@ -229,6 +263,7 @@ pub const Instruction = packed struct(u64) {
 
         /// bpf opcode: `exit` /// `return r0`. /// valid only until sbpfv3
         exit = jmp | exit_code,
+        _,
 
         pub fn isReg(opcode: OpCode) bool {
             const is_reg_bit: u1 = @truncate(@intFromEnum(opcode) >> 3);
@@ -326,6 +361,8 @@ pub const Instruction = packed struct(u64) {
         .{ "rsh"  , .{ .inst = .alu_binary, .opc = rsh | alu64 } },
         .{ "rsh64", .{ .inst = .alu_binary, .opc = rsh | alu64 } },
         .{ "rsh32", .{ .inst = .alu_binary, .opc = rsh | alu32  } },
+
+        .{ "hor64", .{ .inst = .alu_binary, .opc = hor | alu64 } },
         
         .{ "neg"  , .{ .inst = .alu_unary,  .opc = neg | alu64 } },
         .{ "neg64", .{ .inst = .alu_unary,  .opc = neg | alu64 } },
@@ -483,6 +520,8 @@ pub const Instruction = packed struct(u64) {
     pub const arsh: u8 = 0xc0;
     /// alu/alu64 operation code: endianness conversion.
     pub const end: u8 = 0xd0;
+    /// alu/alu64 operation code: high or
+    pub const hor: u8 = 0xf0;
 
     pub const Register = enum(u4) {
         /// Return Value
@@ -525,5 +564,5 @@ pub const Instruction = packed struct(u64) {
 };
 
 pub fn hashSymbolName(name: []const u8) u32 {
-   return std.hash.Murmur3_32.hash(name);
+   return std.hash.Murmur3_32.hashWithSeed(name, 0);
 }
