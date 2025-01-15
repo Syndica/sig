@@ -220,7 +220,8 @@ pub const Elf = struct {
         const headers = Headers.parse(bytes);
         const data = try Data.parse(headers);
 
-        const text_section = data.getShdrByName(headers, ".text") orelse return error.NoTextSection;
+        const text_section = data.getShdrByName(headers, ".text") orelse
+            return error.NoTextSection;
         const offset = headers.header.e_entry -| text_section.sh_addr;
         const entry_pc = try std.math.divExact(u64, offset, 8);
 
@@ -320,7 +321,9 @@ pub const Elf = struct {
             if (version.rejectRodataStackOverlap()) {
                 vaddr_end +|= shdr.sh_size;
             }
-            if ((self.config.reject_broken_elfs and invalid_offsets) or vaddr_end > memory.STACK_START) {
+            if ((self.config.reject_broken_elfs and invalid_offsets) or
+                vaddr_end > memory.STACK_START)
+            {
                 return error.ValueOutOfBounds;
             }
 
@@ -337,8 +340,9 @@ pub const Elf = struct {
         }
 
         const can_borrow = !invalid_offsets and
-            last_ro_section +| 1 -| first_ro_section == n_ro_sections;
-        const ro_section: Executable.Section = if (self.config.optimize_rodata and can_borrow) ro: {
+            last_ro_section +| 1 -| first_ro_section == n_ro_sections and
+            self.config.optimize_rodata;
+        const ro_section: Executable.Section = if (can_borrow) ro: {
             const file_offset = addr_file_offset orelse 0;
             const start = lowest_addr -| file_offset;
             const end = highest_addr -| file_offset;
@@ -429,9 +433,13 @@ pub const Elf = struct {
             if (std.mem.startsWith(u8, name, ".bss")) {
                 return error.WritableSectionsNotSupported;
             }
-            if (std.mem.startsWith(u8, name, ".data") and !std.mem.startsWith(u8, name, ".data.rel")) {
+            if (std.mem.startsWith(u8, name, ".data") and
+                !std.mem.startsWith(u8, name, ".data.rel"))
+            {
                 // TODO: use a packed struct here, this is ugly
-                if (shdr.sh_flags & (elf.SHF_ALLOC | elf.SHF_WRITE) == elf.SHF_ALLOC | elf.SHF_WRITE) {
+                if (shdr.sh_flags & (elf.SHF_ALLOC | elf.SHF_WRITE) ==
+                    elf.SHF_ALLOC | elf.SHF_WRITE)
+                {
                     return error.WritableSectionsNotSupported;
                 }
             }
@@ -517,8 +525,11 @@ pub const Elf = struct {
                     // if the relocation is addressing an instruction inside of the
                     // text section, we'll need to offset it by the offset of the immediate
                     // field into the instruction.
-                    const in_text_section = self.inRangeOfShdr(text_section_index, r_offset);
-                    const imm_offset = if (in_text_section or version == .v1) r_offset +| 4 else r_offset;
+                    const in_text_section = self.inRangeOfShdr(
+                        text_section_index,
+                        r_offset,
+                    ) or version == .v1;
+                    const imm_offset = if (in_text_section) r_offset +| 4 else r_offset;
 
                     const addr_slice = try safeSlice(self.bytes, imm_offset, 4);
                     const ref_addr = std.mem.readInt(u32, addr_slice[0..4], .little);
@@ -589,7 +600,11 @@ pub const Elf = struct {
                                 break :addr memory.PROGRAM_START +| address;
                             },
                             else => addr: {
-                                const addr_slice = try safeSlice(self.bytes, r_offset, @sizeOf(u64));
+                                const addr_slice = try safeSlice(
+                                    self.bytes,
+                                    r_offset,
+                                    @sizeOf(u64),
+                                );
                                 var address = std.mem.readInt(u64, addr_slice[0..8], .little);
                                 if (address < memory.PROGRAM_START) {
                                     address +|= memory.PROGRAM_START;
@@ -625,7 +640,9 @@ pub const Elf = struct {
                         std.mem.writeInt(u32, slice[0..4], key, .little);
                     } else {
                         const hash = sbpf.hashSymbolName(symbol_name);
-                        if (config.reject_broken_elfs and loader.functions.lookupKey(hash) == null) {
+                        if (config.reject_broken_elfs and
+                            loader.functions.lookupKey(hash) == null)
+                        {
                             return error.UnresolvedSymbol;
                         }
                         const slice = try safeSlice(self.bytes, imm_offset, 4);
