@@ -183,6 +183,7 @@ pub fn build(b: *Build) void {
         .sanitize_thread = enable_tsan,
     });
     b.installArtifact(benchmark_exe);
+    benchmark_exe.root_module.addImport("xev", xev_mod);
     benchmark_exe.root_module.addImport("base58-zig", base58_module);
     benchmark_exe.root_module.addImport("zig-network", zig_network_module);
     benchmark_exe.root_module.addImport("httpz", httpz_mod);

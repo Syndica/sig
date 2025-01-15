@@ -42,9 +42,11 @@ pub fn runShredProcessor(
     var error_context: ErrorContext = .{};
     const metrics = try registry.initStruct(Metrics);
 
-    while (!exit.load(.acquire) or
-        verified_shred_receiver.len() != 0)
-    {
+    while (true) {
+        verified_shred_receiver.wait(.{ .unordered = exit }) catch |e| switch (e) {
+            error.Exit => if (verified_shred_receiver.isEmpty()) break,
+        };
+
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
         while (verified_shred_receiver.tryReceive()) |packet| {
