@@ -814,7 +814,17 @@ pub const ReadHandle = struct {
     fn bincodeSerialize(writer: anytype, inner: anytype, params: bincode.Params) anyerror!void {
         _ = params;
         var iter = (ReadHandle{ .inner = inner }).iterator();
+
+        try bincode.write(writer, @as(u64, iter.cached_read.len()), params);
+        while (iter.next()) |byte| {
+            try writer.writeByte(byte);
+        }
         while (iter.next()) |byte| try writer.writeByte(byte);
+
+        try bincode.write(writer, @as(u64, iter.cached_read.len()), params);
+        while (iter.next()) |byte| {
+            try writer.writeByte(byte);
+        }
     }
 
     fn bincodeDeserialize(alloc: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!Inner {
@@ -1569,5 +1579,50 @@ test "BufferPool random read" {
         // read via .readAll()
         try std.testing.expectEqualSlices(u8, read_data_expected, read_data_bp_readall);
         try std.testing.expectEqual(preaded_bytes, read_data_bp_readall.len);
+    }
+}
+
+test "ReadHandle bincode" {
+    const allocator = std.testing.allocator;
+
+    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    defer file.close();
+    const file_id = FileId.fromInt(1);
+
+    const num_frames = 400;
+
+    var bp = try BufferPool.init(allocator, num_frames);
+    defer bp.deinit(allocator);
+
+    const file_size: u32 = @intCast((try file.stat()).size);
+
+    const read = try bp.read(allocator, file, file_id, 0, file_size);
+    defer read.deinit(allocator);
+
+    const read_data = try read.readAllAllocate(allocator);
+    defer allocator.free(read_data);
+
+    {
+        var serialised_from_slice = std.ArrayList(u8).init(allocator);
+        defer serialised_from_slice.deinit();
+
+        try bincode.write(serialised_from_slice.writer(), read_data, .{});
+
+        const deserialised_from_slice = try bincode.readFromSlice(allocator, ReadHandle, serialised_from_slice.items, .{});
+        defer deserialised_from_slice.deinit(allocator);
+
+        try std.testing.expectEqualSlices(u8, read_data, deserialised_from_slice.inner.external.slice);
+    }
+
+    {
+        var serialised_from_handle = std.ArrayList(u8).init(allocator);
+        defer serialised_from_handle.deinit();
+
+        try bincode.write(serialised_from_handle.writer(), read, .{});
+
+        const deserialised_from_handle = try bincode.readFromSlice(allocator, ReadHandle, serialised_from_handle.items, .{});
+        defer deserialised_from_handle.deinit(allocator);
+
+        try std.testing.expectEqualSlices(u8, read_data, deserialised_from_handle.inner.external.slice);
     }
 }
