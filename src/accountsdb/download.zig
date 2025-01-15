@@ -18,9 +18,8 @@ const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 
-// NOTE: this also represents the amount of time a connection is given
-// to warm up before we start checking the download speed
-const DOWNLOAD_PROGRESS_UPDATES_NS = 20 * std.time.ns_per_s;
+// NOTE: this also represents the interval at which progress updates are issued
+const DOWNLOAD_WARMUP_TIME = sig.time.Duration.fromSecs(20);
 
 const BYTE_PER_KIB = 1024;
 const BYTE_PER_MIB = 1024 * BYTE_PER_KIB;
@@ -397,7 +396,7 @@ fn downloadFile(
 
         const elapsed_since_start = full_timer.read();
         const elapsed_since_prev_lap = lap_timer.read();
-        if (elapsed_since_prev_lap.asNanos() <= DOWNLOAD_PROGRESS_UPDATES_NS) continue;
+        if (elapsed_since_prev_lap.asNanos() <= DOWNLOAD_WARMUP_TIME.asNanos()) continue;
         defer lap_timer.reset(); // reset at the end of the iteration, after the update, right before the next read & write.
 
         const total_bytes_left = download_size - total_bytes_read;
