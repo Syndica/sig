@@ -154,8 +154,15 @@ pub const Vm = struct {
                         }
                         break :value lhs +% rhs;
                     },
+                    Instruction.sub => switch (opcode) {
+                        .sub64_imm, .sub32_imm => if (version.swapSubRegImmOperands())
+                            rhs -% lhs
+                        else
+                            lhs -% rhs,
+                        .sub64_reg, .sub32_reg => lhs -% rhs,
+                        else => unreachable,
+                    },
                     // zig fmt: off
-                    Instruction.sub    => lhs -% rhs,
                     Instruction.div    => try std.math.divTrunc(u64, lhs, rhs),
                     Instruction.xor    => lhs ^ rhs,
                     Instruction.@"or"  => lhs | rhs,
@@ -202,6 +209,60 @@ pub const Vm = struct {
                     else => {},
                 }
 
+                registers.set(inst.dst, result);
+            },
+
+            .lmul32_reg,
+            .lmul32_imm,
+            .udiv32_reg,
+            .udiv32_imm,
+            => {
+                if (!version.enablePqr()) return error.UnknownInstruction;
+                const lhs_large = registers.get(inst.dst);
+                const rhs_large = if (opcode.isReg()) registers.get(inst.src) else inst.imm;
+
+                const extended: u64 = switch (@intFromEnum(opcode) & 0b10000000) {
+                    // unsigned
+                    0 => result: {
+                        const lhs: u32 = @truncate(lhs_large);
+                        const rhs: u32 = @truncate(rhs_large);
+                        const result = switch (@intFromEnum(opcode) & 0b01000000) {
+                            // multiply
+                            0 => @panic("TODO"),
+                            // divide
+                            else => lhs / rhs,
+                        };
+                        break :result result;
+                    },
+                    // signed
+                    else => result: {
+                        const lhs: i32 = @truncate(@as(i64, @bitCast(lhs_large)));
+                        const rhs: i32 = @truncate(@as(i64, @bitCast(rhs_large)));
+                        const result = switch (@intFromEnum(opcode) & 0b01000000) {
+                            // divide
+                            0 => lhs *% rhs,
+                            // multiply
+                            else => @panic("TODO"),
+                        };
+                        break :result @bitCast(@as(i64, result));
+                    },
+                };
+
+                registers.set(inst.dst, extended);
+            },
+
+            .lmul64_reg,
+            .lmul64_imm,
+            .udiv64_reg,
+            .udiv64_imm,
+            => {
+                const lhs = registers.get(inst.dst);
+                const rhs = if (opcode.isReg()) registers.get(inst.src) else inst.imm;
+                const result: u64 = switch ((@intFromEnum(opcode) & 0b11100000)) {
+                    Instruction.lmul => lhs *% rhs,
+                    Instruction.udiv => lhs / rhs,
+                    else => unreachable,
+                };
                 registers.set(inst.dst, result);
             },
 
