@@ -8,8 +8,6 @@ const Instruction = sbpf.Instruction;
 const Executable = lib.Executable;
 const BuiltinProgram = lib.BuiltinProgram;
 
-const assert = std.debug.assert;
-
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     executable: *const Executable,
@@ -37,11 +35,11 @@ pub const Vm = struct {
         loader: *const BuiltinProgram,
         stack_len: u64,
     ) !Vm {
-        const stack_pointer = memory.STACK_START +% if (executable.version.enableDynamicStackFrames())
+        const offset = if (executable.version.enableDynamicStackFrames())
             stack_len
         else
             executable.config.stack_frame_size;
-
+        const stack_pointer = memory.STACK_START +% offset;
         var self: Vm = .{
             .executable = executable,
             .allocator = allocator,
