@@ -47,7 +47,12 @@ jobs:
           with:
             version: 0.13.0
         
-        # ensure builds pass for common targets we have.
+        # GitHub's CI runners for macos seem to alternate between using a x86 and an ARM machine
+        # which is annoying to handle and results in them having invalid hardware info configurations
+        # on the virtual machine. This leads to incorrect feature detection and the CI is flaky.
+        # 
+        # If we at some point setup a self-hosted MacOS runner, we could work around the issue and
+        # enable full testing on MacOS!
         - name: build
           run: |
             zig build -Dtarget=x86_64-linux -Dcpu=x86_64_v4
