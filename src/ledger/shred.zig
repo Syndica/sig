@@ -385,13 +385,20 @@ pub const DataShred = struct {
 
 /// Analogous to [Shred trait](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred/traits.rs#L6)
 fn generic_shred(shred_type: ShredType) type {
-    const Self: type, //
-    const CustomHeader: type, //
+    const Self = switch (shred_type) {
+        .data => DataShred,
+        .code => CodeShred,
+    };
+    const CustomHeader = switch (shred_type) {
+        .data => DataHeader,
+        .code => CodeHeader,
+    };
     const constants: ShredConstants = switch (shred_type) {
-        .data => .{ DataShred, DataHeader, data_shred_constants },
-        .code => .{ CodeShred, CodeHeader, code_shred_constants },
+        .data => data_shred_constants,
+        .code => code_shred_constants,
     };
     return struct {
+        // only used in tests
         fn writePayload(self: *Self, data: []const u8) !void {
             if (self.payload.len < constants.payload_size) {
                 return error.InvalidPayloadSize;
@@ -477,7 +484,7 @@ fn generic_shred(shred_type: ShredType) type {
 
         fn merkleNode(self: Self) !Hash {
             const offset = try proofOffset(constants, self.common.variant);
-            return getMerkleNode(self.payload, Signature.size, offset);
+            return getMerkleNodeAt(self.payload, Signature.size, offset);
         }
 
         fn erasureShardAsSlice(self: *const Self) ![]const u8 {
@@ -511,6 +518,7 @@ fn generic_shred(shred_type: ShredType) type {
             return layout.getChainedMerkleRoot(self.payload) orelse error.InvalidPayloadSize;
         }
 
+        // only used in init
         /// agave: set_chained_merkle_root
         fn setChainedMerkleRoot(self: *Self, chained_merkle_root: Hash) !void {
             const offset = try getChainedMerkleRootOffset(self.common.variant);
@@ -521,6 +529,7 @@ fn generic_shred(shred_type: ShredType) type {
             @memcpy(self.payload[offset..end], &chained_merkle_root.data);
         }
 
+        // complicated
         /// agave: set_merkle_proof
         fn setMerkleProof(self: *Self, proof: MerkleProofEntryList) !void {
             try proof.sanitize();
@@ -554,6 +563,7 @@ fn generic_shred(shred_type: ShredType) type {
             return .{ .data = sig_bytes };
         }
 
+        // only used in init
         /// agave: setRetransmitterSignature
         fn setRetransmitterSignature(self: *Self, signature: Signature) !void {
             const offset = try retransmitterSignatureOffset(self.common.variant);
@@ -603,7 +613,7 @@ fn getMerkleRoot(
     };
     const proof = try getMerkleProof(shred, constants, variant);
     const offset = try proofOffset(constants, variant);
-    const node = try getMerkleNode(shred, Signature.size, offset);
+    const node = try getMerkleNodeAt(shred, Signature.size, offset);
     return calculateMerkleRoot(index, node, proof);
 }
 
@@ -624,7 +634,13 @@ fn getMerkleProof(
     };
 }
 
-fn getMerkleNode(shred: []const u8, start: usize, end: usize) !Hash {
+pub fn getMerkleNode(shred: []const u8) !Hash {
+    const variant = layout.getShredVariant(shred) orelse error.UnknownShredVariant;
+    const offset = try proofOffset(variant.constants(), variant);
+    return getMerkleNodeAt(shred, Signature.size, offset);
+}
+
+fn getMerkleNodeAt(shred: []const u8, start: usize, end: usize) !Hash {
     if (shred.len < end) return error.InvalidPayloadSize;
     return hashv(&.{ MERKLE_HASH_PREFIX_LEAF, shred[start..end] });
 }

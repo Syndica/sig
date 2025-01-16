@@ -335,7 +335,7 @@ fn setMerkleProofs(
         }
     }
 }
-
+    
 /// Verify that shreds belong to the same erasure batch
 /// and have consistent headers.
 fn verifyErasureBatch(
