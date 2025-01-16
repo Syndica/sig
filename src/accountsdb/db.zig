@@ -1534,7 +1534,7 @@ pub const AccountsDB = struct {
         }
 
         const file, const file_id = try self.createAccountFile(size, slot);
-        errdefer file.close(); //
+        errdefer file.close();
 
         const offsets = try self.allocator.alloc(u64, accounts.len);
         defer self.allocator.free(offsets);
@@ -3342,8 +3342,6 @@ pub fn writeSnapshotTarWithFields(
 
     try archive_writer_counted.writeAll(&sig.utils.tar.sentinel_blocks);
     if (std.debug.runtime_safety) {
-        if (counting_state.bytes_written % 512 != 0) std.debug.print("counting_state.bytes_written: {}\n", .{counting_state.bytes_written});
-
         std.debug.assert(counting_state.bytes_written % 512 == 0);
     }
 }

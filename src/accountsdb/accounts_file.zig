@@ -423,46 +423,6 @@ pub const AccountFile = struct {
         };
     }
 
-    pub fn newRead(
-        self: *const Self,
-        buffer_pool: *BufferPool,
-        metadata_allocator: std.mem.Allocator,
-        start_offset: u32,
-        length: u32,
-    ) !ReadHandle {
-        const end_offset_exclusive, const overflow_flag = @addWithOverflow(start_offset, length);
-
-        if (overflow_flag == 1 or end_offset_exclusive > self.length) {
-            return error.EOF;
-        }
-        errdefer std.debug.print("failed with file: {}\n", .{self.file});
-
-        return try buffer_pool.read(
-            metadata_allocator,
-            self.file,
-            self.id,
-            start_offset,
-            end_offset_exclusive,
-        );
-    }
-
-    pub fn readTypeCopy(
-        self: *const Self,
-        buffer_pool: *BufferPool,
-        metadata_allocator: std.mem.Allocator,
-        start_offset: u32,
-        comptime T: type,
-    ) !T {
-        const length = @sizeOf(T);
-        const read = try self.readRange(buffer_pool, metadata_allocator, start_offset, length);
-        defer read.deinit(metadata_allocator);
-
-        var data: T = undefined;
-        try read.readAll(std.mem.asBytes(&data));
-
-        return data;
-    }
-
     pub fn getSlice(
         self: *const Self,
         metadata_allocator: std.mem.Allocator,
