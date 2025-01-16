@@ -28,6 +28,7 @@ pub const Config = struct {
     // general config
     log_level: LogLevel = .debug,
     metrics_port: u16 = 12345,
+    shred_version: ?u16 = null,
 
     pub fn genesisFilePath(self: Config) error{UnknownCluster}!?[]const u8 {
         return if (self.genesis_file_path) |provided_path|

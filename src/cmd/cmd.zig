@@ -64,6 +64,14 @@ pub fn run() !void {
         // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
     }
 
+    var shred_version_option = cli.Option{
+        .long_name = "shred-version",
+        .help = "The shred version for the network",
+        .value_ref = cli.mkRef(&config.current.shred_version),
+        .required = false,
+        .value_name = "Shred Version",
+    };
+
     var gossip_host_option = cli.Option{
         .long_name = "gossip-host",
         .help =
@@ -401,6 +409,7 @@ pub fn run() !void {
                             &gossip_spy_node_option,
                             &gossip_dump_option,
                             &network_option,
+                            &shred_version_option,
                         },
                         .target = .{
                             .action = .{
@@ -418,6 +427,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &gossip_host_option,
                             &gossip_port_option,
@@ -476,6 +486,7 @@ pub fn run() !void {
                         \\ for testnet or another `-u` for mainnet/devnet.
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &gossip_host_option,
                             &gossip_port_option,
@@ -512,6 +523,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // where to download the snapshot
                             &snapshot_dir_option,
                             // download options
@@ -609,6 +621,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &gossip_host_option,
                             &gossip_port_option,
@@ -648,6 +661,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &network_option,
                             &gossip_host_option,
@@ -1249,7 +1263,12 @@ const AppBase = struct {
             allocator,
             entrypoints,
         );
-        const my_shred_version = echo_data.shred_version orelse 0;
+
+        // zig fmt: off
+        const my_shred_version = config.current.shred_version
+            orelse echo_data.shred_version
+            orelse 0;
+        // zig fmt: on
 
         const config_host = config.current.gossip.getHost() catch null;
         const my_ip = config_host orelse echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
