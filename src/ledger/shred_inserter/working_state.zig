@@ -540,10 +540,7 @@ pub const ShredWorkingStore = struct {
     }
 
     fn getFromDb(self: Self, comptime cf: ColumnFamily, id: ShredId) !?BytesRef {
-        return if (try self.db.getBytes(cf, .{ id.slot, @intCast(id.index) })) |s|
-            s
-        else
-            null;
+        return try self.db.getBytes(cf, .{ id.slot, @intCast(id.index) });
     }
 };
 
