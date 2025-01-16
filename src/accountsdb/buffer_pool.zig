@@ -263,7 +263,7 @@ pub const BufferPool = struct {
             return error.CannotOverwriteAliveInfo;
         }
 
-        self.frames_metadata.freq[f_idx] = 0;
+        self.frames_metadata.freqSetToZero(f_idx);
         self.frames_metadata.in_queue[f_idx] = .none;
         self.frames_metadata.rc[f_idx].reset();
 
@@ -603,6 +603,8 @@ pub const FramesMetadata = struct {
     }
 
     fn freqDecrement(self: FramesMetadata, index: FrameIndex) void {
+        // note for reviewers: I myself do not trust this code, have a think about it
+
         const old_freq = @atomicRmw(u2, &self.freq[index], .Add, 1, .acq_rel);
         if (old_freq == 3) {
             // we overflowed (0->3), set back to min
@@ -619,6 +621,11 @@ pub const FramesMetadata = struct {
     fn freqSetToOne(self: FramesMetadata, index: FrameIndex) void {
         // note for reviewers: I myself do not trust this code, have a think about it
         @atomicStore(u2, &self.freq[index], 1, .release);
+    }
+
+    fn freqSetToZero(self: FramesMetadata, index: FrameIndex) void {
+        // note for reviewers: I myself do not trust this code, have a think about it
+        @atomicStore(u2, &self.freq[index], 0, .release);
     }
 };
 
