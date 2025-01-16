@@ -9,6 +9,7 @@ const LruCacheCustom = sig.common.lru.LruCacheCustom;
 const ReferenceCounter = sig.sync.reference_counter.ReferenceCounter;
 const Slot = sig.core.Slot;
 const Counter = sig.prometheus.counter.Counter;
+const ReadHandle = sig.accounts_db.buffer_pool.ReadHandle;
 
 /// Stores read-only in-memory copies of commonly used *rooted* accounts
 pub const AccountsCache = struct {
@@ -23,6 +24,8 @@ pub const AccountsCache = struct {
         /// the slot that this version of the account originates from
         slot: Slot,
 
+        const Buf = []align(@alignOf(CachedAccount)) u8;
+
         /// Makes use of the fact that CachedAccount needs to live on the heap & shares its lifetime
         /// with .ref_count in order to allocate once instead of twice.
         pub fn initCreate(
@@ -30,17 +33,19 @@ pub const AccountsCache = struct {
             account: Account,
             slot: Slot,
         ) error{OutOfMemory}!*CachedAccount {
-            const buf = try allocator.alignedAlloc(
+            const buf: Buf = try allocator.alignedAlloc(
                 u8,
                 @alignOf(CachedAccount),
-                @sizeOf(CachedAccount) + account.data.len,
+                @sizeOf(CachedAccount) + account.data.len(),
             );
             const new_entry = @as(*CachedAccount, @ptrCast(buf.ptr));
             const account_data = buf[@sizeOf(CachedAccount)..];
 
+            account.data.read(0, account.data.len(), account_data) catch
+                unreachable; // account.data invalid?
+
             var new_account = account;
-            new_account.data = account_data;
-            @memcpy(new_account.data, account.data);
+            new_account.data = ReadHandle.initExternal(account_data);
 
             new_entry.* = .{
                 .account = new_account,
@@ -52,10 +57,10 @@ pub const AccountsCache = struct {
         }
 
         pub fn deinitDestroy(self: *CachedAccount, allocator: std.mem.Allocator) void {
-            const buf: []align(8) u8 = @as(
-                [*]align(8) u8,
+            const buf: Buf = @as(
+                [*]align(@alignOf(CachedAccount)) u8,
                 @ptrCast(self),
-            )[0 .. @sizeOf(CachedAccount) + self.account.data.len];
+            )[0 .. @sizeOf(CachedAccount) + self.account.data.len()];
             @memset(buf, undefined);
             allocator.free(buf);
         }
@@ -206,7 +211,7 @@ test "AccountsCache put and get account" {
     defer if (cached_account) |cached| cached.releaseOrDestroy(allocator);
 
     try std.testing.expect(cached_account != null);
-    try std.testing.expectEqualSlices(u8, account.data, cached_account.?.account.data);
+    try ReadHandle.expectEqual(account.data, cached_account.?.account.data);
 }
 
 test "AccountsCache returns null when account is missing" {

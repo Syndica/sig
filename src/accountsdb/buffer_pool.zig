@@ -3,11 +3,12 @@ const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 
 const FileId = sig.accounts_db.accounts_file.FileId;
+const bincode = sig.bincode;
 
 /// arbitrarily chosen, I believe >95% of accounts will be <= 512 bytes
-const FRAME_SIZE = 512;
+pub const FRAME_SIZE = 512;
 const INVALID_FRAME = std.math.maxInt(FrameIndex);
-const Frame = [FRAME_SIZE]u8;
+pub const Frame = [FRAME_SIZE]u8;
 /// we can get away with a 32-bit index
 const FrameIndex = u32;
 const FileOffset = u32;
@@ -41,6 +42,35 @@ const FileIdFileOffset = packed struct(u64) {
     file_offset: FileOffset,
 };
 
+fn readError() type {
+    var ReadError = error{
+        InvalidArgument,
+        OutOfMemory,
+        InvalidKey,
+        CannotResetAlive,
+        CannotOverwriteAliveInfo,
+        OffsetsOutOfBounds,
+    };
+
+    if (use_io_uring) {
+        const called_fns = &.{
+            std.os.linux.IoUring.read,
+            std.os.linux.IoUring.submit_and_wait,
+            std.os.linux.IoUring.copy_cqes,
+        };
+        inline for (called_fns) |func| {
+            const ErrorSet = @typeInfo(
+                @typeInfo(@TypeOf(func)).Fn.return_type.?,
+            ).ErrorUnion.error_set;
+            ReadError = ReadError || ErrorSet;
+        }
+    }
+
+    ReadError = ReadError || std.posix.PReadError;
+
+    return ReadError;
+}
+
 /// Used for obtaining cached reads.
 ///
 /// Design details:
@@ -54,6 +84,11 @@ const FileIdFileOffset = packed struct(u64) {
 /// evictUnusedFrame).
 pub const BufferPool = struct {
     pub const FrameMap = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
+    pub const LargeReadMap = std.AutoArrayHashMapUnmanaged(
+        FileIdFileOffset,
+        sig.sync.reference_counter.RcSlice(u8),
+    );
+    pub const ReadError = readError();
 
     /// indices of all free frames
     /// free frames have a refcount of 0 *and* have been evicted
@@ -126,6 +161,19 @@ pub const BufferPool = struct {
         const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
         frame_map.deinit(init_allocator);
         frame_map_lg.unlock();
+
+        lifetime_probe(0, .reset_all);
+    }
+
+    const ProbeKind = enum(u8) { init, deinit, reset_all };
+    noinline fn lifetime_probe(frame: FrameIndex, kind: ProbeKind) callconv(.C) void {
+        std.mem.doNotOptimizeAway(frame);
+        std.mem.doNotOptimizeAway(kind);
+    }
+    comptime {
+        @export(lifetime_probe, .{
+            .name = "sig_bufferpool_lifetime_probe",
+        });
     }
 
     pub fn computeNumberofFrameIndices(
@@ -215,7 +263,7 @@ pub const BufferPool = struct {
             return error.CannotOverwriteAliveInfo;
         }
 
-        self.frames_metadata.freq[f_idx] = 0;
+        self.frames_metadata.freqSetToZero(f_idx);
         self.frames_metadata.in_queue[f_idx] = .none;
         self.frames_metadata.rc[f_idx].reset();
 
@@ -267,8 +315,8 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) !CachedRead {
-        return if (use_io_uring)
+    ) ReadError!ReadHandle {
+        const handle = try if (use_io_uring)
             self.readIoUringSubmitAndWait(
                 allocator,
                 file,
@@ -284,6 +332,8 @@ pub const BufferPool = struct {
                 file_offset_start,
                 file_offset_end,
             );
+
+        return handle;
     }
 
     fn readIoUringSubmitAndWait(
@@ -296,7 +346,7 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) !CachedRead {
+    ) ReadError!ReadHandle {
         if (!use_io_uring) @compileError("io_uring disabled");
 
         const frame_indices = try self.computeFrameIndices(
@@ -366,7 +416,12 @@ pub const BufferPool = struct {
             std.debug.assert(cqe_count == n_submitted); // why did we not receive them all?
             for (0.., cqes) |i, cqe| {
                 if (cqe.err() != .SUCCESS) {
-                    std.debug.panic("cqe err: {}, i: {}", .{ cqe, i });
+                    std.debug.panic("cqe: {}, err: {}, i: {}, file: {}", .{
+                        cqe,
+                        cqe.err(),
+                        i,
+                        file,
+                    });
                 }
                 const f_idx = cqe.user_data;
                 const bytes_read: FrameOffset = @intCast(cqe.res);
@@ -377,12 +432,14 @@ pub const BufferPool = struct {
             }
         }
 
-        return CachedRead{
-            .buffer_pool = self,
-            .frame_indices = frame_indices,
-            .first_frame_start_offset = @intCast(file_offset_start % FRAME_SIZE),
-            .last_frame_end_offset = @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
-        };
+        for (frame_indices) |f_idx| lifetime_probe(f_idx, .init);
+
+        return ReadHandle.initCached(
+            self,
+            frame_indices,
+            @intCast(file_offset_start % FRAME_SIZE),
+            @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
+        );
     }
 
     fn readBlocking(
@@ -395,14 +452,7 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) (error{
-        InvalidArgument,
-        OutOfMemory,
-        InvalidKey,
-        CannotResetAlive,
-        CannotOverwriteAliveInfo,
-        OffsetsOutOfBounds,
-    } || std.posix.PReadError)!CachedRead {
+    ) ReadError!ReadHandle {
         const frame_indices = try self.computeFrameIndices(
             file_id,
             allocator,
@@ -449,12 +499,14 @@ pub const BufferPool = struct {
             try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
         }
 
-        return CachedRead{
-            .buffer_pool = self,
-            .frame_indices = frame_indices,
-            .first_frame_start_offset = @intCast(file_offset_start % FRAME_SIZE),
-            .last_frame_end_offset = @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
-        };
+        for (frame_indices) |f_idx| lifetime_probe(f_idx, .init);
+
+        return ReadHandle.initCached(
+            self,
+            frame_indices,
+            @intCast(file_offset_start % FRAME_SIZE),
+            @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
+        );
     }
 };
 
@@ -471,6 +523,7 @@ pub const FramesMetadata = struct {
 
     /// frequency for the S3_FIFO
     /// Yes, really, only 0, 1, 2, 3.
+    /// Atomic - do not access directly.
     freq: []u2,
 
     /// which S3_FIFO queue this frame exists in
@@ -515,9 +568,9 @@ pub const FramesMetadata = struct {
 
     fn deinit(self: *FramesMetadata, allocator: std.mem.Allocator) void {
         // NOTE: this check itself is racy, but should never happen
-        for (self.rc) |*rc| {
+        for (0.., self.rc) |i, *rc| {
             if (rc.isAlive()) {
-                @panic("BufferPool deinitialised with alive handles");
+                std.debug.panic("BufferPool deinitialised with alive handle: {}\n", .{i});
             }
         }
         allocator.free(self.rc);
@@ -537,6 +590,42 @@ pub const FramesMetadata = struct {
         self.in_queue[index] = .none;
         self.size[index] = 0;
         self.key[index] = FileIdFileOffset.INVALID;
+    }
+
+    fn freqIncrement(self: FramesMetadata, index: FrameIndex) void {
+        // note for reviewers: I myself do not trust this code, have a think about it
+
+        const old_freq = @atomicRmw(u2, &self.freq[index], .Add, 1, .acq_rel);
+        if (old_freq == 0) {
+            // we overflowed (3->0), set back to max
+            @atomicStore(u2, &self.freq[index], 3, .release);
+        }
+    }
+
+    fn freqDecrement(self: FramesMetadata, index: FrameIndex) void {
+        // note for reviewers: I myself do not trust this code, have a think about it
+
+        const old_freq = @atomicRmw(u2, &self.freq[index], .Add, 1, .acq_rel);
+        if (old_freq == 3) {
+            // we overflowed (0->3), set back to min
+            @atomicStore(u2, &self.freq[index], 0, .release);
+        }
+    }
+
+    fn freqIsZero(self: FramesMetadata, index: FrameIndex) bool {
+        // note for reviewers: I myself do not trust this code, have a think about it
+        const freq = @atomicLoad(u2, &self.freq[index], .acquire);
+        return freq == 0;
+    }
+
+    fn freqSetToOne(self: FramesMetadata, index: FrameIndex) void {
+        // note for reviewers: I myself do not trust this code, have a think about it
+        @atomicStore(u2, &self.freq[index], 1, .release);
+    }
+
+    fn freqSetToZero(self: FramesMetadata, index: FrameIndex) void {
+        // note for reviewers: I myself do not trust this code, have a think about it
+        @atomicStore(u2, &self.freq[index], 0, .release);
     }
 };
 
@@ -606,11 +695,11 @@ pub const HierarchicalFIFO = struct {
 
         switch (metadata.in_queue[key]) {
             .main, .small => {
-                metadata.freq[key] +|= 1;
+                metadata.freqIncrement(key);
             },
             .ghost => {
-                std.debug.assert(metadata.freq[key] == 0);
-                metadata.freq[key] = 1;
+                std.debug.assert(metadata.freqIsZero(key));
+                metadata.freqSetToOne(key);
                 // Add key to main too - important to note that the key *still*
                 // exists within ghost, but from now on we'll ignore that entry.
                 self.main.writeItemAssumeCapacity(key);
@@ -620,7 +709,7 @@ pub const HierarchicalFIFO = struct {
                 if (self.small.writableLength() == 0) {
                     const popped_small = self.small.readItem().?;
 
-                    if (metadata.freq[popped_small] == 0) {
+                    if (metadata.freqIsZero(popped_small)) {
                         self.ghost.writeItemAssumeCapacity(popped_small);
                         metadata.in_queue[popped_small] = .ghost;
                     } else {
@@ -667,7 +756,7 @@ pub const HierarchicalFIFO = struct {
 
             // alive evicted keys are reinserted, we try again
             if (metadata.rc[evicted].isAlive()) {
-                metadata.freq[evicted] = 1;
+                metadata.freqSetToOne(evicted);
                 self.main.writeItemAssumeCapacity(evicted);
                 metadata.in_queue[evicted] = .main;
                 alive_eviction_attempts += 1;
@@ -721,10 +810,10 @@ pub const HierarchicalFIFO = struct {
                 .main => if (metadata.in_queue[popped_key] != .main) unreachable,
             }
 
-            if (metadata.freq[popped_key] == 0) {
+            if (metadata.freqIsZero(popped_key)) {
                 break popped_key;
             } else {
-                metadata.freq[popped_key] -|= 1;
+                metadata.freqDecrement(popped_key);
                 queue.writeItemAssumeCapacity(popped_key);
             }
         } else null;
@@ -735,19 +824,108 @@ pub const HierarchicalFIFO = struct {
 
 /// slice-like datatype
 /// view over one or more buffers owned by the BufferPool
-pub const CachedRead = struct {
-    buffer_pool: *BufferPool,
-    frame_indices: []const FrameIndex,
-    /// inclusive, the offset into the first frame
-    first_frame_start_offset: FrameOffset,
-    /// exclusive, the offset into the last frame
-    last_frame_end_offset: FrameOffset,
+pub const ReadHandle = struct {
+    inner: Inner,
+
+    pub const @"!bincode-config:inner" = bincode.FieldConfig(Inner){
+        .deserializer = bincodeDeserialize,
+        .serializer = bincodeSerialize,
+        .free = bincodeFree,
+    };
+
+    fn bincodeSerialize(writer: anytype, inner: anytype, params: bincode.Params) anyerror!void {
+        var iter = (ReadHandle{ .inner = inner }).iterator();
+
+        try bincode.write(writer, @as(u64, iter.cached_read.len()), params);
+        while (iter.next()) |byte| {
+            try writer.writeByte(byte);
+        }
+    }
+
+    fn bincodeDeserialize(
+        alloc: std.mem.Allocator,
+        reader: anytype,
+        params: bincode.Params,
+    ) anyerror!Inner {
+        const data = try bincode.read(alloc, []u8, reader, params);
+        return ReadHandle.initExternalOwned(data).inner;
+    }
+
+    fn bincodeFree(allocator: std.mem.Allocator, inner: anytype) void {
+        (ReadHandle{ .inner = inner }).deinit(allocator);
+    }
+
+    const Inner = union(enum) {
+        /// data owned by BufferPool
+        cached: CachedRead,
+        /// data allocated elsewhere
+        external: External,
+        /// data owned by parent ReadHandle
+        sub_read: SubRead,
+
+        const SubRead = packed struct(u128) {
+            parent: *ReadHandle,
+            // offset into the parent's read
+            start: u32,
+            end: u32,
+        };
+
+        const External = struct {
+            slice: []u8,
+            /// owned => ReadHandle will free the slice
+            owned: bool,
+        };
+
+        const CachedRead = struct {
+            buffer_pool: *BufferPool,
+            frame_indices: []const FrameIndex,
+            /// inclusive, the offset into the first frame
+            first_frame_start_offset: FrameOffset,
+            /// exclusive, the offset into the last frame
+            last_frame_end_offset: FrameOffset,
+        };
+
+        pub inline fn len(self: Inner) u32 {
+            return switch (self) {
+                .sub_read => |sr| sr.end - sr.start,
+                .cached => |cached| {
+                    if (cached.frame_indices.len == 0) return 0;
+                    return (@as(u32, @intCast(cached.frame_indices.len)) - 1) *
+                        FRAME_SIZE +
+                        cached.last_frame_end_offset - cached.first_frame_start_offset;
+                },
+                .external => |allocated| @intCast(allocated.slice.len),
+            };
+        }
+
+        fn deinit(self: Inner, allocator: std.mem.Allocator) void {
+            switch (self) {
+                .cached => |cached| {
+                    for (cached.frame_indices) |frame_index| {
+                        BufferPool.lifetime_probe(frame_index, .deinit);
+
+                        std.debug.assert(frame_index != INVALID_FRAME);
+
+                        if (cached.buffer_pool.frames_metadata.rc[frame_index].release()) {
+                            // notably, the frame remains in memory, and its hashmap entry
+                            // remains valid.
+                        }
+                    }
+                    allocator.free(cached.frame_indices);
+                },
+                .sub_read => |_| {},
+                .external => |external| {
+                    if (external.owned) allocator.free(external.slice);
+                },
+            }
+        }
+    };
+
+    pub const Reader = std.io.GenericReader(*Iterator, error{}, Iterator.readBytes);
 
     pub const Iterator = struct {
-        cached_read: *const CachedRead,
+        cached_read: *const ReadHandle,
         bytes_read: u32 = 0,
-
-        const Reader = std.io.GenericReader(*Iterator, error{}, readBytes);
 
         pub fn next(self: *Iterator) ?u8 {
             if (self.bytes_read == self.cached_read.len()) {
@@ -774,91 +952,260 @@ pub const CachedRead = struct {
         }
     };
 
-    pub fn readByte(self: CachedRead, index: usize) u8 {
-        std.debug.assert(self.frame_indices.len != 0);
-        std.debug.assert(index < self.len());
-        const offset = index + self.first_frame_start_offset;
-        std.debug.assert(offset >= self.first_frame_start_offset);
+    pub fn readByte(self: ReadHandle, index: usize) u8 {
+        return switch (self.inner) {
+            .cached => |cached| blk: {
+                std.debug.assert(cached.frame_indices.len != 0);
+                std.debug.assert(index < self.len());
+                const offset = index + cached.first_frame_start_offset;
+                std.debug.assert(offset >= cached.first_frame_start_offset);
+                std.debug.assert(offset / FRAME_SIZE < cached.frame_indices.len);
+                std.debug.assert(
+                    cached.frame_indices[offset / FRAME_SIZE] < cached.buffer_pool.frames.len,
+                );
 
-        return self.buffer_pool.frames[
-            self.frame_indices[offset / FRAME_SIZE]
-        ][offset % FRAME_SIZE];
+                break :blk cached.buffer_pool.frames[
+                    cached.frame_indices[offset / FRAME_SIZE]
+                ][offset % FRAME_SIZE];
+            },
+            .sub_read => |sub_read| sub_read.parent.readByte(index + sub_read.start),
+            .external => |external| external.slice[index],
+        };
+    }
+
+    /// External to the BufferPool
+    pub fn initExternal(data: []u8) ReadHandle {
+        return ReadHandle{
+            .inner = .{ .external = .{ .slice = data, .owned = false } },
+        };
+    }
+
+    /// External to the BufferPool, data will be freed upon .deinit
+    pub fn initExternalOwned(data: []u8) ReadHandle {
+        return ReadHandle{
+            .inner = .{ .external = .{ .slice = data, .owned = true } },
+        };
+    }
+
+    fn initCached(
+        buffer_pool: *BufferPool,
+        frame_indices: []const FrameIndex,
+        first_frame_start_offset: FrameOffset,
+        last_frame_end_offset: FrameOffset,
+    ) ReadHandle {
+        return .{
+            .inner = .{
+                .cached = .{
+                    .buffer_pool = buffer_pool,
+                    .frame_indices = frame_indices,
+                    .first_frame_start_offset = first_frame_start_offset,
+                    .last_frame_end_offset = last_frame_end_offset,
+                },
+            },
+        };
+    }
+
+    pub fn dupeExternalOwned(self: ReadHandle, allocator: std.mem.Allocator) !ReadHandle {
+        const data_copy = try self.readAllAllocate(allocator);
+        return initExternalOwned(data_copy);
+    }
+
+    pub fn slice(self: *ReadHandle, start: usize, end: usize) !ReadHandle {
+        return ReadHandle{
+            .inner = .{
+                .sub_read = .{
+                    .end = end,
+                    .start = start,
+                    .self = self,
+                },
+            },
+        };
+    }
+
+    /// testing purposes only
+    pub fn expectEqual(expected: ReadHandle, actual: ReadHandle) !void {
+        const expected_buf = try expected.readAllocate(std.testing.allocator, 0, expected.len());
+        defer std.testing.allocator.free(expected_buf);
+        const actual_buf = try actual.readAllocate(std.testing.allocator, 0, actual.len());
+        defer std.testing.allocator.free(actual_buf);
+        try std.testing.expectEqualSlices(u8, expected_buf, actual_buf);
+    }
+
+    pub fn eql(h1: ReadHandle, h2: ReadHandle) bool {
+        if (std.meta.eql(h1.inner, h2.inner)) return true;
+        if (h1.len() != h2.len()) return false;
+
+        var h1_iter = h1.iterator();
+        var h2_iter = h2.iterator();
+
+        while (h1_iter.next()) |h1_byte| {
+            const h2_byte = h2_iter.next().?;
+            if (h1_byte != h2_byte) return false;
+        }
+
+        return true;
+    }
+
+    pub fn eqlSlice(self: ReadHandle, data: []const u8) bool {
+        if (self.len() != data.len) return false;
+
+        var iter = self.iterator();
+        var i: u32 = 0;
+        while (iter.next()) |byte| : (i += 1) {
+            if (byte != data[i]) return false;
+        }
+
+        return true;
+    }
+
+    pub fn readAllAllocate(self: ReadHandle, allocator: std.mem.Allocator) ![]u8 {
+        return self.readAllocate(allocator, 0, self.len());
+    }
+
+    pub fn readAllocate(
+        self: ReadHandle,
+        allocator: std.mem.Allocator,
+        start: FileOffset,
+        end: FileOffset,
+    ) ![]u8 {
+        const buf = try allocator.alloc(u8, end - start);
+        self.read(start, end, buf) catch unreachable; // invalid account?
+        return buf;
     }
 
     /// Copies entire read into specified buffer. Must be correct length.
-    pub fn readAll(
-        self: CachedRead,
+    pub fn readAll(self: ReadHandle, buf: []u8) error{InvalidArgument}!void {
+        try self.read(0, self.len(), buf);
+    }
+
+    /// Copies entire read into specified buffer. Must be correct length.
+    pub fn read(
+        self: ReadHandle,
+        start: FileOffset,
+        end: FileOffset,
         buf: []u8,
     ) error{InvalidArgument}!void {
-        if (buf.len != self.len()) return error.InvalidArgument;
-        var bytes_copied: usize = 0;
+        const range_len = end - start;
+        if (buf.len - start != range_len) return error.InvalidArgument;
 
-        for (0.., self.frame_indices) |i, f_idx| {
+        switch (self.inner) {
+            .external => |a| return @memcpy(buf, a.slice[start..end]),
+            .sub_read => |sb| return sb.parent.read(sb.start + start, sb.start + end, buf),
+            .cached => {},
+        }
+
+        var buf_offset: usize = 0;
+
+        const cached = self.inner.cached;
+
+        for (0.., cached.frame_indices) |i, f_idx| {
+            if ((i + 1) * FRAME_SIZE < start) continue;
+
             const is_first_frame: u2 = @intFromBool(i == 0);
-            const is_last_frame: u2 = @intFromBool(i == self.frame_indices.len - 1);
+            const is_last_frame: u2 = @intFromBool(i == cached.frame_indices.len - 1);
+
+            const range_start_offset = if (start > i * FRAME_SIZE and start < (i + 1) * FRAME_SIZE)
+                start % FRAME_SIZE
+            else
+                0;
+
+            const bytes_left = range_len - buf_offset;
+            if (bytes_left == 0) break;
 
             switch (is_first_frame << 1 | is_last_frame) {
                 0b00 => { // !first, !last (middle frame)
-                    const read_len = FRAME_SIZE;
+                    const read_len = @min(bytes_left, FRAME_SIZE);
                     @memcpy(
-                        buf[bytes_copied..][0..read_len],
-                        &self.buffer_pool.frames[f_idx],
+                        buf[buf_offset..][0..read_len],
+                        cached.buffer_pool.frames[f_idx][range_start_offset..][0..read_len],
                     );
-                    bytes_copied += read_len;
+                    buf_offset += read_len;
                 },
                 0b10 => { // first, !last (first frame)
                     std.debug.assert(i == 0);
-                    const read_len = FRAME_SIZE - self.first_frame_start_offset;
+                    const read_len = @min(
+                        bytes_left,
+                        FRAME_SIZE - cached.first_frame_start_offset,
+                    );
                     @memcpy(
                         buf[0..read_len],
-                        self.buffer_pool.frames[f_idx][self.first_frame_start_offset..],
+                        cached.buffer_pool.frames[
+                            f_idx
+                        ][cached.first_frame_start_offset + range_start_offset ..][0..read_len],
                     );
-                    bytes_copied += read_len;
+                    buf_offset += read_len;
                 },
                 0b01 => { // !first, last (last frame)
-                    const read_len = self.last_frame_end_offset;
+                    const read_len = @min(bytes_left, cached.last_frame_end_offset);
                     @memcpy(
-                        buf[bytes_copied..][0..read_len],
-                        self.buffer_pool.frames[f_idx][0..read_len],
+                        buf[buf_offset..][0..read_len],
+                        cached.buffer_pool.frames[f_idx][range_start_offset..][0..read_len],
                     );
-                    bytes_copied += read_len;
-                    std.debug.assert(bytes_copied == self.len());
+                    buf_offset += read_len;
+                    std.debug.assert(buf_offset == self.len());
                 },
                 0b11 => { // first, last (only frame)
-                    std.debug.assert(self.frame_indices.len == 1);
-                    const readable_len = self.len();
+                    std.debug.assert(cached.frame_indices.len == 1);
+                    const readable_len = @min(bytes_left, self.len());
                     @memcpy(
                         buf[0..readable_len],
-                        self.buffer_pool.frames[
+                        cached.buffer_pool.frames[
                             f_idx
-                        ][self.first_frame_start_offset..self.last_frame_end_offset],
+                        ][cached.first_frame_start_offset +
+                            range_start_offset ..][0..readable_len],
                     );
-                    bytes_copied += self.len();
+                    buf_offset += self.len();
                 },
             }
         }
     }
 
-    pub fn iterator(self: *const CachedRead) Iterator {
+    pub fn len(self: ReadHandle) u32 {
+        return self.inner.len();
+    }
+
+    /// Requires that all the wanted data is within one frame. Length must be under FRAME_SIZE.
+    ///
+    /// Returns error.CantZeroCopyStrided when multiple frame accesses would be required.
+    pub fn zeroCopySlice(
+        self: ReadHandle,
+        start: FileOffset,
+        length: FileOffset,
+    ) error{ InvalidArgument, CantZeroCopyStrided }![]const u8 {
+        switch (self.inner) {
+            .external => |a| return a.slice[start..][0..length],
+            .sub_read => |sr| return sr.parent.zeroCopySlice(
+                sr.start + start,
+                sr.start + start + length,
+            ),
+            .cached => {},
+        }
+
+        const cached = self.inner.cached;
+
+        if (length > FRAME_SIZE) return error.CantZeroCopyStrided;
+        if (length == 0) return &.{};
+        const start_offset = start + cached.first_frame_start_offset;
+
+        const end_offset = start_offset + length;
+
+        const start_frame_offset: FrameOffset = @intCast(start_offset % FRAME_SIZE);
+        const end_frame_offset: FrameOffset = @intCast(end_offset % FRAME_SIZE);
+
+        // => end is in a different frame to the start
+        if (start_frame_offset > end_frame_offset) return error.CantZeroCopyStrided;
+
+        return cached.buffer_pool.frames[
+            cached.frame_indices[start_offset / FRAME_SIZE]
+        ][start_frame_offset..][0..length];
+    }
+
+    pub fn iterator(self: *const ReadHandle) Iterator {
         return .{ .cached_read = self };
     }
 
-    pub fn len(self: CachedRead) u32 {
-        if (self.frame_indices.len == 0) return 0;
-        return (@as(u32, @intCast(self.frame_indices.len)) - 1) *
-            FRAME_SIZE + self.last_frame_end_offset - self.first_frame_start_offset;
-    }
-
-    pub fn deinit(self: CachedRead, allocator: std.mem.Allocator) void {
-        for (self.frame_indices) |frame_index| {
-            std.debug.assert(frame_index != INVALID_FRAME);
-
-            if (self.buffer_pool.frames_metadata.rc[frame_index].release()) {
-                // notably, the frame remains in memory, and its hashmap entry
-                // remains valid.
-            }
-        }
-        allocator.free(self.frame_indices);
+    pub fn deinit(self: ReadHandle, allocator: std.mem.Allocator) void {
+        self.inner.deinit(allocator);
     }
 };
 
@@ -1006,8 +1353,8 @@ test "BufferPool basic usage" {
     const read = try bp.read(fba.allocator(), file, file_id, 0, 1000);
     defer read.deinit(fba.allocator());
 
-    try std.testing.expectEqual(2, read.frame_indices.len);
-    for (read.frame_indices) |f_idx| try std.testing.expect(f_idx != INVALID_FRAME);
+    try std.testing.expectEqual(2, read.inner.cached.frame_indices.len);
+    for (read.inner.cached.frame_indices) |f_idx| try std.testing.expect(f_idx != INVALID_FRAME);
 
     {
         var iter1 = read.iterator();
@@ -1058,6 +1405,60 @@ test "BufferPool allocation sizes" {
     try std.testing.expect((total_requested_bytes / frame_count) - 512 <= 64);
 }
 
+test "BufferPool ReadHandle zero-copy slice" {
+    const allocator = std.testing.allocator;
+
+    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    defer file.close();
+    const file_id = FileId.fromInt(1);
+
+    const num_frames = 200;
+
+    const file_size = (try file.stat()).size;
+    if (file_size < FRAME_SIZE * num_frames) @panic("file too small for valid test");
+
+    var bp = try BufferPool.init(std.heap.page_allocator, num_frames);
+    defer bp.deinit(std.heap.page_allocator);
+
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const read = try bp.read(
+        allocator,
+        file,
+        file_id,
+        0,
+        1000,
+    );
+    defer read.deinit(allocator);
+
+    var slices_read: usize = 0;
+    while (slices_read < 5000) : (slices_read += 1) {
+        const start_offset = prng.random().intRangeAtMost(FileOffset, 0, 1000);
+        const length = prng.random().intRangeAtMost(FileOffset, 0, 1000 - start_offset);
+
+        errdefer std.debug.print(
+            "failed on case(reads={}): file[{}..][0..{}]",
+            .{ slices_read, start_offset, length },
+        );
+
+        var expected_error: ?anyerror = null;
+        if (length > FRAME_SIZE) expected_error = error.StridedBorrow;
+        if (start_offset < FRAME_SIZE and start_offset + length >= FRAME_SIZE) {
+            expected_error = error.CantZeroCopyStrided;
+        }
+
+        const borrowed_slice = read.zeroCopySlice(start_offset, length) catch |err| {
+            try std.testing.expectEqual(expected_error.?, err);
+            continue;
+        };
+
+        var buf: Frame = undefined;
+        const file_slice = buf[0..@min(try file.preadAll(&buf, start_offset), length)];
+
+        try std.testing.expectEqualSlices(u8, file_slice, borrowed_slice);
+    }
+}
+
 test "BufferPool filesize > frame_size * num_frames" {
     const allocator = std.testing.allocator;
 
@@ -1096,12 +1497,12 @@ test "BufferPool filesize > frame_size * num_frames" {
             offset + FRAME_SIZE,
         );
 
-        try std.testing.expectEqual(1, read_frame.frame_indices.len);
+        try std.testing.expectEqual(1, read_frame.inner.cached.frame_indices.len);
 
         const frame: []const u8 = bp.frames[
-            read_frame.frame_indices[0]
+            read_frame.inner.cached.frame_indices[0]
         ][0..bp.frames_metadata.size[
-            read_frame.frame_indices[0]
+            read_frame.inner.cached.frame_indices[0]
         ]];
 
         var frame2: [FRAME_SIZE]u8 = undefined;
@@ -1141,6 +1542,11 @@ test "BufferPool random read" {
             @min(file_size, range_start + num_frames * FRAME_SIZE),
         );
 
+        errdefer std.debug.print(
+            "failed on case(reads={}): file[{}..{}]\n",
+            .{ reads, range_start, range_end },
+        );
+
         if (try BufferPool.computeNumberofFrameIndices(range_start, range_end) > num_frames) {
             continue;
         }
@@ -1159,15 +1565,25 @@ test "BufferPool random read" {
             );
             defer read2.deinit(gpa.allocator());
 
-            try std.testing.expect(
-                read.first_frame_start_offset == read2.first_frame_start_offset,
+            try std.testing.expectEqual(
+                read.inner.cached.first_frame_start_offset,
+                read2.inner.cached.first_frame_start_offset,
             );
-            try std.testing.expect(read.last_frame_end_offset == read2.last_frame_end_offset);
-            try std.testing.expectEqualSlices(u32, read.frame_indices, read2.frame_indices);
+            try std.testing.expectEqual(
+                read.inner.cached.last_frame_end_offset,
+                read2.inner.cached.last_frame_end_offset,
+            );
+            try std.testing.expectEqualSlices(
+                u32,
+                read.inner.cached.frame_indices,
+                read2.inner.cached.frame_indices,
+            );
         }
 
         var total_bytes_read: u32 = 0;
-        for (read.frame_indices) |f_idx| total_bytes_read += bp.frames_metadata.size[f_idx];
+        for (read.inner.cached.frame_indices) |f_idx| {
+            total_bytes_read += bp.frames_metadata.size[f_idx];
+        }
         const read_data_bp_iter = try allocator.alloc(u8, read.len());
         defer allocator.free(read_data_bp_iter);
         {
@@ -1203,5 +1619,68 @@ test "BufferPool random read" {
         // read via .readAll()
         try std.testing.expectEqualSlices(u8, read_data_expected, read_data_bp_readall);
         try std.testing.expectEqual(preaded_bytes, read_data_bp_readall.len);
+    }
+}
+
+test "ReadHandle bincode" {
+    const allocator = std.testing.allocator;
+
+    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    defer file.close();
+    const file_id = FileId.fromInt(1);
+
+    const num_frames = 400;
+
+    var bp = try BufferPool.init(allocator, num_frames);
+    defer bp.deinit(allocator);
+
+    const file_size: u32 = @intCast((try file.stat()).size);
+
+    const read = try bp.read(allocator, file, file_id, 0, file_size);
+    defer read.deinit(allocator);
+
+    const read_data = try read.readAllAllocate(allocator);
+    defer allocator.free(read_data);
+
+    {
+        var serialised_from_slice = std.ArrayList(u8).init(allocator);
+        defer serialised_from_slice.deinit();
+
+        try bincode.write(serialised_from_slice.writer(), read_data, .{});
+
+        const deserialised_from_slice = try bincode.readFromSlice(
+            allocator,
+            ReadHandle,
+            serialised_from_slice.items,
+            .{},
+        );
+        defer deserialised_from_slice.deinit(allocator);
+
+        try std.testing.expectEqualSlices(
+            u8,
+            read_data,
+            deserialised_from_slice.inner.external.slice,
+        );
+    }
+
+    {
+        var serialised_from_handle = std.ArrayList(u8).init(allocator);
+        defer serialised_from_handle.deinit();
+
+        try bincode.write(serialised_from_handle.writer(), read, .{});
+
+        const deserialised_from_handle = try bincode.readFromSlice(
+            allocator,
+            ReadHandle,
+            serialised_from_handle.items,
+            .{},
+        );
+        defer deserialised_from_handle.deinit(allocator);
+
+        try std.testing.expectEqualSlices(
+            u8,
+            read_data,
+            deserialised_from_handle.inner.external.slice,
+        );
     }
 }
