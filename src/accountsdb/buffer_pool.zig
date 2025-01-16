@@ -292,7 +292,9 @@ pub const BufferPool = struct {
         const did_remove = blk: {
             const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
             defer frame_map_lg.unlock();
-            break :blk frame_map.remove(@bitCast(self.frames_metadata.key[evicted].load(.acquire)));
+            break :blk frame_map.remove(
+                @bitCast(self.frames_metadata.key[evicted].load(.acquire)),
+            );
         };
         if (!did_remove) {
             std.debug.panic(
@@ -561,11 +563,19 @@ pub const FramesMetadata = struct {
         errdefer allocator.free(freq);
         @memset(freq, 0);
 
-        const in_queue = try allocator.alignedAlloc(std.atomic.Value(InQueue), std.mem.page_size, num_frames);
+        const in_queue = try allocator.alignedAlloc(
+            std.atomic.Value(InQueue),
+            std.mem.page_size,
+            num_frames,
+        );
         errdefer allocator.free(in_queue);
         @memset(in_queue, std.atomic.Value(InQueue).init(.none));
 
-        const size = try allocator.alignedAlloc(std.atomic.Value(u16), std.mem.page_size, num_frames);
+        const size = try allocator.alignedAlloc(
+            std.atomic.Value(u16),
+            std.mem.page_size,
+            num_frames,
+        );
         errdefer allocator.free(size);
         @memset(size, std.atomic.Value(u16).init(0));
 
