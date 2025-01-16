@@ -36,6 +36,28 @@ jobs:
       - name: check style
         run: python scripts/style.py --check src
 
+  build:
+    runs-on: ubuntu-latest
+    steps:
+        - name: checkout
+          uses: actions/checkout@v3
+        
+        - name: setup-zig
+          uses: mlugg/setup-zig@v1
+          with:
+            version: 0.13.0
+        
+        # GitHub's CI runners for macos seem to alternate between using a x86 and an ARM machine
+        # which is annoying to handle and results in them having invalid hardware info configurations
+        # on the virtual machine. This leads to incorrect feature detection and the CI is flaky.
+        # 
+        # If we at some point setup a self-hosted MacOS runner, we could work around the issue and
+        # enable full testing on MacOS!
+        - name: build
+          run: |
+            zig build -Dtarget=x86_64-linux -Dcpu=x86_64_v4
+            zig build -Dtarget=aarch64-macos -Dcpu=apple_m3 
+
   test:
     strategy:
       matrix:
@@ -45,8 +67,6 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v2
-        with:
-          submodules: recursive
 
       - name: setup-zig
         uses: mlugg/setup-zig@v1
@@ -56,7 +76,7 @@ jobs:
       - name: test
         run: |
           zig build test -Denable-tsan=true
-          zig build test -Denable-tsan=true -Dblockstore=hashmap -Dfilter=ledger
+          zig build test -Denable-tsan=true -Dblockstore=hashmap -Dfilter="ledger"
 
   kcov_test:
     strategy:
@@ -104,8 +124,7 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v2
-        with:
-          submodules: recursive
+
       - name: setup-zig
         uses: mlugg/setup-zig@v1
         with:
@@ -113,6 +132,7 @@ jobs:
 
       - name: build release
         run: zig build -Doptimize=ReleaseSafe
+
       - name: run gossip
         run: bash scripts/gossip_test.sh 120 # in seconds
 
@@ -125,14 +145,15 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v2
-        with:
-          submodules: recursive
+
       - name: setup zig
         uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
+
       - name: build
         run: zig build -Doptimize=ReleaseSafe -Dno-run fuzz
+
       - name: run
         run: ./zig-out/bin/fuzz gossip_service 19 10000
 
@@ -145,14 +166,18 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v2
+
         with:
           submodules: recursive
+
       - name: setup zig
         uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
+
       - name: build
         run: zig build -Doptimize=ReleaseSafe -Dno-run fuzz
+
       - name: run
         run: ./zig-out/bin/fuzz gossip_table 19 100000
 
@@ -165,14 +190,15 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v2
-        with:
-          submodules: recursive
+
       - name: setup zig
         uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
+
       - name: build
         run: zig build -Doptimize=ReleaseSafe -Dno-run fuzz
+
       - name: run
         run: ./zig-out/bin/fuzz allocators 19 10000
 
