@@ -219,8 +219,8 @@ pub fn Channel(T: type) type {
 
         /// Waits untli the channel potentially has items, periodically checking for the ExitCondition.
         /// Must be called by only one receiver thread at a time.
-        pub fn wait(channel: *Self, exit: ExitCondition) error{Exit}!void {
-            while (true) {
+        pub fn waitToReceive(channel: *Self, exit: ExitCondition) error{Exit}!void {
+            while (channel.isEmpty()) {
                 channel.event.timedWait(1 * std.time.ns_per_s) catch {};
                 if (exit.shouldExit()) return error.Exit;
                 if (channel.event.isSet()) return channel.event.reset();

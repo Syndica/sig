@@ -43,9 +43,7 @@ pub fn runShredProcessor(
     const metrics = try registry.initStruct(Metrics);
 
     while (true) {
-        verified_shred_receiver.wait(.{ .unordered = exit }) catch |e| switch (e) {
-            error.Exit => if (verified_shred_receiver.isEmpty()) break,
-        };
+        verified_shred_receiver.waitToReceive(.{ .unordered = exit }) catch break;
 
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();

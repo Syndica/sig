@@ -154,7 +154,7 @@ fn receiveShreds(
     var receive_shreds_timer = try sig.time.Timer.start();
 
     while (true) {
-        receiver.wait(.{ .unordered = exit }) catch break;
+        receiver.waitToReceive(.{ .unordered = exit }) catch break;
         receive_shreds_timer.reset();
 
         const receiver_len = receiver.len();

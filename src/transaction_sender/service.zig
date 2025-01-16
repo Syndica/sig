@@ -124,9 +124,7 @@ pub const Service = struct {
         defer transaction_batch.deinit();
 
         while (true) {
-            self.input_channel.wait(.{ .unordered = self.exit }) catch |e| switch (e) {
-                error.Exit => if (self.input_channel.isEmpty()) break,
-            };
+            self.input_channel.waitToReceive(.{ .unordered = self.exit }) catch break;
 
             while (self.input_channel.tryReceive()) |transaction| {
                 self.metrics.received_count.inc();

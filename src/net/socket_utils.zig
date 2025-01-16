@@ -40,7 +40,7 @@ pub const SocketPipe = struct {
             .{ logger, socket, outgoing_channel, exit },
         );
 
-        return self; 
+        return self;
     }
 
     pub fn initReceiver(
@@ -60,7 +60,7 @@ pub const SocketPipe = struct {
             .{ logger, socket, incoming_channel, exit },
         );
 
-        return self; 
+        return self;
     }
 
     fn runReceiver(
@@ -111,7 +111,7 @@ pub const SocketPipe = struct {
         }
 
         while (true) {
-            outgoing_channel.wait(exit) catch break;
+            outgoing_channel.waitToReceive(exit) catch break;
 
             while (outgoing_channel.tryReceive()) |p| {
                 if (exit.shouldExit()) return; // drop the rest (like above) if exit prematurely.
@@ -216,7 +216,7 @@ pub const BenchmarkPacketProcessing = struct {
         var packets_to_recv = n_packets;
         var timer = try sig.time.Timer.start();
         while (packets_to_recv > 0) {
-            incoming_channel.wait(exit_condition) catch break;
+            incoming_channel.waitToReceive(exit_condition) catch break;
             while (incoming_channel.tryReceive()) |_| {
                 packets_to_recv -|= 1;
             }

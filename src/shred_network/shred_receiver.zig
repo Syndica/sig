@@ -52,7 +52,7 @@ pub const ShredReceiver = struct {
             self.event.set();
         }
 
-        fn wait(self: *ReceiverSignal, exit: ExitCondition) error{Exit}!void {
+        fn waitUntilSent(self: *ReceiverSignal, exit: ExitCondition) error{Exit}!void {
             while (true) {
                 self.event.timedWait(1 * std.time.ns_per_s) catch {};
                 if (exit.shouldExit()) return error.Exit;
@@ -113,7 +113,7 @@ pub const ShredReceiver = struct {
 
         // Run thread to handle incoming packets. Stops when exit is set.
         while (true) {
-            receive_signal.wait(exit) catch break;
+            receive_signal.waitUntilSent(exit) catch break;
             try self.runPacketHandler(response_sender, response_receiver, true);
             try self.runPacketHandler(response_sender, turbine_receiver, false);
         }

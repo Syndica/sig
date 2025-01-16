@@ -149,7 +149,7 @@ pub const GossipService = struct {
     /// Indicates if the gossip service is closed.
     closed: bool,
 
-    /// Piping between the gossip_socket. 
+    /// Piping between the gossip_socket.
     /// Set to null until start() is called as they represent threads.
     incoming_pipe: ?*SocketPipe = null,
     outgoing_pipe: ?*SocketPipe = null,
@@ -524,7 +524,7 @@ pub const GossipService = struct {
 
         // loop until the previous service closes and triggers us to close
         while (true) {
-            self.packet_incoming_channel.wait(exit_condition) catch break;
+            self.packet_incoming_channel.waitToReceive(exit_condition) catch break;
 
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
@@ -621,7 +621,7 @@ pub const GossipService = struct {
         // - `exit` isn't set,
         // - there isn't any data to process in the input channel, in order to block the join until we've finished
         while (true) {
-            self.verified_incoming_channel.wait(exit_condition) catch break;
+            self.verified_incoming_channel.waitToReceive(exit_condition) catch break;
 
             var msg_count: usize = 0;
             while (self.verified_incoming_channel.tryReceive()) |message| {

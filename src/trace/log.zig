@@ -172,7 +172,7 @@ pub const ChannelPrintLogger = struct {
 
     pub fn run(self: *Self) void {
         while (true) {
-            self.channel.wait(.{ .unordered = &self.exit }) catch break;
+            self.channel.waitToReceive(.{ .unordered = &self.exit }) catch break;
 
             while (self.channel.tryReceive()) |message| {
                 defer self.log_allocator.free(message);
