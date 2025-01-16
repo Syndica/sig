@@ -131,12 +131,9 @@ jobs:
         uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
-      - name: get commit hash
-        id: commit
-        run: echo "::set-output name=hash::$(git rev-parse HEAD)"
       - name: convert hash to number
         id: seed
-        run: echo "::set-output name=number::$(printf '%d' 0x${steps.commit.outputs.hash:0:8})"
+        run: echo "::set-output name=number::$(printf '%d' 0x${GITHUB_SHA:0:8})"
       - name: build
         run: zig build -Doptimize=ReleaseSafe -Dno-run fuzz
       - name: run
