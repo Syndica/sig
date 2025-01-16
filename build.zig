@@ -136,7 +136,6 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
         .filters = filters orelse &.{},
         .sanitize_thread = enable_tsan,
-        .test_runner = b.path("src/test_runner.zig"),
     });
     b.installArtifact(unit_tests_exe);
     test_step.dependOn(&unit_tests_exe.step);

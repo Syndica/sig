@@ -267,6 +267,7 @@ pub const AccountsDB = struct {
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
+            for (file_map.values()) |v| v.deinit();
             file_map.deinit(self.allocator);
         }
         {
@@ -671,6 +672,9 @@ pub const AccountsDB = struct {
             };
             errdefer accounts_file.deinit();
 
+            const file_id = file_info.id;
+            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
+
             // index the account file
             var slot_references = std.ArrayListUnmanaged(AccountRef).initBuffer(
                 references_buf[n_accounts_total..],
@@ -712,7 +716,7 @@ pub const AccountsDB = struct {
                 const geyser_writer = self.geyser_writer.?; // SAFE: will always be set if geyser_is_enabled
 
                 // ! reset memory for the next slot
-                defer geyser_storage.reset();
+                defer geyser_storage.reset(self.allocator);
 
                 const data_versioned: sig.geyser.core.VersionedAccountPayload = .{
                     .AccountPayloadV1 = .{
@@ -724,8 +728,6 @@ pub const AccountsDB = struct {
                 try geyser_writer.writePayloadToPipe(data_versioned);
             }
 
-            const file_id = file_info.id;
-            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
             self.largest_file_id = FileId.max(self.largest_file_id, file_id);
             _ = self.largest_rooted_slot.fetchMax(slot, .release);
             self.largest_flushed_slot.store(self.largest_rooted_slot.load(.acquire), .release);
@@ -1949,7 +1951,9 @@ pub const AccountsDB = struct {
                 accounts_alive_size,
                 slot,
             );
-            defer new_file.close();
+            // don't close file if it ends up in file_map
+            var new_file_in_map = false;
+            defer if (!new_file_in_map) new_file.close();
 
             var file_size: usize = 0;
             account_iter.reset();
@@ -1995,6 +1999,7 @@ pub const AccountsDB = struct {
                 new_account_file.number_of_accounts = accounts_alive_count;
 
                 file_map.putAssumeCapacityNoClobber(new_file_id, new_account_file);
+                new_file_in_map = true;
             }
 
             // update the references
@@ -3211,16 +3216,20 @@ pub const GeyserTmpStorage = struct {
         self.pubkeys.deinit();
     }
 
-    pub fn reset(self: *Self) void {
+    pub fn reset(
+        self: *Self,
+        allocator: std.mem.Allocator,
+    ) void {
+        for (self.accounts.items) |account| account.deinit(allocator);
         self.accounts.clearRetainingCapacity();
         self.pubkeys.clearRetainingCapacity();
     }
 
     pub fn cloneAndTrack(self: *Self, allocator: std.mem.Allocator, account_in_file: AccountInFile) Error!void {
-        // doesn't feel great allocating this?
         const account = try account_in_file.toOwnedAccount(allocator);
         errdefer account.deinit(allocator);
         self.accounts.append(account) catch return Error.OutOfGeyserArrayMemory;
+        errdefer _ = self.accounts.pop();
         self.pubkeys.append(account_in_file.pubkey().*) catch return Error.OutOfGeyserArrayMemory;
     }
 };
