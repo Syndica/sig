@@ -213,6 +213,12 @@ pub fn build(b: *Build) void {
     benchmark_exe.linkLibC();
     benchmark_exe.root_module.addOptions("build-options", build_options);
 
+    // make sure pyroscope's got enough info to profile
+    benchmark_exe.build_id = .fast;
+    benchmark_exe.root_module.omit_frame_pointer = false;
+    benchmark_exe.root_module.strip = false;
+
+    b.installArtifact(benchmark_exe);
     benchmark_exe.root_module.addImport("base58-zig", base58_module);
     benchmark_exe.root_module.addImport("zig-network", zig_network_module);
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
