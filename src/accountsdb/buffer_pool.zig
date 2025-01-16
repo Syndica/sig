@@ -646,7 +646,7 @@ pub const FramesMetadata = struct {
 pub const HierarchicalFIFO = struct {
     pub const Key = FrameIndex;
     pub const Metadata = FramesMetadata;
-    pub const Fifo = std.fifo.LinearFifo(FrameIndex, .Slice); // TODO: atomics
+    pub const Fifo = AtomicLinearFifo(FrameIndex);
 
     small: Fifo,
     main: Fifo, // probably-alive items
@@ -706,7 +706,7 @@ pub const HierarchicalFIFO = struct {
                 metadata.in_queue[key] = .main;
             },
             .none => {
-                if (self.small.writableLength() == 0) {
+                if (self.small.writableLengthIsZero()) {
                     const popped_small = self.small.readItem().?;
 
                     if (metadata.freqIsZero(popped_small)) {
@@ -1265,6 +1265,47 @@ test AtomicStack {
         i -= 1;
         try std.testing.expectEqual(i, stack.popOrNull());
     }
+}
+
+/// An std.fifo.LinearFifo-like type with atomics and a minimal API.
+pub fn AtomicLinearFifo(T: type) type {
+    return struct {
+        const Self = @This();
+
+        buf: []T,
+        head: std.atomic.Value(usize),
+        tail: std.atomic.Value(usize) align(64), // align to avoid false share
+
+        pub fn init(buf: []T) Self {
+            return .{
+                .buf = buf,
+                .head = std.atomic.Value(usize).init(0),
+                .tail = std.atomic.Value(usize).init(0),
+            };
+        }
+
+        pub fn writeItemAssumeCapacity(self: *Self, item: T) void {
+            const tail = self.tail.fetchAdd(1, .monotonic) % self.buf.len;
+            self.buf[tail] = item;
+        }
+
+        pub fn readItem(self: *Self) ?T {
+            const current_head = self.head.load(.acquire);
+            const current_tail = self.tail.load(.acquire);
+
+            if (current_head == current_tail) return null;
+
+            const item = self.buf[current_head % self.buf.len];
+            self.head.store(current_head + 1, .release);
+            return item;
+        }
+
+        pub fn writableLengthIsZero(self: *Self) bool {
+            const current_head = self.head.load(.acquire);
+            const current_tail = self.tail.load(.acquire);
+            return (current_tail - current_head) >= self.buf.len;
+        }
+    };
 }
 
 test "BufferPool indicesRequired" {
