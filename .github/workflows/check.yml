@@ -79,7 +79,10 @@ jobs:
           zig build test -Denable-tsan=true -Dblockstore=hashmap -Dfilter="ledger"
 
   kcov_test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{matrix.os}}
     timeout-minutes: 60
     steps:
       - name: checkout
