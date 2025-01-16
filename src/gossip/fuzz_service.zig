@@ -35,7 +35,6 @@ const SLEEP_TIME = Duration.zero();
 // const SLEEP_TIME = Duration.fromSecs(10);
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
-    std.debug.print("Running gossip_service fuzzer with seed: {}\n", .{seed});
     var gpa = std.heap.GeneralPurposeAllocator(.{
         .safety = true,
     }){};

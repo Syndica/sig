@@ -64,7 +64,6 @@ fn createBlockstoreDB() !BlockstoreDB {
 }
 
 pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
-    std.debug.print("Running ledger fuzzer with initial seed: {}\n", .{initial_seed});
     var seed = initial_seed;
     const maybe_max_actions_string = args.next();
 
