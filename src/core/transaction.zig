@@ -1,106 +1,48 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const Ed25519 = std.crypto.sign.Ed25519;
-const KeyPair = Ed25519.KeyPair;
 
-const Hash = sig.core.Hash;
+const leb = std.leb;
+
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+
 const Pubkey = sig.core.Pubkey;
+const Hash = sig.core.Hash;
 const Signature = sig.core.Signature;
-const indexOf = sig.utils.slice.indexOf;
+const CheckedReader = sig.utils.io.CheckedReader;
 
-const peekableReader = sig.utils.io.peekableReader;
-const shortVecConfig = sig.bincode.shortvec.sliceConfig;
+pub const Transaction = struct {
+    /// MAX_BYTES is the maximum size of a transaction.
+    const MAX_BYTES: u32 = 1232;
 
-pub const VersionedTransaction = struct {
+    /// MAX_SIGNATURES is the maximum number of signatures that can be applied to a transaction.
+    const MAX_SIGNATURES: u8 = 127;
+
+    /// MAX_ACCOUNTS is the maximum number of accounts that can be loaded by a transaction.
+    const MAX_ACCOUNTS: u16 = 128;
+
+    /// MAX_INSTRUCTIONS is the maximum number of instructions that can be executed by a transaction.
+    const MAX_INSTRUCTIONS: u8 = 64;
+
+    /// MAX_ADDRESS_LOOKUP_TABLES is the maximum number of address lookup tables that can be used by a transaction.
+    const MAX_ADDRESS_LOOKUP_TABLES: u16 = 127;
+
+    /// Signatures
     signatures: []const Signature,
-    message: VersionedMessage,
 
-    pub const @"!bincode-config:signatures" = shortVecConfig([]const Signature);
+    /// The message version, either legacy or v0.
+    version: Version,
 
-    pub fn deinit(self: VersionedTransaction, allocator: std.mem.Allocator) void {
-        allocator.free(self.signatures);
-        self.message.deinit(allocator);
-    }
+    /// The number of signatures required for this transaction to be considered
+    /// valid. The signers of those signatures must match the first
+    /// `signature_count` of `addresses`.
+    signature_count: u8,
+    /// The last `readonly_signed_count` of the signed addresses are read-only accounts.
+    readonly_signed_count: u8,
+    /// The last `readonly_unsigned_count` of the unsigned addresses are read-only accounts.
+    readonly_unsigned_count: u8,
 
-    pub fn sanitize(self: VersionedTransaction) !void {
-        switch (self.message) {
-            inline .legacy, .v0 => |m| try m.sanitize(),
-        }
-    }
-};
-
-const VersionedMessage = union(enum) {
-    legacy: Message,
-    v0: V0Message,
-
-    pub fn deinit(self: VersionedMessage, allocator: std.mem.Allocator) void {
-        switch (self) {
-            inline .legacy, .v0 => |m| m.deinit(allocator),
-        }
-    }
-
-    pub fn accountKeys(self: VersionedMessage) []const Pubkey {
-        return switch (self) {
-            inline .legacy, .v0 => |m| m.account_keys,
-        };
-    }
-
-    pub const @"!bincode-config" = sig.bincode.FieldConfig(VersionedMessage){
-        .serializer = bincode_config.serialize,
-        .deserializer = bincode_config.deserialize,
-        .free = bincode_config.free,
-    };
-
-    const bincode_config = struct {
-        /// Bit mask that indicates whether a serialized message is versioned.
-        const MESSAGE_VERSION_PREFIX: u8 = 0x80;
-
-        fn serialize(writer: anytype, data: anytype, params: sig.bincode.Params) !void {
-            const self: VersionedMessage = data;
-            switch (self) {
-                .legacy => |msg| {
-                    try sig.bincode.write(writer, msg, params);
-                },
-                .v0 => |msg| {
-                    try writer.writeByte(0x80);
-                    try sig.bincode.write(writer, msg, params);
-                },
-            }
-        }
-
-        fn deserialize(
-            allocator: std.mem.Allocator,
-            original_reader: anytype,
-            params: sig.bincode.Params,
-        ) !VersionedMessage {
-            var peekable = peekableReader(original_reader);
-            const reader = peekable.reader();
-
-            if (try peekable.peekByte() & MESSAGE_VERSION_PREFIX != 0) {
-                return switch (try reader.readByte() & ~MESSAGE_VERSION_PREFIX) {
-                    0 => .{ .v0 = try sig.bincode.read(allocator, V0Message, reader, params) },
-                    127 => error.OffChainMessage,
-                    else => error.InvalidMessageTag,
-                };
-            } else {
-                return .{ .legacy = try sig.bincode.read(allocator, Message, reader, params) };
-            }
-        }
-
-        fn free(allocator: std.mem.Allocator, data: anytype) void {
-            VersionedMessage.deinit(data, allocator);
-        }
-    };
-};
-
-pub const V0Message = struct {
-    /// The message header, identifying signed and read-only `account_keys`.
-    /// Header values only describe static `account_keys`, they do not describe
-    /// any additional account keys loaded via address table lookups.
-    header: MessageHeader,
-
-    /// List of accounts loaded by this transaction.
-    account_keys: []const Pubkey,
+    /// Addresses of accounts loaded by this transaction.
+    addresses: []const Pubkey,
 
     /// The blockhash of a recent block.
     recent_blockhash: Hash,
@@ -110,521 +52,369 @@ pub const V0Message = struct {
     ///
     /// # Notes
     ///
-    /// Program indexes must index into the list of message `account_keys` because
-    /// program id's cannot be dynamically loaded from a lookup table.
+    /// Program indexes must index into the list of `addresses` because
+    /// program addresses cannot be dynamically loaded from a lookup table.
     ///
     /// Account indexes must index into the list of addresses
-    /// constructed from the concatenation of three key lists:
-    ///   1) message `account_keys`
-    ///   2) ordered list of keys loaded from `writable` lookup table indexes
-    ///   3) ordered list of keys loaded from `readable` lookup table indexes
-    instructions: []const CompiledInstruction,
+    /// constructed from the concatenation of three address lists:
+    ///   1) `addresses`
+    ///   2) ordered list of addresses loaded from `writable` lookup table indexes
+    ///   3) ordered list of addresses loaded from `readable` lookup table indexes
+    instructions: []const Instruction,
 
-    /// List of address table lookups used to load additional accounts
-    /// for this transaction.
-    address_table_lookups: []const MessageAddressTableLookup,
+    /// `AddressLookup`'s are used to load account addresses from lookup tables.
+    maybe_address_lookups: ?[]const AddressLookup,
 
-    pub const @"!bincode-config:account_keys" = shortVecConfig([]const Pubkey);
-    pub const @"!bincode-config:instructions" = shortVecConfig([]const CompiledInstruction);
-    pub const @"!bincode-config:address_table_lookups" = shortVecConfig([]const MessageAddressTableLookup);
+    pub const Version = enum(u8) {
+        /// Legacy transaction without address lookups.
+        Legacy = 0xFF,
+        /// Transaction with address lookups.
+        V0 = 0x00,
 
-    pub fn deinit(self: V0Message, allocator: std.mem.Allocator) void {
-        inline for (.{ self.instructions, self.address_table_lookups }) |slice| {
-            for (slice) |item| {
-                item.deinit(allocator);
+        pub fn serialize(self: Version, writer: anytype) !void {
+            switch (self) {
+                Version.Legacy => {},
+                Version.V0 => try writer.writeByte(0x80),
             }
         }
-        allocator.free(self.account_keys);
-        allocator.free(self.instructions);
-        allocator.free(self.address_table_lookups);
-    }
 
-    pub fn sanitize(_: V0Message) !void {
-        // TODO
-        std.debug.print("V0Message.sanitize not implemented", .{});
-    }
-
-    pub fn addressTableLookups(self: V0Message) ?[]MessageAddressTableLookup {
-        switch (self) {
-            .legacy => null,
-            .v0 => |m| m.address_table_lookups,
+        pub fn deserialize(reader: *CheckedReader) !Version {
+            if (try reader.peekByte() & 0x80 == 0x80)
+                return if (try reader.readByte() == 0x80) Version.V0 else error.InvalidVersion;
+            return Version.Legacy;
         }
-    }
-};
-
-pub const MessageAddressTableLookup = struct {
-    /// Address lookup table account key
-    account_key: Pubkey,
-    /// List of indexes used to load writable account addresses
-    writable_indexes: []const u8,
-    /// List of indexes used to load readonly account addresses
-    readonly_indexes: []const u8,
-
-    pub const @"!bincode-config:writable_indexes" = shortVecConfig([]const u8);
-    pub const @"!bincode-config:readonly_indexes" = shortVecConfig([]const u8);
-
-    pub fn deinit(self: MessageAddressTableLookup, allocator: std.mem.Allocator) void {
-        allocator.free(self.writable_indexes);
-        allocator.free(self.readonly_indexes);
-    }
-};
-
-pub const Transaction = struct {
-    signatures: []const Signature,
-    message: Message,
-
-    pub const @"!bincode-config:signatures" = shortVecConfig([]const Signature);
-
-    pub const MAX_BYTES: usize = 1232;
-
-    pub const EMPTY: Transaction = .{
-        .signatures = &.{},
-        .message = Message.EMPTY,
     };
 
-    pub fn newUnsigned(allocator: std.mem.Allocator, message: Message) error{OutOfMemory}!Transaction {
-        return Transaction{
-            .signatures = try allocator.alloc(Signature, message.header.num_required_signatures),
-            .message = message,
-        };
-    }
+    pub const Instruction = struct {
+        /// Index into the transaction accounts array indicating the program account that executes this instruction.
+        program_index: u8,
+        /// TODO: Is this accurate, more likely an index into the concatenation of the three address lists.
+        /// Ordered indices into the transaction accounts array indicating which accounts to pass to the program.
+        account_indexes: []const u8,
+        /// Serialized program instruction.
+        program_instruction: []const u8,
 
-    pub fn clone(self: *const Transaction, allocator: std.mem.Allocator) error{OutOfMemory}!Transaction {
-        return .{
-            .signatures = try allocator.dupe(Signature, self.signatures),
-            .message = try self.message.clone(allocator),
-        };
-    }
-
-    pub fn deinit(self: *const Transaction, allocator: std.mem.Allocator) void {
-        allocator.free(self.signatures);
-        self.message.deinit(allocator);
-    }
-
-    pub fn sanitize(self: *const Transaction) !void {
-        const num_required_sigs = self.message.header.num_required_signatures;
-        const num_signatures = self.signatures.len;
-        if (num_required_sigs > num_signatures) {
-            return error.InsufficientSignatures;
+        pub fn clone(self: *const Instruction, allocator: std.mem.Allocator) !Instruction {
+            return .{
+                .program_index = self.program_index,
+                .account_indexes = try allocator.dupe(u8, self.account_indexes),
+                .program_instruction = try allocator.dupe(u8, self.program_instruction),
+            };
         }
 
-        const num_account_keys = self.message.account_keys.len;
-        if (num_signatures > num_account_keys) {
-            return error.TooManySignatures;
+        pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
+            allocator.free(self.account_indexes);
+            allocator.free(self.program_instruction);
         }
-        try self.message.sanitize();
-    }
-};
 
-pub const Message = struct {
-    header: MessageHeader,
-    account_keys: []const Pubkey,
-    recent_blockhash: Hash,
-    instructions: []const CompiledInstruction,
+        pub fn serialize(self: *const Instruction, writer: anytype) !void {
+            try writer.writeByte(self.program_index);
 
-    pub const @"!bincode-config:account_keys" = shortVecConfig([]const Pubkey);
-    pub const @"!bincode-config:instructions" = shortVecConfig([]const CompiledInstruction);
+            // WARN: Truncate okay if transaction is valid
+            try leb.writeULEB128(writer, @as(u16, @truncate(self.account_indexes.len)));
+            try writer.writeAll(self.account_indexes);
 
-    pub const EMPTY: Message = .{
-        .header = .{
-            .num_required_signatures = 0,
-            .num_readonly_signed_accounts = 0,
-            .num_readonly_unsigned_accounts = 0,
-        },
-        .account_keys = &.{},
-        .recent_blockhash = blk: {
-            @setEvalBranchQuota(1962);
-            break :blk Hash.generateSha256Hash(&.{0});
-        },
-        .instructions = &.{},
+            // WARN: Truncate okay if transaction is valid
+            try leb.writeULEB128(writer, @as(u16, @truncate(self.program_instruction.len)));
+            try writer.writeAll(self.program_instruction);
+        }
+
+        pub fn deserialize(allocator: std.mem.Allocator, reader: *CheckedReader) !Instruction {
+            const program_index = try reader.readByte();
+
+            const account_indexes =
+                try reader.readBytesAlloc(allocator, try leb.readULEB128(u16, reader));
+            errdefer allocator.free(account_indexes);
+
+            const program_instruction =
+                try reader.readBytesAlloc(allocator, try leb.readULEB128(u16, reader));
+            errdefer allocator.free(program_instruction);
+
+            return .{
+                .program_index = program_index,
+                .account_indexes = account_indexes,
+                .program_instruction = program_instruction,
+            };
+        }
     };
 
-    pub fn init(
+    pub const AddressLookup = struct {
+        /// Address of the lookup table
+        table_address: Pubkey,
+        /// List of indexes used to load writable account ids
+        writable_indexes: []const u8,
+        /// List of indexes used to load readonly account ids
+        readonly_indexes: []const u8,
+
+        pub fn clone(self: *const AddressLookup, allocator: std.mem.Allocator) !AddressLookup {
+            const writable_indexes = try allocator.dupe(u8, self.writable_indexes);
+            errdefer allocator.free(writable_indexes);
+            const readonly_indexes = try allocator.dupe(u8, self.readonly_indexes);
+            return .{
+                .table_address = self.table_address,
+                .writable_indexes = writable_indexes,
+                .readonly_indexes = readonly_indexes,
+            };
+        }
+
+        pub fn deinit(self: AddressLookup, allocator: std.mem.Allocator) void {
+            allocator.free(self.writable_indexes);
+            allocator.free(self.readonly_indexes);
+        }
+
+        pub fn serialize(self: *const AddressLookup, writer: anytype) !void {
+            try writer.writeAll(&self.table_address.data);
+
+            try leb.writeULEB128(writer, @as(u16, @truncate(self.writable_indexes.len)));
+            try writer.writeAll(self.writable_indexes);
+
+            try leb.writeULEB128(writer, @as(u16, @truncate(self.readonly_indexes.len)));
+            try writer.writeAll(self.readonly_indexes);
+        }
+
+        pub fn deserialize(allocator: std.mem.Allocator, reader: *CheckedReader) !AddressLookup {
+            var table_address = Pubkey{ .data = [_]u8{0x00} ** Pubkey.SIZE };
+            try reader.readBytesInto(&table_address.data, Pubkey.SIZE);
+
+            const writable_indexes =
+                try reader.readBytesAlloc(allocator, try leb.readULEB128(u16, reader));
+            errdefer allocator.free(writable_indexes);
+
+            const readonly_indexes =
+                try reader.readBytesAlloc(allocator, try leb.readULEB128(u16, reader));
+            errdefer allocator.free(readonly_indexes);
+
+            return .{
+                .table_address = table_address,
+                .writable_indexes = writable_indexes,
+                .readonly_indexes = readonly_indexes,
+            };
+        }
+    };
+
+    pub fn buildTransferTansaction(
         allocator: std.mem.Allocator,
-        instructions: []const Instruction,
-        payer: Pubkey,
+        random: std.Random,
+        from_keypair: KeyPair,
+        to_pubkey: Pubkey,
+        lamports: u64,
         recent_blockhash: Hash,
-    ) !Message {
-        var compiled_keys = try CompiledKeys.init(allocator, instructions, payer);
-        defer compiled_keys.deinit();
-        const header, const account_keys = try compiled_keys.intoMessageHeaderAndAccountKeys(allocator);
-        const compiled_instructions = try compileInstructions(allocator, instructions, account_keys);
+    ) !Transaction {
+        _ = allocator;
+        _ = random;
+        _ = from_keypair;
+        _ = to_pubkey;
+        _ = lamports;
+        _ = recent_blockhash;
+        @panic("Not implemented!");
+    }
+
+    pub fn empty() Transaction {
         return .{
-            .header = header,
-            .account_keys = account_keys,
-            .recent_blockhash = recent_blockhash,
-            .instructions = compiled_instructions,
+            .signatures = &.{},
+            .version = .Legacy,
+            .signature_count = 0,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .addresses = &.{},
+            .recent_blockhash = .{ .data = [_]u8{0x00} ** Hash.SIZE },
+            .instructions = &.{},
+            .maybe_address_lookups = null,
         };
     }
 
-    pub fn clone(self: *const Message, allocator: std.mem.Allocator) error{OutOfMemory}!Message {
-        const account_keys = try allocator.dupe(Pubkey, self.account_keys);
-        errdefer allocator.free(account_keys);
+    pub fn clone(self: Transaction, allocator: std.mem.Allocator) !Transaction {
+        const signatures = try allocator.dupe(Signature, self.signatures);
+        errdefer allocator.free(signatures);
 
-        const instructions = try allocator.alloc(CompiledInstruction, self.instructions.len);
-        errdefer allocator.free(instructions);
-
-        for (instructions, self.instructions, 0..) |*ci, original_ci, i| {
-            errdefer for (instructions[0..i]) |prev_ci| prev_ci.deinit(allocator);
-            ci.* = try original_ci.clone(allocator);
+        var instructions = try allocator.alloc(Instruction, self.instructions.len);
+        errdefer {
+            for (instructions) |instr| instr.deinit(allocator);
+            allocator.free(instructions);
         }
-        errdefer comptime unreachable; // otherwise we have to remember to free each instruction
+        for (self.instructions, 0..) |instr, i|
+            instructions[i] = try instr.clone(allocator);
+
+        var maybe_address_lookups: ?[]AddressLookup = null;
+        if (self.maybe_address_lookups) |alts| {
+            maybe_address_lookups = try allocator.alloc(AddressLookup, alts.len);
+            errdefer {
+                for (maybe_address_lookups.?) |alt| alt.deinit(allocator);
+                allocator.free(maybe_address_lookups.?);
+            }
+            for (alts, 0..) |alt, i|
+                maybe_address_lookups.?[i] = try alt.clone(allocator);
+        }
+
+        const addresses = try allocator.dupe(Pubkey, self.addresses);
 
         return .{
-            .header = self.header,
-            .account_keys = account_keys,
+            .signatures = signatures,
+            .version = self.version,
+            .signature_count = self.signature_count,
+            .readonly_signed_count = self.readonly_signed_count,
+            .readonly_unsigned_count = self.readonly_unsigned_count,
+            .addresses = addresses,
             .recent_blockhash = self.recent_blockhash,
             .instructions = instructions,
+            .maybe_address_lookups = maybe_address_lookups,
         };
     }
 
-    pub fn deinit(self: *const Message, allocator: std.mem.Allocator) void {
-        allocator.free(self.account_keys);
-        for (self.instructions) |*ci| ci.deinit(allocator);
+    pub fn deinit(self: Transaction, allocator: std.mem.Allocator) void {
+        allocator.free(self.signatures);
+        allocator.free(self.addresses);
+        for (self.instructions) |instr| instr.deinit(allocator);
         allocator.free(self.instructions);
-    }
-
-    pub const MessageSanitizeError = error{
-        NotEnoughAccounts,
-        MissingWritableFeePayer,
-        ProgramIdAccountMissing,
-        ProgramIdCannotBePayer,
-        AccountIndexOutOfBounds,
-    };
-
-    pub fn sanitize(self: *const Message) MessageSanitizeError!void {
-        // number of accounts should match spec in header. signed and unsigned should not overlap.
-        if (self.header.num_required_signatures +| self.header.num_readonly_unsigned_accounts > self.account_keys.len) {
-            return error.NotEnoughAccounts;
-        }
-        // there should be at least 1 RW fee-payer account.
-        if (self.header.num_readonly_signed_accounts >= self.header.num_required_signatures) {
-            return error.MissingWritableFeePayer;
-        }
-
-        for (self.instructions) |ci| {
-            if (ci.program_id_index >= self.account_keys.len) {
-                return error.ProgramIdAccountMissing;
-            }
-            // A program cannot be a payer.
-            if (ci.program_id_index == 0) {
-                return error.ProgramIdCannotBePayer;
-            }
-            for (ci.accounts) |ai| {
-                if (ai >= self.account_keys.len) {
-                    return error.AccountIndexOutOfBounds;
-                }
-            }
+        if (self.maybe_address_lookups) |alts| {
+            for (alts) |alt| alt.deinit(allocator);
+            allocator.free(alts);
         }
     }
-};
 
-pub const MessageHeader = struct {
-    /// The number of signatures required for this message to be considered
-    /// valid. The signers of those signatures must match the first
-    /// `num_required_signatures` of [`Message::account_keys`].
-    // NOTE: Serialization-related changes must be paired with the direct read at sigverify.
-    num_required_signatures: u8,
+    pub fn sanitize(self: Transaction) !void {
+        // TODO: Implement
+        _ = self;
+    }
 
-    /// The last `num_readonly_signed_accounts` of the signed keys are read-only
-    /// accounts.
-    num_readonly_signed_accounts: u8,
+    /// Write a **valid** transaction to a slice of bytes.
+    pub fn writeToSlice(self: Transaction, slice: []u8) ![]u8 {
+        var fbs = std.io.fixedBufferStream(slice);
+        try self.serialize(&fbs.writer());
+        return fbs.getWritten();
+    }
 
-    /// The last `num_readonly_unsigned_accounts` of the unsigned keys are
-    /// read-only accounts.
-    num_readonly_unsigned_accounts: u8,
-};
+    /// Read a transaction from a slice of bytes.
+    /// Returns an error if the transaction is invalid.
+    pub fn readFromSlice(allocator: std.mem.Allocator, slice: []const u8) !Transaction {
+        var reader = CheckedReader.init(slice);
+        return try Transaction.deserialize(allocator, &reader);
+    }
 
-pub const Instruction = struct {
-    program_id: Pubkey,
-    accounts: []AccountMeta,
-    data: []u8,
+    /// Serialize a **valid** transaction to a slice of bytes.
+    pub fn serialize(self: Transaction, writer: anytype) !void {
+        // WARN: Truncate okay if transaction is valid
+        try writer.writeByte(@truncate(self.signatures.len));
+        for (self.signatures) |sgn| try writer.writeAll(&sgn.data);
+        try self.version.serialize(writer);
+        try self.serializeSigned(writer);
+    }
 
-    pub fn initSystemInstruction(
-        allocator: std.mem.Allocator,
-        data: SystemInstruction,
-        accounts: []AccountMeta,
-    ) !Instruction {
+    /// Serialize the signed component of a **valid** transaction.
+    pub fn serializeSigned(self: Transaction, writer: anytype) !void {
+        try writer.writeByte(self.signature_count);
+        try writer.writeByte(self.readonly_signed_count);
+        try writer.writeByte(self.readonly_unsigned_count);
+
+        // WARN: Truncate okay if transaction is valid
+        try leb.writeULEB128(writer, @as(u16, @truncate(self.addresses.len)));
+        for (self.addresses) |id| try writer.writeAll(&id.data);
+
+        try writer.writeAll(&self.recent_blockhash.data);
+
+        // WARN: Truncate okay if transaction is valid
+        try leb.writeULEB128(writer, @as(u16, @truncate(self.instructions.len)));
+        for (self.instructions) |instr| try instr.serialize(writer);
+
+        // WARN: Truncate okay if transaction is valid
+        if (self.maybe_address_lookups) |alts| {
+            try leb.writeULEB128(writer, @as(u16, @truncate(alts.len)));
+            for (alts) |alt| try alt.serialize(writer);
+        }
+    }
+
+    /// TODO: Check for validity of the transaction as it is deserialized and return an error if the transaction is invalid.
+    /// [firedancer] https://github.com/firedancer-io/firedancer/blob/8f77acd876ba3c13b6628b66c4266c0454a357f7/src/ballet/txn/fd_txn_parse.c#L7
+    pub fn deserialize(allocator: std.mem.Allocator, reader: *CheckedReader) !Transaction {
+        const signatures = try allocator.alloc(Signature, try reader.readByte());
+        errdefer allocator.free(signatures);
+        for (signatures) |*sgn| try reader.readBytesInto(sgn.data[0..], Signature.SIZE);
+
+        const version = try Version.deserialize(reader);
+        const signature_count = try reader.readByte();
+        const readonly_signed_count = try reader.readByte();
+        const readonly_unsigned_count = try reader.readByte();
+
+        const addresses = try allocator.alloc(Pubkey, try leb.readULEB128(u16, reader));
+        errdefer allocator.free(addresses);
+        for (addresses) |*id| try reader.readBytesInto(id.data[0..], Pubkey.SIZE);
+
+        const recent_blockhash = Hash{ .data = (try reader.readBytes(Hash.SIZE))[0..Hash.SIZE].* };
+
+        const instructions = try allocator.alloc(Instruction, try leb.readULEB128(u16, reader));
+        errdefer {
+            for (instructions) |instr| instr.deinit(allocator);
+            allocator.free(instructions);
+        }
+        for (instructions) |*instr| instr.* = try Instruction.deserialize(allocator, reader);
+
+        const maybe_address_lookups = if (version == Version.V0) blk: {
+            const alts = try allocator.alloc(AddressLookup, try leb.readULEB128(u16, reader));
+            errdefer {
+                for (alts) |alt| alt.deinit(allocator);
+                allocator.free(alts);
+            }
+            for (alts) |*alt| alt.* = try AddressLookup.deserialize(allocator, reader);
+            break :blk alts;
+        } else null;
+
         return .{
-            .program_id = SYSTEM_PROGRAM_ID,
-            .accounts = accounts,
-            .data = try sig.bincode.writeAlloc(allocator, data, .{}),
-        };
-    }
-
-    pub fn deinit(self: *const Instruction, allocator: std.mem.Allocator) void {
-        allocator.free(self.accounts);
-        allocator.free(self.data);
-    }
-};
-
-pub const CompiledInstruction = struct {
-    /// Index into the transaction keys array indicating the program account that executes this instruction.
-    program_id_index: u8,
-    /// Ordered indices into the transaction keys array indicating which accounts to pass to the program.
-    accounts: []const u8,
-    /// The program input data.
-    data: []const u8,
-
-    pub const @"!bincode-config:accounts" = shortVecConfig([]const u8);
-    pub const @"!bincode-config:data" = shortVecConfig([]const u8);
-
-    pub fn clone(self: *const CompiledInstruction, allocator: std.mem.Allocator) error{OutOfMemory}!CompiledInstruction {
-        return .{
-            .program_id_index = self.program_id_index,
-            .accounts = try allocator.dupe(u8, self.accounts),
-            .data = try allocator.dupe(u8, self.data),
-        };
-    }
-
-    pub fn deinit(self: *const CompiledInstruction, allocator: std.mem.Allocator) void {
-        allocator.free(self.accounts);
-        allocator.free(self.data);
-    }
-};
-
-pub const AccountMeta = struct {
-    pubkey: Pubkey,
-    is_signer: bool,
-    is_writable: bool,
-
-    pub fn newMutable(pubkey: Pubkey, is_signer: bool) AccountMeta {
-        return .{
-            .pubkey = pubkey,
-            .is_signer = is_signer,
-            .is_writable = true,
-        };
-    }
-
-    pub fn newImmutable(pubkey: Pubkey, is_signer: bool) AccountMeta {
-        return .{
-            .pubkey = pubkey,
-            .is_signer = is_signer,
-            .is_writable = false,
+            .signatures = signatures,
+            .version = version,
+            .signature_count = signature_count,
+            .readonly_signed_count = readonly_signed_count,
+            .readonly_unsigned_count = readonly_unsigned_count,
+            .addresses = addresses,
+            .recent_blockhash = recent_blockhash,
+            .instructions = instructions,
+            .maybe_address_lookups = maybe_address_lookups,
         };
     }
 };
 
-pub const CompiledKeys = struct {
-    maybe_payer: ?Pubkey,
-    key_meta_map: std.AutoArrayHashMap(Pubkey, CompiledKeyMeta),
-
-    pub fn init(allocator: std.mem.Allocator, instructions: []const Instruction, maybe_payer: ?Pubkey) !CompiledKeys {
-        var key_meta_map = std.AutoArrayHashMap(Pubkey, CompiledKeyMeta).init(allocator);
-        for (instructions) |instruction| {
-            const instruction_meta_gopr = try key_meta_map.getOrPut(instruction.program_id);
-            if (!instruction_meta_gopr.found_existing) {
-                instruction_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
-            }
-            instruction_meta_gopr.value_ptr.*.is_invoked = true;
-
-            for (instruction.accounts) |account_meta| {
-                const account_meta_gopr = try key_meta_map.getOrPut(account_meta.pubkey);
-                if (!account_meta_gopr.found_existing) {
-                    account_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
-                }
-                account_meta_gopr.value_ptr.is_signer = account_meta_gopr.value_ptr.is_signer or
-                    account_meta.is_signer;
-                account_meta_gopr.value_ptr.is_writable = account_meta_gopr.value_ptr.is_writable or
-                    account_meta.is_writable;
-            }
-
-            if (maybe_payer) |payer| {
-                const payer_meta_gopr = try key_meta_map.getOrPut(payer);
-                if (!payer_meta_gopr.found_existing) {
-                    payer_meta_gopr.value_ptr.* = CompiledKeyMeta.ALL_FALSE;
-                }
-                payer_meta_gopr.value_ptr.is_signer = true;
-                payer_meta_gopr.value_ptr.is_writable = true;
-            }
-        }
-        return .{ .maybe_payer = maybe_payer, .key_meta_map = key_meta_map };
-    }
-
-    pub fn deinit(self: *CompiledKeys) void {
-        self.key_meta_map.deinit();
-    }
-
-    /// Creates message header and account keys from the compiled keys.
-    /// Account keys memory is allocated and owned by the caller.
-    pub fn intoMessageHeaderAndAccountKeys(
-        self: *CompiledKeys,
-        allocator: std.mem.Allocator,
-    ) !struct { MessageHeader, []Pubkey } {
-        const account_keys_buf = try allocator.alloc(Pubkey, self.key_meta_map.count() -
-            @intFromBool(self.maybe_payer == null));
-        errdefer allocator.free(account_keys_buf);
-        var account_keys = std.ArrayListUnmanaged(Pubkey).initBuffer(account_keys_buf);
-
-        var writable_signers_end: usize = 0;
-        var readonly_signers_end: usize = 0;
-        var writable_non_signers_end: usize = 0;
-
-        if (self.maybe_payer) |payer| {
-            _ = self.key_meta_map.swapRemove(payer);
-            account_keys.insertAssumeCapacity(writable_signers_end, payer);
-            writable_signers_end += 1;
-            readonly_signers_end += 1;
-            writable_non_signers_end += 1;
-        }
-
-        for (self.key_meta_map.keys(), self.key_meta_map.values()) |key, meta| {
-            if (meta.is_signer and meta.is_writable) {
-                account_keys.insertAssumeCapacity(writable_signers_end, key);
-                writable_signers_end += 1;
-                readonly_signers_end += 1;
-                writable_non_signers_end += 1;
-            } else if (meta.is_signer and !meta.is_writable) {
-                account_keys.insertAssumeCapacity(readonly_signers_end, key);
-                readonly_signers_end += 1;
-                writable_non_signers_end += 1;
-            } else if (!meta.is_signer and meta.is_writable) {
-                account_keys.insertAssumeCapacity(writable_non_signers_end, key);
-                writable_non_signers_end += 1;
-            } else if (!meta.is_signer and !meta.is_writable) {
-                account_keys.appendAssumeCapacity(key);
-            } else unreachable;
-        }
-
-        std.debug.assert(account_keys.items.len == account_keys_buf.len);
-
-        const header = MessageHeader{
-            .num_required_signatures = @intCast(readonly_signers_end),
-            .num_readonly_signed_accounts = @intCast(readonly_signers_end - writable_signers_end),
-            .num_readonly_unsigned_accounts = @intCast(account_keys.items.len - writable_non_signers_end),
-        };
-
-        return .{ header, account_keys_buf };
-    }
-};
-
-pub const CompiledKeyMeta = packed struct {
-    is_signer: bool,
-    is_writable: bool,
-    is_invoked: bool,
-
-    pub const ALL_FALSE: CompiledKeyMeta = .{
-        .is_signer = false,
-        .is_writable = false,
-        .is_invoked = false,
-    };
-};
-
-pub const CompileError = error{
-    AccountIndexOverflow,
-    AddressTableLookupIndexOverflow,
-    UnknownInstructionKey,
-};
-
-const SYSTEM_PROGRAM_ID = Pubkey.ZEROES;
-
-const SystemInstruction = union(enum(u8)) {
-    CreateAccount,
-    Assign,
-    Transfer: struct {
-        lamports: u64,
-    },
-};
-
-pub fn buildTransferTansaction(
-    allocator: std.mem.Allocator,
-    random: std.Random,
-    from_keypair: KeyPair,
-    to_pubkey: Pubkey,
-    lamports: u64,
-    recent_blockhash: Hash,
-) !Transaction {
-    const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
-    const transfer_instruction = try transfer(
-        allocator,
-        from_pubkey,
-        to_pubkey,
-        lamports,
-    );
-    defer transfer_instruction.deinit(allocator);
-    const instructions = [_]Instruction{transfer_instruction};
-
-    const message = try Message.init(allocator, &instructions, from_pubkey, recent_blockhash);
-    const message_bytes = try sig.bincode.writeAlloc(allocator, message, .{});
-    defer allocator.free(message_bytes);
-
-    var signatures = try allocator.alloc(Signature, 1);
-    var noise: [KeyPair.seed_length]u8 = undefined;
-    random.bytes(noise[0..]);
-    signatures[0] = .{ .data = (try from_keypair.sign(message_bytes, noise)).toBytes() };
-
-    return .{
-        .signatures = signatures,
-        .message = message,
-    };
-}
-
-pub fn transfer(
-    allocator: std.mem.Allocator,
-    from_pubkey: Pubkey,
-    to_pubkey: Pubkey,
-    lamports: u64,
-) !Instruction {
-    var account_metas = try allocator.alloc(AccountMeta, 2);
-    account_metas[0] = AccountMeta.newMutable(from_pubkey, true);
-    account_metas[1] = AccountMeta.newMutable(to_pubkey, false);
-    return try Instruction.initSystemInstruction(
-        allocator,
-        .{ .Transfer = .{ .lamports = lamports } },
-        account_metas,
-    );
-}
-
-pub fn compileInstruction(
-    allocator: std.mem.Allocator,
-    instruction: Instruction,
-    account_keys: []const Pubkey,
-) !CompiledInstruction {
-    const program_id_index = indexOf(Pubkey, account_keys, instruction.program_id).?;
-    var accounts = try allocator.alloc(u8, instruction.accounts.len);
-    for (instruction.accounts, 0..) |account, i| {
-        accounts[i] = @truncate(indexOf(Pubkey, account_keys, account.pubkey).?);
-    }
-    return .{
-        .program_id_index = @truncate(program_id_index),
-        .data = try allocator.dupe(u8, instruction.data),
-        .accounts = accounts,
-    };
-}
-
-pub fn compileInstructions(
-    allocator: std.mem.Allocator,
-    instructions: []const Instruction,
-    account_keys: []const Pubkey,
-) ![]CompiledInstruction {
-    var compiled_instructions = try allocator.alloc(CompiledInstruction, instructions.len);
-    for (instructions, 0..) |instruction, i| {
-        compiled_instructions[i] = try compileInstruction(allocator, instruction, account_keys);
-    }
-    return compiled_instructions;
-}
-
-test "create transfer transaction" {
+test "legacy_transaction_parse" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(19);
-    const random = prng.random();
-
-    const from_keypair = try KeyPair.create([_]u8{0} ** KeyPair.seed_length);
-    const to_pubkey: Pubkey = .{ .data = .{1} ** Pubkey.SIZE };
-    const recent_blockhash = Hash.generateSha256Hash(&.{0});
-    const tx = try buildTransferTansaction(
+    const deserialized_transaction = try Transaction.readFromSlice(
         allocator,
-        random,
-        from_keypair,
-        to_pubkey,
-        100,
-        recent_blockhash,
+        transaction_legacy_example.as_bytes[0..],
     );
-    defer tx.deinit(allocator);
-    const actual_bytes = try sig.bincode.writeAlloc(allocator, tx, .{});
-    defer allocator.free(actual_bytes);
-    const expected_bytes = [_]u8{
+    defer deserialized_transaction.deinit(allocator);
+
+    var serialize_buffer = [_]u8{0} ** Transaction.MAX_BYTES;
+    const serialized_transaction = try deserialized_transaction.writeToSlice(&serialize_buffer);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        transaction_legacy_example.as_bytes[0..],
+        serialized_transaction,
+    );
+}
+
+pub const transaction_legacy_example = struct {
+    const as_struct = Transaction{
+        .signatures = &.{
+            Signature.fromString("Z2hT7E85gqWWVKEsZXxJ184u7rXdRnB6EKz2PHAUajx6jHrUZhN5WkE7tPw6PrUA3XzeZRjoE7xJDtQzshZm1Pk") catch unreachable,
+        },
+        .version = .Legacy,
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 1,
+        .addresses = &.{
+            Pubkey.parseBase58String("4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS") catch unreachable,
+            Pubkey.parseBase58String("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi") catch unreachable,
+            Pubkey.parseBase58String("11111111111111111111111111111111") catch unreachable,
+        },
+        .recent_blockhash = Hash.parseBase58String("8RBsoeyoRwajj86MZfZE6gMDJQVYGYcdSfx1zxqxNHbr") catch unreachable,
+        .instructions = &.{.{
+            .program_index = 2,
+            .account_indexes = &.{ 0, 1 },
+            .program_instruction = &.{ 2, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0 },
+        }},
+        .maybe_address_lookups = null,
+    };
+
+    const as_bytes = [_]u8{
         1,   27,  158, 238, 65,  248, 46,  208, 15,  65,  178, 83,  163, 117, 224, 86,  163,
         91,  67,  228, 176, 117, 246, 111, 69,  133, 194, 78,  89,  205, 86,  166, 98,  22,
         27,  163, 250, 167, 208, 146, 201, 53,  24,  212, 97,  230, 100, 176, 26,  194, 121,
@@ -639,133 +429,10 @@ test "create transfer transaction" {
         56,  118, 133, 17,  163, 6,   23,  175, 160, 29,  1,   2,   2,   0,   1,   12,  2,
         0,   0,   0,   100, 0,   0,   0,   0,   0,   0,   0,
     };
-    try std.testing.expectEqualSlices(u8, &expected_bytes, actual_bytes);
-}
+};
 
-test "blank Message fails to sanitize" {
-    try std.testing.expectError(error.MissingWritableFeePayer, Message.EMPTY.sanitize());
-}
-
-test "minimal valid Message sanitizes" {
-    try std.testing.expectEqual({}, Message.sanitize(&.{
-        .header = .{
-            .num_required_signatures = 1,
-            .num_readonly_signed_accounts = 0,
-            .num_readonly_unsigned_accounts = 0,
-        },
-        .account_keys = &.{Pubkey.ZEROES},
-        .recent_blockhash = Hash.generateSha256Hash(&.{0}),
-        .instructions = &.{},
-    }));
-}
-
-test "Message sanitize fails if missing signers" {
-    try std.testing.expectError(error.NotEnoughAccounts, Message.sanitize(&.{
-        .header = .{
-            .num_required_signatures = 2,
-            .num_readonly_signed_accounts = 0,
-            .num_readonly_unsigned_accounts = 0,
-        },
-        .account_keys = &.{Pubkey.ZEROES},
-        .recent_blockhash = Hash.generateSha256Hash(&.{0}),
-        .instructions = &.{},
-    }));
-}
-
-test "Message sanitize fails if missing unsigned" {
-    try std.testing.expectError(error.NotEnoughAccounts, Message.sanitize(&.{
-        .header = .{
-            .num_required_signatures = 1,
-            .num_readonly_signed_accounts = 0,
-            .num_readonly_unsigned_accounts = 1,
-        },
-        .account_keys = &.{Pubkey.ZEROES},
-        .recent_blockhash = Hash.generateSha256Hash(&.{0}),
-        .instructions = &.{},
-    }));
-}
-
-test "Message sanitize fails if no writable signed" {
-    try std.testing.expectError(error.MissingWritableFeePayer, Message.sanitize(&.{
-        .header = .{
-            .num_required_signatures = 1,
-            .num_readonly_signed_accounts = 1,
-            .num_readonly_unsigned_accounts = 0,
-        },
-        .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
-        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &.{},
-    }));
-}
-
-test "Message sanitize fails if missing program id" {
-    try std.testing.expectError(error.ProgramIdAccountMissing, Message.sanitize(&.{
-        .header = .{
-            .num_required_signatures = 1,
-            .num_readonly_signed_accounts = 0,
-            .num_readonly_unsigned_accounts = 0,
-        },
-        .account_keys = &.{Pubkey.ZEROES},
-        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &.{.{
-            .program_id_index = 1,
-            .accounts = &.{},
-            .data = &.{},
-        }},
-    }));
-}
-
-test "Message sanitize fails if program id has index 0" {
-    try std.testing.expectError(error.ProgramIdCannotBePayer, Message.sanitize(&.{
-        .header = .{
-            .num_required_signatures = 1,
-            .num_readonly_signed_accounts = 0,
-            .num_readonly_unsigned_accounts = 0,
-        },
-        .account_keys = &.{Pubkey.ZEROES},
-        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &.{.{
-            .program_id_index = 0,
-            .accounts = &.{},
-            .data = &.{},
-        }},
-    }));
-}
-
-test "Message sanitize fails if account index is out of bounds" {
-    try std.testing.expectError(error.AccountIndexOutOfBounds, Message.sanitize(&.{
-        .header = .{
-            .num_required_signatures = 1,
-            .num_readonly_signed_accounts = 0,
-            .num_readonly_unsigned_accounts = 1,
-        },
-        .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
-        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
-        .instructions = &.{.{
-            .program_id_index = 1,
-            .accounts = &.{2},
-            .data = &.{},
-        }},
-    }));
-}
-
-test "V0Message serialization and deserialization" {
-    const message = test_v0_message.as_struct;
-    try sig.bincode.testRoundTrip(message, &test_v0_message.bincode_serialized_bytes);
-}
-
-test "VersionedTransaction v0 serialization and deserialization" {
-    const transaction = test_v0_transaction.as_struct;
-    try sig.bincode.testRoundTrip(transaction, &test_v0_transaction.bincode_serialized_bytes);
-}
-
-test "VersionedMessage v0 serialization and deserialization" {
-    const versioned_message = test_v0_versioned_message.as_struct;
-    try sig.bincode.testRoundTrip(versioned_message, &test_v0_versioned_message.bincode_serialized_bytes);
-}
-
-pub const test_v0_transaction = struct {
-    pub const as_struct: VersionedTransaction = .{
+pub const transaction_v0_example = struct {
+    pub const as_struct: Transaction = .{
         .signatures = &.{
             Signature.parseBase58String(
                 "2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw",
@@ -774,10 +441,31 @@ pub const test_v0_transaction = struct {
                 "4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj",
             ) catch unreachable,
         },
-        .message = .{ .v0 = test_v0_message.as_struct },
+        .version = .V0,
+        .signature_count = 39,
+        .readonly_signed_count = 12,
+        .readonly_unsigned_count = 102,
+        .addresses = &.{
+            Pubkey.parseBase58String("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE") catch unreachable,
+            Pubkey.parseBase58String("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4") catch unreachable,
+        },
+        .recent_blockhash = Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW") catch unreachable,
+        .instructions = &.{.{
+            .program_index = 100,
+            .account_indexes = &.{ 1, 3 },
+            .program_instruction = &.{
+                104, 232, 42,  254, 46, 48, 104, 89,  101, 211, 253, 161, 65, 155, 204, 89,
+                126, 187, 180, 191, 60, 59, 88,  119, 106, 20,  194, 80,  11, 200, 76,  0,
+            },
+        }},
+        .maybe_address_lookups = &.{.{
+            .table_address = Pubkey.parseBase58String("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD") catch unreachable,
+            .writable_indexes = &.{ 1, 3, 5, 7, 90 },
+            .readonly_indexes = &.{},
+        }},
     };
 
-    pub const bincode_serialized_bytes = [_]u8{
+    pub const as_bytes = [_]u8{
         2,   81,  7,   106, 50,  99,  54,  99,  92,  187, 47,  10,  170, 102, 132, 42,  25,  4,
         26,  67,  106, 76,  132, 119, 57,  38,  159, 7,   243, 132, 127, 236, 31,  83,  124, 56,
         140, 54,  239, 100, 65,  111, 8,   246, 103, 155, 246, 108, 196, 95,  231, 253, 121, 109,
@@ -796,63 +484,5 @@ pub const test_v0_transaction = struct {
         65,  203, 149, 184, 2,   85,  213, 101, 44,  13,  181, 13,  65,  128, 17,  94,  229, 31,
         215, 47,  49,  72,  57,  158, 144, 193, 224, 205, 241, 120, 78,  5,   1,   3,   5,   7,
         90,  0,
-    };
-};
-
-pub const test_v0_versioned_message = struct {
-    pub const as_struct = VersionedMessage{ .v0 = test_v0_message.as_struct };
-
-    pub const bincode_serialized_bytes = [_]u8{
-        128, 39,  12,  102, 2,   236, 88,  117, 221, 34,  125, 55,  183, 193, 174, 21,  99,  70,
-        167, 52,  227, 254, 241, 14,  239, 13,  172, 158, 81,  254, 134, 30,  78,  35,  15,  168,
-        79,  73,  211, 242, 100, 122, 21,  163, 216, 62,  58,  230, 205, 163, 112, 95,  100, 134,
-        113, 98,  129, 164, 240, 184, 157, 4,   34,  55,  72,  89,  113, 179, 97,  58,  235, 71,
-        20,  83,  42,  196, 46,  189, 136, 194, 90,  249, 14,  154, 144, 141, 234, 253, 148, 146,
-        168, 110, 10,  237, 82,  157, 190, 248, 20,  215, 105, 1,   100, 2,   1,   3,   32,  104,
-        232, 42,  254, 46,  48,  104, 89,  101, 211, 253, 161, 65,  155, 204, 89,  126, 187, 180,
-        191, 60,  59,  88,  119, 106, 20,  194, 80,  11,  200, 76,  0,   1,   8,   65,  203, 149,
-        184, 2,   85,  213, 101, 44,  13,  181, 13,  65,  128, 17,  94,  229, 31,  215, 47,  49,
-        72,  57,  158, 144, 193, 224, 205, 241, 120, 78,  5,   1,   3,   5,   7,   90,  0,
-    };
-};
-
-pub const test_v0_message = struct {
-    pub const as_struct = V0Message{
-        .header = .{
-            .num_required_signatures = 39,
-            .num_readonly_signed_accounts = 12,
-            .num_readonly_unsigned_accounts = 102,
-        },
-        .account_keys = &.{
-            Pubkey.parseBase58String("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE") catch unreachable,
-            Pubkey.parseBase58String("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4") catch unreachable,
-        },
-        .recent_blockhash = Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW") catch unreachable,
-        .instructions = &.{.{
-            .program_id_index = 100,
-            .accounts = &.{ 1, 3 },
-            .data = &.{
-                104, 232, 42,  254, 46, 48, 104, 89,  101, 211, 253, 161, 65, 155, 204, 89,
-                126, 187, 180, 191, 60, 59, 88,  119, 106, 20,  194, 80,  11, 200, 76,  0,
-            },
-        }},
-        .address_table_lookups = &.{.{
-            .account_key = Pubkey.parseBase58String("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD") catch unreachable,
-            .writable_indexes = &.{ 1, 3, 5, 7, 90 },
-            .readonly_indexes = &.{},
-        }},
-    };
-
-    pub const bincode_serialized_bytes = [_]u8{
-        39,  12,  102, 2,   236, 88,  117, 221, 34,  125, 55,  183, 193, 174, 21,  99,  70,  167,
-        52,  227, 254, 241, 14,  239, 13,  172, 158, 81,  254, 134, 30,  78,  35,  15,  168, 79,
-        73,  211, 242, 100, 122, 21,  163, 216, 62,  58,  230, 205, 163, 112, 95,  100, 134, 113,
-        98,  129, 164, 240, 184, 157, 4,   34,  55,  72,  89,  113, 179, 97,  58,  235, 71,  20,
-        83,  42,  196, 46,  189, 136, 194, 90,  249, 14,  154, 144, 141, 234, 253, 148, 146, 168,
-        110, 10,  237, 82,  157, 190, 248, 20,  215, 105, 1,   100, 2,   1,   3,   32,  104, 232,
-        42,  254, 46,  48,  104, 89,  101, 211, 253, 161, 65,  155, 204, 89,  126, 187, 180, 191,
-        60,  59,  88,  119, 106, 20,  194, 80,  11,  200, 76,  0,   1,   8,   65,  203, 149, 184,
-        2,   85,  213, 101, 44,  13,  181, 13,  65,  128, 17,  94,  229, 31,  215, 47,  49,  72,
-        57,  158, 144, 193, 224, 205, 241, 120, 78,  5,   1,   3,   5,   7,   90,  0,
     };
 };

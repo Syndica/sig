@@ -267,7 +267,7 @@ pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entr
     }
     while (try readChunk(allocator, reader)) |chunk| {
         defer allocator.free(chunk);
-        try entries.append(try sig.bincode.readFromSlice(allocator, Entry, chunk, .{}));
+        try entries.append(try Entry.readFromSlice(allocator, chunk));
     }
     return entries.toOwnedSlice();
 }
@@ -415,7 +415,7 @@ pub fn insertDataForBlockTest(state: *TestState) !InsertDataForBlockResult {
         for (entry.transactions.items) |transaction| {
             var pre_balances = std.ArrayList(u64).init(allocator);
             var post_balances = std.ArrayList(u64).init(allocator);
-            const num_accounts = transaction.message.accountKeys().len;
+            const num_accounts = transaction.addresses.len;
             for (0..num_accounts) |i| {
                 try pre_balances.append(i * 10);
                 try post_balances.append(i * 11);

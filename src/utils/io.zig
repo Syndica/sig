@@ -87,3 +87,51 @@ fn NarrowAnyStream(comptime Error: type) type {
         }
     };
 }
+
+/// A reader that reads safely from a slice of bytes.
+/// It differs from `std.io.Reader` in that it returns the underlying bytes
+/// rather than reading them into a prodived buffer.
+pub const CheckedReader = struct {
+    bytes: []const u8,
+    pos: usize,
+
+    pub fn init(bytes: []const u8) CheckedReader {
+        return .{ .bytes = bytes, .pos = 0 };
+    }
+
+    pub fn peekByte(self: *CheckedReader) !u8 {
+        if (self.pos >= self.bytes.len) return error.NoBytesLeft;
+        return self.bytes[self.pos];
+    }
+
+    pub fn readByte(self: *CheckedReader) !u8 {
+        if (self.pos >= self.bytes.len) return error.NoBytesLeft;
+        defer self.pos += 1;
+        return self.bytes[self.pos];
+    }
+
+    pub fn readBytes(self: *CheckedReader, len: usize) ![]const u8 {
+        if (len > self.bytes.len - self.pos) return error.NoBytesLeft;
+        defer self.pos += len;
+        return self.bytes[self.pos..(self.pos + len)];
+    }
+
+    pub fn readBytesInto(self: *CheckedReader, dest: []u8, len: usize) !void {
+        if (len > self.bytes.len - self.pos) return error.NoBytesLeft;
+        defer self.pos += len;
+        return std.mem.copyForwards(u8, dest, self.bytes[self.pos..(self.pos + len)]);
+    }
+
+    pub fn readBytesAlloc(self: *CheckedReader, allocator: std.mem.Allocator, len: usize) ![]u8 {
+        if (len > self.bytes.len - self.pos) return error.NoBytesLeft;
+        defer self.pos += len;
+        return allocator.dupe(u8, self.bytes[self.pos..(self.pos + len)]);
+    }
+
+    pub fn readInt(self: *CheckedReader, T: type, endian: std.builtin.Endian) !T {
+        const len = @divExact(@typeInfo(T).Int.bits, 8);
+        if (len > self.bytes.len - self.pos) return error.NoBytesLeft;
+        defer self.pos += len;
+        return std.mem.readInt(T, self.bytes[self.pos..(self.pos + len)][0..len], endian);
+    }
+};

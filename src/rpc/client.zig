@@ -11,7 +11,7 @@ const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
 const ScopedLogger = sig.trace.log.ScopedLogger;
-const Transaction = sig.core.transaction.Transaction;
+const Transaction = sig.core.Transaction;
 const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 pub const Client = struct {
@@ -324,7 +324,7 @@ pub const Client = struct {
         defer request.deinit();
 
         var buffer: [sig.net.PACKET_DATA_SIZE]u8 = undefined;
-        const written = try sig.bincode.writeToSlice(&buffer, transaction, .{});
+        const written = try transaction.writeToSlice(&buffer);
 
         const endec = base58.Table.BITCOIN;
         var encoded_buffer: [base58.encodedMaxSize(buffer.len)]u8 = undefined;
