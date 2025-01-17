@@ -451,45 +451,51 @@ test "spsc" {
 }
 
 test "send-hook" {
-    const Intercept = struct {
-        collect: *std.ArrayList(u64),
-        hook: Channel(u64).SendHook = .{ .before_send = beforeSend },
+    const Counter = struct {
+        count: usize = 0,
+        hook: Channel(u64).SendHook = .{ .after_send = afterSend },
 
-        fn beforeSend(hook: *Channel(u64).SendHook, _: *Channel(u64), value: u64) bool {
+        fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
             const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
-            self.collect.append(value) catch @panic("oom");
-            return false;
+            self.count += 1;
+            std.debug.assert(channel.len() == self.count);
         }
     };
 
-    const Reaction = struct {
-        collect: *std.ArrayList(u64),
+    const Consumer = struct {
+        collected: std.ArrayList(u64),
         hook: Channel(u64).SendHook = .{ .after_send = afterSend },
 
         fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
             const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
             const value = channel.tryReceive() orelse @panic("empty channel after send");
-            self.collect.append(value) catch @panic("oom");
+            self.collected.append(value) catch @panic("oom");
         }
     };
 
-    var ch = try Channel(u64).init(std.testing.allocator);
+    const to_send = 100;
+    const allocator = std.testing.allocator;
+
+    var ch = try Channel(u64).init(allocator);
     defer ch.deinit();
 
-    var list = std.ArrayList(u64).init(std.testing.allocator);
-    defer list.deinit();
+    // Check that afterSend counts sent channel items.
+    var counter = Counter{};
+    ch.send_hook = &counter.hook;
 
-    inline for (.{ Intercept, Reaction }) |HookImpl| {
-        const to_send = 100;
-        list.clearRetainingCapacity();
+    for (0..to_send) |i| try ch.send(i);
+    try expect(ch.len() == to_send);
+    try expect(counter.count == to_send);
 
-        var hook_impl = HookImpl{ .collect = &list };
-        ch.send_hook = &hook_impl.hook;
+    // Check that afterSend consumes any sent values.
+    var consumer = Consumer{ .collected = std.ArrayList(u64).init(allocator) };
+    ch.send_hook = &consumer.hook;
+    defer consumer.collected.deinit();
 
-        for (0..to_send) |i| try ch.send(i);
-        try expect(ch.isEmpty());
-        try expect(list.items.len == to_send);
-    }
+    while (ch.tryReceive()) |_| {} // drain before starting.
+    for (0..to_send) |i| try ch.send(i);
+    try expect(ch.isEmpty());
+    try expect(consumer.collected.items.len == to_send);
 }
 
 test "mpmc" {

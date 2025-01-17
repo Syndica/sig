@@ -29,7 +29,7 @@ const Registry = sig.prometheus.Registry;
 const RwMux = sig.sync.RwMux;
 const SignedGossipData = sig.gossip.SignedGossipData;
 const SocketAddr = sig.net.SocketAddr;
-const SocketPipe = sig.net.SocketPipe;
+const SocketThread = sig.net.SocketThread;
 const Channel = sig.sync.Channel;
 const Slot = sig.core.Slot;
 
@@ -252,7 +252,7 @@ pub const RepairRequester = struct {
     logger: ScopedLogger(@typeName(Self)),
     random: Random,
     keypair: *const KeyPair,
-    sender_pipe: *SocketPipe,
+    sender_thread: *SocketThread,
     sender_channel: *Channel(Packet),
     metrics: Metrics,
 
@@ -277,28 +277,27 @@ pub const RepairRequester = struct {
         const channel = try Channel(Packet).create(allocator);
         errdefer channel.destroy();
 
-        const pipe = try SocketPipe.initSender(
+        const thread = try SocketThread.spawnSender(
             allocator,
             logger,
             udp_send_socket,
             channel,
             .{ .unordered = exit },
         );
-        errdefer pipe.deinit(allocator);
 
         return .{
             .allocator = allocator,
             .logger = logger.withScope(@typeName(Self)),
             .random = random,
             .keypair = keypair,
-            .sender_pipe = pipe,
+            .sender_thread = thread,
             .sender_channel = channel,
             .metrics = try registry.initStruct(Metrics),
         };
     }
 
     pub fn deinit(self: Self) void {
-        self.sender_pipe.deinit(self.allocator);
+        self.sender_thread.join();
         self.sender_channel.destroy();
     }
 

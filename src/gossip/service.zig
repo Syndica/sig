@@ -53,7 +53,7 @@ const PingAndSocketAddr = sig.gossip.ping_pong.PingAndSocketAddr;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Duration = sig.time.Duration;
 const ExitCondition = sig.sync.ExitCondition;
-const SocketPipe = sig.net.SocketPipe;
+const SocketThread = sig.net.SocketThread;
 
 const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
@@ -105,7 +105,7 @@ const GOSSIP_PRNG_SEED = 19;
 
 /// The flow of data goes as follows:
 ///
-/// `SocketPipe` ->
+/// `SocketThread.initReceiver` ->
 ///         - reads from the gossip socket
 ///         - puts the new packet onto `packet_incoming_channel`
 ///         - repeat until exit
@@ -121,14 +121,14 @@ const GOSSIP_PRNG_SEED = 19;
 ///         - processes the verified message it has received
 ///         - depending on the type of message received, it may put something onto `packet_outgoing_channel`
 ///
-///  `SocketPipe` ->
+///  `SocketThread.initSender` ->
 ///         - receives from `packet_outgoing_channel`
 ///         - sends the outgoing packet onto the gossip socket
 ///         - repeats while `exit` is false and `packet_outgoing_channel`
-///         - when `SocketPipe` sees that `exit` has become `true`, it will begin waiting on
+///         - when `SocketThread` sees that `exit` has become `true`, it will begin waiting on
 ///           the previous thing in the chain to close, that usually being `processMessages`.
 ///           this ensures that `processMessages` doesn't add new items to `packet_outgoing_channel`
-///           after the `SocketPipe` thread exits.
+///           after the `SocketThread` exits.
 ///
 pub const GossipService = struct {
     /// used for general allocation purposes
@@ -149,10 +149,10 @@ pub const GossipService = struct {
     /// Indicates if the gossip service is closed.
     closed: bool,
 
-    /// Piping between the gossip_socket.
+    /// Piping data between the gossip_socket and the channels.
     /// Set to null until start() is called as they represent threads.
-    incoming_pipe: ?*SocketPipe = null,
-    outgoing_pipe: ?*SocketPipe = null,
+    incoming_socket_thread: ?*SocketThread = null,
+    outgoing_socket_thread: ?*SocketThread = null,
 
     /// communication between threads
     packet_incoming_channel: *Channel(Packet),
@@ -335,8 +335,8 @@ pub const GossipService = struct {
         self.service_manager.deinit();
 
         // Wait for pipes to shutdown if any
-        if (self.incoming_pipe) |pipe| pipe.deinit(self.allocator);
-        if (self.outgoing_pipe) |pipe| pipe.deinit(self.allocator);
+        if (self.incoming_socket_thread) |thread| thread.join();
+        if (self.outgoing_socket_thread) |thread| thread.join();
 
         // assert the channels are empty in order to make sure no data was lost.
         // everything should be cleaned up when the thread-pool joins.
@@ -404,7 +404,7 @@ pub const GossipService = struct {
             },
         };
 
-        self.incoming_pipe = try SocketPipe.initReceiver(
+        self.incoming_socket_thread = try SocketThread.spawnReceiver(
             self.allocator,
             self.logger.unscoped(),
             self.gossip_socket,
@@ -435,7 +435,7 @@ pub const GossipService = struct {
             exit_condition.ordered.exit_index += 1;
         }
 
-        self.outgoing_pipe = try SocketPipe.initSender(
+        self.outgoing_socket_thread = try SocketThread.spawnSender(
             self.allocator,
             self.logger.unscoped(),
             self.gossip_socket,

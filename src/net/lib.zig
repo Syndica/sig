@@ -7,7 +7,7 @@ pub const quic_client = @import("quic_client.zig");
 pub const IpAddr = net.IpAddr;
 pub const SocketAddr = net.SocketAddr;
 pub const Packet = packet.Packet;
-pub const SocketPipe = socket_utils.SocketPipe;
+pub const SocketThread = socket_utils.SocketThread;
 
 pub const requestIpEcho = echo.requestIpEcho;
 pub const enablePortReuse = net.enablePortReuse;

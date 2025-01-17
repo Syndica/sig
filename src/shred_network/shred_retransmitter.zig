@@ -113,14 +113,14 @@ pub fn runShredRetransmitter(params: struct {
         ));
     }
 
-    const pipe = try socket_utils.SocketPipe.initSender(
+    const sender_thread = try socket_utils.SocketThread.spawnSender(
         params.allocator,
         params.logger,
         retransmit_socket,
         &retransmit_to_socket_channel,
         .{ .unordered = params.exit },
     );
-    defer pipe.deinit(params.allocator);
+    defer sender_thread.join();
 
     for (thread_handles.items) |thread| thread.join();
 }

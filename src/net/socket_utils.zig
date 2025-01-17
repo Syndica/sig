@@ -18,49 +18,53 @@ pub const PACKETS_PER_BATCH: usize = 64;
 // The identifier for the scoped logger used in this file.
 const LOG_SCOPE: []const u8 = "socket_utils";
 
-pub const SocketPipe = struct {
+pub const SocketThread = struct {
+    allocator: Allocator,
     handle: std.Thread,
 
-    const Self = @This();
-
-    pub fn initSender(
+    pub fn spawnSender(
         allocator: Allocator,
         logger: Logger,
         socket: UdpSocket,
         outgoing_channel: *Channel(Packet),
         exit: ExitCondition,
-    ) !*Self {
-        // TODO(king): store event-loop data in SocketPipe (hence, heap-alloc)..
-        const self = try allocator.create(Self);
-        errdefer allocator.destroy(self);
-
-        self.handle = try std.Thread.spawn(
-            .{},
-            runSender,
-            .{ logger, socket, outgoing_channel, exit },
-        );
-
-        return self;
+    ) !*SocketThread {
+        return spawn(allocator, logger, socket, outgoing_channel, exit, runSender);
     }
 
-    pub fn initReceiver(
+    pub fn spawnReceiver(
         allocator: Allocator,
         logger: Logger,
         socket: UdpSocket,
         incoming_channel: *Channel(Packet),
         exit: ExitCondition,
-    ) !*Self {
-        // TODO(king): store event-loop data in SocketPipe (hence, heap-alloc)..
-        const self = try allocator.create(Self);
+    ) !*SocketThread {
+        return spawn(allocator, logger, socket, incoming_channel, exit, runReceiver);
+    }
+
+    fn spawn(
+        allocator: Allocator,
+        logger: Logger,
+        socket: UdpSocket,
+        channel: *Channel(Packet),
+        exit: ExitCondition,
+        comptime runFn: anytype,
+    ) !*SocketThread {
+        // TODO(king): store event-loop data in SocketThread (hence, heap-alloc)..
+        const self = try allocator.create(SocketThread);
         errdefer allocator.destroy(self);
 
-        self.handle = try std.Thread.spawn(
-            .{},
-            runReceiver,
-            .{ logger, socket, incoming_channel, exit },
-        );
+        self.* = .{
+            .allocator = allocator,
+            .handle = try std.Thread.spawn(.{}, runFn, .{ logger, socket, channel, exit }),
+        };
 
         return self;
+    }
+
+    pub fn join(self: *SocketThread) void {
+        self.handle.join();
+        self.allocator.destroy(self);
     }
 
     fn runReceiver(
@@ -123,11 +127,6 @@ pub const SocketPipe = struct {
             }
         }
     }
-
-    pub fn deinit(self: *Self, allocator: Allocator) void {
-        self.handle.join();
-        allocator.destroy(self);
-    }
 };
 
 pub const BenchmarkPacketProcessing = struct {
@@ -164,9 +163,14 @@ pub const BenchmarkPacketProcessing = struct {
         var incoming_channel = try Channel(Packet).init(allocator);
         defer incoming_channel.deinit();
 
-        const incoming_pipe = try SocketPipe
-            .init(allocator, .receiver, .noop, socket, &incoming_channel, exit_condition);
-        defer incoming_pipe.deinit(allocator);
+        const incoming_pipe = try SocketThread.spawnReceiver(
+            allocator,
+            .noop,
+            socket,
+            &incoming_channel,
+            exit_condition,
+        );
+        defer incoming_pipe.join();
 
         // Start outgoing
 
@@ -200,9 +204,14 @@ pub const BenchmarkPacketProcessing = struct {
         var outgoing_channel = try Channel(Packet).init(allocator);
         defer outgoing_channel.deinit();
 
-        const outgoing_pipe = try SocketPipe
-            .init(allocator, .sender, .noop, socket, &outgoing_channel, exit_condition);
-        defer outgoing_pipe.deinit(allocator);
+        const outgoing_pipe = try SocketThread.spawnSender(
+            allocator,
+            .noop,
+            socket,
+            &outgoing_channel,
+            exit_condition,
+        );
+        defer outgoing_pipe.join();
 
         const outgoing_handle = try std.Thread.spawn(
             .{},

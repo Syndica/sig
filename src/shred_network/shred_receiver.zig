@@ -20,7 +20,7 @@ const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
 const RepairMessage = shred_network.repair_message.RepairMessage;
 const Slot = sig.core.Slot;
-const SocketPipe = sig.net.SocketPipe;
+const SocketThread = sig.net.SocketThread;
 const ExitCondition = sig.sync.ExitCondition;
 const VariantCounter = sig.prometheus.VariantCounter;
 
@@ -74,42 +74,42 @@ pub const ShredReceiver = struct {
         const response_sender = try Channel(Packet).create(self.allocator);
         defer response_sender.destroy();
 
-        const response_sender_pipe = try SocketPipe.initSender(
+        const response_sender_thread = try SocketThread.spawnSender(
             self.allocator,
             self.logger.unscoped(),
             self.repair_socket,
             response_sender,
             exit,
         );
-        defer response_sender_pipe.deinit(self.allocator);
+        defer response_sender_thread.join();
 
         // Create pipe from repair_socket -> response_receiver.
         const response_receiver = try Channel(Packet).create(self.allocator);
         response_receiver.send_hook = &receive_signal.hook;
         defer response_receiver.destroy();
 
-        const response_receiver_pipe = try SocketPipe.initReceiver(
+        const response_receiver_thread = try SocketThread.spawnReceiver(
             self.allocator,
             self.logger.unscoped(),
             self.repair_socket,
             response_receiver,
             exit,
         );
-        defer response_receiver_pipe.deinit(self.allocator);
+        defer response_receiver_thread.join();
 
         // Create pipe from turbine_socket -> turbine_receiver.
         const turbine_receiver = try Channel(Packet).create(self.allocator);
         turbine_receiver.send_hook = &receive_signal.hook;
         defer turbine_receiver.destroy();
 
-        const turbine_receiver_pipe = try SocketPipe.initReceiver(
+        const turbine_receiver_thread = try SocketThread.spawnReceiver(
             self.allocator,
             self.logger.unscoped(),
             self.turbine_socket,
             turbine_receiver,
             .{ .unordered = self.exit },
         );
-        defer turbine_receiver_pipe.deinit(self.allocator);
+        defer turbine_receiver_thread.join();
 
         // Run thread to handle incoming packets. Stops when exit is set.
         while (true) {
