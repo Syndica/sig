@@ -62,7 +62,7 @@ pub const Account = struct {
 
     /// computes the hash of the account
     pub fn hash(self: *const Account, pubkey: *const Pubkey) Hash {
-        var iter = self.data.iterator();
+        var iter = self.data.byteIterator();
         return hashAccount(
             self.lamports,
             &iter,
@@ -124,7 +124,7 @@ const Hash = @import("hash.zig").Hash;
 
 pub fn hashAccount(
     lamports: u64,
-    data: *ReadHandle.Iterator,
+    data: *ReadHandle.ByteIterator,
     owner_pubkey_data: []const u8,
     executable: bool,
     rent_epoch: u64,
@@ -170,7 +170,7 @@ test "core.account: test account hash matches rust" {
     };
     const pubkey = Pubkey.ZEROES;
 
-    var iter = account.data.iterator();
+    var iter = account.data.byteIterator();
     const hash = hashAccount(
         account.lamports,
         &iter,

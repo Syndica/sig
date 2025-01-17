@@ -843,40 +843,12 @@ pub const HierarchicalFIFO = struct {
 pub const ReadHandle = struct {
     inner: Inner,
 
-    pub const @"!bincode-config:inner" = bincode.FieldConfig(Inner){
-        .deserializer = bincodeDeserialize,
-        .serializer = bincodeSerialize,
-        .free = bincodeFree,
-    };
-
-    fn bincodeSerialize(writer: anytype, inner: anytype, params: bincode.Params) anyerror!void {
-        var iter = (ReadHandle{ .inner = inner }).iterator();
-
-        try bincode.write(writer, @as(u64, iter.cached_read.len()), params);
-        while (iter.next()) |byte| {
-            try writer.writeByte(byte);
-        }
-    }
-
-    fn bincodeDeserialize(
-        alloc: std.mem.Allocator,
-        reader: anytype,
-        params: bincode.Params,
-    ) anyerror!Inner {
-        const data = try bincode.read(alloc, []u8, reader, params);
-        return ReadHandle.initExternalOwned(data).inner;
-    }
-
-    fn bincodeFree(allocator: std.mem.Allocator, inner: anytype) void {
-        (ReadHandle{ .inner = inner }).deinit(allocator);
-    }
-
     const Inner = union(enum) {
-        /// data owned by BufferPool
+        /// Data owned by BufferPool, returned by .read() - do not construct this yourself (!)
         cached: CachedRead,
-        /// data allocated elsewhere
+        /// Data allocated elsewhere
         external: External,
-        /// data owned by parent ReadHandle
+        /// Data owned by parent ReadHandle
         sub_read: SubRead,
 
         const SubRead = packed struct(u128) {
@@ -937,58 +909,6 @@ pub const ReadHandle = struct {
         }
     };
 
-    pub const Reader = std.io.GenericReader(*Iterator, error{}, Iterator.readBytes);
-
-    pub const Iterator = struct {
-        cached_read: *const ReadHandle,
-        bytes_read: u32 = 0,
-
-        pub fn next(self: *Iterator) ?u8 {
-            if (self.bytes_read == self.cached_read.len()) {
-                return null;
-            }
-            defer self.bytes_read += 1;
-            return self.cached_read.readByte(self.bytes_read);
-        }
-
-        pub fn reset(self: *Iterator) void {
-            self.bytes_read = 0;
-        }
-
-        pub fn readBytes(self: *Iterator, buffer: []u8) error{}!usize {
-            var i: u32 = 0;
-            while (i < buffer.len) : (i += 1) {
-                buffer[i] = self.next() orelse break;
-            }
-            return i;
-        }
-
-        pub fn reader(self: *Iterator) Reader {
-            return .{ .context = self };
-        }
-    };
-
-    pub fn readByte(self: ReadHandle, index: usize) u8 {
-        return switch (self.inner) {
-            .cached => |cached| blk: {
-                std.debug.assert(cached.frame_indices.len != 0);
-                std.debug.assert(index < self.len());
-                const offset = index + cached.first_frame_start_offset;
-                std.debug.assert(offset >= cached.first_frame_start_offset);
-                std.debug.assert(offset / FRAME_SIZE < cached.frame_indices.len);
-                std.debug.assert(
-                    cached.frame_indices[offset / FRAME_SIZE] < cached.buffer_pool.frames.len,
-                );
-
-                break :blk cached.buffer_pool.frames[
-                    cached.frame_indices[offset / FRAME_SIZE]
-                ][offset % FRAME_SIZE];
-            },
-            .sub_read => |sub_read| sub_read.parent.readByte(index + sub_read.start),
-            .external => |external| external.slice[index],
-        };
-    }
-
     /// External to the BufferPool
     pub fn initExternal(data: []u8) ReadHandle {
         return ReadHandle{
@@ -1021,6 +941,10 @@ pub const ReadHandle = struct {
         };
     }
 
+    pub fn deinit(self: ReadHandle, allocator: std.mem.Allocator) void {
+        self.inner.deinit(allocator);
+    }
+
     pub fn dupeExternalOwned(self: ReadHandle, allocator: std.mem.Allocator) !ReadHandle {
         const data_copy = try self.readAllAllocate(allocator);
         return initExternalOwned(data_copy);
@@ -1051,8 +975,8 @@ pub const ReadHandle = struct {
         if (std.meta.eql(h1.inner, h2.inner)) return true;
         if (h1.len() != h2.len()) return false;
 
-        var h1_iter = h1.iterator();
-        var h2_iter = h2.iterator();
+        var h1_iter = h1.byteIterator();
+        var h2_iter = h2.byteIterator();
 
         while (h1_iter.next()) |h1_byte| {
             const h2_byte = h2_iter.next().?;
@@ -1065,7 +989,7 @@ pub const ReadHandle = struct {
     pub fn eqlSlice(self: ReadHandle, data: []const u8) bool {
         if (self.len() != data.len) return false;
 
-        var iter = self.iterator();
+        var iter = self.byteIterator();
         var i: u32 = 0;
         while (iter.next()) |byte| : (i += 1) {
             if (byte != data[i]) return false;
@@ -1216,12 +1140,147 @@ pub const ReadHandle = struct {
         ][start_frame_offset..][0..length];
     }
 
-    pub fn iterator(self: *const ReadHandle) Iterator {
-        return .{ .cached_read = self };
+    pub const ChunkedIterator = struct {
+        read_handle: *const ReadHandle,
+        bytes_read: FileOffset = 0,
+        start: FileOffset,
+        end: FileOffset,
+
+        pub const Reader = std.io.GenericReader(*ChunkedIterator, error{InvalidArgument}, ChunkedIterator.readBytes);
+
+        pub fn reader(self: *ChunkedIterator) Reader {
+            return .{ .context = self };
+        }
+
+        pub fn readBytes(self: *ChunkedIterator, buffer: []u8) error{InvalidArgument}!usize {
+            if (buffer.len != self.end - self.start) return error.InvalidArgument;
+            if (self.bytes_read == self.end) return 0;
+            try self.read_handle.read(self.start + self.bytes_read, self.end, buffer);
+            self.bytes_read += buffer.len;
+            return buffer.len;
+        }
+
+        // Does not copy, reads buffers of up to FRAME_SIZE at a time.
+        pub fn viewNextFrame(self: *ChunkedIterator) ?[]const u8 {
+            if (self.bytes_read == self.end) return null;
+
+            const current_frame = self.bytes_read / FRAME_SIZE;
+            const current_frame_start_offset = self.bytes_read % FRAME_SIZE;
+            const current_frame_end_offset = @max((current_frame + 1) * FRAME_SIZE, self.read_handle.len());
+
+            const frame_buf = switch (self.read_handle.inner) {
+                .cached => |cached| buf: {
+                    const buf = cached.buffer_pool.frames[
+                        current_frame
+                    ][current_frame_start_offset..current_frame_end_offset];
+
+                    break :buf buf;
+                },
+                .external => |external| buf: {
+                    const frame_offset = current_frame * FRAME_SIZE;
+
+                    break :buf external.slice[frame_offset..][current_frame_start_offset..current_frame_end_offset];
+                },
+            };
+
+            if (frame_buf.len == 0) unreachable; // guarded against by the bytes_read check
+
+            self.bytes_read += frame_buf.len;
+
+            return frame_buf;
+        }
+    };
+
+    pub fn chunkedPartial(self: *const ReadHandle, start: usize, end: usize) ChunkedIterator {
+        ChunkedIterator{ .read_handle = self, .start = start, .end = end };
     }
 
-    pub fn deinit(self: ReadHandle, allocator: std.mem.Allocator) void {
-        self.inner.deinit(allocator);
+    pub fn chunkedAll(self: *const ReadHandle) ChunkedIterator {
+        ChunkedIterator{ .read_handle = self, .start = 0, .end = self.len() };
+    }
+
+    pub fn byteIterator(self: *const ReadHandle) ByteIterator {
+        return .{ .read_handle = self };
+    }
+
+    pub const ByteReader = std.io.GenericReader(*ByteIterator, error{}, ByteIterator.readBytes);
+
+    pub const ByteIterator = struct {
+        read_handle: *const ReadHandle,
+        bytes_read: u32 = 0,
+
+        pub fn next(self: *ByteIterator) ?u8 {
+            if (self.bytes_read == self.read_handle.len()) {
+                return null;
+            }
+            defer self.bytes_read += 1;
+            return self.read_handle.readByte(self.bytes_read);
+        }
+
+        pub fn reset(self: *ByteIterator) void {
+            self.bytes_read = 0;
+        }
+
+        pub fn readBytes(self: *ByteIterator, buffer: []u8) error{}!usize {
+            var i: u32 = 0;
+            while (i < buffer.len) : (i += 1) {
+                buffer[i] = self.next() orelse break;
+            }
+            return i;
+        }
+
+        pub fn reader(self: *ByteIterator) ByteReader {
+            return .{ .context = self };
+        }
+    };
+
+    pub fn readByte(self: ReadHandle, index: usize) u8 {
+        return switch (self.inner) {
+            .cached => |cached| blk: {
+                std.debug.assert(cached.frame_indices.len != 0);
+                std.debug.assert(index < self.len());
+                const offset = index + cached.first_frame_start_offset;
+                std.debug.assert(offset >= cached.first_frame_start_offset);
+                std.debug.assert(offset / FRAME_SIZE < cached.frame_indices.len);
+                std.debug.assert(
+                    cached.frame_indices[offset / FRAME_SIZE] < cached.buffer_pool.frames.len,
+                );
+
+                break :blk cached.buffer_pool.frames[
+                    cached.frame_indices[offset / FRAME_SIZE]
+                ][offset % FRAME_SIZE];
+            },
+            .sub_read => |sub_read| sub_read.parent.readByte(index + sub_read.start),
+            .external => |external| external.slice[index],
+        };
+    }
+
+    pub const @"!bincode-config:inner" = bincode.FieldConfig(Inner){
+        .deserializer = bincodeDeserialize,
+        .serializer = bincodeSerialize,
+        .free = bincodeFree,
+    };
+
+    fn bincodeSerialize(writer: anytype, inner: anytype, params: bincode.Params) anyerror!void {
+        var iter = (ReadHandle{ .inner = inner }).byteIterator();
+
+        try bincode.write(writer, @as(u64, iter.read_handle.len()), params);
+        while (iter.next()) |byte| {
+            try writer.writeByte(byte);
+        }
+    }
+
+    fn bincodeDeserialize(
+        alloc: std.mem.Allocator,
+        reader: anytype,
+        params: bincode.Params,
+    ) anyerror!Inner {
+        const data = try bincode.read(alloc, []u8, reader, params);
+        return ReadHandle.initExternalOwned(data).inner;
+    }
+
+    fn bincodeFree(allocator: std.mem.Allocator, inner: anytype) void {
+        (ReadHandle{ .inner = inner }).deinit(allocator);
     }
 };
 
@@ -1414,12 +1473,12 @@ test "BufferPool basic usage" {
     for (read.inner.cached.frame_indices) |f_idx| try std.testing.expect(f_idx != INVALID_FRAME);
 
     {
-        var iter1 = read.iterator();
+        var iter1 = read.byteIterator();
         const reader_data = try iter1.reader().readAllAlloc(fba.allocator(), 1000);
         defer fba.allocator().free(reader_data);
         try std.testing.expectEqual(1000, reader_data.len);
 
-        var iter2 = read.iterator();
+        var iter2 = read.byteIterator();
 
         const iter_data = try fba.allocator().alloc(u8, 1000);
         defer fba.allocator().free(iter_data);
@@ -1645,12 +1704,12 @@ test "BufferPool random read" {
         defer allocator.free(read_data_bp_iter);
         {
             var i: u32 = 0;
-            var iter = read.iterator();
+            var iter = read.byteIterator();
             while (iter.next()) |b| : (i += 1) read_data_bp_iter[i] = b;
             if (i != read.len()) unreachable;
         }
 
-        var iter = read.iterator();
+        var iter = read.byteIterator();
         const read_data_bp_reader = try iter.reader().readAllAlloc(
             allocator,
             num_frames * FRAME_SIZE,

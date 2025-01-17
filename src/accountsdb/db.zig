@@ -1261,7 +1261,7 @@ pub const AccountsDB = struct {
 
                         account_hash = switch (account) {
                             .file => |in_file_account| blk: {
-                                var iter = in_file_account.data.iterator();
+                                var iter = in_file_account.data.byteIterator();
                                 break :blk sig.core.account.hashAccount(
                                     in_file_account.lamports().*,
                                     &iter,
@@ -2376,7 +2376,7 @@ pub const AccountsDB = struct {
             .unrooted_map => |unrooted_map_account| unrooted_map_account.data,
         };
 
-        var iter = file_data.iterator();
+        var iter = file_data.byteIterator();
         const t = sig.bincode.read(allocator, T, iter.reader(), .{}) catch {
             return error.DeserializationError;
         };
