@@ -16,7 +16,7 @@ pub fn Base58Sized(decoded_size: usize) type {
 
         pub fn decode(str: []const u8) ![decoded_size]u8 {
             var result_data: [decoded_size]u8 = undefined;
-            @setEvalBranchQuota(6100);
+            @setEvalBranchQuota(decoded_size * 145);
             const decoded_len = try decoder.decode(str, &result_data);
             if (decoded_len != decoded_size) return error.InvalidDecodedSize;
             return result_data;

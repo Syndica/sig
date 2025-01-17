@@ -8,6 +8,7 @@ const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
 
 // sig common
+const CheckedReader = sig.utils.io.CheckedReader;
 const Counter = sig.prometheus.Counter;
 const Entry = sig.core.Entry;
 const Hash = sig.core.Hash;
@@ -22,7 +23,6 @@ const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
 const Timer = sig.time.Timer;
 const Transaction = sig.core.Transaction;
-const VersionedTransaction = sig.core.VersionedTransaction;
 
 // shred
 const Shred = sig.ledger.shred.Shred;
@@ -479,7 +479,7 @@ pub const BlockstoreReader = struct {
             ArrayList(EntrySummary).init(self.allocator);
         errdefer entries.deinit();
 
-        var slot_transactions = ArrayList(VersionedTransaction).init(self.allocator);
+        var slot_transactions = ArrayList(Transaction).init(self.allocator);
         var num_moved_slot_transactions: usize = 0;
         defer {
             for (slot_transactions.items[num_moved_slot_transactions..]) |tx| {
@@ -714,7 +714,7 @@ pub const BlockstoreReader = struct {
         self: *Self,
         slot: Slot,
         signature: Signature,
-    ) !?VersionedTransaction {
+    ) !?Transaction {
         const slot_entries = try self.getSlotEntries(slot, 0);
         // NOTE perf: linear search runs from scratch every time this is called
         for (slot_entries.items) |entry| {
@@ -1182,13 +1182,18 @@ pub const BlockstoreReader = struct {
                 return e;
             };
             defer bytes.deinit();
-            const these_entries = sig.bincode
-                .readFromSlice(allocator, []Entry, bytes.items, .{}) catch |e| {
-                self.logger.err().logf("failed to deserialize entries from shreds: {}", .{e});
+            var reader = CheckedReader.init(bytes.items);
+            const these_entries = try allocator.alloc(Entry, reader.readInt(usize, .little) catch |e| {
+                self.logger.err().logf("failed to read number of entries from shreds: {}", .{e});
                 return e;
-            };
+            });
             defer allocator.free(these_entries);
             errdefer for (these_entries) |e| e.deinit(allocator);
+            for (these_entries) |*entry|
+                entry.* = Entry.deserialize(allocator, &reader) catch |e| {
+                    self.logger.err().logf("failed to deserialize entries from shreds: {}", .{e});
+                    return e;
+                };
             try entries.appendSlice(these_entries);
         }
         return entries;
@@ -1426,7 +1431,7 @@ const TransactionWithStatusMeta = union(enum) {
 };
 
 pub const VersionedTransactionWithStatusMeta = struct {
-    transaction: VersionedTransaction,
+    transaction: Transaction,
     meta: TransactionStatusMeta,
 
     pub fn deinit(self: @This(), allocator: Allocator) void {

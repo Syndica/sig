@@ -2,36 +2,88 @@ pub const std = @import("std");
 pub const sig = @import("../sig.zig");
 pub const core = @import("lib.zig");
 
+const Hash = core.hash.Hash;
+const Transaction = core.transaction.Transaction;
+const CheckedReader = sig.utils.io.CheckedReader;
+
 pub const Entry = struct {
     /// The number of hashes since the previous Entry ID.
     num_hashes: u64,
 
     /// The SHA-256 hash `num_hashes` after the previous Entry ID.
-    hash: core.Hash,
+    hash: Hash,
 
     /// An unordered list of transactions that were observed before the Entry ID was
     /// generated. They may have been observed before a previous Entry ID but were
     /// pushed back into this list to ensure deterministic interpretation of the ledger.
-    transactions: std.ArrayListUnmanaged(core.VersionedTransaction),
+    transactions: std.ArrayListUnmanaged(Transaction),
 
     pub fn isTick(self: Entry) bool {
         return self.transactions.items.len == 0;
     }
 
     pub fn deinit(self: Entry, allocator: std.mem.Allocator) void {
-        for (self.transactions.items) |tx| {
-            tx.deinit(allocator);
-        }
+        for (self.transactions.items) |tx| tx.deinit(allocator);
         allocator.free(self.transactions.allocatedSlice());
+    }
+
+    pub fn readFromSlice(allocator: std.mem.Allocator, slice: []const u8) !Entry {
+        var reader = CheckedReader.init(slice);
+        return try Entry.deserialize(allocator, &reader);
+    }
+
+    pub fn serialize(self: Entry, writer: anytype) !void {
+        try writer.writeInt(u64, self.num_hashes, std.builtin.Endian.little);
+        try writer.writeAll(&self.hash.data);
+        try writer.writeInt(usize, self.transactions.items.len, std.builtin.Endian.little);
+        for (self.transactions.items) |tx| try tx.serialize(writer);
+    }
+
+    pub fn deserialize(allocator: std.mem.Allocator, reader: *CheckedReader) !Entry {
+        const num_hashes = try reader.readInt(u64, std.builtin.Endian.little);
+        const hash = .{ .data = (try reader.readBytes(Hash.size))[0..Hash.size].* };
+        const transactions = try allocator.alloc(Transaction, try reader.readInt(usize, .little));
+        errdefer {
+            for (transactions) |tx| tx.deinit(allocator);
+            allocator.free(transactions);
+        }
+        for (transactions) |*transaction|
+            transaction.* = try Transaction.deserialize(allocator, reader);
+        return .{
+            .num_hashes = num_hashes,
+            .hash = hash,
+            .transactions = .{
+                .items = transactions,
+                .capacity = transactions.len,
+            },
+        };
     }
 };
 
 test "Entry serialization and deserialization" {
-    const entry = test_entry.as_struct;
-    try sig.bincode.testRoundTrip(entry, &test_entry.bincode_serialized_bytes);
+    const allocator = std.testing.allocator;
+
+    const expected_struct = test_entry.as_struct;
+    const expected_bytes = test_entry.as_bytes;
+
+    const actual_buffer = try allocator.alloc(u8, expected_bytes.len);
+    defer allocator.free(actual_buffer);
+    var actual_fbs = std.io.fixedBufferStream(actual_buffer);
+    try expected_struct.serialize(actual_fbs.writer());
+    try std.testing.expectEqualSlices(u8, &expected_bytes, actual_fbs.getWritten());
+
+    var actual_reader = CheckedReader.init(&expected_bytes);
+    const actual_struct = try Entry.deserialize(allocator, &actual_reader);
+    defer actual_struct.deinit(allocator);
+    try std.testing.expect(sig.utils.types.eql(expected_struct, actual_struct));
 }
 
 pub const test_entry = struct {
+    var txns = [_]Transaction{
+        core.transaction.transaction_v0_example.as_struct,
+        core.transaction.transaction_v0_example.as_struct,
+    };
+
     pub const as_struct = Entry{
         .num_hashes = 149218308,
         .hash = core.Hash
@@ -42,12 +94,7 @@ pub const test_entry = struct {
         },
     };
 
-    var txns = [_]core.VersionedTransaction{
-        core.transaction.test_v0_transaction.as_struct,
-        core.transaction.test_v0_transaction.as_struct,
-    };
-
-    pub const bincode_serialized_bytes = [_]u8{
+    pub const as_bytes = [_]u8{
         4,   228, 228, 8,   0,   0,   0,   0,   224, 199, 210, 235, 148, 143, 98,  241, 248, 45,
         140, 115, 214, 164, 132, 17,  95,  89,  221, 166, 5,   158, 5,   121, 181, 80,  48,  103,
         173, 21,  40,  70,  2,   0,   0,   0,   0,   0,   0,   0,   2,   81,  7,   106, 50,  99,
