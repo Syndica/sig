@@ -40,32 +40,12 @@ pub const ShredReceiver = struct {
 
     const Self = @This();
 
-    /// A shared instance of an event to support waiting on multiple Channels.
-    const ReceiverSignal = struct {
-        event: std.Thread.ResetEvent = .{},
-        hook: Channel(Packet).SendHook = .{ .after_send = afterSend },
-
-        fn afterSend(hook: *Channel(Packet).SendHook, _: *Channel(Packet)) void {
-            const self: *ReceiverSignal = @alignCast(@fieldParentPtr("hook", hook));
-            self.event.set();
-        }
-
-        fn waitUntilSent(self: *ReceiverSignal, exit: ExitCondition) error{Exit}!void {
-            while (true) {
-                self.event.timedWait(1 * std.time.ns_per_s) catch {};
-                if (exit.shouldExit()) return error.Exit;
-                if (self.event.isSet()) return self.event.reset();
-            }
-        }
-    };
-
     /// Run threads to listen/send over socket and handle all incoming packets.
     /// Returns when exit is set to true.
     pub fn run(self: *Self) !void {
         defer self.logger.err().log("exiting shred receiver");
         errdefer self.logger.err().log("error in shred receiver");
 
-        var receive_signal = ReceiverSignal{};
         const exit = ExitCondition{ .unordered = self.exit };
 
         // Cretae pipe from response_sender -> repair_socket
@@ -81,55 +61,59 @@ pub const ShredReceiver = struct {
         );
         defer response_sender_thread.join();
 
-        // Create pipe from repair_socket -> response_receiver.
-        const response_receiver = try Channel(Packet).create(self.allocator);
-        response_receiver.send_hook = &receive_signal.hook;
-        defer response_receiver.destroy();
-
-        const response_receiver_thread = try SocketThread.spawnReceiver(
-            self.allocator,
-            self.logger.unscoped(),
+        // Run a packetHandler thread which pipes from repair_socket -> handlePacket.
+        const response_thread = try std.Thread.spawn(.{}, runPacketHandler, .{
+            self,
+            response_sender,
             self.repair_socket,
-            response_receiver,
             exit,
-        );
-        defer response_receiver_thread.join();
+            true, // is_repair
+        });
+        defer response_thread.join();
 
-        // Create pipe from turbine_socket -> turbine_receiver.
-        const turbine_receiver = try Channel(Packet).create(self.allocator);
-        turbine_receiver.send_hook = &receive_signal.hook;
-        defer turbine_receiver.destroy();
-
-        const turbine_receiver_thread = try SocketThread.spawnReceiver(
-            self.allocator,
-            self.logger.unscoped(),
+        // Run a packetHandler thread which pipes from turbine_socket -> handlePacket.
+        const turbine_thread = try std.Thread.spawn(.{}, runPacketHandler, .{
+            self,
+            response_sender,
             self.turbine_socket,
-            turbine_receiver,
-            .{ .unordered = self.exit },
-        );
-        defer turbine_receiver_thread.join();
-
-        // Run thread to handle incoming packets. Stops when exit is set.
-        while (true) {
-            receive_signal.waitUntilSent(exit) catch break;
-            try self.runPacketHandler(response_sender, response_receiver, true);
-            try self.runPacketHandler(response_sender, turbine_receiver, false);
-        }
+            exit,
+            false, // is_repair
+        });
+        defer turbine_thread.join();
     }
 
     fn runPacketHandler(
         self: *Self,
         response_sender: *Channel(Packet),
-        receiver: *Channel(Packet),
+        receiver_socket: Socket,
+        exit: ExitCondition,
         comptime is_repair: bool,
     ) !void {
-        var packet_count: usize = 0;
-        while (receiver.tryReceive()) |packet| {
-            self.metrics.incReceived(is_repair);
-            packet_count += 1;
-            try self.handlePacket(packet, response_sender, is_repair);
+        // Setup a channel.
+        const receiver = try Channel(Packet).create(self.allocator);
+        defer receiver.destroy();
+
+        // Receive from the socket into the channel.
+        const receiver_thread = try SocketThread.spawnReceiver(
+            self.allocator,
+            self.logger.unscoped(),
+            receiver_socket,
+            receiver,
+            exit,
+        );
+        defer receiver_thread.join();
+
+        // Handle packets from the channel.
+        while (true) {
+            receiver.waitToReceive(exit) catch break;
+            var packet_count: usize = 0;
+            while (receiver.tryReceive()) |packet| {
+                self.metrics.incReceived(is_repair);
+                packet_count += 1;
+                try self.handlePacket(packet, response_sender, is_repair);
+            }
+            self.metrics.observeBatchSize(is_repair, packet_count);
         }
-        self.metrics.observeBatchSize(is_repair, packet_count);
     }
 
     /// Handle a single packet and return.
