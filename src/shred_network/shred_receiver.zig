@@ -24,8 +24,6 @@ const SocketThread = sig.net.SocketThread;
 const ExitCondition = sig.sync.ExitCondition;
 const VariantCounter = sig.prometheus.VariantCounter;
 
-const NUM_TVU_RECEIVERS = 2;
-
 /// Analogous to [ShredFetchStage](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/shred_fetch_stage.rs#L34)
 pub const ShredReceiver = struct {
     allocator: Allocator,
