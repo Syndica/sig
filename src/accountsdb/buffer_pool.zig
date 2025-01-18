@@ -45,17 +45,17 @@ fn io_uring() !*std.os.linux.IoUring {
 }
 
 const FileIdFileOffset = packed struct(u64) {
-    const INVALID: FileIdFileOffset = .{
-        .file_id = FileId.fromInt(std.math.maxInt(FileId.Int)),
-        // disambiguate from 0xAAAA / will trigger asserts as it's not even.
-        .file_offset = 0xBAAD,
-    };
-
     file_id: FileId,
 
     /// offset in the file from which the frame begin
     /// always a multiple of FRAME_SIZE
     file_offset: FileOffset,
+
+    const INVALID: FileIdFileOffset = .{
+        .file_id = FileId.fromInt(std.math.maxInt(FileId.Int)),
+        // disambiguate from 0xAAAA / will trigger asserts as it's not even.
+        .file_offset = 0xBAAD,
+    };
 };
 
 fn readError() type {
@@ -100,13 +100,6 @@ fn readError() type {
 /// A frame dies when its index is evicted from HierarchicalFifo (inside of
 /// evictUnusedFrame).
 pub const BufferPool = struct {
-    pub const FrameMap = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
-    pub const LargeReadMap = std.AutoArrayHashMapUnmanaged(
-        FileIdFileOffset,
-        sig.sync.reference_counter.RcSlice(u8),
-    );
-    pub const ReadError = readError();
-
     /// indices of all free frames
     /// free frames have a refcount of 0 *and* have been evicted
     free_list: AtomicStack(FrameIndex),
@@ -122,13 +115,20 @@ pub const BufferPool = struct {
     /// used for eviction to free less popular (rc=0) frames first
     eviction_lfu: HierarchicalFIFO,
 
+    pub const FrameMap = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
+    pub const LargeReadMap = std.AutoArrayHashMapUnmanaged(
+        FileIdFileOffset,
+        sig.sync.reference_counter.RcSlice(u8),
+    );
+    pub const ReadError = readError();
+
     pub fn init(
         init_allocator: std.mem.Allocator,
         num_frames: u32,
     ) !BufferPool {
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
-        const frames = try init_allocator.alignedAlloc(Frame, std.mem.page_size, num_frames);
+        const frames = try init_allocator.alloc(Frame, num_frames);
         errdefer init_allocator.free(frames);
 
         var frames_metadata = try FramesMetadata.init(init_allocator, num_frames);
@@ -222,7 +222,6 @@ pub const BufferPool = struct {
     }
 
     /// On a "new" frame (i.e. freshly read into), set all of its associated metadata
-    /// TODO: atomics
     fn overwriteDeadFrameInfo(
         self: *BufferPool,
         f_idx: FrameIndex,
@@ -518,47 +517,29 @@ pub const FramesMetadata = struct {
     size: []std.atomic.Value(u16),
 
     fn init(allocator: std.mem.Allocator, num_frames: usize) !FramesMetadata {
-        const rc = try allocator.alignedAlloc(
-            sig.sync.ReferenceCounter,
-            std.mem.page_size,
-            num_frames,
-        );
+        const rc = try allocator.alloc(sig.sync.ReferenceCounter, num_frames);
         errdefer allocator.free(rc);
         @memset(rc, .{ .state = .{ .raw = 0 } });
 
-        const key = try allocator.alignedAlloc(
-            std.atomic.Value(u64),
-            std.mem.page_size,
-            num_frames,
-        );
+        const key = try allocator.alloc(std.atomic.Value(u64), num_frames);
         errdefer allocator.free(key);
         @memset(
             key,
-            std.atomic.Value(u64).init(
-                @bitCast(FileIdFileOffset{
-                    .file_id = FileId.fromInt(0),
-                    .file_offset = 0,
-                }),
-            ),
+            std.atomic.Value(u64).init(@bitCast(FileIdFileOffset{
+                .file_id = FileId.fromInt(0),
+                .file_offset = 0,
+            })),
         );
 
-        const freq = try allocator.alignedAlloc(u2, std.mem.page_size, num_frames);
+        const freq = try allocator.alloc(u2, num_frames);
         errdefer allocator.free(freq);
         @memset(freq, 0);
 
-        const in_queue = try allocator.alignedAlloc(
-            std.atomic.Value(InQueue),
-            std.mem.page_size,
-            num_frames,
-        );
+        const in_queue = try allocator.alloc(std.atomic.Value(InQueue), num_frames);
         errdefer allocator.free(in_queue);
         @memset(in_queue, std.atomic.Value(InQueue).init(.none));
 
-        const size = try allocator.alignedAlloc(
-            std.atomic.Value(u16),
-            std.mem.page_size,
-            num_frames,
-        );
+        const size = try allocator.alloc(std.atomic.Value(u16), num_frames);
         errdefer allocator.free(size);
         @memset(size, std.atomic.Value(u16).init(0));
 
@@ -834,19 +815,6 @@ pub const ReadHandle = struct {
         /// Data owned by parent ReadHandle
         sub_read: SubRead,
 
-        const SubRead = packed struct(u128) {
-            parent: *ReadHandle,
-            // offset into the parent's read
-            start: u32,
-            end: u32,
-        };
-
-        const External = struct {
-            slice: []u8,
-            /// owned => ReadHandle will free the slice
-            owned: bool,
-        };
-
         const CachedRead = struct {
             buffer_pool: *BufferPool,
             frame_indices: []const FrameIndex,
@@ -854,6 +822,19 @@ pub const ReadHandle = struct {
             first_frame_start_offset: FrameOffset,
             /// exclusive, the offset into the last frame
             last_frame_end_offset: FrameOffset,
+        };
+
+        const External = struct {
+            slice: []u8,
+            /// owned => ReadHandle.deinit() will free the slice
+            owned: bool,
+        };
+
+        const SubRead = packed struct(u128) {
+            parent: *ReadHandle,
+            // offset into the parent's read
+            start: u32,
+            end: u32,
         };
 
         pub inline fn len(self: Inner) u32 {
@@ -890,29 +871,7 @@ pub const ReadHandle = struct {
         }
     };
 
-    pub fn iteratorRanged(self: *const ReadHandle, start: FileOffset, end: FileOffset) !Iterator {
-        if (start > end or end > self.len()) return error.InvalidArgument;
-        return .{ .read_handle = self, .start = start, .end = end };
-    }
-
-    pub fn iterator(self: *const ReadHandle) Iterator {
-        return .{ .read_handle = self, .start = 0, .end = self.len() };
-    }
-
-    /// External to the BufferPool
-    pub fn initExternal(data: []u8) ReadHandle {
-        return ReadHandle{
-            .inner = .{ .external = .{ .slice = data, .owned = false } },
-        };
-    }
-
-    /// External to the BufferPool, data will be freed upon .deinit
-    pub fn initExternalOwned(data: []u8) ReadHandle {
-        return ReadHandle{
-            .inner = .{ .external = .{ .slice = data, .owned = true } },
-        };
-    }
-
+    /// Only called by the BufferPool
     fn initCached(
         buffer_pool: *BufferPool,
         frame_indices: []const FrameIndex,
@@ -931,8 +890,31 @@ pub const ReadHandle = struct {
         };
     }
 
+    /// External to the BufferPool, data will be freed upon .deinit
+    pub fn initExternalOwned(data: []u8) ReadHandle {
+        return ReadHandle{
+            .inner = .{ .external = .{ .slice = data, .owned = true } },
+        };
+    }
+
+    /// External to the BufferPool
+    pub fn initExternal(data: []u8) ReadHandle {
+        return ReadHandle{
+            .inner = .{ .external = .{ .slice = data, .owned = false } },
+        };
+    }
+
     pub fn deinit(self: ReadHandle, allocator: std.mem.Allocator) void {
         self.inner.deinit(allocator);
+    }
+
+    pub fn iteratorRanged(self: *const ReadHandle, start: FileOffset, end: FileOffset) !Iterator {
+        if (start > end or end > self.len()) return error.InvalidArgument;
+        return .{ .read_handle = self, .start = start, .end = end };
+    }
+
+    pub fn iterator(self: *const ReadHandle) Iterator {
+        return .{ .read_handle = self, .start = 0, .end = self.len() };
     }
 
     pub fn dupeExternalOwned(self: ReadHandle, allocator: std.mem.Allocator) !ReadHandle {
@@ -940,7 +922,7 @@ pub const ReadHandle = struct {
         return initExternalOwned(data_copy);
     }
 
-    pub fn slice(self: *ReadHandle, start: usize, end: usize) !ReadHandle {
+    pub fn slice(self: *ReadHandle, start: usize, end: usize) ReadHandle {
         return ReadHandle{
             .inner = .{
                 .sub_read = .{
