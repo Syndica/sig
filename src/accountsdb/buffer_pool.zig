@@ -30,7 +30,7 @@ const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
 
 threadlocal var maybe_io_uring: if (use_io_uring) ?std.os.linux.IoUring else void = null;
 fn io_uring() !*std.os.linux.IoUring {
-    const io_uring_entries = 4096;
+    const io_uring_entries = 128;
 
     return if (maybe_io_uring) |*io_ur|
         io_ur
@@ -59,7 +59,7 @@ const FileIdFileOffset = packed struct(u64) {
 };
 
 fn readError() type {
-    var ReadError = error{
+    var ErrorSet = error{
         InvalidArgument,
         OutOfMemory,
         InvalidKey,
@@ -76,16 +76,16 @@ fn readError() type {
             std.os.linux.IoUring.init,
         };
         inline for (extra_fns) |func| {
-            const ErrorSet = @typeInfo(
+            const FnErrorSet = @typeInfo(
                 @typeInfo(@TypeOf(func)).Fn.return_type.?,
             ).ErrorUnion.error_set;
-            ReadError = ReadError || ErrorSet;
+            ErrorSet = ErrorSet || FnErrorSet;
         }
     }
 
-    ReadError = ReadError || std.posix.PReadError;
+    ErrorSet = ErrorSet || std.posix.PReadError;
 
-    return ReadError;
+    return ErrorSet;
 }
 
 /// Used for obtaining cached reads.
@@ -116,15 +116,11 @@ pub const BufferPool = struct {
     eviction_lfu: HierarchicalFIFO,
 
     pub const FrameMap = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
-    pub const LargeReadMap = std.AutoArrayHashMapUnmanaged(
-        FileIdFileOffset,
-        sig.sync.reference_counter.RcSlice(u8),
-    );
     pub const ReadError = readError();
 
     pub fn init(
-        init_allocator: std.mem.Allocator,
         num_frames: u32,
+        init_allocator: std.mem.Allocator,
     ) !BufferPool {
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
@@ -153,7 +149,10 @@ pub const BufferPool = struct {
         };
     }
 
-    pub fn deinit(self: *BufferPool, init_allocator: std.mem.Allocator) void {
+    pub fn deinit(
+        self: *BufferPool,
+        init_allocator: std.mem.Allocator,
+    ) void {
         init_allocator.free(self.frames);
         self.frames_metadata.deinit(init_allocator);
         self.free_list.deinit(init_allocator);
@@ -161,6 +160,37 @@ pub const BufferPool = struct {
         const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
         frame_map.deinit(init_allocator);
         frame_map_lg.unlock();
+    }
+
+    pub fn read(
+        self: *BufferPool,
+        /// used for temp allocations, and the returned .indices slice
+        allocator: std.mem.Allocator,
+        file: std.fs.File,
+        file_id: FileId,
+        /// inclusive
+        file_offset_start: FileOffset,
+        /// exclusive
+        file_offset_end: FileOffset,
+    ) ReadError!ReadHandle {
+        const handle = try if (use_io_uring)
+            self.readIoUringSubmitAndWait(
+                allocator,
+                file,
+                file_id,
+                file_offset_start,
+                file_offset_end,
+            )
+        else
+            self.readBlocking(
+                allocator,
+                file,
+                file_id,
+                file_offset_start,
+                file_offset_end,
+            );
+
+        return handle;
     }
 
     pub fn computeNumberofFrameIndices(
@@ -290,37 +320,6 @@ pub const BufferPool = struct {
         }
         @memset(&self.frames[evicted], 0xAA);
         try self.frames_metadata.resetFrame(evicted);
-    }
-
-    pub fn read(
-        self: *BufferPool,
-        /// used for temp allocations, and the returned .indices slice
-        allocator: std.mem.Allocator,
-        file: std.fs.File,
-        file_id: FileId,
-        /// inclusive
-        file_offset_start: FileOffset,
-        /// exclusive
-        file_offset_end: FileOffset,
-    ) ReadError!ReadHandle {
-        const handle = try if (use_io_uring)
-            self.readIoUringSubmitAndWait(
-                allocator,
-                file,
-                file_id,
-                file_offset_start,
-                file_offset_end,
-            )
-        else
-            self.readBlocking(
-                allocator,
-                file,
-                file_id,
-                file_offset_start,
-                file_offset_end,
-            );
-
-        return handle;
     }
 
     fn readIoUringSubmitAndWait(
@@ -1167,20 +1166,6 @@ pub fn AtomicStack(T: type) type {
     };
 }
 
-test AtomicStack {
-    const allocator = std.testing.allocator;
-    var stack = try AtomicStack(usize).init(allocator, 100);
-    defer stack.deinit(allocator);
-
-    for (0..100) |i| stack.appendAssumeCapacity(i);
-
-    var i: usize = 100;
-    while (i > 0) {
-        i -= 1;
-        try std.testing.expectEqual(i, stack.popOrNull());
-    }
-}
-
 /// An std.fifo.LinearFifo-like type with atomics and a minimal API.
 pub fn AtomicLinearFifo(T: type) type {
     return struct {
@@ -1299,7 +1284,7 @@ test "BufferPool basic usage" {
     defer file.close();
     const file_id = FileId.fromInt(1);
 
-    var bp = try BufferPool.init(allocator, 2048); // 2048 frames = 1MiB
+    var bp = try BufferPool.init(allocator, 2048); // 2048 frames = 1MiB @ FRAME_SIZE=512
     defer bp.deinit(allocator);
 
     var fba_buf: [4096]u8 = undefined;
@@ -1308,7 +1293,10 @@ test "BufferPool basic usage" {
     const read = try bp.read(fba.allocator(), file, file_id, 0, 1000);
     defer read.deinit(fba.allocator());
 
-    try std.testing.expectEqual(2, read.cached.frame_indices.len);
+    try std.testing.expectEqual(
+        try std.math.divCeil(usize, 1000, FRAME_SIZE),
+        read.cached.frame_indices.len,
+    );
     for (read.cached.frame_indices) |f_idx| try std.testing.expect(f_idx != INVALID_FRAME);
 
     {
@@ -1357,7 +1345,7 @@ test "BufferPool allocation sizes" {
     // As of writing, all metadata (excluding eviction_lfu, including frame_map)
     // is 50 bytes or ~9% of memory usage at a frame size of 512, or 50MB for a
     // million frames.
-    try std.testing.expect((total_requested_bytes / frame_count) - 512 <= 64);
+    try std.testing.expect((total_requested_bytes / frame_count) - FRAME_SIZE <= 64);
 }
 
 test "BufferPool filesize > frame_size * num_frames" {
@@ -1592,5 +1580,19 @@ test "ReadHandle bincode" {
             read_data,
             deserialised_from_handle.allocated_read.slice,
         );
+    }
+}
+
+test AtomicStack {
+    const allocator = std.testing.allocator;
+    var stack = try AtomicStack(usize).init(allocator, 100);
+    defer stack.deinit(allocator);
+
+    for (0..100) |i| stack.appendAssumeCapacity(i);
+
+    var i: usize = 100;
+    while (i > 0) {
+        i -= 1;
+        try std.testing.expectEqual(i, stack.popOrNull());
     }
 }
