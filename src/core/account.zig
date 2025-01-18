@@ -21,7 +21,7 @@ pub const Account = struct {
         errdefer allocator.free(data_buf);
 
         random.bytes(data_buf);
-        const data = ReadHandle.initExternalOwned(data_buf);
+        const data = ReadHandle.initAllocatedOwned(data_buf);
 
         return .{
             .lamports = random.int(u64),
@@ -36,7 +36,7 @@ pub const Account = struct {
     pub fn clone(self: *const Account, allocator: std.mem.Allocator) !Account {
         return .{
             .lamports = self.lamports,
-            .data = try self.data.dupeExternalOwned(allocator),
+            .data = try self.data.dupeAllocatedOwned(allocator),
             .owner = self.owner,
             .executable = self.executable,
             .rent_epoch = self.rent_epoch,
@@ -165,7 +165,7 @@ test "core.account: test account hash matches rust" {
     var data: [3]u8 = .{ 1, 2, 3 };
     var account: Account = .{
         .lamports = 10,
-        .data = ReadHandle.initExternal(&data),
+        .data = ReadHandle.initAllocated(&data),
         .owner = Pubkey.ZEROES,
         .executable = false,
         .rent_epoch = 20,

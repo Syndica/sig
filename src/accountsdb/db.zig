@@ -3661,7 +3661,7 @@ test "write and read an account" {
     const pubkey = Pubkey.initRandom(prng.random());
     var data = [_]u8{ 1, 2, 3 };
     const test_account = Account{
-        .data = ReadHandle.initExternal(&data),
+        .data = ReadHandle.initAllocated(&data),
         .executable = false,
         .lamports = 100,
         .owner = Pubkey.ZEROES,

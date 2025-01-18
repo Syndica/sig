@@ -45,7 +45,7 @@ pub const AccountsCache = struct {
                 unreachable; // account.data invalid?
 
             var new_account = account;
-            new_account.data = ReadHandle.initExternal(account_data);
+            new_account.data = ReadHandle.initAllocated(account_data);
 
             new_entry.* = .{
                 .account = new_account,

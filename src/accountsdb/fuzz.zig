@@ -31,7 +31,7 @@ pub const TrackedAccount = struct {
     pub fn toAccount(self: *const TrackedAccount, allocator: std.mem.Allocator) !Account {
         return .{
             .lamports = 19,
-            .data = ReadHandle.initExternalOwned(try allocator.dupe(u8, &self.data)),
+            .data = ReadHandle.initAllocatedOwned(try allocator.dupe(u8, &self.data)),
             .owner = Pubkey.ZEROES,
             .executable = false,
             .rent_epoch = 0,

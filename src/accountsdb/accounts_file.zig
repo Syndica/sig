@@ -201,7 +201,7 @@ pub const AccountInFile = struct {
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!Account {
         return .{
-            .data = try self.data.dupeExternalOwned(allocator),
+            .data = try self.data.dupeAllocatedOwned(allocator),
             .executable = self.executable().*,
             .lamports = self.lamports().*,
             .owner = self.owner().*,
