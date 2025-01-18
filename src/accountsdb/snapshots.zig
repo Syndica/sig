@@ -297,7 +297,7 @@ pub const VoteAccount = struct {
             .free = .assert,
         });
 
-        var data_iter = self.account.data.byteIterator();
+        var data_iter = self.account.data.iterator();
         const vote_state = bincode.read(
             assert_alloc,
             VoteState,
