@@ -62,6 +62,7 @@ pub const ForkInfo = struct {
 
 /// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L187)
 pub const HeaviestSubtreeForkChoice = struct {
+    allocator: std.mem.Allocator,
     fork_infos: AutoHashMap(SlotHashKey, ForkInfo),
     latest_votes: AutoHashMap(Pubkey, SlotHashKey),
     tree_root: SlotHashKey,
@@ -69,21 +70,26 @@ pub const HeaviestSubtreeForkChoice = struct {
 
     const Self = @This();
 
-    pub fn new(allocator: std.mem.Allocator, tree_root: SlotHashKey) !Self {
+    pub fn init(allocator: std.mem.Allocator, tree_root: SlotHashKey) !Self {
         var heaviest_subtree_fork_choice = HeaviestSubtreeForkChoice{
+            .allocator = allocator,
             .fork_infos = AutoHashMap(SlotHashKey, ForkInfo).init(allocator),
             .latest_votes = AutoHashMap(Pubkey, SlotHashKey).init(allocator),
             .tree_root = tree_root,
             .last_root_time = Instant.now(),
         };
 
-        _ = try heaviest_subtree_fork_choice.addNewLeafSlot(allocator, tree_root, null);
+        _ = try heaviest_subtree_fork_choice.addNewLeafSlot(tree_root, null);
         return heaviest_subtree_fork_choice;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.fork_infos.deinit();
+        self.latest_votes.deinit();
     }
 
     pub fn addNewLeafSlot(
         self: *Self,
-        allocator: std.mem.Allocator,
         slot_hash_key: SlotHashKey,
         maybe_parent: ?SlotHashKey,
     ) !void {
@@ -116,7 +122,7 @@ pub const HeaviestSubtreeForkChoice = struct {
                 // The `best_slot` and `deepest_slot` of a leaf is itself
                 .best_slot = slot_hash_key,
                 .deepest_slot = slot_hash_key,
-                .children = SortedMap(SlotHashKey, void).init(allocator),
+                .children = SortedMap(SlotHashKey, void).init(self.allocator),
                 .parent = maybe_parent,
                 .latest_invalid_ancestor = parent_latest_invalid_ancestor,
                 // If the parent is none, then this is the root, which implies this must
@@ -323,8 +329,9 @@ pub const HeaviestSubtreeForkChoice = struct {
 const test_allocator = std.testing.allocator;
 
 test "create HeaviestSubtreeForkChoice from root" {
-    _ = try HeaviestSubtreeForkChoice.new(
+    var fc = try HeaviestSubtreeForkChoice.init(
         test_allocator,
         SlotHashKey{ .slot = 0, .hash = Hash.ZEROES },
     );
+    defer fc.deinit();
 }
