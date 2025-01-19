@@ -1,1 +1,5 @@
-pub const fork_choice = @import("fork_choice/lib.zig");
+pub const fork_choice = @import("fork_choice.zig");
+
+pub const HeaviestSubtreeForkChoice = fork_choice.HeaviestSubtreeForkChoice;
+pub const ForkWeight = fork_choice.ForkWeight;
+pub const ForkInfo = fork_choice.ForkInfo;
