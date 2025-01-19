@@ -5,12 +5,59 @@ local.file_match "local_files" {
 
 loki.source.file "log_scrape" {
     targets    = local.file_match.local_files.targets
-    forward_to = [loki.write.grafana_loki.receiver]
+    forward_to = [loki.process.process_log.receiver]
     tail_from_end = true
+}
+
+loki.process "process_log" {
+    stage.logfmt {
+        mapping = {
+            "level" = "",
+            "scope" = "",
+            "message" = "",
+            "time" = "",
+        }
+    }
+
+    stage.timestamp {
+        source = "time"
+        format = "2006-01-02T15:04:05.000Z"
+    }
+
+    stage.labels {
+        values = {
+            "level" = "",
+            "scope" = "",
+            "message" = "",
+        }
+    }
+
+    stage.static_labels {
+        values = {
+            source = "sig",
+        }
+    }
+
+    forward_to = [loki.write.grafana_loki.receiver]
 }
 
 loki.write "grafana_loki" {
     endpoint {
         url = "http://loki:3100/loki/api/v1/push"
+    }
+}
+
+pyroscope.ebpf "instance" {
+    forward_to = [pyroscope.write.endpoint.receiver]
+    targets    = [{
+        __process_pid__ = env("SIG_PID"),
+        service_name = "sig",
+    }]
+    
+}
+
+pyroscope.write "endpoint" {
+    endpoint {
+        url = "http://pyroscope:4040"
     }
 }

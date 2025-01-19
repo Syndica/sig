@@ -28,6 +28,7 @@ pub const Config = struct {
     // general config
     log_level: LogLevel = .debug,
     metrics_port: u16 = 12345,
+    shred_version: ?u16 = null,
 
     pub fn genesisFilePath(self: Config) error{UnknownCluster}!?[]const u8 {
         return if (self.genesis_file_path) |provided_path|
@@ -143,6 +144,8 @@ pub const AccountsDBConfig = struct {
     save_index: bool = false,
     /// only load snapshot metadata when starting up
     snapshot_metadata_only: bool = false,
+    /// maximum number of snapshot download attempts before failing
+    max_number_of_snapshot_download_attempts: u64 = 1_000,
 };
 
 pub const GeyserConfig = struct {

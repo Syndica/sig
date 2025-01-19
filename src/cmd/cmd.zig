@@ -64,6 +64,14 @@ pub fn run() !void {
         // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
     }
 
+    var shred_version_option = cli.Option{
+        .long_name = "shred-version",
+        .help = "The shred version for the network",
+        .value_ref = cli.mkRef(&config.current.shred_version),
+        .required = false,
+        .value_name = "Shred Version",
+    };
+
     var gossip_host_option = cli.Option{
         .long_name = "gossip-host",
         .help =
@@ -291,11 +299,7 @@ pub fn run() !void {
     var accounts_per_file_estimate = cli.Option{
         .long_name = "accounts-per-file-estimate",
         .short_alias = 'a',
-        .help =
-        \\number of accounts to estimate inside of account files (used for pre-allocation).
-        \\Safer to set it larger than smaller.
-        \\(approx values we found work well testnet/devnet: 1_500, mainnet: 3_000)"
-        ,
+        .help = "number of accounts to estimate inside of account files (used for pre-allocation)",
         .value_ref = cli.mkRef(&config.current.accounts_db.accounts_per_file_estimate),
         .required = false,
         .value_name = "accounts_per_file_estimate",
@@ -405,6 +409,7 @@ pub fn run() !void {
                             &gossip_spy_node_option,
                             &gossip_dump_option,
                             &network_option,
+                            &shred_version_option,
                         },
                         .target = .{
                             .action = .{
@@ -422,6 +427,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &gossip_host_option,
                             &gossip_port_option,
@@ -480,6 +486,7 @@ pub fn run() !void {
                         \\ for testnet or another `-u` for mainnet/devnet.
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &gossip_host_option,
                             &gossip_port_option,
@@ -516,6 +523,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // where to download the snapshot
                             &snapshot_dir_option,
                             // download options
@@ -613,6 +621,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &gossip_host_option,
                             &gossip_port_option,
@@ -652,6 +661,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &network_option,
                             &gossip_host_option,
@@ -1242,28 +1252,35 @@ const AppBase = struct {
         const metrics_registry = globalRegistry();
         const metrics_thread = try spawnMetrics(allocator, config.current.metrics_port);
         errdefer metrics_thread.detach();
-        logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
 
         const my_keypair = try getOrInitIdentity(allocator, logger.unscoped());
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-        logger.info().logf("identity: {s}", .{my_pubkey});
 
         const entrypoints = try config.current.gossip.getEntrypointAddrs(allocator);
-        logger.info().logf("entrypoints: {any}", .{entrypoints});
 
         const echo_data = try getShredAndIPFromEchoServer(
             logger.unscoped(),
             allocator,
             entrypoints,
         );
-        const my_shred_version = echo_data.shred_version orelse 0;
-        logger.info().logf("my shred version: {d}", .{my_shred_version});
+
+        // zig fmt: off
+        const my_shred_version = config.current.shred_version
+            orelse echo_data.shred_version
+            orelse 0;
+        // zig fmt: on
 
         const config_host = config.current.gossip.getHost() catch null;
         const my_ip = config_host orelse echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
-        logger.info().logf("my ip: {any}", .{my_ip});
 
         const my_port = config.current.gossip.port;
+
+        logger.info()
+            .field("metrics_port", config.current.metrics_port)
+            .field("identity", my_pubkey)
+            .field("entrypoints", entrypoints)
+            .field("shred_version", my_shred_version)
+            .log("app setup");
 
         return .{
             .allocator = allocator,
@@ -1300,8 +1317,10 @@ fn startGossip(
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
 ) !*GossipService {
-    app_base.logger.info().logf("gossip host: {any}", .{app_base.my_ip});
-    app_base.logger.info().logf("gossip port: {d}", .{app_base.my_port});
+    app_base.logger.info()
+        .field("host", app_base.my_ip)
+        .field("port", app_base.my_port)
+        .log("gossip setup");
 
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
@@ -1373,21 +1392,18 @@ fn loadSnapshot(
 ) !LoadedSnapshot {
     const logger = unscoped_logger.withScope(@typeName(@This()) ++ "." ++ @src().fn_name);
 
-    var validator_dir = try std.fs.cwd().openDir(sig.VALIDATOR_DIR, .{});
+    var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});
     defer validator_dir.close();
 
     const genesis_file_path = try config.current.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
 
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
-    defer snapshot_dir.close();
 
     const combined_manifest, const snapshot_files = try sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
         allocator,
         logger.unscoped(),
-        validator_dir,
-        snapshot_dir,
+        snapshot_dir_str,
         .{
             .gossip_service = options.gossip_service,
             .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
@@ -1396,6 +1412,9 @@ fn loadSnapshot(
             .min_snapshot_download_speed_mbs = config.current.accounts_db.min_snapshot_download_speed_mbs,
         },
     );
+
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
+    defer snapshot_dir.close();
 
     logger.info().logf("full snapshot: {s}", .{
         sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full.snapshotArchiveName().constSlice()),
@@ -1527,14 +1546,17 @@ fn downloadSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    try downloadSnapshotsFromGossip(
+    const full_file, const maybe_inc_file = try downloadSnapshotsFromGossip(
         gpa_allocator,
         app_base.logger.unscoped(),
         if (trusted_validators) |trusted| trusted.items else null,
         gossip_service,
         snapshot_dir,
         @intCast(min_mb_per_sec),
+        config.current.accounts_db.max_number_of_snapshot_download_attempts,
     );
+    defer full_file.close();
+    defer if (maybe_inc_file) |inc_file| inc_file.close();
 }
 
 fn getTrustedValidators(allocator: Allocator) !?std.ArrayList(Pubkey) {

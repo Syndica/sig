@@ -5,7 +5,6 @@ const bincode = sig.bincode;
 const testing = std.testing;
 
 const Pubkey = sig.core.Pubkey;
-const Signature = sig.core.Signature;
 const SocketAddr = sig.net.SocketAddr;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipData = sig.gossip.data.GossipData;
@@ -15,10 +14,8 @@ const Ping = sig.gossip.ping_pong.Ping;
 const Pong = sig.gossip.ping_pong.Pong;
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const PruneData = sig.gossip.prune.PruneData;
 
-const getWallclockMs = sig.time.getWallclockMs;
-
-const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 /// Analogous to [Protocol](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/cluster_info.rs#L268)
@@ -104,85 +101,7 @@ pub fn sanitizeWallclock(wallclock: u64) !void {
     }
 }
 
-pub const PruneData = struct {
-    /// Pubkey of the node that sent this prune data
-    pubkey: Pubkey,
-    /// Pubkeys of nodes that should be pruned
-    prunes: []const Pubkey,
-    /// Signature of this Prune Message
-    signature: Signature,
-    /// The Pubkey of the intended node/destination for this message
-    destination: Pubkey,
-    /// Wallclock of the node that generated this message
-    wallclock: u64,
-
-    const Self = @This();
-
-    pub fn init(pubkey: Pubkey, prunes: []Pubkey, destination: Pubkey, now: u64) Self {
-        return Self{
-            .pubkey = pubkey,
-            .prunes = prunes,
-            .destination = destination,
-            .signature = Signature.init(.{0} ** 64),
-            .wallclock = now,
-        };
-    }
-
-    pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
-        allocator.free(self.prunes);
-    }
-
-    const PruneSignableData = struct {
-        pubkey: Pubkey,
-        prunes: []const Pubkey,
-        destination: Pubkey,
-        wallclock: u64,
-    };
-
-    pub fn initRandom(random: std.rand.Random, keypair: *KeyPair) !PruneData {
-        var self = PruneData{
-            .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
-            .prunes = &[0]Pubkey{},
-            .signature = Signature.init(.{0} ** 64),
-            .destination = Pubkey.initRandom(random),
-            .wallclock = getWallclockMs(),
-        };
-        try self.sign(keypair);
-
-        return self;
-    }
-
-    pub fn sign(self: *PruneData, keypair: *const KeyPair) !void {
-        // should always be enough space of is invalid msg
-        var slice: [PACKET_DATA_SIZE]u8 = undefined;
-        const signable_data = PruneSignableData{
-            .pubkey = self.pubkey,
-            .prunes = self.prunes,
-            .destination = self.destination,
-            .wallclock = self.wallclock,
-        };
-        const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
-        var signature = try keypair.sign(out, null);
-        self.signature.data = signature.toBytes();
-    }
-
-    pub fn verify(self: *const PruneData) !void {
-        // should always be enough space of is invalid msg
-        var slice: [PACKET_DATA_SIZE]u8 = undefined;
-        const signable_data = PruneSignableData{
-            .pubkey = self.pubkey,
-            .prunes = self.prunes,
-            .destination = self.destination,
-            .wallclock = self.wallclock,
-        };
-        const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
-        if (!try self.signature.verify(self.pubkey, out)) {
-            return error.InvalidSignature;
-        }
-    }
-};
-
-test "gossip.message: push message serialization is predictable" {
+test "push message serialization is predictable" {
     var prng = DefaultPrng.init(0);
     const pubkey = Pubkey.initRandom(prng.random());
     var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
@@ -202,35 +121,7 @@ test "gossip.message: push message serialization is predictable" {
     try std.testing.expectEqual(value_size + empty_size, msg_value_size);
 }
 
-test "gossip.message: test prune data sig verify" {
-    var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
-        125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
-        115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
-        61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
-        121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
-    }));
-
-    var prng = DefaultPrng.init(0);
-    var prune = try PruneData.initRandom(prng.random(), &keypair);
-
-    try prune.verify();
-
-    const rust_bytes = [_]u8{ 80, 98, 7, 181, 129, 96, 249, 247, 34, 39, 251, 41, 125, 241, 31, 25, 122, 103, 202, 48, 78, 160, 222, 65, 228, 81, 171, 237, 233, 87, 248, 29, 37, 0, 19, 66, 83, 207, 78, 86, 232, 157, 184, 144, 71, 12, 223, 86, 144, 169, 160, 171, 139, 248, 106, 63, 194, 178, 144, 119, 51, 60, 201, 7 };
-
-    var prune_v2 = PruneData{
-        .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
-        .prunes = &[0]Pubkey{},
-        .signature = Signature.init(.{0} ** 64),
-        .destination = Pubkey.fromPublicKey(&keypair.public_key),
-        .wallclock = 0,
-    };
-    try prune_v2.sign(&keypair);
-
-    var sig_bytes = prune_v2.signature.data;
-    try std.testing.expectEqualSlices(u8, &rust_bytes, &sig_bytes);
-}
-
-test "gossip.message: ping message serializes and deserializes correctly" {
+test "ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
 
     var prng = std.rand.DefaultPrng.init(0);
@@ -247,7 +138,7 @@ test "gossip.message: ping message serializes and deserializes correctly" {
     try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
 }
 
-test "gossip.message: test ping pong sig verify" {
+test "test ping pong sig verify" {
     var keypair = KeyPair.create(null) catch unreachable;
 
     var prng = std.rand.DefaultPrng.init(0);
@@ -259,7 +150,7 @@ test "gossip.message: test ping pong sig verify" {
     try pong.verifySignature();
 }
 
-test "gossip.message: pull request serializes and deserializes" {
+test "pull request serializes and deserializes" {
     var rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 190, 193, 13, 216, 175, 227, 117, 168, 246, 219, 213, 39, 67, 249, 88, 3, 238, 151, 144, 15, 23, 142, 153, 198, 47, 221, 117, 132, 218, 28, 29, 115, 248, 253, 211, 101, 137, 19, 174, 112, 43, 57, 251, 110, 173, 14, 71, 0, 186, 24, 36, 61, 75, 241, 119, 73, 86, 93, 136, 249, 167, 40, 134, 14, 0, 0, 0, 0, 25, 117, 21, 11, 61, 170, 38, 18, 67, 196, 242, 219, 50, 154, 4, 254, 79, 227, 253, 229, 188, 230, 121, 12, 227, 248, 199, 156, 253, 144, 175, 67, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
@@ -304,7 +195,7 @@ test "gossip.message: pull request serializes and deserializes" {
     try std.testing.expectEqualDeep(pull, deserialized);
 }
 
-test "gossip.message: push message serializes and deserializes correctly" {
+test "push message serializes and deserializes correctly" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
@@ -359,7 +250,7 @@ test "gossip.message: push message serializes and deserializes correctly" {
     try testing.expectEqualSlices(u8, &rust_bytes, bytes);
 }
 
-test "gossip.message: Protocol.PullRequest.ContactInfo signature is valid" {
+test "Protocol.PullRequest.ContactInfo signature is valid" {
     var contact_info_pull_response_packet_from_mainnet = [_]u8{
         1,   0,   0,   0,   9,   116, 228, 64,  179, 73,  145, 220, 74,  55,  179, 56,  86,  218,
         47,  62,  172, 162, 127, 102, 37,  146, 103, 117, 255, 245, 248, 212, 101, 163, 188, 231,

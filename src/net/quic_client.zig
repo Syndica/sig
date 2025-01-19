@@ -19,11 +19,11 @@ pub fn runClient(
     exit: ExitCondition,
 ) !void {
     var client = try Client(20, 20).create(allocator, receiver, logger, exit);
-    try client.run();
     defer {
         client.deinit();
         allocator.destroy(client);
     }
+    try client.run();
 }
 
 pub fn Client(
@@ -508,59 +508,71 @@ fn initSslContext() *ssl.SSL_CTX {
 }
 
 fn initX509Certificate() struct { *ssl.EVP_PKEY, *ssl.X509 } {
-    var public_key: [32]u8 = undefined;
-    var private_key: [64]u8 = undefined;
+    const pctx = ssl.EVP_PKEY_CTX_new_id(ssl.EVP_PKEY_ED25519, null) orelse {
+        @panic("EVP_PKEY_CTX_new_id failed");
+    };
+    if (ssl.EVP_PKEY_keygen_init(pctx) == 0) {
+        @panic("EVP_PKEY_keygen_init failed");
+    }
+    var maybe_pkey: ?*ssl.EVP_PKEY = null;
+    if (ssl.EVP_PKEY_keygen(pctx, &maybe_pkey) == 0) {
+        @panic("EVP_PKEY_keygen failed");
+    }
+    const pkey = maybe_pkey orelse @panic("EVP_PKEY_keygen failed");
 
-    ssl.ED25519_keypair(&public_key, &private_key);
-
-    const pkcs8_prefix: [16]u8 = .{
-        0x30, 0x2e, 0x02, 0x01, 0x00,
-        0x30, 0x05, 0x06, 0x03, 0x2b,
-        0x65, 0x70, 0x04, 0x22, 0x04,
-        0x20,
+    const cert = ssl.X509_new() orelse {
+        @panic("X509_new failed");
     };
 
-    var key_pkcs8_der: [48]u8 = undefined;
-    @memcpy(key_pkcs8_der[0..16], &pkcs8_prefix);
-    @memcpy(key_pkcs8_der[16..], private_key[0..32]);
+    if (ssl.X509_set_version(cert, ssl.X509_VERSION_3) == 0) {
+        @panic("EVP_PKEY_keygen failed");
+    }
 
-    const cert_prefix: [100]u8 = .{
-        0x30, 0x81, 0xf6, 0x30, 0x81, 0xa9, 0xa0, 0x03, 0x02, 0x01, 0x02, 0x02, 0x08, 0x01, 0x01,
-        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x30, 0x16,
-        0x31, 0x14, 0x30, 0x12, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c, 0x0b, 0x53, 0x6f, 0x6c, 0x61,
-        0x6e, 0x61, 0x20, 0x6e, 0x6f, 0x64, 0x65, 0x30, 0x20, 0x17, 0x0d, 0x37, 0x30, 0x30, 0x31,
-        0x30, 0x31, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x5a, 0x18, 0x0f, 0x34, 0x30, 0x39, 0x36,
-        0x30, 0x31, 0x30, 0x31, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x5a, 0x30, 0x00, 0x30, 0x2a,
-        0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    const serial = ssl.ASN1_INTEGER_new() orelse {
+        @panic("ASN1_INTEGER_new failed");
     };
-    const cert_suffix: [117]u8 = .{
-        0xa3, 0x29, 0x30, 0x27, 0x30, 0x17, 0x06, 0x03, 0x55, 0x1d, 0x11, 0x01, 0x01, 0xff, 0x04,
-        0x0d, 0x30, 0x0b, 0x82, 0x09, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x68, 0x6f, 0x73, 0x74, 0x30,
-        0x0c, 0x06, 0x03, 0x55, 0x1d, 0x13, 0x01, 0x01, 0xff, 0x04, 0x02, 0x30, 0x00, 0x30, 0x05,
-        0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x41, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    defer ssl.ASN1_INTEGER_free(serial);
+    if (ssl.ASN1_INTEGER_set(serial, 1) == 0) {
+        @panic("ASN1_INTEGER_set failed");
+    }
+    if (ssl.X509_set_serialNumber(cert, serial) == 0) {
+        @panic("X509_set_serialNumber failed");
+    }
+
+    const issuer = ssl.X509_get_issuer_name(cert) orelse {
+        @panic("X509_get_issuer_name failed");
     };
+    if (ssl.X509_NAME_add_entry_by_txt(
+        issuer,
+        "CN",
+        ssl.MBSTRING_ASC,
+        "Solana",
+        -1,
+        -1,
+        0,
+    ) == 0) {
+        @panic("X509_NAME_add_entry_by_txt failed");
+    }
 
-    var cert_der: [249]u8 = undefined;
-    @memcpy(cert_der[0..100], &cert_prefix);
-    @memcpy(cert_der[100..][0..32], &public_key);
-    @memcpy(cert_der[132..], &cert_suffix);
+    if (ssl.X509_gmtime_adj(ssl.X509_get_notBefore(cert), 0) == null) {
+        @panic("X509_gmtime_adj failed");
+    }
+    // I sure hope 1000 years is enough :P
+    if (ssl.X509_gmtime_adj(ssl.X509_get_notAfter(cert), 60 * 60 * 24 * 365 * 1000) == null) {
+        @panic("X509_gmtime_adj failed");
+    }
 
-    const pkey = ssl.EVP_PKEY_new_raw_private_key(
-        ssl.EVP_PKEY_ED25519,
-        null,
-        &private_key,
-        32,
-    ) orelse {
-        @panic("EVP_PKEY_new_raw_private_key failed");
-    };
+    if (ssl.X509_set_subject_name(cert, issuer) == 0) {
+        @panic("X509_set_subject_name failed");
+    }
 
-    const bio: *ssl.BIO = ssl.BIO_new_mem_buf(&cert_der, 249);
-    const cert = ssl.d2i_X509_bio(bio, null) orelse @panic("d2i_X509_bio failed");
-    _ = ssl.BIO_free(bio);
+    if (ssl.X509_set_pubkey(cert, pkey) == 0) {
+        @panic("X509_set_pubkey failed");
+    }
+
+    if (ssl.X509_sign(cert, pkey, null) == 0) {
+        @panic("X509_sign failed");
+    }
 
     return .{ pkey, cert };
 }

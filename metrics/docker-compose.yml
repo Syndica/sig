@@ -30,6 +30,11 @@ services:
   alloy:
     image: grafana/alloy:v1.3.1
     container_name: alloy
+
+    # needed to access sig process
+    pid: "host"
+    privileged: true
+
     ports:
       - "3200:3200"
     volumes:
@@ -41,9 +46,11 @@ services:
         "--server.http.listen-addr=0.0.0.0:3200",
         "/etc/alloy/config.alloy",
       ]
+    environment:
+      - SIG_PID=${SIG_PID}
 
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:11.4.0
     container_name: grafana
     ports:
       - 3000:3000
@@ -51,10 +58,12 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=grafana
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
     volumes:
       - ./grafana/datasources:/etc/grafana/provisioning/datasources
       - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
       - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/alerting:/etc/grafana/provisioning/alerting
 
   node-exporter:
     image: prom/node-exporter
@@ -62,6 +71,14 @@ services:
     ports:
       - 9100:9100
     restart: unless-stopped
+
+  pyroscope:
+    image: grafana/pyroscope:1.11.0
+    container_name: pyroscope
+    ports:
+      - "4040:4040"
+    environment:
+      - STORAGE_DRIVER=in-memory
 
 volumes:
   prom_data:
