@@ -8,155 +8,158 @@ const requests = @import("requests.zig");
 const IoUring = std.os.linux.IoUring;
 const ServerCtx = sig.rpc.server.Context;
 
-const LinuxIoUring = @This();
-io_uring: IoUring,
-multishot_accept_submitted: bool,
-pending_cqes_count: u8,
-pending_cqes_buf: [255]std.os.linux.io_uring_cqe,
+pub const LinuxIoUring = struct {
+    io_uring: IoUring,
+    multishot_accept_submitted: bool,
+    pending_cqes_count: u8,
+    pending_cqes_buf: [255]std.os.linux.io_uring_cqe,
 
-pub const can_use: enum { no, yes, check } = switch (builtin.os.getVersionRange()) {
-    .linux => |version| can_use: {
-        const min_version: std.SemanticVersion = .{ .major = 6, .minor = 0, .patch = 0 };
-        const is_at_least = version.isAtLeast(min_version) orelse break :can_use .check;
-        break :can_use if (is_at_least) .yes else .no;
-    },
-    else => .no,
-};
-
-pub const InitError = std.posix.MMapError || error{
-    EntriesZero,
-    EntriesNotPowerOfTwo,
-
-    ParamsOutsideAccessibleAddressSpace,
-    ArgumentsInvalid,
-    ProcessFdQuotaExceeded,
-    SystemFdQuotaExceeded,
-    SystemResources,
-
-    PermissionDenied,
-    SystemOutdated,
-};
-
-// NOTE(ink): constructing the return type as `E!?T`, where `E` and `T` are resolved
-// separately seems to help ZLS with understanding the types involved better, which is
-// why I've done it like that here. If ZLS gets smarter in the future, you could probably
-// inline this into a single branch in the return type expression.
-const InitErrOrEmpty = if (can_use == .no) error{} else InitError;
-const InitResultOrNoreturn = if (can_use == .no) noreturn else LinuxIoUring;
-pub fn init() InitErrOrEmpty!?InitResultOrNoreturn {
-    const need_runtime_check = switch (can_use) {
-        .no => return null,
-        .yes => false,
-        .check => true,
+    pub const can_use: enum { no, yes, check } = switch (builtin.os.getVersionRange()) {
+        .linux => |version| can_use: {
+            const min_version: std.SemanticVersion = .{ .major = 6, .minor = 0, .patch = 0 };
+            const is_at_least = version.isAtLeast(min_version) orelse break :can_use .check;
+            break :can_use if (is_at_least) .yes else .no;
+        },
+        else => .no,
     };
 
-    var io_uring = IoUring.init(4096, 0) catch |err| return switch (err) {
-        error.SystemOutdated,
-        error.PermissionDenied,
-        => |e| if (!need_runtime_check) e else return null,
-        else => |e| e,
+    pub const InitError = std.posix.MMapError || error{
+        EntriesZero,
+        EntriesNotPowerOfTwo,
+
+        ParamsOutsideAccessibleAddressSpace,
+        ArgumentsInvalid,
+        ProcessFdQuotaExceeded,
+        SystemFdQuotaExceeded,
+        SystemResources,
+
+        PermissionDenied,
+        SystemOutdated,
     };
-    errdefer io_uring.deinit();
 
-    return .{
-        .io_uring = io_uring,
-        .multishot_accept_submitted = false,
-        .pending_cqes_count = 0,
-        .pending_cqes_buf = undefined,
-    };
-}
+    // NOTE(ink): constructing the return type as `E!?T`, where `E` and `T` are resolved
+    // separately seems to help ZLS with understanding the types involved better, which is
+    // why I've done it like that here. If ZLS gets smarter in the future, you could probably
+    // inline this into a single branch in the return type expression.
+    const InitErrOrEmpty = if (can_use == .no) error{} else InitError;
+    const InitResultOrNoreturn = if (can_use == .no) noreturn else LinuxIoUring;
+    pub fn init() InitErrOrEmpty!?InitResultOrNoreturn {
+        const need_runtime_check = switch (can_use) {
+            .no => return null,
+            .yes => false,
+            .check => true,
+        };
 
-pub fn deinit(self: *LinuxIoUring) void {
-    self.io_uring.deinit();
-}
+        var io_uring = IoUring.init(4096, 0) catch |err| return switch (err) {
+            error.SystemOutdated,
+            error.PermissionDenied,
+            => |e| if (!need_runtime_check) e else return null,
+            else => |e| e,
+        };
+        errdefer io_uring.deinit();
 
-pub const AcceptAndServeConnectionsError = error{
-    /// This was the first call, and we failed to prep, queue, and submit the multishot accept.
-    FailedToAcceptMultishot,
-    SubmissionQueueFull,
-} || IouSubmitError ||
-    HandleOurCqeError ||
-    std.mem.Allocator.Error;
+        return .{
+            .io_uring = io_uring,
+            .multishot_accept_submitted = false,
+            .pending_cqes_count = 0,
+            .pending_cqes_buf = undefined,
+        };
+    }
 
-pub fn acceptAndServeConnections(
-    self: *LinuxIoUring,
-    server_ctx: *ServerCtx,
-) AcceptAndServeConnectionsError!void {
-    if (!self.multishot_accept_submitted) {
-        self.multishot_accept_submitted = true;
-        errdefer self.multishot_accept_submitted = false;
-        _ = self.io_uring.accept_multishot(
-            @bitCast(Entry.ACCEPT),
-            server_ctx.tcp.stream.handle,
-            null,
-            null,
-            std.os.linux.SOCK.CLOEXEC,
-        ) catch |err| return switch (err) {
-            error.SubmissionQueueFull => {
-                server_ctx.logger.err().log(
-                    "Under normal circumstances the accept_multishot would be" ++
-                        " the first SQE to be queued, but somehow the queue was full.",
-                );
+    pub fn deinit(self: *LinuxIoUring) void {
+        self.io_uring.deinit();
+    }
+
+    pub const AcceptAndServeConnectionsError = error{
+        /// This was the first call, and we failed to prep, queue, and submit the multishot accept.
+        FailedToAcceptMultishot,
+        SubmissionQueueFull,
+    } || IouSubmitError ||
+        HandleOurCqeError ||
+        std.mem.Allocator.Error;
+
+    pub fn acceptAndServeConnections(
+        self: *LinuxIoUring,
+        server_ctx: *ServerCtx,
+    ) AcceptAndServeConnectionsError!void {
+        if (!self.multishot_accept_submitted) {
+            self.multishot_accept_submitted = true;
+            errdefer self.multishot_accept_submitted = false;
+            _ = self.io_uring.accept_multishot(
+                @bitCast(Entry.ACCEPT),
+                server_ctx.tcp.stream.handle,
+                null,
+                null,
+                std.os.linux.SOCK.CLOEXEC,
+            ) catch |err| return switch (err) {
+                error.SubmissionQueueFull => {
+                    server_ctx.logger.err().log(
+                        "Under normal circumstances the accept_multishot would be" ++
+                            " the first SQE to be queued, but somehow the queue was full.",
+                    );
+                    return error.FailedToAcceptMultishot;
+                },
+            };
+            if (try self.io_uring.submit() != 1) {
                 return error.FailedToAcceptMultishot;
-            },
-        };
-        if (try self.io_uring.submit() != 1) {
-            return error.FailedToAcceptMultishot;
+            }
+            return;
         }
-        return;
+
+        _ = try self.io_uring.submit();
+
+        if (self.pending_cqes_count != self.pending_cqes_buf.len) {
+            const unused = self.pending_cqes_buf[self.pending_cqes_count..];
+            const new_cqe_count = try self.io_uring.copy_cqes(unused, 0);
+            self.pending_cqes_count += @intCast(new_cqe_count);
+        }
+        const cqes_pending = self.pending_cqes_buf[0..self.pending_cqes_count];
+
+        for (cqes_pending, 0..) |raw_cqe, i| {
+            self.pending_cqes_count -= 1;
+            errdefer std.mem.copyForwards(
+                std.os.linux.io_uring_cqe,
+                self.pending_cqes_buf[0..self.pending_cqes_count],
+                self.pending_cqes_buf[i + 1 ..][0..self.pending_cqes_count],
+            );
+            const our_cqe = OurCqe.fromCqe(raw_cqe);
+            consumeOurCqe(self, server_ctx, our_cqe) catch |err| switch (err) {
+                // connection errors
+                error.ConnectionAborted,
+                error.ConnectionRefused,
+                error.ConnectionResetByPeer,
+                error.ConnectionTimedOut,
+
+                // our http parse errors
+                error.RequestHeadersTooBig,
+                error.RequestTargetTooLong,
+                error.RequestContentTypeUnrecognized,
+
+                // std http parse errors
+                error.UnknownHttpMethod,
+                error.HttpHeadersInvalid,
+                error.InvalidContentLength,
+                error.HttpHeaderContinuationsUnsupported,
+                error.HttpTransferEncodingUnsupported,
+                error.HttpConnectionHeaderUnsupported,
+                error.CompressionUnsupported,
+                error.MissingFinalNewline,
+
+                // splice errors
+                error.BadFileDescriptors,
+                error.BadFdOffset,
+                error.InvalidSplice,
+                => |e| {
+                    server_ctx.logger.err().logf("{s}", .{@errorName(e)});
+                    continue;
+                },
+
+                error.SubmissionQueueFull => |e| return e,
+                else => |e| return e,
+            };
+        }
     }
-
-    _ = try self.io_uring.submit();
-
-    if (self.pending_cqes_count != self.pending_cqes_buf.len) {
-        self.pending_cqes_count += @intCast(try self.io_uring.copy_cqes(self.pending_cqes_buf[self.pending_cqes_count..], 0));
-    }
-    const cqes_pending = self.pending_cqes_buf[0..self.pending_cqes_count];
-
-    for (cqes_pending, 0..) |raw_cqe, i| {
-        self.pending_cqes_count -= 1;
-        errdefer std.mem.copyForwards(
-            std.os.linux.io_uring_cqe,
-            self.pending_cqes_buf[0..self.pending_cqes_count],
-            self.pending_cqes_buf[i + 1 ..][0..self.pending_cqes_count],
-        );
-        const our_cqe = OurCqe.fromCqe(raw_cqe);
-        consumeOurCqe(self, server_ctx, our_cqe) catch |err| switch (err) {
-            // connection errors
-            error.ConnectionAborted,
-            error.ConnectionRefused,
-            error.ConnectionResetByPeer,
-            error.ConnectionTimedOut,
-
-            // our http parse errors
-            error.RequestHeadersTooBig,
-            error.RequestTargetTooLong,
-            error.RequestContentTypeUnrecognized,
-
-            // std http parse errors
-            error.UnknownHttpMethod,
-            error.HttpHeadersInvalid,
-            error.InvalidContentLength,
-            error.HttpHeaderContinuationsUnsupported,
-            error.HttpTransferEncodingUnsupported,
-            error.HttpConnectionHeaderUnsupported,
-            error.CompressionUnsupported,
-            error.MissingFinalNewline,
-
-            // splice errors
-            error.BadFileDescriptors,
-            error.BadFdOffset,
-            error.InvalidSplice,
-            => |e| {
-                server_ctx.logger.err().logf("{s}", .{@errorName(e)});
-                continue;
-            },
-
-            error.SubmissionQueueFull => |e| return e,
-            else => |e| return e,
-        };
-    }
-}
+};
 
 const HandleOurCqeError = error{
     SubmissionQueueFull,

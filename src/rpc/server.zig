@@ -100,7 +100,7 @@ pub const WorkPool = union(enum) {
         .no => noreturn,
     },
 
-    pub const LinuxIoUring = @import("server/LinuxIoUring.zig");
+    pub const LinuxIoUring = @import("server/linux_io_uring.zig").LinuxIoUring;
 
     const BasicAASCError =
         connection.AcceptHandledError ||
