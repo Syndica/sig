@@ -206,7 +206,10 @@ fn consumeOurCqe(
 
         switch (try connection.handleAcceptResult(cqe.err())) {
             .success => {},
-            .intr => std.debug.panic("TODO: does this mean the multishot accept has stopped? If no, just warn. If yes, re-queue here and warn.", .{}), // TODO:
+
+            // TODO: does this mean the multishot accept has stopped? If no, just warn. If yes, re-queue here and warn.
+            .intr => std.debug.panic("TODO:", .{}),
+
             .again => std.debug.panic("The socket should not be in nonblocking mode.", .{}),
             .conn_aborted => return error.ConnectionAborted,
         }
@@ -243,7 +246,8 @@ fn consumeOurCqe(
                 server_ctx.logger.err().logf(
                     "Failed to submit the SQE for the initial recv" ++
                         " for the connection from '{!}'",
-                    .{connection.getSockName(stream.handle)}, // if we fail to getSockName, just print the error in place of the address
+                    // if we fail to getSockName, just print the error in place of the address
+                    .{connection.getSockName(stream.handle)},
                 );
                 return e;
             },
@@ -301,7 +305,8 @@ fn consumeOurCqe(
             const head_info: HeadInfo = head_info: {
                 const head_bytes = entry_data.buffer[0..head.end];
                 const std_head = try std.http.Server.Request.Head.parse(head_bytes);
-                std.debug.assert(std_head.compression == .none); // at the time of writing, this always holds true for the result of `Head.parse`.
+                // at the time of writing, this always holds true for the result of `Head.parse`.
+                std.debug.assert(std_head.compression == .none);
                 break :head_info HeadInfo.parseFromStdHead(std_head) catch |err| switch (err) {
                     error.RequestTargetTooLong => |e| {
                         err_logger.logf("Request target was too long: '{}'", .{
@@ -340,8 +345,13 @@ fn consumeOurCqe(
                 switch (try connection.handleRecvResult(cqe.err())) {
                     .success => {},
 
-                    .intr => std.debug.panic("TODO: how to handle interrupts on this?", .{}), // TODO:
-                    .again => std.debug.panic("The socket should not be in nonblocking mode.", .{}),
+                    // TODO: how to handle interrupts on this?
+                    .intr => std.debug.panic("TODO:", .{}),
+
+                    .again => std.debug.panic(
+                        "The socket should not be in nonblocking mode.",
+                        .{},
+                    ),
 
                     .conn_refused => return error.ConnectionRefused,
                     .conn_reset => return error.ConnectionResetByPeer,
@@ -386,7 +396,10 @@ fn consumeOurCqe(
             .to_pipe => {
                 switch (try connection.handleSpliceResult(cqe.err())) {
                     .success => {},
-                    .again => std.debug.panic("The socket should not be in nonblocking mode.", .{}),
+                    .again => std.debug.panic(
+                        "The socket should not be in nonblocking mode.",
+                        .{},
+                    ),
                 }
                 sfb.spliced_to_pipe += @intCast(cqe.res);
 
@@ -398,7 +411,10 @@ fn consumeOurCqe(
             .to_socket => {
                 switch (try connection.handleSpliceResult(cqe.err())) {
                     .success => {},
-                    .again => std.debug.panic("The socket should not be in nonblocking mode.", .{}),
+                    .again => std.debug.panic(
+                        "The socket should not be in nonblocking mode.",
+                        .{},
+                    ),
                 }
                 sfb.spliced_to_socket += @intCast(cqe.res);
 

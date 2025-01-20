@@ -6,8 +6,6 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 const connection = @import("connection.zig");
 
-const IoUring = std.os.linux.IoUring;
-
 const ServerCtx = sig.rpc.server.Context;
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
@@ -35,7 +33,8 @@ pub const HeadInfo = struct {
 
     pub fn parse(head_bytes: []const u8) ParseError!HeadInfo {
         const parsed_head = try StdHead.parse(head_bytes);
-        std.debug.assert(parsed_head.compression == .none); // at the time of writing, this always holds true for the result of `Head.parse`.
+        // at the time of writing, this always holds true for the result of `Head.parse`.
+        std.debug.assert(parsed_head.compression == .none);
         return try parseFromStdHead(parsed_head);
     }
 
@@ -208,7 +207,11 @@ pub fn handleRequest(
                     // use a length which is still a multiple of 2, greater than the send_buffer length,
                     // in order to almost always force the http server method to flush, instead of
                     // pointlessly copying data into the send buffer.
-                    const read_buffer_len = comptime std.mem.alignForward(usize, send_buffer.len + 1, 2);
+                    const read_buffer_len = comptime std.mem.alignForward(
+                        usize,
+                        send_buffer.len + 1,
+                        2,
+                    );
                     var read_buffer: [read_buffer_len]u8 = undefined;
 
                     while (true) {

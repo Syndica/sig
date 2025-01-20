@@ -5,7 +5,6 @@ const sig = @import("../sig.zig");
 const connection = @import("server/connection.zig");
 const requests = @import("server/requests.zig");
 
-const IoUring = std.os.linux.IoUring;
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
 
 pub const Context = struct {
@@ -224,7 +223,8 @@ test Context {
 
     for ([_]?WorkPool{
         .basic,
-        if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else null, // TODO: see above TODO about `if (a) |*b|` on `?noreturn`.
+        // TODO: see above TODO about `if (a) |*b|` on `?noreturn`.
+        if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else null,
     }) |maybe_work_pool| {
         const work_pool = maybe_work_pool orelse continue;
 
