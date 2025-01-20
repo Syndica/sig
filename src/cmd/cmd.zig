@@ -1554,6 +1554,7 @@ fn downloadSnapshot() !void {
         snapshot_dir,
         @intCast(min_mb_per_sec),
         config.current.accounts_db.max_number_of_snapshot_download_attempts,
+        null,
     );
     defer full_file.close();
     defer if (maybe_inc_file) |inc_file| inc_file.close();

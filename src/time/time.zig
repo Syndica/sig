@@ -499,6 +499,10 @@ pub const Duration = struct {
         return .{ .ns = 0 };
     }
 
+    pub fn fromMinutes(m: u64) Duration {
+        return .{ .ns = m * 60 * std.time.ns_per_s };
+    }
+
     pub fn fromSecs(s: u64) Duration {
         return .{ .ns = s * std.time.ns_per_s };
     }
