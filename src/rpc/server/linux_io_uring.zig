@@ -100,10 +100,6 @@ pub const LinuxIoUring = struct {
                     return error.FailedToAcceptMultishot;
                 },
             };
-            if (try self.io_uring.submit() != 1) {
-                return error.FailedToAcceptMultishot;
-            }
-            return;
         }
 
         _ = try self.io_uring.submit();
@@ -124,6 +120,9 @@ pub const LinuxIoUring = struct {
             );
             const our_cqe = OurCqe.fromCqe(raw_cqe);
             consumeOurCqe(self, server_ctx, our_cqe) catch |err| switch (err) {
+                // EINTR catch-all
+                error.SignalInterruptedOperation,
+
                 // connection errors
                 error.ConnectionAborted,
                 error.ConnectionRefused,
@@ -164,6 +163,12 @@ pub const LinuxIoUring = struct {
 const HandleOurCqeError = error{
     SubmissionQueueFull,
 
+    /// Operation resulted in EINTR. In general there doesn't seem to be a very good way to handle or recover from interruptions,
+    /// so we just fail and drop whatever connection is interrupted; however in theory, this should not be a huge issue in practice,
+    /// with the assumption being that the RPC server will not be running in a process/thread that will be interrupted often enough
+    /// for this to be a problem.
+    SignalInterruptedOperation,
+
     /// Connection was aborted; not necessarily critical.
     ConnectionAborted,
     /// A remote host refused to allow the network connection, typically because it is not
@@ -189,6 +194,12 @@ const HandleOurCqeError = error{
     std.fs.File.OpenError ||
     std.fs.File.GetSeekPosError;
 
+/// Panic message for handling `EAGAIN`; we're not using nonblocking sockets at all,
+/// so it should be impossible to receive that error, or for such an error to be
+/// triggered just from malicious connections.
+const EAGAIN_PANIC_MSG =
+    "The socket should not be in nonblocking mode; server or socket configuration error.";
+
 /// On return, `cqe.user_data` is in an undefined state - this is to say,
 /// it has either already been `deinit`ed, or it has been been re-submitted
 /// in a new `SQE` and should not be modified; in either scenario, the caller
@@ -202,15 +213,16 @@ fn consumeOurCqe(
     errdefer entry.deinit(server_ctx.allocator);
 
     const entry_data: *EntryData = entry.ptr orelse {
-        // multishot accept cqe
+        // `accept_multishot` cqe
+
+        // we may need to re-submit the `accept_multishot` sqe.
+        const accept_cancelled = cqe.flags & std.os.linux.IORING_CQE_F_MORE == 0;
+        if (accept_cancelled) liou.multishot_accept_submitted = false;
 
         switch (try connection.handleAcceptResult(cqe.err())) {
             .success => {},
-
-            // TODO: does this mean the multishot accept has stopped? If no, just warn. If yes, re-queue here and warn.
-            .intr => std.debug.panic("TODO:", .{}),
-
-            .again => std.debug.panic("The socket should not be in nonblocking mode.", .{}),
+            .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+            .intr => return error.SignalInterruptedOperation,
             .conn_aborted => return error.ConnectionAborted,
         }
 
@@ -268,10 +280,8 @@ fn consumeOurCqe(
         .recv_head => |*head| {
             switch (try connection.handleRecvResult(cqe.err())) {
                 .success => {},
-
-                .intr => std.debug.panic("TODO: how to handle interrupts on this?", .{}), // TODO:
-                .again => std.debug.panic("The socket should not be in nonblocking mode.", .{}),
-
+                .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                .intr => return error.SignalInterruptedOperation,
                 .conn_refused => return error.ConnectionRefused,
                 .conn_reset => return error.ConnectionResetByPeer,
                 .timed_out => return error.ConnectionTimedOut,
@@ -344,15 +354,8 @@ fn consumeOurCqe(
             if (body.need_to_check_cqe) {
                 switch (try connection.handleRecvResult(cqe.err())) {
                     .success => {},
-
-                    // TODO: how to handle interrupts on this?
-                    .intr => std.debug.panic("TODO:", .{}),
-
-                    .again => std.debug.panic(
-                        "The socket should not be in nonblocking mode.",
-                        .{},
-                    ),
-
+                    .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                    .intr => return error.SignalInterruptedOperation,
                     .conn_refused => return error.ConnectionRefused,
                     .conn_reset => return error.ConnectionResetByPeer,
                     .timed_out => return error.ConnectionTimedOut,
@@ -369,8 +372,8 @@ fn consumeOurCqe(
         .send_file_head => |*sfh| {
             switch (try connection.handleSendResult(cqe.err())) {
                 .success => {},
-                .intr => std.debug.panic("TODO: how to handle interrupts on this?", .{}), // TODO:
-                .again => std.debug.panic("The socket should not be in nonblocking mode.", .{}),
+                .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                .intr => return error.SignalInterruptedOperation,
             }
             const sent_len: usize = @intCast(cqe.res);
             sfh.sent_bytes += sent_len;
@@ -396,10 +399,7 @@ fn consumeOurCqe(
             .to_pipe => {
                 switch (try connection.handleSpliceResult(cqe.err())) {
                     .success => {},
-                    .again => std.debug.panic(
-                        "The socket should not be in nonblocking mode.",
-                        .{},
-                    ),
+                    .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
                 }
                 sfb.spliced_to_pipe += @intCast(cqe.res);
 
@@ -411,10 +411,7 @@ fn consumeOurCqe(
             .to_socket => {
                 switch (try connection.handleSpliceResult(cqe.err())) {
                     .success => {},
-                    .again => std.debug.panic(
-                        "The socket should not be in nonblocking mode.",
-                        .{},
-                    ),
+                    .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
                 }
                 sfb.spliced_to_socket += @intCast(cqe.res);
 
@@ -433,8 +430,8 @@ fn consumeOurCqe(
         .send_no_body => |*snb| {
             switch (try connection.handleSendResult(cqe.err())) {
                 .success => {},
-                .intr => std.debug.panic("TODO: how to handle interrupts on this?", .{}), // TODO:
-                .again => std.debug.panic("The socket should not be in nonblocking mode.", .{}),
+                .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                .intr => return error.SignalInterruptedOperation,
             }
             const sent_len: usize = @intCast(cqe.res);
             snb.end_index += sent_len;

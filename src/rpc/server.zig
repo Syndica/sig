@@ -211,8 +211,8 @@ test Context {
     defer rpc_server_ctx.joinDeinit();
 
     var maybe_liou = try WorkPool.LinuxIoUring.init();
-    // TODO: currently `if (a) |*b|` on `?noreturn` causes analysis of the unwrap block, even though `if (a) |b|` doesn't.
-    // Filed a bug report for this: https://github.com/ziglang/zig/issues/22556, has a linked PR to fix it; hopefully should be fixed in 0.14.
+    // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
+    // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
     defer if (maybe_liou != null) maybe_liou.?.deinit();
 
     const self_url_bounded_str = sig.utils.fmt.boundedFmt(
