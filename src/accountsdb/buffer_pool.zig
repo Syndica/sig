@@ -501,8 +501,17 @@ pub const BufferPool = struct {
         errdefer allocator.free(frame_indices);
 
         // update found frames in the LFU (we don't want to evict these in the next loop)
-        for (frame_indices) |f_idx| {
+        for (0.., frame_indices) |i, f_idx| {
             if (f_idx == INVALID_FRAME) continue;
+
+            errdefer {
+                // Failed insert? Roll back acquired frames rcs
+                for (frame_indices[0..i]) |alive_frame_idx| {
+                    if (alive_frame_idx != INVALID_FRAME)
+                        _ = self.frames_metadata.rc[alive_frame_idx].release();
+                }
+            }
+
             try self.eviction_lfu.insert(self.frames_metadata, f_idx);
             if (!self.frames_metadata.rc[f_idx].acquire()) {
                 // frame has no handles, but memory is still valid
@@ -527,6 +536,14 @@ pub const BufferPool = struct {
                     try self.evictUnusedFrame();
                 }
             };
+
+            errdefer {
+                // Filling this frame failed, releasing rcs of previously filled frames
+                for (frame_indices[0..i]) |alive_frame_idx| {
+                    std.debug.assert(alive_frame_idx != INVALID_FRAME); // impossible
+                    _ = self.frames_metadata.rc[alive_frame_idx].release();
+                }
+            }
 
             const bytes_read = try file.pread(&self.frames[f_idx.*], frame_aligned_file_offset);
             try self.overwriteDeadFrameInfo(
