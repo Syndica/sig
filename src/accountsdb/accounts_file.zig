@@ -269,15 +269,18 @@ pub const AccountFile = struct {
 
     id: FileId,
     slot: Slot,
-    // number of bytes used
+
+    /// The number of usefully readable bytes in the file
     length: usize,
+
+    /// The size of the file can be >.length. Bytes beyond .length are essentially junk.
+    file_size: usize,
 
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
 
     const Self = @This();
 
-    // TODO: document the difference between .length and the file size, this tripped me up
     pub fn init(file: std.fs.File, accounts_file_info: AccountFileInfo, slot: Slot) !Self {
         const file_stat = try file.stat();
         const file_size: u64 = @intCast(file_stat.size);
@@ -286,7 +289,8 @@ pub const AccountFile = struct {
 
         return .{
             .file = file,
-            .length = accounts_file_info.length, // is this wrong?
+            .length = accounts_file_info.length,
+            .file_size = file_size,
             .id = accounts_file_info.id,
             .slot = slot,
         };
