@@ -1140,7 +1140,8 @@ pub const ReadHandle = union(enum) {
                     const current_frame: FrameIndex = read_offset / FRAME_SIZE;
 
                     const frame_start: FrameOffset = @intCast(read_offset % FRAME_SIZE);
-                    const frame_end: FrameOffset = if (current_frame == cached.frame_indices.len - 1)
+                    const frame_end: FrameOffset = if (current_frame ==
+                        cached.frame_indices.len - 1)
                         cached.last_frame_end_offset
                     else
                         FRAME_SIZE;
@@ -1154,7 +1155,10 @@ pub const ReadHandle = union(enum) {
                     break :buf buf;
                 },
                 .allocated_read => |*external| buf: {
-                    const end_idx = @min(read_offset + FRAME_SIZE, read_offset + self.bytesRemaining());
+                    const end_idx = @min(
+                        read_offset + FRAME_SIZE,
+                        read_offset + self.bytesRemaining(),
+                    );
                     break :buf external.slice[read_offset..end_idx];
                 },
                 .sub_read => @panic("unimpl"),
@@ -1168,7 +1172,11 @@ pub const ReadHandle = union(enum) {
         }
     };
 
-    fn bincodeSerialize(writer: anytype, read_handle: anytype, params: bincode.Params) anyerror!void {
+    fn bincodeSerialize(
+        writer: anytype,
+        read_handle: anytype,
+        params: bincode.Params,
+    ) anyerror!void {
         // we want to serialise it as if it's a slice
         try bincode.write(writer, @as(u64, read_handle.len()), params);
 
