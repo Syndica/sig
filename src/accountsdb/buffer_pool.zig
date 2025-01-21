@@ -119,24 +119,24 @@ pub const BufferPool = struct {
     pub const ReadError = readError();
 
     pub fn init(
-        init_allocator: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         num_frames: u32,
     ) !BufferPool {
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
-        const frames = try init_allocator.alloc(Frame, num_frames);
-        errdefer init_allocator.free(frames);
+        const frames = try allocator.alloc(Frame, num_frames);
+        errdefer allocator.free(frames);
 
-        var frames_metadata = try FramesMetadata.init(init_allocator, num_frames);
-        errdefer frames_metadata.deinit(init_allocator);
+        var frames_metadata = try FramesMetadata.init(allocator, num_frames);
+        errdefer frames_metadata.deinit(allocator);
 
-        var free_list = try AtomicStack(FrameIndex).init(init_allocator, num_frames);
-        errdefer free_list.deinit(init_allocator);
+        var free_list = try AtomicStack(FrameIndex).init(allocator, num_frames);
+        errdefer free_list.deinit(allocator);
         for (0..num_frames) |i| free_list.appendAssumeCapacity(@intCast(i));
 
         var frame_map: FrameMap = .{};
-        try frame_map.ensureTotalCapacity(init_allocator, num_frames);
-        errdefer frame_map.deinit(init_allocator);
+        try frame_map.ensureTotalCapacity(allocator, num_frames);
+        errdefer frame_map.deinit(allocator);
 
         const frame_map_rw = sig.sync.RwMux(FrameMap).init(frame_map);
 
@@ -145,20 +145,20 @@ pub const BufferPool = struct {
             .frames_metadata = frames_metadata,
             .free_list = free_list,
             .frame_map_rw = frame_map_rw,
-            .eviction_lfu = try HierarchicalFIFO.init(init_allocator, num_frames / 10, num_frames),
+            .eviction_lfu = try HierarchicalFIFO.init(allocator, num_frames / 10, num_frames),
         };
     }
 
     pub fn deinit(
         self: *BufferPool,
-        init_allocator: std.mem.Allocator,
+        allocator: std.mem.Allocator,
     ) void {
-        init_allocator.free(self.frames);
-        self.frames_metadata.deinit(init_allocator);
-        self.free_list.deinit(init_allocator);
-        self.eviction_lfu.deinit(init_allocator);
+        allocator.free(self.frames);
+        self.frames_metadata.deinit(allocator);
+        self.free_list.deinit(allocator);
+        self.eviction_lfu.deinit(allocator);
         const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
-        frame_map.deinit(init_allocator);
+        frame_map.deinit(allocator);
         frame_map_lg.unlock();
     }
 
