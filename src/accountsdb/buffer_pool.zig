@@ -877,7 +877,9 @@ pub const ReadHandle = union(enum) {
     /// Data owned by BufferPool, returned by .read() - do not construct this yourself (!)
     cached: CachedRead,
     /// Data allocated elsewhere, not owned or created by BufferPool.
-    allocated_read: AllocatedRead,
+    owned_allocation: []const u8,
+    /// Data allocated elsewhere, not owned or created by BufferPool.
+    unowned_allocation: []const u8,
     /// Data owned by parent ReadHandle
     sub_read: SubRead,
 
@@ -888,12 +890,6 @@ pub const ReadHandle = union(enum) {
         first_frame_start_offset: FrameOffset,
         /// exclusive, the offset into the last frame
         last_frame_end_offset: FrameOffset,
-    };
-
-    const AllocatedRead = struct {
-        slice: []u8,
-        /// owned => ReadHandle.deinit() will free the slice
-        owned: bool,
     };
 
     const SubRead = packed struct(u128) {
@@ -927,17 +923,13 @@ pub const ReadHandle = union(enum) {
     }
 
     /// External to the BufferPool, data will be freed upon .deinit
-    pub fn initAllocatedOwned(data: []u8) ReadHandle {
-        return ReadHandle{
-            .allocated_read = .{ .slice = data, .owned = true },
-        };
+    pub fn initAllocatedOwned(data: []const u8) ReadHandle {
+        return ReadHandle{ .owned_allocation = data };
     }
 
     /// External to the BufferPool
-    pub fn initAllocated(data: []u8) ReadHandle {
-        return ReadHandle{
-            .allocated_read = .{ .slice = data, .owned = false },
-        };
+    pub fn initAllocated(data: []const u8) ReadHandle {
+        return ReadHandle{ .unowned_allocation = data };
     }
 
     pub fn deinit(self: ReadHandle, allocator: std.mem.Allocator) void {
@@ -954,8 +946,9 @@ pub const ReadHandle = union(enum) {
                 allocator.free(cached.frame_indices);
             },
             .sub_read => |_| {},
-            .allocated_read => |allocated_read| {
-                if (allocated_read.owned) allocator.free(allocated_read.slice);
+            .unowned_allocation => |_| {},
+            .owned_allocation => |owned_allocation| {
+                allocator.free(owned_allocation);
             },
         }
     }
@@ -984,7 +977,7 @@ pub const ReadHandle = union(enum) {
         if (buf.len != range_len) return error.InvalidArgument;
 
         switch (self.*) {
-            .allocated_read => |*a| return @memcpy(buf, a.slice[start..end]),
+            .owned_allocation, .unowned_allocation => |data| return @memcpy(buf, data[start..end]),
             .sub_read => |*sb| return sb.parent.read(sb.start + start, sb.start + end, buf),
             .cached => {},
         }
@@ -1022,7 +1015,7 @@ pub const ReadHandle = union(enum) {
                     FRAME_SIZE +
                     cached.last_frame_end_offset - cached.first_frame_start_offset;
             },
-            .allocated_read => |allocated| @intCast(allocated.slice.len),
+            .owned_allocation, .unowned_allocation => |data| @intCast(data.len),
         };
     }
 
@@ -1154,12 +1147,12 @@ pub const ReadHandle = union(enum) {
 
                     break :buf buf;
                 },
-                .allocated_read => |*external| buf: {
+                .owned_allocation, .unowned_allocation => |external| buf: {
                     const end_idx = @min(
                         read_offset + FRAME_SIZE,
                         read_offset + self.bytesRemaining(),
                     );
-                    break :buf external.slice[read_offset..end_idx];
+                    break :buf external[read_offset..end_idx];
                 },
                 .sub_read => @panic("unimpl"),
             };
@@ -1635,7 +1628,7 @@ test "ReadHandle bincode" {
         try std.testing.expectEqualSlices(
             u8,
             read_data,
-            deserialised_from_slice.allocated_read.slice,
+            deserialised_from_slice.owned_allocation,
         );
     }
 
@@ -1656,7 +1649,7 @@ test "ReadHandle bincode" {
         try std.testing.expectEqualSlices(
             u8,
             read_data,
-            deserialised_from_handle.allocated_read.slice,
+            deserialised_from_handle.owned_allocation,
         );
     }
 }
