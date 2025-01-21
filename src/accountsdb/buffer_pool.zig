@@ -897,7 +897,7 @@ pub const ReadHandle = union(enum) {
     };
 
     const SubRead = packed struct(u128) {
-        parent: *ReadHandle,
+        parent: *const ReadHandle,
         // offset into the parent's read
         start: u32,
         end: u32,
@@ -1036,7 +1036,7 @@ pub const ReadHandle = union(enum) {
         return initAllocatedOwned(data_copy);
     }
 
-    pub fn slice(self: *ReadHandle, start: usize, end: usize) ReadHandle {
+    pub fn slice(self: *const ReadHandle, start: usize, end: usize) ReadHandle {
         return .{ .sub_read = .{
             .end = end,
             .start = start,
