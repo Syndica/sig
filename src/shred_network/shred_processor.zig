@@ -65,10 +65,10 @@ pub fn runShredProcessor(
         _ = try shred_inserter.insertShreds(
             shreds.items,
             is_repaired.items,
-            leader_schedule,
-            false,
-            null,
-            tracker,
+            .{
+                .slot_leaders = leader_schedule,
+                .shred_tracker = tracker,
+            },
         );
     }
 }
