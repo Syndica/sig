@@ -404,7 +404,6 @@ pub const BufferPool = struct {
                     // our read again.
                     try performReads(
                         self.frames_metadata,
-                        allocator,
                         threadlocal_io_uring,
                         file,
                         queued_reads,
@@ -435,7 +434,7 @@ pub const BufferPool = struct {
         // (This read length will almost always be FRAME_SIZE, however it will likely be less than
         // that at the end of the file)
         if (queued_reads > 0) {
-            try performReads(self.frames_metadata, allocator, threadlocal_io_uring, file, queued_reads);
+            try performReads(self.frames_metadata, threadlocal_io_uring, file, queued_reads);
         }
 
         return ReadHandle.initCached(
@@ -448,7 +447,6 @@ pub const BufferPool = struct {
 
     fn performReads(
         frames_metadata: FramesMetadata,
-        allocator: std.mem.Allocator,
         threadlocal_io_uring: *std.os.linux.IoUring,
         file: std.fs.File,
         n_reads: u32,
@@ -456,15 +454,14 @@ pub const BufferPool = struct {
         const n_submitted = try threadlocal_io_uring.submit_and_wait(n_reads);
         std.debug.assert(n_submitted == n_reads); // did somethng else submit an event?
 
-        // would be nice to get rid of this alloc
-        const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, n_submitted);
-        defer allocator.free(cqes);
+        var cqe_buf: [io_uring_entries]std.os.linux.io_uring_cqe = undefined;
 
         // check our completions in order to set the frame's size;
         // we need to wait for completion to get the bytes read
-        const cqe_count = try threadlocal_io_uring.copy_cqes(cqes, n_submitted);
+        const cqe_count = try threadlocal_io_uring.copy_cqes(&cqe_buf, n_submitted);
         std.debug.assert(cqe_count == n_submitted); // why did we not receive them all?
-        for (0.., cqes) |i, cqe| {
+
+        for (0.., cqe_buf[0..n_submitted]) |i, cqe| {
             if (cqe.err() != .SUCCESS) {
                 std.debug.panic("cqe: {}, err: {}, i: {}, file: {}", .{
                     cqe,
