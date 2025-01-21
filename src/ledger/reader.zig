@@ -2103,7 +2103,7 @@ test "findMissingDataIndexes" {
         .resigned = false,
     };
     shred.data.common.variant = variant;
-    try shred.data.writePayload(&(.{2} ** 100));
+    try ledger.shred.overwriteShredForTest(allocator, &shred, &(.{2} ** 100));
 
     var slot_meta = SlotMeta.init(allocator, shred_slot, null);
     slot_meta.last_index = 4;
@@ -2172,7 +2172,7 @@ test "getCodeShred" {
     shred.code.common.variant = variant;
     shred.code.custom.num_data_shreds = 1;
     shred.code.custom.num_code_shreds = 1;
-    try shred.code.writePayload(&(.{2} ** 100));
+    try ledger.shred.overwriteShredForTest(allocator, &shred, &(.{2} ** 100));
 
     const shred_slot = shred.commonHeader().slot;
     const shred_index = shred.commonHeader().index;
