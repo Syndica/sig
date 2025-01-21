@@ -233,6 +233,10 @@ test Context {
         defer blk: {
             exit.store(true, .release);
             // send a dummy request so that the serve thread will get the accept and observe `exit`.
+            // TODO(ink): we only issue interruptSelf for the basic work pool, and not the io_uring one,
+            // because for some reason that causes it to hang. this is kinda nasty and it would be
+            // nice for this to Just Work, however I suspect it may have something to do with the
+            // fact that it's the process sending itself a connection multiple times.
             if (work_pool == .basic) interruptSelf(allocator, self_uri) catch |err| {
                 if (@errorReturnTrace()) |st| {
                     std.log.err("{s}\n{}", .{ @errorName(err), st });
