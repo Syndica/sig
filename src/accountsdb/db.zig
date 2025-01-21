@@ -3334,6 +3334,7 @@ pub fn writeSnapshotTarWithFields(
 
         try snapgen.writeAccountFileHeader(archive_writer_counted, file_slot, file_info);
 
+        try account_file.file.seekTo(0);
         var fifo = std.fifo.LinearFifo(u8, .{ .Static = std.mem.page_size }).init();
         try fifo.pump(account_file.file.reader(), archive_writer_counted);
 
