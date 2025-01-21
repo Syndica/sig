@@ -28,10 +28,10 @@ const linux_io_mode: LinuxIoMode = .IoUring;
 
 const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
 
+const io_uring_entries = 128;
+
 threadlocal var maybe_io_uring: if (use_io_uring) ?std.os.linux.IoUring else void = null;
 fn io_uring() !*std.os.linux.IoUring {
-    const io_uring_entries = 128;
-
     return if (maybe_io_uring) |*io_ur|
         io_ur
     else io_ur: {
@@ -119,8 +119,8 @@ pub const BufferPool = struct {
     pub const ReadError = readError();
 
     pub fn init(
-        num_frames: u32,
         init_allocator: std.mem.Allocator,
+        num_frames: u32,
     ) !BufferPool {
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
@@ -335,6 +335,8 @@ pub const BufferPool = struct {
     ) ReadError!ReadHandle {
         if (!use_io_uring) @compileError("io_uring disabled");
 
+        const threadlocal_io_uring = try io_uring();
+
         const frame_indices = try self.computeFrameIndices(
             file_id,
             allocator,
@@ -344,12 +346,17 @@ pub const BufferPool = struct {
         errdefer allocator.free(frame_indices);
 
         // update found frames in the LFU (we don't want to evict these in the next loop)
-        var n_invalid_indices: u32 = 0;
-        for (frame_indices) |f_idx| {
-            if (f_idx == INVALID_FRAME) {
-                n_invalid_indices += 1;
-                continue;
+        for (0.., frame_indices) |i, f_idx| {
+            if (f_idx == INVALID_FRAME) continue;
+
+            errdefer {
+                // Failed insert? Roll back acquired frames rcs
+                for (frame_indices[0..i]) |alive_frame_idx| {
+                    if (alive_frame_idx != INVALID_FRAME)
+                        _ = self.frames_metadata.rc[alive_frame_idx].release();
+                }
             }
+
             try self.eviction_lfu.insert(self.frames_metadata, f_idx);
             if (!self.frames_metadata.rc[f_idx].acquire()) {
                 // frame has no handles, but memory is still valid
@@ -359,6 +366,7 @@ pub const BufferPool = struct {
 
         // fill in invalid frames with file data, replacing invalid frames with
         // fresh ones.
+        var queued_reads: u32 = 0;
         for (0.., frame_indices) |i, *f_idx| {
             if (f_idx.* != INVALID_FRAME) continue;
             // INVALID_FRAME => not found, read fresh and populate
@@ -375,46 +383,59 @@ pub const BufferPool = struct {
                 }
             };
 
-            _ = try (try io_uring()).read(
+            errdefer {
+                // Filling this frame failed, releasing rcs of previously filled frames
+                for (frame_indices[0..i]) |alive_frame_idx| {
+                    std.debug.assert(alive_frame_idx != INVALID_FRAME); // impossible
+                    _ = self.frames_metadata.rc[alive_frame_idx].release();
+                }
+            }
+
+            if (threadlocal_io_uring.read(
                 f_idx.*,
                 file.handle,
                 .{ .buffer = &self.frames[f_idx.*] },
                 frame_aligned_file_offset,
-            );
+            )) |_| {
+                queued_reads += 1;
+            } else |err| switch (err) {
+                error.SubmissionQueueFull => {
+                    // if the queue is full, let's submit our previous reads early, and then queue
+                    // our read again.
+                    try performReads(
+                        self.frames_metadata,
+                        allocator,
+                        threadlocal_io_uring,
+                        file,
+                        queued_reads,
+                    );
+                    _ = try threadlocal_io_uring.read(
+                        f_idx.*,
+                        file.handle,
+                        .{ .buffer = &self.frames[f_idx.*] },
+                        frame_aligned_file_offset,
+                    );
+                    queued_reads = 1;
+                },
+                else => |e| return e,
+            }
+
             try self.overwriteDeadFrameInfoNoSize(f_idx.*, file_id, frame_aligned_file_offset);
             try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
+        }
+
+        errdefer {
+            for (frame_indices) |alive_frame_idx| {
+                std.debug.assert(alive_frame_idx != INVALID_FRAME); // impossible
+                _ = self.frames_metadata.rc[alive_frame_idx].release();
+            }
         }
 
         // Wait for our file reads to complete, filling the read length into the metadata as we go.
         // (This read length will almost always be FRAME_SIZE, however it will likely be less than
         // that at the end of the file)
-        if (n_invalid_indices > 0) {
-            const n_submitted = try (try io_uring()).submit_and_wait(n_invalid_indices);
-            std.debug.assert(n_submitted == n_invalid_indices); // did smthng else submit an event?
-
-            // would be nice to get rid of this alloc
-            const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, n_submitted);
-            defer allocator.free(cqes);
-
-            // check our completions in order to set the frame's size;
-            // we need to wait for completion to get the bytes read
-            const cqe_count = try (try io_uring()).copy_cqes(cqes, n_submitted);
-            std.debug.assert(cqe_count == n_submitted); // why did we not receive them all?
-            for (0.., cqes) |i, cqe| {
-                if (cqe.err() != .SUCCESS) {
-                    std.debug.panic("cqe: {}, err: {}, i: {}, file: {}", .{
-                        cqe,
-                        cqe.err(),
-                        i,
-                        file,
-                    });
-                }
-                const f_idx = cqe.user_data;
-                const bytes_read: FrameOffset = @intCast(cqe.res);
-                std.debug.assert(bytes_read <= FRAME_SIZE);
-
-                self.frames_metadata.size[f_idx].store(bytes_read, .release);
-            }
+        if (queued_reads > 0) {
+            try performReads(self.frames_metadata, allocator, threadlocal_io_uring, file, queued_reads);
         }
 
         return ReadHandle.initCached(
@@ -423,6 +444,41 @@ pub const BufferPool = struct {
             @intCast(file_offset_start % FRAME_SIZE),
             @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
         );
+    }
+
+    fn performReads(
+        frames_metadata: FramesMetadata,
+        allocator: std.mem.Allocator,
+        threadlocal_io_uring: *std.os.linux.IoUring,
+        file: std.fs.File,
+        n_reads: u32,
+    ) !void {
+        const n_submitted = try threadlocal_io_uring.submit_and_wait(n_reads);
+        std.debug.assert(n_submitted == n_reads); // did somethng else submit an event?
+
+        // would be nice to get rid of this alloc
+        const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, n_submitted);
+        defer allocator.free(cqes);
+
+        // check our completions in order to set the frame's size;
+        // we need to wait for completion to get the bytes read
+        const cqe_count = try threadlocal_io_uring.copy_cqes(cqes, n_submitted);
+        std.debug.assert(cqe_count == n_submitted); // why did we not receive them all?
+        for (0.., cqes) |i, cqe| {
+            if (cqe.err() != .SUCCESS) {
+                std.debug.panic("cqe: {}, err: {}, i: {}, file: {}", .{
+                    cqe,
+                    cqe.err(),
+                    i,
+                    file,
+                });
+            }
+            const f_idx = cqe.user_data;
+            const bytes_read: FrameOffset = @intCast(cqe.res);
+            std.debug.assert(bytes_read <= FRAME_SIZE);
+
+            frames_metadata.size[f_idx].store(bytes_read, .release);
+        }
     }
 
     fn readBlocking(
@@ -833,6 +889,12 @@ pub const ReadHandle = union(enum) {
         end: u32,
     };
 
+    pub const @"!bincode-config" = bincode.FieldConfig(ReadHandle){
+        .deserializer = bincodeDeserialize,
+        .serializer = bincodeSerialize,
+        .free = bincodeFree,
+    };
+
     /// Only called by the BufferPool
     fn initCached(
         buffer_pool: *BufferPool,
@@ -961,7 +1023,7 @@ pub const ReadHandle = union(enum) {
     }
 
     pub fn slice(self: *ReadHandle, start: usize, end: usize) ReadHandle {
-        return ReadHandle{ .sub_read = .{
+        return .{ .sub_read = .{
             .end = end,
             .start = start,
             .self = self,
@@ -1090,12 +1152,6 @@ pub const ReadHandle = union(enum) {
             self.bytes_read += @intCast(frame_buf.len);
             return frame_buf;
         }
-    };
-
-    pub const @"!bincode-config" = bincode.FieldConfig(ReadHandle){
-        .deserializer = bincodeDeserialize,
-        .serializer = bincodeSerialize,
-        .free = bincodeFree,
     };
 
     fn bincodeSerialize(writer: anytype, read_handle: anytype, params: bincode.Params) anyerror!void {
