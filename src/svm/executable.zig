@@ -8,7 +8,7 @@ const Vm = @import("vm.zig").Vm;
 pub const Executable = struct {
     bytes: []const u8,
     instructions: []align(1) const sbpf.Instruction,
-    version: sbpf.SBPFVersion,
+    version: sbpf.Version,
     entry_pc: u64,
     from_elf: bool,
     ro_section: Section,
@@ -55,25 +55,38 @@ pub const Executable = struct {
     }
 
     pub fn fromAsm(allocator: std.mem.Allocator, source: []const u8, config: Config) !Executable {
-        return Assembler.parse(allocator, source, config);
+        var function_registry, const instructions = try Assembler.parse(
+            allocator,
+            source,
+            config,
+        );
+        return fromTextBytes(
+            allocator,
+            std.mem.sliceAsBytes(instructions),
+            &function_registry,
+            config,
+        );
     }
 
     pub fn fromTextBytes(
         allocator: std.mem.Allocator,
         source: []const u8,
-        version: sbpf.SBPFVersion,
         registry: *Registry(u64),
         config: Config,
     ) !Executable {
+        const version = config.minimum_version;
+
         const entry_pc = if (registry.lookupName("entrypoint")) |entry_pc|
             entry_pc.value
-        else
-            try registry.registerHashedLegacy(
+        else pc: {
+            _ = try registry.registerHashedLegacy(
                 allocator,
                 !version.enableStaticSyscalls(),
                 "entrypoint",
                 0,
             );
+            break :pc 0;
+        };
 
         return .{
             .instructions = std.mem.bytesAsSlice(sbpf.Instruction, source),
@@ -84,7 +97,10 @@ pub const Executable = struct {
             .entry_pc = entry_pc,
             .ro_section = .{ .borrowed = .{ .offset = 0, .start = 0, .end = 0 } },
             .from_elf = false,
-            .text_vaddr = memory.PROGRAM_START,
+            .text_vaddr = if (version.enableLowerBytecodeVaddr())
+                memory.BYTECODE_START
+            else
+                memory.PROGRAM_START,
         };
     }
 
@@ -140,7 +156,8 @@ pub const Assembler = struct {
         allocator: std.mem.Allocator,
         source: []const u8,
         config: Config,
-    ) !Executable {
+    ) !struct { Registry(u64), []const sbpf.Instruction } {
+        const version = config.minimum_version;
         var assembler: Assembler = .{ .source = source };
         const statements = try assembler.tokenize(allocator);
         defer {
@@ -327,7 +344,13 @@ pub const Assembler = struct {
                                 };
                             }
                         },
-                        .call_reg => .{
+                        .call_reg => if (version.callRegUsesSrcReg()) .{
+                            .opcode = @enumFromInt(bind.opc),
+                            .dst = .r0,
+                            .src = operands[0].register,
+                            .off = 0,
+                            .imm = 0,
+                        } else .{
                             .opcode = @enumFromInt(bind.opc),
                             .dst = .r0,
                             .src = .r0,
@@ -359,28 +382,9 @@ pub const Assembler = struct {
             }
         }
 
-        const entry_pc = if (function_registry.lookupName("entrypoint")) |entry|
-            entry.value
-        else pc: {
-            _ = try function_registry.registerHashedLegacy(
-                allocator,
-                !config.minimum_version.enableStaticSyscalls(),
-                "entrypoint",
-                0,
-            );
-            break :pc 0;
-        };
-
         return .{
-            .bytes = source,
-            .ro_section = .{ .borrowed = .{ .offset = 0, .start = 0, .end = source.len } },
-            .instructions = try instructions.toOwnedSlice(allocator),
-            .version = config.minimum_version,
-            .entry_pc = entry_pc,
-            .from_elf = false,
-            .text_vaddr = memory.PROGRAM_START,
-            .function_registry = function_registry,
-            .config = config,
+            function_registry,
+            try instructions.toOwnedSlice(allocator),
         };
     }
 
@@ -546,7 +550,7 @@ pub const BuiltinProgram = struct {
 pub const Config = struct {
     optimize_rodata: bool = true,
     reject_broken_elfs: bool = false,
-    minimum_version: sbpf.SBPFVersion = .v2,
+    minimum_version: sbpf.Version = .v3,
     stack_frame_size: u64 = 4096,
     max_call_depth: u64 = 64,
 
