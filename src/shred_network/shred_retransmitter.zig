@@ -323,7 +323,8 @@ fn retransmitShreds(
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
-        // NOTE: multiple `retransmitShreds` run concurrently can't use receiver.wait() here.
+        // NOTE: multiple `retransmitShreds` run concurrently so we can't use
+        // `receiver.waitToReceive()` here as it only supports one caller thread.
         const retransmit_info: RetransmitShredInfo = receiver.tryReceive() orelse continue;
         defer retransmit_info.turbine_tree.releaseUnsafe();
 
