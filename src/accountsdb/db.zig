@@ -670,10 +670,8 @@ pub const AccountsDB = struct {
                     return err;
                 };
             };
-            errdefer accounts_file.deinit();
-
-            const file_id = file_info.id;
-            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
+            var accounts_file_moved_to_filemap = false;
+            defer if (!accounts_file_moved_to_filemap) accounts_file.deinit();
 
             // index the account file
             var slot_references = std.ArrayListUnmanaged(AccountRef).initBuffer(
@@ -703,6 +701,10 @@ pub const AccountsDB = struct {
             if (n_accounts_this_slot == 0) {
                 continue;
             }
+            const file_id = file_info.id;
+            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
+            accounts_file_moved_to_filemap = true;
+
             // track slice of references per slot
             n_accounts_total += n_accounts_this_slot;
             slot_reference_map.putAssumeCapacityNoClobber(
