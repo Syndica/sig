@@ -21,10 +21,6 @@ pub const SBPFVersion = enum {
     // v3,
     // reserved,
 
-    pub fn usesStaticSyscalls(version: SBPFVersion) bool {
-        return version != .v1;
-    }
-
     pub fn enableDynamicStackFrames(version: SBPFVersion) bool {
         return version != .v1;
     }

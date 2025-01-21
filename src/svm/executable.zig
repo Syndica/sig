@@ -515,6 +515,7 @@ pub const Config = struct {
     minimum_version: sbpf.SBPFVersion = .v2,
     stack_frame_size: u64 = 4096,
     max_call_depth: u64 = 64,
+
     pub fn stackSize(config: Config) u64 {
         return config.stack_frame_size * config.max_call_depth;
     }
