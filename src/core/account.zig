@@ -97,8 +97,7 @@ pub const Account = struct {
         offset += 32;
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
-        self.data.readAll(buf[offset..][0..self.data.len()]) catch
-            unreachable; // invalid args
+        self.data.readAll(buf[offset..][0..self.data.len()]);
 
         offset += self.data.len();
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));

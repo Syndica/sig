@@ -41,8 +41,7 @@ pub const AccountsCache = struct {
             const new_entry = @as(*CachedAccount, @ptrCast(buf.ptr));
             const account_data = buf[@sizeOf(CachedAccount)..];
 
-            account.data.read(0, account.data.len(), account_data) catch
-                unreachable; // account.data invalid?
+            account.data.readAll(account_data);
 
             var new_account = account;
             new_account.data = ReadHandle.initAllocated(account_data);

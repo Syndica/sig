@@ -957,34 +957,32 @@ pub const ReadHandle = union(enum) {
         return .{ .read_handle = self, .start = 0, .end = self.len() };
     }
 
-    /// Copies entire read into specified buffer. Must be correct length.
-    pub fn readAll(self: ReadHandle, buf: []u8) error{InvalidArgument}!void {
-        try self.read(0, self.len(), buf);
+    /// Copies all data into specified buffer. Buf.len === self.len()
+    pub fn readAll(self: ReadHandle, buf: []u8) void {
+        std.debug.assert(buf.len == self.len());
+        self.read(0, buf);
     }
 
     pub fn readAllAllocate(self: ReadHandle, allocator: std.mem.Allocator) ![]u8 {
         return self.readAllocate(allocator, 0, self.len());
     }
 
-    /// Copies entire read into specified buffer. Must be correct length.
+    /// Copies data into specified buffer.
     pub fn read(
         self: *const ReadHandle,
         start: FileOffset,
-        end: FileOffset,
         buf: []u8,
-    ) error{InvalidArgument}!void {
-        const range_len = end - start;
-        if (buf.len != range_len) return error.InvalidArgument;
+    ) void {
+        const end: FileOffset = @intCast(start + buf.len);
 
         switch (self.*) {
             .owned_allocation, .unowned_allocation => |data| return @memcpy(buf, data[start..end]),
-            .sub_read => |*sb| return sb.parent.read(sb.start + start, sb.start + end, buf),
+            .sub_read => |*sb| return sb.parent.read(sb.start + start, buf),
             .cached => {},
         }
 
-        var iter = try self.iteratorRanged(start, end);
-
         var bytes_copied: u32 = 0;
+        var iter = self.iteratorRanged(start, end);
         while (iter.nextFrame()) |frame_slice| {
             const copy_len = @min(frame_slice.len, buf.len - bytes_copied);
             @memcpy(
@@ -1002,7 +1000,7 @@ pub const ReadHandle = union(enum) {
         end: FileOffset,
     ) ![]u8 {
         const buf = try allocator.alloc(u8, end - start);
-        self.read(start, end, buf) catch unreachable; // invalid account?
+        self.read(start, buf);
         return buf;
     }
 
@@ -1019,8 +1017,10 @@ pub const ReadHandle = union(enum) {
         };
     }
 
-    pub fn iteratorRanged(self: *const ReadHandle, start: FileOffset, end: FileOffset) !Iterator {
-        if (start > end or end > self.len()) return error.InvalidArgument;
+    pub fn iteratorRanged(self: *const ReadHandle, start: FileOffset, end: FileOffset) Iterator {
+        std.debug.assert(self.len() >= end);
+        std.debug.assert(end >= start);
+
         return .{ .read_handle = self, .start = start, .end = end };
     }
 
@@ -1099,11 +1099,7 @@ pub const ReadHandle = union(enum) {
 
             const read_len = @min(self.bytesRemaining(), buffer.len);
 
-            self.read_handle.read(
-                self.start + self.bytes_read,
-                self.start + self.bytes_read + read_len,
-                buffer[0..read_len],
-            ) catch unreachable;
+            self.read_handle.read(self.start + self.bytes_read, buffer[0..read_len]);
             self.bytes_read += @intCast(read_len);
             return read_len;
         }
@@ -1571,7 +1567,7 @@ test "BufferPool random read" {
 
         const read_data_bp_readall = try allocator.alloc(u8, read.len());
         defer allocator.free(read_data_bp_readall);
-        try read.readAll(read_data_bp_readall);
+        read.readAll(read_data_bp_readall);
 
         const read_data_expected = try allocator.alloc(u8, range_end - range_start);
         defer allocator.free(read_data_expected);

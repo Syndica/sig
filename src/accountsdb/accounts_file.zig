@@ -254,9 +254,7 @@ pub const AccountInFile = struct {
         offset += 32;
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
-        self.data.readAll(buf[offset..][0..self.data.len()]) catch
-            unreachable; // invalid args
-
+        self.data.readAll(buf[offset..][0..self.data.len()]);
         offset += self.data.len();
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
@@ -462,7 +460,7 @@ pub const AccountFile = struct {
         defer read.deinit(metadata_allocator);
 
         var buf: T = undefined;
-        try read.readAll(std.mem.asBytes(&buf));
+        read.readAll(std.mem.asBytes(&buf));
         return buf;
     }
 
