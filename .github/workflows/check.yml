@@ -4,29 +4,24 @@ on:
   push:
     branches: [main, pre-release]
   pull_request:
-    branches: [main, pre-release]
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - name: checkout
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
-      - name: setup-zig
-        uses: mlugg/setup-zig@v1
+      - uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
 
       - name: lint
-        run: |
-          zig fmt --check src/ build.zig
+        run: zig fmt --check src/ build.zig
 
   check_style:
     runs-on: ubuntu-latest
     steps:
-      - name: checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v3
@@ -39,59 +34,77 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-        - name: checkout
-          uses: actions/checkout@v3
-        
-        - name: setup-zig
-          uses: mlugg/setup-zig@v1
-          with:
-            version: 0.13.0
-        
-        # GitHub's CI runners for macos seem to alternate between using a x86 and an ARM machine
-        # which is annoying to handle and results in them having invalid hardware info configurations
-        # on the virtual machine. This leads to incorrect feature detection and the CI is flaky.
-        # 
-        # If we at some point setup a self-hosted MacOS runner, we could work around the issue and
-        # enable full testing on MacOS!
-        - name: build
-          run: |
-            zig build -Dtarget=x86_64-linux -Dcpu=x86_64_v4
-            zig build -Dtarget=aarch64-macos -Dcpu=apple_m3 
+      - uses: actions/checkout@v4
+      
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+      
+      - name: build
+        run: |
+          zig build test -Denable-tsan=true  -Dno-run -p output/tsan
+          zig build test -Denable-tsan=false -Dno-run -p output/no-tsan/
+          zig build test -Denable-tsan=true -Dblockstore=hashmap -Dfilter="ledger" -Dno-run -p output/hashmap
+      
+      # In order to not loose the execution permissions of the binaries, 
+      # we tar everything together before uploading
+      - name: bundle
+        run: tar -cvf zig-build.tar output/
+            
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zig-build
+          path: zig-build.tar
+            
+  # GitHub's CI runners for macos seem to alternate between using a x86 and an ARM machine
+  # which is annoying to handle and results in them having invalid hardware info configurations
+  # on the virtual machine. This leads to incorrect feature detection and the CI is flaky.
+  # 
+  # If we at some point setup a self-hosted MacOS runner, we could work around the issue and
+  # enable full testing on MacOS!
+  build-macos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: build
+        run: zig build -Dtarget=aarch64-macos -Dcpu=apple_m3
 
   test:
     strategy:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
+    needs: build
     timeout-minutes: 60
     steps:
-      - name: checkout
-        uses: actions/checkout@v2
-
-      - name: setup-zig
-        uses: mlugg/setup-zig@v1
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          version: 0.13.0
+          name: zig-build
 
       - name: test
-        run: |
-          zig build test -Denable-tsan=true
-          zig build test -Denable-tsan=true -Dblockstore=hashmap -Dfilter="ledger"
+        run: output/tsan/bin/test
+      
+      - name: test-hashmap
+        run: output/hashmap/bin/test
 
   kcov_test:
     strategy:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
+    needs: build
     timeout-minutes: 60
     steps:
-      - name: checkout
-        uses: actions/checkout@v2
-
-      - name: setup-zig
-        uses: mlugg/setup-zig@v1
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          version: 0.13.0
+          name: zig-build
 
       - name: Set up dependencies
         run: sudo apt-get update
@@ -108,30 +121,43 @@ jobs:
           sudo ln libbfd-2.42-system.so libbfd-2.38-system.so || echo libbfd not found
 
       - name: run kcov
-        run: |
-          bash scripts/kcov_test.sh
+        run: bash scripts/kcov_test.sh output/no-tsan/bin/test
 
       - name: print coverage report
-        run: |
-          python scripts/parse_kcov.py kcov-output/test/coverage.json
+        run: python scripts/parse_kcov.py kcov-output/test/coverage.json
+
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+      
+      - name: build
+        run: zig build sig fuzz -Doptimize=ReleaseSafe -Dno-run
+
+      - name: bundle
+        run: tar -cvf zig-build-release.tar zig-out/
+            
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zig-build-release
+          path: zig-build-release.tar
 
   gossip:
     strategy:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
+    needs: build-release
     timeout-minutes: 60
     steps:
-      - name: checkout
-        uses: actions/checkout@v2
-
-      - name: setup-zig
-        uses: mlugg/setup-zig@v1
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          version: 0.13.0
-
-      - name: build release
-        run: zig build -Doptimize=ReleaseSafe
+          name: zig-build-release 
 
       - name: run gossip
         run: bash scripts/gossip_test.sh 120 # in seconds
@@ -142,17 +168,12 @@ jobs:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
     timeout-minutes: 60
+    needs: build-release
     steps:
-      - name: checkout
-        uses: actions/checkout@v2
-
-      - name: setup zig
-        uses: mlugg/setup-zig@v1
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          version: 0.13.0
-
-      - name: build
-        run: zig build -Doptimize=ReleaseSafe -Dno-run fuzz
+          name: zig-build-release 
 
       - name: run
         run: ./zig-out/bin/fuzz gossip_service 19 10000
@@ -162,21 +183,13 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
+    needs: build-release
     timeout-minutes: 60
     steps:
-      - name: checkout
-        uses: actions/checkout@v2
-
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          submodules: recursive
-
-      - name: setup zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.13.0
-
-      - name: build
-        run: zig build -Doptimize=ReleaseSafe -Dno-run fuzz
+          name: zig-build-release 
 
       - name: run
         run: ./zig-out/bin/fuzz gossip_table 19 100000
@@ -186,18 +199,13 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
+    needs: build-release
     timeout-minutes: 60
     steps:
-      - name: checkout
-        uses: actions/checkout@v2
-
-      - name: setup zig
-        uses: mlugg/setup-zig@v1
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          version: 0.13.0
-
-      - name: build
-        run: zig build -Doptimize=ReleaseSafe -Dno-run fuzz
+          name: zig-build-release 
 
       - name: run
         run: ./zig-out/bin/fuzz allocators 19 10000
@@ -207,18 +215,14 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
+    needs: build-release
     timeout-minutes: 60
     steps:
-      - name: checkout
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
         with:
-          submodules: recursive
-      - name: setup zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.13.0
-      - name: build
-        run: zig build -Doptimize=ReleaseSafe -Dno-run fuzz
+          name: zig-build-release 
+
       - name: run
         run: ./zig-out/bin/fuzz ledger 19 10000
 
