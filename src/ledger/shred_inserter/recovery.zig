@@ -10,10 +10,12 @@ const Lru = sig.common.lru.LruCacheCustom;
 const CodeShred = ledger.shred.CodeShred;
 const CodeShredHeader = ledger.shred.CodeHeader;
 const CommonHeader = ledger.shred.CommonHeader;
+const DataHeader = ledger.shred.DataHeader;
 const DataShred = ledger.shred.DataShred;
 const MerkleProofEntryList = ledger.shred.MerkleProofEntryList;
 const ReedSolomon = ledger.reed_solomon.ReedSolomon;
 const Shred = ledger.shred.Shred;
+const ShredType = ledger.shred.ShredType;
 const Signature = sig.core.Signature;
 
 const checkedSub = sig.utils.math.checkedSub;
@@ -70,6 +72,7 @@ const RecoveryShreds = struct {
     allocator: Allocator,
     input_shreds: []?Shred,
     shards: []?[]const u8,
+    /// true = was present, false = needs to be reconstructed
     mask: []const bool,
     num_to_recover: usize,
 
@@ -222,8 +225,12 @@ fn reconstructShreds(
     shreds: RecoveryShreds,
 ) ![]const Shred {
     // Reconstruct code and data shreds from erasure encoded shards.
+    var recovered_payloads = try allocator.alloc(?[]u8, shreds.input_shreds.len);
     var all_shreds = try std.ArrayListUnmanaged(Shred)
         .initCapacity(allocator, shreds.input_shreds.len);
+    var merkle_tree_builder = try std.ArrayList(Hash)
+        .initCapacity(allocator, shreds.input_shreds.len);
+    errdefer merkle_tree_builder.deinit();
     errdefer {
         // The shreds that are created below need to be freed if there is an error.
         // If no error, ownership is transfered to calling scope.
@@ -231,27 +238,74 @@ fn reconstructShreds(
         for (all_shreds.items, 0..) |shred, i| {
             if (!shreds.mask[i]) shred.deinit();
         }
+        all_shreds.deinit(allocator);
     }
     std.debug.assert(shreds.input_shreds.len == shreds.shards.len);
+
     for (shreds.input_shreds, shreds.shards, 0..) |maybe_shred, maybe_shard, index| {
         if (maybe_shred) |shred| {
-            all_shreds.appendAssumeCapacity(shred);
+            merkle_tree_builder.appendAssumeCapacity(try shred.merkleNode());
+            recovered_payloads[index] = null;
         } else {
-            const shard = maybe_shard orelse return error.TooFewShards;
-            all_shreds.appendAssumeCapacity(try reconstructShred(allocator, meta, shard, index));
+            const shard = maybe_shard orelse return error.oops;
+            const payload = if (index < meta.code_header.num_data_shreds)
+                try dataShred(allocator, meta, shard)
+            else
+                try codeShred(allocator, meta, shard);
+
+            merkle_tree_builder.appendAssumeCapacity(try sig.ledger.shred.getMerkleNode(payload));
+            recovered_payloads[index] = payload;
+        }
+    }
+    try makeMerkleTree(&merkle_tree_builder);
+    const merkle_tree = merkle_tree_builder.toOwnedSlice();
+
+    for (shreds.input_shreds, recovered_payloads, 0..) |maybe_shred, maybe_payload, index| {
+        const merkle_proof =
+            try makeMerkleProof(allocator, index, shreds.shards.len, merkle_tree) //
+        orelse return error.InvalidMerkleProof;
+
+        if (maybe_shred) |shred| {
+            const expected_proof = try sig.ledger.shred.getMerkleProof(shred.payload());
+            if (!expected_proof.eql(merkle_proof)) {
+                return error.InvalidMerkleProof;
+            }
+            all_shreds.appendAssumeCapacity(shred);
+        } else if (maybe_payload) |recovered_payload| {
+            sig.ledger.shred.setMerkleProof(recovered_payload, merkle_proof);
+            const shred = try reconstructShred(allocator, meta, recovered_payload, index, merkle_proof);
+            all_shreds.appendAssumeCapacity(shred);
         }
     }
 
-    try setMerkleProofs(allocator, meta, shreds, all_shreds.items);
-
     return all_shreds.toOwnedSlice(allocator);
 }
+
+// fn computeMerkleTree(allocator: Allocator, shreds: []const []const u8) ![]const Hash {
+//     var tree = try std.ArrayList(Hash).initCapacity(allocator, recovered_shards.len);
+//     errdefer tree.deinit();
+
+//     for (recovered_shards) |maybe_shard| {
+//         const shard = maybe_shard orelse return error.TooFewShards;
+
+//         const variant = sig.ledger.shred.layout.getShredVariantFromShard(shard) orelse
+//             return error.UnknownShredVariant;
+//         const offset = try sig.ledger.shred.proofOffset(variant.constants(), variant);
+//         const merkle_node = try sig.ledger.shred.getMerkleNodeAt(shard, 0, offset - Signature.size);
+
+//         tree.appendAssumeCapacity(merkle_node);
+//     }
+
+//     try makeMerkleTree(&tree);
+//     return try tree.toOwnedSlice();
+// }
 
 fn reconstructShred(
     allocator: Allocator,
     meta: RecoveryMetadata,
     shard: []const u8,
     index: usize,
+    merkle_proof: ?MerkleProofEntryList,
 ) !Shred {
     if (index < meta.code_header.num_data_shreds) {
         const data_shred = try DataShred.fromRecoveredShard(
@@ -259,6 +313,7 @@ fn reconstructShred(
             meta.common_header.leader_signature,
             meta.chained_merkle_root,
             meta.retransmitter_signature,
+            merkle_proof,
             shard,
         );
         const this = data_shred.common;
@@ -285,56 +340,201 @@ fn reconstructShred(
             this_code_header,
             meta.chained_merkle_root,
             meta.retransmitter_signature,
+            merkle_proof,
             shard,
         );
         return .{ .code = code_shred };
     }
 }
 
-fn setMerkleProofs(
+fn reconstructShred2(
     allocator: Allocator,
     meta: RecoveryMetadata,
-    shreds: RecoveryShreds,
-    all_shreds: []Shred,
-) !void {
-    // Compute merkle tree
-    var tree = try std.ArrayList(Hash).initCapacity(allocator, all_shreds.len);
-    defer tree.deinit();
-    for (all_shreds) |shred| {
-        const merkle_node = try sig.ledger.shred.getMerkleNode(shred.payload());
-        tree.appendAssumeCapacity(merkle_node);
-    }
-    try makeMerkleTree(&tree);
-
-    // set the merkle proof on the recovered shreds.
-    const num_shards: usize = meta.code_header.num_data_shreds + meta.code_header.num_code_shreds;
-    for (all_shreds, shreds.mask, 0..) |*shred, was_present, index| {
-        const proof: MerkleProofEntryList = try makeMerkleProof(
+    payload: []const u8,
+    index: usize,
+    merkle_proof: ?MerkleProofEntryList,
+) !Shred {
+    if (index < meta.code_header.num_data_shreds) {
+        const data_shred = try DataShred.fromPayloadOwned(allocator, payload);
+        const this = data_shred.common;
+        const set = meta.common_header;
+        if (this.variant.proof_size != set.variant.proof_size or
+            this.variant.chained != set.variant.chained or
+            this.variant.resigned != set.variant.resigned or
+            this.slot != set.slot or
+            this.version != set.version or
+            this.erasure_set_index != set.erasure_set_index)
+        {
+            return error.InvalidRecoveredShred;
+        }
+        return .{ .data = data_shred };
+    } else {
+        const offset = index - meta.code_header.num_data_shreds;
+        var this_common_header = meta.common_header;
+        var this_code_header = meta.code_header;
+        this_common_header.index += @intCast(offset);
+        this_code_header.erasure_code_index = @intCast(offset);
+        const code_shred = try CodeShred.fromRecoveredShard(
             allocator,
-            index,
-            num_shards,
-            tree.items,
-        ) orelse return error.InvalidMerkleProof;
-        defer proof.deinit(allocator);
-        if (proof.len != @as(usize, @intCast(meta.common_header.variant.proof_size))) {
-            return error.InvalidMerkleProof;
-        }
-        if (was_present) {
-            const expected_proof = try sig.ledger.shred.getMerkleProof(shred.payload());
-            var expected_proof_iterator = expected_proof.iterator();
-            var i: usize = 0;
-            while (expected_proof_iterator.next()) |expected_entry| : (i += 1) {
-                const actual_entry = proof.get(i) orelse return error.InvalidMerkleProof;
-                if (!std.mem.eql(u8, expected_entry, &actual_entry)) {
-                    return error.InvalidMerkleProof;
-                }
-            }
-        } else {
-            try sig.ledger.shred.setMerkleProof(shred.payloadMut(), proof);
-            std.debug.assert(!std.meta.isError(shred.sanitize())); // TODO error somewhere else
-            // TODO: Assert that shred payload is fully populated.
-        }
+            this_common_header,
+            this_code_header,
+            meta.chained_merkle_root,
+            meta.retransmitter_signature,
+            merkle_proof,
+            shard,
+        );
+        return .{ .code = code_shred };
     }
+}
+
+const ShredMut = union(ShredType) {
+    code: CodeShredMut,
+    data: DataShredMut,
+};
+
+const CodeShredMut = struct {
+    common: CommonHeader,
+    custom: CodeHeader,
+    allocator: Allocator,
+    payload: []u8,
+};
+
+const DataShredMut = struct {
+    common: CommonHeader,
+    custom: DataHeader,
+    allocator: Allocator,
+    payload: []u8,
+
+    pub const constants = sig.ledger.shred.data_shred_constants;
+    const generic = generic_shred(.data);
+
+    /// agave: ShredData::from_recovered_shard
+    pub fn fromRecoveredShard(
+        allocator: Allocator,
+        leader_signature: Signature,
+        chained_merkle_root: ?Hash,
+        retransmitter_signature: ?Signature,
+        merkle_proof: ?MerkleProofEntryList,
+        shard: []const u8,
+    ) !DataShredMut {
+        const shard_size = shard.len;
+        if (shard_size + Signature.size > constants.payload_size) {
+            return error.InvalidShardSize;
+        }
+        const payload = try allocator.alloc(u8, constants.payload_size);
+        errdefer allocator.free(payload);
+        @memcpy(payload[0..Signature.size], &leader_signature.data);
+        @memcpy(payload[Signature.size..][0..shard_size], shard);
+        @memset(payload[Signature.size + shard_size ..], 0);
+        var shred = try generic.fromPayloadOwned(allocator, payload);
+        if (shard_size != try capacity(code_shred_constants, shred.common.variant))
+            return error.InvalidShardSize;
+        if (merkle_proof) |proof|
+            try setMerkleProof(payload, proof);
+        if (chained_merkle_root) |hash|
+            try setChainedMerkleRoot(payload, shred.common.variant, hash);
+        if (retransmitter_signature) |sign|
+            try setRetransmitterSignatureFor(payload, shred.common.variant, sign);
+        try shred.sanitize();
+        return shred;
+    }
+};
+
+// fn getMerkleProofs(
+//     allocator: Allocator,
+//     meta: RecoveryMetadata,
+//     shreds: RecoveryShreds,
+// ) ![]const ?MerkleProofEntryList {
+//     // Compute merkle tree
+//     var tree = try std.ArrayList(Hash).initCapacity(allocator, shreds.shards.len);
+//     defer tree.deinit();
+//     for (shreds.shards) |maybe_shard| {
+//         const shard = maybe_shard orelse return error.TooFewShards;
+//         const merkle_node = try sig.ledger.shred.getMerkleNode(shard);
+//         tree.appendAssumeCapacity(merkle_node);
+//     }
+//     try makeMerkleTree(&tree);
+
+//     // calculate the merkle proof for the recovered shreds.
+//     const proofs = try allocator.alloc(?MerkleProofEntryList, shreds.shards.len);
+//     errdefer allocator.free(proofs);
+//     const num_shards: usize = meta.code_header.num_data_shreds + meta.code_header.num_code_shreds;
+//     for (shreds.shards, shreds.mask, 0..) |maybe_shard, was_present, index| {
+//         errdefer for (0..index) |i| if (proofs[i]) |p| p.deinit(allocator);
+//         const proof: MerkleProofEntryList =
+//             try makeMerkleProof(allocator, index, num_shards, tree.items) orelse
+//             return error.InvalidMerkleProof;
+//         errdefer proof.deinit(allocator);
+//         if (proof.len != @as(usize, @intCast(meta.common_header.variant.proof_size))) {
+//             return error.InvalidMerkleProof;
+//         }
+//         if (was_present) {
+//             const expected_proof = try sig.ledger.shred.getMerkleProof(maybe_shard.?);
+//             if (!expected_proof.eql(proof)) {
+//                 return error.InvalidMerkleProof;
+//             }
+//         } else {
+//             proofs[index] = proof;
+//             // TODO: Assert that shred payload is fully populated.
+//         }
+//     }
+//     return proofs;
+// }
+
+/// the full data shred payload minus merkle proof
+fn dataShred(
+    allocator: Allocator,
+    meta: RecoveryMetadata,
+    shard: []u8,
+) ![]u8 {
+    const shard_size = shard.len;
+    if (shard_size + Signature.size > sig.ledger.shred.data_shred_constants.payload_size) {
+        return error.InvalidShardSize;
+    }
+    const payload = try allocator.alloc(u8, sig.ledger.shred.data_shred_constants.payload_size);
+    errdefer allocator.free(payload);
+    @memcpy(payload[0..Signature.size], &meta.common_header.leader_signature.data);
+    @memcpy(payload[Signature.size..][0..shard_size], shard);
+    @memset(payload[Signature.size + shard_size ..], 0);
+
+    if (meta.chained_merkle_root) |hash|
+        try sig.ledger.shred.setChainedMerkleRoot(payload, meta.common_header.variant, hash);
+    if (meta.retransmitter_signature) |sign|
+        try sig.ledger.shred.setRetransmitterSignatureFor(payload, meta.common_header.variant, sign);
+
+    return payload;
+}
+
+/// the full code shred payload minus merkle proof
+fn codeShred(
+    allocator: Allocator,
+    meta: RecoveryMetadata,
+    shard: []u8,
+) ![]u8 {
+    const constants = sig.ledger.shred.code_shred_constants;
+    if (meta.common_header.variant.shred_type != .code) {
+        return error.InvalidShredVariant;
+    }
+    if (shard.len != try sig.ledger.shred.capacity(constants, meta.common_header.variant)) {
+        return error.InvalidShardSize;
+    }
+    if (shard.len + constants.headers_size > constants.payload_size) {
+        return error.InvalidShardSize;
+    }
+    const payload = try allocator.alloc(u8, constants.payload_size);
+    @memcpy(payload[constants.headers_size..][0..shard.len], shard);
+    @memset(payload[constants.headers_size + shard.len ..], 0);
+    var buf = std.io.fixedBufferStream(payload);
+    const writer = buf.writer();
+    try sig.bincode.write(writer, meta.common_header, .{}); // TODO is this necessary?
+    try sig.bincode.write(writer, meta.code_header, .{}); // and this?
+
+    if (meta.chained_merkle_root) |hash|
+        try sig.ledger.shred.setChainedMerkleRoot(payload, meta.common_header.variant, hash);
+    if (meta.retransmitter_signature) |sign|
+        try sig.ledger.shred.setRetransmitterSignatureFor(payload, meta.common_header.variant, sign);
+
+    return payload;
 }
 
 /// Verify that shreds belong to the same erasure batch
@@ -435,7 +635,7 @@ test "recover mainnet shreds - construct shreds from shards" {
         all_shreds[index] = if (maybe_shred) |shred|
             shred
         else
-            try reconstructShred(allocator, meta, shard, index);
+            try reconstructShred(allocator, meta, shard, index, null);
     }
     var i: usize = 0;
     for (all_shreds, mainnet_partially_recovered_shreds) |recovered_shred, shred_bytes| {

@@ -80,7 +80,18 @@ pub const ShredInserter = struct {
         self.logger.deinit();
     }
 
-    pub const InsertShredsResult = struct {
+    pub const Options = struct {
+        /// Skip some validations for performance.
+        is_trusted: bool = false,
+        /// Necessary for shred recovery.
+        slot_leaders: ?SlotLeaders = null,
+        /// Send recovered shreds here if provided.
+        retransmit_sender: ?PointerClosure([]const []const u8, void) = null,
+        /// Records all shreds.
+        shred_tracker: ?*sig.shred_network.shred_tracker.BasicShredTracker = null,
+    };
+
+    pub const Result = struct {
         completed_data_set_infos: ArrayList(CompletedDataSetInfo),
         duplicate_shreds: ArrayList(PossibleDuplicateShred),
     };
@@ -145,11 +156,8 @@ pub const ShredInserter = struct {
         self: *Self,
         shreds: []const Shred,
         is_repaired: []const bool,
-        maybe_slot_leaders: ?SlotLeaders,
-        is_trusted: bool,
-        retransmit_sender: ?PointerClosure([]const []const u8, void),
-        shred_tracker: ?*sig.shred_network.shred_tracker.BasicShredTracker,
-    ) !InsertShredsResult {
+        options: Options,
+    ) !Result {
         const milli_timestamp = std.time.milliTimestamp();
         ///////////////////////////
         // check inputs for validity and edge cases
@@ -191,7 +199,7 @@ pub const ShredInserter = struct {
             const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
             switch (shred) {
                 .data => |data_shred| {
-                    if (shred_tracker) |tracker| {
+                    if (options.shred_tracker) |tracker| {
                         tracker.registerDataShred(&shred.data, milli_timestamp) catch |err|
                             switch (err) {
                             error.SlotUnderflow, error.SlotOverflow => {
@@ -205,8 +213,8 @@ pub const ShredInserter = struct {
                         &state,
                         merkle_root_validator,
                         write_batch,
-                        is_trusted,
-                        maybe_slot_leaders,
+                        options.is_trusted,
+                        options.slot_leaders,
                         shred_source,
                     )) |completed_data_sets| {
                         if (is_repair) {
@@ -236,7 +244,7 @@ pub const ShredInserter = struct {
                         &state,
                         merkle_root_validator,
                         write_batch,
-                        is_trusted,
+                        options.is_trusted,
                         shred_source,
                     );
                 },
@@ -250,15 +258,17 @@ pub const ShredInserter = struct {
         var shred_recovery_timer = try Timer.start();
         var valid_recovered_shreds = ArrayList([]const u8).init(allocator);
         defer valid_recovered_shreds.deinit();
-        if (maybe_slot_leaders) |slot_leaders| {
+        if (options.slot_leaders) |leaders| {
             var reed_solomon_cache = try ReedSolomonCache.init(allocator);
             defer reed_solomon_cache.deinit();
+            std.debug.print("_\n\ngonna\n\n", .{});
             const recovered_shreds = try self.tryShredRecovery(
                 &state.erasure_metas,
                 &state.index_working_set,
                 state.shreds(),
                 &reed_solomon_cache,
             );
+            std.debug.print("_\n\nlen: {}\n\n", .{recovered_shreds.items.len});
             defer {
                 for (recovered_shreds.items) |shred| {
                     shred.deinit();
@@ -267,10 +277,11 @@ pub const ShredInserter = struct {
             }
 
             for (recovered_shreds.items) |shred| {
+                std.debug.print("_\n\none shred\n\n", .{});
                 if (shred == .data) {
                     self.metrics.num_recovered.inc();
                 }
-                const leader = slot_leaders.get(shred.commonHeader().slot);
+                const leader = leaders.get(shred.commonHeader().slot);
                 if (leader == null) {
                     continue;
                 }
@@ -285,7 +296,7 @@ pub const ShredInserter = struct {
                     try valid_recovered_shreds.append(shred.payload()); // TODO lifetime
                     continue;
                 }
-                if (shred_tracker) |tracker| {
+                if (options.shred_tracker) |tracker| {
                     tracker.registerDataShred(&shred.data, milli_timestamp) catch |err|
                         switch (err) {
                         error.SlotUnderflow, error.SlotOverflow => {
@@ -299,27 +310,32 @@ pub const ShredInserter = struct {
                     &state,
                     merkle_root_validator,
                     write_batch,
-                    is_trusted,
-                    maybe_slot_leaders,
+                    options.is_trusted,
+                    options.slot_leaders,
                     .recovered,
                 )) |completed_data_sets| {
                     defer completed_data_sets.deinit();
                     try newly_completed_data_sets.appendSlice(completed_data_sets.items);
                     self.metrics.num_recovered_inserted.inc();
                     try valid_recovered_shreds.append(shred.payload()); // TODO lifetime
-                } else |e| switch (e) {
-                    error.Exists => self.metrics.num_recovered_exists.inc(),
-                    error.InvalidShred => self.metrics.num_recovered_failed_invalid.inc(),
-                    // error.BlockstoreError => {
-                    //     self.metrics.num_recovered_blockstore_error.inc();
-                    //     // TODO improve this (maybe should be an error set)
-                    // },
-                    else => return e, // TODO explicit
+                } else |e| {
+                    std.debug.print("_\n\nerror inserting: {}\n\n", .{e});
+                    switch (e) {
+                        error.Exists => self.metrics.num_recovered_exists.inc(),
+                        error.InvalidShred => self.metrics.num_recovered_failed_invalid.inc(),
+                        // error.BlockstoreError => {
+                        //     self.metrics.num_recovered_blockstore_error.inc();
+                        //     // TODO improve this (maybe should be an error set)
+                        // },
+                        else => return e, // TODO explicit
+                    }
                 }
             }
-            if (valid_recovered_shreds.items.len > 0) if (retransmit_sender) |sender| {
+            if (valid_recovered_shreds.items.len > 0) if (options.retransmit_sender) |sender| {
                 sender.call(valid_recovered_shreds.items); // TODO lifetime
             };
+        } else {
+            std.debug.print("_\n\nno leaders\n\n", .{});
         }
         self.metrics.shred_recovery_elapsed_us.add(shred_recovery_timer.read().asMicros());
 
@@ -935,9 +951,11 @@ pub const ShredInserter = struct {
             self.submitRecoveryMetrics(index.slot, erasure_meta, true, "complete", shreds.items.len);
             return shreds;
         } else |e| {
-            self.logger.err().logf("shred recovery error: {}", .{e});
-            self.submitRecoveryMetrics(index.slot, erasure_meta, true, "incomplete", 0);
-            return std.ArrayList(Shred).init(self.allocator);
+            return e;
+            // self.logger.err().logf("shred recovery error: {}", .{e});
+            // std.debug.print("_\n\nERROR: {}\n\n", .{e});
+            // self.submitRecoveryMetrics(index.slot, erasure_meta, true, "incomplete", 0);
+            // return std.ArrayList(Shred).init(self.allocator);
         }
     }
 
@@ -1179,7 +1197,7 @@ const ShredInserterTestState = struct {
     fn insertShredBytes(
         self: *ShredInserterTestState,
         shred_payloads: []const []const u8,
-    ) !ShredInserter.InsertShredsResult {
+    ) !ShredInserter.Result {
         const shreds = try self.allocator().alloc(Shred, shred_payloads.len);
         defer {
             for (shreds) |shred| shred.deinit();
@@ -1193,7 +1211,7 @@ const ShredInserterTestState = struct {
         for (0..shreds.len) |i| {
             is_repairs[i] = false;
         }
-        return self.inserter.insertShreds(shreds, is_repairs, null, false, null, null);
+        return self.inserter.insertShreds(shreds, is_repairs, .{});
     }
 
     fn checkInsertCodeShred(
@@ -1221,13 +1239,13 @@ const ShredInserterTestState = struct {
 pub fn insertShredsForTest(
     inserter: *ShredInserter,
     shreds: []const Shred,
-) !ShredInserter.InsertShredsResult {
+) !ShredInserter.Result {
     const is_repairs = try inserter.allocator.alloc(bool, shreds.len);
     defer inserter.allocator.free(is_repairs);
     for (0..shreds.len) |i| {
         is_repairs[i] = false;
     }
-    return inserter.insertShreds(shreds, is_repairs, null, false, null, null);
+    return inserter.insertShreds(shreds, is_repairs, .{});
 }
 
 test "insertShreds single shred" {
@@ -1236,7 +1254,7 @@ test "insertShreds single shred" {
     const allocator = std.testing.allocator;
     const shred = try Shred.fromPayload(allocator, &ledger.shred.test_data_shred);
     defer shred.deinit();
-    _ = try state.inserter.insertShreds(&.{shred}, &.{false}, null, false, null, null);
+    _ = try state.inserter.insertShreds(&.{shred}, &.{false}, .{});
     const stored_shred = try state.db.getBytes(
         schema.data_shred,
         .{ shred.commonHeader().slot, shred.commonHeader().index },
@@ -1260,7 +1278,7 @@ test "insertShreds 100 shreds from mainnet" {
         try shreds.append(shred);
     }
     _ = try state.inserter
-        .insertShreds(shreds.items, &(.{false} ** shred_bytes.len), null, false, null, null);
+        .insertShreds(shreds.items, &(.{false} ** shred_bytes.len), .{});
     for (shreds.items) |shred| {
         const bytes = try state.db.getBytes(
             schema.data_shred,
@@ -1519,10 +1537,7 @@ test "recovery" {
     _ = try state.inserter.insertShreds(
         code_shreds,
         is_repairs,
-        leader_schedule.provider(),
-        false,
-        null,
-        null,
+        .{ .slot_leaders = leader_schedule.provider() },
     );
 
     for (data_shreds) |data_shred| {

@@ -177,6 +177,7 @@ pub const CodeShred = struct {
         code_header: CodeHeader,
         chained_merkle_root: ?Hash,
         retransmitter_signature: ?Signature,
+        merkle_proof: ?MerkleProofEntryList,
         shard: []const u8,
     ) !Self {
         if (common_header.variant.shred_type != .code) {
@@ -193,8 +194,10 @@ pub const CodeShred = struct {
         @memset(payload[constants.headers_size + shard.len ..], 0);
         var buf = std.io.fixedBufferStream(payload);
         const writer = buf.writer();
-        try bincode.write(writer, common_header, .{});
-        try bincode.write(writer, code_header, .{});
+        try bincode.write(writer, common_header, .{}); // TODO is this necessary?
+        try bincode.write(writer, code_header, .{}); // and this?
+        if (merkle_proof) |proof|
+            try setMerkleProof(payload, proof);
         if (chained_merkle_root) |hash|
             try setChainedMerkleRoot(payload, common_header.variant, hash);
         if (retransmitter_signature) |sign|
@@ -294,6 +297,7 @@ pub const DataShred = struct {
         leader_signature: Signature,
         chained_merkle_root: ?Hash,
         retransmitter_signature: ?Signature,
+        merkle_proof: ?MerkleProofEntryList,
         shard: []const u8,
     ) !Self {
         const shard_size = shard.len;
@@ -308,12 +312,18 @@ pub const DataShred = struct {
         var shred = try generic.fromPayloadOwned(allocator, payload);
         if (shard_size != try capacity(code_shred_constants, shred.common.variant))
             return error.InvalidShardSize;
+        if (merkle_proof) |proof|
+            try setMerkleProof(payload, proof);
         if (chained_merkle_root) |hash|
             try setChainedMerkleRoot(payload, shred.common.variant, hash);
         if (retransmitter_signature) |sign|
             try setRetransmitterSignatureFor(payload, shred.common.variant, sign);
         try shred.sanitize();
         return shred;
+    }
+
+    pub fn fromPayloadOwned(allocator: Allocator, payload: []u8) !Self {
+        return generic.fromPayloadOwned(allocator, payload);
     }
 
     pub fn zeroedForTest(allocator: std.mem.Allocator) !Self {
@@ -613,13 +623,15 @@ pub fn setMerkleProof(shred: []u8, proof: MerkleProofEntryList) !void {
     }
 }
 
+// TODO unused
 pub fn getMerkleNode(shred: []const u8) !Hash {
     const variant = layout.getShredVariant(shred) orelse return error.UnknownShredVariant;
     const offset = try proofOffset(variant.constants(), variant);
     return getMerkleNodeAt(shred, Signature.size, offset);
 }
 
-fn getMerkleNodeAt(shred: []const u8, start: usize, end: usize) !Hash {
+pub fn getMerkleNodeAt(shred: []const u8, start: usize, end: usize) !Hash {
+    std.debug.print("{},{} - {}\n", .{ start, end, shred.len });
     if (shred.len < end) return error.InvalidPayloadSize;
     return hashv(&.{ MERKLE_HASH_PREFIX_LEAF, shred[start..end] });
 }
@@ -723,7 +735,7 @@ pub fn hashv(vals: []const []const u8) Hash {
 }
 
 /// Where the merkle proof starts in the shred binary.
-fn proofOffset(constants: ShredConstants, variant: ShredVariant) !usize {
+pub fn proofOffset(constants: ShredConstants, variant: ShredVariant) !usize {
     return constants.headers_size +
         try capacity(constants, variant) +
         if (variant.chained) SIZE_OF_MERKLE_ROOT else 0;
@@ -799,6 +811,7 @@ pub fn ChunkIterator(comptime T: type, chunk_size: usize) type {
 /// This contains a slice that may or may not be owned. Be careful with its lifetime.
 pub const MerkleProofEntryList = struct {
     bytes: []const u8,
+    /// number of entries, not the number of bytes
     len: usize,
 
     const Self = @This();
@@ -827,8 +840,7 @@ pub const MerkleProofEntryList = struct {
     }
 
     pub fn eql(self: Self, other: Self) bool {
-        return self.len == other.len and
-            std.mem.eql(u8, self.bytes[0..self.len], other.bytes[0..other.len]);
+        return self.len == other.len and std.mem.eql(u8, self.bytes, other.bytes);
     }
 };
 
@@ -910,7 +922,7 @@ pub const ShredType = enum(u8) {
     code = 0b0101_1010,
     data = 0b1010_0101,
 
-    fn constants(self: @This()) ShredConstants {
+    pub fn constants(self: @This()) ShredConstants {
         return switch (self) {
             .code => code_shred_constants,
             .data => data_shred_constants,
@@ -1100,6 +1112,15 @@ pub const layout = struct {
     pub fn getShredVariant(shred: []const u8) ?ShredVariant {
         if (shred.len <= OFFSET_OF_SHRED_VARIANT) return null;
         const byte = shred[OFFSET_OF_SHRED_VARIANT];
+        return ShredVariant.fromByte(byte) catch null;
+    }
+
+    /// Gets the shred variant from an erasure shard.
+    /// The erasure shard is a subset of the shred.
+    pub fn getShredVariantFromShard(shred: []const u8) ?ShredVariant {
+        const offset_without_signature = OFFSET_OF_SHRED_VARIANT - Signature.size;
+        if (shred.len <= offset_without_signature) return null;
+        const byte = shred[offset_without_signature];
         return ShredVariant.fromByte(byte) catch null;
     }
 
