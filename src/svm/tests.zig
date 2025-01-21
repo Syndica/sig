@@ -40,7 +40,7 @@ fn testAsmWithMemory(
         Region.init(.mutable, stack_memory, memory.STACK_START),
         Region.init(.constant, &.{}, memory.HEAP_START),
         Region.init(.mutable, mutable, memory.INPUT_START),
-    }, .v1);
+    }, .v0);
 
     var loader: BuiltinProgram = .{};
     var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
@@ -101,7 +101,7 @@ test "add32" {
 }
 
 test "add64" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x300000fff
         \\  add r0, -1
@@ -248,7 +248,7 @@ test "mul32 negative" {
 }
 
 test "div32 imm" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x10000000c
         \\  div32 r0, 4
@@ -257,7 +257,7 @@ test "div32 imm" {
 }
 
 test "div32 reg" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 12
         \\  lddw r1, 0x100000004
@@ -267,7 +267,7 @@ test "div32 reg" {
 }
 
 test "div32 small" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x10000000c
         \\  mov r1, 4
@@ -318,7 +318,7 @@ test "div32 division by zero" {
 }
 
 test "neg32" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 2
         \\  neg32 r0
@@ -327,7 +327,7 @@ test "neg32" {
 }
 
 test "neg64" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 2
         \\  neg r0
@@ -335,7 +335,7 @@ test "neg64" {
     , 0xFFFFFFFFFFFFFFFE);
 }
 
-test "neg invalid on v2" {
+test "neg invalid on v3" {
     try testAsm(.{},
         \\entrypoint:
         \\  neg32 r0
@@ -408,7 +408,7 @@ test "mod32" {
 }
 
 test "mod32 overflow" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x100000003
         \\  mod32 r0, 3
@@ -505,7 +505,7 @@ test "hor64" {
 }
 
 test "lddw" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x1122334455667788
         \\  exit
@@ -513,7 +513,7 @@ test "lddw" {
 }
 
 test "lddw bottom" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x0000000080000000
         \\  exit
@@ -521,7 +521,7 @@ test "lddw bottom" {
 }
 
 test "lddw logic" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0
         \\  mov r1, 0
@@ -536,7 +536,7 @@ test "lddw logic" {
     , 0x2);
 }
 
-test "lddw invalid on v2" {
+test "lddw invalid on v3" {
     try testAsm(.{},
         \\entrypoint:
         \\  lddw r0, 0x1122334455667788
@@ -546,7 +546,7 @@ test "lddw invalid on v2" {
 
 test "le16" {
     try testAsmWithMemory(
-        .{ .minimum_version = .v1 },
+        .{ .minimum_version = .v0 },
         \\  ldxh r0, [r1]
         \\  le16 r0
         \\  exit
@@ -558,7 +558,7 @@ test "le16" {
 
 test "le16 high" {
     try testAsmWithMemory(
-        .{ .minimum_version = .v1 },
+        .{ .minimum_version = .v0 },
         \\  ldxdw r0, [r1]
         \\  le16 r0
         \\  exit
@@ -570,7 +570,7 @@ test "le16 high" {
 
 test "le32" {
     try testAsmWithMemory(
-        .{ .minimum_version = .v1 },
+        .{ .minimum_version = .v0 },
         \\  ldxw r0, [r1]
         \\  le32 r0
         \\  exit
@@ -582,7 +582,7 @@ test "le32" {
 
 test "le32 high" {
     try testAsmWithMemory(
-        .{ .minimum_version = .v1 },
+        .{ .minimum_version = .v0 },
         \\  ldxdw r0, [r1]
         \\  le32 r0
         \\  exit
@@ -594,7 +594,7 @@ test "le32 high" {
 
 test "le64" {
     try testAsmWithMemory(
-        .{ .minimum_version = .v1 },
+        .{ .minimum_version = .v0 },
         \\  ldxdw r0, [r1]
         \\  le64 r0
         \\  exit
@@ -604,7 +604,7 @@ test "le64" {
     );
 }
 
-test "le invalid on v2" {
+test "le invalid on v3" {
     try testAsm(.{},
         \\  le16 r0
         \\  exit
@@ -1773,47 +1773,6 @@ test "subnet" {
     }, 0x1);
 }
 
-test "pqr divide by zero" {
-    const allocator = std.testing.allocator;
-    var program: [24]u8 = .{0} ** 24;
-    program[0] = @intFromEnum(OpCode.mov32_imm);
-    program[16] = @intFromEnum(OpCode.exit);
-
-    inline for (.{
-        OpCode.udiv32_reg,
-        OpCode.udiv64_reg,
-        OpCode.urem32_reg,
-        OpCode.urem64_reg,
-        OpCode.sdiv32_reg,
-        OpCode.sdiv64_reg,
-        OpCode.srem32_reg,
-        OpCode.srem64_reg,
-    }) |opcode| {
-        program[8] = @intFromEnum(opcode);
-
-        const config: Config = .{};
-
-        var registry: lib.Registry(u64) = .{};
-        defer registry.deinit(allocator);
-
-        var executable = try Executable.fromTextBytes(
-            allocator,
-            &program,
-            .v2,
-            &registry,
-            config,
-        );
-
-        var loader: BuiltinProgram = .{};
-        const map = try MemoryMap.init(&.{}, .v2);
-
-        var vm = try Vm.init(allocator, &executable, map, &loader, 0);
-        defer vm.deinit();
-
-        try expectEqual(error.DivisionByZero, vm.run());
-    }
-}
-
 test "pqr" {
     const allocator = std.testing.allocator;
     var program: [48]u8 = .{0} ** 48;
@@ -1835,61 +1794,66 @@ test "pqr" {
 
     const max_int = std.math.maxInt(u64);
     inline for (
+        // zig fmt: off
         [_]struct { OpCode, u64, u64, u64 }{
-            .{ OpCode.udiv32_reg, 13, 4, 3 },
+            .{ OpCode.udiv32_reg,  13, 4, 3 },
             .{ OpCode.uhmul64_reg, 13, 4, 0 },
-            .{ OpCode.udiv32_reg, 13, 4, 3 },
-            .{ OpCode.udiv64_reg, 13, 4, 3 },
-            .{ OpCode.urem32_reg, 13, 4, 1 },
-            .{ OpCode.urem64_reg, 13, 4, 1 },
+            .{ OpCode.udiv32_reg,  13, 4, 3 },
+            .{ OpCode.udiv64_reg,  13, 4, 3 },
+            .{ OpCode.urem32_reg,  13, 4, 1 },
+            .{ OpCode.urem64_reg,  13, 4, 1 },
+
             .{ OpCode.uhmul64_reg, 13, max_int, 12 },
-            .{ OpCode.udiv32_reg, 13, max_int, 0 },
-            .{ OpCode.udiv64_reg, 13, max_int, 0 },
-            .{ OpCode.urem32_reg, 13, max_int, 13 },
-            .{ OpCode.urem64_reg, 13, max_int, 13 },
+            .{ OpCode.udiv32_reg,  13, max_int, 0 },
+            .{ OpCode.udiv64_reg,  13, max_int, 0 },
+            .{ OpCode.urem32_reg,  13, max_int, 13 },
+            .{ OpCode.urem64_reg,  13, max_int, 13 },
+
             .{ OpCode.uhmul64_reg, max_int, 4, 3 },
-            .{ OpCode.udiv32_reg, max_int, 4, std.math.maxInt(u32) / 4 },
-            .{ OpCode.udiv64_reg, max_int, 4, max_int / 4 },
-            .{ OpCode.urem32_reg, max_int, 4, 3 },
-            .{ OpCode.urem64_reg, max_int, 4, 3 },
+            .{ OpCode.udiv32_reg,  max_int, 4, std.math.maxInt(u32) / 4 },
+            .{ OpCode.udiv64_reg,  max_int, 4, max_int / 4 },
+            .{ OpCode.urem32_reg,  max_int, 4, 3 },
+            .{ OpCode.urem64_reg,  max_int, 4, 3 },
+
             .{ OpCode.uhmul64_reg, max_int, max_int, max_int - 1 },
-            .{ OpCode.udiv32_reg, max_int, max_int, 1 },
-            .{ OpCode.udiv64_reg, max_int, max_int, 1 },
-            .{ OpCode.urem32_reg, max_int, max_int, 0 },
-            .{ OpCode.urem64_reg, max_int, max_int, 0 },
+            .{ OpCode.udiv32_reg,  max_int, max_int, 1 },
+            .{ OpCode.udiv64_reg,  max_int, max_int, 1 },
+            .{ OpCode.urem32_reg,  max_int, max_int, 0 },
+            .{ OpCode.urem64_reg,  max_int, max_int, 0 },
 
-            .{ OpCode.lmul32_reg, 13, 4, 52 },
-            .{ OpCode.lmul64_reg, 13, 4, 52 },
+            .{ OpCode.lmul32_reg,  13, 4, 52 },
+            .{ OpCode.lmul64_reg,  13, 4, 52 },
             .{ OpCode.shmul64_reg, 13, 4, 0 },
-            .{ OpCode.sdiv32_reg, 13, 4, 3 },
-            .{ OpCode.sdiv64_reg, 13, 4, 3 },
-            .{ OpCode.srem32_reg, 13, 4, 1 },
-            .{ OpCode.srem64_reg, 13, 4, 1 },
+            .{ OpCode.sdiv32_reg,  13, 4, 3 },
+            .{ OpCode.sdiv64_reg,  13, 4, 3 },
+            .{ OpCode.srem32_reg,  13, 4, 1 },
+            .{ OpCode.srem64_reg,  13, 4, 1 },
 
-            .{ OpCode.lmul32_reg, 13, ~@as(u64, 3), ~@as(u64, 51) },
-            .{ OpCode.lmul64_reg, 13, ~@as(u64, 3), ~@as(u64, 51) },
+            .{ OpCode.lmul32_reg,  13, ~@as(u64, 3), ~@as(u64, 51) },
+            .{ OpCode.lmul64_reg,  13, ~@as(u64, 3), ~@as(u64, 51) },
             .{ OpCode.shmul64_reg, 13, ~@as(u64, 3), ~@as(u64, 0) },
-            .{ OpCode.sdiv32_reg, 13, ~@as(u64, 3), ~@as(u64, 2) },
-            .{ OpCode.sdiv64_reg, 13, ~@as(u64, 3), ~@as(u64, 2) },
-            .{ OpCode.srem32_reg, 13, ~@as(u64, 3), 1 },
-            .{ OpCode.srem64_reg, 13, ~@as(u64, 3), 1 },
+            .{ OpCode.sdiv32_reg,  13, ~@as(u64, 3), ~@as(u64, 2) },
+            .{ OpCode.sdiv64_reg,  13, ~@as(u64, 3), ~@as(u64, 2) },
+            .{ OpCode.srem32_reg,  13, ~@as(u64, 3), 1 },
+            .{ OpCode.srem64_reg,  13, ~@as(u64, 3), 1 },
 
-            .{ OpCode.lmul32_reg, ~@as(u64, 12), 4, ~@as(u64, 51) },
-            .{ OpCode.lmul64_reg, ~@as(u64, 12), 4, ~@as(u64, 51) },
+            .{ OpCode.lmul32_reg,  ~@as(u64, 12), 4, ~@as(u64, 51) },
+            .{ OpCode.lmul64_reg,  ~@as(u64, 12), 4, ~@as(u64, 51) },
             .{ OpCode.shmul64_reg, ~@as(u64, 12), 4, ~@as(u64, 0) },
-            .{ OpCode.sdiv32_reg, ~@as(u64, 12), 4, ~@as(u64, 2) },
-            .{ OpCode.sdiv64_reg, ~@as(u64, 12), 4, ~@as(u64, 2) },
-            .{ OpCode.srem32_reg, ~@as(u64, 12), 4, ~@as(u64, 0) },
-            .{ OpCode.srem64_reg, ~@as(u64, 12), 4, ~@as(u64, 0) },
+            .{ OpCode.sdiv32_reg,  ~@as(u64, 12), 4, ~@as(u64, 2) },
+            .{ OpCode.sdiv64_reg,  ~@as(u64, 12), 4, ~@as(u64, 2) },
+            .{ OpCode.srem32_reg,  ~@as(u64, 12), 4, ~@as(u64, 0) },
+            .{ OpCode.srem64_reg,  ~@as(u64, 12), 4, ~@as(u64, 0) },
 
-            .{ OpCode.lmul32_reg, ~@as(u64, 12), ~@as(u64, 3), 52 },
-            .{ OpCode.lmul64_reg, ~@as(u64, 12), ~@as(u64, 3), 52 },
+            .{ OpCode.lmul32_reg,  ~@as(u64, 12), ~@as(u64, 3), 52 },
+            .{ OpCode.lmul64_reg,  ~@as(u64, 12), ~@as(u64, 3), 52 },
             .{ OpCode.shmul64_reg, ~@as(u64, 12), ~@as(u64, 3), 0 },
-            .{ OpCode.sdiv32_reg, ~@as(u64, 12), ~@as(u64, 3), 3 },
-            .{ OpCode.sdiv64_reg, ~@as(u64, 12), ~@as(u64, 3), 3 },
-            .{ OpCode.srem32_reg, ~@as(u64, 12), ~@as(u64, 3), ~@as(u64, 0) },
-            .{ OpCode.srem64_reg, ~@as(u64, 12), ~@as(u64, 3), ~@as(u64, 0) },
+            .{ OpCode.sdiv32_reg,  ~@as(u64, 12), ~@as(u64, 3), 3 },
+            .{ OpCode.sdiv64_reg,  ~@as(u64, 12), ~@as(u64, 3), 3 },
+            .{ OpCode.srem32_reg,  ~@as(u64, 12), ~@as(u64, 3), ~@as(u64, 0) },
+            .{ OpCode.srem64_reg,  ~@as(u64, 12), ~@as(u64, 3), ~@as(u64, 0) },
         },
+        // zig fmt: on
     ) |entry| {
         const opc, const dst, const src, const expected = entry;
         std.mem.writeInt(u32, program[4..][0..4], @truncate(dst), .little);
@@ -1899,7 +1863,7 @@ test "pqr" {
         std.mem.writeInt(u32, program[36..][0..4], @truncate(src), .little);
         program[32] = @intFromEnum(opc);
 
-        const config: Config = .{};
+        const config: Config = .{ .minimum_version = .v3 };
 
         var registry: lib.Registry(u64) = .{};
         defer registry.deinit(allocator);
@@ -1907,19 +1871,58 @@ test "pqr" {
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
-            .v2,
             &registry,
             config,
         );
 
         var loader: BuiltinProgram = .{};
-        const map = try MemoryMap.init(&.{}, .v2);
+        const map = try MemoryMap.init(&.{}, .v3);
 
         var vm = try Vm.init(allocator, &executable, map, &loader, 0);
         defer vm.deinit();
 
         const unsigned_expected: u64 = expected;
         try expectEqual(unsigned_expected, try vm.run());
+    }
+}
+
+test "pqr divide by zero" {
+    const allocator = std.testing.allocator;
+    var program: [24]u8 = .{0} ** 24;
+    program[0] = @intFromEnum(OpCode.mov32_imm);
+    program[16] = @intFromEnum(OpCode.exit);
+
+    inline for (.{
+        OpCode.udiv32_reg,
+        OpCode.udiv64_reg,
+        OpCode.urem32_reg,
+        OpCode.urem64_reg,
+        OpCode.sdiv32_reg,
+        OpCode.sdiv64_reg,
+        OpCode.srem32_reg,
+        OpCode.srem64_reg,
+    }) |opcode| {
+        program[8] = @intFromEnum(opcode);
+
+        const config: Config = .{ .minimum_version = .v3 };
+
+        var registry: lib.Registry(u64) = .{};
+        defer registry.deinit(allocator);
+
+        var executable = try Executable.fromTextBytes(
+            allocator,
+            &program,
+            &registry,
+            config,
+        );
+
+        var loader: BuiltinProgram = .{};
+        const map = try MemoryMap.init(&.{}, .v3);
+
+        var vm = try Vm.init(allocator, &executable, map, &loader, 0);
+        defer vm.deinit();
+
+        try expectEqual(error.DivisionByZero, vm.run());
     }
 }
 
@@ -1986,7 +1989,7 @@ test "call depth out of bounds" {
 }
 
 test "callx imm" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov64 r0, 0x0
         \\  mov64 r8, 0x1
@@ -2000,10 +2003,31 @@ test "callx imm" {
     , 42);
 }
 
-test "callx out of bounds" {
-    try testAsm(.{},
+test "callx out of bounds low" {
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov64 r0, 0x3
+        \\  callx r0
+        \\  exit
+    , error.PcOutOfBounds);
+}
+
+test "callx out of bounds high" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov64 r0, -0x1
+        \\  lsh64 r0, 0x20
+        \\  or64 r0, 0x3
+        \\  callx r0
+        \\  exit
+    , error.PcOutOfBounds);
+}
+
+test "callx out of bounds max" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov64 r0, -0x8
+        \\  hor64 r0, -0x1
         \\  callx r0
         \\  exit
     , error.PcOutOfBounds);
@@ -2032,7 +2056,7 @@ test "call bpf 2 bpf" {
 }
 
 test "fixed stack out of bounds" {
-    try testAsm(.{ .minimum_version = .v1 },
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  stb [r10-0x4000], 0
         \\  exit
@@ -2115,7 +2139,7 @@ fn testElfWithSyscalls(
         Region.init(.mutable, stack_memory, memory.STACK_START),
         Region.init(.constant, &.{}, memory.HEAP_START),
         Region.init(.mutable, &.{}, memory.INPUT_START),
-    }, .v1);
+    }, .v0);
 
     var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
     defer vm.deinit();
@@ -2124,12 +2148,12 @@ fn testElfWithSyscalls(
     try expectEqual(expected, result);
 }
 
-test "BPF_64_64 sbpfv1" {
+test "BPF_64_64 sbpfv0" {
     // [ 1] .text             PROGBITS        0000000000000120 000120 000018 00  AX  0   0  8
     // prints the address of the first byte in the .text section
     try testElf(
-        .{ .minimum_version = .v1 },
-        sig.ELF_DATA_DIR ++ "reloc_64_64_sbpfv1.so",
+        .{ .minimum_version = .v0 },
+        sig.ELF_DATA_DIR ++ "reloc_64_64_sbpfv0.so",
         memory.PROGRAM_START + 0x120,
     );
 }
@@ -2143,12 +2167,12 @@ test "BPF_64_64" {
     );
 }
 
-test "BPF_64_RELATIVE data sbpv1" {
+test "BPF_64_RELATIVE data sbpv0" {
     // 4: 0000000000000140     8 OBJECT  LOCAL  DEFAULT     3 reloc_64_relative_data.DATA
     // 0000000000000140  0000000000000008 R_BPF_64_RELATIVE
     try testElf(
-        .{ .minimum_version = .v1 },
-        sig.ELF_DATA_DIR ++ "reloc_64_relative_data_sbpfv1.so",
+        .{ .minimum_version = .v0 },
+        sig.ELF_DATA_DIR ++ "reloc_64_relative_data_sbpfv0.so",
         memory.PROGRAM_START + 0x140,
     );
 }
@@ -2162,18 +2186,18 @@ test "BPF_64_RELATIVE data" {
     );
 }
 
-test "BPF_64_RELATIVE sbpv1" {
+test "BPF_64_RELATIVE sbpv0" {
     try testElf(
-        .{ .minimum_version = .v1 },
-        sig.ELF_DATA_DIR ++ "reloc_64_relative_sbpfv1.so",
+        .{ .minimum_version = .v0 },
+        sig.ELF_DATA_DIR ++ "reloc_64_relative_sbpfv0.so",
         memory.PROGRAM_START + 0x138,
     );
 }
 
-test "load elf rodata sbpfv1" {
+test "load elf rodata sbpfv0" {
     try testElf(
-        .{ .minimum_version = .v1 },
-        sig.ELF_DATA_DIR ++ "rodata_section_sbpfv1.so",
+        .{ .minimum_version = .v0 },
+        sig.ELF_DATA_DIR ++ "rodata_section_sbpfv0.so",
         42,
     );
 }
