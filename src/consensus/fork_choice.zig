@@ -147,8 +147,8 @@ pub const HeaviestSubtreeForkChoice = struct {
         self.last_root_time = Instant.now();
     }
 
-    pub fn containsBlock(self: *const Self, key: *SlotHashKey) bool {
-        return self.fork_infos.contains(key);
+    pub fn containsBlock(self: *const Self, key: *const SlotHashKey) bool {
+        return self.fork_infos.contains(key.*);
     }
 
     pub fn latest_invalid_ancestor(self: *const Self, slot_hash_key: SlotHashKey) ?Slot {
@@ -326,8 +326,8 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     // TODO: Change this to return an iterator.
-    fn getChildren(self: *Self, slot_hash_key: *const SlotHashKey) ?std.ArrayList(SlotHashKey) {
-        const fork_info = self.fork_infos.get(slot_hash_key) orelse return null;
+    fn getChildren(self: *Self, slot_hash_key: *const SlotHashKey) ?SortedMap(SlotHashKey, void) {
+        const fork_info = self.fork_infos.get(slot_hash_key.*) orelse return null;
         return fork_info.children;
     }
 
@@ -335,14 +335,60 @@ pub const HeaviestSubtreeForkChoice = struct {
         const fork_info = self.fork_infos.get(slot_hash_key) orelse return null;
         return fork_info.isCandidate();
     }
+
+    fn subtreeDiff(
+        self: *Self,
+        root1: *const SlotHashKey,
+        root2: *const SlotHashKey,
+    ) !AutoHashMap(SlotHashKey, void) {
+        if (self.containsBlock(root1)) {
+            return AutoHashMap(SlotHashKey, void).init(self.allocator);
+        }
+        var pending_keys = std.ArrayList(SlotHashKey).init(self.allocator);
+        defer pending_keys.deinit();
+
+        try pending_keys.append(root1.*);
+
+        var reachable_set = AutoHashMap(SlotHashKey, void).init(self.allocator);
+        defer reachable_set.deinit();
+
+        while (pending_keys.popOrNull()) |current_key| {
+            if (current_key.order(root2.*) == .eq) {
+                continue;
+            }
+
+            var children = self.getChildren(&current_key) orelse return error.MissingChild;
+            for (children.keys()) |child| {
+                try pending_keys.append(child);
+            }
+            try reachable_set.put(current_key, {});
+        }
+
+        return reachable_set;
+    }
 };
 
+/// Testing only ensures everything compiles.
+/// TODO: Update to assert.
 const test_allocator = std.testing.allocator;
 
-test "create HeaviestSubtreeForkChoice from root" {
+test "HeaviestSubtreeForkChoice.init" {
     var fc = try HeaviestSubtreeForkChoice.init(
         test_allocator,
         SlotHashKey{ .slot = 0, .hash = Hash.ZEROES },
     );
     defer fc.deinit();
+}
+
+test "HeaviestSubtreeForkChoice.subtreeDiff" {
+    var fc = try HeaviestSubtreeForkChoice.init(
+        test_allocator,
+        SlotHashKey{ .slot = 0, .hash = Hash.ZEROES },
+    );
+    defer fc.deinit();
+
+    _ = try fc.subtreeDiff(
+        &SlotHashKey{ .slot = 0, .hash = Hash.ZEROES },
+        &SlotHashKey{ .slot = 0, .hash = Hash.ZEROES },
+    );
 }
