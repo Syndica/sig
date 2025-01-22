@@ -94,6 +94,12 @@ pub const ShredInserter = struct {
     pub const Result = struct {
         completed_data_set_infos: ArrayList(CompletedDataSetInfo),
         duplicate_shreds: ArrayList(PossibleDuplicateShred),
+
+        pub fn deinit(self: Result) void {
+            for (self.duplicate_shreds.items) |ds| ds.deinit();
+            self.completed_data_set_infos.deinit();
+            self.duplicate_shreds.deinit();
+        }
     };
 
     /// The main function that performs the shred insertion logic
@@ -194,7 +200,7 @@ pub const ShredInserter = struct {
         //
         var shred_insertion_timer = try Timer.start();
         var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
-        defer newly_completed_data_sets.deinit();
+        errdefer newly_completed_data_sets.deinit();
         for (shreds, is_repaired) |shred, is_repair| {
             const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
             switch (shred) {
@@ -413,7 +419,6 @@ pub const ShredInserter = struct {
 
         return .{
             .completed_data_set_infos = newly_completed_data_sets,
-            // TODO: ensure all duplicate shreds exceed lifetime of pending state
             .duplicate_shreds = state.duplicate_shreds,
         };
     }
@@ -488,7 +493,9 @@ pub const ShredInserter = struct {
             // dupes
             if (index_meta.code_index.contains(shred.common.index)) {
                 self.metrics.num_code_shreds_exists.inc();
-                try state.duplicate_shreds.append(.{ .Exists = .{ .code = shred } });
+                const dupe = try shred.clone();
+                errdefer dupe.deinit();
+                try state.duplicate_shreds.append(.{ .Exists = .{ .code = dupe } });
                 return false;
             }
 
@@ -551,10 +558,11 @@ pub const ShredInserter = struct {
                 slot,
                 erasure_meta,
             )) |conflicting_shred| {
+                defer conflicting_shred.deinit();
                 // found the duplicate
                 self.db.put(schema.duplicate_slots, slot, .{
                     .shred1 = conflicting_shred.data,
-                    .shred2 = shred.payload,
+                    .shred2 = try shred.allocator.dupe(u8, shred.payload),
                 }) catch |e| {
                     // TODO: only log a database error?
                     self.logger.err().logf(
@@ -562,12 +570,12 @@ pub const ShredInserter = struct {
                         .{ slot, erasure_set_id, e },
                     );
                 };
+                const original = try shred.clone();
+                errdefer original.deinit();
+                const conflict = try conflicting_shred.clone(self.allocator);
+                errdefer conflict.deinit();
                 try state.duplicate_shreds.append(.{
-                    .ErasureConflict = .{
-                        // TODO lifetimes
-                        .original = .{ .code = shred },
-                        .conflict = conflicting_shred,
-                    },
+                    .ErasureConflict = .{ .original = .{ .code = original }, .conflict = conflict },
                 });
             } else {
                 self.logger.err().logf(&newlinesToSpaces(
@@ -598,7 +606,7 @@ pub const ShredInserter = struct {
         _: CodeShred, // TODO: figure out why this is here. delete it or add what is missing.
         slot: Slot,
         erasure_meta: *const ErasureMeta,
-    ) !?BytesRef { // TODO consider lifetime
+    ) !?BytesRef { // TODO lifetime
         // Search for the shred which set the initial erasure config, either inserted,
         // or in the current batch in just_inserted_shreds.
         const index: u32 = @intCast(erasure_meta.first_received_code_index);
@@ -770,7 +778,7 @@ pub const ShredInserter = struct {
                     ), .{ shred_id, slot_meta });
                     return false; // TODO: this is redundant
                 };
-                errdefer ending_shred.deinit();
+                defer ending_shred.deinit();
                 const dupe = meta.DuplicateSlotProof{
                     .shred1 = ending_shred.data,
                     .shred2 = shred.payload,
@@ -779,10 +787,13 @@ pub const ShredInserter = struct {
                     // TODO: only log a database error?
                     self.logger.err().logf("failed to store duplicate slot: {}", .{e});
                 };
-                // FIXME data ownership
+                const original = try shred.clone();
+                errdefer original.deinit();
+                const conflict = try ending_shred.clone(self.allocator);
+                errdefer conflict.deinit();
                 try duplicate_shreds.append(.{ .LastIndexConflict = .{
-                    .original = .{ .data = shred },
-                    .conflict = ending_shred,
+                    .original = .{ .data = original },
+                    .conflict = conflict,
                 } });
             }
 
@@ -916,7 +927,10 @@ pub const ShredInserter = struct {
         reed_solomon_cache: *ReedSolomonCache,
     ) !std.ArrayList(Shred) {
         var available_shreds = ArrayList(Shred).init(self.allocator);
-        defer available_shreds.deinit();
+        defer {
+            for (available_shreds.items) |shred| shred.deinit();
+            available_shreds.deinit();
+        }
 
         try getRecoveryShreds(
             self.allocator,
@@ -1243,7 +1257,8 @@ test "insertShreds single shred" {
     const allocator = std.testing.allocator;
     const shred = try Shred.fromPayload(allocator, &ledger.shred.test_data_shred);
     defer shred.deinit();
-    _ = try state.inserter.insertShreds(&.{shred}, &.{false}, .{});
+    const result = try state.inserter.insertShreds(&.{shred}, &.{false}, .{});
+    result.deinit();
     const stored_shred = try state.db.getBytes(
         schema.data_shred,
         .{ shred.commonHeader().slot, shred.commonHeader().index },
@@ -1294,7 +1309,8 @@ test "chaining basic" {
     };
 
     // insert slot 1
-    _ = try state.insertShredBytes(slots[1]);
+    var result = try state.insertShredBytes(slots[1]);
+    result.deinit();
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
@@ -1305,7 +1321,8 @@ test "chaining basic" {
     }
 
     // insert slot 2
-    _ = try state.insertShredBytes(slots[2]);
+    result = try state.insertShredBytes(slots[2]);
+    result.deinit();
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
@@ -1324,7 +1341,8 @@ test "chaining basic" {
     }
 
     // insert slot 0
-    _ = try state.insertShredBytes(slots[0]);
+    result = try state.insertShredBytes(slots[0]);
+    result.deinit();
     {
         var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 0)).?;
         defer slot_meta.deinit();
@@ -1452,12 +1470,7 @@ test "merkle root metas coding" {
         try state.db.commit(&write_batch);
     }
 
-    for (insert_state.duplicate_shreds.items) |duplicate| {
-        switch (duplicate) {
-            .Exists => {},
-            inline else => |sc| sc.conflict.deinit(),
-        }
-    }
+    for (insert_state.duplicate_shreds.items) |duplicate| duplicate.deinit();
     insert_state.duplicate_shreds.clearRetainingCapacity();
 
     { // third shred (different index, should succeed)
@@ -1523,11 +1536,12 @@ test "recovery" {
     defer allocator.free(is_repairs);
     for (0..code_shreds.len) |i| is_repairs[i] = false;
 
-    _ = try state.inserter.insertShreds(
+    const result = try state.inserter.insertShreds(
         code_shreds,
         is_repairs,
         .{ .slot_leaders = leader_schedule.provider() },
     );
+    result.deinit();
 
     for (data_shreds) |data_shred| {
         const key = .{ data_shred.data.common.slot, data_shred.data.common.index };

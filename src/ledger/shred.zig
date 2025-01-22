@@ -61,6 +61,13 @@ pub const Shred = union(ShredType) {
         };
     }
 
+    pub fn clone(self: Self) Allocator.Error!Self {
+        return switch (self) {
+            .code => |shred| .{ .code = try shred.clone() },
+            .data => |shred| .{ .data = try shred.clone() },
+        };
+    }
+
     pub fn payload(self: Self) []const u8 {
         return switch (self) {
             inline .code, .data => |shred| shred.payload,
@@ -168,6 +175,12 @@ pub const CodeShred = struct {
 
     pub fn deinit(self: Self) void {
         self.allocator.free(self.payload);
+    }
+
+    pub fn clone(self: Self) Allocator.Error!Self {
+        var new = self;
+        new.payload = try new.allocator.dupe(u8, new.payload);
+        return new;
     }
 
     /// agave: ShredCode::from_recovered_shard
@@ -286,6 +299,12 @@ pub const DataShred = struct {
 
     pub fn deinit(self: Self) void {
         self.allocator.free(self.payload);
+    }
+
+    pub fn clone(self: Self) Allocator.Error!Self {
+        var new = self;
+        new.payload = try new.allocator.dupe(u8, new.payload);
+        return new;
     }
 
     /// agave: ShredData::from_recovered_shard

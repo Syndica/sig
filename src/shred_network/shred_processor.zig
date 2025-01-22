@@ -46,6 +46,7 @@ pub fn runShredProcessor(
     {
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
+        defer for (shreds.items) |shred| shred.deinit();
         while (verified_shred_receiver.tryReceive()) |packet| {
             const shred_payload = layout.getShred(&packet) orelse return error.InvalidVerifiedShred;
             const shred = try shreds.addOne(allocator);
@@ -62,7 +63,7 @@ pub fn runShredProcessor(
         }
         metrics.insertion_batch_size.observe(shreds.items.len);
         metrics.passed_to_inserter_count.add(shreds.items.len);
-        _ = try shred_inserter.insertShreds(
+        const result = try shred_inserter.insertShreds(
             shreds.items,
             is_repaired.items,
             .{
@@ -70,6 +71,7 @@ pub fn runShredProcessor(
                 .shred_tracker = tracker,
             },
         );
+        result.deinit();
     }
 }
 

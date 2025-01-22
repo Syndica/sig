@@ -80,11 +80,13 @@ pub const MerkleRootValidator = struct {
                 .shred_type = merkle_root_meta.first_received_shred_type,
             };
             if (try self.shreds.get(shred_id)) |conflicting_shred| {
+                defer conflicting_shred.deinit();
+                const original = try shred.clone();
+                errdefer original.deinit();
+                const conflict = try conflicting_shred.clone(self.allocator);
+                errdefer conflict.deinit();
                 try self.duplicate_shreds.append(.{
-                    .MerkleRootConflict = .{
-                        .original = shred.*, // TODO lifetimes (cloned in rust)
-                        .conflict = conflicting_shred,
-                    },
+                    .MerkleRootConflict = .{ .original = original, .conflict = conflict },
                 });
             } else {
                 self.logger.err().logf(&newlinesToSpaces(
@@ -210,7 +212,7 @@ pub const MerkleRootValidator = struct {
             );
             return true;
         };
-        errdefer other_shred.deinit();
+        defer other_shred.deinit();
 
         const older_shred, const newer_shred = switch (direction) {
             .forward => .{ shred.payload(), other_shred.data },
@@ -250,11 +252,13 @@ pub const MerkleRootValidator = struct {
         );
 
         if (!try self.duplicate_shreds.contains(slot)) {
+            const original = try shred.clone();
+            errdefer original.deinit();
+            const conflict = try other_shred.clone(self.allocator);
+            errdefer conflict.deinit();
             try self.duplicate_shreds.append(.{
-                .ChainedMerkleRootConflict = .{ .original = shred, .conflict = other_shred },
+                .ChainedMerkleRootConflict = .{ .original = original, .conflict = conflict },
             });
-        } else {
-            other_shred.deinit();
         }
 
         return false;
