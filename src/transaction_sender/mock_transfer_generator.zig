@@ -2,6 +2,9 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const types = @import("../rpc/types.zig");
 
+const system_program = sig.runtime.program.system_program;
+const SYSTEM_PROGRAM_ID = sig.runtime.id.SYSTEM_PROGRAM_ID;
+
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 const AtomicBool = std.atomic.Value(bool);
@@ -183,7 +186,7 @@ pub const MockTransferService = struct {
                 };
             };
 
-            const transaction = try sig.core.Transaction.buildTransferTansaction(
+            const transaction = try buildTransferTansaction(
                 self.allocator,
                 random,
                 from_keypair,
@@ -239,7 +242,7 @@ pub const MockTransferService = struct {
                 };
             };
 
-            const transaction = try sig.core.Transaction.buildTransferTansaction(
+            const transaction = try buildTransferTansaction(
                 self.allocator,
                 random,
                 from_keypair,
@@ -284,7 +287,7 @@ pub const MockTransferService = struct {
             };
         };
 
-        const transaction = try sig.core.transaction.buildTransferTansaction(
+        const transaction = try buildTransferTansaction(
             self.allocator,
             random,
             from_keypair,
@@ -374,5 +377,64 @@ pub const MockTransferService = struct {
             }
         }
         return error.AirdropFailed;
+    }
+
+    pub fn buildTransferTansaction(
+        allocator: std.mem.Allocator,
+        random: std.Random,
+        from_keypair: KeyPair,
+        to_pubkey: Pubkey,
+        lamports: u64,
+        recent_blockhash: Hash,
+    ) !sig.core.Transaction {
+        const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
+
+        const signatures = try allocator.alloc(Signature, 1);
+        errdefer allocator.free(signatures);
+
+        const addresses = try allocator.alloc(Pubkey, 3);
+        errdefer allocator.free(addresses);
+        addresses[0] = from_pubkey;
+        addresses[1] = to_pubkey;
+        addresses[2] = SYSTEM_PROGRAM_ID;
+
+        const account_indexes = try allocator.alloc(u8, 2);
+        errdefer allocator.free(account_indexes);
+        account_indexes[0] = 0;
+        account_indexes[1] = 1;
+
+        var data = try sig.bincode.writeToArray(
+            allocator,
+            system_program.Instruction{ .Transfer = .{ .lamports = lamports } },
+            .{},
+        );
+        errdefer data.deinit();
+
+        const instructions = try allocator.alloc(sig.core.Transaction.Instruction, 1);
+        errdefer allocator.free(instructions);
+        instructions[0] = .{
+            .program_index = 2,
+            .account_indexes = account_indexes,
+            .data = try data.toOwnedSlice(),
+        };
+
+        const transaction = sig.core.Transaction{
+            .signatures = signatures,
+            .version = .V0,
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 1,
+            .account_keys = addresses,
+            .recent_blockhash = recent_blockhash,
+            .instructions = instructions,
+        };
+
+        var buffer = [_]u8{0} ** sig.core.Transaction.MAX_BYTES;
+        const signable = try transaction.writeSignableToSlice(&buffer);
+        var noise: [KeyPair.seed_length]u8 = undefined;
+        random.bytes(noise[0..]);
+        transaction.signatures[0] = Signature.init((try from_keypair.sign(signable, noise)).toBytes());
+
+        return transaction;
     }
 };
