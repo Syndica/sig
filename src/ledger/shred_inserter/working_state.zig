@@ -112,13 +112,13 @@ pub const PendingInsertShredsState = struct {
         };
     }
 
+    /// duplicate_shreds is not deinitialized. ownership is transfered to caller
     pub fn deinit(self: *Self) void {
         self.just_inserted_shreds.deinit();
         self.erasure_metas.deinit();
         self.merkle_root_metas.deinit();
         deinitMapRecursive(&self.slot_meta_working_set);
         deinitMapRecursive(&self.index_working_set);
-        self.duplicate_shreds.deinit();
         self.write_batch.deinit();
     }
 

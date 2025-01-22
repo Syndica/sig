@@ -645,7 +645,11 @@ pub const ShredInserter = struct {
 
         if (!is_trusted) {
             if (isDataShredPresent(shred, slot_meta, &index_meta.data_index)) {
-                try state.duplicate_shreds.append(.{ .Exists = shred_union });
+                {
+                    const dupe = try shred_union.clone();
+                    errdefer dupe.deinit();
+                    try state.duplicate_shreds.append(.{ .Exists = dupe });
+                }
                 return error.Exists;
             }
             if (shred.isLastInSlot() and
@@ -685,11 +689,9 @@ pub const ShredInserter = struct {
                 // A previous shred has been inserted in this batch or in blockstore
                 // Compare our current shred against the previous shred for potential
                 // conflicts
-                if (!try merkle_root_validator.checkConsistency(
-                    slot,
-                    merkle_root_meta.asRef(),
-                    &shred_union,
-                )) {
+                if (!try merkle_root_validator
+                    .checkConsistency(slot, merkle_root_meta.asRef(), &shred_union))
+                {
                     return error.InvalidShred;
                 }
             }
@@ -1281,8 +1283,9 @@ test "insertShreds 100 shreds from mainnet" {
         const shred = try Shred.fromPayload(std.testing.allocator, payload);
         try shreds.append(shred);
     }
-    _ = try state.inserter
+    const result = try state.inserter
         .insertShreds(shreds.items, &(.{false} ** shred_bytes.len), .{});
+    result.deinit();
     for (shreds.items) |shred| {
         const bytes = try state.db.getBytes(
             schema.data_shred,
@@ -1431,7 +1434,13 @@ test "merkle root metas coding" {
         &state.db,
         metrics,
     );
-    defer insert_state.deinit();
+    defer {
+        insert_state.deinit();
+        for (insert_state.duplicate_shreds.items) |shred| {
+            shred.deinit();
+        }
+        insert_state.duplicate_shreds.deinit();
+    }
 
     { // second shred (same index as first, should conflict with merkle root)
         var write_batch = try state.db.initWriteBatch();
