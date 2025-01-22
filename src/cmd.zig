@@ -14,7 +14,6 @@ const IpAddr = sig.net.IpAddr;
 const Logger = sig.trace.Logger;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.Pubkey;
-const ShredNetworkDependencies = sig.shred_network.ShredNetworkDependencies;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
@@ -57,7 +56,7 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-var current_config = sig.common.Config.DEFAULT;
+var current_config = sig.Config.DEFAULT;
 
 pub fn main() !void {
     defer {
@@ -866,7 +865,7 @@ fn validator() !void {
     // shred network
     var shred_network_manager = try sig.shred_network.start(
         current_config.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
-        ShredNetworkDependencies{
+        .{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
             .registry = app_base.metrics_registry,
@@ -904,7 +903,7 @@ fn shredNetwork() !void {
     var rpc_client = sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
 
-// <<<<<<< HEAD
+    // <<<<<<< HEAD
     const shred_network_conf = current_config.shred_network.toConfig(
         current_config.shred_network.start_slot orelse blk: {
             const response = try rpc_client.getSlot(allocator, .{});
@@ -915,7 +914,7 @@ fn shredNetwork() !void {
 
     const repair_port: u16 = shred_network_conf.repair_port;
     const turbine_recv_port: u16 = shred_network_conf.turbine_recv_port;
-// =======
+    // =======
     // var shred_network_conf = current_config.shred_network;
     // shred_network_conf.start_slot = shred_network_conf.start_slot orelse blk: {
     //     const response = try rpc_client.getSlot(allocator, .{});
@@ -924,7 +923,7 @@ fn shredNetwork() !void {
 
     // const repair_port: u16 = current_config.shred_network.repair_port;
     // const turbine_recv_port: u16 = current_config.shred_network.turbine_recv_port;
-// >>>>>>> 4d5dbdf8 (Extract cmd abstractions, remove redundant aliases)
+    // >>>>>>> 4d5dbdf8 (Extract cmd abstractions, remove redundant aliases)
 
     var gossip_service = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },

@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("sig.zig");
 const core = sig.core;
 
 const ShredNetworkConfig = sig.shred_network.ShredNetworkConfig;

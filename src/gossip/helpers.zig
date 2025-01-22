@@ -40,7 +40,7 @@ pub fn initGossipFromCluster(
     const my_shred_version = echo_data.shred_version orelse 0;
     const my_ip = echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
 
-    const default_config: sig.common.Config.GossipConfig = .{};
+    const default_config: sig.Config.GossipConfig = .{};
     // NOTE: we dont use the default port to avoid port collisions with other gossip
     // services running on the same machine
     const my_port = default_config.port + 5;
