@@ -41,9 +41,9 @@ pub fn runShredProcessor(
     var is_repaired: ArrayListUnmanaged(bool) = .{};
     const metrics = try registry.initStruct(Metrics);
 
-    while (!exit.load(.acquire) or
-        verified_shred_receiver.len() != 0)
-    {
+    while (true) {
+        verified_shred_receiver.waitToReceive(.{ .unordered = exit }) catch break;
+
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
         defer for (shreds.items) |shred| shred.deinit();

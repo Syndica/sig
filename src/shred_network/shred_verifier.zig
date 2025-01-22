@@ -29,9 +29,9 @@ pub fn runShredVerifier(
 ) !void {
     const metrics = try registry.initStruct(Metrics);
     var verified_merkle_roots = try VerifiedMerkleRoots.init(std.heap.c_allocator, 1024);
-    while (!exit.load(.acquire) or
-        unverified_shred_receiver.len() != 0)
-    {
+    while (true) {
+        unverified_shred_receiver.waitToReceive(.{ .unordered = exit }) catch break;
+
         var packet_count: usize = 0;
         while (unverified_shred_receiver.tryReceive()) |packet| {
             packet_count += 1;
