@@ -147,6 +147,10 @@ pub const HeaviestSubtreeForkChoice = struct {
         self.last_root_time = Instant.now();
     }
 
+    pub fn containsBlock(self: *const Self, key: *SlotHashKey) bool {
+        return self.fork_infos.contains(key);
+    }
+
     pub fn latest_invalid_ancestor(self: *const Self, slot_hash_key: SlotHashKey) ?Slot {
         if (self.fork_infos.get(slot_hash_key)) |fork_info| {
             return fork_info.latest_invalid_ancestor;
