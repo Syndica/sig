@@ -1029,6 +1029,25 @@ pub const ReadHandle = union(enum) {
         return initAllocatedOwned(data_copy);
     }
 
+    pub fn duplicateCached(self: ReadHandle, allocator: std.mem.Allocator) !ReadHandle {
+        switch (self) {
+            .cached => |*cached| {
+                const indices = try allocator.dupe(FrameIndex, cached.frame_indices);
+                for (indices) |f_idx| {
+                    const alive = cached.buffer_pool.frames_metadata.rc[f_idx].acquire();
+                    if (!alive) @panic("called duplicateCached on a ReadHandle with a dead frame");
+                }
+                return ReadHandle.initCached(
+                    cached.buffer_pool,
+                    indices,
+                    cached.first_frame_start_offset,
+                    cached.last_frame_end_offset,
+                );
+            },
+            else => unreachable, // duplicateCached called with non-cached ReadHandle
+        }
+    }
+
     pub fn slice(self: *const ReadHandle, start: usize, end: usize) ReadHandle {
         return .{ .sub_read = .{
             .end = end,
@@ -1067,7 +1086,7 @@ pub const ReadHandle = union(enum) {
 
         var iter = self.iterator();
         var i: u32 = 0;
-        while (iter.nextFrame()) |frame_slice| : (i += frame_slice.len) {
+        while (iter.nextFrame()) |frame_slice| : (i += @intCast(frame_slice.len)) {
             if (!std.mem.eql(u8, frame_slice, data[i..frame_slice.len])) return false;
         }
 

@@ -3228,7 +3228,7 @@ pub const GeyserTmpStorage = struct {
     }
 
     pub fn cloneAndTrack(self: *Self, allocator: std.mem.Allocator, account_in_file: AccountInFile) Error!void {
-        const account = try account_in_file.toOwnedAccount(allocator);
+        const account = try account_in_file.dupeCachedAccount(allocator);
         errdefer account.deinit(allocator);
         self.accounts.append(account) catch return Error.OutOfGeyserArrayMemory;
         errdefer _ = self.accounts.pop();
