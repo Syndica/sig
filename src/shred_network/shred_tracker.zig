@@ -267,6 +267,7 @@ const bit_set = struct {
     fn maskBit(index: usize) ShredSet.MaskInt {
         return @as(ShredSet.MaskInt, 1) << @as(ShredSet.ShiftInt, @truncate(index));
     }
+
     fn maskIndex(index: usize) usize {
         return index >> @bitSizeOf(ShredSet.ShiftInt);
     }
