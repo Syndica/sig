@@ -254,7 +254,7 @@ pub const GeyserWriter = struct {
 
 pub fn createGeyserWriterFromConfig(
     allocator: std.mem.Allocator,
-    geyser_config: sig.cmd.config.GeyserConfig,
+    geyser_config: sig.common.Config.GeyserConfig,
 ) !*GeyserWriter {
     if (!geyser_config.enable) return error.GeyserWriterIsDisabled;
 

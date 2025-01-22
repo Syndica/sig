@@ -440,7 +440,7 @@ fn downloadFile(
     return output_file;
 }
 
-const default_adb_config = sig.cmd.config.AccountsDBConfig{};
+const default_adb_config: sig.common.Config.AccountsDBConfig = .{};
 
 pub fn getOrDownloadAndUnpackSnapshot(
     allocator: std.mem.Allocator,

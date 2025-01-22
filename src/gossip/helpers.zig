@@ -11,7 +11,6 @@ const IpAddr = sig.net.IpAddr;
 
 const resolveSocketAddr = sig.net.net.resolveSocketAddr;
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
-const getOrInitIdentity = sig.cmd.helpers.getOrInitIdentity;
 const getWallclockMs = sig.time.getWallclockMs;
 const getClusterEntrypoints = sig.gossip.service.getClusterEntrypoints;
 
@@ -41,11 +40,11 @@ pub fn initGossipFromCluster(
     const my_shred_version = echo_data.shred_version orelse 0;
     const my_ip = echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
 
-    const default_config = sig.cmd.config.GossipConfig{};
+    const default_config: sig.common.Config.GossipConfig = .{};
     // NOTE: we dont use the default port to avoid port collisions with other gossip
     // services running on the same machine
     const my_port = default_config.port + 5;
-    const my_keypair = try getOrInitIdentity(allocator, logger);
+    const my_keypair = try sig.identity.getOrInit(allocator, logger);
 
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);

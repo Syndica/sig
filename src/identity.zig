@@ -1,15 +1,17 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("sig.zig");
 
 const Logger = sig.trace.Logger;
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 
 pub const IDENTITY_KEYPAIR_PATH = "identity.key";
 
+/// Re-export of stdlib's Ed25519 KeyPair.
+pub const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+
 /// Returns the keypair from {app data directory}/{IDENTITY_KEYPAIR_PATH} or creates a new one
 /// if the file does not exist. If the file is invalid, an error is returned.
-pub fn getOrInitIdentity(
+pub fn getOrInit(
     allocator: std.mem.Allocator,
     logger: Logger,
 ) !KeyPair {
