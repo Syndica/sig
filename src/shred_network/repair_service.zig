@@ -374,7 +374,7 @@ pub const AddressedRepairRequest = struct {
 };
 
 /// How many slots to cache in RepairPeerProvider
-const REPAIR_PEERS_CACHE_CAPACITY: usize = 128;
+const REPAIR_PEERS_CACHE_CAPACITY: usize = 8;
 /// Maximum age of a cache item to use for repair peers
 const REPAIR_PEERS_CACHE_TTL_SECONDS: u64 = 10;
 

@@ -297,7 +297,7 @@ pub const ShredInserter = struct {
                 // erasure batch, no need to store code shreds in
                 // blockstore.
                 if (shred == .code) {
-                    try valid_recovered_shreds.append(shred.payload()); // TODO lifetime
+                    try valid_recovered_shreds.append(shred.payload());
                     continue;
                 }
                 if (options.shred_tracker) |tracker| {
@@ -322,7 +322,7 @@ pub const ShredInserter = struct {
                     defer completed_data_sets.deinit();
                     try newly_completed_data_sets.appendSlice(completed_data_sets.items);
                     self.metrics.num_recovered_inserted.inc();
-                    try valid_recovered_shreds.append(shred.payload()); // TODO lifetime
+                    try valid_recovered_shreds.append(shred.payload());
                 } else |e| switch (e) {
                     error.Exists => self.metrics.num_recovered_exists.inc(),
                     error.InvalidShred => self.metrics.num_recovered_failed_invalid.inc(),
@@ -333,8 +333,10 @@ pub const ShredInserter = struct {
                     else => return e, // TODO explicit
                 }
             }
-            if (valid_recovered_shreds.items.len > 0) if (options.retransmit_sender) |sender| {
-                sender.call(valid_recovered_shreds.items); // TODO lifetime
+            if (valid_recovered_shreds.items.len > 0) if (options.retransmit_sender) |_| {
+                // TODO: This needs to be implemented differently, probably with
+                // a channel, and with proper consideration for lifetimes.
+                // sender.call(valid_recovered_shreds.items);
             };
         }
         self.metrics.shred_recovery_elapsed_us.add(shred_recovery_timer.read().asMicros());
