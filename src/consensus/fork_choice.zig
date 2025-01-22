@@ -325,6 +325,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
+    // TODO: Change this to return an iterator.
     fn getChildren(self: *Self, slot_hash_key: *const SlotHashKey) ?std.ArrayList(SlotHashKey) {
         const fork_info = self.fork_infos.get(slot_hash_key) orelse return null;
         return fork_info.children;
