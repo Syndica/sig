@@ -194,11 +194,13 @@ pub const HeaviestSubtreeForkChoice = struct {
                     break;
                 }
                 // Saftey: maybe_ancestor cannot be null due to the if check above.
-                const ancestor = maybe_ancestor.?;
+                var ancestor = maybe_ancestor.?;
                 if (self.fork_infos.getPtr(&ancestor)) |ancestor_fork_info| {
                     // Do the update to the new best slot.
                     if (ancestor_fork_info.best_slot == *parent_best_slot_hash_key) {
                         ancestor_fork_info.*.best_slot = *slot_hash_key;
+                        // Walk up the tree.
+                        ancestor = ancestor_fork_info.parent;
                     } else {
                         break;
                     }
