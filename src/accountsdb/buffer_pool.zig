@@ -2,6 +2,8 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 
+const IoUring = std.os.linux.IoUring;
+
 const FileId = sig.accounts_db.accounts_file.FileId;
 const bincode = sig.bincode;
 
@@ -26,23 +28,32 @@ const LinuxIoMode = enum {
 };
 const linux_io_mode: LinuxIoMode = .IoUring;
 
-// TODO: ideally we should be able to select this with a cli flag.
+// TODO: ideally we should be able to select this with a cli flag. (#509)
 const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
 
 const io_uring_entries = 128;
 
-threadlocal var maybe_io_uring: if (use_io_uring) ?std.os.linux.IoUring else void = null;
-fn io_uring() !*std.os.linux.IoUring {
-    return if (maybe_io_uring) |*io_ur|
-        io_ur
-    else io_ur: {
-        maybe_io_uring = try std.os.linux.IoUring.init(
-            io_uring_entries,
-            0,
-        );
-        // TODO: to deinit reliably we could hook thread exit? Not sure if we even need to.
-        break :io_ur &(maybe_io_uring.?);
+fn io_uring() !*IoUring {
+    // We use one io_uring instance per-thread internally for fast thread-safe usage.
+
+    // From https://github.com/axboe/liburing/wiki/io_uring-and-networking-in-2023:
+    // > Not sharing a ring between threads is the recommended way to use rings in general, as it
+    // > avoids any unnecessary synchronization. Available since 6.1.
+
+    const threadlocals = struct {
+        threadlocal var io_uring: ?IoUring = null;
     };
+
+    _ = threadlocals.io_uring orelse {
+        threadlocals.io_uring = try IoUring.init(
+            io_uring_entries,
+            // Causes an error if we try to init with more entries than the kernel supports - it
+            // would be bad if the kernel gave us fewer than we expect to have.
+            std.os.linux.IORING_SETUP_CLAMP,
+        );
+    };
+
+    return &(threadlocals.io_uring.?);
 }
 
 const FileIdFileOffset = packed struct(u64) {
@@ -71,10 +82,10 @@ fn readError() type {
 
     if (use_io_uring) {
         const extra_fns = &.{
-            std.os.linux.IoUring.read,
-            std.os.linux.IoUring.submit_and_wait,
-            std.os.linux.IoUring.copy_cqes,
-            std.os.linux.IoUring.init,
+            IoUring.read,
+            IoUring.submit_and_wait,
+            IoUring.copy_cqes,
+            IoUring.init,
         };
         inline for (extra_fns) |func| {
             const FnErrorSet = @typeInfo(
@@ -448,7 +459,7 @@ pub const BufferPool = struct {
 
     fn performReads(
         frames_metadata: FramesMetadata,
-        threadlocal_io_uring: *std.os.linux.IoUring,
+        threadlocal_io_uring: *IoUring,
         file: std.fs.File,
         n_reads: u32,
     ) !void {
