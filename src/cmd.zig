@@ -1,6 +1,6 @@
 const builtin = @import("builtin");
 const cli = @import("zig-cli");
-const sig = @import("../sig.zig");
+const sig = @import("sig.zig");
 const std = @import("std");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
@@ -50,9 +50,16 @@ else
 const LOG_SCOPE = "cmd";
 const ScopedLogger = sig.trace.ScopedLogger(LOG_SCOPE);
 
+// We set this so that std.log knows not to log .debug level messages
+// which libraries we import will use
+pub const std_options: std.Options = .{
+    // Set the log level to info
+    .log_level = .info,
+};
+
 var current_config = sig.common.Config.DEFAULT;
 
-pub fn run() !void {
+pub fn main() !void {
     defer {
         // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
         // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
