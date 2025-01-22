@@ -192,12 +192,13 @@ pub const ShredInserter = struct {
             switch (shred) {
                 .data => |data_shred| {
                     if (shred_tracker) |tracker| {
-                        tracker.registerDataShred(&shred.data, milli_timestamp) catch |err|
+                        tracker.registerDataShred(&shred.data, milli_timestamp) catch |err| {
                             switch (err) {
-                            error.SlotUnderflow, error.SlotOverflow => {
-                                self.metrics.register_shred_error.observe(@errorCast(err));
-                            },
-                            else => return err,
+                                error.SlotUnderflow, error.SlotOverflow => {
+                                    self.metrics.register_shred_error.observe(@errorCast(err));
+                                },
+                                else => return err,
+                            }
                         };
                     }
                     if (self.checkInsertDataShred(
@@ -286,12 +287,13 @@ pub const ShredInserter = struct {
                     continue;
                 }
                 if (shred_tracker) |tracker| {
-                    tracker.registerDataShred(&shred.data, milli_timestamp) catch |err|
+                    tracker.registerDataShred(&shred.data, milli_timestamp) catch |err| {
                         switch (err) {
-                        error.SlotUnderflow, error.SlotOverflow => {
-                            self.metrics.register_shred_error.observe(@errorCast(err));
-                        },
-                        else => return err,
+                            error.SlotUnderflow, error.SlotOverflow => {
+                                self.metrics.register_shred_error.observe(@errorCast(err));
+                            },
+                            else => return err,
+                        }
                     };
                 }
                 if (self.checkInsertDataShred(
