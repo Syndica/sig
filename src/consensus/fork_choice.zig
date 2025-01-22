@@ -158,6 +158,10 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
+    pub fn bestOverallSlot(self: *const Self) ?SlotHashKey {
+        return self.bestSlot(self.tree_root);
+    }
+
     pub fn bestSlot(self: *const Self, slot_hash_key: SlotHashKey) ?SlotHashKey {
         if (self.fork_infos.get(slot_hash_key)) |fork_info| {
             return fork_info.best_slot;
