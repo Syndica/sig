@@ -1202,7 +1202,7 @@ pub fn testTransactionSenderService() !void {
 
     // setup channel for communication to the tx-sender service
     const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
-    defer transaction_channel.deinit();
+    defer transaction_channel.destroy();
 
     // this handles transactions and forwards them to leaders TPU ports
     var transaction_sender_service = try sig.transaction_sender.Service.init(

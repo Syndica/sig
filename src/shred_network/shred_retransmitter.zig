@@ -113,16 +113,14 @@ pub fn runShredRetransmitter(params: struct {
         ));
     }
 
-    try thread_handles.append(try std.Thread.spawn(
-        .{},
-        socket_utils.sendSocket,
-        .{
-            retransmit_socket,
-            &retransmit_to_socket_channel,
-            params.logger,
-            .{ .unordered = params.exit },
-        },
-    ));
+    const sender_thread = try socket_utils.SocketThread.spawnSender(
+        params.allocator,
+        params.logger,
+        retransmit_socket,
+        &retransmit_to_socket_channel,
+        .{ .unordered = params.exit },
+    );
+    defer sender_thread.join();
 
     for (thread_handles.items) |thread| thread.join();
 }
@@ -153,9 +151,11 @@ fn receiveShreds(
     defer deduper.deinit();
 
     var shreds = std.ArrayList(Packet).init(allocator);
+    var receive_shreds_timer = try sig.time.Timer.start();
 
-    while (!exit.load(.acquire)) {
-        var receive_shreds_timer = try sig.time.Timer.start();
+    while (true) {
+        receiver.waitToReceive(.{ .unordered = exit }) catch break;
+        receive_shreds_timer.reset();
 
         const receiver_len = receiver.len();
         if (receiver_len == 0) continue;
@@ -323,6 +323,8 @@ fn retransmitShreds(
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
+        // NOTE: multiple `retransmitShreds` run concurrently so we can't use
+        // `receiver.waitToReceive()` here as it only supports one caller thread.
         const retransmit_info: RetransmitShredInfo = receiver.tryReceive() orelse continue;
         defer retransmit_info.turbine_tree.releaseUnsafe();
 

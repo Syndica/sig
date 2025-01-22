@@ -86,12 +86,12 @@ pub fn start(
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
-    // channels
+    // channels (cant use arena as they need to alloc/free frequently & potentially from multiple sender threads)
     const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
     try defers.deferCall(Channel(Packet).destroy, .{unverified_shred_channel});
     const shreds_to_insert_channel = try Channel(Packet).create(deps.allocator);
     try defers.deferCall(Channel(Packet).destroy, .{shreds_to_insert_channel});
-    const retransmit_channel = try Channel(sig.net.Packet).create(deps.allocator);
+    const retransmit_channel = try Channel(Packet).create(deps.allocator);
     try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
 
     // receiver (threads)
