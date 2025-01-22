@@ -311,7 +311,9 @@ pub fn csvDumpIOWriter(
     var timer = try sig.time.Timer.start();
     errdefer exit.store(true, .monotonic);
 
-    while (!exit.load(.monotonic)) {
+    while (true) {
+        io_channel.waitToReceive(.{ .unordered = exit }) catch break;
+
         while (io_channel.tryReceive()) |csv_row| {
             // write to file
             try csv_file.writeAll(csv_row);

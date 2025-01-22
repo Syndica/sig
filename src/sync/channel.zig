@@ -5,14 +5,23 @@ const Backoff = @import("backoff.zig").Backoff;
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 
+const ExitCondition = sig.sync.ExitCondition;
+
 pub fn Channel(T: type) type {
     return struct {
         head: Position,
         tail: Position,
         closed: Atomic(bool) = Atomic(bool).init(false),
         allocator: Allocator,
-        mutex: std.Thread.Mutex = .{},
-        condition: std.Thread.Condition = .{},
+        event: std.Thread.ResetEvent = .{},
+        send_hook: ?*SendHook = null,
+
+        pub const SendHook = struct {
+            /// Called after the channel has pushed the value.
+            after_send: *const fn (*SendHook, *Self) void = defaultAfterSend,
+
+            fn defaultAfterSend(_: *SendHook, _: *Self) void {}
+        };
 
         const Self = @This();
         const BLOCK_CAP = 31;
@@ -134,13 +143,15 @@ pub fn Channel(T: type) type {
 
         pub fn close(channel: *Self) void {
             channel.closed.store(true, .monotonic);
-            channel.condition.broadcast();
         }
 
         pub fn send(channel: *Self, value: T) !void {
             if (channel.closed.load(.monotonic)) {
                 return error.ChannelClosed;
             }
+
+            const send_hook = channel.send_hook;
+
             var backoff: Backoff = .{};
             var tail = channel.tail.index.load(.acquire);
             var block = channel.tail.block.load(.acquire);
@@ -195,58 +206,24 @@ pub fn Channel(T: type) type {
                     // to read the data we've just assigned.
                     _ = slot.state.fetchOr(WRITTEN_TO, .release);
 
-                    channel.mutex.lock();
-                    channel.condition.signal();
-                    channel.mutex.unlock();
+                    channel.event.set();
+
+                    if (send_hook) |hook| {
+                        hook.after_send(hook, channel);
+                    }
+
                     return;
                 }
             }
         }
 
-        /// Attempt to receive an item. If the channel is empty, waits until
-        /// an item is available or the channel is closed.
-        ///
-        /// Returns:
-        /// - T: when an item is available.
-        /// - error.ChannelClosed: if the channel is both empty and closed.
-        pub fn receive(channel: *Self) error{ChannelClosed}!T {
-            while (true) {
-                if (channel.tryReceive()) |item| {
-                    return item;
-                } else if (channel.closed.load(.monotonic)) {
-                    return error.ChannelClosed;
-                }
-                channel.mutex.lock();
-                channel.condition.wait(&channel.mutex);
-                channel.mutex.unlock();
-            }
-        }
-
-        /// Attempt to receive an item. If the channel is empty, waits until
-        /// the timeout, an item is available, or the channel is closed.
-        ///
-        /// Returns:
-        /// - T: if item was available before the timeout.
-        /// - null: if empty and timed out before an item arrived.
-        /// - error.ChannelClosed: if the channel is both empty and closed.
-        pub fn receiveTimeout(channel: *Self, timeout: sig.time.Duration) error{ChannelClosed}!?T {
-            const end = std.time.nanoTimestamp() + timeout.asNanos();
-            while (true) {
-                if (channel.tryReceive()) |item| {
-                    return item;
-                } else if (channel.closed.load(.monotonic)) {
-                    return error.ChannelClosed;
-                }
-                const now = std.time.nanoTimestamp();
-                if (now > end) {
-                    return null;
-                }
-                channel.mutex.lock();
-                defer channel.mutex.unlock();
-                channel.condition.timedWait(&channel.mutex, @intCast(end - now)) catch |e|
-                    switch (e) {
-                    error.Timeout => return null,
-                };
+        /// Waits untli the channel potentially has items, periodically checking for the ExitCondition.
+        /// Must be called by only one receiver thread at a time.
+        pub fn waitToReceive(channel: *Self, exit: ExitCondition) error{Exit}!void {
+            while (channel.isEmpty()) {
+                channel.event.timedWait(1 * std.time.ns_per_s) catch {};
+                if (exit.shouldExit()) return error.Exit;
+                if (channel.event.isSet()) return channel.event.reset();
             }
         }
 
@@ -473,53 +450,52 @@ test "spsc" {
     producer.join();
 }
 
-test "blocking receive" {
-    const S = struct {
-        fn producer(ch: *Channel(u64)) !void {
-            try ch.send(123);
-        }
+test "send-hook" {
+    const Counter = struct {
+        count: usize = 0,
+        hook: Channel(u64).SendHook = .{ .after_send = afterSend },
 
-        fn consumer(ch: *Channel(u64)) void {
-            std.debug.assert(123 == ch.receive() catch @panic("error receiving"));
-        }
-    };
-
-    var ch = try Channel(u64).init(std.testing.allocator);
-    defer ch.deinit();
-
-    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
-    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
-
-    consumer.join();
-    producer.join();
-}
-
-test "timeout receive receives" {
-    const S = struct {
-        fn producer(ch: *Channel(u64)) !void {
-            try ch.send(123);
-        }
-
-        fn consumer(ch: *Channel(u64)) void {
-            std.debug.assert(123 == ch.receiveTimeout(sig.time.Duration.fromSecs(1)) catch
-                @panic("error receiving"));
+        fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
+            const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
+            self.count += 1;
+            std.debug.assert(channel.len() == self.count);
         }
     };
 
-    var ch = try Channel(u64).init(std.testing.allocator);
+    const Consumer = struct {
+        collected: std.ArrayList(u64),
+        hook: Channel(u64).SendHook = .{ .after_send = afterSend },
+
+        fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
+            const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
+            const value = channel.tryReceive() orelse @panic("empty channel after send");
+            self.collected.append(value) catch @panic("oom");
+        }
+    };
+
+    const to_send = 100;
+    const allocator = std.testing.allocator;
+
+    var ch = try Channel(u64).init(allocator);
     defer ch.deinit();
 
-    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
-    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
+    // Check that afterSend counts sent channel items.
+    var counter = Counter{};
+    ch.send_hook = &counter.hook;
 
-    consumer.join();
-    producer.join();
-}
+    for (0..to_send) |i| try ch.send(i);
+    try expect(ch.len() == to_send);
+    try expect(counter.count == to_send);
 
-test "timeout receive times out" {
-    var ch = try Channel(u64).init(std.testing.allocator);
-    defer ch.deinit();
-    try std.testing.expectEqual(null, try ch.receiveTimeout(sig.time.Duration.fromMillis(10)));
+    // Check that afterSend consumes any sent values.
+    var consumer = Consumer{ .collected = std.ArrayList(u64).init(allocator) };
+    ch.send_hook = &consumer.hook;
+    defer consumer.collected.deinit();
+
+    while (ch.tryReceive()) |_| {} // drain before starting.
+    for (0..to_send) |i| try ch.send(i);
+    try expect(ch.isEmpty());
+    try expect(consumer.collected.items.len == to_send);
 }
 
 test "mpmc" {
