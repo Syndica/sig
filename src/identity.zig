@@ -35,13 +35,19 @@ pub fn getOrInit(
 
         const end_pos = try file.getEndPos();
         if (end_pos != buf.len) {
-            logger.err().logf("Overlong identity file, expected {} bytes, found {}", .{ buf.len, end_pos });
+            logger.err().logf(
+                "Overlong identity file, expected {} bytes, found {}",
+                .{ buf.len, end_pos },
+            );
             return error.InvalidIdentityFile;
         }
 
         const file_len = try file.readAll(&buf);
         if (file_len != buf.len) {
-            logger.err().logf("Truncated identity file, expected {} bytes, found {}", .{ buf.len, file_len });
+            logger.err().logf(
+                "Truncated identity file, expected {} bytes, found {}",
+                .{ buf.len, file_len },
+            );
             return error.InvalidIdentityFile;
         }
 
