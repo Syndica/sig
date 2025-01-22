@@ -5,13 +5,15 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Mutex = std.Thread.Mutex;
 
+const Duration = sig.time.Duration;
 const Gauge = sig.prometheus.Gauge;
+const Instant = sig.time.Instant;
 const Registry = sig.prometheus.Registry;
 const Slot = sig.core.Slot;
 
 const MAX_SHREDS_PER_SLOT: usize = sig.ledger.shred.MAX_SHREDS_PER_SLOT;
 
-const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: u64 = 600;
+const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: Duration = Duration.fromMillis(600);
 
 pub const Range = struct {
     start: u32,
@@ -67,13 +69,13 @@ pub const BasicShredTracker = struct {
     pub fn registerDataShred(
         self: *Self,
         shred: *const sig.ledger.shred.DataShred,
-        milli_timestamp: i64,
+        timestamp: Instant,
     ) !void {
         const parent = try shred.parent();
         const is_last_in_slot = shred.custom.flags.isSet(.last_shred_in_slot);
         const slot = shred.common.slot;
         const index = shred.common.index;
-        try self.registerShred(slot, index, parent, is_last_in_slot, milli_timestamp);
+        try self.registerShred(slot, index, parent, is_last_in_slot, timestamp);
     }
 
     pub fn registerShred(
@@ -82,7 +84,7 @@ pub const BasicShredTracker = struct {
         shred_index: u32,
         parent_slot: Slot,
         is_last_in_slot: bool,
-        milli_timestamp: i64,
+        timestamp: Instant,
     ) SlotOutOfBounds!void {
         self.mux.lock();
         defer self.mux.unlock();
@@ -90,7 +92,7 @@ pub const BasicShredTracker = struct {
         const monitored_slot = try self.observeSlot(slot);
 
         const slot_is_complete = monitored_slot
-            .record(shred_index, is_last_in_slot, milli_timestamp);
+            .record(shred_index, is_last_in_slot, timestamp);
 
         if (slot > self.max_slot_processed) {
             self.max_slot_processed = slot;
@@ -168,7 +170,7 @@ pub const BasicShredTracker = struct {
     pub fn identifyMissing(
         self: *Self,
         slot_reports: *MultiSlotReport,
-        milli_timestamp: i64,
+        timestamp: Instant,
     ) (Allocator.Error || SlotOutOfBounds)!bool {
         if (self.start_slot == null) return false;
         self.mux.lock();
@@ -179,11 +181,9 @@ pub const BasicShredTracker = struct {
         const last_slot_to_check = @max(self.max_slot_processed, self.current_bottom_slot);
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getMonitoredSlot(slot);
-            if (monitored_slot.first_received_timestamp_ms +
-                MIN_SLOT_AGE_TO_REPORT_AS_MISSING > milli_timestamp)
-            {
+            if (timestamp.elapsedSince(monitored_slot.first_received_timestamp)
+                .lt(MIN_SLOT_AGE_TO_REPORT_AS_MISSING))
                 continue;
-            }
             var slot_report = try slot_reports.addOne();
             slot_report.slot = slot;
             try monitored_slot.identifyMissing(&slot_report.missing_shreds);
@@ -279,7 +279,7 @@ const MonitoredSlot = struct {
     shreds: ShredSet = ShredSet.initEmpty(),
     max_seen: ?u32 = null,
     last_shred: ?u32 = null,
-    first_received_timestamp_ms: i64 = 0,
+    first_received_timestamp: Instant = Instant.UNIX_EPOCH,
     is_complete: bool = false,
     parent_slot: ?Slot = null,
     unique_observed_count: u32 = 0,
@@ -287,7 +287,7 @@ const MonitoredSlot = struct {
     const Self = @This();
 
     /// returns if the slot is *definitely* complete (there may be false negatives)
-    pub fn record(self: *Self, shred_index: u32, is_last_in_slot: bool, milli_timestamp: i64) bool {
+    pub fn record(self: *Self, shred_index: u32, is_last_in_slot: bool, timestamp: Instant) bool {
         if (self.is_complete) return false;
         if (!bit_set.setAndWasSet(&self.shreds, shred_index)) self.unique_observed_count += 1;
 
@@ -299,7 +299,7 @@ const MonitoredSlot = struct {
 
         if (self.max_seen == null) {
             self.max_seen = shred_index;
-            self.first_received_timestamp_ms = milli_timestamp;
+            self.first_received_timestamp = timestamp;
         } else {
             self.max_seen = @max(self.max_seen.?, shred_index);
         }
@@ -348,7 +348,7 @@ test "trivial happy path" {
 
     var tracker = try BasicShredTracker.init(13579, .noop, sig.prometheus.globalRegistry());
 
-    _ = try tracker.identifyMissing(&msr, 1_000);
+    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
 
     try std.testing.expect(1 == msr.len);
     const report = msr.items()[0];
@@ -365,12 +365,12 @@ test "1 registered shred is identified" {
     defer msr.deinit();
 
     var tracker = try BasicShredTracker.init(13579, .noop, sig.prometheus.globalRegistry());
-    try tracker.registerShred(13579, 123, 13578, false, 0);
+    try tracker.registerShred(13579, 123, 13578, false, Instant.UNIX_EPOCH);
 
-    _ = try tracker.identifyMissing(&msr, 0);
+    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH);
     try std.testing.expectEqual(0, msr.len);
 
-    _ = try tracker.identifyMissing(&msr, 1_000);
+    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
     try std.testing.expectEqual(1, msr.len);
 
     const report = msr.items()[0];

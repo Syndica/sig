@@ -195,7 +195,7 @@ pub const RepairService = struct {
         var oldest_slot_needing_repair: u64 = 0;
         var newest_slot_needing_repair: u64 = 0;
         var repairs = ArrayList(RepairRequest).init(self.allocator);
-        if (!try self.shred_tracker.identifyMissing(&self.report, std.time.milliTimestamp())) {
+        if (!try self.shred_tracker.identifyMissing(&self.report, sig.time.Instant.now())) {
             return repairs;
         }
         var individual_count: usize = 0;

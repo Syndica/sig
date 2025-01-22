@@ -150,7 +150,7 @@ pub const ShredInserter = struct {
         retransmit_sender: ?PointerClosure([]const []const u8, void),
         shred_tracker: ?*sig.shred_network.shred_tracker.BasicShredTracker,
     ) !InsertShredsResult {
-        const milli_timestamp = std.time.milliTimestamp();
+        const timestamp = sig.time.Instant.now();
         ///////////////////////////
         // check inputs for validity and edge cases
         //
@@ -192,7 +192,7 @@ pub const ShredInserter = struct {
             switch (shred) {
                 .data => |data_shred| {
                     if (shred_tracker) |tracker| {
-                        tracker.registerDataShred(&shred.data, milli_timestamp) catch |err| {
+                        tracker.registerDataShred(&shred.data, timestamp) catch |err| {
                             switch (err) {
                                 error.SlotUnderflow, error.SlotOverflow => {
                                     self.metrics.register_shred_error.observe(@errorCast(err));
@@ -287,7 +287,7 @@ pub const ShredInserter = struct {
                     continue;
                 }
                 if (shred_tracker) |tracker| {
-                    tracker.registerDataShred(&shred.data, milli_timestamp) catch |err| {
+                    tracker.registerDataShred(&shred.data, timestamp) catch |err| {
                         switch (err) {
                             error.SlotUnderflow, error.SlotOverflow => {
                                 self.metrics.register_shred_error.observe(@errorCast(err));

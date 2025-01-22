@@ -22,6 +22,7 @@
 //  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const string = []const u8;
 const time = @This();
 
@@ -563,6 +564,15 @@ pub const Duration = struct {
 pub const Instant = struct {
     inner: std.time.Instant,
 
+    pub const UNIX_EPOCH = Instant{ .inner = .{
+        .timestamp = if (is_posix) .{ .tv_sec = 0, .tv_nsec = 0 } else 0,
+    } };
+
+    const is_posix = switch (builtin.os.tag) {
+        .windows, .uefi, .wasi => false,
+        else => true,
+    };
+
     pub fn now() Instant {
         return .{ .inner = std.time.Instant.now() catch unreachable };
     }
@@ -573,6 +583,18 @@ pub const Instant = struct {
 
     pub fn elapsedSince(self: Instant, earlier: Instant) Duration {
         return Duration.fromNanos(self.inner.since(earlier.inner));
+    }
+
+    pub fn plus(self: Instant, duration: Duration) Instant {
+        if (is_posix) {
+            const new_ns = self.inner.timestamp.tv_nsec + @as(isize, @intCast(duration.ns));
+            return .{ .inner = .{ .timestamp = .{
+                .tv_sec = self.inner.timestamp.tv_sec + @divFloor(new_ns, std.time.ns_per_s),
+                .tv_nsec = @mod(new_ns, std.time.ns_per_s),
+            } } };
+        } else {
+            return .{ .inner = .{ .timestamp = self.inner.timestamp + duration.ns } };
+        }
     }
 
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
