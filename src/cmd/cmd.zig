@@ -22,7 +22,7 @@ const ScopedLogger = sig.trace.ScopedLogger;
 const Network = config.Network;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.Pubkey;
-const ShredCollectorDependencies = sig.shred_network.ShredCollectorDependencies;
+const ShredNetworkDependencies = sig.shred_network.ShredNetworkDependencies;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
@@ -488,9 +488,9 @@ pub fn run() !void {
                     },
 
                     &cli.Command{
-                        .name = "shred-collector",
-                        .description = .{ .one_line = "Run the shred collector to collect and store shreds", .detailed = 
-                        \\ This command runs the shred collector without running the full validator
+                        .name = "shred-network",
+                        .description = .{ .one_line = "Run the shred network to collect and store shreds", .detailed = 
+                        \\ This command runs the shred network without running the full validator
                         \\ (mainly excluding the accounts-db setup).
                         \\
                         \\ NOTE: this means that this command *requires* a leader schedule to be provided
@@ -526,7 +526,7 @@ pub fn run() !void {
                         },
                         .target = .{
                             .action = .{
-                                .exec = shredCollector,
+                                .exec = shredNetwork,
                             },
                         },
                     },
@@ -862,10 +862,10 @@ fn validator() !void {
         .{ &rpc_epoch_ctx_service, &app_base.exit },
     );
 
-    // shred collector
+    // shred network
     var shred_network_manager = try sig.shred_network.start(
         config.current.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
-        ShredCollectorDependencies{
+        ShredNetworkDependencies{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
             .registry = app_base.metrics_registry,
@@ -888,7 +888,7 @@ fn validator() !void {
     shred_network_manager.join();
 }
 
-fn shredCollector() !void {
+fn shredNetwork() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
     defer {

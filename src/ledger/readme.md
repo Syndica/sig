@@ -36,7 +36,7 @@ the RocksDB project and makes it usable within Sig via RocksDB's C API and auto-
 
 The core implementation of the ledger can be found in the [`ledger`](./) module.
 
-## ShredCollector, ShredInserter, and Shredder
+## ShredNetwork, ShredInserter, and Shredder
 
 ### Shreds
 
@@ -59,25 +59,25 @@ The Shred Network is responsible for gathering and storing shreds from the netwo
 part of the ledger, the ledger plays a crucial role in supporting its operations. As such, the Shred Network 
 is implemented in its own module, ie: [`shred_network`](../shred_network), separate from the ledger module.
 
-A core part of the Shred Network is the `ShredCollector` which collects shreds received via the Shred Network 
+A core part of the Shred Network is the `ShredNetwork` which collects shreds received via the Shred Network 
 and persist in ledger.
 
-Understanding how the ShredCollector interacts with components from the ledger can help sheds light on key elements of the 
+Understanding how the ShredNetwork interacts with components from the ledger can help sheds light on key elements of the 
 ledger’s architecture. 
 
-The following diagram illustrates the dependencies between the ShredCollector and related components of the ledger:
+The following diagram illustrates the dependencies between the ShredNetwork and related components of the ledger:
 
 ```mermaid
 graph TD
-    A[ShredCollector] --> B[ShredInserter]
+    A[ShredNetwork] --> B[ShredInserter]
     B --> C[BlockstoreDB]
     D[cleanup_service] --> C
     D --> E[BlockstoreReader]
 ```
 
-![ShredCollector Component](./imgs/shred_network_component.png)
+![ShredNetwork Component](./imgs/shred_network_component.png)
 
-- The **ShredCollector** utilizes:
+- The **ShredNetwork** utilizes:
   - The **ShredInserter** to insert shreds received from the network via Gossip.
 
 - The **ShredInserter** relies on:
@@ -87,10 +87,10 @@ graph TD
   - The **BlockstoreDB** for performing cleanup operations, also backed by RocksDB.
   - The **BlockstoreReader** for reading data during cleanup.
 
-The ShredCollector can be run standalone without running the full node.
+The ShredNetwork can be run standalone without running the full node.
 
 ```
-zig-out/bin/sig shred-collector --leader-schedule <path_to_leader_schedule> --network <network> --test-repair-for-slot <slot>
+zig-out/bin/sig shred-network --leader-schedule <path_to_leader_schedule> --network <network> --test-repair-for-slot <slot>
 ```
 
 Note: Running standalone requires manually needing to set to slot to repeatedly send repair requests for shreds from, via the `test-repair-for-slot` flag and 

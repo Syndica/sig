@@ -28,8 +28,8 @@ const RepairService = shred_network.repair_service.RepairService;
 const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
 const ShredReceiverMetrics = shred_network.shred_receiver.ShredReceiverMetrics;
 
-/// Settings which instruct the Shred Collector how to behave.
-pub const ShredCollectorConfig = struct {
+/// Settings which instruct the Shred Network how to behave.
+pub const ShredNetworkConfig = struct {
     start_slot: Slot,
     repair_port: u16,
     /// tvu port in agave
@@ -38,15 +38,15 @@ pub const ShredCollectorConfig = struct {
     dump_shred_tracker: bool,
 };
 
-/// Resources that are required for the Shred Collector to operate.
-pub const ShredCollectorDependencies = struct {
+/// Resources that are required for the Shred Network to operate.
+pub const ShredNetworkDependencies = struct {
     allocator: Allocator,
     logger: Logger,
     random: Random,
     registry: *Registry(.{}),
     /// This validator's keypair
     my_keypair: *const KeyPair,
-    /// Shared exit indicator, used to shutdown the Shred Collector.
+    /// Shared exit indicator, used to shutdown the Shred Network.
     exit: *Atomic(bool),
     /// Shared state that is read from gossip
     gossip_table_rw: *RwMux(GossipTable),
@@ -59,24 +59,24 @@ pub const ShredCollectorDependencies = struct {
     overwrite_turbine_stake_for_testing: bool,
 };
 
-/// Start the Shred Collector.
+/// Start the Shred Network.
 ///
 /// Initializes all state and spawns all threads.
 /// Returns as soon as all the threads are running.
 ///
-/// Returns a ServiceManager representing the Shred Collector.
-/// This can be used to join and deinit the Shred Collector.
+/// Returns a ServiceManager representing the Shred Network.
+/// This can be used to join and deinit the Shred Network.
 ///
 /// Analogous to a subset of [Tvu::new](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/turbine.rs#L119)
 pub fn start(
-    conf: ShredCollectorConfig,
-    deps: ShredCollectorDependencies,
+    conf: ShredNetworkConfig,
+    deps: ShredNetworkDependencies,
 ) !ServiceManager {
     var service_manager = ServiceManager.init(
         deps.allocator,
         deps.logger.unscoped(),
         deps.exit,
-        "shred collector",
+        "shred network",
         .{},
         .{},
     );
@@ -108,11 +108,7 @@ pub fn start(
         .metrics = try deps.registry.initStruct(ShredReceiverMetrics),
         .root_slot = conf.start_slot -| 1,
     };
-    try service_manager.spawn(
-        "Shred Receiver",
-        ShredReceiver.run,
-        .{shred_receiver},
-    );
+    try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
 
     // verifier (thread)
     try service_manager.spawn(
@@ -128,7 +124,7 @@ pub fn start(
         },
     );
 
-    // tracker (shared state, internal to Shred Collector)
+    // tracker (shared state, internal to Shred Network)
     const shred_tracker = try arena.create(BasicShredTracker);
     shred_tracker.* = try BasicShredTracker.init(
         conf.start_slot,
@@ -201,11 +197,7 @@ pub fn start(
         repair_peer_provider,
         shred_tracker,
     );
-    try service_manager.spawn(
-        "Repair Service",
-        RepairService.run,
-        .{repair_svc},
-    );
+    try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
 
     if (conf.dump_shred_tracker) {
         try service_manager.spawn("dump shred tracker", struct {

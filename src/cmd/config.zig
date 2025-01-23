@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const ACCOUNT_INDEX_SHARDS = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS;
-const ShredCollectorConfig = sig.shred_network.ShredCollectorConfig;
+const ShredNetworkConfig = sig.shred_network.ShredNetworkConfig;
 const IpAddr = sig.net.IpAddr;
 const LogLevel = sig.trace.Level;
 const Cluster = sig.core.Cluster;
@@ -117,7 +117,7 @@ const ShredNetworkCliArgs = struct {
     no_retransmit: bool = true,
     dump_shred_tracker: bool = false,
 
-    pub fn toConfig(self: ShredNetworkCliArgs, fallback_slot: sig.core.Slot) ShredCollectorConfig {
+    pub fn toConfig(self: ShredNetworkCliArgs, fallback_slot: sig.core.Slot) ShredNetworkConfig {
         return .{
             .start_slot = self.start_slot orelse fallback_slot,
             .repair_port = self.repair_port,
