@@ -1238,50 +1238,6 @@ pub const ReadHandle = union(enum) {
     }
 };
 
-/// Used for atomic appends + pops; No guarantees for elements.
-/// Methods follow that of ArrayListUnmanaged
-pub fn AtomicStack(T: type) type {
-    return struct {
-        const Self = @This();
-
-        buf: [*]T,
-        len: std.atomic.Value(usize),
-        cap: usize, // fixed
-
-        fn init(allocator: std.mem.Allocator, cap: usize) !Self {
-            const buf = try allocator.alloc(T, cap);
-            return .{
-                .buf = buf.ptr,
-                .len = .{ .raw = 0 },
-                .cap = cap,
-            };
-        }
-
-        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            allocator.free(self.buf[0..self.cap]);
-            self.* = undefined;
-        }
-
-        // add new item to the end of buf, incrementing self.len atomically
-        fn appendAssumeCapacity(self: *Self, item: T) void {
-            const prev_len = self.len.load(.acquire);
-            std.debug.assert(prev_len < self.cap);
-            self.buf[prev_len] = item;
-            _ = self.len.fetchAdd(1, .release);
-        }
-
-        // return item at end of buf, decrementing self.len atomically
-        fn popOrNull(self: *Self) ?T {
-            const prev_len = self.len.fetchSub(1, .acquire);
-            if (prev_len == 0) {
-                _ = self.len.fetchAdd(1, .release);
-                return null;
-            }
-            return self.buf[prev_len - 1];
-        }
-    };
-}
-
 /// An std.fifo.LinearFifo-like type with atomics and a minimal API.
 pub fn AtomicLinearFifo(T: type) type {
     return struct {
@@ -1688,19 +1644,5 @@ test "ReadHandle bincode" {
             read_data,
             deserialised_from_handle.owned_allocation,
         );
-    }
-}
-
-test AtomicStack {
-    const allocator = std.testing.allocator;
-    var stack = try AtomicStack(usize).init(allocator, 100);
-    defer stack.deinit(allocator);
-
-    for (0..100) |i| stack.appendAssumeCapacity(i);
-
-    var i: usize = 100;
-    while (i > 0) {
-        i -= 1;
-        try std.testing.expectEqual(i, stack.popOrNull());
     }
 }
