@@ -22,7 +22,7 @@ const ScopedLogger = sig.trace.ScopedLogger;
 const Network = config.Network;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.Pubkey;
-const ShredCollectorDependencies = sig.shred_network.ShredCollectorDependencies;
+const ShredNetworkDependencies = sig.shred_network.ShredNetworkDependencies;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
@@ -147,6 +147,22 @@ pub fn run() !void {
         .value_ref = cli.mkRef(&config.current.shred_network.start_slot),
         .required = false,
         .value_name = "slot number",
+    };
+
+    var retransmit_option = cli.Option{
+        .long_name = "no-retransmit",
+        .help = "Shreds will be received and stored but not retransmitted",
+        .value_ref = cli.mkRef(&config.current.shred_network.no_retransmit),
+        .required = false,
+        .value_name = "Disable Shred Retransmission",
+    };
+
+    var dump_shred_tracker = cli.Option{
+        .long_name = "dump-shred-tracker",
+        .help = "Create shred-tracker.txt to visually represent the currently tracked slots.",
+        .value_ref = cli.mkRef(&config.current.shred_network.dump_shred_tracker),
+        .required = false,
+        .value_name = "Dump Shred Tracker",
     };
 
     var gossip_entrypoints_option = cli.Option{
@@ -472,9 +488,9 @@ pub fn run() !void {
                     },
 
                     &cli.Command{
-                        .name = "shred-collector",
-                        .description = .{ .one_line = "Run the shred collector to collect and store shreds", .detailed = 
-                        \\ This command runs the shred collector without running the full validator
+                        .name = "shred-network",
+                        .description = .{ .one_line = "Run the shred network to collect and store shreds", .detailed = 
+                        \\ This command runs the shred network without running the full validator
                         \\ (mainly excluding the accounts-db setup).
                         \\
                         \\ NOTE: this means that this command *requires* a leader schedule to be provided
@@ -493,13 +509,14 @@ pub fn run() !void {
                             &gossip_entrypoints_option,
                             &gossip_spy_node_option,
                             &gossip_dump_option,
-                            // repair
+                            // shred_network
                             &turbine_recv_port_option,
                             &repair_port_option,
                             &test_repair_option,
-                            // turbine
+                            &dump_shred_tracker,
                             &turbine_num_retransmit_threads,
                             &turbine_overwrite_stake_for_testing,
+                            &retransmit_option,
                             // blockstore cleanup service
                             &max_shreds_option,
                             // general
@@ -509,7 +526,7 @@ pub fn run() !void {
                         },
                         .target = .{
                             .action = .{
-                                .exec = shredCollector,
+                                .exec = shredNetwork,
                             },
                         },
                     },
@@ -845,12 +862,10 @@ fn validator() !void {
         .{ &rpc_epoch_ctx_service, &app_base.exit },
     );
 
-    // shred collector
-    var shred_col_conf = config.current.shred_network;
-    shred_col_conf.start_slot = shred_col_conf.start_slot orelse loaded_snapshot.collapsed_manifest.bank_fields.slot;
+    // shred network
     var shred_network_manager = try sig.shred_network.start(
-        shred_col_conf,
-        ShredCollectorDependencies{
+        config.current.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
+        ShredNetworkDependencies{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
             .registry = app_base.metrics_registry,
@@ -873,7 +888,7 @@ fn validator() !void {
     shred_network_manager.join();
 }
 
-fn shredCollector() !void {
+fn shredNetwork() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
     defer {
@@ -888,14 +903,16 @@ fn shredCollector() !void {
     var rpc_client = sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
 
-    var shred_network_conf = config.current.shred_network;
-    shred_network_conf.start_slot = shred_network_conf.start_slot orelse blk: {
-        const response = try rpc_client.getSlot(allocator, .{});
-        break :blk try response.result();
-    };
+    const shred_network_conf = config.current.shred_network.toConfig(
+        config.current.shred_network.start_slot orelse blk: {
+            const response = try rpc_client.getSlot(allocator, .{});
+            break :blk try response.result();
+        },
+    );
+    app_base.logger.info().logf("Starting from slot: {?}", .{shred_network_conf.start_slot});
 
-    const repair_port: u16 = config.current.shred_network.repair_port;
-    const turbine_recv_port: u16 = config.current.shred_network.turbine_recv_port;
+    const repair_port: u16 = shred_network_conf.repair_port;
+    const turbine_recv_port: u16 = shred_network_conf.turbine_recv_port;
 
     var gossip_service = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },

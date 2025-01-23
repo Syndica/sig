@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const ACCOUNT_INDEX_SHARDS = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS;
-const ShredCollectorConfig = sig.shred_network.ShredCollectorConfig;
+const ShredNetworkConfig = sig.shred_network.ShredNetworkConfig;
 const IpAddr = sig.net.IpAddr;
 const LogLevel = sig.trace.Level;
 const Cluster = sig.core.Cluster;
@@ -15,7 +15,7 @@ const getAccountPerFileEstimateFromCluster =
 pub const Config = struct {
     identity: IdentityConfig = .{},
     gossip: GossipConfig = .{},
-    shred_network: ShredCollectorConfig = shred_network_defaults,
+    shred_network: ShredNetworkCliArgs = .{},
     accounts_db: AccountsDBConfig = .{},
     geyser: GeyserConfig = .{},
     turbine: TurbineConfig = .{},
@@ -110,10 +110,27 @@ pub const GossipConfig = struct {
     }
 };
 
-pub const shred_network_defaults = ShredCollectorConfig{
-    .turbine_recv_port = 8002,
-    .repair_port = 8003,
-    .start_slot = null,
+/// The command-line arguments that are used to configure the shred network. The
+/// CLI args are slightly different from the `shred_network.start` inputs, so it
+/// gets its own struct. `ShredNetworkConfig` represents the inputs to the start
+/// function.
+const ShredNetworkCliArgs = struct {
+    start_slot: ?sig.core.Slot = null,
+    repair_port: u16 = 8003,
+    turbine_recv_port: u16 = 8002,
+    no_retransmit: bool = true,
+    dump_shred_tracker: bool = false,
+
+    /// Converts from the CLI args into the `shred_network.start` parameters
+    pub fn toConfig(self: ShredNetworkCliArgs, fallback_slot: sig.core.Slot) ShredNetworkConfig {
+        return .{
+            .start_slot = self.start_slot orelse fallback_slot,
+            .repair_port = self.repair_port,
+            .turbine_recv_port = self.turbine_recv_port,
+            .retransmit = !self.no_retransmit,
+            .dump_shred_tracker = self.dump_shred_tracker,
+        };
+    }
 };
 
 /// Analogous to [AccountsDbConfig](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L597)

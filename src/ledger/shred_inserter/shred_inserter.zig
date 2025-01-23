@@ -148,7 +148,9 @@ pub const ShredInserter = struct {
         maybe_slot_leaders: ?SlotLeaders,
         is_trusted: bool,
         retransmit_sender: ?PointerClosure([]const []const u8, void),
+        shred_tracker: ?*sig.shred_network.shred_tracker.BasicShredTracker,
     ) !InsertShredsResult {
+        const timestamp = sig.time.Instant.now();
         ///////////////////////////
         // check inputs for validity and edge cases
         //
@@ -189,6 +191,16 @@ pub const ShredInserter = struct {
             const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
             switch (shred) {
                 .data => |data_shred| {
+                    if (shred_tracker) |tracker| {
+                        tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                            switch (err) {
+                                error.SlotUnderflow, error.SlotOverflow => {
+                                    self.metrics.register_shred_error.observe(@errorCast(err));
+                                },
+                                else => return err,
+                            }
+                        };
+                    }
                     if (self.checkInsertDataShred(
                         data_shred,
                         &state,
@@ -274,6 +286,16 @@ pub const ShredInserter = struct {
                     try valid_recovered_shreds.append(shred.payload()); // TODO lifetime
                     continue;
                 }
+                if (shred_tracker) |tracker| {
+                    tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                        switch (err) {
+                            error.SlotUnderflow, error.SlotOverflow => {
+                                self.metrics.register_shred_error.observe(@errorCast(err));
+                            },
+                            else => return err,
+                        }
+                    };
+                }
                 if (self.checkInsertDataShred(
                     shred.data,
                     &state,
@@ -285,7 +307,7 @@ pub const ShredInserter = struct {
                 )) |completed_data_sets| {
                     defer completed_data_sets.deinit();
                     try newly_completed_data_sets.appendSlice(completed_data_sets.items);
-                    self.metrics.num_inserted.inc();
+                    self.metrics.num_recovered_inserted.inc();
                     try valid_recovered_shreds.append(shred.payload()); // TODO lifetime
                 } else |e| switch (e) {
                     error.Exists => self.metrics.num_recovered_exists.inc(),
@@ -1105,6 +1127,8 @@ pub const BlockstoreInsertionMetrics = struct {
     num_code_shreds_invalid_erasure_config: *Counter, // usize
     num_code_shreds_inserted: *Counter, // usize
 
+    register_shred_error: *sig.prometheus.VariantCounter(sig.shred_network.shred_tracker.SlotOutOfBounds),
+
     pub const prefix = "shred_inserter";
 };
 
@@ -1171,7 +1195,7 @@ const ShredInserterTestState = struct {
         for (0..shreds.len) |i| {
             is_repairs[i] = false;
         }
-        return self.inserter.insertShreds(shreds, is_repairs, null, false, null);
+        return self.inserter.insertShreds(shreds, is_repairs, null, false, null, null);
     }
 
     fn checkInsertCodeShred(
@@ -1205,7 +1229,7 @@ pub fn insertShredsForTest(
     for (0..shreds.len) |i| {
         is_repairs[i] = false;
     }
-    return inserter.insertShreds(shreds, is_repairs, null, false, null);
+    return inserter.insertShreds(shreds, is_repairs, null, false, null, null);
 }
 
 test "insertShreds single shred" {
@@ -1214,7 +1238,7 @@ test "insertShreds single shred" {
     const allocator = std.testing.allocator;
     const shred = try Shred.fromPayload(allocator, &ledger.shred.test_data_shred);
     defer shred.deinit();
-    _ = try state.inserter.insertShreds(&.{shred}, &.{false}, null, false, null);
+    _ = try state.inserter.insertShreds(&.{shred}, &.{false}, null, false, null, null);
     const stored_shred = try state.db.getBytes(
         schema.data_shred,
         .{ shred.commonHeader().slot, shred.commonHeader().index },
@@ -1238,7 +1262,7 @@ test "insertShreds 100 shreds from mainnet" {
         try shreds.append(shred);
     }
     _ = try state.inserter
-        .insertShreds(shreds.items, &(.{false} ** shred_bytes.len), null, false, null);
+        .insertShreds(shreds.items, &(.{false} ** shred_bytes.len), null, false, null, null);
     for (shreds.items) |shred| {
         const bytes = try state.db.getBytes(
             schema.data_shred,
@@ -1499,6 +1523,7 @@ test "recovery" {
         is_repairs,
         leader_schedule.provider(),
         false,
+        null,
         null,
     );
 

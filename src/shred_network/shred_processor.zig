@@ -39,7 +39,6 @@ pub fn runShredProcessor(
     var shred_inserter = shred_inserter_;
     var shreds: ArrayListUnmanaged(Shred) = .{};
     var is_repaired: ArrayListUnmanaged(bool) = .{};
-    var error_context: ErrorContext = .{};
     const metrics = try registry.initStruct(Metrics);
 
     while (true) {
@@ -48,21 +47,18 @@ pub fn runShredProcessor(
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
         while (verified_shred_receiver.tryReceive()) |packet| {
-            processShred(
-                allocator,
-                tracker,
-                metrics,
-                &packet,
-                &shreds,
-                &is_repaired,
-                &error_context,
-            ) catch |e| {
+            const shred_payload = layout.getShred(&packet) orelse return error.InvalidVerifiedShred;
+            const shred = try shreds.addOne(allocator);
+            errdefer _ = shreds.pop();
+            shred.* = Shred.fromPayload(allocator, shred_payload) catch |e| {
                 logger.err().logf(
                     "failed to process verified shred {?}.{?}: {}",
-                    .{ error_context.slot, error_context.index, e },
+                    .{ layout.getSlot(shred_payload), layout.getIndex(shred_payload), e },
                 );
-                error_context = .{};
+                continue;
             };
+
+            try is_repaired.append(allocator, packet.flags.isSet(.repair));
         }
         metrics.insertion_batch_size.observe(shreds.items.len);
         metrics.passed_to_inserter_count.add(shreds.items.len);
@@ -72,59 +68,8 @@ pub fn runShredProcessor(
             leader_schedule,
             false,
             null,
+            tracker,
         );
-    }
-}
-
-const ErrorContext = struct { slot: ?u64 = null, index: ?u32 = null };
-
-fn processShred(
-    allocator: Allocator,
-    tracker: *BasicShredTracker,
-    metrics: Metrics,
-    packet: *const Packet,
-    shreds: *ArrayListUnmanaged(Shred),
-    is_repaired: *ArrayListUnmanaged(bool),
-    error_context: *ErrorContext,
-) !void {
-    const shred_payload = layout.getShred(packet) orelse return error.InvalidPayload;
-    const slot = layout.getSlot(shred_payload) orelse return error.InvalidSlot;
-    errdefer error_context.slot = slot;
-    const index = layout.getIndex(shred_payload) orelse return error.InvalidIndex;
-    errdefer error_context.index = index;
-
-    tracker.registerShred(slot, index) catch |err| switch (err) {
-        error.SlotUnderflow, error.SlotOverflow => {
-            metrics.register_shred_error.observe(err);
-            return;
-        },
-    };
-
-    var shred = try shreds.addOne(allocator);
-    errdefer _ = shreds.pop();
-    try is_repaired.append(allocator, packet.flags.isSet(.repair));
-    errdefer _ = is_repaired.pop();
-
-    shred.* = try Shred.fromPayload(allocator, shred_payload);
-
-    if (shred.* == .data) {
-        const parent = try shred.data.parent();
-        if (parent + 1 != slot) {
-            metrics.skipped_slot_count.add(slot - parent);
-            tracker.skipSlots(parent, slot) catch |err| switch (err) {
-                error.SlotUnderflow, error.SlotOverflow => {
-                    metrics.skip_slots_error.observe(err);
-                },
-            };
-        }
-    }
-    if (shred.isLastInSlot()) {
-        tracker.setLastShred(slot, index) catch |err| switch (err) {
-            error.SlotUnderflow, error.SlotOverflow => {
-                metrics.set_last_shred_error.observe(err);
-                return;
-            },
-        };
     }
 }
 

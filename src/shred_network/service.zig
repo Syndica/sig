@@ -28,23 +28,25 @@ const RepairService = shred_network.repair_service.RepairService;
 const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
 const ShredReceiverMetrics = shred_network.shred_receiver.ShredReceiverMetrics;
 
-/// Settings which instruct the Shred Collector how to behave.
-pub const ShredCollectorConfig = struct {
-    start_slot: ?Slot,
+/// Settings which instruct the Shred Network how to behave.
+pub const ShredNetworkConfig = struct {
+    start_slot: Slot,
     repair_port: u16,
     /// tvu port in agave
     turbine_recv_port: u16,
+    retransmit: bool,
+    dump_shred_tracker: bool,
 };
 
-/// Resources that are required for the Shred Collector to operate.
-pub const ShredCollectorDependencies = struct {
+/// Resources that are required for the Shred Network to operate.
+pub const ShredNetworkDependencies = struct {
     allocator: Allocator,
     logger: Logger,
     random: Random,
     registry: *Registry(.{}),
     /// This validator's keypair
     my_keypair: *const KeyPair,
-    /// Shared exit indicator, used to shutdown the Shred Collector.
+    /// Shared exit indicator, used to shutdown the Shred Network.
     exit: *Atomic(bool),
     /// Shared state that is read from gossip
     gossip_table_rw: *RwMux(GossipTable),
@@ -57,24 +59,24 @@ pub const ShredCollectorDependencies = struct {
     overwrite_turbine_stake_for_testing: bool,
 };
 
-/// Start the Shred Collector.
+/// Start the Shred Network.
 ///
 /// Initializes all state and spawns all threads.
 /// Returns as soon as all the threads are running.
 ///
-/// Returns a ServiceManager representing the Shred Collector.
-/// This can be used to join and deinit the Shred Collector.
+/// Returns a ServiceManager representing the Shred Network.
+/// This can be used to join and deinit the Shred Network.
 ///
 /// Analogous to a subset of [Tvu::new](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/turbine.rs#L119)
 pub fn start(
-    conf: ShredCollectorConfig,
-    deps: ShredCollectorDependencies,
+    conf: ShredNetworkConfig,
+    deps: ShredNetworkDependencies,
 ) !ServiceManager {
     var service_manager = ServiceManager.init(
         deps.allocator,
         deps.logger.unscoped(),
         deps.exit,
-        "shred collector",
+        "shred network",
         .{},
         .{},
     );
@@ -104,13 +106,9 @@ pub fn start(
         .unverified_shred_sender = unverified_shred_channel,
         .shred_version = deps.my_shred_version,
         .metrics = try deps.registry.initStruct(ShredReceiverMetrics),
-        .root_slot = if (conf.start_slot) |s| s - 1 else 0,
+        .root_slot = conf.start_slot -| 1,
     };
-    try service_manager.spawn(
-        "Shred Receiver",
-        ShredReceiver.run,
-        .{shred_receiver},
-    );
+    try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
 
     // verifier (thread)
     try service_manager.spawn(
@@ -121,12 +119,12 @@ pub fn start(
             deps.registry,
             unverified_shred_channel,
             shreds_to_insert_channel,
-            retransmit_channel,
+            if (conf.retransmit) retransmit_channel else null,
             deps.epoch_context_mgr.slotLeaders(),
         },
     );
 
-    // tracker (shared state, internal to Shred Collector)
+    // tracker (shared state, internal to Shred Network)
     const shred_tracker = try arena.create(BasicShredTracker);
     shred_tracker.* = try BasicShredTracker.init(
         conf.start_slot,
@@ -151,22 +149,24 @@ pub fn start(
     );
 
     // retransmitter (thread)
-    try service_manager.spawn(
-        "Shred Retransmitter",
-        shred_network.shred_retransmitter.runShredRetransmitter,
-        .{.{
-            .allocator = deps.allocator,
-            .my_contact_info = deps.my_contact_info,
-            .epoch_context_mgr = deps.epoch_context_mgr,
-            .gossip_table_rw = deps.gossip_table_rw,
-            .receiver = retransmit_channel,
-            .maybe_num_retransmit_threads = deps.n_retransmit_threads,
-            .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
-            .exit = deps.exit,
-            .rand = deps.random,
-            .logger = deps.logger.unscoped(),
-        }},
-    );
+    if (conf.retransmit) {
+        try service_manager.spawn(
+            "Shred Retransmitter",
+            shred_network.shred_retransmitter.runShredRetransmitter,
+            .{.{
+                .allocator = deps.allocator,
+                .my_contact_info = deps.my_contact_info,
+                .epoch_context_mgr = deps.epoch_context_mgr,
+                .gossip_table_rw = deps.gossip_table_rw,
+                .receiver = retransmit_channel,
+                .maybe_num_retransmit_threads = deps.n_retransmit_threads,
+                .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
+                .exit = deps.exit,
+                .rand = deps.random,
+                .logger = deps.logger.unscoped(),
+            }},
+        );
+    }
 
     // repair (thread)
     const repair_peer_provider = try RepairPeerProvider.init(
@@ -197,11 +197,21 @@ pub fn start(
         repair_peer_provider,
         shred_tracker,
     );
-    try service_manager.spawn(
-        "Repair Service",
-        RepairService.run,
-        .{repair_svc},
-    );
+    try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
+
+    if (conf.dump_shred_tracker) {
+        try service_manager.spawn("dump shred tracker", struct {
+            fn run(exit: *const Atomic(bool), trakr: *BasicShredTracker) !void {
+                const file = try std.fs.cwd().createFile("shred-tracker.txt", .{});
+                while (!exit.load(.monotonic)) {
+                    try file.seekTo(0);
+                    try file.setEndPos(0);
+                    _ = trakr.print(file.writer()) catch unreachable;
+                    std.time.sleep(std.time.ns_per_s);
+                }
+            }
+        }.run, .{ deps.exit, shred_tracker });
+    }
 
     return service_manager;
 }
