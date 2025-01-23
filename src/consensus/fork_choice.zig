@@ -183,6 +183,25 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
+    pub fn setTreeRoot(self: *Self, new_root: *const SlotHashKey) !void {
+        // Remove everything reachable from old root but not new root
+        var remove_set = try self.subtreeDiff(&self.tree_root, new_root);
+        defer remove_set.deinit();
+
+        var it = remove_set.keyIterator();
+        while (it.next()) |node_key| {
+            // "Slots reachable from old root must exist in tree"
+            // TODO: Revisit. Panic if key is not found?.
+            _ = self.fork_infos.remove(node_key.*);
+        }
+
+        const root_fork_info = self.fork_infos.getPtr(new_root.*) orelse return error.NewRootNotFound;
+
+        root_fork_info.parent = null;
+        self.tree_root = new_root.*;
+        self.last_root_time = Instant.now();
+    }
+
     /// Updates the fork tree's metadata for ancestors when a new slot (slot_hash_key) is added.
     /// Specifically, it propagates updates about the best slot and deepest slot upwards through
     /// the ancestors of the new slot.
@@ -336,6 +355,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         return fork_info.isCandidate();
     }
 
+    // TODO change return value to SortedMap.
     fn subtreeDiff(
         self: *Self,
         root1: *const SlotHashKey,
@@ -389,6 +409,18 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
 
     _ = try fc.subtreeDiff(
         &SlotHashKey{ .slot = 0, .hash = Hash.ZEROES },
+        &SlotHashKey{ .slot = 0, .hash = Hash.ZEROES },
+    );
+}
+
+test "HeaviestSubtreeForkChoice.setTreeRoot" {
+    var fc = try HeaviestSubtreeForkChoice.init(
+        test_allocator,
+        SlotHashKey{ .slot = 0, .hash = Hash.ZEROES },
+    );
+    defer fc.deinit();
+
+    _ = try fc.setTreeRoot(
         &SlotHashKey{ .slot = 0, .hash = Hash.ZEROES },
     );
 }
