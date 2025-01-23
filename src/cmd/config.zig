@@ -1,6 +1,5 @@
 const std = @import("std");
-const sig = @import("sig.zig");
-const core = sig.core;
+const sig = @import("../sig.zig");
 
 const ShredNetworkConfig = sig.shred_network.ShredNetworkConfig;
 const resolveSocketAddr = sig.net.net.resolveSocketAddr;
@@ -24,7 +23,8 @@ pub const Config = struct {
     metrics_port: u16 = 12345,
     shred_version: ?u16 = null,
 
-    pub const DEFAULT: Config = .{};
+    const ShredCollectorConfig = sig.shred_network.service.ShredCollectorConfig;
+    const GeyserConfig = sig.geyser.core.GeyserWriterConfig;
 
     pub fn genesisFilePath(self: Config) error{UnknownCluster}!?[]const u8 {
         return if (self.genesis_file_path) |provided_path|
@@ -36,12 +36,6 @@ pub const Config = struct {
             .localnet => null, // no default genesis file for localhost
         } else null;
     }
-
-    pub const GeyserConfig = struct {
-        enable: bool = false,
-        pipe_path: []const u8 = sig.VALIDATOR_DIR ++ "geyser.pipe",
-        writer_fba_bytes: usize = 1 << 32, // 4gb
-    };
 
     pub const TestTransactionSenderConfig = struct {
         n_transactions: u64 = 3,
@@ -135,9 +129,9 @@ pub const Config = struct {
             };
         }
 
-        pub fn getCluster(self: GossipConfig) error{UnknownCluster}!?core.Cluster {
+        pub fn getCluster(self: GossipConfig) error{UnknownCluster}!?sig.core.Cluster {
             return if (self.network) |network_str|
-                std.meta.stringToEnum(core.Cluster, network_str) orelse
+                std.meta.stringToEnum(sig.core.Cluster, network_str) orelse
                     error.UnknownCluster
             else
                 null;

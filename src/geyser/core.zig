@@ -252,9 +252,15 @@ pub const GeyserWriter = struct {
     }
 };
 
+pub const GeyserWriterConfig = struct {
+    enable: bool = false,
+    pipe_path: []const u8 = sig.VALIDATOR_DIR ++ "geyser.pipe",
+    writer_fba_bytes: usize = 1 << 32, // 4gb
+};
+
 pub fn createGeyserWriterFromConfig(
     allocator: std.mem.Allocator,
-    geyser_config: sig.Config.GeyserConfig,
+    geyser_config: GeyserWriterConfig,
 ) !*GeyserWriter {
     if (!geyser_config.enable) return error.GeyserWriterIsDisabled;
 

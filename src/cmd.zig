@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const cli = @import("zig-cli");
 const sig = @import("sig.zig");
 const std = @import("std");
+const Config = @import("cmd/config.zig").Config;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
@@ -49,14 +50,14 @@ else
 const LOG_SCOPE = "cmd";
 const ScopedLogger = sig.trace.ScopedLogger(LOG_SCOPE);
 
+var current_config: Config = .{};
+
 // We set this so that std.log knows not to log .debug level messages
 // which libraries we import will use
 pub const std_options: std.Options = .{
     // Set the log level to info
     .log_level = .info,
 };
-
-var current_config = sig.Config.DEFAULT;
 
 pub fn main() !void {
     defer {
@@ -1475,6 +1476,7 @@ fn loadSnapshot(
             .force_unpack_snapshot = adb_config.force_unpack_snapshot,
             .force_new_snapshot_download = adb_config.force_new_snapshot_download,
             .num_threads_snapshot_unpack = adb_config.num_threads_snapshot_unpack,
+            .max_number_of_download_attempts = adb_config.max_number_of_snapshot_download_attempts,
             .min_snapshot_download_speed_mbs = adb_config.min_snapshot_download_speed_mbs,
         },
     );

@@ -1,4 +1,3 @@
-pub const Config = @import("config.zig").Config;
 pub const accounts_db = @import("accountsdb/lib.zig");
 pub const adapter = @import("adapter.zig");
 pub const bincode = @import("bincode/bincode.zig");
