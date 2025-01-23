@@ -188,11 +188,10 @@ pub const HeaviestSubtreeForkChoice = struct {
         var remove_set = try self.subtreeDiff(&self.tree_root, new_root);
         defer remove_set.deinit();
 
-        var it = remove_set.keyIterator();
-        while (it.next()) |node_key| {
+        for (remove_set.keys()) |node_key| {
             // "Slots reachable from old root must exist in tree"
             // TODO: Revisit. Panic if key is not found?.
-            _ = self.fork_infos.remove(node_key.*);
+            _ = self.fork_infos.remove(node_key);
         }
 
         const root_fork_info = self.fork_infos.getPtr(new_root.*) orelse return error.NewRootNotFound;
@@ -355,21 +354,20 @@ pub const HeaviestSubtreeForkChoice = struct {
         return fork_info.isCandidate();
     }
 
-    // TODO change return value to SortedMap.
     fn subtreeDiff(
         self: *Self,
         root1: *const SlotHashKey,
         root2: *const SlotHashKey,
-    ) !AutoHashMap(SlotHashKey, void) {
+    ) !SortedMap(SlotHashKey, void) {
         if (self.containsBlock(root1)) {
-            return AutoHashMap(SlotHashKey, void).init(self.allocator);
+            return SortedMap(SlotHashKey, void).init(self.allocator);
         }
         var pending_keys = std.ArrayList(SlotHashKey).init(self.allocator);
         defer pending_keys.deinit();
 
         try pending_keys.append(root1.*);
 
-        var reachable_set = AutoHashMap(SlotHashKey, void).init(self.allocator);
+        var reachable_set = SortedMap(SlotHashKey, void).init(self.allocator);
         defer reachable_set.deinit();
 
         while (pending_keys.popOrNull()) |current_key| {
