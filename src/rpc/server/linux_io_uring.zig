@@ -565,8 +565,8 @@ const Entry = packed struct(u64) {
 
     const ACCEPT: Entry = .{ .ptr = null };
 
-    fn deinit(entry: Entry, allocator: std.mem.Allocator) void {
-        const ptr = entry.ptr orelse return;
+    fn deinit(self: Entry, allocator: std.mem.Allocator) void {
+        const ptr = self.ptr orelse return;
         ptr.deinit(allocator);
         allocator.destroy(ptr);
     }
@@ -577,10 +577,10 @@ const EntryData = struct {
     stream: std.net.Stream,
     state: EntryState,
 
-    fn deinit(data: *EntryData, allocator: std.mem.Allocator) void {
-        data.state.deinit();
-        allocator.free(data.buffer);
-        data.stream.close();
+    fn deinit(self: *EntryData, allocator: std.mem.Allocator) void {
+        self.state.deinit();
+        allocator.free(self.buffer);
+        self.stream.close();
     }
 };
 
@@ -598,8 +598,8 @@ const EntryState = union(enum) {
         },
     };
 
-    fn deinit(state: *EntryState) void {
-        switch (state.*) {
+    fn deinit(self: *EntryState) void {
+        switch (self.*) {
             .recv_head => {},
             .recv_body => {},
             .send_file_head => |*sfh| sfh.deinit(),

@@ -64,30 +64,30 @@ pub const Context = struct {
 
     /// Blocks until all tasks are completed, and then closes the server context.
     /// Does not force the server to exit.
-    pub fn joinDeinit(server: *Context) void {
-        server.wait_group.wait();
-        server.tcp.deinit();
+    pub fn joinDeinit(self: *Context) void {
+        self.wait_group.wait();
+        self.tcp.deinit();
     }
 
     /// Spawn the serve loop as a separate thread.
     pub fn serveSpawn(
-        server_ctx: *Context,
+        self: *Context,
         exit: *std.atomic.Value(bool),
         /// The pool to dispatch work to.
         work_pool: WorkPool,
     ) std.Thread.SpawnError!std.Thread {
-        return try std.Thread.spawn(.{}, serve, .{ server_ctx, exit, work_pool });
+        return try std.Thread.spawn(.{}, serve, .{ self, exit, work_pool });
     }
 
     /// Calls `acceptAndServeConnection` in a loop until `exit.load(.acquire)`.
     pub fn serve(
-        server_ctx: *Context,
+        self: *Context,
         exit: *std.atomic.Value(bool),
         /// The pool to dispatch work to.
         work_pool: WorkPool,
     ) WorkPool.AcceptAndServeConnectionError!void {
         while (!exit.load(.acquire)) {
-            try work_pool.acceptAndServeConnection(server_ctx);
+            try work_pool.acceptAndServeConnection(self);
         }
     }
 };
@@ -114,10 +114,10 @@ pub const WorkPool = union(enum) {
         IoUringAASCError;
 
     pub fn acceptAndServeConnection(
-        work_pool: WorkPool,
+        self: WorkPool,
         server: *Context,
     ) AcceptAndServeConnectionError!void {
-        switch (work_pool) {
+        switch (self) {
             .basic => {
                 const conn = try connection.acceptHandled(server.tcp);
                 defer conn.stream.close();

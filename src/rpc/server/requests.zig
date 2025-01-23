@@ -260,13 +260,13 @@ pub fn methodFmt(method: std.http.Method) MethodFmt {
 pub const MethodFmt = struct {
     method: std.http.Method,
     pub fn format(
-        fmt: MethodFmt,
+        self: MethodFmt,
         comptime fmt_str: []const u8,
         fmt_options: std.fmt.FormatOptions,
         writer: anytype,
     ) @TypeOf(writer).Error!void {
         _ = fmt_options;
-        if (fmt_str.len != 0) std.fmt.invalidFmtError(fmt_str, fmt);
-        try fmt.method.write(writer);
+        if (fmt_str.len != 0) std.fmt.invalidFmtError(fmt_str, self);
+        try self.method.write(writer);
     }
 };
