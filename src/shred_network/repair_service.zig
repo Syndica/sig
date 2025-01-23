@@ -130,7 +130,7 @@ pub const RepairService = struct {
         var timer = try std.time.Timer.start();
         var last_iteration: u64 = 0;
         while (!self.exit.load(.acquire)) {
-            _ = timer.read();
+            timer.reset();
             var num_repairs_sent: usize = 0;
             if (self.sendNecessaryRepairs()) |count| {
                 num_repairs_sent = count;
