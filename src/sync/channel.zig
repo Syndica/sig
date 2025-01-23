@@ -594,127 +594,90 @@ pub const BenchmarkChannel = struct {
 
     pub const BenchmarkArgs = struct {
         name: []const u8 = "",
-        n_items: usize,
         n_senders: usize,
-        n_receivers: usize,
+        receives: bool,
     };
 
     pub const args = [_]BenchmarkArgs{
         .{
-            .name = "  10k_items-   1_senders-   1_receivers ",
-            .n_items = 10_000,
+            .name = "1_senders-   1_receivers ",
             .n_senders = 1,
-            .n_receivers = 1,
+            .receives = true,
         },
         .{
-            .name = " 100k_items-   4_senders-   4_receivers ",
-            .n_items = 100_000,
-            .n_senders = 4,
-            .n_receivers = 4,
+            .name = "N_senders-   0_receivers ",
+            .n_senders = std.math.maxInt(usize),
+            .receives = false,
         },
         .{
-            .name = " 500k_items-   8_senders-   8_receivers ",
-            .n_items = 500_000,
-            .n_senders = 8,
-            .n_receivers = 8,
-        },
-        .{
-            .name = "   1m_items-  16_senders-  16_receivers ",
-            .n_items = 1_000_000,
-            .n_senders = 16,
-            .n_receivers = 16,
+            .name = "N_senders-   1_receivers ",
+            .n_senders = std.math.maxInt(usize),
+            .receives = true,
         },
     };
 
-    pub fn benchmarkSimpleUsizeBetterChannel(argss: BenchmarkArgs) !sig.time.Duration {
-        var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
-        const n_items = argss.n_items;
-        const senders_count = argss.n_senders;
-        const receivers_count = argss.n_receivers;
-        var timer = try sig.time.Timer.start();
+    const Context = struct {
+        channel: Channel(Packet),
+        start: std.Thread.ResetEvent = .{},
+        stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        popped: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    };
 
+    fn runSender(ctx: *Context) !void {
+        ctx.start.wait();
+        while (!ctx.stop.load(.monotonic)) {
+            try ctx.channel.send(Packet.default());
+        }
+    }
+
+    fn runReceiver(ctx: *Context) !void {
+        ctx.start.wait();
+        while (!ctx.stop.load(.monotonic)) {
+            std.mem.doNotOptimizeAway(ctx.channel.tryReceive() orelse continue);
+            // NOTE: should happen-after len() update from tryReceive().
+            ctx.popped.store(ctx.popped.load(.monotonic) + 1, .release);
+        }
+    }
+
+    pub fn benchmarkSimplePacketBetterChannel(argss: BenchmarkArgs) !sig.time.Duration {
+        const num_cpus = @max(1, try std.Thread.getCpuCount());
         const allocator = if (@import("builtin").is_test)
             std.testing.allocator
         else
             std.heap.c_allocator;
-        var channel = try Channel(usize).init(allocator);
-        defer channel.deinit();
 
-        const sends_per_sender: usize = n_items / senders_count;
-        const receives_per_receiver: usize = n_items / receivers_count;
+        var ctx = Context{ .channel = try Channel(Packet).init(allocator) };
+        defer ctx.channel.deinit();
 
-        var thread_index: usize = 0;
-        while (thread_index < senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{
-                &channel,
-                sends_per_sender,
-            });
+        var threads = std.ArrayList(std.Thread).init(allocator);
+        defer {
+            ctx.stop.store(true, .monotonic);
+            for (threads.items) |t| t.join();
+            threads.deinit();
         }
 
-        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{
-                &channel,
-                receives_per_receiver,
-            });
+        var num_senders = argss.n_senders;
+        if (num_senders == std.math.maxInt(usize)) num_senders = num_cpus;
+        for (0..num_senders) |_| {
+            try threads.append(try std.Thread.spawn(.{}, runSender, .{&ctx}));
         }
 
-        for (0..thread_handles.len) |i| {
-            if (thread_handles[i]) |handle| {
-                handle.join();
-            } else {
-                break;
-            }
+        if (argss.receives) {
+            try threads.append(try std.Thread.spawn(.{}, runReceiver, .{&ctx}));
         }
 
-        const elapsed = timer.read();
-        return elapsed;
-    }
+        ctx.start.set();
+        std.time.sleep(1 * std.time.ns_per_s);
 
-    pub fn benchmarkSimplePacketBetterChannel(argss: BenchmarkArgs) !sig.time.Duration {
-        var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
-        const n_items = argss.n_items;
-        const senders_count = argss.n_senders;
-        const receivers_count = argss.n_receivers;
-        var timer = try sig.time.Timer.start();
-
-        const allocator = std.heap.c_allocator;
-        var channel = try Channel(Packet).init(allocator);
-        defer channel.deinit();
-
-        const sends_per_sender: usize = n_items / senders_count;
-        const receives_per_receiver: usize = n_items / receivers_count;
-
-        var thread_index: usize = 0;
-        while (thread_index < senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketSender, .{
-                &channel,
-                sends_per_sender,
-            });
-        }
-
-        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketReceiver, .{
-                &channel,
-                receives_per_receiver,
-            });
-        }
-
-        for (0..thread_handles.len) |i| {
-            if (thread_handles[i]) |handle| {
-                handle.join();
-            } else {
-                break;
-            }
-        }
-
-        return timer.read();
+        const popped = ctx.popped.load(.acquire); // NOTE: should happen-before len() read.
+        const total = popped + ctx.channel.len();
+        return .{ .ns = std.time.ns_per_s / total };
     }
 };
 
 test "BenchmarkChannel.benchmarkSimplePacketBetterChannel" {
     _ = try BenchmarkChannel.benchmarkSimplePacketBetterChannel(.{
-        .n_items = 100_000,
         .n_senders = 4,
-        .n_receivers = 4,
+        .receives = true,
     });
 }
