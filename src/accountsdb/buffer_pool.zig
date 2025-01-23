@@ -359,12 +359,12 @@ pub const BufferPool = struct {
 
         for (0.., cqe_buf[0..n_submitted]) |i, cqe| {
             if (cqe.err() != .SUCCESS) {
-                std.debug.panicExtra(null, @returnAddress(), "cqe: {}, err: {}, i: {}, file: {}", .{
-                    cqe,
-                    cqe.err(),
-                    i,
-                    file,
-                });
+                std.debug.panicExtra(
+                    null,
+                    @returnAddress(),
+                    "cqe: {}, err: {}, i: {}, file: {}",
+                    .{ cqe, cqe.err(), i, file },
+                );
             }
             const f_idx: FrameIndex = @intCast(cqe.user_data);
             const bytes_read: FrameOffset = @intCast(cqe.res);
@@ -444,7 +444,10 @@ const FrameManager = struct {
         file_offset_start: FileOffset,
         file_offset_end: FileOffset,
     ) error{ InvalidArgument, OffsetsOutOfBounds, OutOfMemory }![]FrameIndex {
-        const n_indices = try BufferPool.computeNumberofFrameIndices(file_offset_start, file_offset_end);
+        const n_indices = try BufferPool.computeNumberofFrameIndices(
+            file_offset_start,
+            file_offset_end,
+        );
         if (n_indices > self.metadata.rc.len) return error.OffsetsOutOfBounds;
 
         const frame_indices = try allocator.alloc(FrameIndex, n_indices);
@@ -523,7 +526,12 @@ const FrameManager = struct {
         self.insertLfu(f_idx);
 
         if (!self.metadata.rc[f_idx].acquire()) {
-            std.debug.panicExtra(null, @returnAddress(), "attempted to reuse dead frame: {}", .{f_idx});
+            std.debug.panicExtra(
+                null,
+                @returnAddress(),
+                "attempted to reuse dead frame: {}",
+                .{f_idx},
+            );
         }
     }
 
@@ -571,7 +579,12 @@ const FrameManager = struct {
         std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
 
         if (self.metadata.rc[f_idx].isAlive()) {
-            std.debug.panicExtra(null, @returnAddress(), "attempted to reset frame with active ReadHandles: {}\n", .{f_idx});
+            std.debug.panicExtra(
+                null,
+                @returnAddress(),
+                "attempted to reset frame with active ReadHandles: {}\n",
+                .{f_idx},
+            );
         }
 
         const map_key: FileIdFileOffset = .{
@@ -603,7 +616,12 @@ const FrameManager = struct {
     fn insertLfu(self: *FrameManager, f_idx: FrameIndex) void {
         const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
         eviction_lfu.insert(self.metadata, f_idx) catch |err| switch (err) {
-            error.InvalidKey => std.debug.panicExtra(null, @returnAddress(), "Attempted to use invalid key: {}\n", .{f_idx}),
+            error.InvalidKey => std.debug.panicExtra(
+                null,
+                @returnAddress(),
+                "Attempted to use invalid key: {}\n",
+                .{f_idx},
+            ),
         };
         eviction_lfu_lg.unlock();
     }
@@ -673,7 +691,12 @@ const FrameMetadata = struct {
         // NOTE: this check itself is racy, but should never happen
         for (0.., self.rc) |i, *rc| {
             if (rc.isAlive()) {
-                std.debug.panicExtra(null, @returnAddress(), "BufferPool deinitialised with alive handle: {}\n", .{i});
+                std.debug.panicExtra(
+                    null,
+                    @returnAddress(),
+                    "BufferPool deinitialised with alive handle: {}\n",
+                    .{i},
+                );
             }
         }
         allocator.free(self.rc);
@@ -1406,9 +1429,12 @@ test "BufferPool allocation sizes" {
     // except for the s3_fifo queues, which are split to be ~90% and ~10% of that
     // length.
     var total_requested_bytes = gpa.total_requested_bytes;
-    total_requested_bytes -= bp.manager.eviction_lfu.readField("ghost").buf.len * @sizeOf(FrameIndex);
-    total_requested_bytes -= bp.manager.eviction_lfu.readField("main").buf.len * @sizeOf(FrameIndex);
-    total_requested_bytes -= bp.manager.eviction_lfu.readField("small").buf.len * @sizeOf(FrameIndex);
+    total_requested_bytes -= bp.manager.eviction_lfu.readField("ghost").buf.len *
+        @sizeOf(FrameIndex);
+    total_requested_bytes -= bp.manager.eviction_lfu.readField("main").buf.len *
+        @sizeOf(FrameIndex);
+    total_requested_bytes -= bp.manager.eviction_lfu.readField("small").buf.len *
+        @sizeOf(FrameIndex);
     total_requested_bytes -= @sizeOf(usize) * 3; // hashmap header
 
     try std.testing.expect(total_requested_bytes % frame_count == 0);
