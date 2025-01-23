@@ -194,7 +194,8 @@ pub const HeaviestSubtreeForkChoice = struct {
             _ = self.fork_infos.remove(node_key);
         }
 
-        const root_fork_info = self.fork_infos.getPtr(new_root.*) orelse return error.NewRootNotFound;
+        const root_fork_info = self
+            .fork_infos.getPtr(new_root.*) orelse return error.NewRootNotFound;
 
         root_fork_info.parent = null;
         self.tree_root = new_root.*;
