@@ -2147,7 +2147,7 @@ pub const AccountsDB = struct {
                 };
 
                 if (maybe_cached_account) |cached_account| {
-                    const account = try cached_account.account.clone(self.allocator);
+                    const account = try cached_account.account.cloneOwned(self.allocator);
                     cached_account.releaseOrDestroy(self.allocator);
                     return account;
                 } else {
@@ -2174,7 +2174,7 @@ pub const AccountsDB = struct {
                 _, const accounts = unrooted_accounts.get(account_ref.slot) orelse return error.SlotNotFound;
                 const account = accounts[ref_info.index];
 
-                return account.clone(self.allocator);
+                return try account.cloneOwned(self.allocator);
             },
         }
     }
@@ -2243,7 +2243,7 @@ pub const AccountsDB = struct {
         );
         defer account_in_file.deinit(account_allocator);
         defer self.file_map_fd_rw.unlockShared();
-        return try account_in_file.toOwnedAccount(account_allocator);
+        return try account_in_file.dupeCachedAccount(account_allocator);
     }
 
     /// Gets an account given an file_id and offset value.
@@ -2510,7 +2510,7 @@ pub const AccountsDB = struct {
 
             for (accounts_duped, accounts, 0..) |*account, original, i| {
                 errdefer for (accounts_duped[0..i]) |prev| prev.deinit(self.allocator);
-                account.* = try original.clone(self.allocator);
+                account.* = try original.cloneOwned(self.allocator);
 
                 const bhs, var bhs_lg = try self.getOrInitBankHashStats(slot);
                 defer bhs_lg.unlock();

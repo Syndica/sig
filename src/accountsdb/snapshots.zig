@@ -279,7 +279,7 @@ pub const VoteAccount = struct {
         vote_account: VoteAccount,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!VoteAccount {
-        const account = try vote_account.account.clone(allocator);
+        const account = try vote_account.account.cloneOwned(allocator);
         errdefer account.deinit(allocator);
         return .{
             .account = account,

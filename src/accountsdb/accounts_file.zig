@@ -196,19 +196,6 @@ pub const AccountInFile = struct {
         }
     }
 
-    pub fn toOwnedAccount(
-        self: *const Self,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!Account {
-        return .{
-            .data = try self.data.dupeAllocatedOwned(allocator),
-            .executable = self.executable().*,
-            .lamports = self.lamports().*,
-            .owner = self.owner().*,
-            .rent_epoch = self.rent_epoch().*,
-        };
-    }
-
     /// requires .data to be owned by the BufferPool
     pub fn dupeCachedAccount(
         self: *const Self,
