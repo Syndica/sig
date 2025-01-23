@@ -524,6 +524,10 @@ pub const Duration = struct {
         return self.ns / std.time.ns_per_s;
     }
 
+    pub fn asSecsFloat(self: Duration) f64 {
+        return @as(f64, @floatFromInt(self.ns)) / @as(f64, @floatFromInt(std.time.ns_per_s));
+    }
+
     pub fn asMillis(self: Duration) u64 {
         return self.ns / std.time.ns_per_ms;
     }
@@ -554,6 +558,22 @@ pub const Duration = struct {
 
     pub fn eql(self: Duration, other: Duration) bool {
         return self.ns == other.ns;
+    }
+
+    pub fn min(self: Duration, other: Duration) Duration {
+        return .{ .ns = @min(self.ns, other.ns) };
+    }
+
+    pub fn max(self: Duration, other: Duration) Duration {
+        return .{ .ns = @min(self.ns, other.ns) };
+    }
+
+    pub fn saturatingSub(self: Duration, other: Duration) Duration {
+        return .{ .ns = self.ns -| other.ns };
+    }
+
+    pub fn div(self: Duration, divisor: u64) Duration {
+        return .{ .ns = self.ns / divisor };
     }
 
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
