@@ -12,17 +12,17 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = zig_network.Socket;
 
-const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const ContactInfo = sig.gossip.ContactInfo;
 const Counter = sig.prometheus.Counter;
+const Duration = sig.time.Duration;
 const Gauge = sig.prometheus.Gauge;
 const GossipTable = sig.gossip.GossipTable;
 const Histogram = sig.prometheus.Histogram;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
+const Instant = sig.time.Instant;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 const LruCacheCustom = sig.utils.lru.LruCacheCustom;
-const MultiSlotReport = shred_network.shred_tracker.MultiSlotReport;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
@@ -34,6 +34,8 @@ const SocketThread = sig.net.SocketThread;
 const Channel = sig.sync.Channel;
 const Slot = sig.core.Slot;
 
+const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
+const MultiSlotReport = shred_network.shred_tracker.MultiSlotReport;
 const RepairRequest = shred_network.repair_message.RepairRequest;
 const RepairMessage = shred_network.repair_message.RepairMessage;
 
@@ -123,12 +125,9 @@ pub const RepairService = struct {
         self.report.deinit();
     }
 
-    const min_loop_duration_ns = 500 * std.time.ns_per_ms;
-
     pub fn run(self: *Self) !void {
         var waiting_for_peers = false;
-        var timer = try std.time.Timer.start();
-        var last_iteration: u64 = 0;
+        var timer = try sig.time.Timer.start();
         while (!self.exit.load(.acquire)) {
             timer.reset();
             var num_repairs_sent: usize = 0;
@@ -145,14 +144,12 @@ pub const RepairService = struct {
                 },
                 else => return e,
             }
-            last_iteration = timer.lap();
-            const last_iteration_seconds = @as(f64, @floatFromInt(last_iteration)) /
-                @as(f64, @floatFromInt(std.time.ns_per_s));
+            const last_iteration = timer.lap();
 
             self.metrics.batch_size.observe(num_repairs_sent);
-            self.metrics.batch_process_time.observe(last_iteration_seconds);
+            self.metrics.batch_process_time.observe(last_iteration.asSecsFloat());
             self.metrics.last_batch_size.set(num_repairs_sent);
-            self.metrics.last_batch_process_time.set(last_iteration_seconds);
+            self.metrics.last_batch_process_time.set(last_iteration.asSecsFloat());
 
             sleepRepair(num_repairs_sent, last_iteration);
         }
@@ -190,7 +187,7 @@ pub const RepairService = struct {
     /// Supports the maximum number of shreds that could possibly be generated
     /// during a repair loop iteration. This ensures it is always possible to
     /// catch up, assuming the current hardware is powerful enough.
-    const MAX_SHRED_REPAIRS = (MAX_DATA_SHREDS_PER_SLOT * MAX_REPAIR_DELAY_MILLIS) / 400;
+    const MAX_SHRED_REPAIRS = (MAX_DATA_SHREDS_PER_SLOT * MAX_REPAIR_LOOP_DURATION_TARGET.asMillis()) / 400;
 
     fn getRepairs(self: *Self) !ArrayList(RepairRequest) {
         var oldest_slot_needing_repair: u64 = 0;
@@ -279,22 +276,45 @@ fn maxRequesterThreads() u32 {
 /// behind, while allowing low latency to fill small gaps when we're caught up.
 /// It also ensures the repair service does not hog resources 100% of the time,
 /// so turbine can get a chance to start keeping up on its own.
-fn sleepRepair(num_requests: u64, last_iteration_ns: u64) void {
-    const min = 200; // so the repair service is not too greedy/eager/redundant
-    const target_millis = num_requests / 8;
-    const bounded_target_ms: u64 = @max(min, @min(MAX_REPAIR_DELAY_MILLIS, target_millis));
-    const bounded_target_ns = bounded_target_ms * std.time.ns_per_ms;
-    const remaining_sleep_for_target = bounded_target_ns -| last_iteration_ns;
+///
+/// The numbers and logic here are somewhat arbitrary, but this was tuned to
+/// work well during testing and should not be modified without thorough
+/// testing. If the thread allocation strategy for the repair service changes
+/// dramatically, it will likely make sense to revise this sleeping approach.
+fn sleepRepair(num_requests: u64, last_iteration: Duration) void {
+    // time we'd like the entire loop to take for this number of repairs
+    const target = Duration.fromMillis(num_requests / 8);
+    const bounded = target.min(MAX_REPAIR_LOOP_DURATION_TARGET).max(MIN_REPAIR_LOOP_DURATION);
 
-    // sets a bare minimum sleep of 100 ms to do other work.
-    const floor = std.time.ns_per_s / 5;
+    // amount of time to sleep after last_iteration to reach the target
+    const remaining_sleep_for_target = bounded.saturatingSub(last_iteration);
 
     // if overwhelmed by generating many repair requests, this ensures there is
-    // a pause between them to process some incoming shreds.
-    const take_a_break = last_iteration_ns / 4;
+    // a pause between them to dedicate more CPU to process some incoming
+    // shreds. This supplements MIN_REPAIR_DELAY to ensure repairs are actively
+    // being processed no more than 80% of the time.
+    const take_a_break = last_iteration.div(4);
 
-    std.time.sleep(@max(remaining_sleep_for_target, floor, take_a_break));
+    std.time.sleep(remaining_sleep_for_target.max(MIN_REPAIR_DELAY).max(take_a_break).asNanos());
 }
+
+/// The maximum time that we want the repair loop to take.
+///
+/// This could be exceeded if it takes longer to actually send the repair
+/// requests. But otherwise this is the maximum loop duration that we'll target
+/// with the sleeps.
+///
+/// This is sort of like a timeout for repair responses. After 1 second, we
+/// should have gotten all the repairs, and there's no need to delay sending
+/// more requests.
+const MAX_REPAIR_LOOP_DURATION_TARGET = Duration.fromSecs(1);
+
+/// Ensures the full repair loop doesn't repeat more often than this.
+const MIN_REPAIR_LOOP_DURATION = Duration.fromMillis(200);
+
+/// Ensures the repair loop always sleeps for some time to do other work between
+/// repairs.
+const MIN_REPAIR_DELAY = Duration.fromMillis(100);
 
 /// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
@@ -544,10 +564,6 @@ pub const RepairPeerProvider = struct {
         return try allocator.realloc(buf, compatible_peers);
     }
 };
-
-/// The maximum time to wait between repair loop iterations.
-/// Sort of like a timeout for repair responses.
-const MAX_REPAIR_DELAY_MILLIS = 1_000;
 
 test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
