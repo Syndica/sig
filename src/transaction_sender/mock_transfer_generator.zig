@@ -183,7 +183,7 @@ pub const MockTransferService = struct {
                 };
             };
 
-            const transaction = try sig.core.transaction.buildTransferTansaction(
+            const transaction = try sig.core.Transaction.buildTransferTansaction(
                 self.allocator,
                 random,
                 from_keypair,
@@ -239,7 +239,7 @@ pub const MockTransferService = struct {
                 };
             };
 
-            const transaction = try sig.core.transaction.buildTransferTansaction(
+            const transaction = try sig.core.Transaction.buildTransferTansaction(
                 self.allocator,
                 random,
                 from_keypair,

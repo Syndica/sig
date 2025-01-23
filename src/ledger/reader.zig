@@ -22,7 +22,7 @@ const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
 const Timer = sig.time.Timer;
 const Transaction = sig.core.Transaction;
-const VersionedTransaction = sig.core.VersionedTransaction;
+const VersionedTransaction = sig.core.Transaction;
 
 // shred
 const Shred = sig.ledger.shred.Shred;

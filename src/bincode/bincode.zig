@@ -5,6 +5,7 @@ pub const list = @import("list.zig");
 pub const optional = @import("optional.zig");
 pub const varint = @import("varint.zig");
 pub const shortvec = @import("shortvec.zig");
+pub const CompactU16 = @import("CompactU16.zig");
 
 const std = @import("std");
 const builtin = @import("builtin");

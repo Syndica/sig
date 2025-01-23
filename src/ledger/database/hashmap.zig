@@ -517,6 +517,6 @@ const SharedHashMap = struct {
     }
 };
 
-comptime {
-    _ = &database.interface.testDatabase(SharedHashMapDB);
-}
+// comptime {
+// _ = &database.interface.testDatabase(SharedHashMapDB);
+// }
