@@ -110,6 +110,10 @@ pub const GossipConfig = struct {
     }
 };
 
+/// The command-line arguments that are used to configure the shred network. The
+/// CLI args are slightly different from the `shred_network.start` inputs, so it
+/// gets its own struct. `ShredNetworkConfig` represents the inputs to the start
+/// function.
 const ShredNetworkCliArgs = struct {
     start_slot: ?sig.core.Slot = null,
     repair_port: u16 = 8003,
@@ -117,6 +121,7 @@ const ShredNetworkCliArgs = struct {
     no_retransmit: bool = true,
     dump_shred_tracker: bool = false,
 
+    /// Converts from the CLI args into the `shred_network.start` parameters
     pub fn toConfig(self: ShredNetworkCliArgs, fallback_slot: sig.core.Slot) ShredNetworkConfig {
         return .{
             .start_slot = self.start_slot orelse fallback_slot,
