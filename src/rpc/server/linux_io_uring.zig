@@ -269,12 +269,12 @@ fn consumeOurCqe(
     };
     errdefer server_ctx.wait_group.finish();
 
-    const err_logger = server_ctx.logger.err().field(
+    const addr_err_logger = server_ctx.logger.err().field(
         "address",
         // if we fail to getSockName, just print the error in place of the address;
         connection.getSockName(entry_data.stream.handle),
     );
-    errdefer err_logger.logf("Dropping connection", .{});
+    errdefer addr_err_logger.log("Dropping connection");
 
     switch (entry_data.state) {
         .recv_head => |*head| {
@@ -319,7 +319,7 @@ fn consumeOurCqe(
                 std.debug.assert(std_head.compression == .none);
                 break :head_info HeadInfo.parseFromStdHead(std_head) catch |err| switch (err) {
                     error.RequestTargetTooLong => |e| {
-                        err_logger.logf("Request target was too long: '{}'", .{
+                        server_ctx.logger.err().logf("Request target was too long: '{}'", .{
                             std.zig.fmtEscapes(std_head.target),
                         });
                         return e;
@@ -346,7 +346,7 @@ fn consumeOurCqe(
                 .content_end = content_end,
             } };
             const body = &entry_data.state.recv_body;
-            try handleRecvBody(liou, server_ctx, err_logger, entry, body);
+            try handleRecvBody(liou, server_ctx, entry, body);
             return;
         },
 
@@ -365,7 +365,7 @@ fn consumeOurCqe(
                 body.content_end += recv_len;
             }
 
-            try handleRecvBody(liou, server_ctx, err_logger, entry, body);
+            try handleRecvBody(liou, server_ctx, entry, body);
             return;
         },
 
@@ -450,7 +450,6 @@ fn consumeOurCqe(
 fn handleRecvBody(
     liou: *LinuxIoUring,
     server_ctx: *ServerCtx,
-    err_logger: anytype,
     entry: Entry,
     body: *EntryState.RecvBody,
 ) !void {
@@ -459,7 +458,7 @@ fn handleRecvBody(
 
     if (!body.head_info.method.requestHasBody()) {
         if (body.head_info.content_len) |content_len| {
-            err_logger.logf(
+            server_ctx.logger.err().logf(
                 "{} request isn't expected to have a body, but got Content-Length: {d}",
                 .{ requests.methodFmt(body.head_info.method), content_len },
             );

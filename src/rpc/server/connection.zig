@@ -1,9 +1,10 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
+pub const GetSockNameError = std.posix.GetSockNameError;
 pub fn getSockName(
     socket_handle: std.posix.socket_t,
-) std.posix.GetSockNameError!std.net.Address {
+) GetSockNameError!std.net.Address {
     var addr: std.net.Address = .{ .any = undefined };
     var addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(addr.any));
     try std.posix.getsockname(socket_handle, &addr.any, &addr_len);

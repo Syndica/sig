@@ -18,7 +18,7 @@ pub const Context = struct {
     wait_group: std.Thread.WaitGroup,
     tcp: std.net.Server,
     /// Must not be mutated.
-    read_buffer_size: usize,
+    read_buffer_size: u32,
 
     pub const LOGGER_SCOPE = "rpc.Server";
     pub const ScopedLogger = sig.trace.log.ScopedLogger(LOGGER_SCOPE);
@@ -42,11 +42,12 @@ pub const Context = struct {
         read_buffer_size: u32,
         /// The socket address to listen on for incoming HTTP and/or RPC requests.
         socket_addr: std.net.Address,
+        /// See `@FieldType(std.net.Address.ListenOptions, "reuse_address")`.
+        reuse_address: bool = false,
     }) std.net.Address.ListenError!Context {
         var tcp_server = try params.socket_addr.listen(.{
-            // NOTE: ideally we would be doing this nonblockingly, however this doesn't work properly on mac,
-            // so for testing purposes we can't test the `serve` functionality directly.
             .force_nonblocking = false,
+            .reuse_address = params.reuse_address,
         });
         errdefer tcp_server.deinit();
 
