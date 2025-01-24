@@ -221,7 +221,8 @@ fn consumeOurCqe(
 
         switch (try connection.handleAcceptResult(cqe.err())) {
             .success => {},
-            .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+            // just quickly exit; if we need to re-issue, that's already handled above
+            .again => return,
             .intr => return error.SignalInterruptedOperation,
             .conn_aborted => return error.ConnectionAborted,
         }
@@ -342,7 +343,6 @@ fn consumeOurCqe(
 
             entry_data.state = .{ .recv_body = .{
                 .head_info = head_info,
-                .need_to_check_cqe = false,
                 .content_end = content_end,
             } };
             const body = &entry_data.state.recv_body;
@@ -351,20 +351,17 @@ fn consumeOurCqe(
         },
 
         .recv_body => |*body| {
-            if (body.need_to_check_cqe) {
-                switch (try connection.handleRecvResult(cqe.err())) {
-                    .success => {},
-                    .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
-                    .intr => return error.SignalInterruptedOperation,
-                    .conn_refused => return error.ConnectionRefused,
-                    .conn_reset => return error.ConnectionResetByPeer,
-                    .timed_out => return error.ConnectionTimedOut,
-                }
-
-                const recv_len: usize = @intCast(cqe.res);
-                body.content_end += recv_len;
+            switch (try connection.handleRecvResult(cqe.err())) {
+                .success => {},
+                .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                .intr => return error.SignalInterruptedOperation,
+                .conn_refused => return error.ConnectionRefused,
+                .conn_reset => return error.ConnectionResetByPeer,
+                .timed_out => return error.ConnectionTimedOut,
             }
 
+            const recv_len: usize = @intCast(cqe.res);
+            body.content_end += recv_len;
             try handleRecvBody(liou, server_ctx, entry, body);
             return;
         },
@@ -380,17 +377,23 @@ fn consumeOurCqe(
 
             switch (try sfh.computeAndMaybePrepSend(entry, &liou.io_uring)) {
                 .sending_more => return,
-                .all_sent => {
-                    const sfd = sfh.sfd;
-                    entry_data.state = .{ .send_file_body = .{
-                        .sfd = sfd,
-                        .spliced_to_pipe = 0,
-                        .spliced_to_socket = 0,
-                        .which = .to_pipe,
-                    } };
-                    const sfb = &entry_data.state.send_file_body;
-                    try sfb.prepSpliceFileToPipe(entry, &liou.io_uring);
-                    return;
+                .all_sent => switch (sfh.data) {
+                    .file_size => {
+                        entry.deinit(server_ctx.allocator);
+                        server_ctx.wait_group.finish();
+                        return;
+                    },
+                    .sfd => |sfd| {
+                        entry_data.state = .{ .send_file_body = .{
+                            .sfd = sfd,
+                            .spliced_to_pipe = 0,
+                            .spliced_to_socket = 0,
+                            .which = .to_pipe,
+                        } };
+                        const sfb = &entry_data.state.send_file_body;
+                        try sfb.prepSpliceFileToPipe(entry, &liou.io_uring);
+                        return;
+                    },
                 },
             }
         },
@@ -438,6 +441,7 @@ fn consumeOurCqe(
 
             if (snb.end_index < snb.head.len) {
                 try snb.prepSend(entry, &liou.io_uring);
+                return;
             } else std.debug.assert(snb.end_index == snb.head.len);
 
             entry.deinit(server_ctx.allocator);
@@ -445,6 +449,8 @@ fn consumeOurCqe(
             return;
         },
     }
+
+    comptime unreachable;
 }
 
 fn handleRecvBody(
@@ -478,37 +484,56 @@ fn handleRecvBody(
             return;
         },
 
-        .GET => switch (requests.getRequestTargetResolve(
+        inline .HEAD, .GET => |method| switch (requests.getRequestTargetResolve(
             server_ctx.logger,
             body.head_info.target.constSlice(),
             server_ctx.latest_snapshot_gen_info,
         )) {
             inline .full_snapshot, .inc_snapshot => |pair| {
-                const snap_info, var full_info_lg = pair;
-                errdefer full_info_lg.unlock();
+                const sfh_data: EntryState.SendFileHead.Data = switch (method) {
+                    .HEAD => blk: {
+                        const snap_info, var full_info_lg = pair;
+                        defer full_info_lg.unlock();
 
-                const archive_name_bounded = snap_info.snapshotArchiveName();
-                const archive_name = archive_name_bounded.constSlice();
+                        const archive_name_bounded = snap_info.snapshotArchiveName();
+                        const archive_name = archive_name_bounded.constSlice();
 
-                const snapshot_dir = server_ctx.snapshot_dir;
-                const archive_file = try snapshot_dir.openFile(archive_name, .{});
-                errdefer archive_file.close();
-                const file_size = try archive_file.getEndPos();
+                        const snapshot_dir = server_ctx.snapshot_dir;
+                        const snap_stat = try snapshot_dir.statFile(archive_name);
+                        break :blk .{ .file_size = snap_stat.size };
+                    },
+                    .GET => blk: {
+                        const snap_info, var full_info_lg = pair;
+                        errdefer full_info_lg.unlock();
 
-                const pipe_r, const pipe_w = try std.posix.pipe();
-                errdefer std.posix.close(pipe_w);
-                errdefer std.posix.close(pipe_r);
+                        const archive_name_bounded = snap_info.snapshotArchiveName();
+                        const archive_name = archive_name_bounded.constSlice();
+
+                        const snapshot_dir = server_ctx.snapshot_dir;
+                        const archive_file = try snapshot_dir.openFile(archive_name, .{});
+                        errdefer archive_file.close();
+
+                        const file_size = try archive_file.getEndPos();
+
+                        const pipe_r, const pipe_w = try std.posix.pipe();
+                        errdefer std.posix.close(pipe_w);
+                        errdefer std.posix.close(pipe_r);
+
+                        break :blk .{ .sfd = .{
+                            .file_lg = full_info_lg,
+                            .file = archive_file,
+                            .file_size = file_size,
+
+                            .pipe_w = pipe_w,
+                            .pipe_r = pipe_r,
+                        } };
+                    },
+                    else => comptime unreachable,
+                };
 
                 entry_data.state = .{ .send_file_head = .{
-                    .sfd = .{
-                        .file_lg = full_info_lg,
-                        .file = archive_file,
-                        .file_size = file_size,
-
-                        .pipe_w = pipe_w,
-                        .pipe_r = pipe_r,
-                    },
                     .sent_bytes = 0,
+                    .data = sfh_data,
                 } };
                 const sfh = &entry_data.state.send_file_head;
                 switch (try sfh.computeAndMaybePrepSend(entry, &liou.io_uring)) {
@@ -614,10 +639,6 @@ const EntryState = union(enum) {
 
     const RecvBody = struct {
         head_info: requests.HeadInfo,
-        /// Should be true when submitting the SQE.
-        /// Will be true when receving the CQE, and false when we've
-        /// been `continue`'d into by another prong in the switch loop.
-        need_to_check_cqe: bool,
         /// The current number of content bytes read into the buffer.
         content_end: usize,
     };
@@ -639,11 +660,20 @@ const EntryState = union(enum) {
     };
 
     const SendFileHead = struct {
-        sfd: SendFileData,
         sent_bytes: u64,
+        data: Data,
+
+        const Data = union(enum) {
+            /// Just responding to a HEAD request.
+            file_size: u64,
+            sfd: SendFileData,
+        };
 
         fn deinit(self: *SendFileHead) void {
-            self.sfd.deinit();
+            switch (self.data) {
+                .sfd => |*sfd| sfd.deinit(),
+                .file_size => {},
+            }
         }
 
         fn computeAndMaybePrepSend(
@@ -675,9 +705,11 @@ const EntryState = union(enum) {
                     .phrase = if (status.phrase()) |str| str else "",
                 }) catch |err| switch (err) {};
 
-                writer.print("Content-Length: {d}\r\n", .{
-                    self.sfd.file_size,
-                }) catch |err| switch (err) {};
+                const file_size = switch (self.data) {
+                    .sfd => |sfd| sfd.file_size,
+                    .file_size => |file_size| file_size,
+                };
+                writer.print("Content-Length: {d}\r\n", .{file_size}) catch |err| switch (err) {};
 
                 writer.writeAll("\r\n") catch |err| switch (err) {};
 

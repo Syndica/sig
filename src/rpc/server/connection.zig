@@ -11,26 +11,47 @@ pub fn getSockName(
     return addr;
 }
 
+/// When this is false, it means `accept[Handled]` can't apply
+/// flags to the accepted socket, and the caller will have to
+/// to ensure relevant flags are enabled/disabled after acceptance.
+pub const have_accept4 = !builtin.target.isDarwin();
+
 pub const AcceptHandledError = HandleAcceptError || error{
     ConnectionAborted,
     WouldBlock,
 };
+
 pub fn acceptHandled(
     tcp_server: std.net.Server,
+    /// NOTE: this is *only* a hint, and may not apply on all platforms.
+    /// See `have_accept4`.
+    sync_hint: enum { blocking, nonblocking },
 ) AcceptHandledError!std.net.Server.Connection {
+    const accept_flags: u32 = blk: {
+        var accept_flags: u32 = std.posix.SOCK.CLOEXEC;
+        accept_flags |= switch (sync_hint) {
+            .blocking => 0,
+            .nonblocking => std.posix.SOCK.NONBLOCK,
+        };
+        break :blk accept_flags;
+    };
+
     while (true) {
         var addr: std.net.Address = .{ .any = undefined };
         var addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(addr.any));
-        const rc = if (!builtin.target.isDarwin()) std.posix.system.accept4(
-            tcp_server.stream.handle,
-            &addr.any,
-            &addr_len,
-            std.posix.SOCK.CLOEXEC,
-        ) else std.posix.system.accept(
-            tcp_server.stream.handle,
-            &addr.any,
-            &addr_len,
-        );
+        const rc = if (have_accept4)
+            std.posix.system.accept4(
+                tcp_server.stream.handle,
+                &addr.any,
+                &addr_len,
+                accept_flags,
+            )
+        else
+            std.posix.system.accept(
+                tcp_server.stream.handle,
+                &addr.any,
+                &addr_len,
+            );
 
         return switch (try handleAcceptResult(std.posix.errno(rc))) {
             .intr => continue,
@@ -41,6 +62,27 @@ pub fn acceptHandled(
                 .address = addr,
             },
         };
+    }
+}
+
+pub const SetSocketSync = std.posix.FcntlError;
+
+/// Ensure the socket is set to be blocking or nonblocking.
+pub fn setSocketSync(
+    socket: std.posix.socket_t,
+    sync: enum { blocking, nonblocking },
+) !void {
+    const FlagsInt = @typeInfo(std.posix.O).Struct.backing_integer.?;
+    var flags_int: FlagsInt = @intCast(try std.posix.fcntl(socket, std.posix.F.GETFL, 0));
+    const flags = std.mem.bytesAsValue(std.posix.O, std.mem.asBytes(&flags_int));
+
+    const nonblock_wanted = switch (sync) {
+        .blocking => false,
+        .nonblocking => true,
+    };
+    if (flags.NONBLOCK != nonblock_wanted) {
+        flags.NONBLOCK = nonblock_wanted;
+        _ = try std.posix.fcntl(socket, std.posix.F.SETFL, flags_int);
     }
 }
 

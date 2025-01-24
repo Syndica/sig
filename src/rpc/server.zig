@@ -46,7 +46,7 @@ pub const Context = struct {
         reuse_address: bool = false,
     }) std.net.Address.ListenError!Context {
         var tcp_server = try params.socket_addr.listen(.{
-            .force_nonblocking = false,
+            .force_nonblocking = true,
             .reuse_address = params.reuse_address,
         });
         errdefer tcp_server.deinit();
@@ -104,6 +104,7 @@ pub const WorkPool = union(enum) {
 
     const BasicAASCError =
         connection.AcceptHandledError ||
+        connection.SetSocketSync ||
         std.mem.Allocator.Error ||
         std.http.Server.ReceiveHeadError ||
         requests.HandleRequestError;
@@ -120,8 +121,19 @@ pub const WorkPool = union(enum) {
     ) AcceptAndServeConnectionError!void {
         switch (self) {
             .basic => {
-                const conn = try connection.acceptHandled(server.tcp);
+                const conn = connection.acceptHandled(
+                    server.tcp,
+                    .blocking,
+                ) catch |err| switch (err) {
+                    error.WouldBlock => return,
+                    else => |e| return e,
+                };
                 defer conn.stream.close();
+
+                if (!connection.have_accept4) {
+                    // make sure the accepted socket is in blocking mode
+                    try connection.setSocketSync(conn.stream.handle, .blocking);
+                }
 
                 server.wait_group.start();
                 defer server.wait_group.finish();
@@ -200,27 +212,10 @@ test Context {
         };
     });
 
-    const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
-    var rpc_server_ctx = try Context.init(.{
-        .allocator = allocator,
-        .logger = logger,
-        .snapshot_dir = test_data_dir,
-        .latest_snapshot_gen_info = &latest_snapshot_gen_info,
-        .socket_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
-        .read_buffer_size = 4096,
-    });
-    defer rpc_server_ctx.joinDeinit();
-
     var maybe_liou = try WorkPool.LinuxIoUring.init();
     // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
     // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
     defer if (maybe_liou != null) maybe_liou.?.deinit();
-
-    const self_url_bounded_str = sig.utils.fmt.boundedFmt(
-        "http://localhost:{d}/",
-        .{rpc_server_ctx.tcp.listen_address.getPort()},
-    );
-    const self_uri = try std.Uri.parse(self_url_bounded_str.constSlice());
 
     for ([_]?WorkPool{
         .basic,
@@ -229,25 +224,23 @@ test Context {
     }) |maybe_work_pool| {
         const work_pool = maybe_work_pool orelse continue;
 
+        const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
+        const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
+        var rpc_server_ctx = try Context.init(.{
+            .allocator = allocator,
+            .logger = logger,
+            .snapshot_dir = test_data_dir,
+            .latest_snapshot_gen_info = &latest_snapshot_gen_info,
+            .socket_addr = sock_addr,
+            .read_buffer_size = 4096,
+            .reuse_address = true,
+        });
+        defer rpc_server_ctx.joinDeinit();
+
         var exit = std.atomic.Value(bool).init(false);
         const serve_thread = try rpc_server_ctx.serveSpawn(&exit, work_pool);
-        defer blk: {
-            exit.store(true, .release);
-            // send a dummy request so that the serve thread will get the accept and observe `exit`.
-            // TODO(ink): we only issue interruptSelf for the basic work pool, and not the io_uring one,
-            // because for some reason that causes it to hang. this is kinda nasty and it would be
-            // nice for this to Just Work, however I suspect it may have something to do with the
-            // fact that it's the process sending itself a connection multiple times.
-            if (work_pool == .basic) interruptSelf(allocator, self_uri) catch |err| {
-                if (@errorReturnTrace()) |st| {
-                    std.log.err("{s}\n{}", .{ @errorName(err), st });
-                } else {
-                    std.log.err("{s}", .{@errorName(err)});
-                }
-                break :blk; // don't attempt to join the thread if an error occurred
-            };
-            serve_thread.join();
-        }
+        defer serve_thread.join();
+        defer exit.store(true, .release);
 
         try testExpectSnapshotResponse(
             allocator,
@@ -333,22 +326,4 @@ fn testDownloadSelfSnapshot(
     try std.testing.expectEqual(content_len, response_content.len);
 
     return response_content;
-}
-
-fn interruptSelf(
-    allocator: std.mem.Allocator,
-    snap_url: std.Uri,
-) !void {
-    var client: std.http.Client = .{ .allocator = allocator };
-    defer client.deinit();
-
-    var server_header_buffer: [4096 * 16]u8 = undefined;
-    var request = try client.open(.HEAD, snap_url, .{
-        .server_header_buffer = &server_header_buffer,
-    });
-    defer request.deinit();
-
-    try request.send();
-    try request.finish();
-    try request.wait();
 }
