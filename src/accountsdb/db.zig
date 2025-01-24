@@ -384,7 +384,7 @@ pub const AccountsDB = struct {
                     self.logger.err().logf("Failed to open accounts/{s}: {s}", .{ file_name_bounded.constSlice(), @errorName(err) });
                     return err;
                 };
-                defer accounts_file.close();
+                errdefer accounts_file.close();
 
                 break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
                     self.logger.err().logf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });

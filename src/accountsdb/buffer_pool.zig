@@ -384,6 +384,7 @@ const FrameManager = struct {
 
     /// Uniquely identifies a frame from its file_id and offset.
     /// Used for looking up valid frames.
+    /// TODO: Using a concurrent hashmap may be a large performance improvement.
     frame_map_rw: sig.sync.RwMux(Map),
 
     /// Stores internally-used per-frame data.
@@ -400,7 +401,7 @@ const FrameManager = struct {
         errdefer metadata.deinit(allocator);
 
         var frame_map: Map = .{};
-        try frame_map.ensureTotalCapacity(allocator, num_frames);
+        try frame_map.ensureTotalCapacity(allocator, num_frames * 2);
         errdefer frame_map.deinit(allocator);
         const frame_map_rw = sig.sync.RwMux(Map).init(frame_map);
 
@@ -455,24 +456,23 @@ const FrameManager = struct {
         @memset(frame_indices, INVALID_FRAME);
 
         // lookup frame mappings
-        const frame_map, var frame_map_lg = self.frame_map_rw.readWithLock();
-        for (0.., frame_indices) |i, *f_idx| {
-            const file_offset: FileOffset = @intCast(
-                (i * FRAME_SIZE) + (file_offset_start - file_offset_start % FRAME_SIZE),
-            );
+        {
+            const frame_map, var frame_map_lg = self.frame_map_rw.readWithLock();
+            defer frame_map_lg.unlock();
 
-            const key: FileIdFileOffset = .{
-                .file_id = file_id,
-                .file_offset = file_offset,
-            };
+            for (0.., frame_indices) |i, *f_idx| {
+                const file_offset: FileOffset = @intCast(
+                    (i * FRAME_SIZE) + (file_offset_start - file_offset_start % FRAME_SIZE),
+                );
 
-            const maybe_frame_idx = blk: {
-                break :blk frame_map.get(key);
-            };
+                const key: FileIdFileOffset = .{
+                    .file_id = file_id,
+                    .file_offset = file_offset,
+                };
 
-            if (maybe_frame_idx) |frame_idx| f_idx.* = frame_idx;
+                if (frame_map.get(key)) |frame_idx| f_idx.* = frame_idx;
+            }
         }
-        frame_map_lg.unlock();
 
         for (frame_indices) |f_idx| {
             if (f_idx == INVALID_FRAME) continue;
@@ -488,17 +488,29 @@ const FrameManager = struct {
         const prev_free_idx = self.free_idx.fetchAdd(1, .monotonic);
         if (prev_free_idx < self.metadata.rc.len) return @intCast(prev_free_idx);
 
-        const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
-        const evicted = eviction_lfu.evict(self.metadata);
-        eviction_lfu_lg.unlock();
+        const evicted, const evicted_key = blk: {
+            const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+            defer eviction_lfu_lg.unlock();
+
+            const evicted = eviction_lfu.evict(self.metadata);
+            const evicted_key = self.metadata.key[evicted].load(.acquire);
+
+            // not actually necessary, but makes issues more visible
+            self.metadata.key[evicted].store(@bitCast(FileIdFileOffset.INVALID), .release);
+            self.metadata.size[evicted].store(0xAAAA, .release);
+
+            break :blk .{ evicted, evicted_key };
+        };
 
         const did_remove = blk: {
             const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
             defer frame_map_lg.unlock();
-            break :blk frame_map.remove(
-                @bitCast(self.metadata.key[evicted].load(.acquire)),
-            );
+            break :blk frame_map.remove(@bitCast(evicted_key));
         };
+
+        // Thread safety: thread safety issues seem to all go away if I hold the eviction_lfu_lg up
+        // until here. But we shouldn't need to do this?
+
         if (!did_remove) {
             std.debug.panicExtra(
                 null,
@@ -593,13 +605,14 @@ const FrameManager = struct {
         };
 
         {
-            // Lock eviction_lfu, as it directly accesses many of these metadata fields
+            // Thread safety: Lock eviction_lfu, as it directly accesses many of these metadata
+            // fields.
             _, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
             defer eviction_lfu_lg.unlock();
 
             self.metadata.freqSetToZero(f_idx);
             self.metadata.in_queue[f_idx].store(.none, .release);
-            self.metadata.rc[f_idx].reset();
+            self.metadata.rc[f_idx].reset(); // Thread safety: is .reset() correct?
             self.metadata.key[f_idx].store(@bitCast(map_key), .release);
             self.metadata.size[f_idx].store(0xAAAA, .release);
         }
@@ -607,6 +620,10 @@ const FrameManager = struct {
         {
             const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
             defer frame_map_lg.unlock();
+
+            // Thread safety: it is possible for an ordering of inserts and removes to cause this
+            // frame_map to not always be at a consistent size, despite a single thread always
+            // removing one entry before adding one.
             frame_map.putAssumeCapacityNoClobber(map_key, f_idx);
         }
 
@@ -615,6 +632,7 @@ const FrameManager = struct {
 
     fn insertLfu(self: *FrameManager, f_idx: FrameIndex) void {
         const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+        defer eviction_lfu_lg.unlock();
         eviction_lfu.insert(self.metadata, f_idx) catch |err| switch (err) {
             error.InvalidKey => std.debug.panicExtra(
                 null,
@@ -623,7 +641,6 @@ const FrameManager = struct {
                 .{f_idx},
             ),
         };
-        eviction_lfu_lg.unlock();
     }
 };
 
@@ -1443,7 +1460,7 @@ test "BufferPool allocation sizes" {
     // As of writing, all metadata (excluding eviction_lfu, including frame_map)
     // is 50 bytes or ~9% of memory usage at a frame size of 512, or 50MB for a
     // million frames.
-    try std.testing.expect((total_requested_bytes / frame_count) - FRAME_SIZE <= 64);
+    try std.testing.expect((total_requested_bytes / frame_count) - FRAME_SIZE <= 80);
 }
 
 test "BufferPool filesize > frame_size * num_frames" {
