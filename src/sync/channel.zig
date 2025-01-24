@@ -594,7 +594,7 @@ pub const BenchmarkChannel = struct {
 
     pub const BenchmarkArgs = struct {
         name: []const u8 = "",
-        n_senders: usize,
+        n_senders: ?usize,
         receives: bool,
     };
 
@@ -606,12 +606,12 @@ pub const BenchmarkChannel = struct {
         },
         .{
             .name = "N_senders-   0_receivers ",
-            .n_senders = std.math.maxInt(usize),
+            .n_senders = null, // null = num_cpus
             .receives = false,
         },
         .{
             .name = "N_senders-   1_receivers ",
-            .n_senders = std.math.maxInt(usize),
+            .n_senders = null, // null = num_cpus
             .receives = true,
         },
     };
@@ -656,8 +656,7 @@ pub const BenchmarkChannel = struct {
             threads.deinit();
         }
 
-        var num_senders = argss.n_senders;
-        if (num_senders == std.math.maxInt(usize)) num_senders = num_cpus;
+        const num_senders = argss.n_senders orelse num_cpus;
         for (0..num_senders) |_| {
             try threads.append(try std.Thread.spawn(.{}, runSender, .{&ctx}));
         }
