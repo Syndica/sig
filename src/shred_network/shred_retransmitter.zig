@@ -38,9 +38,9 @@ const DEDUPER_RESET_CYCLE: Duration = Duration.fromSecs(5 * 60);
 const DEDUPER_NUM_BITS: u64 = 637_534_199;
 
 /// Retransmit Service
-/// The retransmit service receives verified shreds from the shred collector and retransmits them to the network.
+/// The retransmit service receives verified shreds from the shred network and retransmits them to the network.
 /// The retransmit service is broken down into two main components:
-/// 1. receiveShreds: runs on a single thread and receives shreds from the shred collector, deduplicates them, and then packages them
+/// 1. receiveShreds: runs on a single thread and receives shreds from the shred network, deduplicates them, and then packages them
 ///    into RetransmitShredInfo's which are sent to a channel for further processing.
 /// 2. retransmitShreds: runs on N threads and receives RetransmitShredInfo's from the channel, computes the children to retransmit to
 ///    and then constructs and sends packets to the network.
