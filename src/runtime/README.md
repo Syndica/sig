@@ -13,7 +13,7 @@ Currently, this document is scoped to the logic contained within the [`execute_l
     - touched_account_count: `u64`
     - accounts_resize_delta: `i64`
 - [Check Transaction Balanced](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L863)
-- [Return TransactionExecutionResult](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L7890)
+- [Return TransactionExecutionResult](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L890)
 
 ## ExecuteTransactionContext
 
@@ -44,7 +44,16 @@ The key account loading logic can be found [here](https://github.com/anza-xyz/ag
 `BorrowedAccounts` are interesting in that I am not certain why they need to be 'borrowed' yet. A `BorrowedAccount` is simply a write lock over an `AccountSharedData` from the `ExecuteTransactionContext`'s list of accounts along with some other metadata. Since transaction execution is synchronous, I am note sure why we need the write lock here. For now borrowed accounts will keep the lock because both Firedancer and Agave use one so it is likely something I am missing. During instruction execution an account may be 'borrowed' from the transaction execution context, allowing modification of its data.  
 
 ## LogCollector
-As its name suggests, the `LogCollector` is used to collect logs in the program runtime. If enabled, each `ExecuteTransactionContext` gets its own `LogCollector`. In Agave the `LogCollector` for each `InvokeContext` is created [here](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L765.)
+**Implementations**
+    - [agave](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L4)
+    - [firedancer](https://github.com/firedancer-io/firedancer/blob/82ecf8392fe076afce5f9cba02a5efa976e664c8/src/flamenco/log_collector/fd_log_collector.h#L19)
+    - [sig](log_collector.zig)
+
+- The `LogCollector` is used to collect logs during transaction execution. 
+- The `LogCollector` can be configured with a max log size in bytes.
+- Each `ExecuteTransactionContext` has its own log collector.
+- Collected logs form part of the `TransactionExecutionResult` and may affect consenus.
+
 
 ## ComputeBudget
 
