@@ -144,6 +144,8 @@ pub const HeaviestSubtreeForkChoice = struct {
             return error.MissingParent;
         }
 
+        try self.propagateNewLeaf(&slot_hash_key, &parent);
+        // TODO: Revisit, this was set first in the Agave code.
         self.last_root_time = Instant.now();
     }
 
@@ -206,28 +208,28 @@ pub const HeaviestSubtreeForkChoice = struct {
     /// Specifically, it propagates updates about the best slot and deepest slot upwards through
     /// the ancestors of the new slot.
     fn propagateNewLeaf(
-        self: HeaviestSubtreeForkChoice,
-        slot_hash_key: *SlotHashKey,
-        parent_slot_hash_key: *SlotHashKey,
-    ) void {
+        self: *HeaviestSubtreeForkChoice,
+        slot_hash_key: *const SlotHashKey,
+        parent_slot_hash_key: *const SlotHashKey,
+    ) !void {
         // Returns an error as parent must exist in self.fork_infos after its child leaf was created
         const parent_best_slot_hash_key =
-            self.fork_infos.get(&parent_slot_hash_key) orelse return error.MissingParent;
+            self.bestSlot(parent_slot_hash_key.*) orelse return error.MissingParent;
         // If this new leaf is the direct parent's best child, then propagate it up the tree
-        if (self.isBestChild(slot_hash_key)) {
-            const maybe_ancestor: ?*SlotHashKey = parent_slot_hash_key;
+        if (try self.isBestChild(slot_hash_key)) {
+            const maybe_ancestor: ?*const SlotHashKey = parent_slot_hash_key;
             while (true) {
                 if (maybe_ancestor == null) {
                     break;
                 }
                 // Saftey: maybe_ancestor cannot be null due to the if check above.
                 var ancestor = maybe_ancestor.?;
-                if (self.fork_infos.getPtr(&ancestor)) |ancestor_fork_info| {
+                if (self.fork_infos.getPtr(ancestor.*)) |ancestor_fork_info| {
                     // Do the update to the new best slot.
-                    if (ancestor_fork_info.best_slot == *parent_best_slot_hash_key) {
-                        ancestor_fork_info.*.best_slot = *slot_hash_key;
+                    if (ancestor_fork_info.*.best_slot.order(parent_best_slot_hash_key) == .eq) {
+                        ancestor_fork_info.*.best_slot = slot_hash_key.*;
                         // Walk up the tree.
-                        ancestor = ancestor_fork_info.parent;
+                        ancestor = &ancestor_fork_info.parent.?;
                     } else {
                         break;
                     }
@@ -238,9 +240,9 @@ pub const HeaviestSubtreeForkChoice = struct {
             }
         }
         // Propagate the deepest slot up the tree.
-        const maybe_ancestor: ?*SlotHashKey = parent_slot_hash_key;
+        const maybe_ancestor: ?*const SlotHashKey = parent_slot_hash_key;
         var current_child = slot_hash_key.*;
-        var current_height = 1;
+        var current_height: usize = 1;
         while (true) {
             if (maybe_ancestor == null) {
                 break;
@@ -250,12 +252,12 @@ pub const HeaviestSubtreeForkChoice = struct {
             }
             // Saftey: maybe_ancestor cannot be null due to the if check above.
             var ancestor = maybe_ancestor.?;
-            if (self.fork_infos.getPtr(&ancestor)) |ancestor_fork_info| {
+            if (self.fork_infos.getPtr(ancestor.*)) |ancestor_fork_info| {
                 ancestor_fork_info.deepest_slot = slot_hash_key.*;
                 ancestor_fork_info.height = current_height + 1;
-                current_child = ancestor;
+                current_child = ancestor.*;
                 current_height = ancestor_fork_info.height;
-                ancestor = ancestor_fork_info.parent;
+                ancestor = &ancestor_fork_info.parent.?;
             } else {
                 // If ancestor is given then ancestor's info must already exist.
                 return error.MissingParent;
@@ -276,20 +278,21 @@ pub const HeaviestSubtreeForkChoice = struct {
         }
         // Saftety: maybe_parent cannot be null due to the if check above.
         const parent = maybe_parent.?;
-        const children = self.getChildren(parent) orelse return false;
+        var children = self.getChildren(&parent) orelse return false;
 
-        for (children.items) |child| {
+        for (children.keys()) |child| {
             // child must exist in `self.fork_infos`
             const child_weight = self.stakeVotedSubtree(&child) orelse return error.MissingChild;
 
             // Don't count children currently marked as invalid
             // child must exist in tree
-            if (!(self.isCandidate(child) orelse return error.MissingChild)) {
+            if (!(self.isCandidate(&child) orelse return error.MissingChild)) {
                 continue;
             }
 
             if (child_weight > maybe_best_child_weight or
-                (maybe_best_child_weight == child_weight and child.lessThan(maybe_best_child)))
+                (maybe_best_child_weight == child_weight and
+                child.order(maybe_best_child.*) == .lt))
             {
                 return false;
             }
@@ -301,7 +304,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     fn isDeepestChild(self: *Self, deepest_child: *const SlotHashKey) bool {
         const maybe_deepest_child_weight =
             self.stakeVotedSubtree(deepest_child) orelse return false;
-        const maybe_deepest_child_height = self.height(deepest_child) orelse return false;
+        const maybe_deepest_child_height = self.getHeight(deepest_child) orelse return false;
         const maybe_parent = self.getParent(deepest_child);
 
         // If there's no parent, this must be the root
@@ -310,22 +313,22 @@ pub const HeaviestSubtreeForkChoice = struct {
         }
         // Saftety: maybe_parent cannot be null due to the if check above.
         const parent = maybe_parent.?;
-        const children = self.getChildren(&parent) orelse return false;
+        var children = self.getChildren(&parent) orelse return false;
 
-        for (children.items) |child| {
+        for (children.keys()) |child| {
             const child_height = self.getHeight(&child) orelse return false;
             const child_weight = self.stakeVotedSubtree(&child) orelse return false;
 
-            const height_cmp = std.math.cmp(child_height, maybe_deepest_child_height);
-            const weight_cmp = std.math.cmp(child_weight, maybe_deepest_child_weight);
-            const slot_cmp = std.math.cmp(child.slot, deepest_child.slot);
+            const height_cmp = std.math.order(child_height, maybe_deepest_child_height);
+            const weight_cmp = std.math.order(child_weight, maybe_deepest_child_weight);
+            const slot_cmp = std.math.order(child.slot, deepest_child.slot);
 
             switch (height_cmp) {
-                .Greater => return false,
-                .Equal => switch (weight_cmp) {
-                    .Greater => return false,
-                    .Equal => switch (slot_cmp) {
-                        .Less => return false,
+                .gt => return false,
+                .eq => switch (weight_cmp) {
+                    .gt => return false,
+                    .eq => switch (slot_cmp) {
+                        .lt => return false,
                         else => {},
                     },
                     else => {},
@@ -345,13 +348,16 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     // TODO: Change this to return an iterator.
-    fn getChildren(self: *Self, slot_hash_key: *const SlotHashKey) ?SortedMap(SlotHashKey, void) {
+    fn getChildren(
+        self: *const Self,
+        slot_hash_key: *const SlotHashKey,
+    ) ?SortedMap(SlotHashKey, void) {
         const fork_info = self.fork_infos.get(slot_hash_key.*) orelse return null;
         return fork_info.children;
     }
 
-    fn isCandidate(self: *Self, slot_hash_key: *SlotHashKey) ?bool {
-        const fork_info = self.fork_infos.get(slot_hash_key) orelse return null;
+    fn isCandidate(self: *const Self, slot_hash_key: *const SlotHashKey) ?bool {
+        const fork_info = self.fork_infos.get(slot_hash_key.*) orelse return null;
         return fork_info.isCandidate();
     }
 
