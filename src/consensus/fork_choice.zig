@@ -361,6 +361,19 @@ pub const HeaviestSubtreeForkChoice = struct {
         return fork_info.isCandidate();
     }
 
+    /// Find all nodes reachable from `root1`, excluding subtree at `root2`
+    ///
+    /// For example, given the following tree:
+    ///
+    ///           A = root1
+    ///          / \
+    /// root2 = B   C
+    ///        / \   \
+    ///       D   E   F
+    ///          / \
+    ///         G   H
+    ///
+    /// subtreeDiff (root1, root2) = {A, C, F}
     fn subtreeDiff(
         self: *Self,
         root1: *const SlotHashKey,
