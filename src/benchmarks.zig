@@ -229,6 +229,7 @@ pub fn main() !void {
                     allocator,
                     logger.unscoped(),
                     .testnet, // TODO: support other clusters
+                    8006,
                 );
                 defer {
                     gossip_service.shutdown();

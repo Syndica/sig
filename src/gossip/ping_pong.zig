@@ -5,7 +5,7 @@ const testing = std.testing;
 
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const LruCache = sig.common.lru.LruCache;
+const LruCache = sig.utils.lru.LruCache;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Signature = sig.core.Signature;
