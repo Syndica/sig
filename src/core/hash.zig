@@ -9,10 +9,20 @@ pub const SlotAndHash = struct {
     slot: Slot,
     hash: Hash,
 
+    pub fn order(a: *const SlotAndHash, b: *const SlotAndHash) std.math.Order {
+        if (a.slot == b.slot and a.hash.order(&b.hash) == .eq) {
+            return .eq;
+        } else if (a.slot < b.slot or a.slot == b.slot and (a.hash.order(&b.hash) == .lt)) {
+            return .lt;
+        } else if (a.slot > b.slot or a.slot == b.slot and (a.hash.order(&b.hash) == .gt)) {
+            return .gt;
+        } else {
+            unreachable;
+        }
+    }
+
     pub fn equals(a: *const SlotAndHash, b: *const SlotAndHash) bool {
-        if (a.slot != b.slot) return false;
-        if (!a.hash.eql(b.hash)) return false;
-        return true;
+        return order(a, b) == .eq;
     }
 };
 
