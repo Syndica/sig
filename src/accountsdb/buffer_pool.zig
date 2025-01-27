@@ -127,7 +127,7 @@ pub const BufferPool = struct {
         const frames = try allocator.alloc(Frame, num_frames);
         errdefer allocator.free(frames);
 
-        const manager = try FrameManager.init(allocator, num_frames);
+        var manager = try FrameManager.init(allocator, num_frames);
         errdefer manager.deinit(allocator);
 
         return .{
@@ -178,16 +178,17 @@ pub const BufferPool = struct {
             errdefer {
                 // Filling this frame failed, releasing rcs of previously filled frames
                 for (frame_indices[0..i]) |alive_frame_idx| {
-                    self.manager.deinitFrame(alive_frame_idx);
+                    self.deinitFrame(alive_frame_idx);
                 }
             }
 
             const bytes_read = try file.preadAll(&self.frames[f_idx.*], frame_aligned_file_offset);
+            std.debug.assert(bytes_read <= FRAME_SIZE);
+            // TODO: check total bytes_read
             self.manager.resetNewFrame(
                 f_idx.*,
                 file_id,
                 frame_aligned_file_offset,
-                @intCast(bytes_read),
             );
         }
 
@@ -283,7 +284,7 @@ pub const BufferPool = struct {
             errdefer {
                 // Filling this frame failed, releasing rcs of previously filled frames
                 for (frame_indices[0..i]) |alive_frame_idx| {
-                    self.manager.deinitFrame(alive_frame_idx);
+                    self.deinitFrame(alive_frame_idx);
                 }
             }
 
@@ -299,7 +300,6 @@ pub const BufferPool = struct {
                     // if the queue is full, let's submit our previous reads early, and then queue
                     // our read again.
                     try IouringSubmitAndWaitReads(
-                        &self.manager,
                         threadlocal_io_uring,
                         file,
                         queued_reads,
@@ -315,7 +315,7 @@ pub const BufferPool = struct {
                 else => |e| return e,
             }
 
-            self.manager.resetNewFrameNoSize(
+            self.manager.resetNewFrame(
                 f_idx.*,
                 file_id,
                 frame_aligned_file_offset,
@@ -324,12 +324,12 @@ pub const BufferPool = struct {
 
         errdefer {
             for (frame_indices) |alive_frame_idx| {
-                self.manager.deinitFrame(alive_frame_idx);
+                self.deinitFrame(alive_frame_idx);
             }
         }
 
         if (queued_reads > 0) {
-            try IouringSubmitAndWaitReads(&self.manager, threadlocal_io_uring, file, queued_reads);
+            try IouringSubmitAndWaitReads(threadlocal_io_uring, file, queued_reads);
         }
 
         return ReadHandle.initCached(
@@ -342,7 +342,6 @@ pub const BufferPool = struct {
 
     // Wait for our file reads to complete, filling the read length into the metadata as we go.
     fn IouringSubmitAndWaitReads(
-        manager: *Manager,
         threadlocal_io_uring: *IoUring,
         file: std.fs.File,
         n_reads: u32,
@@ -368,10 +367,14 @@ pub const BufferPool = struct {
             }
             const f_idx: FrameIndex = @intCast(cqe.user_data);
             const bytes_read: FrameOffset = @intCast(cqe.res);
+            _ = f_idx;
             std.debug.assert(bytes_read <= FRAME_SIZE);
-
-            manager.setNewFrameSize(f_idx, bytes_read);
+            // TODO: check total bytes_read
         }
+    }
+
+    pub inline fn deinitFrame(self: *BufferPool, f_idx: FrameIndex) void {
+        self.manager.deinitFrame(f_idx);
     }
 };
 
@@ -387,25 +390,21 @@ const FrameManager = struct {
     /// TODO: Using a concurrent hashmap may be a large performance improvement.
     frame_map_rw: sig.sync.RwMux(Map),
 
-    /// Stores internally-used per-frame data.
-    metadata: Metadata,
-
     /// Evicts unused frames for reuse.
     eviction_lfu: sig.sync.RwMux(HierarchicalFIFO),
 
-    pub const Metadata = FrameMetadata;
+    /// Per-frame refcounts. Used to track what frames still have handles associated with them.
+    rc: []sig.sync.ReferenceCounter,
+
     pub const Map = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
 
     pub fn init(allocator: std.mem.Allocator, num_frames: u32) error{OutOfMemory}!FrameManager {
-        var metadata = try Metadata.init(allocator, num_frames);
-        errdefer metadata.deinit(allocator);
-
         var frame_map: Map = .{};
         try frame_map.ensureTotalCapacity(allocator, num_frames * 2);
         errdefer frame_map.deinit(allocator);
         const frame_map_rw = sig.sync.RwMux(Map).init(frame_map);
 
-        const eviction_lfu = HierarchicalFIFO.init(
+        var eviction_lfu = HierarchicalFIFO.init(
             allocator,
             num_frames / 10,
             num_frames,
@@ -415,17 +414,19 @@ const FrameManager = struct {
         };
         errdefer eviction_lfu.deinit(allocator);
 
+        const rc = try allocator.alloc(sig.sync.ReferenceCounter, num_frames);
+        errdefer allocator.free(rc);
+        @memset(rc, .{ .state = .{ .raw = 0 } });
+
         return .{
             .free_idx = std.atomic.Value(u64).init(0),
             .frame_map_rw = frame_map_rw,
-            .metadata = metadata,
             .eviction_lfu = sig.sync.RwMux(HierarchicalFIFO).init(eviction_lfu),
+            .rc = rc,
         };
     }
 
     pub fn deinit(self: *FrameManager, allocator: std.mem.Allocator) void {
-        self.metadata.deinit(allocator);
-
         const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
         eviction_lfu.deinit(allocator);
         eviction_lfu_lg.unlock();
@@ -433,6 +434,22 @@ const FrameManager = struct {
         const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
         frame_map.deinit(allocator);
         frame_map_lg.unlock();
+
+        for (0.., self.rc) |i, *rc| {
+            if (rc.isAlive()) {
+                std.debug.panicExtra(
+                    null,
+                    @returnAddress(),
+                    "BufferPool deinitialised with alive handle: {}\n",
+                    .{i},
+                );
+            }
+        }
+        allocator.free(self.rc);
+    }
+
+    fn numFrames(self: *const FrameManager) u32 {
+        return @intCast(self.rc.len);
     }
 
     // Creates a buffer of frame indices. Each frame index may either be an INVALID_FRAME, or a
@@ -449,7 +466,7 @@ const FrameManager = struct {
             file_offset_start,
             file_offset_end,
         );
-        if (n_indices > self.metadata.rc.len) return error.OffsetsOutOfBounds;
+        if (n_indices > self.numFrames()) return error.OffsetsOutOfBounds;
 
         const frame_indices = try allocator.alloc(FrameIndex, n_indices);
         errdefer allocator.free(frame_indices);
@@ -484,18 +501,18 @@ const FrameManager = struct {
     /// Called on a cache miss.
     fn getUnused(self: *FrameManager, frames: []Frame) FrameIndex {
         const prev_free_idx = self.free_idx.fetchAdd(1, .monotonic);
-        if (prev_free_idx < self.metadata.rc.len) return @intCast(prev_free_idx);
+        if (prev_free_idx < self.rc.len) return @intCast(prev_free_idx);
 
         const evicted, const evicted_key = blk: {
             const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
             defer eviction_lfu_lg.unlock();
 
-            const evicted = eviction_lfu.evict(self.metadata);
-            const evicted_key = self.metadata.key[evicted].load(.acquire);
+            const evicted = eviction_lfu.evict(self.rc);
+
+            const evicted_key = eviction_lfu.key[evicted];
 
             // not actually necessary, but makes issues more visible
-            self.metadata.key[evicted].store(@bitCast(FileIdFileOffset.INVALID), .release);
-            self.metadata.size[evicted].store(0xAAAA, .release);
+            eviction_lfu.key[evicted] = FileIdFileOffset.INVALID;
 
             break :blk .{ evicted, evicted_key };
         };
@@ -529,9 +546,9 @@ const FrameManager = struct {
         for (frame_indeces) |f_idx| {
             if (f_idx == INVALID_FRAME) continue; // ignore cache misses
             any_cache_hits = true;
-            if (!self.metadata.rc[f_idx].acquire()) {
+            if (!self.rc[f_idx].acquire()) {
                 // frame has no handles, but memory is still valid
-                self.metadata.rc[f_idx].reset();
+                self.rc[f_idx].reset();
             }
         }
 
@@ -541,7 +558,7 @@ const FrameManager = struct {
 
             for (frame_indeces) |f_idx| {
                 if (f_idx == INVALID_FRAME) continue; // ignore cache misses
-                eviction_lfu.insert(self.metadata, f_idx) catch |err| switch (err) {
+                eviction_lfu.insert(f_idx) catch |err| switch (err) {
                     error.InvalidKey => std.debug.panicExtra(
                         null,
                         @returnAddress(),
@@ -556,7 +573,7 @@ const FrameManager = struct {
     /// Must be used on alive frames.
     fn reuseAliveFrames(self: *FrameManager, frame_indeces: []FrameIndex) void {
         for (frame_indeces) |f_idx| {
-            if (!self.metadata.rc[f_idx].acquire()) {
+            if (!self.rc[f_idx].acquire()) {
                 std.debug.panicExtra(
                     null,
                     @returnAddress(),
@@ -570,7 +587,7 @@ const FrameManager = struct {
         defer eviction_lfu_lg.unlock();
 
         for (frame_indeces) |f_idx| {
-            eviction_lfu.insert(self.metadata, f_idx) catch |err| switch (err) {
+            eviction_lfu.insert(f_idx) catch |err| switch (err) {
                 error.InvalidKey => std.debug.panicExtra(
                     null,
                     @returnAddress(),
@@ -581,42 +598,8 @@ const FrameManager = struct {
         }
     }
 
-    fn deinitFrame(self: *FrameManager, f_idx: FrameIndex) void {
-        std.debug.assert(f_idx != INVALID_FRAME);
-
-        // We deliberately do not clean up upon deinit - the frame's data and map entry remain valid
-        // for a later read to use.
-        _ = self.metadata.rc[f_idx].release();
-    }
-
     /// To be used on newly evicted dead frames, which are being written into.
     fn resetNewFrame(
-        self: *FrameManager,
-        f_idx: FrameIndex,
-        file_id: FileId,
-        frame_aligned_file_offset: FileOffset,
-        size: FrameOffset,
-    ) void {
-        resetNewFrameNoSize(
-            self,
-            f_idx,
-            file_id,
-            frame_aligned_file_offset,
-        );
-        self.metadata.size[f_idx].store(size, .release);
-    }
-
-    /// Only to be called soon after .resetNewFrameNoSize.
-    fn setNewFrameSize(
-        self: *FrameManager,
-        f_idx: FrameIndex,
-        size: FrameOffset,
-    ) void {
-        self.metadata.size[f_idx].store(size, .release);
-    }
-
-    /// Must be followed up with a call to .setNewFrameSize when the size is known.
-    fn resetNewFrameNoSize(
         self: *FrameManager,
         f_idx: FrameIndex,
         file_id: FileId,
@@ -624,7 +607,7 @@ const FrameManager = struct {
     ) void {
         std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
 
-        if (self.metadata.rc[f_idx].isAlive()) {
+        if (self.rc[f_idx].isAlive()) {
             std.debug.panicExtra(
                 null,
                 @returnAddress(),
@@ -639,16 +622,13 @@ const FrameManager = struct {
         };
 
         {
-            // Thread safety: Lock eviction_lfu, as it directly accesses many of these metadata
-            // fields.
-            _, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+            var eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
             defer eviction_lfu_lg.unlock();
 
-            self.metadata.freqSetToZero(f_idx);
-            self.metadata.in_queue[f_idx].store(.none, .release);
-            self.metadata.rc[f_idx].reset(); // Thread safety: is .reset() correct?
-            self.metadata.key[f_idx].store(@bitCast(map_key), .release);
-            self.metadata.size[f_idx].store(0xAAAA, .release);
+            eviction_lfu.freq[f_idx] = 0;
+            eviction_lfu.in_queue[f_idx] = .none;
+            eviction_lfu.key[f_idx] = map_key;
+            self.rc[f_idx].reset(); // Thread safety: is .reset() correct?
         }
 
         {
@@ -664,10 +644,18 @@ const FrameManager = struct {
         self.insertLfu(f_idx);
     }
 
+    fn deinitFrame(self: *FrameManager, f_idx: FrameIndex) void {
+        std.debug.assert(f_idx != INVALID_FRAME);
+
+        // We deliberately do not clean up upon deinit - the frame's data and map entry remain valid
+        // for a later read to use.
+        _ = self.rc[f_idx].release();
+    }
+
     fn insertLfu(self: *FrameManager, f_idx: FrameIndex) void {
         const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
         defer eviction_lfu_lg.unlock();
-        eviction_lfu.insert(self.metadata, f_idx) catch |err| switch (err) {
+        eviction_lfu.insert(f_idx) catch |err| switch (err) {
             error.InvalidKey => std.debug.panicExtra(
                 null,
                 @returnAddress(),
@@ -675,117 +663,6 @@ const FrameManager = struct {
                 .{f_idx},
             ),
         };
-    }
-};
-
-const FrameMetadata = struct {
-    pub const InQueue = enum(u8) { none, small, main, ghost }; // u8 required for extern usage
-
-    /// ref count for the frame. For frames that are currently being used elsewhere.
-    rc: []sig.sync.ReferenceCounter,
-
-    /// effectively the inverse of BufferPool.FrameMap, used in order to
-    /// evict keys by their value
-    /// This is really a FileIdFileOffset.
-    /// TODO: Zig 0.14 (#20590) seems to let us to do atomics on packed structs directly.
-    key: []std.atomic.Value(u64),
-
-    /// frequency for the HierarchicalFIFO
-    /// Yes, really, only 0, 1, 2, 3.
-    /// Atomic - do not access directly.
-    freq: []u2,
-
-    /// which HierarchicalFIFO queue this frame exists in
-    /// thread safety: is always read/written while the lock to Hierarchical Fifo is held
-    in_queue: []std.atomic.Value(InQueue),
-
-    /// 0..=512
-    /// This is really a FrameOffset, but I've upped it to a u16 to appease std.atomic
-    size: []std.atomic.Value(u16),
-
-    fn init(allocator: std.mem.Allocator, num_frames: usize) !FrameMetadata {
-        const rc = try allocator.alloc(sig.sync.ReferenceCounter, num_frames);
-        errdefer allocator.free(rc);
-        @memset(rc, .{ .state = .{ .raw = 0 } });
-
-        const key = try allocator.alloc(std.atomic.Value(u64), num_frames);
-        errdefer allocator.free(key);
-        @memset(
-            key,
-            std.atomic.Value(u64).init(@bitCast(FileIdFileOffset{
-                .file_id = FileId.fromInt(0),
-                .file_offset = 0,
-            })),
-        );
-
-        const freq = try allocator.alloc(u2, num_frames);
-        errdefer allocator.free(freq);
-        @memset(freq, 0);
-
-        const in_queue = try allocator.alloc(std.atomic.Value(InQueue), num_frames);
-        errdefer allocator.free(in_queue);
-        @memset(in_queue, std.atomic.Value(InQueue).init(.none));
-
-        const size = try allocator.alloc(std.atomic.Value(u16), num_frames);
-        errdefer allocator.free(size);
-        @memset(size, std.atomic.Value(u16).init(0));
-
-        return .{
-            .rc = rc,
-            .key = key,
-            .freq = freq,
-            .in_queue = in_queue,
-            .size = size,
-        };
-    }
-
-    fn deinit(self: *FrameMetadata, allocator: std.mem.Allocator) void {
-        // NOTE: this check itself is racy, but should never happen
-        for (0.., self.rc) |i, *rc| {
-            if (rc.isAlive()) {
-                std.debug.panicExtra(
-                    null,
-                    @returnAddress(),
-                    "BufferPool deinitialised with alive handle: {}\n",
-                    .{i},
-                );
-            }
-        }
-        allocator.free(self.rc);
-        allocator.free(self.key);
-        allocator.free(self.freq);
-        allocator.free(self.in_queue);
-        allocator.free(self.size);
-        self.* = undefined;
-    }
-
-    fn freqIncrement(self: FrameMetadata, index: FrameIndex) void {
-        const old_freq = @atomicRmw(u2, &self.freq[index], .Add, 1, .acquire);
-        if (old_freq == 0) {
-            // we overflowed (3->0), set back to max
-            @atomicStore(u2, &self.freq[index], 3, .release);
-        }
-    }
-
-    fn freqDecrement(self: FrameMetadata, index: FrameIndex) void {
-        const old_freq = @atomicRmw(u2, &self.freq[index], .Sub, 1, .acquire);
-        if (old_freq == 3) {
-            // we overflowed (0->3), set back to min
-            @atomicStore(u2, &self.freq[index], 0, .release);
-        }
-    }
-
-    fn freqIsZero(self: FrameMetadata, index: FrameIndex) bool {
-        const freq = @atomicLoad(u2, &self.freq[index], .acquire);
-        return freq == 0;
-    }
-
-    fn freqSetToOne(self: FrameMetadata, index: FrameIndex) void {
-        @atomicStore(u2, &self.freq[index], 1, .release);
-    }
-
-    fn freqSetToZero(self: FrameMetadata, index: FrameIndex) void {
-        @atomicStore(u2, &self.freq[index], 0, .release);
     }
 };
 
@@ -805,12 +682,23 @@ const FrameMetadata = struct {
 ///    eviction when no free frames can be made available is illegal behaviour.
 pub const HierarchicalFIFO = struct {
     pub const Key = FrameIndex;
-    pub const Metadata = FrameMetadata;
     pub const Fifo = AtomicLinearFifo(FrameIndex);
+    pub const InQueue = enum(u8) { none, small, main, ghost }; // u8 required for extern usage
 
     small: Fifo,
     main: Fifo, // probably-alive items
     ghost: Fifo, // probably-dead items
+
+    /// Effectively the inverse of BufferPool.FrameMap, used in order to
+    /// evict frame indeces by their FileIdFileOffset.
+    key: []FileIdFileOffset,
+
+    /// Frequency for the HierarchicalFIFO entries.
+    /// Yes, really, only 0, 1, 2, 3.
+    freq: []u2,
+
+    /// Which queue each frame exists in.
+    in_queue: []InQueue,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -828,10 +716,25 @@ pub const HierarchicalFIFO = struct {
         const ghost_buf = try allocator.alloc(FrameIndex, num_frames);
         errdefer allocator.free(ghost_buf);
 
+        const key = try allocator.alloc(FileIdFileOffset, num_frames);
+        errdefer allocator.free(key);
+        @memset(key, .{ .file_id = FileId.fromInt(0), .file_offset = 0 });
+
+        const freq = try allocator.alloc(u2, num_frames);
+        errdefer allocator.free(freq);
+        @memset(freq, 0);
+
+        const in_queue = try allocator.alloc(InQueue, num_frames);
+        errdefer allocator.free(in_queue);
+        @memset(in_queue, .none);
+
         return .{
             .small = Fifo.init(small_buf),
             .main = Fifo.init(main_buf),
             .ghost = Fifo.init(ghost_buf),
+            .key = key,
+            .freq = freq,
+            .in_queue = in_queue,
         };
     }
 
@@ -839,6 +742,11 @@ pub const HierarchicalFIFO = struct {
         allocator.free(self.small.buf);
         allocator.free(self.main.buf);
         allocator.free(self.ghost.buf);
+
+        allocator.free(self.key);
+        allocator.free(self.freq);
+        allocator.free(self.in_queue);
+
         self.* = undefined;
     }
 
@@ -848,37 +756,36 @@ pub const HierarchicalFIFO = struct {
 
     pub fn insert(
         self: *HierarchicalFIFO,
-        metadata: Metadata,
         key: Key,
     ) error{InvalidKey}!void {
         if (key == INVALID_FRAME) return error.InvalidKey;
 
-        switch (metadata.in_queue[key].load(.acquire)) {
+        switch (self.in_queue[key]) {
             .main, .small => {
-                metadata.freqIncrement(key);
+                self.freq[key] +|= 1;
             },
             .ghost => {
-                std.debug.assert(metadata.freqIsZero(key));
-                metadata.freqSetToOne(key);
+                std.debug.assert(self.freq[key] == 0);
+                self.freq[key] = 1;
                 // Add key to main too - important to note that the key *still*
                 // exists within ghost, but from now on we'll ignore that entry.
                 self.main.writeItemAssumeCapacity(key);
-                metadata.in_queue[key].store(.main, .release);
+                self.in_queue[key] = .main;
             },
             .none => {
                 if (self.small.writableLengthIsZero()) {
                     const popped_small = self.small.readItem().?;
 
-                    if (metadata.freqIsZero(popped_small)) {
+                    if (self.freq[popped_small] == 0) {
                         self.ghost.writeItemAssumeCapacity(popped_small);
-                        metadata.in_queue[popped_small].store(.ghost, .release);
+                        self.in_queue[popped_small] = .ghost;
                     } else {
                         self.main.writeItemAssumeCapacity(popped_small);
-                        metadata.in_queue[popped_small].store(.main, .release);
+                        self.in_queue[popped_small] = .main;
                     }
                 }
                 self.small.writeItemAssumeCapacity(key);
-                metadata.in_queue[key].store(.small, .release);
+                self.in_queue[key] = .small;
             },
         }
     }
@@ -887,24 +794,27 @@ pub const HierarchicalFIFO = struct {
     /// This does not return an optional, as the caller *requires* a key to be
     /// evicted. Not being able to return a key means illegal internal state in
     /// the BufferPool.
-    pub fn evict(self: *HierarchicalFIFO, metadata: Metadata) Key {
+    pub fn evict(
+        self: *HierarchicalFIFO,
+        rc: []sig.sync.ReferenceCounter,
+    ) Key {
         var alive_eviction_attempts: usize = 0;
 
         const dead_key: Key = while (true) {
             var maybe_evicted: ?Key = null;
 
-            if (maybe_evicted == null) maybe_evicted = self.evictGhost(metadata);
+            if (maybe_evicted == null) maybe_evicted = self.evictGhost();
 
             // if we keep failing to evict a dead key, start alternating between
             // evicting from main and small. This saves us from the rare case
             // that every key in main is alive. In normal conditions, main
             // should be evicted from first.
             if (alive_eviction_attempts < 10 or alive_eviction_attempts % 2 == 0) {
-                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(metadata, .main);
-                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(metadata, .small);
+                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(.main);
+                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(.small);
             } else {
-                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(metadata, .small);
-                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(metadata, .main);
+                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(.small);
+                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(.main);
             }
 
             // NOTE: This panic is effectively unreachable - an empty cache
@@ -915,25 +825,25 @@ pub const HierarchicalFIFO = struct {
                 @panic("unable to evict: cache empty"); // see above comment
 
             // alive evicted keys are reinserted, we try again
-            if (metadata.rc[evicted].isAlive()) {
-                metadata.freqSetToOne(evicted);
+            if (rc[evicted].isAlive()) {
+                self.freq[evicted] = 1;
                 self.main.writeItemAssumeCapacity(evicted);
-                metadata.in_queue[evicted].store(.main, .release);
+                self.in_queue[evicted] = .main;
                 alive_eviction_attempts += 1;
                 continue;
             }
 
             // key is definitely dead
-            metadata.in_queue[evicted].store(.none, .release);
+            self.in_queue[evicted] = .none;
             break evicted;
         };
 
         return dead_key;
     }
 
-    fn evictGhost(self: *HierarchicalFIFO, metadata: Metadata) ?Key {
+    fn evictGhost(self: *HierarchicalFIFO) ?Key {
         const evicted: ?Key = while (self.ghost.readItem()) |ghost_key| {
-            switch (metadata.in_queue[ghost_key].load(.acquire)) {
+            switch (self.in_queue[ghost_key]) {
                 .ghost => {
                     break ghost_key;
                 },
@@ -956,7 +866,6 @@ pub const HierarchicalFIFO = struct {
 
     fn evictSmallOrMain(
         self: *HierarchicalFIFO,
-        metadata: Metadata,
         comptime target_queue: enum { small, main },
     ) ?Key {
         const queue = switch (target_queue) {
@@ -966,14 +875,14 @@ pub const HierarchicalFIFO = struct {
 
         const evicted: ?Key = while (queue.readItem()) |popped_key| {
             switch (target_queue) {
-                .small => if (metadata.in_queue[popped_key].load(.acquire) != .small) unreachable,
-                .main => if (metadata.in_queue[popped_key].load(.acquire) != .main) unreachable,
+                .small => if (self.in_queue[popped_key] != .small) unreachable,
+                .main => if (self.in_queue[popped_key] != .main) unreachable,
             }
 
-            if (metadata.freqIsZero(popped_key)) {
+            if (self.freq[popped_key] == 0) {
                 break popped_key;
             } else {
-                metadata.freqDecrement(popped_key);
+                self.freq[popped_key] -= 1;
                 queue.writeItemAssumeCapacity(popped_key);
             }
         } else null;
@@ -1047,7 +956,7 @@ pub const ReadHandle = union(enum) {
         switch (self) {
             .cached => |cached| {
                 for (cached.frame_indices) |frame_index| {
-                    cached.buffer_pool.manager.deinitFrame(frame_index);
+                    cached.buffer_pool.deinitFrame(frame_index);
                 }
                 allocator.free(cached.frame_indices);
             },
@@ -1528,15 +1437,13 @@ test "BufferPool filesize > frame_size * num_frames" {
 
         try std.testing.expectEqual(1, read_frame.cached.frame_indices.len);
 
-        const frame: []const u8 = bp.frames[
+        const frame: []const u8 = &bp.frames[
             read_frame.cached.frame_indices[0]
-        ][0..bp.manager.metadata.size[
-            read_frame.cached.frame_indices[0]
-        ].load(.unordered)];
+        ];
 
         var frame2: [FRAME_SIZE]u8 = undefined;
         const bytes_read = try file.preadAll(&frame2, offset);
-        try std.testing.expectEqualSlices(u8, frame2[0..bytes_read], frame);
+        try std.testing.expectEqualSlices(u8, frame2[0..bytes_read], frame[0..bytes_read]);
         read_frame.deinit(allocator);
     }
 }
@@ -1611,10 +1518,6 @@ test "BufferPool random read" {
 
         errdefer std.debug.print("failed with read: {}\n", .{read});
 
-        var total_bytes_read: u32 = 0;
-        for (read.cached.frame_indices) |f_idx| {
-            total_bytes_read += bp.manager.metadata.size[f_idx].load(.unordered);
-        }
         const read_data_bp_iter = try allocator.alloc(u8, read.len());
         defer allocator.free(read_data_bp_iter);
         {
