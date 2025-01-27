@@ -1304,8 +1304,6 @@ const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     closed: bool,
 
-    const Self = @This();
-
     fn init(allocator: std.mem.Allocator) !AppBase {
         const logger = (try spawnLogger(allocator)).withScope(LOG_SCOPE);
         errdefer logger.deinit();
@@ -1319,11 +1317,7 @@ const AppBase = struct {
 
         const entrypoints = try current_config.gossip.getEntrypointAddrs(allocator);
 
-        const echo_data = try getShredAndIPFromEchoServer(
-            logger.unscoped(),
-            allocator,
-            entrypoints,
-        );
+        const echo_data = try getShredAndIPFromEchoServer(logger.unscoped(), entrypoints);
 
         // zig fmt: off
         const my_shred_version = current_config.shred_version
