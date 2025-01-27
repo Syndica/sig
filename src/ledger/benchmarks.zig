@@ -58,7 +58,7 @@ pub const BenchmarkLedger = struct {
         }
 
         var timer = try sig.time.Timer.start();
-        _ = try inserter.insertShreds(shreds, is_repairs, null, false, null);
+        _ = try inserter.insertShreds(shreds, is_repairs, null, false, null, null);
         return timer.read();
     }
 

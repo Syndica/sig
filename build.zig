@@ -88,7 +88,7 @@ pub fn build(b: *Build) void {
     // main executable
     const sig_exe = b.addExecutable(.{
         .name = "sig",
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/cmd.zig"),
         .target = target,
         .optimize = optimize,
         .sanitize_thread = enable_tsan,

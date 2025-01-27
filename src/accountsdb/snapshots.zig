@@ -12,6 +12,7 @@ const Epoch = sig.core.time.Epoch;
 const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
+const SlotAndHash = sig.core.hash.SlotAndHash;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
@@ -1576,17 +1577,6 @@ pub const BankHashStats = struct {
         stats.total_data_len +%= other.total_data_len;
         stats.num_lamports_stored +%= other.num_lamports_stored;
         stats.num_executable_accounts += other.num_executable_accounts;
-    }
-};
-
-pub const SlotAndHash = struct {
-    slot: Slot,
-    hash: Hash,
-
-    pub fn equals(a: *const SlotAndHash, b: *const SlotAndHash) bool {
-        if (a.slot != b.slot) return false;
-        if (!a.hash.eql(b.hash)) return false;
-        return true;
     }
 };
 

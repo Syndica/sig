@@ -229,6 +229,7 @@ pub fn main() !void {
                     allocator,
                     logger.unscoped(),
                     .testnet, // TODO: support other clusters
+                    8006,
                 );
                 defer {
                     gossip_service.shutdown();
@@ -247,6 +248,7 @@ pub fn main() !void {
                         .force_new_snapshot_download = true,
                         .max_number_of_download_attempts = 50,
                         .min_snapshot_download_speed_mbs = 10,
+                        .download_timeout = Duration.fromMinutes(5),
                     },
                 ) catch |err| {
                     switch (err) {

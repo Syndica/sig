@@ -3720,7 +3720,7 @@ test "load other sysvars" {
         full_inc_manifest.deinit(allocator);
     }
 
-    const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
+    const SlotAndHash = sig.core.hash.SlotAndHash;
     _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
     _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.Rent, &sysvars.IDS.rent);
     _ = try accounts_db.getTypeFromAccount(panic_allocator, SlotAndHash, &sysvars.IDS.slot_hashes);

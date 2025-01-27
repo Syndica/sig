@@ -12,16 +12,16 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = zig_network.Socket;
 
-const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const ContactInfo = sig.gossip.ContactInfo;
 const Counter = sig.prometheus.Counter;
+const Duration = sig.time.Duration;
 const Gauge = sig.prometheus.Gauge;
 const GossipTable = sig.gossip.GossipTable;
+const Histogram = sig.prometheus.Histogram;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 const LruCacheCustom = sig.utils.lru.LruCacheCustom;
-const MultiSlotReport = shred_network.shred_tracker.MultiSlotReport;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
@@ -30,14 +30,17 @@ const RwMux = sig.sync.RwMux;
 const SignedGossipData = sig.gossip.SignedGossipData;
 const SocketAddr = sig.net.SocketAddr;
 const SocketThread = sig.net.SocketThread;
+const Channel = sig.sync.Channel;
 const Slot = sig.core.Slot;
 
+const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
+const MultiSlotReport = shred_network.shred_tracker.MultiSlotReport;
 const RepairRequest = shred_network.repair_message.RepairRequest;
 const RepairMessage = shred_network.repair_message.RepairMessage;
 
 const serializeRepairRequest = shred_network.repair_message.serializeRepairRequest;
 
-const NUM_REQUESTER_THREADS = 4;
+const MAX_DATA_SHREDS_PER_SLOT = sig.ledger.shred.data_shred_constants.max_per_slot;
 
 /// Identifies which repairs are needed and sends them
 /// - delegates to RepairPeerProvider to identify repair peers.
@@ -51,11 +54,11 @@ pub const RepairService = struct {
     shred_tracker: *BasicShredTracker,
     logger: ScopedLogger(@typeName(Self)),
     exit: *Atomic(bool),
-    last_big_request_timestamp_ms: i64 = 0,
     /// memory to re-use across iterations. initialized to empty
     report: MultiSlotReport,
     thread_pool: RequestBatchThreadPool,
     metrics: Metrics,
+    prng: std.Random.DefaultPrng,
 
     pub const RequestBatchThreadPool = HomogeneousThreadPool(struct {
         requester: *RepairRequester,
@@ -67,14 +70,25 @@ pub const RepairService = struct {
     });
 
     const Metrics = struct {
-        repair_request_count: *Counter,
-        requests_in_latest_batch: *Gauge(u64),
+        request_count: *Counter,
         oldest_slot_needing_repair: *Gauge(u64),
         newest_slot_needing_repair: *Gauge(u64),
-        newest_slot_to_request: *Gauge(u64),
-        oldest_slot_to_request: *Gauge(u64),
 
-        const prefix = "repair";
+        batch_size: *Histogram,
+        batch_process_time: *Histogram,
+        last_batch_size: *Gauge(u64),
+        last_batch_process_time: *Gauge(f64),
+
+        pub const prefix = "repair_service";
+
+        pub fn histogramBucketsForField(name: []const u8) []const f64 {
+            return if (std.mem.eql(u8, name, "batch_size"))
+                &.{ 0, 1, 3, 10, 30, 100, 300, 1000, 3_000, 10_000, 30_000, 100_000 }
+            else if (std.mem.eql(u8, name, "batch_process_time"))
+                &.{ 0, 0.000_1, 0.001, 0.01, 0.1, 1, 10, 100, 1_000 }
+            else
+                unreachable;
+        }
     };
 
     const Self = @This();
@@ -96,8 +110,9 @@ pub const RepairService = struct {
             .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
-            .thread_pool = RequestBatchThreadPool.init(allocator, NUM_REQUESTER_THREADS),
+            .thread_pool = RequestBatchThreadPool.init(allocator, maxRequesterThreads()),
             .metrics = try registry.initStruct(Metrics),
+            .prng = std.Random.DefaultPrng.init(0),
         };
     }
 
@@ -109,14 +124,14 @@ pub const RepairService = struct {
         self.report.deinit();
     }
 
-    const min_loop_duration_ns = 100 * std.time.ns_per_ms;
-
     pub fn run(self: *Self) !void {
         var waiting_for_peers = false;
-        var timer = try std.time.Timer.start();
-        var last_iteration: u64 = 0;
+        var timer = try sig.time.Timer.start();
         while (!self.exit.load(.acquire)) {
-            if (self.sendNecessaryRepairs()) |_| {
+            timer.reset();
+            var num_repairs_sent: usize = 0;
+            if (self.sendNecessaryRepairs()) |count| {
+                num_repairs_sent = count;
                 if (waiting_for_peers) {
                     waiting_for_peers = false;
                     self.logger.info().logf("Acquired some repair peers.", .{});
@@ -128,27 +143,33 @@ pub const RepairService = struct {
                 },
                 else => return e,
             }
-            last_iteration = timer.lap();
-            std.time.sleep(min_loop_duration_ns -| last_iteration);
+            const last_iteration = timer.lap();
+
+            self.metrics.batch_size.observe(num_repairs_sent);
+            self.metrics.batch_process_time.observe(last_iteration.asSecsFloat());
+            self.metrics.last_batch_size.set(num_repairs_sent);
+            self.metrics.last_batch_process_time.set(last_iteration.asSecsFloat());
+
+            sleepRepair(num_repairs_sent, last_iteration);
         }
     }
 
     /// Identifies which repairs are needed based on the current state,
-    /// and sends those repairs, then returns.
-    pub fn sendNecessaryRepairs(self: *Self) !void {
+    /// and sends those repairs, then returns the number of repairs.
+    pub fn sendNecessaryRepairs(self: *Self) !usize {
         const repair_requests = try self.getRepairs();
         defer repair_requests.deinit();
-        self.metrics.repair_request_count.add(repair_requests.items.len);
+        self.metrics.request_count.add(repair_requests.items.len);
         const addressed_requests = try self.assignRequestsToPeers(repair_requests.items);
         defer addressed_requests.deinit();
 
         if (addressed_requests.items.len < 4) {
-            self.metrics.requests_in_latest_batch.set(addressed_requests.items.len);
             try self.requester.sendRepairRequestBatch(addressed_requests.items);
         } else {
-            for (0..4) |i| {
-                const start = (addressed_requests.items.len * i) / 4;
-                const end = (addressed_requests.items.len * (i + 1)) / 4;
+            const num_threads = numRequesterThreads(addressed_requests.items.len);
+            for (0..num_threads) |i| {
+                const start = (addressed_requests.items.len * i) / num_threads;
+                const end = (addressed_requests.items.len * (i + 1)) / num_threads;
                 try self.thread_pool.schedule(.{
                     .requester = &self.requester,
                     .requests = addressed_requests.items[start..end],
@@ -157,71 +178,56 @@ pub const RepairService = struct {
             }
         }
 
-        // TODO less often
-        if (addressed_requests.items.len > 0) {
-            self.logger.debug().logf(
-                "sent {} repair requests",
-                .{addressed_requests.items.len},
-            );
-        }
+        return addressed_requests.items.len;
     }
 
-    const MAX_SHRED_REPAIRS = 1000;
-    const MIN_HIGHEST_REPAIRS = 10;
-    const MAX_HIGHEST_REPAIRS = 200;
+    /// The maximum number of `.Shred` repairs to request.
+    ///
+    /// Supports the maximum number of shreds that could possibly be generated
+    /// during a repair loop iteration. This ensures it is always possible to
+    /// catch up, assuming the current hardware is powerful enough.
+    const MAX_SHRED_REPAIRS = (MAX_DATA_SHREDS_PER_SLOT * MAX_REPAIR_LOOP_DURATION_TARGET.asMillis()) / 400;
 
     fn getRepairs(self: *Self) !ArrayList(RepairRequest) {
         var oldest_slot_needing_repair: u64 = 0;
         var newest_slot_needing_repair: u64 = 0;
         var repairs = ArrayList(RepairRequest).init(self.allocator);
-        if (!try self.shred_tracker.identifyMissing(&self.report)) {
+        if (!try self.shred_tracker.identifyMissing(&self.report, sig.time.Instant.now())) {
             return repairs;
         }
         var individual_count: usize = 0;
         var highest_count: usize = 0;
         var slot: Slot = 0;
 
-        var num_highest_repairs: usize = MIN_HIGHEST_REPAIRS;
-        if (self.last_big_request_timestamp_ms + 5_000 < std.time.milliTimestamp()) {
-            self.last_big_request_timestamp_ms = std.time.milliTimestamp();
-            num_highest_repairs = MAX_HIGHEST_REPAIRS;
-        }
-
-        for (self.report.items()) |*report| outer: {
+        // request every shred that is reported missing, up to MAX_SHRED_REPAIRS
+        for (self.report.items()) |*report| {
             slot = report.slot;
             oldest_slot_needing_repair = @min(slot, oldest_slot_needing_repair);
             newest_slot_needing_repair = @max(slot, newest_slot_needing_repair);
-            for (report.missing_shreds.items) |shred_window| {
-                if (shred_window.end) |end| {
-                    for (shred_window.start..end) |i| {
-                        individual_count += 1;
-                        try repairs.append(.{ .Shred = .{ slot, i } });
-                        if (individual_count > MAX_SHRED_REPAIRS) {
-                            break :outer;
+            if (individual_count < MAX_SHRED_REPAIRS) {
+                for (report.missing_shreds.items) |shred_window| mid_loop: {
+                    if (shred_window.end) |end| {
+                        for (shred_window.start..end) |i| {
+                            if (individual_count > MAX_SHRED_REPAIRS) break :mid_loop;
+                            individual_count += 1;
+                            try repairs.append(.{ .Shred = .{ slot, i } });
                         }
                     }
                 }
             }
-            if (highest_count < num_highest_repairs) {
-                highest_count += 1;
-                try repairs.append(.{ .HighestShred = .{ slot, 0 } });
-            }
+            highest_count += 1;
+            try repairs.append(.{ .HighestShred = .{ slot, 0 } });
         }
 
-        var newest_slot_to_request: u64 = newest_slot_needing_repair;
-        var oldest_slot_to_request: u64 = oldest_slot_needing_repair;
-        if (highest_count < num_highest_repairs) {
-            for (slot..slot + num_highest_repairs - highest_count) |s| {
-                newest_slot_to_request = @max(slot, newest_slot_to_request);
-                oldest_slot_to_request = @min(slot, oldest_slot_to_request);
-                try repairs.append(.{ .HighestShred = .{ s, 0 } });
-            }
-        }
+        // eagerly request the next unknown slot in case turbine is laggy
+        try repairs.append(.{ .HighestShred = .{ slot + 1, 0 } });
+
+        // request ahead to detect if caught behind. use jitter to avoid skipped slots
+        const num_slots_ahead = self.prng.random().intRangeAtMost(u32, 10, 50);
+        try repairs.append(.{ .HighestShred = .{ slot + num_slots_ahead, 0 } });
 
         self.metrics.oldest_slot_needing_repair.set(oldest_slot_needing_repair);
         self.metrics.newest_slot_needing_repair.set(newest_slot_needing_repair);
-        self.metrics.newest_slot_to_request.set(newest_slot_to_request);
-        self.metrics.oldest_slot_to_request.set(oldest_slot_to_request);
 
         return repairs;
     }
@@ -245,13 +251,78 @@ pub const RepairService = struct {
     }
 };
 
+/// Returns the number of threads that should be used to send this many repair
+/// requests.
+///
+/// Allows the number of repair requester threads to scale up when a lot of
+/// repairs are necessary, and scale down during normal operation.
+fn numRequesterThreads(num_requests: usize) usize {
+    const target_requests_per_thread = 100;
+    const target_threads = num_requests / target_requests_per_thread;
+    return @max(1, @min(target_threads, maxRequesterThreads()));
+}
+
+/// Sets the maximum number of repair threads to either 16 or half the cpu
+/// count, whatever is less.
+fn maxRequesterThreads() u32 {
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    return @min(16, cpu_count / 2);
+}
+
+/// Sleeps an appropriate duration after sending some repair requests.
+///
+/// This avoids sending massive numbers of redundant requests when we're far
+/// behind, while allowing low latency to fill small gaps when we're caught up.
+/// It also ensures the repair service does not hog resources 100% of the time,
+/// so turbine can get a chance to start keeping up on its own.
+///
+/// The numbers and logic here are somewhat arbitrary, but this was tuned to
+/// work well during testing and should not be modified without thorough
+/// testing. If the thread allocation strategy for the repair service changes
+/// dramatically, it will likely make sense to revise this sleeping approach.
+fn sleepRepair(num_requests: u64, last_iteration: Duration) void {
+    // time we'd like the entire loop to take for this number of repairs
+    const target = Duration.fromMillis(num_requests / 8);
+    const bounded = target.min(MAX_REPAIR_LOOP_DURATION_TARGET).max(MIN_REPAIR_LOOP_DURATION);
+
+    // amount of time to sleep after last_iteration to reach the target
+    const remaining_sleep_for_target = bounded.saturatingSub(last_iteration);
+
+    // if overwhelmed by generating many repair requests, this ensures there is
+    // a pause between them to dedicate more CPU to process some incoming
+    // shreds. This supplements MIN_REPAIR_DELAY to ensure repairs are actively
+    // being processed no more than 80% of the time.
+    const take_a_break = last_iteration.div(4);
+
+    std.time.sleep(remaining_sleep_for_target.max(MIN_REPAIR_DELAY).max(take_a_break).asNanos());
+}
+
+/// The maximum time that we want the repair loop to take.
+///
+/// This could be exceeded if it takes longer to actually send the repair
+/// requests. But otherwise this is the maximum loop duration that we'll target
+/// with the sleeps.
+///
+/// This is sort of like a timeout for repair responses. After 1 second, we
+/// should have gotten all the repairs, and there's no need to delay sending
+/// more requests.
+const MAX_REPAIR_LOOP_DURATION_TARGET = Duration.fromSecs(1);
+
+/// Ensures the full repair loop doesn't repeat more often than this.
+const MIN_REPAIR_LOOP_DURATION = Duration.fromMillis(200);
+
+/// Ensures the repair loop always sleeps for some time to do other work between
+/// repairs.
+const MIN_REPAIR_DELAY = Duration.fromMillis(100);
+
 /// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
     allocator: Allocator,
     logger: ScopedLogger(@typeName(Self)),
     random: Random,
     keypair: *const KeyPair,
-    sender: SocketThread,
+    sender_thread: *SocketThread,
+    sender_channel: *Channel(Packet),
     metrics: Metrics,
 
     const Self = @This();
@@ -272,19 +343,31 @@ pub const RepairRequester = struct {
         udp_send_socket: Socket,
         exit: *Atomic(bool),
     ) !Self {
-        const sndr = try SocketThread.initSender(allocator, logger, udp_send_socket, exit);
+        const channel = try Channel(Packet).create(allocator);
+        errdefer channel.destroy();
+
+        const thread = try SocketThread.spawnSender(
+            allocator,
+            logger,
+            udp_send_socket,
+            channel,
+            .{ .unordered = exit },
+        );
+
         return .{
             .allocator = allocator,
             .logger = logger.withScope(@typeName(Self)),
             .random = random,
             .keypair = keypair,
-            .sender = sndr,
+            .sender_thread = thread,
+            .sender_channel = channel,
             .metrics = try registry.initStruct(Metrics),
         };
     }
 
     pub fn deinit(self: Self) void {
-        self.sender.deinit(self.allocator);
+        self.sender_thread.join();
+        self.sender_channel.destroy();
     }
 
     pub fn sendRepairRequestBatch(
@@ -309,7 +392,7 @@ pub const RepairRequester = struct {
                 self.random.int(Nonce),
             );
             packet.size = data.len;
-            try self.sender.channel.send(packet);
+            try self.sender_channel.send(packet);
             self.metrics.pending_requests.dec();
             self.metrics.sent_request_count.inc();
         }
@@ -559,7 +642,7 @@ test "RepairService sends repair request to gossip peer" {
     defer service.deinit();
 
     // run test
-    try service.sendNecessaryRepairs();
+    _ = try service.sendNecessaryRepairs();
     var buf: [200]u8 = undefined;
     const size = peer_socket.receive(&buf) catch 0;
 

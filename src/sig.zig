@@ -9,6 +9,7 @@ pub const core = @import("core/lib.zig");
 pub const crypto = @import("crypto/lib.zig");
 pub const geyser = @import("geyser/lib.zig");
 pub const gossip = @import("gossip/lib.zig");
+pub const identity = @import("identity.zig");
 pub const ledger = @import("ledger/lib.zig");
 pub const net = @import("net/lib.zig");
 pub const prometheus = @import("prometheus/lib.zig");
