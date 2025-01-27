@@ -2,11 +2,10 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const connection = @import("connection.zig");
-const requests = @import("requests.zig");
-
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
 
+// work pool backends
+pub const basic = @import("basic.zig");
 pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
 
 pub const Context = struct {
@@ -26,6 +25,14 @@ pub const Context = struct {
     pub const ScopedLogger = sig.trace.log.ScopedLogger(LOGGER_SCOPE);
 
     pub const MIN_READ_BUFFER_SIZE = 4096;
+
+    pub const WorkPool = union(enum) {
+        basic,
+        linux_io_uring: switch (LinuxIoUring.can_use) {
+            .yes, .check => *LinuxIoUring,
+            .no => noreturn,
+        },
+    };
 
     /// The returned result must be pinned to a memory location before calling any methods.
     pub fn init(params: struct {
@@ -75,83 +82,36 @@ pub const Context = struct {
     /// Spawn the serve loop as a separate thread.
     pub fn serveSpawn(
         self: *Context,
-        exit: *std.atomic.Value(bool),
         /// The pool to dispatch work to.
         work_pool: WorkPool,
+        exit: *std.atomic.Value(bool),
     ) std.Thread.SpawnError!std.Thread {
-        return try std.Thread.spawn(.{}, serve, .{ self, exit, work_pool });
+        return try std.Thread.spawn(.{}, serve, .{ self, work_pool, exit });
     }
 
     /// Calls `acceptAndServeConnection` in a loop until `exit.load(.acquire)`.
     pub fn serve(
         self: *Context,
-        exit: *std.atomic.Value(bool),
         /// The pool to dispatch work to.
         work_pool: WorkPool,
-    ) WorkPool.AcceptAndServeConnectionError!void {
+        exit: *std.atomic.Value(bool),
+    ) AcceptAndServeConnectionError!void {
         while (!exit.load(.acquire)) {
-            try work_pool.acceptAndServeConnection(self);
+            try self.acceptAndServeConnection(work_pool);
         }
     }
-};
-
-pub const WorkPool = union(enum) {
-    basic,
-    linux_io_uring: switch (LinuxIoUring.can_use) {
-        .yes, .check => *LinuxIoUring,
-        .no => noreturn,
-    },
-
-    const BasicAASCError =
-        connection.AcceptHandledError ||
-        connection.SetSocketSync ||
-        std.mem.Allocator.Error ||
-        std.http.Server.ReceiveHeadError ||
-        requests.HandleRequestError;
-    const IoUringAASCError =
-        LinuxIoUring.AcceptAndServeConnectionsError;
 
     pub const AcceptAndServeConnectionError =
-        BasicAASCError ||
-        IoUringAASCError;
+        basic.AcceptAndServeConnectionError ||
+        LinuxIoUring.AcceptAndServeConnectionsError;
 
     pub fn acceptAndServeConnection(
-        self: WorkPool,
-        server: *Context,
+        self: *Context,
+        work_pool: WorkPool,
     ) AcceptAndServeConnectionError!void {
-        switch (self) {
-            .basic => {
-                const conn = connection.acceptHandled(
-                    server.tcp,
-                    .blocking,
-                ) catch |err| switch (err) {
-                    error.WouldBlock => return,
-                    else => |e| return e,
-                };
-                defer conn.stream.close();
-
-                if (!connection.have_accept4) {
-                    // make sure the accepted socket is in blocking mode
-                    try connection.setSocketSync(conn.stream.handle, .blocking);
-                }
-
-                server.wait_group.start();
-                defer server.wait_group.finish();
-
-                const buffer = try server.allocator.alloc(u8, server.read_buffer_size);
-                defer server.allocator.free(buffer);
-
-                var http_server = std.http.Server.init(conn, buffer);
-                var request = try http_server.receiveHead();
-
-                try requests.handleRequest(
-                    server.logger,
-                    &request,
-                    server.snapshot_dir,
-                    server.latest_snapshot_gen_info,
-                );
-            },
-            .linux_io_uring => |linux| try linux.acceptAndServeConnections(server),
+        switch (work_pool) {
+            .basic => try basic.acceptAndServeConnection(self),
+            .linux_io_uring => |linux| try linux.acceptAndServeConnections(self),
         }
     }
 };
@@ -217,7 +177,7 @@ test Context {
     // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
     defer if (maybe_liou != null) maybe_liou.?.deinit();
 
-    for ([_]?WorkPool{
+    for ([_]?Context.WorkPool{
         .basic,
         // TODO: see above TODO about `if (a) |*b|` on `?noreturn`.
         if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else null,
@@ -238,7 +198,7 @@ test Context {
         defer rpc_server_ctx.joinDeinit();
 
         var exit = std.atomic.Value(bool).init(false);
-        const serve_thread = try rpc_server_ctx.serveSpawn(&exit, work_pool);
+        const serve_thread = try rpc_server_ctx.serveSpawn(work_pool, &exit);
         defer serve_thread.join();
         defer exit.store(true, .release);
 

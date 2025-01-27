@@ -5,8 +5,8 @@ const sig = @import("../../sig.zig");
 const connection = @import("connection.zig");
 const requests = @import("requests.zig");
 
-const IoUring = std.os.linux.IoUring;
 const ServerCtx = sig.rpc.server.Context;
+const IoUring = std.os.linux.IoUring;
 
 pub const LinuxIoUring = struct {
     io_uring: IoUring,
