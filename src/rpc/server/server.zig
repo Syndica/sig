@@ -23,7 +23,7 @@ pub const Context = struct {
     /// Must not be mutated.
     read_buffer_size: u32,
 
-    pub const LOGGER_SCOPE = "rpc.Server";
+    pub const LOGGER_SCOPE = "rpc.server";
     pub const ScopedLogger = sig.trace.log.ScopedLogger(LOGGER_SCOPE);
 
     pub const MIN_READ_BUFFER_SIZE = 4096;
