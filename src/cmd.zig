@@ -1319,11 +1319,7 @@ const AppBase = struct {
 
         const entrypoints = try current_config.gossip.getEntrypointAddrs(allocator);
 
-        const echo_data = try getShredAndIPFromEchoServer(
-            logger.unscoped(),
-            allocator,
-            entrypoints,
-        );
+        const echo_data = try getShredAndIPFromEchoServer(logger.unscoped(), entrypoints);
 
         // zig fmt: off
         const my_shred_version = current_config.shred_version

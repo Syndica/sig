@@ -33,11 +33,7 @@ pub fn initGossipFromCluster(
     }
 
     // create contact info
-    const echo_data = try getShredAndIPFromEchoServer(
-        logger.unscoped(),
-        allocator,
-        entrypoints.items,
-    );
+    const echo_data = try getShredAndIPFromEchoServer(logger.unscoped(), entrypoints.items);
     const my_shred_version = echo_data.shred_version orelse 0;
     const my_ip = echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
 
