@@ -1,10 +1,9 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const connection = @import("connection.zig");
-const requests = @import("requests.zig");
-
-const ServerCtx = sig.rpc.server.Context;
+const server = @import("server.zig");
+const requests = server.requests;
+const connection = server.connection;
 
 pub const AcceptAndServeConnectionError =
     connection.AcceptHandledError ||
@@ -13,7 +12,7 @@ pub const AcceptAndServeConnectionError =
     std.http.Server.ReceiveHeadError ||
     requests.HandleRequestError;
 
-pub fn acceptAndServeConnection(server_ctx: *ServerCtx) !void {
+pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
     const conn = connection.acceptHandled(
         server_ctx.tcp,
         .blocking,

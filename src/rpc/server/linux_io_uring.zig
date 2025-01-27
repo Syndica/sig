@@ -2,10 +2,10 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const connection = @import("connection.zig");
-const requests = @import("requests.zig");
+const server = @import("server.zig");
+const requests = server.requests;
+const connection = server.connection;
 
-const ServerCtx = sig.rpc.server.Context;
 const IoUring = std.os.linux.IoUring;
 
 pub const LinuxIoUring = struct {
@@ -80,7 +80,7 @@ pub const LinuxIoUring = struct {
 
     pub fn acceptAndServeConnections(
         self: *LinuxIoUring,
-        server_ctx: *ServerCtx,
+        server_ctx: *server.Context,
     ) AcceptAndServeConnectionsError!void {
         if (!self.multishot_accept_submitted) {
             self.multishot_accept_submitted = true;
@@ -206,7 +206,7 @@ const EAGAIN_PANIC_MSG =
 /// should not interact with it.
 fn consumeOurCqe(
     liou: *LinuxIoUring,
-    server_ctx: *ServerCtx,
+    server_ctx: *server.Context,
     cqe: OurCqe,
 ) HandleOurCqeError!void {
     const entry = cqe.user_data;
@@ -455,7 +455,7 @@ fn consumeOurCqe(
 
 fn handleRecvBody(
     liou: *LinuxIoUring,
-    server_ctx: *ServerCtx,
+    server_ctx: *server.Context,
     entry: Entry,
     body: *EntryState.RecvBody,
 ) !void {
