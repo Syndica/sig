@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 const network = @import("zig-network");
+const xev = @import("xev");
 
 const Allocator = std.mem.Allocator;
 const UdpSocket = network.Socket;
@@ -18,74 +19,344 @@ pub const PACKETS_PER_BATCH: usize = 64;
 // The identifier for the scoped logger used in this file.
 const LOG_SCOPE: []const u8 = "socket_utils";
 
-pub const SocketThread = struct {
-    allocator: Allocator,
-    handle: std.Thread,
+const XevThread = struct {
+    pub const Handle = std.Thread.ResetEvent;
 
-    pub fn spawnSender(
+    const List = std.DoublyLinkedList(struct {
         allocator: Allocator,
-        logger: Logger,
-        socket: UdpSocket,
-        outgoing_channel: *Channel(Packet),
-        exit: ExitCondition,
-    ) !*SocketThread {
-        return spawn(allocator, logger, socket, outgoing_channel, exit, runSender);
-    }
+        st: ?*SocketThread,
+        packet: Packet = undefined,
+        udp: xev.UDP,
+        udp_state: xev.UDP.State = undefined,
+        udp_completion: xev.Completion = undefined,
+        io: enum { idle, pending, cancelled } = .idle,
+    });
 
-    pub fn spawnReceiver(
-        allocator: Allocator,
-        logger: Logger,
-        socket: UdpSocket,
-        incoming_channel: *Channel(Packet),
-        exit: ExitCondition,
-    ) !*SocketThread {
-        return spawn(allocator, logger, socket, incoming_channel, exit, runReceiver);
-    }
+    var ref_count = std.atomic.Value(usize).init(0);
+    var register = std.atomic.Value(?*List.Node).init(null);
+    var io_notified = std.atomic.Value(bool).init(false);
+    var io_thread: std.Thread = undefined;
+    var io_event: xev.Async = undefined;
+    var active = List{};
 
-    fn spawn(
-        allocator: Allocator,
-        logger: Logger,
-        socket: UdpSocket,
-        channel: *Channel(Packet),
-        exit: ExitCondition,
-        comptime runFn: anytype,
-    ) !*SocketThread {
-        // TODO(king): store event-loop data in SocketThread (hence, heap-alloc)..
-        const self = try allocator.create(SocketThread);
-        errdefer allocator.destroy(self);
+    pub fn spawn(st: *SocketThread) !void {
+        // Make the socket non-blocking (required by xev).
+        var flags = try std.posix.fcntl(st.socket.internal, std.posix.F.GETFL, 0);
+        flags |= @as(c_int, @bitCast(std.posix.O{ .NONBLOCK = true }));
+        _ = try std.posix.fcntl(st.socket.internal, std.posix.F.SETFL, flags);
 
-        self.* = .{
-            .allocator = allocator,
-            .handle = try std.Thread.spawn(.{}, runFn, .{ logger, socket, channel, exit }),
+        // Start xev thread if not running.
+        if (ref_count.fetchAdd(2, .acquire) == 0) {
+            io_notified.store(false, .monotonic);
+            io_event = try xev.Async.init();
+            io_thread = try std.Thread.spawn(.{}, runIoThread, .{});
+        }
+
+        // When a sender SocketThread receives a message, it needs to wake up xev to udp send it.
+        if (st.direction == .sender) {
+            st.channel.send_hook = &(struct {
+                var send_hook: Channel(Packet).SendHook = .{ .after_send = afterSend };
+                fn afterSend(_: *Channel(Packet).SendHook, _: *Channel(Packet)) void {
+                    notifyIoThread();
+                }
+            }).send_hook;
+        }
+
+        // When the node exits, it will trigger this event.
+        st.handle = std.Thread.ResetEvent{};
+
+        // Create a node for the SocketThread
+        const node = try st.allocator.create(List.Node);
+        node.* = .{
+            .data = .{
+                .allocator = st.allocator,
+                .st = st,
+                .udp = xev.UDP.initFd(st.socket.internal),
+            },
         };
 
-        return self;
+        // Push the node to the register stack & wake the xev thread to start handling it.
+        node.next = register.load(.monotonic);
+        while (true) {
+            node.next = register.cmpxchgWeak(node.next, node, .release, .monotonic) orelse {
+                break notifyIoThread();
+            };
+        }
     }
 
-    pub fn join(self: *SocketThread) void {
-        self.handle.join();
-        self.allocator.destroy(self);
+    pub fn join(st: *SocketThread) void {
+        // The last SocketThread to join will stop the xev thread.
+        if (ref_count.fetchSub(2, .release) == 2) {
+            // Lock the ref_count to detect if theres races (i.e. another spawn()) during shutdown.
+            std.debug.assert(ref_count.swap(1, .acquire) == 0);
+            defer std.debug.assert(ref_count.swap(0, .release) == 1);
+
+            notifyIoThread(); // wake up xev thread to see ref_count == 1 to stop/shutdown
+            io_thread.join();
+            io_event.deinit();
+        }
+
+        st.handle.wait();
     }
 
-    fn runReceiver(
-        logger_: Logger,
-        socket_: UdpSocket,
-        incoming_channel: *Channel(Packet),
-        exit: ExitCondition,
+    fn notifyIoThread() void {
+        const already_notified = io_notified.swap(true, .release);
+        if (!already_notified) {
+            io_event.notify() catch std.debug.panic("failed to notify xev event loop", .{});
+        }
+    }
+
+    fn runIoThread() !void {
+        var loop = try xev.Loop.init(.{});
+        defer loop.deinit();
+
+        // Trigger pollIo() when the xev thread is notified from outside (channel send, shutdown).
+        var io_event_completion: xev.Completion = undefined;
+        io_event.wait(&loop, &io_event_completion, void, null, onNotify);
+
+        // Every once in a while, trigger pollIo() to check SocketThread.exit flags.
+        var timer = try xev.Timer.init();
+        defer timer.deinit();
+        var timer_completion: xev.Completion = undefined;
+        timer.run(&loop, &timer_completion, SOCKET_TIMEOUT_US, xev.Timer, &timer, onTick);
+
+        try loop.run(.until_done);
+    }
+
+    fn onNotify(
+        _: ?*void,
+        loop: *xev.Loop,
+        completion: *xev.Completion,
+        result: xev.Async.WaitError!void,
+    ) xev.CallbackAction {
+        result catch |e| std.debug.panic("xev notify event failed: {}", .{e});
+        std.debug.assert(io_notified.swap(false, .acquire));
+
+        pollIo(loop);
+        io_event.wait(loop, completion, void, null, onNotify);
+        return .disarm;
+    }
+
+    fn onTick(
+        maybe_timer: ?*xev.Timer,
+        loop: *xev.Loop,
+        completion: *xev.Completion,
+        result: xev.Timer.RunError!void,
+    ) xev.CallbackAction {
+        result catch |e| std.debug.panic("xev notify event failed: {}", .{e});
+
+        pollIo(loop);
+        maybe_timer.?.run(loop, completion, SOCKET_TIMEOUT_US, xev.Timer, maybe_timer, onTick);
+        return .disarm;
+    }
+
+    fn pollIo(loop: *xev.Loop) void {
+        const shutdown = ref_count.load(.acquire) == 1;
+        defer if (shutdown) loop.stop();
+
+        // Move registered nodes into the active list.
+        var pushed = register.swap(null, .acquire);
+        while (pushed) |node| {
+            pushed = node.next;
+            active.append(node);
+        }
+
+        // Iterate active nodes and poll them. If shutting down, close them instead.
+        var iter = active.first;
+        while (iter) |node| {
+            iter = node.next;
+            if (shutdown) {
+                closeNode(node, error.Shutdown);
+            } else {
+                pollNode(node, loop) catch |e| closeNode(node, e);
+            }
+        }
+    }
+
+    fn pollNode(node: *List.Node, loop: *xev.Loop) !void {
+        const st = node.data.st.?;
+        if (st.exit.shouldExit()) return error.Exit;
+
+        switch (node.data.io) {
+            .idle => {}, // start new IO operation below.
+            .pending => return, // IO operation already running.
+            .cancelled => unreachable, // only observable in onSend/onRecv callback.
+        }
+
+        switch (st.direction) {
+            .sender => {
+                node.data.packet = st.channel.tryReceive() orelse return;
+                node.data.io = .pending;
+                node.data.udp.write(
+                    loop,
+                    &node.data.udp_completion,
+                    &node.data.udp_state,
+                    blk: { // Convert network.EndPoint to std.net.Address
+                        const addr = node.data.packet.addr;
+                        var buf = std.BoundedArray(u8, 256){};
+                        try buf.writer().print("{}", .{addr.address});
+                        break :blk try std.net.Address.parseIp(buf.slice(), addr.port);
+                    },
+                    .{ .slice = node.data.packet.data[0..node.data.packet.size] },
+                    List.Node,
+                    node,
+                    onSend,
+                );
+            },
+            .receiver => {
+                node.data.packet = Packet.default();
+                node.data.io = .pending;
+                node.data.udp.read(
+                    loop,
+                    &node.data.udp_completion,
+                    &node.data.udp_state,
+                    .{ .slice = &node.data.packet.data },
+                    List.Node,
+                    node,
+                    onRecv,
+                );
+            },
+        }
+    }
+
+    fn closeNode(node: *List.Node, err: anyerror) void {
+        const st = node.data.st.?;
+        node.data.st = null;
+
+        // Sender drains the channel when closing.
+        if (st.direction == .sender) {
+            while (st.channel.tryReceive()) |_| {}
+        }
+
+        const logger = st.logger.withScope(LOG_SCOPE);
+        logger.debug().logf("{s} loop closed: {}", .{ @tagName(st.direction), err });
+        st.exit.afterExit();
+
+        // Unregister node and signal SocketThread to deinit/dealloc itself (node may live on).
+        active.remove(node);
+        st.handle.set();
+
+        switch (node.data.io) {
+            .idle => node.data.allocator.destroy(node),
+            .pending => node.data.io = .cancelled, // tell onSend/onRecv callback to free itself.
+            .cancelled => unreachable, // only observable in onSend/onRecv callback.
+        }
+    }
+
+    fn getNodeOnCallback(node: *List.Node) ?*List.Node {
+        switch (node.data.io) {
+            .idle => unreachable, // IO just finished, it must have been started.
+            .pending => { // IO finished as normal.
+                node.data.io = .idle;
+                return node;
+            },
+            .cancelled => { // The node was closed during IO. Deallocate it now.
+                node.data.allocator.destroy(node);
+                return null;
+            },
+        }
+    }
+
+    fn onSend(
+        maybe_node: ?*List.Node,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        _: *xev.UDP.State,
+        _: xev.UDP,
+        _: xev.WriteBuffer,
+        result: xev.UDP.WriteError!usize,
+    ) xev.CallbackAction {
+        if (getNodeOnCallback(maybe_node.?)) |node| {
+            handleSend(node, loop, result) catch |e| closeNode(node, e);
+        }
+        return .disarm;
+    }
+
+    fn handleSend(
+        node: *List.Node,
+        loop: *xev.Loop,
+        result: xev.UDP.WriteError!usize,
     ) !void {
-        const logger = logger_.withScope(LOG_SCOPE);
+        const st = node.data.st.?;
+        const logger = st.logger.withScope(LOG_SCOPE);
+
+        if (result) |bytes_sent| {
+            std.debug.assert(node.data.packet.size == bytes_sent);
+        } else |err| { // On send error, skip packet and proces next in pollNode
+            logger.err().logf("send socket error: {}", .{err});
+        }
+
+        try pollNode(node, loop);
+    }
+
+    fn onRecv(
+        maybe_node: ?*List.Node,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        _: *xev.UDP.State,
+        peer_addr: std.net.Address,
+        _: xev.UDP,
+        _: xev.ReadBuffer,
+        result: xev.UDP.ReadError!usize,
+    ) xev.CallbackAction {
+        if (getNodeOnCallback(maybe_node.?)) |node| {
+            handleRecv(node, loop, peer_addr, result) catch |e| closeNode(node, e);
+        }
+        return .disarm;
+    }
+
+    fn handleRecv(
+        node: *List.Node,
+        loop: *xev.Loop,
+        peer_addr: std.net.Address,
+        result: xev.UDP.ReadError!usize,
+    ) !void {
+        const st = node.data.st.?;
+        const logger = st.logger.withScope(LOG_SCOPE);
+
+        node.data.packet.size = result catch |err| {
+            logger.err().logf("recv socket error: {}", .{err});
+            return err;
+        };
+
+        node.data.packet.addr = blk: {
+            var buf = std.BoundedArray(u8, 256){};
+            try buf.writer().print("{}", .{peer_addr});
+            break :blk try network.EndPoint.parse(buf.slice());
+        };
+
+        try st.channel.send(node.data.packet);
+        try pollNode(node, loop);
+    }
+};
+
+const PerThread = struct {
+    pub const Handle = std.Thread;
+
+    pub fn spawn(st: *SocketThread) !void {
+        st.handle = switch (st.direction) {
+            .sender => try std.Thread.spawn(.{}, runSender, .{st}),
+            .receiver => try std.Thread.spawn(.{}, runReceiver, .{st}),
+        };
+    }
+
+    pub fn join(st: *SocketThread) void {
+        st.handle.join();
+    }
+
+    fn runReceiver(st: *SocketThread) !void {
+        const logger = st.logger.withScope(LOG_SCOPE);
         defer {
-            exit.afterExit();
+            st.exit.afterExit();
             logger.info().log("readSocket loop closed");
         }
 
-        // NOTE: we set to non-blocking to periodically check if we should exit
-        var socket = socket_;
-        try socket.setReadTimeout(SOCKET_TIMEOUT_US);
+        // NOTE: we set a timeout to periodically check if we should exit
+        try st.socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
-        while (exit.shouldRun()) {
+        while (st.exit.shouldRun()) {
             var packet: Packet = Packet.default();
-            const recv_meta = socket.receiveFrom(&packet.data) catch |err| switch (err) {
+            const recv_meta = st.socket.receiveFrom(&packet.data) catch |err| switch (err) {
                 error.WouldBlock => continue,
                 else => |e| {
                     logger.err().logf("readSocket error: {s}", .{@errorName(e)});
@@ -96,36 +367,96 @@ pub const SocketThread = struct {
             if (bytes_read == 0) return error.SocketClosed;
             packet.addr = recv_meta.sender;
             packet.size = bytes_read;
-            try incoming_channel.send(packet);
+            try st.channel.send(packet);
         }
     }
 
-    fn runSender(
-        logger_: Logger,
-        socket: UdpSocket,
-        outgoing_channel: *Channel(Packet),
-        exit: ExitCondition,
-    ) !void {
-        const logger = logger_.withScope(LOG_SCOPE);
+    fn runSender(st: *SocketThread) !void {
+        const logger = st.logger.withScope(LOG_SCOPE);
         defer {
             // empty the channel
-            while (outgoing_channel.tryReceive()) |_| {}
-            exit.afterExit();
+            while (st.channel.tryReceive()) |_| {}
+            st.exit.afterExit();
             logger.debug().log("sendSocket loop closed");
         }
 
         while (true) {
-            outgoing_channel.waitToReceive(exit) catch break;
+            st.channel.waitToReceive(st.exit) catch break;
 
-            while (outgoing_channel.tryReceive()) |p| {
-                if (exit.shouldExit()) return; // drop the rest (like above) if exit prematurely.
-                const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
+            while (st.channel.tryReceive()) |p| {
+                if (st.exit.shouldExit()) return; // drop the rest (like above) if exit prematurely.
+                const bytes_sent = st.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                     logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
-                    continue;
+                    continue; // on error, skip this packet and try to send another.
                 };
                 std.debug.assert(bytes_sent == p.size);
             }
         }
+    }
+};
+
+// TODO: Evaluate when XevThread socket backend is beneficial. 
+const SocketBackend = PerThread;
+
+pub const SocketThread = struct {
+    allocator: Allocator,
+    logger: Logger,
+    socket: UdpSocket,
+    channel: *Channel(Packet),
+    exit: ExitCondition,
+    direction: Direction,
+    handle: SocketBackend.Handle,
+
+    const Direction = enum { sender, receiver };
+
+    pub fn spawnSender(
+        allocator: Allocator,
+        logger: Logger,
+        socket: UdpSocket,
+        outgoing_channel: *Channel(Packet),
+        exit: ExitCondition,
+    ) !*SocketThread {
+        return spawn(allocator, logger, socket, outgoing_channel, exit, .sender);
+    }
+
+    pub fn spawnReceiver(
+        allocator: Allocator,
+        logger: Logger,
+        socket: UdpSocket,
+        incoming_channel: *Channel(Packet),
+        exit: ExitCondition,
+    ) !*SocketThread {
+        return spawn(allocator, logger, socket, incoming_channel, exit, .receiver);
+    }
+
+    fn spawn(
+        allocator: Allocator,
+        logger: Logger,
+        socket: UdpSocket,
+        channel: *Channel(Packet),
+        exit: ExitCondition,
+        direction: Direction,
+    ) !*SocketThread {
+        const self = try allocator.create(SocketThread);
+        errdefer allocator.destroy(self);
+
+        self.* = .{
+            .allocator = allocator,
+            .logger = logger,
+            .socket = socket,
+            .channel = channel,
+            .exit = exit,
+            .direction = direction,
+            .handle = undefined,
+        };
+
+        try SocketBackend.spawn(self);
+        return self;
+    }
+
+    pub fn join(self: *SocketThread) void {
+        SocketBackend.join(self);
+        self.allocator.destroy(self);
     }
 };
 
