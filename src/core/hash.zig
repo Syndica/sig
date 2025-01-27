@@ -2,7 +2,29 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Sha256 = std.crypto.hash.sha2.Sha256;
+const Slot = sig.core.time.Slot;
 const Allocator = std.mem.Allocator;
+
+pub const SlotAndHash = struct {
+    slot: Slot,
+    hash: Hash,
+
+    pub fn order(a: *const SlotAndHash, b: *const SlotAndHash) std.math.Order {
+        if (a.slot == b.slot and a.hash.order(&b.hash) == .eq) {
+            return .eq;
+        } else if (a.slot < b.slot or a.slot == b.slot and (a.hash.order(&b.hash) == .lt)) {
+            return .lt;
+        } else if (a.slot > b.slot or a.slot == b.slot and (a.hash.order(&b.hash) == .gt)) {
+            return .gt;
+        } else {
+            unreachable;
+        }
+    }
+
+    pub fn equals(a: *const SlotAndHash, b: *const SlotAndHash) bool {
+        return order(a, b) == .eq;
+    }
+};
 
 pub const Hash = extern struct {
     data: [size]u8,
