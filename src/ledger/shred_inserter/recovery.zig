@@ -5,7 +5,7 @@ const ledger = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
-const Lru = sig.common.lru.LruCacheCustom;
+const Lru = sig.utils.lru.LruCacheCustom;
 
 const CodeShred = ledger.shred.CodeShred;
 const CodeShredHeader = ledger.shred.CodeHeader;

@@ -440,8 +440,6 @@ fn downloadFile(
     return output_file;
 }
 
-const default_adb_config = sig.cmd.config.AccountsDBConfig{};
-
 pub fn getOrDownloadAndUnpackSnapshot(
     allocator: std.mem.Allocator,
     logger_: Logger,
@@ -457,7 +455,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         num_threads_snapshot_unpack: u16 = 0,
         min_snapshot_download_speed_mbs: usize = 20,
         trusted_validators: ?[]const Pubkey = null,
-        max_number_of_download_attempts: u64 = default_adb_config.max_number_of_snapshot_download_attempts,
+        max_number_of_download_attempts: u64,
         download_timeout: ?sig.time.Duration = null,
     },
 ) !struct { FullAndIncrementalManifest, SnapshotFiles } {
