@@ -182,7 +182,7 @@ pub const BufferPool = struct {
                 }
             }
 
-            const bytes_read = try file.pread(&self.frames[f_idx.*], frame_aligned_file_offset);
+            const bytes_read = try file.preadAll(&self.frames[f_idx.*], frame_aligned_file_offset);
             self.manager.resetNewFrame(
                 f_idx.*,
                 file_id,
