@@ -4,7 +4,6 @@ const builtin = @import("builtin");
 
 const ShredVersion = sig.core.shred.ShredVersion;
 const SocketAddr = sig.net.SocketAddr;
-const Atomic = std.atomic.Value;
 const Logger = sig.trace.Logger;
 const IpAddr = sig.net.IpAddr;
 
