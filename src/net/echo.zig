@@ -84,7 +84,6 @@ pub const Server = struct {
     allocator: std.mem.Allocator,
     tcp: std.net.Server,
     thread_pool: *std.Thread.Pool,
-    wait_group: std.Thread.WaitGroup,
 
     pub const InitError =
         std.net.Address.ListenError ||
@@ -115,15 +114,13 @@ pub const Server = struct {
             .allocator = allocator,
             .tcp = tcp,
             .thread_pool = thread_pool,
-            .wait_group = .{},
         };
     }
 
     pub fn deinit(self: *Server) void {
-        self.wait_group.wait();
-        self.thread_pool.deinit();
+        self.thread_pool.deinit(); // this will wait for all running jobs to complete
         self.allocator.destroy(self.thread_pool);
-        self.tcp.deinit();
+        self.tcp.stream.close();
     }
 
     pub fn spawnServe(self: *Server, exit: *std.atomic.Value(bool)) std.Thread.SpawnError!void {
@@ -138,9 +135,6 @@ pub const Server = struct {
                 else => |e| return e,
             };
             errdefer conn.stream.close();
-
-            self.wait_group.start();
-            errdefer self.wait_group.finish();
 
             // TODO: unify this with the code for the RPC server
             if (comptime builtin.target.isDarwin()) set_flags: {
@@ -158,7 +152,6 @@ pub const Server = struct {
             const hct = try HandleConnectionTask.create(
                 self.allocator,
                 conn,
-                &self.wait_group,
                 self.logger,
             );
             errdefer hct.deinitAndDestroy();
@@ -172,13 +165,11 @@ const HandleConnectionTask = struct {
     allocator: std.mem.Allocator,
     read_buffer: [4096]u8,
     server: std.http.Server,
-    wg: *std.Thread.WaitGroup,
     logger: Logger,
 
     fn create(
         allocator: std.mem.Allocator,
         connection: std.net.Server.Connection,
-        wg: *std.Thread.WaitGroup,
         logger: Logger,
     ) std.mem.Allocator.Error!*HandleConnectionTask {
         const hct = try allocator.create(HandleConnectionTask);
@@ -188,7 +179,6 @@ const HandleConnectionTask = struct {
             .allocator = allocator,
             .read_buffer = undefined,
             .server = std.http.Server.init(connection, &hct.read_buffer),
-            .wg = wg,
             .logger = logger,
         };
         return hct;
@@ -197,7 +187,6 @@ const HandleConnectionTask = struct {
     fn deinitAndDestroy(
         self: *HandleConnectionTask,
     ) void {
-        self.wg.finish();
         const allocator = self.allocator;
         allocator.destroy(self);
     }
