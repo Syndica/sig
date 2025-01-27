@@ -15,7 +15,9 @@ const DirectPrintLogger = sig.trace.DirectPrintLogger;
 const Logger = sig.trace.Logger;
 const SlotMeta = ledger.meta.SlotMeta;
 const VersionedTransactionWithStatusMeta = ledger.reader.VersionedTransactionWithStatusMeta;
+
 const comptimePrint = std.fmt.comptimePrint;
+const insertShredsForTest = ledger.shred_inserter.shred_inserter.insertShredsForTest;
 
 const schema = ledger.schema.schema;
 
@@ -397,9 +399,12 @@ pub fn insertDataForBlockTest(state: *TestState) !InsertDataForBlockResult {
         deinitShreds(allocator, slice);
     };
 
-    _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
-    _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, more_shreds);
-    _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, unrooted_shreds);
+    var result = try insertShredsForTest(&inserter, shreds);
+    result.deinit();
+    result = try insertShredsForTest(&inserter, more_shreds);
+    result.deinit();
+    result = try insertShredsForTest(&inserter, unrooted_shreds);
+    result.deinit();
 
     try writer.setRoots(&.{ slot - 1, slot, slot + 1 });
 
