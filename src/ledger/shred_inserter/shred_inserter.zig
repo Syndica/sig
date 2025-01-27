@@ -157,6 +157,16 @@ pub const ShredInserter = struct {
     /// `CompletedDataSetInfo` and a vector of its corresponding index in the
     /// input `shreds` vector.
     ///
+    /// Lifetime rules:
+    /// - Shreds received over the network are owned by the caller to
+    ///   insertShreds. The ShredInserter must treat them as a reference that
+    ///   will die when insertShreds returns.
+    /// - Shreds returned from insertShreds are owned by the caller to
+    ///   insertShreds. This means the lifetime must exceed the insertShreds
+    ///   call.
+    /// - Any shreds created during insertShreds must be either returned or
+    ///   deinitialized before returning.
+    ///
     /// agave: do_insert_shreds
     pub fn insertShreds(
         self: *Self,
