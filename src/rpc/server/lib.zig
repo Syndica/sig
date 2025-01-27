@@ -1,11 +1,13 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
 
-const connection = @import("server/connection.zig");
-const requests = @import("server/requests.zig");
+const connection = @import("connection.zig");
+const requests = @import("requests.zig");
 
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
+
+pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -99,8 +101,6 @@ pub const WorkPool = union(enum) {
         .yes, .check => *LinuxIoUring,
         .no => noreturn,
     },
-
-    pub const LinuxIoUring = @import("server/linux_io_uring.zig").LinuxIoUring;
 
     const BasicAASCError =
         connection.AcceptHandledError ||
@@ -212,7 +212,7 @@ test Context {
         };
     });
 
-    var maybe_liou = try WorkPool.LinuxIoUring.init();
+    var maybe_liou = try LinuxIoUring.init();
     // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
     // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
     defer if (maybe_liou != null) maybe_liou.?.deinit();
