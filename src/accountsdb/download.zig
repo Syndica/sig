@@ -3,7 +3,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
+const SlotAndHash = sig.core.hash.SlotAndHash;
 const Pubkey = sig.core.Pubkey;
 const GossipTable = sig.gossip.GossipTable;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
