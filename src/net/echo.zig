@@ -147,19 +147,19 @@ pub const Server = struct {
                 _ = try std.posix.fcntl(conn.stream.handle, std.posix.F.SETFL, flags_int);
             }
 
-            const hct = try HandleConnectionTask.create(
+            const hct = try ConnectionTask.create(
                 self.allocator,
                 conn,
                 self.logger,
             );
             errdefer hct.deinitAndDestroy();
 
-            try self.thread_pool.spawn(handleConnectionNoErr, .{hct});
+            try self.thread_pool.spawn(ConnectionTask.handleNoError, .{hct});
         }
     }
 };
 
-const HandleConnectionTask = struct {
+const ConnectionTask = struct {
     allocator: std.mem.Allocator,
     read_buffer: [4096]u8,
     server: std.http.Server,
@@ -169,8 +169,8 @@ const HandleConnectionTask = struct {
         allocator: std.mem.Allocator,
         connection: std.net.Server.Connection,
         logger: Logger,
-    ) std.mem.Allocator.Error!*HandleConnectionTask {
-        const hct = try allocator.create(HandleConnectionTask);
+    ) std.mem.Allocator.Error!*ConnectionTask {
+        const hct = try allocator.create(ConnectionTask);
         errdefer allocator.destroy(hct);
 
         hct.* = .{
@@ -183,87 +183,87 @@ const HandleConnectionTask = struct {
     }
 
     fn deinitAndDestroy(
-        self: *HandleConnectionTask,
+        self: *ConnectionTask,
     ) void {
         const allocator = self.allocator;
         allocator.destroy(self);
     }
-};
 
-fn handleConnectionNoErr(hct: *HandleConnectionTask) void {
-    handleConnection(hct) catch |err| {
-        if (@errorReturnTrace()) |st| {
-            std.log.err("{s}:\n{}", .{ @errorName(err), st });
-        } else {
-            std.log.err("{s}", .{@errorName(err)});
-        }
-    };
-}
-
-fn handleConnection(hct: *HandleConnectionTask) !void {
-    defer hct.deinitAndDestroy();
-
-    var request = try hct.server.receiveHead();
-    const reader = sig.utils.io.narrowAnyReader(
-        try request.reader(),
-        std.http.Server.Request.ReadError,
-    );
-
-    if (request.head.method != .POST or
-        !std.mem.eql(u8, request.head.target, "/"))
-    {
-        try httpRespondError(&request, .not_found, "");
-        return;
+    fn handleNoError(hct: *ConnectionTask) void {
+        handle(hct) catch |err| {
+            if (@errorReturnTrace()) |st| {
+                std.log.err("{s}:\n{}", .{ @errorName(err), st });
+            } else {
+                std.log.err("{s}", .{@errorName(err)});
+            }
+        };
     }
 
-    hct.logger.debug().log("handling echo request");
+    fn handle(hct: *ConnectionTask) !void {
+        defer hct.deinitAndDestroy();
 
-    var request_buf: [256]u8 = undefined;
-    const request_byte_count = try reader.readAll(&request_buf);
-    const request_bytes = request_buf[0..request_byte_count];
+        var request = try hct.server.receiveHead();
+        const reader = sig.utils.io.narrowAnyReader(
+            try request.reader(),
+            std.http.Server.Request.ReadError,
+        );
 
-    const ip_echo_request_result = std.json.parseFromSlice(
-        IpEchoRequest,
-        hct.allocator,
-        request_bytes,
-        .{ .allocate = .alloc_if_needed },
-    ) catch |err| return switch (err) {
-        error.OutOfMemory => try httpRespondError(&request, .insufficient_storage, ""),
-        else => try httpRespondError(&request, .bad_request, ""),
-    };
-    const ip_echo_request = ip_echo_request_result.value;
-    _ = ip_echo_request;
-    ip_echo_request_result.deinit();
+        if (request.head.method != .POST or
+            !std.mem.eql(u8, request.head.target, "/"))
+        {
+            try httpRespondError(&request, .not_found, "");
+            return;
+        }
 
-    const socket_addr = SocketAddr.fromIpV4Address(request.server.connection.address);
-    const ip_echo_response: IpEchoResponse = .{
-        .address = .{ .ipv4 = socket_addr.V4.ip },
-        .shred_version = .{ .value = 0 },
-    };
+        hct.logger.debug().log("handling echo request");
 
-    const content_len = blk: {
-        var counter = std.io.countingWriter(std.io.null_writer);
-        try std.json.stringify(ip_echo_response, .{}, counter.writer());
-        break :blk counter.bytes_written;
-    };
+        var request_buf: [256]u8 = undefined;
+        const request_byte_count = try reader.readAll(&request_buf);
+        const request_bytes = request_buf[0..request_byte_count];
 
-    var send_buffer: [4096]u8 = undefined;
-    var response = request.respondStreaming(.{
-        .send_buffer = &send_buffer,
-        .content_length = content_len,
-        .respond_options = .{
-            .version = .@"HTTP/1.0",
-            .status = .ok,
-            .keep_alive = false,
-        },
-    });
-    const writer = sig.utils.io.narrowAnyWriter(
-        response.writer(),
-        std.http.Server.Response.WriteError,
-    );
-    try std.json.stringify(ip_echo_response, .{}, writer);
-    try response.end();
-}
+        const ip_echo_request_result = std.json.parseFromSlice(
+            IpEchoRequest,
+            hct.allocator,
+            request_bytes,
+            .{ .allocate = .alloc_if_needed },
+        ) catch |err| return switch (err) {
+            error.OutOfMemory => try httpRespondError(&request, .insufficient_storage, ""),
+            else => try httpRespondError(&request, .bad_request, ""),
+        };
+        const ip_echo_request = ip_echo_request_result.value;
+        _ = ip_echo_request;
+        ip_echo_request_result.deinit();
+
+        const socket_addr = SocketAddr.fromIpV4Address(request.server.connection.address);
+        const ip_echo_response: IpEchoResponse = .{
+            .address = .{ .ipv4 = socket_addr.V4.ip },
+            .shred_version = .{ .value = 0 },
+        };
+
+        const content_len = blk: {
+            var counter = std.io.countingWriter(std.io.null_writer);
+            try std.json.stringify(ip_echo_response, .{}, counter.writer());
+            break :blk counter.bytes_written;
+        };
+
+        var send_buffer: [4096]u8 = undefined;
+        var response = request.respondStreaming(.{
+            .send_buffer = &send_buffer,
+            .content_length = content_len,
+            .respond_options = .{
+                .version = .@"HTTP/1.0",
+                .status = .ok,
+                .keep_alive = false,
+            },
+        });
+        const writer = sig.utils.io.narrowAnyWriter(
+            response.writer(),
+            std.http.Server.Response.WriteError,
+        );
+        try std.json.stringify(ip_echo_response, .{}, writer);
+        try response.end();
+    }
+};
 
 fn httpRespondError(
     request: *std.http.Server.Request,
