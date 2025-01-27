@@ -395,7 +395,7 @@ const PerThread = struct {
     }
 };
 
-// TODO: Evaluate when XevThread socket backend is beneficial. 
+// TODO: Evaluate when XevThread socket backend is beneficial.
 const SocketBackend = PerThread;
 
 pub const SocketThread = struct {
