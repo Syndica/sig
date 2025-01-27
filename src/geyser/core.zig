@@ -252,28 +252,25 @@ pub const GeyserWriter = struct {
     }
 };
 
-pub const GeyserWriterConfig = struct {
-    enable: bool = false,
-    pipe_path: []const u8 = sig.VALIDATOR_DIR ++ "geyser.pipe",
-    writer_fba_bytes: usize = 1 << 32, // 4gb
-};
-
-pub fn createGeyserWriterFromConfig(
+pub fn createGeyserWriter(
     allocator: std.mem.Allocator,
-    geyser_config: GeyserWriterConfig,
+    pipe_path: []const u8,
+    writer_fba_bytes: usize,
 ) !*GeyserWriter {
-    if (!geyser_config.enable) return error.GeyserWriterIsDisabled;
-
     const exit = try allocator.create(Atomic(bool));
+    errdefer allocator.destroy(exit);
     exit.* = Atomic(bool).init(false);
 
     const geyser_writer = try allocator.create(GeyserWriter);
+    errdefer allocator.destroy(geyser_writer);
+
     geyser_writer.* = try GeyserWriter.init(
         allocator,
-        geyser_config.pipe_path,
+        pipe_path,
         exit,
-        geyser_config.writer_fba_bytes,
+        writer_fba_bytes,
     );
+    errdefer geyser_writer.deinit();
 
     // start the geyser writer
     try geyser_writer.spawnIOLoop();

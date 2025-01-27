@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const GeyserConfig = sig.geyser.core.GeyserWriterConfig;
 const ShredNetworkConfig = sig.shred_network.ShredNetworkConfig;
 const resolveSocketAddr = sig.net.net.resolveSocketAddr;
 const getAccountPerFileEstimateFromCluster =
@@ -11,7 +10,7 @@ pub const Cmd = struct {
     gossip: Gossip = .{},
     shred_network: ShredNetwork = .{},
     accounts_db: AccountsDB = .{},
-    geyser: GeyserConfig = .{},
+    geyser: Geyser = .{},
     turbine: Turbine = .{},
 
     test_transaction_sender: TestTransactionSender = .{},
@@ -45,6 +44,12 @@ pub const Turbine = struct {
     num_retransmit_threads: ?usize = null, // Default to number of CPUs
     // TODO: remove when no longer needed
     overwrite_stake_for_testing: bool = false,
+};
+
+pub const Geyser = struct {
+    enable: bool = false,
+    pipe_path: []const u8 = sig.VALIDATOR_DIR ++ "geyser.pipe",
+    writer_fba_bytes: usize = 1 << 32, // 4gb
 };
 
 /// The command-line arguments that are used to configure the shred network. The

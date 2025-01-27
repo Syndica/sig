@@ -30,7 +30,7 @@ const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
 const spawnMetrics = sig.prometheus.spawnMetrics;
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
-const createGeyserWriterFromConfig = sig.geyser.core.createGeyserWriterFromConfig;
+const createGeyserWriter = sig.geyser.core.createGeyserWriter;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = if (builtin.mode == .Debug)
@@ -776,19 +776,19 @@ fn validator() !void {
         allocator.destroy(gossip_service);
     }
 
-    const geyser_writer: ?*GeyserWriter = createGeyserWriterFromConfig(
-        allocator,
-        current_config.geyser,
-    ) catch |err| switch (err) {
-        error.GeyserWriterIsDisabled => null,
-        else => return err,
+    const geyser_writer: ?*GeyserWriter = if (!current_config.geyser.enable)
+        null
+    else
+        try createGeyserWriter(
+            allocator,
+            current_config.geyser.pipe_path,
+            current_config.geyser.writer_fba_bytes,
+        );
+    defer if (geyser_writer) |geyser| {
+        geyser.deinit();
+        allocator.destroy(geyser.exit);
+        allocator.destroy(geyser);
     };
-    defer {
-        if (geyser_writer) |geyser| {
-            geyser.deinit();
-            allocator.destroy(geyser.exit);
-        }
-    }
 
     // snapshot
     var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
@@ -1132,19 +1132,19 @@ fn validateSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const geyser_writer: ?*GeyserWriter = createGeyserWriterFromConfig(
-        allocator,
-        current_config.geyser,
-    ) catch |err| switch (err) {
-        error.GeyserWriterIsDisabled => null,
-        else => return err,
+    const geyser_writer: ?*GeyserWriter = if (!current_config.geyser.enable)
+        null
+    else
+        try createGeyserWriter(
+            allocator,
+            current_config.geyser.pipe_path,
+            current_config.geyser.writer_fba_bytes,
+        );
+    defer if (geyser_writer) |geyser| {
+        geyser.deinit();
+        allocator.destroy(geyser.exit);
+        allocator.destroy(geyser);
     };
-    defer {
-        if (geyser_writer) |geyser| {
-            geyser.deinit();
-            allocator.destroy(geyser.exit);
-        }
-    }
 
     var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = null,
