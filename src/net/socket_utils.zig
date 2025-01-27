@@ -20,7 +20,7 @@ const LOG_SCOPE: []const u8 = "socket_utils";
 
 pub const SocketThread = struct {
     node: List.Node,
-    
+
     const Direction = enum { sender, receiver };
     const List = std.DoublyLinkedList(Data);
     const Data = struct {
@@ -31,6 +31,7 @@ pub const SocketThread = struct {
         exit: ExitCondition,
         direction: Direction,
         packet: ?Packet = null,
+        io_pending: bool = false,
         closed: std.Thread.ResetEvent = .{},
     };
 
@@ -108,7 +109,7 @@ pub const SocketThread = struct {
         fn afterSend(_: *Channel(Packet).SendHook, _: *Channel(Packet)) void {
             IoThread.notify();
         }
-        
+
         fn push(node: *List.Node) !void {
             if (ref_count.fetchAdd(2, .acquire) == 0) {
                 notify_fds = try std.posix.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
@@ -140,7 +141,7 @@ pub const SocketThread = struct {
                 const n = std.posix.write(notify_fds[1], &[_]u8{'a'}) catch |e| {
                     std.debug.panic("io thread notify signal failed: {}", .{e});
                 };
-                std.debug.assert(n == 1); 
+                std.debug.assert(n == 1);
             }
         }
 
@@ -149,46 +150,79 @@ pub const SocketThread = struct {
             defer while (active.pop()) |node| close(&node.data, error.Shutdown);
 
             var pfd = std.BoundedArray(std.posix.pollfd, 256){};
-            while (ref_count.load(.monotonic) != 1) {
+            var data = std.BoundedArray(?*Data, 256){};
+
+            var skipped_io_poll: usize = 0;
+            while (ref_count.load(.monotonic) != 1) { // run until shutdown.
                 pfd.len = 0;
+                data.len = 0;
+
+                // Always listen for IoThread notifications.
+                try data.append(null);
                 try pfd.append(.{
                     .fd = notify_fds[0],
                     .events = std.posix.POLL.IN,
                     .revents = 0,
                 });
 
+                // Take in new SocketThread nodes that were created/registered.
                 var pushed = register.swap(null, .acquire);
                 while (pushed) |node| {
                     pushed = node.next;
                     active.append(node);
                 }
 
+                // Poll all SocketThread nodes (ensures data.exit is checked frequently).
+                var ready: usize = 0;
                 var iter = active.first;
                 while (iter) |node| {
                     iter = node.next;
-                    poll(&node.data) catch |err| {
-                        active.remove(node);
-                        close(&node.data, err);
-                        continue;
-                    };
-                    try pfd.append(.{
-                        .fd = node.data.socket.internal,
-                        .events = switch (node.data.direction) {
-                            .sender => std.posix.POLL.OUT,
-                            .receiver => std.posix.POLL.IN,
+                    poll(&node.data) catch |e| switch (e) {
+                        error.WouldBlock => {
+                            node.data.io_pending = true;
+                            try data.append(&node.data);
+                            try pfd.append(.{
+                                .fd = node.data.socket.internal,
+                                .events = switch (node.data.direction) {
+                                    .sender => std.posix.POLL.OUT,
+                                    .receiver => std.posix.POLL.IN,
+                                },
+                                .revents = 0,
+                            });
                         },
-                        .revents = 0,
-                    });
+                        error.RePoll => {
+                            ready += 1;
+                        },
+                        else => |err| {
+                            active.remove(node);
+                            close(&node.data, err);
+                        },
+                    };
                 }
 
-                const ready = try std.posix.poll(pfd.slice(), 1_000);
-                if (ready > 0) {
-                    for (pfd.slice()) |p| {
-                        if (p.revents != 0 and p.fd == notify_fds[0]) {
-                            var buf = [_]u8{0};
-                            const n = try std.posix.read(p.fd, &buf);
-                            std.debug.assert(n == 1);
-                            std.debug.assert(notified.swap(false, .acquire));
+                // Skip polling for IO if there's nodes that are still ready to poll again.
+                // But make sure not to skip IO polling for too long to avoid starvation.
+                if (ready > 0 and skipped_io_poll < 128) {
+                    skipped_io_poll += 1;
+                    continue;
+                }
+
+                const timeout_ms: i32 = if (ready > 0) 0 else 1_000; // if ready, non-blocking poll.
+                const io_ready = try std.posix.poll(pfd.slice(), timeout_ms);
+                skipped_io_poll = 0;
+
+                if (io_ready > 0) {
+                    for (pfd.slice(), data.slice()) |p, maybe_data| {
+                        if (p.revents > 0) { // pollfd is ready
+                            if (maybe_data) |d| {
+                                std.debug.assert(d.io_pending);
+                                d.io_pending = false;
+                            } else { // IoThread was notified, consume it.
+                                var buf = [_]u8{0};
+                                const n = try std.posix.read(p.fd, &buf);
+                                std.debug.assert(n == 1);
+                                std.debug.assert(notified.swap(false, .acquire));
+                            }
                         }
                     }
                 }
@@ -197,28 +231,29 @@ pub const SocketThread = struct {
 
         fn poll(data: *Data) !void {
             if (data.exit.shouldExit()) return error.Exit;
+            if (data.io_pending) return error.WouldBlock;
 
             const logger = data.logger.withScope(LOG_SCOPE);
             switch (data.direction) {
-                .sender => while (true) {
+                .sender => {
                     const p = data.packet orelse data.channel.tryReceive() orelse return;
                     data.packet = p;
                     const b = data.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| switch (e) {
-                        error.WouldBlock => return,
+                        error.WouldBlock => return error.WouldBlock,
                         else => {
                             logger.err().logf("send socket error: {}", .{e});
                             data.packet = null;
-                            continue;
-                        }
+                            return error.RePoll; // on send failure, process another packet.
+                        },
                     };
                     std.debug.assert(b == p.size);
                     data.packet = null;
-                    return;
+                    return error.RePoll; // send success, process another packet.
                 },
                 .receiver => {
                     data.packet = data.packet orelse Packet.default();
                     const r = data.socket.receiveFrom(&data.packet.?.data) catch |e| switch (e) {
-                        error.WouldBlock => return,
+                        error.WouldBlock => return error.WouldBlock,
                         else => {
                             logger.err().logf("recv socket error: {}\n", .{e});
                             return e;
@@ -228,6 +263,7 @@ pub const SocketThread = struct {
                     data.packet.?.addr = r.sender;
                     data.packet.?.size = r.numberOfBytes;
                     try data.channel.send(data.packet.?);
+                    return error.RePoll; // recv'd packet sent, receive another.
                 },
             }
         }
@@ -237,9 +273,9 @@ pub const SocketThread = struct {
             if (data.direction == .sender) {
                 while (data.channel.tryReceive()) |_| {}
             }
-            
+
             const logger = data.logger.withScope(LOG_SCOPE);
-            logger.debug().logf("{s} socket loop closed: {}", .{@tagName(data.direction), err});
+            logger.debug().logf("{s} socket loop closed: {}", .{ @tagName(data.direction), err });
             data.exit.afterExit();
             data.closed.set();
         }
