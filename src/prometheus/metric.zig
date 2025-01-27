@@ -32,7 +32,7 @@ pub const Metric = struct {
 
     getResultFn: *const fn (self: *Metric, allocator: mem.Allocator) Error!Result,
 
-    pub fn write(self: *Metric, allocator: mem.Allocator, writer: anytype, name: []const u8) Error!void {
+    pub fn write(self: *Metric, allocator: mem.Allocator, writer: anytype, name: []const u8) (@TypeOf(writer).Error || Error)!void {
         const result = try self.getResultFn(self, allocator);
         defer result.deinit(allocator);
 

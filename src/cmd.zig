@@ -1304,8 +1304,6 @@ const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     closed: bool,
 
-    const Self = @This();
-
     fn init(allocator: std.mem.Allocator) !AppBase {
         const logger = (try spawnLogger(allocator)).withScope(LOG_SCOPE);
         errdefer logger.deinit();
