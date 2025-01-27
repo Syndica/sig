@@ -470,20 +470,18 @@ const FrameManager = struct {
                     .file_offset = file_offset,
                 };
 
-                if (frame_map.get(key)) |frame_idx| f_idx.* = frame_idx;
+                if (frame_map.get(key)) |frame_idx| f_idx.* = frame_idx; // cache hit
             }
         }
 
-        for (frame_indices) |f_idx| {
-            if (f_idx == INVALID_FRAME) continue;
-            self.reuse(f_idx);
-        }
+        self.reuseValidFrames(frame_indices);
 
         return frame_indices;
     }
 
     /// Frames with an associated rc of 0 are up for eviction, and which frames
     /// are evicted first is up to the LFU.
+    /// Called on a cache miss.
     fn getUnused(self: *FrameManager, frames: []Frame) FrameIndex {
         const prev_free_idx = self.free_idx.fetchAdd(1, .monotonic);
         if (prev_free_idx < self.metadata.rc.len) return @intCast(prev_free_idx);
@@ -523,27 +521,63 @@ const FrameManager = struct {
         return evicted;
     }
 
-    /// Used upon a valid frame. Frame's rc may be alive or dead.
-    fn reuse(self: *FrameManager, f_idx: FrameIndex) void {
-        self.insertLfu(f_idx);
+    /// Ignores invalid frames. Frame's rc may be alive or dead. Locks eviction_lfu if there are
+    /// cache hits.
+    fn reuseValidFrames(self: *FrameManager, frame_indeces: []FrameIndex) void {
+        var any_cache_hits = false;
 
-        if (!self.metadata.rc[f_idx].acquire()) {
-            // frame has no handles, but memory is still valid
-            self.metadata.rc[f_idx].reset();
+        for (frame_indeces) |f_idx| {
+            if (f_idx == INVALID_FRAME) continue; // ignore cache misses
+            any_cache_hits = true;
+            if (!self.metadata.rc[f_idx].acquire()) {
+                // frame has no handles, but memory is still valid
+                self.metadata.rc[f_idx].reset();
+            }
+        }
+
+        if (any_cache_hits) {
+            const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+            defer eviction_lfu_lg.unlock();
+
+            for (frame_indeces) |f_idx| {
+                if (f_idx == INVALID_FRAME) continue; // ignore cache misses
+                eviction_lfu.insert(self.metadata, f_idx) catch |err| switch (err) {
+                    error.InvalidKey => std.debug.panicExtra(
+                        null,
+                        @returnAddress(),
+                        "Attempted to use invalid key: {}\n",
+                        .{f_idx},
+                    ),
+                };
+            }
         }
     }
 
-    /// Must be used on an alive frame.
-    fn reuseAlive(self: *FrameManager, f_idx: FrameIndex) void {
-        self.insertLfu(f_idx);
+    /// Must be used on alive frames.
+    fn reuseAliveFrames(self: *FrameManager, frame_indeces: []FrameIndex) void {
+        for (frame_indeces) |f_idx| {
+            if (!self.metadata.rc[f_idx].acquire()) {
+                std.debug.panicExtra(
+                    null,
+                    @returnAddress(),
+                    "attempted to reuse dead frame: {}",
+                    .{f_idx},
+                );
+            }
+        }
 
-        if (!self.metadata.rc[f_idx].acquire()) {
-            std.debug.panicExtra(
-                null,
-                @returnAddress(),
-                "attempted to reuse dead frame: {}",
-                .{f_idx},
-            );
+        const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+        defer eviction_lfu_lg.unlock();
+
+        for (frame_indeces) |f_idx| {
+            eviction_lfu.insert(self.metadata, f_idx) catch |err| switch (err) {
+                error.InvalidKey => std.debug.panicExtra(
+                    null,
+                    @returnAddress(),
+                    "Attempted to use invalid key: {}\n",
+                    .{f_idx},
+                ),
+            };
         }
     }
 
@@ -662,6 +696,7 @@ const FrameMetadata = struct {
     freq: []u2,
 
     /// which HierarchicalFIFO queue this frame exists in
+    /// thread safety: is always read/written while the lock to Hierarchical Fifo is held
     in_queue: []std.atomic.Value(InQueue),
 
     /// 0..=512
@@ -1104,9 +1139,7 @@ pub const ReadHandle = union(enum) {
         switch (self) {
             .cached => |*cached| {
                 const indices = try allocator.dupe(FrameIndex, cached.frame_indices);
-                for (indices) |f_idx| {
-                    cached.buffer_pool.manager.reuseAlive(f_idx);
-                }
+                cached.buffer_pool.manager.reuseAliveFrames(indices);
                 return ReadHandle.initCached(
                     cached.buffer_pool,
                     indices,
