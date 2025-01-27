@@ -2,7 +2,7 @@ const builtin = @import("builtin");
 const cli = @import("zig-cli");
 const sig = @import("sig.zig");
 const std = @import("std");
-const Config = @import("cmd/config.zig").Config;
+const config = @import("cmd/config.zig");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
@@ -50,7 +50,7 @@ else
 const LOG_SCOPE = "cmd";
 const ScopedLogger = sig.trace.ScopedLogger(LOG_SCOPE);
 
-var current_config: Config = .{};
+var current_config: config.Cmd = .{};
 
 // We set this so that std.log knows not to log .debug level messages
 // which libraries we import will use
@@ -897,6 +897,8 @@ fn validator() !void {
         .{ &rpc_epoch_ctx_service, &app_base.exit },
     );
 
+    const turbine_config = current_config.turbine;
+
     // shred network
     var shred_network_manager = try sig.shred_network.start(
         current_config.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
@@ -912,8 +914,8 @@ fn validator() !void {
             .epoch_context_mgr = &epoch_context_manager,
             .shred_inserter = shred_inserter,
             .my_contact_info = my_contact_info,
-            .n_retransmit_threads = current_config.turbine.num_retransmit_threads,
-            .overwrite_turbine_stake_for_testing = current_config.turbine.overwrite_stake_for_testing,
+            .n_retransmit_threads = turbine_config.num_retransmit_threads,
+            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
         },
     );
     defer shred_network_manager.deinit();
