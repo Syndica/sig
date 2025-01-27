@@ -23,8 +23,6 @@ pub fn getShredAndIPFromEchoServer(
     for (socket_addresses) |socket_addr| {
         const response = requestIpEcho(socket_addr.toAddress(), .{}) catch continue;
         my_ip = my_ip orelse response.address;
-        if (my_ip == null)
-            my_ip = response.address;
 
         if (response.shred_version) |shred_version| {
             logger.info()
