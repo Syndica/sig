@@ -144,7 +144,7 @@ pub const BufferPool = struct {
         self.manager.deinit(allocator);
     }
 
-    fn readBlocking(
+    noinline fn readBlocking(
         self: *BufferPool,
         /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
@@ -164,13 +164,20 @@ pub const BufferPool = struct {
         errdefer allocator.free(frame_indices);
 
         errdefer {
+
+            // TODO: replace evicted frames back into lfu
+            // (put that thing back where it came from or so help me)
+        }
+
+        errdefer {
             // read failed, rollback rcs
-            for (frame_indices) |alive_frame_idx| {
-                self.deinitFrame(alive_frame_idx);
+            for (frame_indices) |masked_frame_idx| {
+                const unmasked_f_idx = masked_frame_idx >> 1;
+                self.deinitFrame(unmasked_f_idx);
             }
         }
 
-        var total_bytes_read: u32 = 0;
+        var did_perform_reads = false;
 
         for (0.., frame_indices) |i, masked_f_idx| {
             const must_read = masked_f_idx & 1 > 0;
@@ -183,15 +190,18 @@ pub const BufferPool = struct {
             const unmasked_f_idx = masked_f_idx >> 1;
             const bytes_read = try file.preadAll(&self.frames[unmasked_f_idx], frame_aligned_file_offset);
             std.debug.assert(bytes_read <= FRAME_SIZE);
-            total_bytes_read += @intCast(bytes_read);
+            did_perform_reads = true;
         }
 
         self.manager.insertNewlyWritten(
             file_offset_start,
             frame_indices,
             file_id,
-            total_bytes_read > 0,
+            did_perform_reads,
         );
+
+        // We can't error after this point - the errdefer above expects masked frame indeces.
+        errdefer comptime unreachable;
 
         for (frame_indices) |*f_idx| {
             const unmasked_f_idx = f_idx.* >> 1;
@@ -206,7 +216,7 @@ pub const BufferPool = struct {
         );
     }
 
-    pub fn read(
+    pub noinline fn read(
         self: *BufferPool,
         /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
@@ -386,11 +396,6 @@ pub const BufferPool = struct {
 
 /// Keeps track of all of the data and lifetimes associated with frames.
 const FrameManager = struct {
-    /// This field allows you to quickly get the first unused frames after initialisation. Once its
-    /// value exceeds num_frames - 1, this means there are no more never-used frames (and we will
-    /// start evicting from the lfu)
-    free_idx: std.atomic.Value(u64),
-
     /// Uniquely identifies a frame from its file_id and offset.
     /// Used for looking up valid frames.
     /// TODO: Using a concurrent hashmap may be a large performance improvement.
@@ -405,14 +410,15 @@ const FrameManager = struct {
     pub const Map = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
 
     pub fn init(allocator: std.mem.Allocator, num_frames: u32) error{OutOfMemory}!FrameManager {
+        std.debug.assert(num_frames > 0);
+
         var frame_map: Map = .{};
         try frame_map.ensureTotalCapacity(allocator, num_frames * 2);
         errdefer frame_map.deinit(allocator);
-        const frame_map_rw = sig.sync.RwMux(Map).init(frame_map);
 
         var eviction_lfu = HierarchicalFIFO.init(
             allocator,
-            num_frames / 10,
+            @max(num_frames / 10, 1),
             num_frames,
         ) catch |err| switch (err) {
             error.InvalidArgument => unreachable,
@@ -420,13 +426,26 @@ const FrameManager = struct {
         };
         errdefer eviction_lfu.deinit(allocator);
 
+        for (0..num_frames) |i| {
+            const f_idx: FrameIndex = @intCast(i);
+            // initially populate so that we can start evicting
+            eviction_lfu.insert(f_idx) catch unreachable;
+
+            const bad_key = FileIdFileOffset{
+                .file_id = FileId.fromInt(std.math.maxInt(u32)),
+                .file_offset = f_idx * 2 + 1, // always odd => always invalid
+            };
+
+            frame_map.putAssumeCapacityNoClobber(bad_key, f_idx);
+            eviction_lfu.key[f_idx] = bad_key;
+        }
+
         const rc = try allocator.alloc(sig.sync.ReferenceCounter, num_frames);
         errdefer allocator.free(rc);
         @memset(rc, .{ .state = .{ .raw = 0 } });
 
         return .{
-            .free_idx = std.atomic.Value(u64).init(0),
-            .frame_map_rw = frame_map_rw,
+            .frame_map_rw = sig.sync.RwMux(Map).init(frame_map),
             .eviction_lfu = sig.sync.RwMux(HierarchicalFIFO).init(eviction_lfu),
             .rc = rc,
         };
@@ -458,7 +477,7 @@ const FrameManager = struct {
         return @intCast(self.rc.len);
     }
 
-    pub fn getAllIndices(
+    noinline fn getAllIndices(
         self: *FrameManager,
         allocator: std.mem.Allocator,
         file_id: FileId,
@@ -533,35 +552,23 @@ const FrameManager = struct {
                 } else {
                     // cache miss, get new unused index, read required
 
-                    // Immediately "evict" free_idx until we can't anymore.
-                    // We only go through free_idx once.
-                    const prev_free_idx = self.free_idx.fetchAdd(1, .monotonic);
-                    if (prev_free_idx < self.numFrames()) {
-                        // Not a real eviction.
+                    const evicted = eviction_lfu.evict(self.rc);
+                    const evicted_key = eviction_lfu.key[evicted];
 
-                        // frame has no handles, but memory is still valid
-                        if (!self.rc[prev_free_idx].acquire()) self.rc[prev_free_idx].reset();
+                    if (!frame_map.remove(evicted_key))
+                        std.debug.panic(
+                            "failed to remove evicted key {} from map",
+                            .{evicted_key},
+                        );
 
-                        // reserve bit, mark it as do-file-read
-                        f_idx.* = @shlExact(@as(u32, @intCast(prev_free_idx)), 1) | 1;
-                    } else {
-                        // Real eviction taking place.
+                    // frame has no handles, but memory is still valid
+                    if (!self.rc[evicted].acquire()) self.rc[evicted].reset();
 
-                        const evicted = eviction_lfu.evict(self.rc);
-                        const evicted_key = eviction_lfu.key[evicted];
+                    // not actually necessary, but makes issues more visible
+                    eviction_lfu.key[evicted].file_id = FileId.fromInt(std.math.maxInt(u32));
 
-                        if (!frame_map.remove(evicted_key))
-                            @panic("failed to remove evicted key from map");
-
-                        // frame has no handles, but memory is still valid
-                        if (!self.rc[evicted].acquire()) self.rc[evicted].reset();
-
-                        // not actually necessary, but makes issues more visible
-                        eviction_lfu.key[evicted] = FileIdFileOffset.INVALID;
-
-                        // reserve bit, mark it as do-file-read
-                        f_idx.* = @shlExact(evicted, 1) | 1;
-                    }
+                    // reserve bit, mark it as do-file-read
+                    f_idx.* = @shlExact(evicted, 1) | 1;
                 }
             }
         }
@@ -569,42 +576,51 @@ const FrameManager = struct {
         return frame_indices;
     }
 
-    pub fn insertNewlyWritten(
+    noinline fn insertNewlyWritten(
         self: *FrameManager,
         file_offset_start: FileOffset,
         frame_indices: []const FrameIndex,
         file_id: FileId,
         read_bytes: bool,
     ) void {
-        _ = read_bytes;
+        if (!read_bytes) {
+            const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+            defer eviction_lfu_lg.unlock();
 
-        const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
-        defer frame_map_lg.unlock();
+            for (frame_indices) |masked_f_idx| {
+                const unmasked_f_idx = masked_f_idx >> 1;
+                eviction_lfu.insert(unmasked_f_idx) catch unreachable;
+            }
+        } else {
+            const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
+            defer frame_map_lg.unlock();
 
-        const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
-        defer eviction_lfu_lg.unlock();
+            const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+            defer eviction_lfu_lg.unlock();
 
-        for (0.., frame_indices) |i, masked_f_idx| {
-            const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
-                (file_offset_start - file_offset_start % FRAME_SIZE));
-            std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
+            for (0.., frame_indices) |i, masked_f_idx| {
+                const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
+                    (file_offset_start - file_offset_start % FRAME_SIZE));
+                std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
 
-            const must_read = masked_f_idx & 1 > 0;
+                const must_read = masked_f_idx & 1 > 0;
 
-            // remove read/write bit flag
-            const unmasked_f_idx = masked_f_idx >> 1;
+                const unmasked_f_idx = masked_f_idx >> 1;
+                eviction_lfu.insert(unmasked_f_idx) catch unreachable;
 
-            eviction_lfu.insert(unmasked_f_idx) catch unreachable;
+                if (!must_read) continue;
 
-            if (!must_read) continue;
+                const map_key = .{
+                    .file_id = file_id,
+                    .file_offset = frame_aligned_file_offset,
+                };
 
-            const map_key = .{
-                .file_id = file_id,
-                .file_offset = frame_aligned_file_offset,
-            };
+                std.debug.assert(frame_map.available > 0);
+                std.debug.assert(frame_map.get(map_key) == null);
 
-            frame_map.putAssumeCapacityNoClobber(map_key, unmasked_f_idx);
-            eviction_lfu.key[unmasked_f_idx] = map_key;
+                frame_map.putAssumeCapacityNoClobber(map_key, unmasked_f_idx);
+                eviction_lfu.key[unmasked_f_idx] = map_key;
+            }
         }
     }
 
@@ -838,7 +854,8 @@ const FrameManager = struct {
 ///    eviction when no free frames can be made available is illegal behaviour.
 pub const HierarchicalFIFO = struct {
     pub const Key = FrameIndex;
-    pub const Fifo = AtomicLinearFifo(FrameIndex);
+    pub const Fifo = std.fifo.LinearFifo(FrameIndex, .Slice);
+
     pub const InQueue = enum(u8) { none, small, main, ghost }; // u8 required for extern usage
 
     small: Fifo,
@@ -914,7 +931,7 @@ pub const HierarchicalFIFO = struct {
         self: *HierarchicalFIFO,
         key: Key,
     ) error{InvalidKey}!void {
-        if (key == INVALID_FRAME) return error.InvalidKey;
+        if (key == INVALID_FRAME) return error.InvalidKey; // never happened, remove
 
         switch (self.in_queue[key]) {
             .main, .small => {
@@ -929,7 +946,7 @@ pub const HierarchicalFIFO = struct {
                 self.in_queue[key] = .main;
             },
             .none => {
-                if (self.small.writableLengthIsZero()) {
+                if (self.small.writableLength() == 0) {
                     const popped_small = self.small.readItem().?;
 
                     if (self.freq[popped_small] == 0) {
@@ -1052,6 +1069,7 @@ pub const HierarchicalFIFO = struct {
 pub const ReadHandle = union(enum) {
     /// Data owned by BufferPool, returned by .read() - do not construct this yourself (!)
     cached: CachedRead,
+
     /// Data allocated elsewhere, not owned or created by BufferPool.
     owned_allocation: []const u8,
     /// Data allocated elsewhere, not owned or created by BufferPool.
