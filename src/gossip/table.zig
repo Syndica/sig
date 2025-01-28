@@ -8,8 +8,10 @@ const AutoHashMap = std.AutoHashMap;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const GossipTableShards = sig.gossip.shards.GossipTableShards;
+const GossipMap = sig.gossip.map.GossipMap;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipData = sig.gossip.data.GossipData;
+const GossipDataTag = sig.gossip.data.GossipDataTag;
 const GossipVersionedData = sig.gossip.data.GossipVersionedData;
 const GossipKey = sig.gossip.data.GossipKey;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
@@ -46,7 +48,8 @@ pub fn AutoArrayHashSet(comptime T: type) type {
 ///
 /// Analogous to [Crds](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L68)
 pub const GossipTable = struct {
-    store: AutoArrayHashMap(GossipKey, GossipVersionedData),
+    // store: AutoArrayHashMap(GossipKey, GossipVersionedData),
+    store: GossipMap,
 
     // special types tracked with their index
     contact_infos: AutoArrayHashSet(usize),
@@ -63,7 +66,7 @@ pub const GossipTable = struct {
     entries: AutoArrayHashMap(u64, usize),
 
     // Indices of all gossip values associated with a node/pubkey.
-    pubkey_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)),
+    pubkey_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(struct { GossipDataTag, usize })),
 
     // used to build pull responses efficiently
     shards: GossipTableShards,
@@ -72,7 +75,7 @@ pub const GossipTable = struct {
     purged: HashTimeQueue,
 
     // head of the store
-    cursor: usize = 0,
+    cursor: usize = 0, // TODO remove
 
     // NOTE: this allocator is used to free any memory allocated by the bincode library
     allocator: std.mem.Allocator,
@@ -81,7 +84,7 @@ pub const GossipTable = struct {
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
-            .store = AutoArrayHashMap(GossipKey, GossipVersionedData).init(allocator),
+            .store = GossipMap.init(),
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
@@ -120,9 +123,9 @@ pub const GossipTable = struct {
 
         var store_iter = self.store.iterator();
         while (store_iter.next()) |entry| {
-            entry.value_ptr.value.data.deinit(self.allocator);
+            entry.gossipData().deinit(self.allocator);
         }
-        self.store.deinit();
+        self.store.deinit(self.allocator);
     }
 
     pub const InsertResult = union(enum) {
@@ -151,7 +154,7 @@ pub const GossipTable = struct {
         };
 
         const label = value.label();
-        const result = try self.store.getOrPut(label);
+        const result = try self.store.getOrPut(self.allocator, label);
         const entry_index = result.index;
         const origin = value.id();
 
@@ -200,7 +203,7 @@ pub const GossipTable = struct {
                 try self.pubkey_to_values.put(origin, indexs);
             }
 
-            result.value_ptr.* = versioned_value;
+            result.entry.write(versioned_value);
 
             self.cursor += 1;
 
@@ -208,76 +211,75 @@ pub const GossipTable = struct {
             return .InsertedNewEntry;
 
             // should overwrite existing entry
-        } else if (versioned_value.overwrites(result.value_ptr)) {
-            const old_entry = result.value_ptr.*;
-
-            switch (value.data) {
-                .ContactInfo => |*info| {
-                    try self.shred_versions.put(info.pubkey, info.shred_version);
-                },
-                .LegacyContactInfo => |*info| {
-                    try self.shred_versions.put(info.id, info.shred_version);
-                    const contact_info = try info.toContactInfo(self.allocator);
-                    var old_info = try self.converted_contact_infos.fetchPut(
-                        info.id,
-                        contact_info,
-                    );
-                    old_info.?.value.deinit();
-                },
-                .Vote => {
-                    const did_remove = self.votes.swapRemove(old_entry.cursor_on_insertion);
-                    std.debug.assert(did_remove);
-                    try self.votes.put(self.cursor, entry_index);
-                },
-                .EpochSlots => {
-                    const did_remove = self.epoch_slots.swapRemove(
-                        old_entry.cursor_on_insertion,
-                    );
-                    std.debug.assert(did_remove);
-                    try self.epoch_slots.put(self.cursor, entry_index);
-                },
-                .DuplicateShred => {
-                    const did_remove = self.duplicate_shreds.swapRemove(
-                        old_entry.cursor_on_insertion,
-                    );
-                    std.debug.assert(did_remove);
-                    try self.duplicate_shreds.put(self.cursor, entry_index);
-                },
-                else => {},
-            }
-
-            // remove and insert to make sure the shard ordering is oldest-to-newest
-            // NOTE: do we need the ordering to be oldest-to-newest?
-            self.shards.remove(entry_index, &old_entry.value_hash);
-            try self.shards.insert(entry_index, &versioned_value.value_hash);
-
-            const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
-            std.debug.assert(did_remove);
-            try self.entries.put(self.cursor, entry_index);
-
-            // As long as the pubkey does not change, self.records
-            // does not need to be updated.
-            std.debug.assert(old_entry.value.id().equals(&origin));
-
-            try self.purged.insert(old_entry.value_hash, now);
-
-            result.value_ptr.* = versioned_value;
-            self.cursor += 1;
-
-            // overwrite existing entry
-            return .{ .OverwroteExistingEntry = old_entry.value.data };
-
-            // do nothing
         } else {
-            const old_entry = result.value_ptr.*;
+            const old_entry = result.entry.value();
+            if (versioned_value.overwrites(&old_entry)) {
+                switch (value.data) {
+                    .ContactInfo => |*info| {
+                        try self.shred_versions.put(info.pubkey, info.shred_version);
+                    },
+                    .LegacyContactInfo => |*info| {
+                        try self.shred_versions.put(info.id, info.shred_version);
+                        const contact_info = try info.toContactInfo(self.allocator);
+                        var old_info = try self.converted_contact_infos.fetchPut(
+                            info.id,
+                            contact_info,
+                        );
+                        old_info.?.value.deinit();
+                    },
+                    .Vote => {
+                        const did_remove = self.votes.swapRemove(old_entry.cursor_on_insertion);
+                        std.debug.assert(did_remove);
+                        try self.votes.put(self.cursor, entry_index);
+                    },
+                    .EpochSlots => {
+                        const did_remove = self.epoch_slots.swapRemove(
+                            old_entry.cursor_on_insertion,
+                        );
+                        std.debug.assert(did_remove);
+                        try self.epoch_slots.put(self.cursor, entry_index);
+                    },
+                    .DuplicateShred => {
+                        const did_remove = self.duplicate_shreds.swapRemove(
+                            old_entry.cursor_on_insertion,
+                        );
+                        std.debug.assert(did_remove);
+                        try self.duplicate_shreds.put(self.cursor, entry_index);
+                    },
+                    else => {},
+                }
 
-            if (old_entry.value_hash.order(&versioned_value.value_hash) != .eq) {
-                // if hash isnt the same and override() is false then msg is old
+                // remove and insert to make sure the shard ordering is oldest-to-newest
+                // NOTE: do we need the ordering to be oldest-to-newest?
+                self.shards.remove(entry_index, &old_entry.value_hash);
+                try self.shards.insert(entry_index, &versioned_value.value_hash);
+
+                const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
+                std.debug.assert(did_remove);
+                try self.entries.put(self.cursor, entry_index);
+
+                // As long as the pubkey does not change, self.records
+                // does not need to be updated.
+                std.debug.assert(old_entry.value.id().equals(&origin));
+
                 try self.purged.insert(old_entry.value_hash, now);
-                return .IgnoredOldValue;
+
+                result.entry.write(versioned_value);
+                self.cursor += 1;
+
+                // overwrite existing entry
+                return .{ .OverwroteExistingEntry = old_entry.value.data };
+
+                // do nothing
             } else {
-                // hash is the same then its a duplicate value which isnt stored
-                return .IgnoredDuplicateValue;
+                if (old_entry.value_hash.order(&versioned_value.value_hash) != .eq) {
+                    // if hash isnt the same and override() is false then msg is old
+                    try self.purged.insert(old_entry.value_hash, now);
+                    return .IgnoredOldValue;
+                } else {
+                    // hash is the same then its a duplicate value which isnt stored
+                    return .IgnoredDuplicateValue;
+                }
             }
         }
     }
@@ -339,7 +341,7 @@ pub const GossipTable = struct {
         // used when purging old values.
         inline for (labels) |contact_info_label| {
             if (self.store.getEntry(contact_info_label)) |entry| {
-                entry.value_ptr.timestamp_on_insertion = now;
+                entry.setTimestamp(now);
                 updated_contact_info = true;
             }
         }
@@ -508,36 +510,69 @@ pub const GossipTable = struct {
         minimum_insertion_timestamp: u64,
     ) ContactInfoIterator {
         return .{
-            .values = self.store.values(),
+            .values = .{
+                self.store.maps.ContactInfo.values(),
+                self.store.maps.LegacyContactInfo.values(),
+            },
+            // .values = self.store.values(),
             .converted_contact_infos = &self.converted_contact_infos,
-            .indices = self.contact_infos.iterator().keys,
-            .count = self.contact_infos.count(),
+            // .indices = self.contact_infos.iterator().keys,
+            // .count = self.contact_infos.count(),
             .minimum_insertion_timestamp = minimum_insertion_timestamp,
         };
     }
 
     pub const ContactInfoIterator = struct {
-        values: []const GossipVersionedData,
-        converted_contact_infos: *const AutoArrayHashMap(Pubkey, ContactInfo),
-        indices: [*]usize,
-        count: usize,
-        minimum_insertion_timestamp: u64,
-        index_cursor: usize = 0,
+        values: struct {
+            []const GossipMap.Value(.ContactInfo),
+            []const GossipMap.Value(.LegacyContactInfo),
+        },
 
-        pub fn next(self: *@This()) ?*const ContactInfo {
-            while (self.index_cursor < self.count) {
-                const index = self.indices[self.index_cursor];
-                self.index_cursor += 1;
-                const value = &self.values[index];
-                if (value.timestamp_on_insertion >= self.minimum_insertion_timestamp) {
-                    return switch (value.value.data) {
-                        .LegacyContactInfo => |*lci| self.converted_contact_infos.getPtr(lci.id).?,
-                        .ContactInfo => |*ci| ci,
-                        else => unreachable,
-                    };
+        // values: []const GossipVersionedData,
+        converted_contact_infos: *const AutoArrayHashMap(Pubkey, ContactInfo),
+        // indices: [*]usize,
+        cursor: struct { usize, usize } = .{ 0, 0 },
+        // count: usize,
+        minimum_insertion_timestamp: u64,
+        // index_cursor: usize = 0,
+
+        pub fn next(self: *ContactInfoIterator) ?*const ContactInfo {
+            while (true) {
+                const slice_index, const index = self.cursor;
+                if (slice_index > 1) return null;
+
+                switch (slice_index) {
+                    inline 0, 1 => |comptime_slice_index| {
+                        const slice = self.values[comptime_slice_index];
+                        if (index >= slice.len) {
+                            self.cursor[0] += 1;
+                            continue;
+                        }
+                        const value = &slice[index];
+                        self.cursor[1] += 1;
+                        if (value.timestamp_on_insertion >= self.minimum_insertion_timestamp) {
+                            return self.toContactInfo(&value.data);
+                        } else {
+                            return null;
+                        }
+                    },
+                    else => unreachable,
                 }
             }
-            return null;
+        }
+
+        fn toContactInfo(self: *const ContactInfoIterator, info: anytype) *const ContactInfo {
+            return if (@TypeOf(info) == *const ContactInfo)
+                info
+            else
+                self.converted_contact_infos.getPtr(info.id).?;
+        }
+
+        fn toThreadSafe(_: *const ContactInfoIterator, info: anytype) ContactInfo {
+            return if (@TypeOf(info) == ContactInfo)
+                ThreadSafeContactInfo.fromContactInfo(info.*)
+            else
+                ThreadSafeContactInfo.fromLegacyContactInfo(info.*);
         }
 
         pub fn nextThreadSafe(self: *@This()) ?ThreadSafeContactInfo {
@@ -740,7 +775,7 @@ pub const GossipTable = struct {
             const entry_indexs = self.pubkey_to_values.getEntry(pubkey).?.value_ptr;
             const count = entry_indexs.count();
             for (entry_indexs.keys()[0..count]) |entry_index| {
-                try labels_to_remove.append(labels[entry_index]);
+                try labels_to_remove.append(labels[entry_index]); // keyByIndex
             }
         }
 

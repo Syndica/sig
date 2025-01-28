@@ -176,7 +176,7 @@ pub const GossipKey = union(GossipDataTag) {
     RestartHeaviestFork: Pubkey,
 };
 
-const GossipDataTag = enum(u32) {
+pub const GossipDataTag = enum(u32) {
     LegacyContactInfo,
     Vote,
     LowestSlot,
@@ -191,7 +191,69 @@ const GossipDataTag = enum(u32) {
     ContactInfo,
     RestartLastVotedForkSlots,
     RestartHeaviestFork,
+
+    pub fn Key(self: GossipDataTag) type {
+        return switch (self) {
+            .LegacyContactInfo => Pubkey,
+            .Vote => struct { u8, Pubkey },
+            .LowestSlot => Pubkey,
+            .LegacySnapshotHashes => Pubkey,
+            .AccountsHashes => Pubkey,
+            .EpochSlots => struct { u8, Pubkey },
+            .LegacyVersion => Pubkey,
+            .Version => Pubkey,
+            .NodeInstance => Pubkey,
+            .DuplicateShred => struct { u16, Pubkey },
+            .SnapshotHashes => Pubkey,
+            .ContactInfo => Pubkey,
+            .RestartLastVotedForkSlots => Pubkey,
+            .RestartHeaviestFork => Pubkey,
+        };
+    }
+
+    pub fn Value(self: GossipDataTag) type {
+        return switch (self) {
+            .LegacyContactInfo => LegacyContactInfo,
+            .Vote => struct { u8, Vote },
+            .LowestSlot => struct { u8, LowestSlot },
+            .LegacySnapshotHashes => LegacySnapshotHashes,
+            .AccountsHashes => AccountsHashes,
+            .EpochSlots => struct { u8, EpochSlots },
+            .LegacyVersion => LegacyVersion,
+            .Version => Version,
+            .NodeInstance => NodeInstance,
+            .DuplicateShred => struct { u16, DuplicateShred },
+            .SnapshotHashes => SnapshotHashes,
+            .ContactInfo => ContactInfo,
+            .RestartLastVotedForkSlots => RestartLastVotedForkSlots,
+            .RestartHeaviestFork => RestartHeaviestFork,
+        };
+    }
 };
+
+test "drewprint" {
+    const types: []const type = &.{
+        GossipVersionedData,
+        LegacyContactInfo,
+        Vote,
+        LowestSlot,
+        LegacySnapshotHashes,
+        AccountsHashes,
+        EpochSlots,
+        LegacyVersion,
+        Version,
+        NodeInstance,
+        DuplicateShred,
+        SnapshotHashes,
+        ContactInfo,
+        RestartLastVotedForkSlots,
+        RestartHeaviestFork,
+        SocketAddr,
+    };
+    inline for (types) |T| {
+        std.debug.print("{s}: {}\n", .{ @typeName(T), @sizeOf(T) });
+    }
+}
 
 /// Analogous to [CrdsData](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L85)
 pub const GossipData = union(GossipDataTag) {
