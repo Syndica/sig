@@ -186,7 +186,12 @@ pub const BufferPool = struct {
             total_bytes_read += @intCast(bytes_read);
         }
 
-        self.manager.insertNewlyWritten(file_offset_start, frame_indices, file_id);
+        self.manager.insertNewlyWritten(
+            file_offset_start,
+            frame_indices,
+            file_id,
+            total_bytes_read > 0,
+        );
 
         for (frame_indices) |*f_idx| {
             const unmasked_f_idx = f_idx.* >> 1;
@@ -470,6 +475,7 @@ const FrameManager = struct {
         errdefer allocator.free(frame_indices);
         @memset(frame_indices, INVALID_FRAME);
 
+        var missed_a_frame: bool = false;
         // lookup frame mappings
         {
             const frame_map, var frame_map_lg = self.frame_map_rw.readWithLock();
@@ -487,11 +493,23 @@ const FrameManager = struct {
 
                 if (frame_map.get(key)) |frame_idx| {
                     f_idx.* = frame_idx; // cache hit
+                } else {
+                    missed_a_frame = true;
                 }
             }
         }
 
-        {
+        if (!missed_a_frame) {
+            // No cache misses, don't use locks we don't need
+            for (frame_indices) |*f_idx| {
+                std.debug.assert(f_idx.* != INVALID_FRAME);
+                // frame has no handles, but memory is still valid
+                if (!self.rc[f_idx.*].acquire()) self.rc[f_idx.*].reset();
+
+                // reserve bit, mark as don't-file-read
+                f_idx.* = @shlExact(f_idx.*, 1) | 0;
+            }
+        } else {
             const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
             defer frame_map_lg.unlock();
 
@@ -556,7 +574,10 @@ const FrameManager = struct {
         file_offset_start: FileOffset,
         frame_indices: []const FrameIndex,
         file_id: FileId,
+        read_bytes: bool,
     ) void {
+        _ = read_bytes;
+
         const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
         defer frame_map_lg.unlock();
 
