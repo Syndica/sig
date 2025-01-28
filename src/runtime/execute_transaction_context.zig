@@ -12,6 +12,10 @@ const ExecuteInstructionContext = sig.runtime.ExecuteInstructionContext;
 const InstructionError = sig.core.instruction.InstructionError;
 const LogCollector = sig.runtime.LogCollector;
 const Transaction = sig.core.Transaction;
+const SysvarCache = sig.runtime.SysvarCache;
+
+pub const MAX_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
+    sig.runtime.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
 pub const MAX_INSTRUCTION_TRACE_LENGTH: usize = 100;
@@ -20,11 +24,14 @@ pub const MAX_INSTRUCTION_TRACE_LENGTH: usize = 100;
 pub const MAX_INSTRUCTION_STACK_DEPTH: usize = 5;
 
 pub const ExecuteTransactionContext = struct {
-    accounts: std.BoundedArray(AccountInfo, Transaction.MAX_ACCOUNTS),
+    accounts: std.BoundedArray(RwMux(AccountInfo), Transaction.MAX_ACCOUNTS),
+
+    /// Total change to account data size within transaction
+    accounts_resize_delta: i64,
 
     /// Instruction compute meter, for tracking compute units consumed against
     /// the designated compute budget during program execution.
-    compute_meter: RwMux(u64),
+    compute_meter: u64,
 
     /// If an error other than an InstructionError occurs during execution its value will
     /// be set here and InstructionError.custom will be returned
@@ -33,43 +40,71 @@ pub const ExecuteTransactionContext = struct {
     /// Optional log collector
     maybe_log_collector: ?LogCollector,
 
-    const AccountInfo = struct {
-        pubkey: Pubkey,
-        data: RwMux(AccountSharedData),
+    // TODO: the following feilds should live above the transaction level, however, they are
+    // defined here temporarily for convenience.
+    sysvar_cache: SysvarCache,
+    lamports_per_signature: u64,
+    last_blockhash: Hash,
+
+    pub const AccountInfo = struct {
+        touched: bool,
+        account: AccountSharedData,
     };
 
-    pub fn consumeCompute(self: *ExecuteTransactionContext, compute: u64) InstructionError.ComputationalBudgetExceeded!void {
+    pub fn checkAccountsResizeDelta(
+        self: *const ExecuteTransactionContext,
+        delta: i64,
+    ) error{MaxAccountsDataAllocationsExceeded}!void {
+        if (self.accounts_resize_delta +| delta > MAX_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION)
+            return error.MaxAccountsDataAllocationsExceeded;
+    }
+
+    pub fn consumeCompute(
+        self: *ExecuteTransactionContext,
+        compute: u64,
+    ) error{ComputationalBudgetExceeded}!void {
         const compute_meter, const compute_meter_guard = self.compute_meter.writeWithLock();
         defer compute_meter_guard.unlock();
         const exceeded = compute_meter < compute;
         compute_meter.* -|= compute;
-        if (exceeded) return .ComputationalBudgetExceeded;
+        if (exceeded) return error.ComputationalBudgetExceeded;
     }
 
-    pub fn getBlockhash(self: *ExecuteTransactionContext) Hash {
-        // TODO: implement
-        _ = self;
-        return Hash.ZEROES;
+    pub fn getBlockhash(self: *const ExecuteTransactionContext) Hash {
+        return self.last_blockhash;
     }
 
-    pub fn getBorrowedAccount(self: *ExecuteTransactionContext, pubkey: Pubkey) ?BorrowedAccount {
-        for (self.accounts.buffer) |account| {
-            if (account.pubkey == pubkey) {
-                const data, const guard = account.data.writeWithLock();
-                return .{
-                    .pubkey = account.pubkey,
-                    .account = data,
-                    .account_write_guard = guard,
-                };
-            }
-        }
-        return null;
+    pub fn getBorrowedAccount(
+        self: *ExecuteTransactionContext,
+        eic: *const ExecuteInstructionContext,
+        eic_info: *const ExecuteInstructionContext.AccountInfo,
+    ) InstructionError!BorrowedAccount {
+        if (eic_info.index_in_transaction >= self.accounts.len)
+            return error.MissingAccount;
+
+        // TODO: this lock acquire should be fallible and return
+        // `InstructionError.AccountBorrowFailed`
+        var account_info = self.accounts.get(eic_info.index_in_transaction);
+        const etc_info, const etc_info_write_guard = account_info.writeWithLock();
+
+        return .{
+            .eic = eic,
+            .eic_info = eic_info,
+            .etc_info = etc_info,
+            .etc_info_write_guard = etc_info_write_guard,
+        };
+    }
+
+    pub fn getSysvar(self: *ExecuteTransactionContext, comptime T: type) error{UnsupportedSysvar}!T {
+        return if (self.sysvar_cache.get(T)) |value| value else error.UnsupportedSysvar;
     }
 
     pub fn getLamportsPerSignature(self: *ExecuteTransactionContext) u64 {
-        // TODO: implement
-        _ = self;
-        return 0;
+        return self.lamports_per_signature;
+    }
+
+    pub fn addAccountsResizeDelta(self: *ExecuteTransactionContext, delta: i64) void {
+        self.accounts_resize_delta +|= delta;
     }
 
     pub fn setCustomError(self: *ExecuteTransactionContext, custom_error: u32) void {
@@ -77,7 +112,7 @@ pub const ExecuteTransactionContext = struct {
     }
 
     pub fn log(self: *ExecuteTransactionContext, comptime fmt: []const u8, args: anytype) void {
-        if (self.maybe_log_collector) |log_collector| log_collector.log(fmt, args);
+        if (self.maybe_log_collector) |*log_collector| log_collector.log(fmt, args) catch @panic("TODO: handle log error");
     }
 };
 

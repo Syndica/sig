@@ -14,9 +14,10 @@ pub const MAX_PERMITTED_DATA_LENGTH: u64 = 10 * 1024 * 1024;
 pub const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION: i64 = 2 * 10 * 1024 * 1024;
 
 /// Include executeSystemProgramInstruction in the **system_program** namespace
-pub const executeSystemProgramInstruction = @import("system_program_execute.zig").executeSystemProgramInstruction;
+const system_program_execute = @import("system_program_execute.zig");
+pub const executeSystemProgramInstruction = system_program_execute.executeSystemProgramInstruction;
 
-pub const SystemProgramError = enum {
+pub const SystemProgramError = error{
     /// An account with the same address already exists.
     AccountAlreadyInUse,
     /// Account does not have enough SOL to perform the operation.

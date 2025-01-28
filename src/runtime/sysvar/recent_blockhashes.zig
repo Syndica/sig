@@ -13,4 +13,8 @@ pub const RecentBlockhashes = struct {
         blockhash: Hash,
         fee_calculator: Fees.FeeCalculator,
     };
+
+    pub fn isEmpty(self: RecentBlockhashes) bool {
+        return self.entries.len == 0;
+    }
 };

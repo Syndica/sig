@@ -1,6 +1,8 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
+const sysvar = sig.runtime.sysvar;
+const id = sig.runtime.id;
 const nonce = sig.runtime.nonce;
 const pubkey_utils = sig.runtime.pubkey_utils;
 
@@ -12,11 +14,12 @@ const ExecuteInstructionContext = sig.runtime.ExecuteInstructionContext;
 const SystemError = sig.runtime.program.system_program.SystemProgramError;
 const SystemInstruction = sig.runtime.program.system_program.SystemProgramInstruction;
 
-const SYSTEM_PROGRAM_ID = sig.runtime.id.SYSTEM_PROGRAM_ID;
 const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system_program.MAX_PERMITTED_DATA_LENGTH;
 
+// TODO: Handle allocator errors with .Custom and return InstructionError
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
-pub fn executeSystemProgramInstruction(eic: *ExecuteInstructionContext) InstructionError!void {
+pub fn executeSystemProgramInstruction(allocator: std.mem.Allocator, eic: *ExecuteInstructionContext) !void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
     eic.consumeCompute(150);
@@ -26,6 +29,7 @@ pub fn executeSystemProgramInstruction(eic: *ExecuteInstructionContext) Instruct
     const instruction = try SystemInstruction.deserialize(eic.instruction_data);
     return switch (instruction) {
         .create_account => |args| try executeCreateAccount(
+            allocator,
             eic,
             args.lamports,
             args.space,
@@ -40,6 +44,7 @@ pub fn executeSystemProgramInstruction(eic: *ExecuteInstructionContext) Instruct
             args.lamports,
         ),
         .create_account_with_seed => |args| try executeCreateAccountWithSeed(
+            allocator,
             eic,
             args.base,
             args.seed,
@@ -63,10 +68,12 @@ pub fn executeSystemProgramInstruction(eic: *ExecuteInstructionContext) Instruct
             arg,
         ),
         .allocate => |args| try executeAllocate(
+            allocator,
             eic,
             args.space,
         ),
         .allocate_with_seed => |args| try executeAllocateWithSeed(
+            allocator,
             eic,
             args.base,
             args.seed,
@@ -93,22 +100,23 @@ pub fn executeSystemProgramInstruction(eic: *ExecuteInstructionContext) Instruct
 
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L315-L334
 fn executeCreateAccount(
+    allocator: std.mem.Allocator,
     eic: *ExecuteInstructionContext,
     lamports: u64,
     space: u64,
     owner: Pubkey,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(2);
-    try createAccount(eic, 0, 1, lamports, space, owner, try eic.getAccountPubkey(1));
+) !void {
+    try eic.checkNumberOfAccounts(2);
+    try createAccount(allocator, eic, 0, 1, lamports, space, owner, try eic.getAccountPubkey(1));
 }
 
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L365-L375
 fn executeAssign(
     eic: *ExecuteInstructionContext,
     owner: Pubkey,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(1);
-    const account = try eic.getBorrowedAccount(0);
+) !void {
+    try eic.checkNumberOfAccounts(1);
+    var account = try eic.getBorrowedAccount(0);
     defer account.deinit();
     try assign(eic, account, owner, account.getPubkey());
 }
@@ -117,21 +125,22 @@ fn executeAssign(
 fn executeTransfer(
     eic: *ExecuteInstructionContext,
     lamports: u64,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(2);
+) !void {
+    try eic.checkNumberOfAccounts(2);
     try transfer(eic, 0, 1, lamports);
 }
 
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L343-L362
 fn executeCreateAccountWithSeed(
+    allocator: std.mem.Allocator,
     eic: *ExecuteInstructionContext,
     base: Pubkey,
     seed: []const u8,
     lamports: u64,
     space: u64,
     owner: Pubkey,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(2);
+) !void {
+    try eic.checkNumberOfAccounts(2);
     try checkSeedAddress(
         eic,
         eic.getAccountPubkey(1),
@@ -140,27 +149,26 @@ fn executeCreateAccountWithSeed(
         owner,
         "Create: address {} does not match derived address {}",
     );
-    try createAccount(eic, 0, 1, lamports, space, owner, base);
+    try createAccount(allocator, eic, 0, 1, lamports, space, owner, base);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L407-L423
 fn executeAdvanceNonceAccount(
     eic: *ExecuteInstructionContext,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(1);
-    const account = try eic.getBorrowedAccount(0);
+) !void {
+    try eic.checkNumberOfAccounts(1);
+    var account = try eic.getBorrowedAccount(0);
     defer account.deinit();
-    // TODO: Implement recent blockhashes sysvar
-    // const recent_blockhashes = try get_sysvar_with_account_check.recent_blockhashes(
-    //     eic.execute_transaction_context,
-    //     eic,
-    //     1,
-    // );
-    // if (recent_blockhashes.isEmpty()) {
-    //     eic.log("Advance nonce account: recent blockhash list is empty", .{});
-    //     eic.setCustomError(SystemError.NonceNoRecentBlockhashes);
-    //     return .Custom;
-    // }
+
+    try eic.checkAccountAtIndex(1, id.SYSVAR_RECENT_BLOCKHASHES_ID);
+    const recent_blockhashes = try eic.getSysvar(sysvar.RecentBlockhashes);
+
+    if (recent_blockhashes.isEmpty()) {
+        eic.log("Advance nonce account: recent blockhash list is empty", .{});
+        eic.setCustomError(SystemError.NonceNoRecentBlockhashes);
+        return error.Custom;
+    }
+
     try advanceNonceAccount(eic, account);
 }
 
@@ -168,25 +176,17 @@ fn executeAdvanceNonceAccount(
 fn executeWithdrawNonceAccount(
     eic: *ExecuteInstructionContext,
     lamports: u64,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(2);
-    // TODO: Implement recent blockhashes sysvar
-    // const recent_blockhashes = try get_sysvar_with_account_check.recent_blockhashes(
-    //     eic.execute_transaction_context,
-    //     eic,
-    //     2,
-    // );
-    // TODO: Implement rent sysvar
-    // const rent = try get_sysvar_with_account_check.rent(
-    //     eic.execute_transaction_context,
-    //     eic,
-    //     3,
-    // );
-    const rent = Rent{
-        .lamports_per_byte_year = 0,
-        .exemption_threshold = 0,
-        .burn_percent = 0,
-    };
+) !void {
+    try eic.checkNumberOfAccounts(2);
+
+    // TODO: Is this sysvar call required for consensus despite being unused?
+    try eic.checkAccountAtIndex(2, id.SYSVAR_RECENT_BLOCKHASHES_ID);
+    const recent_blockhashes = try eic.getSysvar(sysvar.RecentBlockhashes);
+    _ = recent_blockhashes;
+
+    try eic.checkAccountAtIndex(3, id.SYSVAR_RENT_ID);
+    const rent = try eic.getSysvar(sysvar.Rent);
+
     return withdrawNonceAccount(eic, lamports, rent);
 }
 
@@ -194,27 +194,23 @@ fn executeWithdrawNonceAccount(
 fn executeInitializeNonceAccount(
     eic: *ExecuteInstructionContext,
     authority: Pubkey,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(1);
-    const account = try eic.getBorrowedAccount(0);
+) !void {
+    try eic.checkNumberOfAccounts(1);
+    var account = try eic.getBorrowedAccount(0);
     defer account.deinit();
-    // TODO: Implement recent blockhashes sysvar
-    // const recent_blockhashes = try get_sysvar_with_account_check.recent_blockhashes(
-    //     eic.execute_transaction_context,
-    //     eic,
-    //     1,
-    // );
-    // TODO: Implement rent sysvar
-    // if (recent_blockhashes.isEmpty()) {
-    //     eic.log("Initialize nonce account: recent blockhash list is empty", .{});
-    //     eic.setCustomError(SystemError.NonceNoRecentBlockhashes);
-    //     return .Custom;
-    // }
-    const rent = Rent{
-        .lamports_per_byte_year = 0,
-        .exemption_threshold = 0,
-        .burn_percent = 0,
-    };
+
+    try eic.checkAccountAtIndex(1, id.SYSVAR_RECENT_BLOCKHASHES_ID);
+    const recent_blockhashes = try eic.getSysvar(sysvar.RecentBlockhashes);
+
+    if (recent_blockhashes.isEmpty()) {
+        eic.log("Initialize nonce account: recent blockhash list is empty", .{});
+        eic.setCustomError(SystemError.NonceNoRecentBlockhashes);
+        return error.Custom;
+    }
+
+    try eic.checkAccountAtIndex(3, id.SYSVAR_RENT_ID);
+    const rent = try eic.getSysvar(sysvar.Rent);
+
     try initializeNonceAccount(
         eic,
         account,
@@ -227,9 +223,9 @@ fn executeInitializeNonceAccount(
 fn executeAuthorizeNonceAccount(
     eic: *ExecuteInstructionContext,
     authority: Pubkey,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(1);
-    const account = try eic.getBorrowedAccount(0);
+) !void {
+    try eic.checkNumberOfAccounts(1);
+    var account = try eic.getBorrowedAccount(0);
     defer account.deinit();
     return authorizeNonceAccount(
         eic,
@@ -240,25 +236,27 @@ fn executeAuthorizeNonceAccount(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L488-L498
 fn executeAllocate(
+    allocator: std.mem.Allocator,
     eic: *ExecuteInstructionContext,
     space: u64,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(1);
-    const account = try eic.getBorrowedAccount(0);
+) !void {
+    try eic.checkNumberOfAccounts(1);
+    var account = try eic.getBorrowedAccount(0);
     defer account.deinit();
-    try allocate(eic, account, space, account.getPubkey());
+    try allocate(allocator, eic, account, space, account.getPubkey());
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L506-L523
 fn executeAllocateWithSeed(
+    allocator: std.mem.Allocator,
     eic: *ExecuteInstructionContext,
     base: Pubkey,
     seed: []const u8,
     space: u64,
     owner: Pubkey,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(1);
-    const account = try eic.getBorrowedAccount(0);
+) !void {
+    try eic.checkNumberOfAccounts(1);
+    var account = try eic.getBorrowedAccount(0);
     defer account.deinit();
     try checkSeedAddress(
         eic,
@@ -268,7 +266,7 @@ fn executeAllocateWithSeed(
         owner,
         "Create: address {} does not match derived address {}",
     );
-    try allocate(eic, account, space, base);
+    try allocate(allocator, eic, account, space, base);
     try assign(eic, account, owner, base);
 }
 
@@ -278,9 +276,9 @@ fn executeAssignWithSeed(
     base: Pubkey,
     seed: []const u8,
     owner: Pubkey,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(1);
-    const account = try eic.getBorrowedAccount(0);
+) !void {
+    try eic.checkNumberOfAccounts(1);
+    var account = try eic.getBorrowedAccount(0);
     defer account.deinit();
     try checkSeedAddress(
         eic,
@@ -299,8 +297,8 @@ fn executeTransferWithSeed(
     lamports: u64,
     from_seed: []const u8,
     from_owner: Pubkey,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(3);
+) !void {
+    try eic.checkNumberOfAccounts(3);
 
     const from_base_index = 0;
     const from_index = 0;
@@ -334,11 +332,11 @@ fn executeTransferWithSeed(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L472-L485
 fn executeUpgradeNonceAccount(
     eic: *ExecuteInstructionContext,
-) InstructionError!void {
-    try eic.checkNumberOfInstructionAccounts(1);
-    const account = try eic.getBorrowedAccount(0);
+) !void {
+    try eic.checkNumberOfAccounts(1);
+    var account = try eic.getBorrowedAccount(0);
     defer account.deinit();
-    if (!account.getOwner().equals(SYSTEM_PROGRAM_ID)) return .InvalidAccountOwner;
+    if (!account.getOwner().equals(id.SYSTEM_PROGRAM_ID)) return .InvalidAccountOwner;
     if (!account.isWritable()) return .InvalidArgument;
     switch (try account.getState(nonce.Versions)) {
         .legacy => |*state| {
@@ -356,29 +354,37 @@ fn executeUpgradeNonceAccount(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#70
 fn allocate(
+    allocator: std.mem.Allocator,
     eic: *ExecuteInstructionContext,
     account: BorrowedAccount,
     space: u64,
     authority: Pubkey,
-) InstructionError!void {
+) !void {
     eic.checkIsSigner(Pubkey, authority) catch |err| {
         eic.log("Allocate: 'base' account {} must sign", .{account.getPubkey()});
         return err;
     };
 
-    if (account.hasData() || !SYSTEM_PROGRAM_ID.equals(account.getOwner())) {
+    const has_data = account.hasData();
+    const prog_id_correct = !id.SYSTEM_PROGRAM_ID.equals(&account.getOwner());
+
+    std.debug.print("\naccount.hasData()={}\n", .{has_data});
+    std.debug.print("!id.SYSTEM_PROGRAM_ID.equals(&account.getOwner())={}\n", .{prog_id_correct});
+    std.debug.print("account.hasData() or !id.SYSTEM_PROGRAM_ID.equals(&account.getOwner())={}\n", .{has_data or prog_id_correct});
+
+    if (account.hasData() or !id.SYSTEM_PROGRAM_ID.equals(&account.getOwner())) {
         eic.log("Allocate: account {} already in use", .{account.getPubkey()});
-        eic.setCustomError(SystemError.AccountAlreadyInUse);
-        return .Custom;
+        eic.setCustomError(@intFromError(SystemError.AccountAlreadyInUse));
+        return error.Custom;
     }
 
     if (space > MAX_PERMITTED_DATA_LENGTH) {
         eic.log("Allocate: requested {}, max allowed {}", .{ space, MAX_PERMITTED_DATA_LENGTH });
-        eic.setCustomError(SystemError.InvalidAccountDataLength);
-        return .Custom;
+        eic.setCustomError(@intFromError(SystemError.InvalidAccountDataLength));
+        return error.Custom;
     }
 
-    try account.setDataLength(@intCast(space));
+    try account.setDataLength(allocator, @intCast(space));
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L112
@@ -387,7 +393,7 @@ fn assign(
     account: BorrowedAccount,
     owner: Pubkey,
     authority: Pubkey,
-) InstructionError!void {
+) !void {
     if (account.getOwner().equals(owner)) return null;
 
     eic.checkIsSigner(Pubkey, authority) catch |err| {
@@ -400,6 +406,7 @@ fn assign(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L145
 fn createAccount(
+    allocator: std.mem.Allocator,
     eic: *ExecuteInstructionContext,
     from_index: u16,
     to_index: u16,
@@ -407,18 +414,18 @@ fn createAccount(
     space: u64,
     owner: Pubkey,
     authority: Pubkey,
-) InstructionError!void {
+) !void {
     {
-        const account = try eic.getBorrowedAccount(to_index);
+        var account = try eic.getBorrowedAccount(to_index);
         defer account.deinit();
 
         if (account.getLamports() > 0) {
             eic.log("Create Account: account {} already in use", .{account.getPubkey()});
             eic.setCustomError(SystemError.AccountAlreadyInUse);
-            return .Custom;
+            return error.Custom;
         }
 
-        try allocate(eic, account, space, authority);
+        try allocate(allocator, eic, account, space, authority);
         try assign(eic, account, owner, authority);
     }
 
@@ -436,7 +443,7 @@ fn transfer(
     from_index: u16,
     to_index: u16,
     lamports: u64,
-) InstructionError!void {
+) !void {
     eic.checkIsSigner(u16, from_index) catch |err| {
         eic.log("Transfer: `from` account {} must sign", .{eic.getAccountPubkey(from_index)});
         return err;
@@ -456,9 +463,9 @@ fn transferVerified(
     from_index: u16,
     to_index: u16,
     lamports: u64,
-) InstructionError!void {
+) !void {
     {
-        const account = try eic.getBorrowedAccount(from_index);
+        var account = try eic.getBorrowedAccount(from_index);
         defer account.deinit();
 
         if (account.hasData()) {
@@ -469,13 +476,13 @@ fn transferVerified(
         if (lamports > account.getLamports()) {
             eic.log("Transfer: insufficient lamports {}, need {}", .{});
             eic.setCustomError(SystemError.ResultWithNegativeLamports);
-            return .Custom;
+            return error.Custom;
         }
 
         account.subtractLamports(lamports);
     }
 
-    const account = try eic.getBorrowedAccount(to_index);
+    var account = try eic.getBorrowedAccount(to_index);
     defer account.deinit();
     account.addLamports(lamports);
 }
@@ -484,7 +491,7 @@ fn transferVerified(
 fn advanceNonceAccount(
     eic: *ExecuteInstructionContext,
     account: BorrowedAccount,
-) InstructionError!void {
+) !void {
     if (!account.isWritable()) {
         eic.log("Advance nonce account: Account {} must be writeable", .{account.getPubkey()});
         return .InvalidArgument;
@@ -507,7 +514,7 @@ fn advanceNonceAccount(
             if (data.durable_nonce.eql(next_durable_nonce)) {
                 eic.log("Advance nonce account: nonce can only advance once per slot");
                 eic.setCustomError(SystemError.NonceBlockhashNotExpired);
-                return .Custom;
+                return error.Custom;
             }
 
             account.setState(
@@ -526,7 +533,7 @@ fn withdrawNonceAccount(
     eic: *ExecuteInstructionContext,
     lamports: u64,
     rent: Rent,
-) InstructionError!void {
+) !void {
     const from_account_index = 0;
     const to_account_index = 1;
 
@@ -553,7 +560,7 @@ fn withdrawNonceAccount(
                     if (durable_nonce.eql(data.durable_nonce)) {
                         eic.log("Withdraw nonce account: nonce can only advance once per slot");
                         eic.setCustomError(SystemError.NonceBlockhashNotExpired);
-                        return .Custom;
+                        return error.Custom;
                     }
                     from_account.setState(nonce.Versions.current(nonce.State.unintialized));
                 } else {
@@ -590,7 +597,7 @@ fn initializeNonceAccount(
     account: BorrowedAccount,
     authority: Pubkey,
     rent: Rent,
-) InstructionError!void {
+) !void {
     if (!account.isWritable()) {
         eic.log("Initialize nonce account: Account {} must be writeable", .{account.getPubkey()});
         return .InvalidArgument;
@@ -625,7 +632,7 @@ pub fn authorizeNonceAccount(
     eic: *ExecuteInstructionContext,
     account: BorrowedAccount,
     authority: Pubkey,
-) InstructionError!void {
+) !void {
     if (!account.isWritable()) {
         eic.log("Authorize nonce account: Account {} must be writeable", .{account.getPubkey()});
         return .InvalidArgument;
@@ -666,11 +673,72 @@ fn checkSeedAddress(
     owner: Pubkey,
     seed: []const u8,
     log_err_fmt: []const u8,
-) InstructionError!void {
+) !void {
     const created = try pubkey_utils.createWithSeed(eic, base, seed, owner);
     if (!expected.equals(created)) {
         eic.log(log_err_fmt, .{ expected, created });
         eic.setCustomError(SystemError.AddressWithSeedMismatch);
-        return .Custom;
+        return error.Custom;
     }
+}
+
+test "executeAllocate" {
+    const Hash = sig.core.Hash;
+    const SysvarCache = sig.runtime.SysvarCache;
+    const Transaction = sig.core.Transaction;
+    const RwMux = sig.sync.RwMux;
+    const ExecuteTransactionContext = sig.runtime.ExecuteTransactionContext;
+
+    const MAX_INSTRUCTION_ACCOUNTS = sig.runtime.MAX_INSTRUCTION_ACCOUNTS;
+
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const etc_account_info: ExecuteTransactionContext.AccountInfo = .{
+        .touched = false,
+        .account = .{
+            .lamports = 0,
+            .data = .{},
+            .owner = id.SYSTEM_PROGRAM_ID,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    };
+
+    var etc_accounts = try std.BoundedArray(
+        RwMux(ExecuteTransactionContext.AccountInfo),
+        Transaction.MAX_ACCOUNTS,
+    ).init(0);
+    try etc_accounts.append(RwMux(ExecuteTransactionContext.AccountInfo).init(etc_account_info));
+
+    var etc: ExecuteTransactionContext = .{
+        .accounts = etc_accounts,
+        .accounts_resize_delta = 0,
+        .compute_meter = 0,
+        .maybe_custom_error = null,
+        .maybe_log_collector = null,
+        .sysvar_cache = SysvarCache.default(),
+        .lamports_per_signature = 5000,
+        .last_blockhash = Hash.ZEROES,
+    };
+
+    var eic_accounts = try std.BoundedArray(
+        ExecuteInstructionContext.AccountInfo,
+        MAX_INSTRUCTION_ACCOUNTS,
+    ).init(0);
+    try eic_accounts.append(.{
+        .pubkey = Pubkey.initRandom(prng.random()),
+        .is_signer = true,
+        .is_writable = true,
+        .index_in_transaction = 0,
+    });
+
+    var eic: ExecuteInstructionContext = .{
+        .etc = &etc,
+        .program_id = id.SYSTEM_PROGRAM_ID,
+        .accounts = eic_accounts,
+    };
+
+    try executeAllocate(allocator, &eic, 1024);
 }

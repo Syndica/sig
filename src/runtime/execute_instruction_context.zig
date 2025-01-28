@@ -10,86 +10,121 @@ const InstructionError = sig.core.instruction.InstructionError;
 const SystemError = sig.runtime.program.system_program.SystemProgramError;
 const Pubkey = sig.core.Pubkey;
 
-// https://github.com/firedancer-io/firedancer/blob/82ecf8392fe076afce5f9cba02a5efa976e664c8/src/flamenco/runtime/info/fd_instr_info.h#L12
-const MAX_INSTRUCTION_ACCOUNTS: usize = 256;
+const MAX_INSTRUCTION_ACCOUNTS = sig.runtime.MAX_INSTRUCTION_ACCOUNTS;
 
 pub const ExecuteInstructionContext = struct {
     /// The transaction context associated with this instruction execution
     etc: *ExecuteTransactionContext,
 
+    /// The program id of the currently executing instruction
+    program_id: Pubkey,
+
     /// The accounts used by this instruction and their required metadata
     accounts: std.BoundedArray(AccountInfo, MAX_INSTRUCTION_ACCOUNTS),
 
-    const AccountInfo = struct {
-        index_in_transaction: u16,
+    pub const AccountInfo = struct {
+        pubkey: Pubkey,
         is_signer: bool,
         is_writable: bool,
-        pubkey: Pubkey,
+        index_in_transaction: u16,
     };
 
-    pub fn init(
-        execute_transaction_context: *ExecuteTransactionContext,
-        accounts: std.BoundedArray(AccountInfo, MAX_INSTRUCTION_ACCOUNTS),
-    ) ExecuteInstructionContext {
-        return .{
-            .execute_transaction_context = execute_transaction_context,
-            .accounts = accounts,
-        };
+    pub fn checkAccountsResizeDelta(
+        self: *const ExecuteInstructionContext,
+        delta: i64,
+    ) error{MaxAccountsDataAllocationsExceeded}!void {
+        try self.etc.checkAccountsResizeDelta(delta);
+    }
+
+    fn checkAccountAtIndex(
+        eic: *ExecuteInstructionContext,
+        index: usize,
+        expected: Pubkey,
+    ) InstructionError!void {
+        if (index >= eic.accounts.len) return error.NotEnoughAccountKeys;
+        if (!expected.equals(eic.getAccountPubkey(index))) return error.InvalidArgument;
     }
 
     pub fn checkIsSigner(
-        self: *ExecuteInstructionContext,
+        self: *const ExecuteInstructionContext,
         comptime T: type,
         probe: T,
-    ) InstructionError.MissingRequiredSignature!void {
+    ) error{MissingRequiredSignature}!void {
         switch (T) {
             Pubkey => {
-                for (self.accounts) |account| {
-                    if (account.pubkey.equals(probe))
-                        return if (account.is_signer) null else .MissingRequiredSignature;
+                for (self.accounts.buffer) |account| {
+                    if (account.pubkey.equals(&probe))
+                        if (account.is_signer) return else return error.MissingRequiredSignature;
                 }
-                return .MissingRequiredSignature;
+                return error.MissingRequiredSignature;
             },
             u16 => {
-                if (!self.accounts[probe].is_signer)
-                    return .MissingRequiredSignature;
+                if (!self.accounts.get(probe).is_signer)
+                    return error.MissingRequiredSignature;
             },
             else => @compileError("Invalid type for `probe`"),
         }
     }
 
-    pub fn checkNumberOfInstructionAccounts(self: *ExecuteInstructionContext, required: usize) InstructionError.NotEnoughAccountKeys!void {
-        if (self.accounts.len < required) return .NotEnoughAccountKeys;
+    pub fn checkNumberOfAccounts(
+        self: *const ExecuteInstructionContext,
+        required: usize,
+    ) error{NotEnoughAccountKeys}!void {
+        if (self.accounts.len < required) return error.NotEnoughAccountKeys;
     }
 
-    pub fn consumeCompute(self: *ExecuteInstructionContext, units: u64) InstructionError.ComputationalBudgetExceeded!void {
-        self.etc.consumeCompute(units);
+    pub fn consumeCompute(
+        self: *const ExecuteInstructionContext,
+        units: u64,
+    ) error{ComputationalBudgetExceeded}!void {
+        try self.etc.consumeCompute(units);
     }
 
-    pub fn getAccountPubkey(self: *ExecuteInstructionContext, index: usize) InstructionError.NotEnoughAccountKeys!Pubkey {
-        if (index >= self.accounts.len) return .NotEnoughAccountKeys;
+    pub fn getAccountPubkey(
+        self: *const ExecuteInstructionContext,
+        index: usize,
+    ) error{NotEnoughAccountKeys}!Pubkey {
+        if (index >= self.accounts.len) return error.NotEnoughAccountKeys;
         self.accounts[index].pubkey;
     }
 
-    pub fn getBlockhash(self: *ExecuteInstructionContext) Hash {
+    pub fn getBlockhash(self: *const ExecuteInstructionContext) Hash {
         self.etc.getBlockhash();
     }
 
-    pub fn getBorrowedAccount(self: *ExecuteInstructionContext, index: usize) InstructionError!BorrowedAccount {
-        // TODO: examine errors
-        if (index >= self.accounts.len) return .NotEnoughAccountKeys;
-        self.etc.getBorrowedAccount(self.accounts[index].index_in_transaction);
+    pub fn getBorrowedAccount(
+        self: *const ExecuteInstructionContext,
+        index: usize,
+    ) InstructionError!BorrowedAccount {
+        if (index >= self.accounts.len) return error.NotEnoughAccountKeys;
+        return self.etc.getBorrowedAccount(self, &self.accounts.get(index));
     }
 
-    pub fn getLamportsPerSignature(self: *ExecuteInstructionContext) u64 {
+    pub fn getLamportsPerSignature(self: *const ExecuteInstructionContext) u64 {
         self.etc.getLamportsPerSignature();
     }
 
-    pub fn setCustomError(self: *ExecuteInstructionContext, custom_error: u32) void {
+    pub fn getSysvar(self: *const ExecuteInstructionContext, comptime T: type) error{UnsupportedSysvar}!T {
+        self.etc.getSysvar(T);
+    }
+
+    pub fn isOwner(self: *const ExecuteInstructionContext, pubkey: Pubkey) bool {
+        return self.program_id.equals(&pubkey);
+    }
+
+    pub fn addAccountsResizeDelta(self: *const ExecuteInstructionContext, delta: i64) void {
+        self.etc.addAccountsResizeDelta(delta);
+    }
+
+    pub fn setCustomError(self: *const ExecuteInstructionContext, custom_error: u32) void {
         self.etc.setCustomError(custom_error);
     }
 
-    pub fn log(self: *ExecuteInstructionContext, comptime fmt: []const u8, args: anytype) void {
+    pub fn log(
+        self: *const ExecuteInstructionContext,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) void {
         self.etc.log(fmt, args);
     }
 };
