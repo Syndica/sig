@@ -70,12 +70,10 @@ pub const LinuxIoUring = struct {
         self.io_uring.deinit();
     }
 
-    pub const AcceptAndServeConnectionsError = error{
-        /// This was the first call, and we failed to prep, queue, and submit the multishot accept.
-        FailedToAcceptMultishot,
-        SubmissionQueueFull,
-    } || IouSubmitError ||
-        HandleOurCqeError ||
+    pub const AcceptAndServeConnectionsError =
+        IouGetSqeError ||
+        IouSubmitError ||
+        ConsumeOurCqeError ||
         std.mem.Allocator.Error;
 
     pub fn acceptAndServeConnections(
@@ -92,12 +90,12 @@ pub const LinuxIoUring = struct {
                 null,
                 std.os.linux.SOCK.CLOEXEC,
             ) catch |err| return switch (err) {
-                error.SubmissionQueueFull => {
+                error.SubmissionQueueFull => |e| {
                     server_ctx.logger.err().log(
                         "Under normal circumstances the accept_multishot would be" ++
                             " the first SQE to be queued, but somehow the queue was full.",
                     );
-                    return error.FailedToAcceptMultishot;
+                    return e;
                 },
             };
         }
@@ -119,86 +117,53 @@ pub const LinuxIoUring = struct {
                 self.pending_cqes_buf[i + 1 ..][0..self.pending_cqes_count],
             );
             const our_cqe = OurCqe.fromCqe(raw_cqe);
-            consumeOurCqe(self, server_ctx, our_cqe) catch |err| switch (err) {
-                // EINTR catch-all
-                error.SignalInterruptedOperation,
-
-                // connection errors
-                error.ConnectionAborted,
-                error.ConnectionRefused,
-                error.ConnectionResetByPeer,
-                error.ConnectionTimedOut,
-
-                // our http parse errors
-                error.RequestHeadersTooBig,
-                error.RequestTargetTooLong,
-                error.RequestContentTypeUnrecognized,
-
-                // std http parse errors
-                error.UnknownHttpMethod,
-                error.HttpHeadersInvalid,
-                error.InvalidContentLength,
-                error.HttpHeaderContinuationsUnsupported,
-                error.HttpTransferEncodingUnsupported,
-                error.HttpConnectionHeaderUnsupported,
-                error.CompressionUnsupported,
-                error.MissingFinalNewline,
-
-                // splice errors
-                error.BadFileDescriptors,
-                error.BadFdOffset,
-                error.InvalidSplice,
-                => |e| {
-                    server_ctx.logger.err().logf("{s}", .{@errorName(e)});
-                    continue;
-                },
-
-                error.SubmissionQueueFull => |e| return e,
-                else => |e| return e,
-            };
+            switch (try consumeOurCqe(self, server_ctx, our_cqe)) {
+                .ok => {},
+                .signal_interrupted_operation,
+                .misc_connection_failure,
+                .http_head_parse_error,
+                .splice_error,
+                => {},
+            }
         }
     }
 };
 
-const HandleOurCqeError = error{
-    SubmissionQueueFull,
+const ConsumeOurCqeResult = enum {
+    ok,
 
     /// Operation resulted in EINTR. In general there doesn't seem to be a very good way to handle or recover from interruptions,
     /// so we just fail and drop whatever connection is interrupted; however in theory, this should not be a huge issue in practice,
     /// with the assumption being that the RPC server will not be running in a process/thread that will be interrupted often enough
     /// for this to be a problem.
-    SignalInterruptedOperation,
+    signal_interrupted_operation,
 
-    /// Connection was aborted; not necessarily critical.
-    ConnectionAborted,
-    /// A remote host refused to allow the network connection, typically because it is not
-    /// running the requested service.
-    ConnectionRefused,
-    /// A remote host refused to allow the network connection, typically because it is not
-    /// running the requested service.
-    ConnectionResetByPeer,
-    ConnectionTimedOut,
+    /// Connection was aborted, refused, reset, or it timed out.
+    misc_connection_failure,
 
-    /// The headers recv'd in a request were too big.
-    RequestHeadersTooBig,
-    /// The request line recv'd was too long.
-    RequestTargetTooLong,
-    /// The request 'Content-Type' did not match any recognized `ContentType`.
-    RequestContentTypeUnrecognized,
-} || connection.HandleAcceptError ||
+    /// Failed to parse the HTTP request head, perhaps because it was too big,
+    /// the request target was too long, or because it was invalid in some way.
+    http_head_parse_error,
+
+    /// Somehow the splice arguments or their associated state were invalid.
+    splice_error,
+};
+
+const ConsumeOurCqeError =
+    IouGetSqeError ||
+    HandleRecvBodyError ||
+    std.mem.Allocator.Error ||
+    connection.HandleAcceptError ||
     connection.HandleRecvError ||
     connection.HandleSendError ||
-    connection.HandleSpliceError ||
-    std.mem.Allocator.Error ||
-    std.http.Server.Request.Head.ParseError ||
-    std.fs.File.OpenError ||
-    std.fs.File.GetSeekPosError;
+    connection.HandleSpliceError;
 
 /// Panic message for handling `EAGAIN`; we're not using nonblocking sockets at all,
 /// so it should be impossible to receive that error, or for such an error to be
 /// triggered just from malicious connections.
 const EAGAIN_PANIC_MSG =
-    "The socket should not be in nonblocking mode; server or socket configuration error.";
+    "The file/socket should not be in nonblocking mode;" ++
+    " server or file/socket configuration error.";
 
 /// On return, `cqe.user_data` is in an undefined state - this is to say,
 /// it has either already been `deinit`ed, or it has been been re-submitted
@@ -208,7 +173,7 @@ fn consumeOurCqe(
     liou: *LinuxIoUring,
     server_ctx: *server.Context,
     cqe: OurCqe,
-) HandleOurCqeError!void {
+) ConsumeOurCqeError!ConsumeOurCqeResult {
     const entry = cqe.user_data;
     errdefer entry.deinit(server_ctx.allocator);
 
@@ -222,9 +187,9 @@ fn consumeOurCqe(
         switch (try connection.handleAcceptResult(cqe.err())) {
             .success => {},
             // just quickly exit; if we need to re-issue, that's already handled above
-            .again => return,
-            .intr => return error.SignalInterruptedOperation,
-            .conn_aborted => return error.ConnectionAborted,
+            .again => return .ok,
+            .intr => return .signal_interrupted_operation,
+            .conn_aborted => return .misc_connection_failure,
         }
 
         const stream: std.net.Stream = .{ .handle = cqe.res };
@@ -257,8 +222,7 @@ fn consumeOurCqe(
         ) catch |err| switch (err) {
             error.SubmissionQueueFull => |e| {
                 server_ctx.logger.err().logf(
-                    "Failed to submit the SQE for the initial recv" ++
-                        " for the connection from '{!}'",
+                    "Failed to submit the SQE for the initial recv for the connection from '{!}'",
                     // if we fail to getSockName, just print the error in place of the address
                     .{connection.getSockName(stream.handle)},
                 );
@@ -266,7 +230,7 @@ fn consumeOurCqe(
             },
         };
 
-        return;
+        return .ok;
     };
     errdefer server_ctx.wait_group.finish();
 
@@ -282,10 +246,11 @@ fn consumeOurCqe(
             switch (try connection.handleRecvResult(cqe.err())) {
                 .success => {},
                 .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
-                .intr => return error.SignalInterruptedOperation,
-                .conn_refused => return error.ConnectionRefused,
-                .conn_reset => return error.ConnectionResetByPeer,
-                .timed_out => return error.ConnectionTimedOut,
+                .intr => return .signal_interrupted_operation,
+                .conn_refused,
+                .conn_reset,
+                .timed_out,
+                => return .misc_connection_failure,
             }
 
             const recv_len: usize = @intCast(cqe.res);
@@ -298,7 +263,7 @@ fn consumeOurCqe(
             if (head.parser.state != .finished) {
                 std.debug.assert(head.end == recv_end);
                 if (head.end == entry_data.buffer.len) {
-                    return error.RequestHeadersTooBig;
+                    return .http_head_parse_error;
                 }
 
                 _ = try liou.io_uring.recv(
@@ -307,7 +272,8 @@ fn consumeOurCqe(
                     .{ .buffer = entry_data.buffer[head.end..] },
                     0,
                 );
-                return;
+
+                return .ok;
             }
 
             // copy relevant headers and information out of the buffer,
@@ -315,17 +281,20 @@ fn consumeOurCqe(
             const HeadInfo = requests.HeadInfo;
             const head_info: HeadInfo = head_info: {
                 const head_bytes = entry_data.buffer[0..head.end];
-                const std_head = try std.http.Server.Request.Head.parse(head_bytes);
+                const std_head = std.http.Server.Request.Head.parse(head_bytes) catch
+                    return .http_head_parse_error;
                 // at the time of writing, this always holds true for the result of `Head.parse`.
                 std.debug.assert(std_head.compression == .none);
-                break :head_info HeadInfo.parseFromStdHead(std_head) catch |err| switch (err) {
-                    error.RequestTargetTooLong => |e| {
-                        server_ctx.logger.err().logf("Request target was too long: '{}'", .{
-                            std.zig.fmtEscapes(std_head.target),
-                        });
-                        return e;
-                    },
-                    else => |e| return e,
+                break :head_info HeadInfo.parseFromStdHead(std_head) catch |err| {
+                    switch (err) {
+                        error.RequestTargetTooLong => {
+                            server_ctx.logger.err().logf("Request target was too long: '{}'", .{
+                                std.zig.fmtEscapes(std_head.target),
+                            });
+                        },
+                        else => {},
+                    }
+                    return .http_head_parse_error;
                 };
             };
 
@@ -347,41 +316,43 @@ fn consumeOurCqe(
             } };
             const body = &entry_data.state.recv_body;
             try handleRecvBody(liou, server_ctx, entry, body);
-            return;
+            return .ok;
         },
 
         .recv_body => |*body| {
             switch (try connection.handleRecvResult(cqe.err())) {
                 .success => {},
                 .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
-                .intr => return error.SignalInterruptedOperation,
-                .conn_refused => return error.ConnectionRefused,
-                .conn_reset => return error.ConnectionResetByPeer,
-                .timed_out => return error.ConnectionTimedOut,
+                .intr => return .signal_interrupted_operation,
+                .conn_refused,
+                .conn_reset,
+                .timed_out,
+                => return .misc_connection_failure,
             }
 
             const recv_len: usize = @intCast(cqe.res);
             body.content_end += recv_len;
             try handleRecvBody(liou, server_ctx, entry, body);
-            return;
+            return .ok;
         },
 
         .send_file_head => |*sfh| {
             switch (try connection.handleSendResult(cqe.err())) {
                 .success => {},
                 .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
-                .intr => return error.SignalInterruptedOperation,
+                .intr => return .signal_interrupted_operation,
+                .conn_reset => return .misc_connection_failure,
             }
             const sent_len: usize = @intCast(cqe.res);
             sfh.sent_bytes += sent_len;
 
             switch (try sfh.computeAndMaybePrepSend(entry, &liou.io_uring)) {
-                .sending_more => return,
+                .sending_more => return .ok,
                 .all_sent => switch (sfh.data) {
                     .file_size => {
                         entry.deinit(server_ctx.allocator);
                         server_ctx.wait_group.finish();
-                        return;
+                        return .ok;
                     },
                     .sfd => |sfd| {
                         entry_data.state = .{ .send_file_body = .{
@@ -392,7 +363,7 @@ fn consumeOurCqe(
                         } };
                         const sfb = &entry_data.state.send_file_body;
                         try sfb.prepSpliceFileToPipe(entry, &liou.io_uring);
-                        return;
+                        return .ok;
                     },
                 },
             }
@@ -403,18 +374,26 @@ fn consumeOurCqe(
                 switch (try connection.handleSpliceResult(cqe.err())) {
                     .success => {},
                     .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                    .bad_file_descriptors,
+                    .bad_fd_offset,
+                    .invalid_splice,
+                    => return .splice_error,
                 }
                 sfb.spliced_to_pipe += @intCast(cqe.res);
 
                 sfb.which = .to_socket;
                 try sfb.prepSplicePipeToSocket(entry, &liou.io_uring);
 
-                return;
+                return .ok;
             },
             .to_socket => {
                 switch (try connection.handleSpliceResult(cqe.err())) {
                     .success => {},
                     .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                    .bad_file_descriptors,
+                    .bad_fd_offset,
+                    .invalid_splice,
+                    => return .splice_error,
                 }
                 sfb.spliced_to_socket += @intCast(cqe.res);
 
@@ -426,7 +405,7 @@ fn consumeOurCqe(
                     entry.deinit(server_ctx.allocator);
                     server_ctx.wait_group.finish();
                 }
-                return;
+                return .ok;
             },
         },
 
@@ -434,25 +413,32 @@ fn consumeOurCqe(
             switch (try connection.handleSendResult(cqe.err())) {
                 .success => {},
                 .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
-                .intr => return error.SignalInterruptedOperation,
+                .intr => return .signal_interrupted_operation,
+                .conn_reset => return .misc_connection_failure,
             }
             const sent_len: usize = @intCast(cqe.res);
             snb.end_index += sent_len;
 
             if (snb.end_index < snb.head.len) {
                 try snb.prepSend(entry, &liou.io_uring);
-                return;
+                return .ok;
             } else std.debug.assert(snb.end_index == snb.head.len);
 
             entry.deinit(server_ctx.allocator);
             server_ctx.wait_group.finish();
-            return;
+            return .ok;
         },
     }
 
     comptime unreachable;
 }
 
+const HandleRecvBodyError =
+    IouGetSqeError ||
+    std.fs.Dir.StatFileError ||
+    std.fs.File.OpenError ||
+    std.fs.File.GetSeekPosError ||
+    std.posix.PipeError;
 fn handleRecvBody(
     liou: *LinuxIoUring,
     server_ctx: *server.Context,
@@ -537,9 +523,10 @@ fn handleRecvBody(
                 } };
                 const sfh = &entry_data.state.send_file_head;
                 switch (try sfh.computeAndMaybePrepSend(entry, &liou.io_uring)) {
-                    .sending_more => return,
                     .all_sent => unreachable, // we know this for certain
+                    .sending_more => {},
                 }
+                return;
             },
             .unrecognized => {},
         },
@@ -555,6 +542,7 @@ fn handleRecvBody(
     };
     const snb = &entry_data.state.send_no_body;
     try snb.prepSend(entry, &liou.io_uring);
+    return;
 }
 
 const OurCqe = extern struct {
@@ -680,7 +668,7 @@ const EntryState = union(enum) {
             self: *SendFileHead,
             entry: Entry,
             io_uring: *IoUring,
-        ) !enum {
+        ) IouGetSqeError!enum {
             /// The head has been fully sent already, no send was prepped.
             all_sent,
             /// There is still more head data to send.
@@ -748,7 +736,7 @@ const EntryState = union(enum) {
             self: *const SendFileBody,
             entry: Entry,
             io_uring: *IoUring,
-        ) !void {
+        ) IouGetSqeError!void {
             const entry_ptr = entry.ptr.?;
             std.debug.assert(self == &entry_ptr.state.send_file_body);
             std.debug.assert(self.which == .to_pipe);
@@ -767,7 +755,7 @@ const EntryState = union(enum) {
             self: *const SendFileBody,
             entry: Entry,
             io_uring: *IoUring,
-        ) !void {
+        ) IouGetSqeError!void {
             const entry_ptr = entry.ptr.?;
             std.debug.assert(self == &entry_ptr.state.send_file_body);
             std.debug.assert(self.which == .to_socket);
@@ -812,7 +800,7 @@ const EntryState = union(enum) {
             self: *const SendNoBody,
             entry: Entry,
             io_uring: *IoUring,
-        ) !void {
+        ) IouGetSqeError!void {
             const entry_ptr = entry.ptr.?;
             std.debug.assert(self == &entry_ptr.state.send_no_body);
             _ = try io_uring.send(
@@ -824,6 +812,8 @@ const EntryState = union(enum) {
         }
     };
 };
+
+const IouGetSqeError = error{SubmissionQueueFull};
 
 /// Extracted from `std.os.linux.IoUring.submit`
 const IouSubmitError = IouEnterError;

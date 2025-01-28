@@ -176,7 +176,6 @@ pub fn handleRecvResult(
 pub const HandleSendError = error{
     AccessDenied,
     FastOpenAlreadyInProgress,
-    ConnectionResetByPeer,
     MessageTooBig,
     SystemResources,
     BrokenPipe,
@@ -187,6 +186,7 @@ pub const HandleSendResult = enum {
     success,
     intr,
     again,
+    conn_reset,
 };
 
 pub fn handleSendResult(
@@ -200,6 +200,7 @@ pub fn handleSendResult(
         .SUCCESS => .success,
         .INTR => .intr,
         .AGAIN => .again,
+        .CONNRESET => .conn_reset,
 
         .BADF, // always a race condition
         .DESTADDRREQ, // The socket is not connection-mode, and no peer address is set.
@@ -222,7 +223,6 @@ pub fn handleSendResult(
 
         .ACCES => return error.AccessDenied,
         .ALREADY => return error.FastOpenAlreadyInProgress,
-        .CONNRESET => return error.ConnectionResetByPeer,
         .MSGSIZE => return error.MessageTooBig,
         .NOBUFS, .NOMEM => return error.SystemResources,
         .PIPE => return error.BrokenPipe,
@@ -232,19 +232,18 @@ pub fn handleSendResult(
 }
 
 pub const HandleSpliceError = error{
-    ///  One or both file descriptors are not valid, or do not have proper read-write mode.
-    BadFileDescriptors,
-    /// Either off_in or off_out was not NULL, but the corresponding file descriptor refers to a pipe.
-    BadFdOffset,
-    /// Could be one of many reasons, see the manpage for splice.
-    InvalidSplice,
-    /// Out of memory.
     SystemResources,
 } || std.posix.UnexpectedError;
 
 pub const HandleSpliceResult = enum {
     success,
     again,
+    /// One or both file descriptors are not valid, or do not have proper read-write mode.
+    bad_file_descriptors,
+    /// Either off_in or off_out was not NULL, but the corresponding file descriptor refers to a pipe.
+    bad_fd_offset,
+    /// Could be one of many reasons, see the manpage for splice.
+    invalid_splice,
 };
 
 pub fn handleSpliceResult(
@@ -257,9 +256,9 @@ pub fn handleSpliceResult(
     return switch (rc) {
         .SUCCESS => .success,
         .AGAIN => .again,
-        .INVAL => return error.InvalidSplice,
-        .SPIPE => return error.BadFdOffset,
-        .BADF => return error.BadFileDescriptors,
+        .INVAL => .invalid_splice,
+        .SPIPE => .bad_fd_offset,
+        .BADF => .bad_file_descriptors,
         .NOMEM => return error.SystemResources,
         else => |err| std.posix.unexpectedErrno(err),
     };
