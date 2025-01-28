@@ -66,7 +66,7 @@ pub const GossipTable = struct {
     entries: AutoArrayHashMap(u64, usize),
 
     // Indices of all gossip values associated with a node/pubkey.
-    pubkey_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(struct { GossipDataTag, usize })),
+    pubkey_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(GossipMap.Index)),
 
     // used to build pull responses efficiently
     shards: GossipTableShards,
@@ -92,7 +92,8 @@ pub const GossipTable = struct {
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
             .converted_contact_infos = AutoArrayHashMap(Pubkey, ContactInfo).init(allocator),
             .entries = AutoArrayHashMap(u64, usize).init(allocator),
-            .pubkey_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)).init(allocator),
+            .pubkey_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(GossipMap.Index))
+                .init(allocator),
             .shards = try GossipTableShards.init(allocator),
             .purged = HashTimeQueue.init(allocator),
             .allocator = allocator,
@@ -195,11 +196,11 @@ pub const GossipTable = struct {
 
             const maybe_node_entry = self.pubkey_to_values.getEntry(origin);
             if (maybe_node_entry) |node_entry| {
-                try node_entry.value_ptr.put(entry_index, {});
+                try node_entry.value_ptr.put(.{ value.data, entry_index }, {});
             } else {
-                var indexs = AutoArrayHashSet(usize).init(self.allocator);
+                var indexs = AutoArrayHashSet(GossipMap.Index).init(self.allocator);
                 errdefer indexs.deinit();
-                try indexs.put(entry_index, {});
+                try indexs.put(.{ value.data, entry_index }, {});
                 try self.pubkey_to_values.put(origin, indexs);
             }
 
@@ -351,8 +352,7 @@ pub const GossipTable = struct {
         if (self.pubkey_to_values.getEntry(pubkey)) |entry| {
             const pubkey_indexs = entry.value_ptr;
             for (pubkey_indexs.keys()) |index| {
-                const value = &self.store.values()[index];
-                value.timestamp_on_insertion = now;
+                self.store.getEntryByIndex(index).setTimestamp(now);
             }
         }
     }

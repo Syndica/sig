@@ -14,30 +14,29 @@ const GossipDataTag = gossip.data.GossipDataTag;
 const GossipKey = gossip.data.GossipKey;
 const GossipVersionedData = gossip.data.GossipVersionedData;
 
-pub const GossipMap = struct {
-    maps: EnumFieldStructMultiType(GossipDataTag, Map),
+pub const GossipMap = struct {     
+    /// Maps a gossip key to the index that you'll find the item in its
+    /// respective array list in lists_struct.
+    key_to_index: KeyToIndex,
+    /// A struct with one field per gossip tag, where each is an array list
+    /// containing the respective payload type for that gossip tag.
+    lists_struct: EnumFieldStructMultiType(GossipDataTag, List),
 
-    const fields = blk: {
-        const len = @typeInfo(GossipDataTag).Enum.fields.len;
-        var names: [len][]const u8 = undefined;
-        var tags: [len]GossipDataTag = undefined;
-        for (@typeInfo(GossipDataTag).Enum.fields, 0..) |f, i| {
-            names[i] = f.name;
-            tags[i] = @field(GossipDataTag, f.name);
-        }
-        break :blk .{ .names = names, .tags = tags };
-    };
+    const KeyToIndex = std.AutoArrayHashMapUnmanaged(GossipKey, usize);
 
-    fn Map(tag: GossipDataTag) type {
-        return std.AutoArrayHashMapUnmanaged(tag.Key(), Value(tag));
+    fn List(tag: GossipDataTag) type {
+        return std.ArrayListUnmanaged(Value(tag));
     }
 
+    /// Stores the same data as GossipVersionedValue, except:
+    /// - the nested structs are flattened
+    /// - it's generic instead of a tagged union, to save memory
     pub fn Value(tag: GossipDataTag) type {
         return struct {
             data: tag.Value(),
             signature: Signature,
-            value_hash: Hash,
-            timestamp_on_insertion: u64,
+            value_hash: Hash, 
+            timestamp_on_insertion: u64,         
             cursor_on_insertion: u64,
 
             pub fn gossipData(self: @This()) GossipData {
@@ -59,107 +58,54 @@ pub const GossipMap = struct {
         };
     }
 
-    pub const Index = struct { GossipDataTag, usize };
+    const fields = blk: {
+        const len = @typeInfo(GossipDataTag).Enum.fields.len;
+        var names: [len][]const u8 = undefined;
+        var tags: [len]GossipDataTag = undefined;
+        for (@typeInfo(GossipDataTag).Enum.fields, 0..) |f, i| {
+            names[i] = f.name;
+            tags[i] = @field(GossipDataTag, f.name);
+        }
+        break :blk .{ .names = names, .tags = tags };
+    };
 
     pub fn init() GossipMap {
-        var maps: EnumFieldStructMultiType(GossipDataTag, Map) = undefined;
-        inline for (fields.names) |f| @field(maps, f) = .{};
-        return .{ .maps = maps };
+        var lists: EnumFieldStructMultiType(GossipDataTag, List) = undefined;
+        inline for (fields.names) |f| @field(lists, f) = .{};
+        return .{
+            .key_to_index = .{},
+            .lists_struct = lists,
+        };
     }
 
     pub fn deinit(self: *GossipMap, allocator: Allocator) void {
-        inline for (fields.names) |f| @field(self.maps, f).deinit(allocator);
+        // TODO decide: deinit inner values?
+        inline for (fields.names) |f| @field(self.lists_struct, f).deinit(allocator);
     }
 
     pub fn count(self: *const GossipMap) usize {
-        var c: usize = 0;
-        inline for (fields.names) |f| c += @field(self.maps, f).count();
-        return c;
+        return self.key_to_index.count();
     }
 
     pub fn get(self: *const GossipMap, key: GossipKey) ?GossipVersionedData {
+        const index = self.key_to_index.get(key) orelse return null;
         switch (@as(GossipDataTag, key)) {
             inline else => |comptime_tag| {
-                const inner_key = @field(key, @tagName(comptime_tag));
-                const value = self.map(comptime_tag).get(inner_key) orelse return null;
+                const value = self.list(comptime_tag).items[index];
                 return value.versioned();
             },
         }
     }
 
-    pub fn keyByIndex(
-        self: *const GossipMap,
-        comptime tag: GossipDataTag,
-        index: usize,
-    ) tag.Key() {
-        return @field(self, @tagName(tag)).keys()[index];
-    }
-
-    pub fn valueByIndex(
-        self: *const GossipMap,
-        comptime tag: GossipDataTag,
-        index: usize,
-    ) Value(tag) {
-        return @field(self, @tagName(tag)).values()[index];
-    }
-
-    pub fn valuePtrByIndex(
-        self: *GossipMap,
-        comptime tag: GossipDataTag,
-        index: usize,
-    ) *Value(tag) {
-        return @field(self, @tagName(tag)).values()[index];
-    }
-
-    pub fn getOrPut(self: *GossipMap, allocator: Allocator, key: GossipKey) !GetOrPutResult {
-        switch (@as(GossipDataTag, key)) {
-            inline else => |comptime_tag| {
-                const gop = try self.mapMut(comptime_tag)
-                    .getOrPut(allocator, @field(key, @tagName(comptime_tag)));
-                var entry: Entry = undefined;
-                @field(entry.inner, @tagName(comptime_tag)) = .{
-                    .key_ptr = gop.key_ptr,
-                    .value_ptr = gop.value_ptr,
-                };
-                return .{
-                    .entry = entry,
-                    .found_existing = gop.found_existing,
-                    .index = gop.index,
-                };
-            },
-        }
-    }
-
-    pub const GetOrPutResult = struct {
-        entry: Entry,
-        found_existing: bool,
-        index: usize,
-
-        fn Inner(tag: GossipDataTag) type {
-            return Map(tag).GetOrPutResult;
-        }
-    };
-
     pub fn getEntry(self: *GossipMap, key: GossipKey) ?Entry {
+        const index_entry = self.key_to_index.getEntry(key) orelse return null;
+        const index = index_entry.value_ptr.*;
         switch (@as(GossipDataTag, key)) {
             inline else => |comptime_tag| {
-                const inner_entry = self.map(comptime_tag)
-                    .getEntry(@field(key, @tagName(comptime_tag))) orelse return null;
-                var entry: Entry = undefined;
-                @field(entry.inner, @tagName(comptime_tag)) = inner_entry;
-                return entry;
-            },
-        }
-    }
-
-    pub fn getEntryByIndex(self: *GossipMap, index: Index) Entry {
-        switch (index[0]) {
-            inline else => |comptime_tag| {
-                const slice = self.map(comptime_tag).entries.slice();
                 var entry: Entry = undefined;
                 @field(entry.inner, @tagName(comptime_tag)) = .{
-                    .key_ptr = &slice.items(.key)[index[1]],
-                    .value_ptr = &slice.items(.value)[index[1]],
+                    .key_ptr = index,
+                    .value_ptr = self.list(comptime_tag)[index],
                 };
                 return entry;
             },
@@ -167,10 +113,13 @@ pub const GossipMap = struct {
     }
 
     pub const Entry = struct {
-        inner: EnumFieldUnion(GossipDataTag, Inner),
+        inner: EnumFieldUnion(GossipDataTag, GenericEntry),
 
-        fn Inner(tag: GossipDataTag) type {
-            return Map(tag).Entry;
+        fn GenericEntry(tag: GossipDataTag) type {
+            return struct {
+                key_ptr: *GossipKey,
+                value_ptr: *Value(tag),
+            };
         }
 
         pub fn value(self: Entry) GossipVersionedData {
@@ -229,7 +178,7 @@ pub const GossipMap = struct {
         }
 
         fn Inner(tag: GossipDataTag) type {
-            return Map(tag).Iterator;
+            return List(tag).Iterator;
         }
 
         pub fn next(self: *Iterator) ?Entry {
@@ -249,18 +198,11 @@ pub const GossipMap = struct {
         }
     };
 
-    pub fn swapRemove(self: *GossipMap, key: GossipKey) bool {
-        return switch (@as(GossipDataTag, key)) {
-            inline else => |comptime_tag| self.mapMut(comptime_tag)
-                .swapRemove(@field(key, @tagName(comptime_tag))),
-        };
+    fn list(self: *const GossipMap, comptime tag: GossipDataTag) *const List(tag) {
+        return &@field(self.lists_struct, @tagName(tag));
     }
 
-    fn map(self: *const GossipMap, comptime tag: GossipDataTag) *const Map(tag) {
-        return &@field(self.maps, @tagName(tag));
-    }
-
-    fn mapMut(self: *GossipMap, comptime tag: GossipDataTag) *Map(tag) {
-        return &@field(self.maps, @tagName(tag));
+    fn listMut(self: *GossipMap, comptime tag: GossipDataTag) *List(tag) {
+        return &@field(self.lists_struct, @tagName(tag));
     }
 };
