@@ -921,7 +921,10 @@ pub const GossipService = struct {
             // new push msgs
             try self.drainPushQueueToGossipTable(getWallclockMs());
             const maybe_push_packets = self.buildPushMessages(&push_cursor) catch |e| blk: {
-                self.logger.err().logf("failed to generate push messages: {any}", .{e});
+                self.logger.err().logf(
+                    "failed to generate push messages: {any}\n{any}",
+                    .{ e, @errorReturnTrace() },
+                );
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {

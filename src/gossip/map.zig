@@ -292,3 +292,62 @@ test "put, remove, and get" {
         try std.testing.expectEqual(data[i], get);
     }
 }
+
+test "repeat add+remove" {
+    const keypair = try std.crypto.sign.Ed25519.KeyPair.create([_]u8{1} ** 32);
+    var prng = std.rand.DefaultPrng.init(91);
+    const random = prng.random();
+
+    var map = GossipMap{};
+    defer map.deinit(std.testing.allocator);
+
+    var keys = std.ArrayList(GossipKey).init(std.testing.allocator);
+    defer keys.deinit();
+    // var data = std.ArrayList(GossipVersionedData).init(std.testing.allocator);
+
+    for (0..20) |_| {
+        // add
+        for (0..10) |_| {
+            const value = gossip.SignedGossipData.initSigned(
+                &keypair,
+                .{ .ContactInfo = try gossip.ContactInfo.initRandom(
+                    std.testing.allocator,
+                    prng.random(),
+                    sig.core.Pubkey.initRandom(random),
+                    random.int(u64),
+                    random.int(u64),
+                    random.int(u16),
+                ) },
+            );
+
+            const key = value.data.label();
+            const versioned = GossipVersionedData{
+                .value = value,
+                .value_hash = undefined,
+                .timestamp_on_insertion = 12345,
+                .cursor_on_insertion = 101,
+            };
+
+            try keys.append(key);
+
+            const gop = try map.getOrPut(std.testing.allocator, key);
+            gop.entry.setVersionedData(versioned);
+        }
+
+        // remove
+        for (0..3) |_| {
+            const index = random.intRangeLessThan(usize, 0, keys.items.len);
+            const key = keys.swapRemove(index);
+
+            const item = map.get(key) orelse unreachable;
+            item.deinit(std.testing.allocator);
+            try std.testing.expect(map.swapRemove(key));
+        }
+    }
+
+    for (keys.items) |key| {
+        const item = map.get(key) orelse unreachable;
+        item.deinit(std.testing.allocator);
+        try std.testing.expect(map.swapRemove(key));
+    }
+}

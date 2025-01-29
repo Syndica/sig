@@ -261,11 +261,12 @@ pub const GossipTable = struct {
 
             try self.purged.insert(old_entry.value_hash, now);
 
+            const overwritten_data = result.entry.getGossipData();
             result.entry.setVersionedData(versioned_value);
             self.cursor += 1;
 
             // overwrite existing entry
-            return .{ .OverwroteExistingEntry = result.entry.getGossipData() };
+            return .{ .OverwroteExistingEntry = overwritten_data };
 
             // do nothing
         } else {
