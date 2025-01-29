@@ -39,15 +39,12 @@ pub const Executable = struct {
         }
     };
 
-    pub fn fromElf(allocator: std.mem.Allocator, elf: *Elf) !Executable {
-        errdefer elf.function_registry.deinit(allocator);
-        const ro_section = try elf.parseRoSections(allocator);
-        errdefer ro_section.deinit(allocator);
-
+    /// Takes ownership of the `Elf`.
+    pub fn fromElf(elf: Elf) !Executable {
         return .{
             .bytes = elf.bytes,
-            .ro_section = ro_section,
-            .instructions = try elf.getInstructions(),
+            .ro_section = elf.ro_section,
+            .instructions = elf.getInstructions(),
             .version = elf.version,
             .entry_pc = elf.entry_pc,
             .from_elf = true,
