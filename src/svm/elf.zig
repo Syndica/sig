@@ -451,14 +451,14 @@ pub const Elf = struct {
 
         // ensure that the entry point is inside of the ".text" section
         const entrypoint = header.e_entry;
-        const text_section = self.getShdrByName(".text") orelse
-            return error.ShdrNotFound;
-
-        if (entrypoint < text_section.sh_addr or
-            entrypoint > text_section.sh_addr +| text_section.sh_size)
-        {
+        const text_section_index = self.getShdrIndexByName(".text") orelse
+            return error.NoTextSection;
+        if (!self.inRangeOfShdrVaddr(text_section_index, entrypoint)) {
             return error.EntrypointOutsideTextSection;
         }
+        const text_section_slice = try self.headers.shdrSlice(text_section_index);
+        if (text_section_slice.len % @sizeOf(sbpf.Instruction) != 0)
+            return error.InvalidTextSectionLength;
 
         if (self.config.minimum_version.enableElfVaddr()) {
             if (self.config.optimize_rodata != true) return error.UnsupportedSBPFVersion;
@@ -679,6 +679,13 @@ pub const Elf = struct {
         const sh_offset = shdr.sh_offset;
         const sh_size = shdr.sh_size;
         return addr >= sh_offset and addr < sh_offset + sh_size;
+    }
+
+    fn inRangeOfShdrVaddr(self: *const Elf, index: usize, addr: usize) bool {
+        const shdr = self.headers.shdrs[index];
+        const sh_addr = shdr.sh_addr;
+        const sh_size = shdr.sh_size;
+        return addr >= sh_addr and addr < sh_addr + sh_size;
     }
 
     fn inRangeOfPhdrVm(phdr: elf.Elf64_Phdr, addr: usize) bool {
