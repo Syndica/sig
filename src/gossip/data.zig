@@ -5,6 +5,7 @@ const sig = @import("../sig.zig");
 const testing = std.testing;
 const bincode = sig.bincode;
 
+const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const UdpSocket = network.Socket;
@@ -20,6 +21,7 @@ const ClientVersion = sig.version.ClientVersion;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 
+const createAs = sig.utils.allocators.createAs;
 const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 const sanitizeWallclock = sig.gossip.message.sanitizeWallclock;
@@ -137,21 +139,23 @@ pub const SignedGossipData = struct {
 
     /// only used in tests.
     pub fn initRandom(
+        allocator: Allocator,
         random: std.rand.Random,
         /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
         keypair: *const KeyPair,
     ) Self {
-        return initSigned(keypair, GossipData.initRandom(random));
+        return initSigned(keypair, try GossipData.initRandom(allocator, random));
     }
 
     /// only used in tests
     pub fn randomWithIndex(
+        allocator: Allocator,
         random: std.rand.Random,
         /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
         keypair: *const KeyPair,
         index: usize,
     ) !Self {
-        var data = GossipData.randomFromIndex(random, index);
+        var data = GossipData.randomFromIndex(allocator, random, index);
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         data.setId(pubkey);
         return initSigned(keypair, data);
@@ -195,22 +199,22 @@ const GossipDataTag = enum(u32) {
 
 /// Analogous to [CrdsData](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L85)
 pub const GossipData = union(GossipDataTag) {
-    LegacyContactInfo: LegacyContactInfo,
-    Vote: struct { u8, Vote },
-    LowestSlot: struct { u8, LowestSlot },
-    LegacySnapshotHashes: LegacySnapshotHashes,
-    AccountsHashes: AccountsHashes,
-    EpochSlots: struct { u8, EpochSlots },
-    LegacyVersion: LegacyVersion,
-    Version: Version,
-    NodeInstance: NodeInstance,
-    DuplicateShred: struct { u16, DuplicateShred },
-    SnapshotHashes: SnapshotHashes,
-    ContactInfo: ContactInfo,
+    LegacyContactInfo: *const LegacyContactInfo,
+    Vote: *const struct { u8, Vote },
+    LowestSlot: *const struct { u8, LowestSlot },
+    LegacySnapshotHashes: *const LegacySnapshotHashes,
+    AccountsHashes: *const AccountsHashes,
+    EpochSlots: *const struct { u8, EpochSlots },
+    LegacyVersion: *const LegacyVersion,
+    Version: *const Version,
+    NodeInstance: *const NodeInstance,
+    DuplicateShred: *const struct { u16, DuplicateShred },
+    SnapshotHashes: *const SnapshotHashes,
+    ContactInfo: *const ContactInfo,
     // https://github.com/anza-xyz/agave/commit/0a3810854fa4a11b0841c548dcbc0ada311b8830
-    RestartLastVotedForkSlots: RestartLastVotedForkSlots,
+    RestartLastVotedForkSlots: *const RestartLastVotedForkSlots,
     // https://github.com/anza-xyz/agave/commit/4a2871f38419b4d9b303254273b19a2e41707c47
-    RestartHeaviestFork: RestartHeaviestFork,
+    RestartHeaviestFork: *const RestartHeaviestFork,
 
     pub fn clone(self: *const GossipData, allocator: std.mem.Allocator) error{OutOfMemory}!GossipData {
         return switch (self.*) {
@@ -234,19 +238,22 @@ pub const GossipData = union(GossipDataTag) {
     pub fn deinit(self: *const GossipData, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .LegacyContactInfo => {},
-            .Vote => |*v| v[1].deinit(allocator),
-            .LowestSlot => |*v| v[1].deinit(allocator),
-            .LegacySnapshotHashes => |*v| v.deinit(allocator),
-            .AccountsHashes => |*v| v.deinit(allocator),
-            .EpochSlots => |*v| v[1].deinit(allocator),
+            .Vote => |*v| v.*[1].deinit(allocator),
+            .LowestSlot => |*v| v.*[1].deinit(allocator),
+            .LegacySnapshotHashes => |*v| v.*.deinit(allocator),
+            .AccountsHashes => |*v| v.*.deinit(allocator),
+            .EpochSlots => |*v| v.*[1].deinit(allocator),
             .LegacyVersion => {},
             .Version => {},
             .NodeInstance => {},
-            .DuplicateShred => |*v| v[1].deinit(allocator),
-            .SnapshotHashes => |*v| v.deinit(allocator),
-            .ContactInfo => |*v| v.deinit(),
-            .RestartLastVotedForkSlots => |*v| v.deinit(allocator),
+            .DuplicateShred => |*v| v.*[1].deinit(allocator),
+            .SnapshotHashes => |*v| v.*.deinit(allocator),
+            .ContactInfo => |*v| v.*.deinit(),
+            .RestartLastVotedForkSlots => |*v| v.*.deinit(allocator),
             .RestartHeaviestFork => {},
+        }
+        switch (self.*) {
+            inline else => |x| allocator.destroy(x),
         }
     }
 
@@ -411,44 +418,44 @@ pub const GossipData = union(GossipDataTag) {
     pub fn setId(self: *GossipData, new_id: Pubkey) void {
         switch (self.*) {
             // zig fmt: off
-            .LegacyContactInfo         => |*v| v.id = new_id,
-            .Vote                      => |*v| v[1].from = new_id,
-            .LowestSlot                => |*v| v[1].from = new_id,
-            .LegacySnapshotHashes      => |*v| v.from = new_id,
-            .AccountsHashes            => |*v| v.from = new_id,
-            .EpochSlots                => |*v| v[1].from = new_id,
-            .LegacyVersion             => |*v| v.from = new_id,
-            .Version                   => |*v| v.from = new_id,
-            .NodeInstance              => |*v| v.from = new_id,
-            .DuplicateShred            => |*v| v[1].from = new_id,
-            .SnapshotHashes            => |*v| v.from = new_id,
-            .ContactInfo               => |*v| v.pubkey = new_id,
-            .RestartLastVotedForkSlots => |*v| v.from = new_id,
-            .RestartHeaviestFork       => |*v| v.from = new_id,
+            .LegacyContactInfo         => |*v| v.*.id = new_id,
+            .Vote                      => |*v| v.*[1].from = new_id,
+            .LowestSlot                => |*v| v.*[1].from = new_id,
+            .LegacySnapshotHashes      => |*v| v.*.from = new_id,
+            .AccountsHashes            => |*v| v.*.from = new_id,
+            .EpochSlots                => |*v| v.*[1].from = new_id,
+            .LegacyVersion             => |*v| v.*.from = new_id,
+            .Version                   => |*v| v.*.from = new_id,
+            .NodeInstance              => |*v| v.*.from = new_id,
+            .DuplicateShred            => |*v| v.*[1].from = new_id,
+            .SnapshotHashes            => |*v| v.*.from = new_id,
+            .ContactInfo               => |*v| v.*.pubkey = new_id,
+            .RestartLastVotedForkSlots => |*v| v.*.from = new_id,
+            .RestartHeaviestFork       => |*v| v.*.from = new_id,
             // zig fmt: on
         }
     }
 
     /// only used in tests
-    pub fn initRandom(random: std.rand.Random) GossipData {
+    pub fn initRandom(allocator: Allocator, random: std.rand.Random) !GossipData {
         const v = random.intRangeAtMost(u16, 0, 10);
-        return GossipData.randomFromIndex(random, v);
+        return try GossipData.randomFromIndex(allocator, random, v);
     }
 
-    pub fn randomFromIndex(random: std.rand.Random, index: usize) GossipData {
+    pub fn randomFromIndex(allocator: Allocator, random: std.rand.Random, index: usize) !GossipData {
         return switch (index) {
-            0 => .{ .LegacyContactInfo = LegacyContactInfo.initRandom(random) },
-            1 => .{ .Vote = .{ random.intRangeAtMost(u8, 0, MAX_VOTES - 1), Vote.initRandom(random) } },
-            2 => .{ .EpochSlots = .{ random.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS - 1), EpochSlots.initRandom(random) } },
-            3 => .{ .LowestSlot = .{ 0, LowestSlot.initRandom(random) } },
-            4 => .{ .LegacySnapshotHashes = LegacySnapshotHashes.initRandom(random) },
-            5 => .{ .AccountsHashes = AccountsHashes.initRandom(random) },
-            6 => .{ .LegacyVersion = LegacyVersion.initRandom(random) },
-            7 => .{ .Version = Version.initRandom(random) },
-            8 => .{ .NodeInstance = NodeInstance.initRandom(random) },
-            9 => .{ .SnapshotHashes = SnapshotHashes.initRandom(random) },
-            // 10 => .{ .ContactInfo = ContactInfo.initRandom(random) },
-            else => .{ .DuplicateShred = .{ random.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.initRandom(random) } },
+            0 => .{ .LegacyContactInfo = try createAs(allocator, LegacyContactInfo.initRandom(random)) },
+            1 => .{ .Vote = try createAs(allocator, .{ random.intRangeAtMost(u8, 0, MAX_VOTES - 1), Vote.initRandom(random) }) },
+            2 => .{ .EpochSlots = try createAs(allocator, .{ random.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS - 1), EpochSlots.initRandom(random) }) },
+            3 => .{ .LowestSlot = try createAs(allocator, .{ 0, LowestSlot.initRandom(random) }) },
+            4 => .{ .LegacySnapshotHashes = try createAs(allocator, LegacySnapshotHashes.initRandom(random)) },
+            5 => .{ .AccountsHashes = try createAs(allocator, AccountsHashes.initRandom(random)) },
+            6 => .{ .LegacyVersion = try createAs(allocator, LegacyVersion.initRandom(random)) },
+            7 => .{ .Version = try createAs(allocator, Version.initRandom(random)) },
+            8 => .{ .NodeInstance = try createAs(allocator, NodeInstance.initRandom(random)) },
+            9 => .{ .SnapshotHashes = try createAs(allocator, SnapshotHashes.initRandom(random)) },
+            // 10 => .{ .ContactInfo createAs(allocator, = ContactInfo.initRandom(random)) },
+            else => .{ .DuplicateShred = try createAs(allocator, .{ random.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.initRandom(random) }) },
         };
     }
 };
@@ -2017,7 +2024,7 @@ test "random gossip data" {
         _ = result;
     }
     {
-        const data = GossipData.initRandom(random);
+        const data = try GossipData.initRandom(random);
         const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
         _ = result;
     }

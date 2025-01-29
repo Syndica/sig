@@ -10,6 +10,12 @@ const log2 = std.math.log2;
 const alignForward = std.mem.alignForward;
 const bytesAsValue = std.mem.bytesAsValue;
 
+pub fn createAs(allocator: std.mem.Allocator, item: anytype) std.mem.Allocator.Error!*@TypeOf(item) {
+    const ptr = try allocator.create(@TypeOf(item));
+    ptr.* = item;
+    return ptr;
+}
+
 /// very similar to RecycleFBA but with a few differences:
 /// - this uses an explicit T type and only returns slices of that type (instead of a generic u8)
 /// - additional memory blocks are supported (instead of using a fixed-buffer-allocator approach)

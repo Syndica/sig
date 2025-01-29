@@ -55,6 +55,7 @@ const Duration = sig.time.Duration;
 const ExitCondition = sig.sync.ExitCondition;
 const SocketThread = sig.net.SocketThread;
 
+const createAs = sig.utils.allocators.createAs;
 const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
@@ -2895,7 +2896,7 @@ test "test build push messages" {
     }
     lg.unlock();
 
-    const value = GossipData.initRandom(prng.random());
+    const value = try GossipData.initRandom(std.testing.allocator, prng.random());
 
     // set the active set
     {

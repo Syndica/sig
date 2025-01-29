@@ -19,6 +19,8 @@ const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.Pubkey;
 const SocketAddr = sig.net.SocketAddr;
 
+const createAs = sig.utils.allocators.createAs;
+
 const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 pub const UNIQUE_PUBKEY_CAPACITY: usize = 8_192;
 // TODO: cli arg for this
@@ -166,11 +168,11 @@ pub const GossipTable = struct {
             switch (value.data) {
                 .ContactInfo => |*info| {
                     try self.contact_infos.put(entry_index, {});
-                    try self.shred_versions.put(info.pubkey, info.shred_version);
+                    try self.shred_versions.put(info.*.pubkey, info.*.shred_version);
                 },
                 .LegacyContactInfo => |*info| {
                     try self.contact_infos.put(entry_index, {});
-                    try self.shred_versions.put(info.id, info.shred_version);
+                    try self.shred_versions.put(info.*.id, info.shred_version);
                     const contact_info = try info.toContactInfo(self.allocator);
                     try self.converted_contact_infos.put(info.id, contact_info);
                 },
@@ -366,7 +368,7 @@ pub const GossipTable = struct {
     pub fn getThreadSafeContactInfo(self: *const Self, pubkey: Pubkey) ?ThreadSafeContactInfo {
         const label = GossipKey{ .ContactInfo = pubkey };
         if (self.store.get(label)) |v| {
-            return ThreadSafeContactInfo.fromContactInfo(v.value.data.ContactInfo);
+            return ThreadSafeContactInfo.fromContactInfo(v.value.data.ContactInfo.*);
         } else {
             const contact_info = self.converted_contact_infos.get(pubkey) orelse return null;
             return ThreadSafeContactInfo.fromContactInfo(contact_info);
@@ -531,8 +533,8 @@ pub const GossipTable = struct {
                 const value = &self.values[index];
                 if (value.timestamp_on_insertion >= self.minimum_insertion_timestamp) {
                     return switch (value.value.data) {
-                        .LegacyContactInfo => |*lci| self.converted_contact_infos.getPtr(lci.id).?,
-                        .ContactInfo => |*ci| ci,
+                        .LegacyContactInfo => |lci| self.converted_contact_infos.getPtr(lci.*.id).?,
+                        .ContactInfo => |ci| ci,
                         else => unreachable,
                     };
                 }

@@ -16,6 +16,8 @@ const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const PruneData = sig.gossip.prune.PruneData;
 
+const createAs = sig.utils.allocators.createAs;
+
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 /// Analogous to [Protocol](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/cluster_info.rs#L268)
@@ -111,7 +113,7 @@ test "push message serialization is predictable" {
     const empty_size = bincode.sizeOf(msg, .{});
 
     const keypair = try KeyPair.create(null);
-    const value = SignedGossipData.initRandom(prng.random(), &keypair);
+    const value = SignedGossipData.initRandom(std.testing.allocator, prng.random(), &keypair);
     const value_size = bincode.sizeOf(value, .{});
     try values.append(value);
     try std.testing.expect(values.items.len == 1);
@@ -179,7 +181,7 @@ test "pull request serializes and deserializes" {
         .shred_version = 0,
     };
     const value = SignedGossipData.initSigned(&keypair, .{
-        .LegacyContactInfo = legacy_contact_info,
+        .LegacyContactInfo = try createAs(std.testing.allocator, legacy_contact_info),
     });
 
     var filter = GossipPullFilter.init(testing.allocator);
@@ -220,8 +222,9 @@ test "push message serializes and deserializes correctly" {
     };
 
     const data = GossipData{
-        .LegacyContactInfo = legacy_contact_info,
+        .LegacyContactInfo = try createAs(std.testing.allocator, legacy_contact_info),
     };
+    defer data.deinit(std.testing.allocator);
 
     const rust_bytes = [_]u8{
         2,   0,   0,   0,   138, 136, 227, 221, 116, 9,   241, 149, 253, 82,  219, 45,

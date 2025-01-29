@@ -13,6 +13,7 @@ const GossipTable = sig.gossip.GossipTable;
 const SignedGossipData = sig.gossip.SignedGossipData;
 const RwMux = sig.sync.RwMux;
 
+const createAs = sig.utils.allocators.createAs;
 const exp = std.math.exp;
 const shuffleFirstN = sig.utils.slice.shuffleFirstN;
 
@@ -276,7 +277,7 @@ test "building pull filters" {
         var legacy_contact_info = LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
         const gossip_value = SignedGossipData.initSigned(&kp, .{
-            .LegacyContactInfo = legacy_contact_info,
+            .LegacyContactInfo = try createAs(std.testing.allocator, legacy_contact_info),
         });
 
         _ = try gossip_table.insert(gossip_value, 0);

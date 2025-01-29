@@ -24,6 +24,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Duration = sig.time.Duration;
 const Channel = sig.sync.Channel;
 
+const createAs = sig.utils.allocators.createAs;
 const getWallclockMs = sig.time.getWallclockMs;
 const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
 
@@ -344,7 +345,7 @@ pub fn randomSignedGossipData(
     // TODO: support other types of gossip data
     const info = ContactInfo.init(allocator, info_pubkey, now, SHRED_VERSION);
 
-    return SignedGossipData.initSigned(&keypair, .{ .ContactInfo = info });
+    return SignedGossipData.initSigned(&keypair, .{ .ContactInfo = try createAs(allocator, info) });
 }
 
 pub fn randomPushMessage(
@@ -412,7 +413,7 @@ pub fn randomPullRequest(
 ) !Packet {
     const value = SignedGossipData.initSigned(
         keypair,
-        .{ .ContactInfo = contact_info },
+        .{ .ContactInfo = try createAs(allocator, contact_info) },
     );
     return randomPullRequestWithContactInfo(
         allocator,

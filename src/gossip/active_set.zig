@@ -12,6 +12,7 @@ const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipTable = sig.gossip.table.GossipTable;
 
+const createAs = sig.utils.allocators.createAs;
 const getWallclockMs = sig.time.getWallclockMs;
 const shuffleFirstN = sig.utils.slice.shuffleFirstN;
 
