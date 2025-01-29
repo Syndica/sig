@@ -362,7 +362,7 @@ pub const Vm = struct {
                         try builtin_fn(self);
                     }
                 }
-                if (internal) {
+                if (internal and !resolved) {
                     if (self.executable.function_registry.lookupKey(inst.imm)) |entry| {
                         resolved = true;
                         try self.pushCallFrame();
