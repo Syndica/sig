@@ -1747,14 +1747,35 @@ test "fixed stack out of bounds" {
 test "dynamic frame pointer" {
     const config: Config = .{};
     try testAsm(config,
-        \\entrypoint:
-        \\  add r11, -8
+        \\entrypoint: 
+        \\  add r10, -64
+        \\  stxdw [r10+8], r10
+        \\  call function_foo
+        \\  ldxdw r0, [r10+8]
+        \\  exit
+        \\function_foo:
+        \\  exit
+    , memory.STACK_START + config.stackSize() - 64);
+
+    try testAsm(config,
+        \\entrypoint: 
+        \\  add r10, -64
         \\  call function_foo
         \\  exit
         \\function_foo:
         \\  mov r0, r10
         \\  exit
-    , memory.STACK_START + config.stackSize() - 8);
+    , memory.STACK_START + config.stackSize() - 64);
+
+    try testAsm(config,
+        \\entrypoint: 
+        \\  call function_foo
+        \\  mov r0, r10
+        \\  exit
+        \\function_foo:
+        \\  add r10, -64
+        \\  exit
+    , memory.STACK_START + config.stackSize());
 }
 
 fn testElf(

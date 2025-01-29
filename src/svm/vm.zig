@@ -17,7 +17,6 @@ pub const Vm = struct {
     loader: *const BuiltinProgram,
 
     vm_addr: u64,
-    stack_pointer: u64,
     call_frames: std.ArrayListUnmanaged(CallFrame),
     depth: u64,
     instruction_count: u64,
@@ -45,7 +44,6 @@ pub const Vm = struct {
             .allocator = allocator,
             .registers = std.EnumArray(sbpf.Instruction.Register, u64).initFill(0),
             .memory_map = memory_map,
-            .stack_pointer = stack_pointer,
             .depth = 0,
             .call_frames = try std.ArrayListUnmanaged(CallFrame).initCapacity(allocator, 64),
             .instruction_count = 0,
@@ -53,7 +51,7 @@ pub const Vm = struct {
             .loader = loader,
         };
 
-        self.registers.set(.r10, self.stack_pointer);
+        self.registers.set(.r10, stack_pointer);
         self.registers.set(.r1, memory.INPUT_START);
         self.registers.set(.pc, executable.entry_pc);
 
@@ -144,17 +142,8 @@ pub const Vm = struct {
                 const rhs: u64 = if (opcode.is64()) rhs_large else @as(u32, @truncate(rhs_large));
 
                 var result: u64 = switch (@intFromEnum(opcode) & 0xF0) {
-                    Instruction.add => value: {
-                        if (opcode == .add64_imm and
-                            inst.dst == .r11 and
-                            version.enableDynamicStackFrames())
-                        {
-                            self.stack_pointer +%= rhs;
-                            break :value lhs; // value is unchanged
-                        }
-                        break :value lhs +% rhs;
-                    },
                     // zig fmt: off
+                    Instruction.add    => lhs +% rhs,
                     Instruction.sub    => lhs -% rhs,
                     Instruction.div    => try std.math.divTrunc(u64, lhs, rhs),
                     Instruction.xor    => lhs ^ rhs,
@@ -345,7 +334,7 @@ pub const Vm = struct {
                 self.registers.set(.r10, frame.fp);
                 @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
                 if (!version.enableDynamicStackFrames()) {
-                    self.stack_pointer -= self.executable.config.stack_frame_size;
+                    registers.getPtr(.r10).* -= self.executable.config.stack_frame_size;
                 }
                 next_pc = frame.return_pc;
             },
@@ -420,9 +409,8 @@ pub const Vm = struct {
         }
 
         if (!self.executable.version.enableDynamicStackFrames()) {
-            self.stack_pointer += self.executable.config.stack_frame_size;
+            self.registers.getPtr(.r10).* += self.executable.config.stack_frame_size;
         }
-        self.registers.set(.r10, self.stack_pointer);
     }
 
     /// Performs a i64 sign-extension. This is commonly needed in SBPV1.
