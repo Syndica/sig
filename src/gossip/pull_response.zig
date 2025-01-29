@@ -47,7 +47,7 @@ pub fn filterSignedGossipDatas(
     errdefer output.deinit();
 
     for (match_indexs.items) |entry_index| {
-        var entry = gossip_table.store.iterator().values[entry_index];
+        var entry = gossip_table.store.getByIndex(entry_index);
 
         // entry is too new
         if (entry.value.wallclock() > caller_wallclock_with_jitter) {
@@ -58,7 +58,7 @@ pub fn filterSignedGossipDatas(
             continue;
         }
         // exclude contact info (? not sure why - labs does it)
-        if (entry.value.data == GossipData.ContactInfo) {
+        if (entry.value.data == .ContactInfo) {
             continue;
         }
 

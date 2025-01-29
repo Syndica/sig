@@ -54,7 +54,9 @@ pub const GossipDumpService = struct {
             // write records to string
             var encoder_buf: [50]u8 = undefined;
             const base58Encoder = @import("base58-zig").Encoder.init(.{});
-            for (gossip_table.store.values()) |gossip_versioned_data| {
+            var iterator = gossip_table.store.iterator();
+            while (iterator.next()) |entry| {
+                const gossip_versioned_data = entry.getVersionedData();
                 const val: SignedGossipData = gossip_versioned_data.value;
                 const size = try base58Encoder.encode(
                     &gossip_versioned_data.value_hash.data,
