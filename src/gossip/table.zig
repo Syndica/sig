@@ -669,52 +669,64 @@ pub const GossipTable = struct {
             std.debug.assert(did_remove);
         }
 
-        // account for the swap with the last element
+        self.accountForSwapRemove(entry_index);
+    }
+
+    /// Called during remove to account for the swap that occurs when an item is
+    /// swapRemoved from the map. The last item from the map is moved into that
+    /// location, so the indices pointing to that item need to be updated to
+    /// point to its new index.
+    ///
+    /// This is separated into a different function to isolate the state to
+    /// avoid mistakes. The new entry must be acquired from map using the
+    /// existing index. The prior entry does not point to the correct item.
+    fn accountForSwapRemove(self: *GossipTable, entry_index: usize) void {
         const table_len = self.len();
         // if (index == table_len) then it was already the last
         // element so we dont need to do anything
-        if (entry_index < table_len) {
-            // replace data with newly swapped value
-            gossip_data = entry.getGossipData();
-            // gossip_data now points to the element which was swapped in and needs updating
-            const new_index_cursor = entry.metadata_ptr.cursor_on_insertion;
-            const new_index_origin = gossip_data.id();
+        std.debug.assert(entry_index <= table_len);
+        if (entry_index == table_len) return;
 
-            // update shards
-            self.shards.remove(table_len, &entry.metadata_ptr.value_hash);
-            // wont fail because we just removed a value in line above
-            self.shards.insert(entry_index, &entry.metadata_ptr.value_hash) catch unreachable;
+        // replace data with newly swapped value
+        const entry = self.store.getEntryByIndex(entry_index);
+        // gossip_data now points to the element which was swapped in and needs updating
+        const new_index_cursor = entry.metadata_ptr.cursor_on_insertion;
+        const new_index_origin = entry.getGossipData().id();
 
-            // these also should not fail since there are no allocations - just changing the value
-            switch (entry.tag()) {
-                .ContactInfo => {
-                    const did_remove = self.contact_infos.swapRemove(table_len);
-                    std.debug.assert(did_remove);
-                    self.contact_infos.put(entry_index, {}) catch unreachable;
-                },
-                .LegacyContactInfo => {
-                    const did_remove = self.contact_infos.swapRemove(table_len);
-                    std.debug.assert(did_remove);
-                    self.contact_infos.put(entry_index, {}) catch unreachable;
-                },
-                .Vote => {
-                    self.votes.put(new_index_cursor, entry_index) catch unreachable;
-                },
-                .EpochSlots => {
-                    self.epoch_slots.put(new_index_cursor, entry_index) catch unreachable;
-                },
-                .DuplicateShred => {
-                    self.duplicate_shreds.put(new_index_cursor, entry_index) catch unreachable;
-                },
-                else => {},
-            }
-            self.entries.put(new_index_cursor, entry_index) catch unreachable;
+        // update shards
+        self.shards.remove(table_len, &entry.metadata_ptr.value_hash);
+        // wont fail because we just removed a value in line above
+        self.shards.insert(entry_index, &entry.metadata_ptr.value_hash) catch unreachable;
 
-            const new_entry_indexs = self.pubkey_to_values.getEntry(new_index_origin).?.value_ptr;
-            const did_remove = new_entry_indexs.swapRemove(table_len);
-            std.debug.assert(did_remove);
-            new_entry_indexs.put(entry_index, {}) catch unreachable;
+        // these also should not fail since there are no allocations - just changing the value
+        switch (entry.tag()) {
+            .ContactInfo => {
+                const did_remove = self.contact_infos.swapRemove(table_len);
+                std.debug.assert(did_remove);
+                self.contact_infos.put(entry_index, {}) catch unreachable;
+            },
+            .LegacyContactInfo => {
+                const did_remove = self.contact_infos.swapRemove(table_len);
+                std.debug.assert(did_remove);
+                self.contact_infos.put(entry_index, {}) catch unreachable;
+            },
+            .Vote => {
+                self.votes.put(new_index_cursor, entry_index) catch unreachable;
+            },
+            .EpochSlots => {
+                self.epoch_slots.put(new_index_cursor, entry_index) catch unreachable;
+            },
+            .DuplicateShred => {
+                self.duplicate_shreds.put(new_index_cursor, entry_index) catch unreachable;
+            },
+            else => {},
         }
+        self.entries.put(new_index_cursor, entry_index) catch unreachable;
+
+        const new_entry_indexs = self.pubkey_to_values.getEntry(new_index_origin).?.value_ptr;
+        const did_remove = new_entry_indexs.swapRemove(table_len);
+        std.debug.assert(did_remove);
+        new_entry_indexs.put(entry_index, {}) catch unreachable;
     }
 
     /// Trim when over 90% of max capacity

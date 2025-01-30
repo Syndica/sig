@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
 const Signature = sig.core.Signature;
+const SplitUnionList = sig.utils.collections.SplitUnionList;
 
 const GossipData = gossip.data.GossipData;
 const GossipDataTag = gossip.data.GossipDataTag;
@@ -16,7 +17,7 @@ const assert = std.debug.assert;
 
 pub const GossipMap = struct {
     key_to_index: std.AutoArrayHashMapUnmanaged(GossipKey, usize) = .{},
-    gossip_data: std.MultiArrayList(GossipData) = .{},
+    gossip_data: SplitUnionList(GossipData) = SplitUnionList(GossipData).init(),
     metadata: std.ArrayListUnmanaged(Metadata) = .{},
 
     pub const Metadata = struct {
@@ -65,7 +66,7 @@ pub const GossipMap = struct {
         const index = entry.value_ptr.*;
         return .{
             .key_ptr = entry.key_ptr,
-            .gossip_data_slice = self.gossip_data.slice(),
+            .gossip_data_entry = self.gossip_data.getEntry(index),
             .metadata_ptr = &self.metadata.items[index],
             .index = index,
         };
@@ -73,8 +74,8 @@ pub const GossipMap = struct {
 
     pub fn getEntryByIndex(self: *const GossipMap, index: usize) Entry {
         return .{
-            .key_ptr = &self.key_to_index.values()[index],
-            .gossip_data_slice = self.gossip_data.slice(),
+            .key_ptr = &self.key_to_index.keys()[index],
+            .gossip_data_entry = self.gossip_data.getEntry(index),
             .metadata_ptr = &self.metadata.items[index],
             .index = index,
         };
@@ -83,11 +84,11 @@ pub const GossipMap = struct {
     pub const Entry = struct {
         key_ptr: *GossipKey,
         metadata_ptr: *Metadata,
-        gossip_data_slice: std.MultiArrayList(GossipData).Slice,
+        gossip_data_entry: SplitUnionList(GossipData).Entry,
         index: usize,
 
         pub fn tag(self: Entry) GossipDataTag {
-            return self.gossip_data_slice.items(.tags)[self.index];
+            return self.gossip_data_entry.tag;
         }
 
         pub fn getVersionedData(self: Entry) GossipVersionedData {
@@ -113,20 +114,18 @@ pub const GossipMap = struct {
         }
 
         pub fn getGossipData(self: Entry) GossipData {
-            return self.gossip_data_slice.get(self.index);
+            return self.gossip_data_entry.read();
         }
 
         pub fn setGossipData(self: Entry, gossip_data: GossipData) void {
-            // var: the method has incorrect api, requiring a mutable pointer for no reason
-            var slice = self.gossip_data_slice;
-            return slice.set(self.index, gossip_data);
+            return self.gossip_data_entry.write(gossip_data);
         }
 
         pub fn getTypedPtr(
             self: *const Entry,
             comptime gossip_tag: GossipDataTag,
         ) *const gossip_tag.Value() {
-            return &@field(self.gossip_data_slice.items(.data)[self.index], @tagName(gossip_tag));
+            return &@field(self.gossip_data_entry.items(.data)[self.index], @tagName(gossip_tag));
         }
     };
 
@@ -148,11 +147,11 @@ pub const GossipMap = struct {
         comptime tag: GossipDataTag,
         index: usize,
     ) *const tag.Value() {
-        return &@field(self.gossip_data.items(.data)[index], @tagName(tag));
+        return self.gossip_data.getTypedConst(tag, index);
     }
 
     pub fn tagOfIndex(self: *const GossipMap, index: usize) GossipDataTag {
-        return self.gossip_data.items(.tags)[index];
+        return self.gossip_data.getTag(index);
     }
 
     pub fn swapRemove(self: *GossipMap, key: GossipKey) bool {
@@ -169,17 +168,17 @@ pub const GossipMap = struct {
     pub fn getOrPut(self: *GossipMap, allocator: Allocator, key: GossipKey) !GetOrPut {
         const key_gop = try self.key_to_index.getOrPut(allocator, key);
 
-        const metadata_ptr = if (key_gop.found_existing) blk: {
-            break :blk &self.metadata.items[key_gop.index];
+        const metadata_ptr, const list_entry = if (key_gop.found_existing) .{
+            &self.metadata.items[key_gop.index], self.gossip_data.getEntry(key_gop.index), //
         } else blk: {
             key_gop.value_ptr.* = key_gop.index;
             const metadata_ptr = try self.metadata.addOne(allocator);
             errdefer _ = self.metadata.pop();
-            const gd_index = try self.gossip_data.addOne(allocator);
-            assert(gd_index == key_gop.index);
-            assert(gd_index == self.metadata.items.len - 1);
+            const list_entry = try self.gossip_data.addOne(allocator, key);
+            assert(list_entry.index == key_gop.index);
+            assert(list_entry.index == self.metadata.items.len - 1);
             errdefer _ = self.gossip_data.pop();
-            break :blk metadata_ptr;
+            break :blk .{ metadata_ptr, list_entry };
         };
 
         assert(key_gop.value_ptr.* == key_gop.index);
@@ -187,7 +186,7 @@ pub const GossipMap = struct {
             .entry = .{
                 .key_ptr = key_gop.key_ptr,
                 .metadata_ptr = metadata_ptr,
-                .gossip_data_slice = self.gossip_data.slice(),
+                .gossip_data_entry = list_entry,
                 .index = key_gop.index,
             },
             .found_existing = key_gop.found_existing,
@@ -202,21 +201,21 @@ pub const GossipMap = struct {
     pub fn iterator(self: *const GossipMap) Iterator {
         return .{
             .key_to_index = self.key_to_index.iterator(),
-            .gossip_data = self.gossip_data.slice(),
+            .gossip_data = self.gossip_data.iterator(),
             .metadata = self.metadata.items,
         };
     }
 
     pub const Iterator = struct {
         key_to_index: std.AutoArrayHashMapUnmanaged(GossipKey, usize).Iterator,
-        gossip_data: std.MultiArrayList(GossipData).Slice,
+        gossip_data: SplitUnionList(GossipData).Iterator,
         metadata: []Metadata,
 
         pub fn next(self: *Iterator) ?Entry {
             return if (self.key_to_index.next()) |key_index| .{
                 .key_ptr = key_index.key_ptr,
                 .metadata_ptr = &self.metadata[key_index.value_ptr.*],
-                .gossip_data_slice = self.gossip_data,
+                .gossip_data_entry = self.gossip_data.next() orelse unreachable,
                 .index = key_index.value_ptr.*,
             } else null;
         }
