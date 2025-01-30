@@ -3,12 +3,9 @@ const sig = @import("../sig.zig");
 
 const leb = std.leb;
 
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-
-const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
+const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
-const CheckedReader = sig.utils.io.CheckedReader;
 
 pub const Transaction = struct {
     /// MAX_BYTES is the maximum size of a transaction.
@@ -65,24 +62,28 @@ pub const Transaction = struct {
     /// `AddressLookup`'s are used to load account account addresses from lookup tables.
     maybe_address_lookups: ?[]const AddressLookup = null,
 
+    pub const @"!bincode-config": sig.bincode.FieldConfig(Transaction) = .{
+        .deserializer = deserialize,
+        .serializer = serialize,
+    };
+
+    pub const EMPTY = Transaction{
+        .signatures = &.{},
+        .version = .Legacy,
+        .signature_count = 0,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 0,
+        .account_keys = &.{},
+        .recent_blockhash = .{ .data = [_]u8{0x00} ** Hash.SIZE },
+        .instructions = &.{},
+        .maybe_address_lookups = null,
+    };
+
     pub const Version = enum(u8) {
         /// Legacy transaction without address lookups.
         Legacy = 0xFF,
         /// Transaction with address lookups.
         V0 = 0x00,
-
-        pub fn serialize(self: Version, writer: anytype) !void {
-            switch (self) {
-                Version.Legacy => {},
-                Version.V0 => try writer.writeByte(0x80),
-            }
-        }
-
-        pub fn deserialize(reader: *CheckedReader) !Version {
-            if (try reader.peekByte() & 0x80 == 0x80)
-                return if (try reader.readByte() == 0x80) Version.V0 else error.InvalidVersion;
-            return Version.Legacy;
-        }
     };
 
     pub const Instruction = struct {
@@ -119,16 +120,22 @@ pub const Transaction = struct {
             try writer.writeAll(self.data);
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, reader: *CheckedReader) !Instruction {
+        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !Instruction {
             const program_index = try reader.readByte();
 
-            const account_indexes =
-                try reader.readBytesAlloc(allocator, try leb.readULEB128(u16, reader));
+            const account_indexes = try allocator.alloc(
+                u8,
+                try leb.readULEB128(u16, reader),
+            );
             errdefer allocator.free(account_indexes);
+            try reader.readNoEof(account_indexes);
 
-            const data =
-                try reader.readBytesAlloc(allocator, try leb.readULEB128(u16, reader));
+            const data = try allocator.alloc(
+                u8,
+                try leb.readULEB128(u16, reader),
+            );
             errdefer allocator.free(data);
+            try reader.readNoEof(data);
 
             return .{
                 .program_index = program_index,
@@ -172,17 +179,22 @@ pub const Transaction = struct {
             try writer.writeAll(self.readonly_indexes);
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, reader: *CheckedReader) !AddressLookup {
-            var table_address = Pubkey{ .data = [_]u8{0x00} ** Pubkey.SIZE };
-            try reader.readBytesInto(&table_address.data, Pubkey.SIZE);
+        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !AddressLookup {
+            const table_address: Pubkey = .{ .data = try reader.readBytesNoEof(Pubkey.SIZE) };
 
-            const writable_indexes =
-                try reader.readBytesAlloc(allocator, try leb.readULEB128(u16, reader));
+            const writable_indexes = try allocator.alloc(
+                u8,
+                try leb.readULEB128(u16, reader),
+            );
             errdefer allocator.free(writable_indexes);
+            try reader.readNoEof(writable_indexes);
 
-            const readonly_indexes =
-                try reader.readBytesAlloc(allocator, try leb.readULEB128(u16, reader));
+            const readonly_indexes = try allocator.alloc(
+                u8,
+                try leb.readULEB128(u16, reader),
+            );
             errdefer allocator.free(readonly_indexes);
+            try reader.readNoEof(readonly_indexes);
 
             return .{
                 .table_address = table_address,
@@ -191,20 +203,6 @@ pub const Transaction = struct {
             };
         }
     };
-
-    pub fn empty() Transaction {
-        return .{
-            .signatures = &.{},
-            .version = .Legacy,
-            .signature_count = 0,
-            .readonly_signed_count = 0,
-            .readonly_unsigned_count = 0,
-            .account_keys = &.{},
-            .recent_blockhash = .{ .data = [_]u8{0x00} ** Hash.SIZE },
-            .instructions = &.{},
-            .maybe_address_lookups = null,
-        };
-    }
 
     pub fn clone(self: Transaction, allocator: std.mem.Allocator) !Transaction {
         const signatures = try allocator.dupe(Signature, self.signatures);
@@ -260,34 +258,11 @@ pub const Transaction = struct {
         _ = self;
     }
 
-    /// Write a **valid** transaction to a slice of bytes.
-    pub fn writeToSlice(self: Transaction, slice: []u8) ![]u8 {
-        var fbs = std.io.fixedBufferStream(slice);
-        try self.serialize(&fbs.writer());
-        return fbs.getWritten();
-    }
-
     /// Write a signable component of **valid** transaction to a slice of bytes.
     pub fn writeSignableToSlice(self: Transaction, slice: []u8) ![]u8 {
         var fbs = std.io.fixedBufferStream(slice);
-        try self.serialize(&fbs.writer());
+        try serialize(&fbs.writer(), self, .{});
         return fbs.getWritten();
-    }
-
-    /// Read a transaction from a slice of bytes.
-    /// Returns an error if the transaction is invalid.
-    pub fn readFromSlice(allocator: std.mem.Allocator, slice: []const u8) !Transaction {
-        var reader = CheckedReader.init(slice);
-        return try Transaction.deserialize(allocator, &reader);
-    }
-
-    /// Serialize a **valid** transaction to a slice of bytes.
-    pub fn serialize(self: Transaction, writer: anytype) !void {
-        // WARN: Truncate okay if transaction is valid
-        try writer.writeByte(@truncate(self.signatures.len));
-        for (self.signatures) |sgn| try writer.writeAll(&sgn.data);
-        try self.version.serialize(writer);
-        try self.serializeSignable(writer);
     }
 
     /// Serialize the signed component of a **valid** transaction.
@@ -312,67 +287,103 @@ pub const Transaction = struct {
             for (alts) |alt| try alt.serialize(writer);
         }
     }
-
-    /// TODO: Check for validity of the transaction as it is deserialized and return an error if the transaction is invalid.
-    /// [firedancer] https://github.com/firedancer-io/firedancer/blob/8f77acd876ba3c13b6628b66c4266c0454a357f7/src/ballet/txn/fd_txn_parse.c#L7
-    pub fn deserialize(allocator: std.mem.Allocator, reader: *CheckedReader) !Transaction {
-        const signatures = try allocator.alloc(Signature, try reader.readByte());
-        errdefer allocator.free(signatures);
-        for (signatures) |*sgn| try reader.readBytesInto(sgn.data[0..], Signature.SIZE);
-
-        const version = try Version.deserialize(reader);
-        const signature_count = try reader.readByte();
-        const readonly_signed_count = try reader.readByte();
-        const readonly_unsigned_count = try reader.readByte();
-
-        const account_keys = try allocator.alloc(Pubkey, try leb.readULEB128(u16, reader));
-        errdefer allocator.free(account_keys);
-        for (account_keys) |*id| try reader.readBytesInto(id.data[0..], Pubkey.SIZE);
-
-        const recent_blockhash = Hash{ .data = (try reader.readBytes(Hash.SIZE))[0..Hash.SIZE].* };
-
-        const instructions = try allocator.alloc(Instruction, try leb.readULEB128(u16, reader));
-        errdefer {
-            for (instructions) |instr| instr.deinit(allocator);
-            allocator.free(instructions);
-        }
-        for (instructions) |*instr| instr.* = try Instruction.deserialize(allocator, reader);
-
-        const maybe_address_lookups = if (version == Version.V0) blk: {
-            const alts = try allocator.alloc(AddressLookup, try leb.readULEB128(u16, reader));
-            errdefer {
-                for (alts) |alt| alt.deinit(allocator);
-                allocator.free(alts);
-            }
-            for (alts) |*alt| alt.* = try AddressLookup.deserialize(allocator, reader);
-            break :blk alts;
-        } else null;
-
-        return .{
-            .signatures = signatures,
-            .version = version,
-            .signature_count = signature_count,
-            .readonly_signed_count = readonly_signed_count,
-            .readonly_unsigned_count = readonly_unsigned_count,
-            .account_keys = account_keys,
-            .recent_blockhash = recent_blockhash,
-            .instructions = instructions,
-            .maybe_address_lookups = maybe_address_lookups,
-        };
-    }
 };
+
+/// Serialize a **valid** transaction to a slice of bytes.
+pub fn serialize(writer: anytype, data: anytype, params: sig.bincode.Params) !void {
+    _ = params;
+
+    // WARN: Truncate okay if transaction is valid
+    try writer.writeByte(@truncate(data.signatures.len));
+    for (data.signatures) |sgn| try writer.writeAll(&sgn.data);
+
+    switch (data.version) {
+        Transaction.Version.Legacy => {},
+        Transaction.Version.V0 => try writer.writeByte(0x80),
+    }
+
+    try data.serializeSignable(writer);
+}
+
+/// TODO: Check for validity of the transaction as it is deserialized and return an error if the transaction is invalid.
+/// [firedancer] https://github.com/firedancer-io/firedancer/blob/8f77acd876ba3c13b6628b66c4266c0454a357f7/src/ballet/txn/fd_txn_parse.c#L7
+pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: sig.bincode.Params) !Transaction {
+    _ = params;
+
+    const signatures = try allocator.alloc(Signature, try reader.readByte());
+    errdefer allocator.free(signatures);
+    for (signatures) |*sgn| sgn.* = .{ .data = try reader.readBytesNoEof(Signature.SIZE) };
+
+    // The next byte is either the version or the signature count,
+    // If the first bit is set, then the remaining bits denote the version number.
+    // Otherwise it is the signature count.
+    const version_or_signature_count = try reader.readByte();
+    const version = if (version_or_signature_count & 0x80 == 0x80)
+        if (version_or_signature_count == 0x80)
+            Transaction.Version.V0
+        else
+            return error.InvalidVersion
+    else
+        Transaction.Version.Legacy;
+
+    const signature_count = if (version == Transaction.Version.Legacy) version_or_signature_count else try reader.readByte();
+    const readonly_signed_count = try reader.readByte();
+    const readonly_unsigned_count = try reader.readByte();
+
+    const account_keys = try allocator.alloc(Pubkey, try leb.readULEB128(u16, reader));
+    errdefer allocator.free(account_keys);
+    for (account_keys) |*id| id.* = .{ .data = try reader.readBytesNoEof(Pubkey.SIZE) };
+
+    const recent_blockhash: Hash = .{ .data = try reader.readBytesNoEof(Hash.SIZE) };
+
+    const instructions = try allocator.alloc(Transaction.Instruction, try leb.readULEB128(u16, reader));
+
+    errdefer {
+        for (instructions) |instr| instr.deinit(allocator);
+        allocator.free(instructions);
+    }
+    for (instructions) |*instr| instr.* = try Transaction.Instruction.deserialize(allocator, reader);
+
+    const maybe_address_lookups = if (version == Transaction.Version.V0) blk: {
+        const alts = try allocator.alloc(Transaction.AddressLookup, try leb.readULEB128(u16, reader));
+        errdefer {
+            for (alts) |alt| alt.deinit(allocator);
+            allocator.free(alts);
+        }
+        for (alts) |*alt| alt.* = try Transaction.AddressLookup.deserialize(allocator, reader);
+        break :blk alts;
+    } else null;
+
+    return .{
+        .signatures = signatures,
+        .version = version,
+        .signature_count = signature_count,
+        .readonly_signed_count = readonly_signed_count,
+        .readonly_unsigned_count = readonly_unsigned_count,
+        .account_keys = account_keys,
+        .recent_blockhash = recent_blockhash,
+        .instructions = instructions,
+        .maybe_address_lookups = maybe_address_lookups,
+    };
+}
 
 test "legacy_transaction_parse" {
     const allocator = std.testing.allocator;
 
-    const deserialized_transaction = try Transaction.readFromSlice(
+    const deserialized_transaction = try sig.bincode.readFromSlice(
         allocator,
+        Transaction,
         transaction_legacy_example.as_bytes[0..],
+        .{},
     );
     defer deserialized_transaction.deinit(allocator);
 
     var serialize_buffer = [_]u8{0} ** Transaction.MAX_BYTES;
-    const serialized_transaction = try deserialized_transaction.writeToSlice(&serialize_buffer);
+    const serialized_transaction = try sig.bincode.writeToSlice(
+        &serialize_buffer,
+        deserialized_transaction,
+        .{},
+    );
 
     try std.testing.expectEqualSlices(
         u8,

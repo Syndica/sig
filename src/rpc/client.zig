@@ -324,7 +324,7 @@ pub const Client = struct {
         defer request.deinit();
 
         var buffer: [sig.net.PACKET_DATA_SIZE]u8 = undefined;
-        const written = try transaction.writeToSlice(&buffer);
+        const written = try sig.bincode.writeToSlice(&buffer, transaction, .{});
 
         const endec = base58.Table.BITCOIN;
         var encoded_buffer: [base58.encodedMaxSize(buffer.len)]u8 = undefined;
