@@ -241,7 +241,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            var allocator = self.arena_state.allocator();
+            const allocator = self.arena_state.allocator();
             const duped_name = try allocator.dupe(u8, name);
 
             const gop = try self.metrics.getOrPut(allocator, duped_name);
