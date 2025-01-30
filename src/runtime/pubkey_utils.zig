@@ -29,14 +29,14 @@ pub fn createWithSeed(
 ) InstructionError!Pubkey {
     if (seed.len > MAX_SEED_LEN) {
         eic.setCustomError(ERROR_MAX_SEED_LEN_EXCEEDED);
-        return .Custom;
+        return InstructionError.Custom;
     }
 
     const offset = owner.data.len - PDA_MARKER.len;
     if (std.mem.eql(u8, owner.data[offset..], PDA_MARKER)) {
         eic.setCustomError(ERROR_ILLEGAL_OWNER);
-        return .Custom;
+        return InstructionError.Custom;
     }
 
-    return .{ .data = utils.hashv(&.{ base.data, seed, owner.data }) };
+    return .{ .data = utils.hashv(&.{ &base.data, seed, &owner.data }) };
 }

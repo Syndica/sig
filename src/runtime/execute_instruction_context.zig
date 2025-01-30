@@ -22,6 +22,9 @@ pub const ExecuteInstructionContext = struct {
     /// The accounts used by this instruction and their required metadata
     accounts: std.BoundedArray(AccountInfo, MAX_INSTRUCTION_ACCOUNTS),
 
+    /// Instruction data
+    instruction_data: []const u8,
+
     pub const AccountInfo = struct {
         pubkey: Pubkey,
         is_signer: bool,
@@ -36,13 +39,14 @@ pub const ExecuteInstructionContext = struct {
         try self.etc.checkAccountsResizeDelta(delta);
     }
 
-    fn checkAccountAtIndex(
+    pub fn checkAccountAtIndex(
         eic: *ExecuteInstructionContext,
         index: usize,
         expected: Pubkey,
     ) InstructionError!void {
         if (index >= eic.accounts.len) return error.NotEnoughAccountKeys;
-        if (!expected.equals(eic.getAccountPubkey(index))) return error.InvalidArgument;
+        const actual = try eic.getAccountPubkey(index);
+        if (!expected.equals(&actual)) return error.InvalidArgument;
     }
 
     pub fn checkIsSigner(
@@ -85,11 +89,11 @@ pub const ExecuteInstructionContext = struct {
         index: usize,
     ) error{NotEnoughAccountKeys}!Pubkey {
         if (index >= self.accounts.len) return error.NotEnoughAccountKeys;
-        self.accounts[index].pubkey;
+        return self.accounts.slice()[index].pubkey;
     }
 
     pub fn getBlockhash(self: *const ExecuteInstructionContext) Hash {
-        self.etc.getBlockhash();
+        return self.etc.getBlockhash();
     }
 
     pub fn getBorrowedAccount(
@@ -97,15 +101,15 @@ pub const ExecuteInstructionContext = struct {
         index: usize,
     ) InstructionError!BorrowedAccount {
         if (index >= self.accounts.len) return error.NotEnoughAccountKeys;
-        return self.etc.getBorrowedAccount(self, &self.accounts.get(index));
+        return self.etc.getBorrowedAccount(self, &self.accounts.constSlice()[index]);
     }
 
     pub fn getLamportsPerSignature(self: *const ExecuteInstructionContext) u64 {
-        self.etc.getLamportsPerSignature();
+        return self.etc.getLamportsPerSignature();
     }
 
     pub fn getSysvar(self: *const ExecuteInstructionContext, comptime T: type) error{UnsupportedSysvar}!T {
-        self.etc.getSysvar(T);
+        return try self.etc.getSysvar(T);
     }
 
     pub fn isOwner(self: *const ExecuteInstructionContext, pubkey: Pubkey) bool {

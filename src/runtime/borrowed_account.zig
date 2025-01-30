@@ -22,25 +22,24 @@ pub const BorrowedAccount = struct {
     etc_info_write_guard: RwMux(ExecuteTransactionContext.AccountInfo).WLockGuard,
 
     /// Releases the write guard on the account.
-    pub fn deinit(self: *BorrowedAccount) void {
-        _ = self;
-        // self.etc_info_write_guard.unlock();
+    pub fn release(self: *BorrowedAccount) void {
+        self.etc_info_write_guard.unlock();
     }
 
     /// Returns an error if the account data can not be mutated by the current program
     /// https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077-L1078
     pub fn checkDataCanBeChanged(self: BorrowedAccount) InstructionError!void {
-        if (self.isExecutable()) return error.ExecutableDataModified;
-        if (!self.isWritable()) return error.ReadonlyDataModified;
-        if (self.isOwnedByCurrentProgram()) return error.ExternalAccountDataModified;
+        if (self.isExecutable()) return InstructionError.ExecutableDataModified;
+        if (!self.isWritable()) return InstructionError.ReadonlyDataModified;
+        if (!self.isOwnedByCurrentProgram()) return InstructionError.ExternalAccountDataModified;
     }
 
     /// Returns an error if the account data can not be resized by the current program
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1095
     pub fn checkDataCanBeResized(self: BorrowedAccount, length: usize) InstructionError!void {
         const old_length = self.getData().len;
-        if (length != old_length and !self.isOwnedByCurrentProgram()) return error.AccountDataSizeChanged;
-        if (length > MAX_PERMITTED_DATA_LENGTH) return error.InvalidRealloc;
+        if (length != old_length and !self.isOwnedByCurrentProgram()) return InstructionError.AccountDataSizeChanged;
+        if (length > MAX_PERMITTED_DATA_LENGTH) return InstructionError.InvalidRealloc;
         try self.eic.checkAccountsResizeDelta(@intCast(length -| old_length));
     }
 
@@ -64,10 +63,10 @@ pub const BorrowedAccount = struct {
 
     /// Returns a writable slice of the account data (transaction wide)
     /// https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L826
-    pub fn getDataMutable(self: BorrowedAccount) []u8 {
+    pub fn getDataMutable(self: BorrowedAccount) ![]u8 {
         try self.checkDataCanBeChanged();
         try self.touch();
-        return self.getData();
+        return self.etc_info.account.data.items;
     }
 
     /// Returns the owner of this account (transaction wide)
@@ -79,7 +78,7 @@ pub const BorrowedAccount = struct {
     /// Deserializes the account data into a `T` via `T.deserialize(allocator, data)`.
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L968-L969
     pub fn getState(self: BorrowedAccount, allocator: std.mem.Allocator, comptime T: type) error{InvalidAccountData}!T {
-        return T.deserialize(allocator, self.getData()) catch error.InvalidAccountData;
+        return sig.bincode.readFromSlice(allocator, T, self.getData(), .{}) catch error.InvalidAccountData;
     }
 
     /// Returns `true` if the account data is non-empty.
@@ -102,7 +101,8 @@ pub const BorrowedAccount = struct {
     /// Returns `true` if the account data is zeroed or empty.
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L756
     pub fn isDataZeroedOrEmpty(self: BorrowedAccount) bool {
-        std.mem.eql(u8, self.getData(), @splat(0));
+        for (self.getData()) |byte| if (byte != 0) return false;
+        return true;
     }
 
     /// Returns true if the owner of this account is the current `InstructionContext`s last program (instruction wide)
@@ -115,7 +115,7 @@ pub const BorrowedAccount = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L800
     pub fn addLamports(self: *BorrowedAccount, lamports: u64) error{ArithmeticOverflow}!void {
         self.etc_info.account.lamports = std.math.add(u64, self.etc_info.account.lamports, lamports) catch {
-            return error.ArithmeticOverflow;
+            return InstructionError.ArithmeticOverflow;
         };
     }
 
@@ -123,7 +123,7 @@ pub const BorrowedAccount = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L808
     pub fn subtractLamports(self: *BorrowedAccount, lamports: u64) error{ArithmeticOverflow}!void {
         self.etc_info.account.lamports = std.math.sub(u64, self.etc_info.account.lamports, lamports) catch {
-            return error.ArithmeticOverflow;
+            return InstructionError.ArithmeticOverflow;
         };
     }
 
@@ -145,9 +145,9 @@ pub const BorrowedAccount = struct {
         if (!self.isOwnedByCurrentProgram() or
             !self.isWritable() or
             self.isExecutable() or
-            !self.isDataZeroedOrEmpty()) return error.ModifiedProgramId;
+            !self.isDataZeroedOrEmpty()) return InstructionError.ModifiedProgramId;
 
-        if (!self.getOwner().equals(owner)) {
+        if (!self.getOwner().equals(&owner)) {
             try self.touch();
             self.etc_info.account.owner = owner;
         }
@@ -157,10 +157,11 @@ pub const BorrowedAccount = struct {
     /// T must implement `T.serializedSize()` and `T.writeToSlice(slice: []u8)`.
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
     pub fn setState(self: BorrowedAccount, comptime T: type, state: T) InstructionError!void {
-        const data = self.getDataMutable();
-        const serialized_size = state.serializedSize() catch error.GenericError;
-        if (serialized_size > data.len) return error.AccountDataTooSmall;
-        state.writeToSlice(data) catch error.GenericError;
+        const data = try self.getDataMutable();
+        const serialized_size = @sizeOf(T); // TODO: evaluate `T.serializedSize() catch error.GenericError;`
+        if (serialized_size > data.len) return InstructionError.AccountDataTooSmall;
+        const written = sig.bincode.writeToSlice(data, state, .{}) catch return InstructionError.GenericError;
+        if (written.len != serialized_size) return InstructionError.GenericError;
     }
 
     /// Touches the account (transaction wide)

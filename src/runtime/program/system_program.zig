@@ -17,27 +17,6 @@ pub const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION: i64 = 2 * 10 
 const system_program_execute = @import("system_program_execute.zig");
 pub const executeSystemProgramInstruction = system_program_execute.executeSystemProgramInstruction;
 
-pub const SystemProgramError = error{
-    /// An account with the same address already exists.
-    AccountAlreadyInUse,
-    /// Account does not have enough SOL to perform the operation.
-    ResultWithNegativeLamports,
-    /// Cannot assign account to this program id.
-    InvalidProgramId,
-    /// Cannot allocate account data of this length.
-    InvalidAccountDataLength,
-    /// Length of requested seed is too long.
-    MaxSeedLengthExceeded,
-    /// Provided address does not match addressed derived from seed.
-    AddressWithSeedMismatch,
-    /// Advancing stored nonce requires a populated RecentBlockhashes sysvar.
-    NonceNoRecentBlockhashes,
-    /// Stored nonce is still in recent_blockhashes.
-    NonceBlockhashNotExpired,
-    /// Specified nonce does not match stored nonce.
-    NonceUnexpectedBlockhashValue,
-};
-
 pub const SystemProgramInstruction = union(enum) {
     /// Create a new account
     ///
@@ -210,10 +189,25 @@ pub const SystemProgramInstruction = union(enum) {
     /// # Account references
     ///   0. `[WRITE]` Nonce account
     upgrade_nonce_account,
+};
 
-    /// Safely an Instruction from a buffer returning InstructionError.InvalidInstructionData
-    /// on failure
-    pub fn deserialize(data: []const u8) InstructionError!SystemProgramInstruction {
-        _ = data;
-    }
+pub const SystemProgramError = error{
+    /// An account with the same address already exists.
+    AccountAlreadyInUse,
+    /// Account does not have enough SOL to perform the operation.
+    ResultWithNegativeLamports,
+    /// Cannot assign account to this program id.
+    InvalidProgramId,
+    /// Cannot allocate account data of this length.
+    InvalidAccountDataLength,
+    /// Length of requested seed is too long.
+    MaxSeedLengthExceeded,
+    /// Provided address does not match addressed derived from seed.
+    AddressWithSeedMismatch,
+    /// Advancing stored nonce requires a populated RecentBlockhashes sysvar.
+    NonceNoRecentBlockhashes,
+    /// Stored nonce is still in recent_blockhashes.
+    NonceBlockhashNotExpired,
+    /// Specified nonce does not match stored nonce.
+    NonceUnexpectedBlockhashValue,
 };

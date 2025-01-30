@@ -25,7 +25,7 @@ pub const SysvarCache = struct {
     maybe_fees: ?[]const u8,
     maybe_recent_blockhashes: ?[]const u8,
 
-    pub fn default() SysvarCache {
+    pub fn empty() SysvarCache {
         return .{
             .maybe_clock = null,
             .maybe_epoch_schedule = null,
@@ -42,10 +42,11 @@ pub const SysvarCache = struct {
     }
 
     pub fn get(self: SysvarCache, comptime T: type) ?T {
+        _ = self;
         return switch (T) {
-            Fees => if (self.maybe_fees) |fees| @ptrCast(fees.ptr),
-            RecentBlockhashes => if (self.maybe_recent_blockhashes) |recent_blockhashes| @ptrCast(recent_blockhashes.ptr),
-            Rent => if (self.maybe_rent) |rent| @ptrCast(rent.ptr),
+            // Fees => if (self.maybe_fees) |fees| @ptrCast(fees.ptr),
+            // RecentBlockhashes => if (self.maybe_recent_blockhashes) |recent_blockhashes| @ptrCast(recent_blockhashes.ptr),
+            // Rent => if (self.maybe_rent) |rent| @ptrCast(rent.ptr),
             else => @panic("Unsupported sysvar"),
         };
     }

@@ -63,10 +63,8 @@ pub const ExecuteTransactionContext = struct {
         self: *ExecuteTransactionContext,
         compute: u64,
     ) error{ComputationalBudgetExceeded}!void {
-        const compute_meter, const compute_meter_guard = self.compute_meter.writeWithLock();
-        defer compute_meter_guard.unlock();
-        const exceeded = compute_meter < compute;
-        compute_meter.* -|= compute;
+        const exceeded = self.compute_meter < compute;
+        self.compute_meter -|= compute;
         if (exceeded) return error.ComputationalBudgetExceeded;
     }
 
@@ -84,7 +82,8 @@ pub const ExecuteTransactionContext = struct {
 
         // TODO: this lock acquire should be fallible and return
         // `InstructionError.AccountBorrowFailed`
-        var account_info = self.accounts.get(eic_info.index_in_transaction);
+        // writeWithLock takes an address
+        const account_info = &self.accounts.slice()[eic_info.index_in_transaction];
         const etc_info, const etc_info_write_guard = account_info.writeWithLock();
 
         return .{
