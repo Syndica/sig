@@ -60,7 +60,7 @@ pub const Transaction = struct {
     instructions: []const Instruction,
 
     /// `AddressLookup`'s are used to load account account addresses from lookup tables.
-    maybe_address_lookups: ?[]const AddressLookup = null,
+    address_lookups: []const AddressLookup = &.{},
 
     pub const @"!bincode-config": sig.bincode.FieldConfig(Transaction) = .{
         .deserializer = deserialize,
@@ -76,7 +76,7 @@ pub const Transaction = struct {
         .account_keys = &.{},
         .recent_blockhash = .{ .data = [_]u8{0x00} ** Hash.size },
         .instructions = &.{},
-        .maybe_address_lookups = null,
+        .address_lookups = &.{},
     };
 
     pub const Version = enum(u8) {
@@ -216,16 +216,13 @@ pub const Transaction = struct {
         for (self.instructions, 0..) |instr, i|
             instructions[i] = try instr.clone(allocator);
 
-        var maybe_address_lookups: ?[]AddressLookup = null;
-        if (self.maybe_address_lookups) |alts| {
-            maybe_address_lookups = try allocator.alloc(AddressLookup, alts.len);
-            errdefer {
-                for (maybe_address_lookups.?) |alt| alt.deinit(allocator);
-                allocator.free(maybe_address_lookups.?);
-            }
-            for (alts, 0..) |alt, i|
-                maybe_address_lookups.?[i] = try alt.clone(allocator);
+        const address_lookups = try allocator.alloc(AddressLookup, self.address_lookups.len);
+        errdefer {
+            for (address_lookups) |alt| alt.deinit(allocator);
+            allocator.free(address_lookups);
         }
+        for (address_lookups, 0..) |*alt, i|
+            alt.* = try self.address_lookups[i].clone(allocator);
 
         const account_keys = try allocator.dupe(Pubkey, self.account_keys);
 
@@ -238,7 +235,7 @@ pub const Transaction = struct {
             .account_keys = account_keys,
             .recent_blockhash = self.recent_blockhash,
             .instructions = instructions,
-            .maybe_address_lookups = maybe_address_lookups,
+            .address_lookups = address_lookups,
         };
     }
 
@@ -247,10 +244,8 @@ pub const Transaction = struct {
         allocator.free(self.account_keys);
         for (self.instructions) |instr| instr.deinit(allocator);
         allocator.free(self.instructions);
-        if (self.maybe_address_lookups) |alts| {
-            for (alts) |alt| alt.deinit(allocator);
-            allocator.free(alts);
-        }
+        for (self.address_lookups) |alt| alt.deinit(allocator);
+        allocator.free(self.address_lookups);
     }
 
     pub fn sanitize(self: Transaction) !void {
@@ -282,9 +277,9 @@ pub const Transaction = struct {
         for (self.instructions) |instr| try instr.serialize(writer);
 
         // WARN: Truncate okay if transaction is valid
-        if (self.maybe_address_lookups) |alts| {
-            try leb.writeULEB128(writer, @as(u16, @truncate(alts.len)));
-            for (alts) |alt| try alt.serialize(writer);
+        if (self.version != Version.Legacy) {
+            try leb.writeULEB128(writer, @as(u16, @truncate(self.address_lookups.len)));
+            for (self.address_lookups) |alt| try alt.serialize(writer);
         }
     }
 };
@@ -363,7 +358,7 @@ pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: sig.bi
         .account_keys = account_keys,
         .recent_blockhash = recent_blockhash,
         .instructions = instructions,
-        .maybe_address_lookups = maybe_address_lookups,
+        .address_lookups = maybe_address_lookups orelse &.{},
     };
 }
 
@@ -416,7 +411,7 @@ pub const transaction_legacy_example = struct {
             .account_indexes = &.{ 0, 1 },
             .data = &.{ 2, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0 },
         }},
-        .maybe_address_lookups = null,
+        .address_lookups = &.{},
     };
 
     const as_bytes = [_]u8{
@@ -465,7 +460,7 @@ pub const transaction_v0_example = struct {
                 126, 187, 180, 191, 60, 59, 88,  119, 106, 20,  194, 80,  11, 200, 76,  0,
             },
         }},
-        .maybe_address_lookups = &.{.{
+        .address_lookups = &.{.{
             .table_address = Pubkey.fromString("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD") catch unreachable,
             .writable_indexes = &.{ 1, 3, 5, 7, 90 },
             .readonly_indexes = &.{},
