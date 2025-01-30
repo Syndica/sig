@@ -2,7 +2,9 @@ const sig = @import("../sig.zig");
 
 const sysvar = sig.runtime.sysvar;
 
-/// TODO: Why store these values as raw bytes??
+/// TODO:
+///     - Add sysvar's as they are needed
+///     - Evaluate storing as raw bytes or as object representations
 pub const SysvarCache = struct {
     // full account data as provided by bank, including any trailing zero bytes
     // maybe_clock: ?[]const u8,

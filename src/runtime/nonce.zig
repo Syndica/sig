@@ -1,9 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-/// This is direcly imported because it `utils.zig` will be removed in a follow up PR.
-const utils = @import("utils.zig");
-
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const FeeCalculator = sig.runtime.sysvar.Fees.FeeCalculator;
@@ -64,5 +61,5 @@ pub const Data = struct {
 };
 
 pub fn createDurableNonce(blockhash: Hash) Hash {
-    return .{ .data = utils.hashv(&.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data }) };
+    return .{ .data = sig.runtime.tmp_utils.hashv(&.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data }) };
 }

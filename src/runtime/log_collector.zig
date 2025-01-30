@@ -70,7 +70,7 @@ test "bytes_limit" {
         try log_collector.log("Hello", .{});
         try log_collector.log("World", .{}); // This message will be truncated
 
-        try test_utils.expectEqualLogs(
+        try testing.expectEqualLogs(
             &.{
                 "Hello",
                 "Log truncated",
@@ -93,7 +93,7 @@ test "bytes_limit" {
     }
 }
 
-const test_utils = struct {
+const testing = struct {
     fn expectEqualLogs(expected: []const []const u8, actual: []const []const u8) !void {
         try std.testing.expectEqual(expected.len, actual.len);
         for (expected, 0..) |expected_message, i|
