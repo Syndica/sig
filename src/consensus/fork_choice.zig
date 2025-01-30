@@ -896,6 +896,19 @@ test "HeaviestSubtreeForkChoice.initForTest" {
     defer fc.deinit();
 }
 
+test "HeaviestSubtreeForkChoice.testSetRoot" {
+    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    defer fc.deinit();
+    // Set root to 1, should only purge 0
+    const root1 = SlotAndHash{ .slot = 1, .hash = Hash.ZEROES };
+    _ = try fc.setTreeRoot(&root1);
+    for (0..6) |i| {
+        const slot_hash = SlotAndHash{ .slot = @intCast(i), .hash = Hash.ZEROES };
+        const exists = i != 0;
+        try std.testing.expectEqual(exists, fc.fork_infos.contains(slot_hash));
+    }
+}
+
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
 
 const fork_tuples = [_]TreeNode{
