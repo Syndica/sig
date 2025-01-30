@@ -16,27 +16,29 @@ const PDA_MARKER = "ProgramDerivedAddress";
 const ERROR_MAX_SEED_LEN_EXCEEDED = 0;
 const ERROR_ILLEGAL_OWNER = 2;
 
+pub const PubkeyError = error{
+    MaxSeedLenExceeded,
+    InvalidSeeds,
+    IllegalOwner,
+};
+
 /// TODO: since we are assigning a custom error, this could logically be a
 /// member function of ExecuteInstructionContext. Alternatively it could be
 /// moved to our Pubkey module and we could implement the matching PubkeyError
 /// enum in Zig, then we can set the custom error in the calling context thus
 /// decoupling from the ExecuteInstructionContext.
 pub fn createWithSeed(
-    eic: *ExecuteInstructionContext,
     base: Pubkey,
     seed: []const u8,
     owner: Pubkey,
-) InstructionError!Pubkey {
+) PubkeyError!Pubkey {
     if (seed.len > MAX_SEED_LEN) {
-        eic.setCustomError(ERROR_MAX_SEED_LEN_EXCEEDED);
-        return InstructionError.Custom;
+        return PubkeyError.MaxSeedLenExceeded;
     }
 
     const offset = owner.data.len - PDA_MARKER.len;
-    if (std.mem.eql(u8, owner.data[offset..], PDA_MARKER)) {
-        eic.setCustomError(ERROR_ILLEGAL_OWNER);
-        return InstructionError.Custom;
-    }
+    if (std.mem.eql(u8, owner.data[offset..], PDA_MARKER))
+        return PubkeyError.IllegalOwner;
 
     return .{ .data = utils.hashv(&.{ &base.data, seed, &owner.data }) };
 }

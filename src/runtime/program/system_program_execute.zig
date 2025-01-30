@@ -11,6 +11,7 @@ const Rent = sig.runtime.sysvar.Rent;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const InstructionError = sig.core.instruction.InstructionError;
 const ExecuteInstructionContext = sig.runtime.ExecuteInstructionContext;
+const ExecuteInstructionAccount = sig.runtime.ExecuteInstructionContext.AccountInfo;
 const SystemError = sig.runtime.program.system_program.SystemProgramError;
 const SystemProgramInstruction = sig.runtime.program.system_program.SystemProgramInstruction;
 
@@ -32,6 +33,8 @@ pub fn executeSystemProgramInstruction(allocator: std.mem.Allocator, eic: *Execu
         eic.instruction_data,
         .{},
     );
+    defer sig.bincode.free(allocator, instruction);
+
     return switch (instruction) {
         .create_account => |args| try executeCreateAccount(
             allocator,
@@ -692,7 +695,10 @@ fn checkSeedAddress(
     seed: []const u8,
     comptime log_err_fmt: []const u8,
 ) !void {
-    const created = try pubkey_utils.createWithSeed(eic, base, seed, owner);
+    const created = pubkey_utils.createWithSeed(base, seed, owner) catch |err| {
+        eic.setCustomError(@intFromError(err));
+        return InstructionError.Custom;
+    };
     if (!expected.equals(&created)) {
         eic.log(log_err_fmt, .{ expected, created });
         eic.setCustomError(@intFromError(SystemError.AddressWithSeedMismatch));
@@ -707,20 +713,26 @@ pub const testing = struct {
     const Transaction = sig.core.Transaction;
     const AccountSharedData = sig.runtime.AccountSharedData;
     const ExecuteTransactionContext = sig.runtime.ExecuteTransactionContext;
+    const ExecuteTransactionAccount = sig.runtime.ExecuteTransactionContext.AccountInfo;
     const SysvarCache = sig.runtime.SysvarCache;
     const MAX_INSTRUCTION_ACCOUNTS = sig.runtime.MAX_INSTRUCTION_ACCOUNTS;
 
-    pub fn createAccountSharedData(allocator: std.mem.Allocator, params: struct {
+    const AccountSharedDataParams = struct {
         lamports: u64 = 0,
         data: []const u8 = &.{},
         owner: Pubkey = Pubkey.ZEROES,
         executable: bool = false,
         rent_epoch: u64 = 0,
-    }) AccountSharedData {
-        const data = allocator.create(std.ArrayListUnmanaged(u8)) catch unreachable;
+    };
+
+    pub fn createAccountSharedData(
+        allocator: std.mem.Allocator,
+        params: AccountSharedDataParams,
+    ) !AccountSharedData {
+        const data = try allocator.create(std.ArrayListUnmanaged(u8));
         data.* = std.ArrayListUnmanaged(u8){
             .capacity = params.data.len,
-            .items = allocator.dupe(u8, params.data) catch unreachable,
+            .items = try allocator.dupe(u8, params.data),
         };
         return .{
             .lamports = params.lamports,
@@ -731,24 +743,42 @@ pub const testing = struct {
         };
     }
 
-    pub fn createExecuteTransactionContext(params: struct {
-        accounts: []const AccountSharedData,
+    pub fn createAccountSharedDatas(
+        allocator: std.mem.Allocator,
+        params: []const AccountSharedDataParams,
+    ) ![]AccountSharedData {
+        var account_shared_datas = std.ArrayList(AccountSharedData).init(allocator);
+
+        for (params) |param|
+            try account_shared_datas.append(try createAccountSharedData(allocator, param));
+
+        return account_shared_datas.toOwnedSlice();
+    }
+
+    const ExecuteTransactionContextParams = struct {
         accounts_resize_delta: i64 = 0,
         compute_meter: u64 = 0,
         maybe_custom_error: ?u32 = null,
-        sysvar_cache: SysvarCache = SysvarCache.empty(),
+        sysvar_cache: SysvarCache = SysvarCache.EMPTY,
         lamports_per_signature: u64 = 0,
         last_blockhash: Hash = Hash.ZEROES,
-    }) ExecuteTransactionContext {
+    };
+
+    pub fn createExecuteTransactionContext(
+        accounts: []const AccountSharedData,
+        params: ExecuteTransactionContextParams,
+    ) !ExecuteTransactionContext {
         var etc_accounts = std.BoundedArray(
-            RwMux(ExecuteTransactionContext.AccountInfo),
+            RwMux(ExecuteTransactionAccount),
             Transaction.MAX_ACCOUNTS,
         ){};
-        for (params.accounts) |account_shared_data|
-            etc_accounts.append(RwMux(ExecuteTransactionContext.AccountInfo).init(.{
+
+        for (accounts) |account_shared_data|
+            try etc_accounts.append(RwMux(ExecuteTransactionAccount).init(.{
                 .touched = false,
                 .account = account_shared_data,
-            })) catch unreachable;
+            }));
+
         return .{
             .accounts = etc_accounts,
             .accounts_resize_delta = params.accounts_resize_delta,
@@ -761,268 +791,275 @@ pub const testing = struct {
         };
     }
 
-    pub fn createExecuteInstructionContext(params: struct {
+    pub fn createExecuteInstructionContext(
         etc: *ExecuteTransactionContext,
         program_id: Pubkey,
-        accounts: []const ExecuteInstructionContext.AccountInfo,
+        accounts: []const ExecuteInstructionAccount,
         instruction_data: []const u8,
-    }) ExecuteInstructionContext {
-        var eic_accounts = std.BoundedArray(
-            ExecuteInstructionContext.AccountInfo,
+    ) !ExecuteInstructionContext {
+        const eic_accounts = try std.BoundedArray(
+            ExecuteInstructionAccount,
             MAX_INSTRUCTION_ACCOUNTS,
-        ){};
-        for (params.accounts) |account_info|
-            eic_accounts.append(account_info) catch unreachable;
+        ).fromSlice(accounts);
+
         return .{
-            .etc = params.etc,
-            .program_id = params.program_id,
+            .etc = etc,
+            .program_id = program_id,
             .accounts = eic_accounts,
-            .instruction_data = params.instruction_data,
+            .instruction_data = instruction_data,
         };
+    }
+
+    /// TODO: Add Context Pre / Post Checks
+    pub fn expectInstructionExecutionResult(
+        allocator: std.mem.Allocator,
+        instruction: anytype,
+        instruction_accounts: []const ExecuteInstructionAccount,
+        pre_transaction_accounts: []const AccountSharedDataParams,
+        post_transaction_accounts: []const AccountSharedDataParams,
+        execute_transaction_context: ExecuteTransactionContextParams,
+    ) !void {
+        const instruction_data = try sig.bincode.writeAlloc(allocator, instruction, .{});
+        defer allocator.free(instruction_data);
+
+        const transaction_accounts = try createAccountSharedDatas(allocator, pre_transaction_accounts);
+        defer {
+            for (transaction_accounts) |account| {
+                account.data.deinit(allocator);
+                allocator.destroy(account.data);
+            }
+            allocator.free(transaction_accounts);
+        }
+
+        var etc = try createExecuteTransactionContext(
+            transaction_accounts,
+            execute_transaction_context,
+        );
+
+        var eic = try createExecuteInstructionContext(
+            &etc,
+            instruction.program_id(),
+            instruction_accounts,
+            instruction_data,
+        );
+
+        try executeSystemProgramInstruction(allocator, &eic);
+
+        const expected_transaction_accounts = try createAccountSharedDatas(allocator, post_transaction_accounts);
+        defer {
+            for (expected_transaction_accounts) |account| {
+                account.data.deinit(allocator);
+                allocator.destroy(account.data);
+            }
+            allocator.free(expected_transaction_accounts);
+        }
+
+        try std.testing.expectEqual(expected_transaction_accounts.len, etc.accounts.len);
+        for (expected_transaction_accounts, 0..) |expected_account, index|
+            std.testing.expect(expected_account.equals(etc.getAccountSharedData(index))) catch |err| {
+                std.debug.print("Mismatch in account at index {}\n", .{index});
+                std.debug.print("\tExpected: {}\n", .{expected_account});
+                std.debug.print("\tActual:   {}\n", .{etc.getAccountSharedData(index)});
+                return err;
+            };
     }
 };
 
 test "executeAllocate" {
-    const AccountSharedData = sig.runtime.AccountSharedData;
-
-    const createAccountSharedData = testing.createAccountSharedData;
-
-    const allocator = std.testing.allocator;
-
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const allocate_space = 1024;
-
-    const instruction = SystemProgramInstruction{ .allocate = .{ .space = allocate_space } };
-    const instruction_data = try sig.bincode.writeAlloc(allocator, instruction, .{});
-    defer allocator.free(instruction_data);
-
-    const transaction_accounts = [_]AccountSharedData{
-        createAccountSharedData(allocator, .{
-            .owner = id.SYSTEM_PROGRAM_ID,
-        }),
-    };
-    defer for (transaction_accounts) |account| {
-        account.data.deinit(allocator);
-        allocator.destroy(account.data);
-    };
-
-    const instruction_accounts = [_]ExecuteInstructionContext.AccountInfo{
-        .{ // Account 0
-            .pubkey = Pubkey.initRandom(prng.random()),
-            .is_signer = true,
-            .is_writable = true,
-            .index_in_transaction = 0,
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .allocate = .{
+                .space = 1024,
+            },
         },
-    };
-
-    var etc = testing.createExecuteTransactionContext(.{
-        .accounts = &transaction_accounts,
-        .compute_meter = 150,
-    });
-
-    var eic = testing.createExecuteInstructionContext(.{
-        .etc = &etc,
-        .program_id = id.SYSTEM_PROGRAM_ID,
-        .accounts = &instruction_accounts,
-        .instruction_data = instruction_data,
-    });
-
-    try executeSystemProgramInstruction(allocator, &eic);
-
-    const expected_transaction_accounts = [_]AccountSharedData{
-        createAccountSharedData(allocator, .{
-            .owner = id.SYSTEM_PROGRAM_ID,
-            .data = &[_]u8{0} ** allocate_space,
-        }),
-    };
-    defer for (expected_transaction_accounts) |account| {
-        account.data.deinit(allocator);
-        allocator.destroy(account.data);
-    };
-
-    try std.testing.expectEqual(expected_transaction_accounts.len, transaction_accounts.len);
-    for (expected_transaction_accounts, 0..) |expected_account, index|
-        try std.testing.expect(expected_account.equals(transaction_accounts[index]));
-
-    std.debug.print("Allocated {} bytes", .{allocate_space});
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = true,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+        },
+        &.{
+            .{},
+        },
+        &.{
+            .{ .data = &[_]u8{0} ** 1024 },
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
 }
 
-// test "executeAssign" {
-//     const Hash = sig.core.Hash;
-//     const SysvarCache = sig.runtime.SysvarCache;
-//     const Transaction = sig.core.Transaction;
-//     const RwMux = sig.sync.RwMux;
-//     const ExecuteTransactionContext = sig.runtime.ExecuteTransactionContext;
-//     const AccountSharedData = sig.runtime.AccountSharedData;
+test "executeAssign" {
+    var prng = std.Random.DefaultPrng.init(5083);
 
-//     const MAX_INSTRUCTION_ACCOUNTS = sig.runtime.MAX_INSTRUCTION_ACCOUNTS;
+    const new_owner = Pubkey.initRandom(prng.random());
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .assign = .{
+                .owner = new_owner,
+            },
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = true,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+        },
+        &.{
+            .{},
+        },
+        &.{
+            .{ .owner = new_owner },
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}
 
-//     const allocator = std.testing.allocator;
+test "executeCreateAccount" {
+    var prng = std.Random.DefaultPrng.init(5083);
 
-//     var prng = std.Random.DefaultPrng.init(5083);
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .create_account = .{
+                .lamports = 1_000_000,
+                .space = 0,
+                .owner = id.SYSTEM_PROGRAM_ID,
+            },
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = true,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = true,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            },
+        },
+        &.{
+            .{
+                .lamports = 2_000_000,
+            },
+            .{},
+        },
+        &.{
+            .{ .lamports = 1_000_000 },
+            .{ .lamports = 1_000_000, .owner = id.SYSTEM_PROGRAM_ID },
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}
 
-//     const owner = Pubkey.initRandom(prng.random());
+test "executeTransfer" {
+    var prng = std.Random.DefaultPrng.init(5083);
 
-//     var data = std.ArrayListUnmanaged(u8){};
-//     defer data.deinit(allocator);
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .transfer = .{
+                .lamports = 1_000_000,
+            },
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = true,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            },
+        },
+        &.{
+            .{
+                .lamports = 2_000_000,
+            },
+            .{
+                .lamports = 0,
+            },
+        },
+        &.{
+            .{ .lamports = 1_000_000 },
+            .{ .lamports = 1_000_000 },
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}
 
-//     const initial_account: AccountSharedData = .{
-//         .lamports = 0,
-//         .data = &data,
-//         .owner = id.SYSTEM_PROGRAM_ID,
-//         .executable = false,
-//         .rent_epoch = 0,
-//     };
+test "executeCreateAccountWithSeed" {
+    var prng = std.Random.DefaultPrng.init(5083);
 
-//     const etc_account_info: ExecuteTransactionContext.AccountInfo = .{
-//         .touched = false,
-//         .account = initial_account,
-//     };
-
-//     var etc_accounts = std.BoundedArray(
-//         RwMux(ExecuteTransactionContext.AccountInfo),
-//         Transaction.MAX_ACCOUNTS,
-//     ){};
-//     try etc_accounts.append(RwMux(ExecuteTransactionContext.AccountInfo).init(etc_account_info));
-
-//     var etc: ExecuteTransactionContext = .{
-//         .accounts = etc_accounts,
-//         .accounts_resize_delta = 0,
-//         .compute_meter = 0,
-//         .maybe_custom_error = null,
-//         .maybe_log_collector = null,
-//         .sysvar_cache = SysvarCache.empty(),
-//         .lamports_per_signature = 0,
-//         .last_blockhash = Hash.ZEROES,
-//     };
-
-//     var eic_accounts = std.BoundedArray(
-//         ExecuteInstructionContext.AccountInfo,
-//         MAX_INSTRUCTION_ACCOUNTS,
-//     ){};
-//     try eic_accounts.append(.{
-//         .pubkey = Pubkey.initRandom(prng.random()),
-//         .is_signer = true,
-//         .is_writable = true,
-//         .index_in_transaction = 0,
-//     });
-
-//     var eic: ExecuteInstructionContext = .{
-//         .etc = &etc,
-//         .program_id = id.SYSTEM_PROGRAM_ID,
-//         .accounts = eic_accounts,
-//     };
-
-//     try executeAssign(&eic, owner);
-
-//     const final_account = try eic.getBorrowedAccount(0);
-
-//     try std.testing.expectEqual(initial_account.lamports, final_account.getLamports());
-//     try std.testing.expectEqualSlices(u8, initial_account.data.items, final_account.getData());
-//     try std.testing.expect(final_account.getOwner().equals(&owner));
-//     try std.testing.expectEqual(initial_account.executable, false);
-//     try std.testing.expectEqual(initial_account.rent_epoch, final_account.etc_info.account.rent_epoch);
-// }
-
-// test "executeTransfer" {
-//     const Hash = sig.core.Hash;
-//     const SysvarCache = sig.runtime.SysvarCache;
-//     const Transaction = sig.core.Transaction;
-//     const RwMux = sig.sync.RwMux;
-//     const ExecuteTransactionContext = sig.runtime.ExecuteTransactionContext;
-//     const AccountSharedData = sig.runtime.AccountSharedData;
-
-//     const MAX_INSTRUCTION_ACCOUNTS = sig.runtime.MAX_INSTRUCTION_ACCOUNTS;
-
-//     const allocator = std.testing.allocator;
-
-//     var prng = std.Random.DefaultPrng.init(5083);
-
-//     var data = std.ArrayListUnmanaged(u8){};
-//     defer data.deinit(allocator);
-
-//     const initial_account_0: AccountSharedData = .{
-//         .lamports = 1_000_000,
-//         .data = &data,
-//         .owner = id.SYSTEM_PROGRAM_ID,
-//         .executable = false,
-//         .rent_epoch = 0,
-//     };
-
-//     const initial_account_1: AccountSharedData = .{
-//         .lamports = 0,
-//         .data = &data,
-//         .owner = id.SYSTEM_PROGRAM_ID,
-//         .executable = false,
-//         .rent_epoch = 0,
-//     };
-
-//     const etc_account_info_0: ExecuteTransactionContext.AccountInfo = .{
-//         .touched = false,
-//         .account = initial_account_0,
-//     };
-
-//     const etc_account_info_1: ExecuteTransactionContext.AccountInfo = .{
-//         .touched = false,
-//         .account = initial_account_1,
-//     };
-
-//     var etc_accounts = std.BoundedArray(
-//         RwMux(ExecuteTransactionContext.AccountInfo),
-//         Transaction.MAX_ACCOUNTS,
-//     ){};
-//     try etc_accounts.append(RwMux(ExecuteTransactionContext.AccountInfo).init(etc_account_info_0));
-//     try etc_accounts.append(RwMux(ExecuteTransactionContext.AccountInfo).init(etc_account_info_1));
-
-//     var etc: ExecuteTransactionContext = .{
-//         .accounts = etc_accounts,
-//         .accounts_resize_delta = 0,
-//         .compute_meter = 0,
-//         .maybe_custom_error = null,
-//         .maybe_log_collector = null,
-//         .sysvar_cache = SysvarCache.empty(),
-//         .lamports_per_signature = 0,
-//         .last_blockhash = Hash.ZEROES,
-//     };
-
-//     var eic_accounts = std.BoundedArray(
-//         ExecuteInstructionContext.AccountInfo,
-//         MAX_INSTRUCTION_ACCOUNTS,
-//     ){};
-//     try eic_accounts.append(.{
-//         .pubkey = Pubkey.initRandom(prng.random()),
-//         .is_signer = true,
-//         .is_writable = true,
-//         .index_in_transaction = 0,
-//     });
-//     try eic_accounts.append(.{
-//         .pubkey = Pubkey.initRandom(prng.random()),
-//         .is_signer = false,
-//         .is_writable = true,
-//         .index_in_transaction = 1,
-//     });
-
-//     var eic: ExecuteInstructionContext = .{
-//         .etc = &etc,
-//         .program_id = id.SYSTEM_PROGRAM_ID,
-//         .accounts = eic_accounts,
-//     };
-
-//     try executeTransfer(&eic, 500_000);
-
-//     const final_account_0 = try eic.getBorrowedAccount(0);
-//     const final_account_1 = try eic.getBorrowedAccount(1);
-
-//     try std.testing.expectEqual(500_000, final_account_0.getLamports());
-//     try std.testing.expectEqualSlices(u8, initial_account_0.data.items, final_account_0.getData());
-//     try std.testing.expectEqual(initial_account_0.owner, final_account_0.getOwner());
-//     try std.testing.expectEqual(initial_account_0.executable, false);
-//     try std.testing.expectEqual(initial_account_0.rent_epoch, final_account_0.etc_info.account.rent_epoch);
-
-//     try std.testing.expectEqual(500_000, final_account_1.getLamports());
-//     try std.testing.expectEqualSlices(u8, initial_account_1.data.items, final_account_1.getData());
-//     try std.testing.expectEqual(initial_account_1.owner, final_account_1.getOwner());
-//     try std.testing.expectEqual(initial_account_1.executable, false);
-//     try std.testing.expectEqual(initial_account_1.rent_epoch, final_account_1.etc_info.account.rent_epoch);
-// }
+    const base = Pubkey.initRandom(prng.random());
+    const seed = &[_]u8{0x10} ** 32;
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .create_account_with_seed = .{
+                .base = base,
+                .seed = seed,
+                .lamports = 1_000_000,
+                .space = 0,
+                .owner = id.SYSTEM_PROGRAM_ID,
+            },
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = true,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .pubkey = try pubkey_utils.createWithSeed(base, seed, id.SYSTEM_PROGRAM_ID),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            },
+            .{
+                .pubkey = base,
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+        },
+        &.{
+            .{
+                .lamports = 2_000_000,
+            },
+            .{},
+            .{},
+        },
+        &.{
+            .{ .lamports = 1_000_000 },
+            .{ .lamports = 1_000_000, .owner = id.SYSTEM_PROGRAM_ID },
+            .{},
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}

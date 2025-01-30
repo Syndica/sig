@@ -189,6 +189,11 @@ pub const SystemProgramInstruction = union(enum) {
     /// # Account references
     ///   0. `[WRITE]` Nonce account
     upgrade_nonce_account,
+
+    pub fn program_id(self: SystemProgramInstruction) Pubkey {
+        _ = self;
+        return sig.runtime.id.SYSTEM_PROGRAM_ID;
+    }
 };
 
 pub const SystemProgramError = error{

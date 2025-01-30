@@ -68,6 +68,12 @@ pub const ExecuteTransactionContext = struct {
         if (exceeded) return error.ComputationalBudgetExceeded;
     }
 
+    pub fn getAccountSharedData(self: *ExecuteTransactionContext, index: usize) AccountSharedData {
+        const account_info, var account_info_read_guard = self.accounts.slice()[index].readWithLock();
+        defer account_info_read_guard.unlock();
+        return account_info.account;
+    }
+
     pub fn getBlockhash(self: *const ExecuteTransactionContext) Hash {
         return self.last_blockhash;
     }
