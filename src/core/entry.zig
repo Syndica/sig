@@ -1,10 +1,8 @@
 pub const std = @import("std");
 pub const sig = @import("../sig.zig");
-pub const core = @import("lib.zig");
 
-const Hash = core.hash.Hash;
-const Transaction = core.transaction.Transaction;
-const CheckedReader = sig.utils.io.CheckedReader;
+const Hash = sig.core.hash.Hash;
+const Transaction = sig.core.transaction.Transaction;
 
 pub const Entry = struct {
     /// The number of hashes since the previous Entry ID.
@@ -26,67 +24,22 @@ pub const Entry = struct {
         for (self.transactions.items) |tx| tx.deinit(allocator);
         allocator.free(self.transactions.allocatedSlice());
     }
-
-    pub fn readFromSlice(allocator: std.mem.Allocator, slice: []const u8) !Entry {
-        var reader = CheckedReader.init(slice);
-        return try Entry.deserialize(allocator, &reader);
-    }
-
-    pub fn serialize(self: Entry, writer: anytype) !void {
-        try writer.writeInt(u64, self.num_hashes, std.builtin.Endian.little);
-        try writer.writeAll(&self.hash.data);
-        try writer.writeInt(usize, self.transactions.items.len, std.builtin.Endian.little);
-        for (self.transactions.items) |tx| try tx.serialize(writer);
-    }
-
-    pub fn deserialize(allocator: std.mem.Allocator, reader: *CheckedReader) !Entry {
-        const num_hashes = try reader.readInt(u64, std.builtin.Endian.little);
-        const hash = .{ .data = (try reader.readBytes(Hash.size))[0..Hash.size].* };
-        const transactions = try allocator.alloc(Transaction, try reader.readInt(usize, .little));
-        errdefer {
-            for (transactions) |tx| tx.deinit(allocator);
-            allocator.free(transactions);
-        }
-        for (transactions) |*transaction|
-            transaction.* = try Transaction.deserialize(allocator, reader);
-        return .{
-            .num_hashes = num_hashes,
-            .hash = hash,
-            .transactions = .{
-                .items = transactions,
-                .capacity = transactions.len,
-            },
-        };
-    }
 };
 
 test "Entry serialization and deserialization" {
-    const allocator = std.testing.allocator;
-
-    const expected_struct = test_entry.as_struct;
-    const expected_bytes = test_entry.as_bytes;
-
-    const actual_buffer = try allocator.alloc(u8, expected_bytes.len);
-    defer allocator.free(actual_buffer);
-    var actual_fbs = std.io.fixedBufferStream(actual_buffer);
-    try expected_struct.serialize(actual_fbs.writer());
-    try std.testing.expectEqualSlices(u8, &expected_bytes, actual_fbs.getWritten());
-
-    var actual_reader = CheckedReader.init(&expected_bytes);
-    const actual_struct = try Entry.deserialize(allocator, &actual_reader);
-    defer actual_struct.deinit(allocator);
-    try std.testing.expect(sig.utils.types.eql(expected_struct, actual_struct));
+    const entry = test_entry.as_struct;
+    try sig.bincode.testRoundTrip(entry, &test_entry.as_bytes);
 }
 
 pub const test_entry = struct {
     var txns = [_]Transaction{
-        core.transaction.transaction_v0_example.as_struct,
-        core.transaction.transaction_v0_example.as_struct,
+        sig.core.transaction.transaction_v0_example.as_struct,
+        sig.core.transaction.transaction_v0_example.as_struct,
     };
 
     pub const as_struct = Entry{
         .num_hashes = 149218308,
-        .hash = core.Hash
+        .hash = sig.core.Hash
             .parseBase58String("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd") catch unreachable,
         .transactions = .{
             .items = txns[0..2],

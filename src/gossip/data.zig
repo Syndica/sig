@@ -585,7 +585,7 @@ pub const Vote = struct {
     pub fn initRandom(random: std.rand.Random) Vote {
         return Vote{
             .from = Pubkey.initRandom(random),
-            .transaction = Transaction.empty(),
+            .transaction = Transaction.EMPTY,
             .wallclock = getWallclockMs(),
             .slot = random.int(u64),
         };

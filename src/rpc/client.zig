@@ -324,7 +324,7 @@ pub const Client = struct {
         defer request.deinit();
 
         var buffer: [sig.net.PACKET_DATA_SIZE]u8 = undefined;
-        const written = try transaction.writeToSlice(&buffer);
+        const written = try sig.bincode.writeToSlice(&buffer, transaction, .{});
 
         const sized = sig.crypto.base58.Base58Sized(sig.net.PACKET_DATA_SIZE);
         var encode_buffer: [sized.max_encoded_size]u8 = undefined;

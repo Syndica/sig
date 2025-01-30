@@ -8,7 +8,6 @@ const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
 
 // sig common
-const CheckedReader = sig.utils.io.CheckedReader;
 const Counter = sig.prometheus.Counter;
 const Entry = sig.core.Entry;
 const Hash = sig.core.Hash;
@@ -1182,18 +1181,17 @@ pub const BlockstoreReader = struct {
                 return e;
             };
             defer bytes.deinit();
-            var reader = CheckedReader.init(bytes.items);
-            const these_entries = try allocator.alloc(Entry, reader.readInt(usize, .little) catch |e| {
-                self.logger.err().logf("failed to read number of entries from shreds: {}", .{e});
+            const these_entries = bincode.readFromSlice(
+                allocator,
+                []Entry,
+                bytes.items,
+                .{},
+            ) catch |e| {
+                self.logger.err().logf("failed to deserialize entries from shreds: {}", .{e});
                 return e;
-            });
+            };
             defer allocator.free(these_entries);
             errdefer for (these_entries) |e| e.deinit(allocator);
-            for (these_entries) |*entry|
-                entry.* = Entry.deserialize(allocator, &reader) catch |e| {
-                    self.logger.err().logf("failed to deserialize entries from shreds: {}", .{e});
-                    return e;
-                };
             try entries.appendSlice(these_entries);
         }
         return entries;
