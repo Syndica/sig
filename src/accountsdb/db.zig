@@ -151,12 +151,12 @@ pub const AccountsDB = struct {
         /// Used to initialize snapshot hashes to be sent to gossip.
         my_pubkey: Pubkey,
         /// Reference to the gossip service's message push queue, used to push updates to snapshot info.
-        push_msg_queue: *sig.sync.Mux(std.ArrayList(sig.gossip.GossipData)),
+        push_msg_queue: *sig.gossip.GossipService.PushMessageQueue,
 
         // TODO/NOTE: this will be more useful/nicer to use as a decl literal
         pub fn fromService(gossip_service: *sig.gossip.GossipService) !GossipView {
             return .{
-                .my_pubkey = Pubkey.fromPublicKey(&gossip_service.my_keypair.public_key),
+                .my_pubkey = gossip_service.my_pubkey,
                 .push_msg_queue = &gossip_service.push_msg_queue_mux,
             };
         }
@@ -2729,12 +2729,15 @@ pub const AccountsDB = struct {
         if (self.gossip_view) |gossip_view| { // advertise new snapshot via gossip
             const push_msg_queue, var push_msg_queue_lg = gossip_view.push_msg_queue.writeWithLock();
             defer push_msg_queue_lg.unlock();
+
             try push_msg_queue.append(.{
-                .SnapshotHashes = .{
-                    .from = gossip_view.my_pubkey,
-                    .full = .{ .slot = params.target_slot, .hash = full_hash },
-                    .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.EMPTY,
-                    .wallclock = 0, // the wallclock will be set when it's processed in the queue
+                .data = .{
+                    .SnapshotHashes = .{
+                        .from = gossip_view.my_pubkey,
+                        .full = .{ .slot = params.target_slot, .hash = full_hash },
+                        .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.EMPTY,
+                        .wallclock = 0, // the wallclock will be set when it's processed in the queue
+                    },
                 },
             });
         }
@@ -2960,14 +2963,16 @@ pub const AccountsDB = struct {
             const push_msg_queue, var push_msg_queue_lg = gossip_view.push_msg_queue.writeWithLock();
             defer push_msg_queue_lg.unlock();
             try push_msg_queue.append(.{
-                .SnapshotHashes = .{
-                    .from = gossip_view.my_pubkey,
-                    .full = .{ .slot = full_snapshot_info.slot, .hash = full_snapshot_info.hash },
-                    .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.initSingle(.{
-                        .slot = params.target_slot,
-                        .hash = incremental_hash,
-                    }),
-                    .wallclock = 0, // the wallclock will be set when it's processed in the queue
+                .data = .{
+                    .SnapshotHashes = .{
+                        .from = gossip_view.my_pubkey,
+                        .full = .{ .slot = full_snapshot_info.slot, .hash = full_snapshot_info.hash },
+                        .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.initSingle(.{
+                            .slot = params.target_slot,
+                            .hash = incremental_hash,
+                        }),
+                        .wallclock = 0, // the wallclock will be set when it's processed in the queue
+                    },
                 },
             });
         }
@@ -4302,8 +4307,9 @@ test "generate snapshot & update gossip snapshot hashes" {
     defer full_inc_manifest.deinit(allocator);
 
     // mock gossip service
-    const Queue = std.ArrayList(sig.gossip.GossipData);
-    var push_msg_queue_mux = sig.sync.Mux(Queue).init(Queue.init(allocator));
+    var push_msg_queue_mux = sig.gossip.GossipService.PushMessageQueue.init(
+        std.ArrayList(sig.gossip.data.GossipDataManaged).init(allocator),
+    );
     defer push_msg_queue_mux.private.v.deinit();
     const my_keypair = try KeyPair.create(null);
 
@@ -4359,7 +4365,7 @@ test "generate snapshot & update gossip snapshot hashes" {
         defer queue_lg.unlock();
 
         try std.testing.expectEqual(1, queue.items.len);
-        const queue_item_0 = queue.items[0]; // should be from the full generation
+        const queue_item_0 = queue.items[0].data; // should be from the full generation
         try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_0));
 
         try std.testing.expectEqualDeep(
@@ -4395,7 +4401,7 @@ test "generate snapshot & update gossip snapshot hashes" {
             defer queue_lg.unlock();
 
             try std.testing.expectEqual(2, queue.items.len);
-            const queue_item_1 = queue.items[1]; // should be from the incremental generation
+            const queue_item_1 = queue.items[1].data; // should be from the incremental generation
             try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_1));
 
             try std.testing.expectEqualDeep(

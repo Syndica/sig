@@ -54,6 +54,7 @@ const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Duration = sig.time.Duration;
 const ExitCondition = sig.sync.ExitCondition;
 const SocketThread = sig.net.SocketThread;
+const GossipDataManaged = sig.gossip.data.GossipDataManaged;
 
 const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
@@ -98,7 +99,6 @@ pub const PING_CACHE_RATE_LIMIT_DELAY = Duration.fromSecs(1280 / 64);
 const DEFAULT_EPOCH_DURATION = Duration.fromMillis(172_800_000);
 
 pub const VERIFY_PACKET_PARALLEL_TASKS = 4;
-
 const THREAD_POOL_SIZE = 4;
 const MAX_PROCESS_BATCH_SIZE = 64;
 const GOSSIP_PRNG_SEED = 19;
@@ -164,7 +164,8 @@ pub const GossipService = struct {
     /// manages push message peers
     active_set_rw: RwMux(ActiveSet),
     /// all gossip data pushed into this will have its wallclock overwritten during `drainPushQueueToGossipTable`.
-    push_msg_queue_mux: Mux(ArrayList(GossipData)),
+    /// NOTE: for all messages appended to this queue, the memory ownership is transfered to this struct.
+    push_msg_queue_mux: PushMessageQueue,
     /// hashes of failed gossip values from pull responses
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
@@ -184,6 +185,7 @@ pub const GossipService = struct {
     pub const LOG_SCOPE = "gossip_service";
     pub const ScopedLogger = sig.trace.log.ScopedLogger(LOG_SCOPE);
 
+    pub const PushMessageQueue = Mux(ArrayList(GossipDataManaged));
     const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
 
     pub fn create(
@@ -290,6 +292,8 @@ pub const GossipService = struct {
             .{},
         );
 
+        const push_msg_queue = ArrayList(GossipDataManaged).init(allocator);
+
         return .{
             .allocator = allocator,
             .gossip_value_allocator = gossip_value_allocator,
@@ -302,7 +306,7 @@ pub const GossipService = struct {
             .packet_outgoing_channel = packet_outgoing_channel,
             .verified_incoming_channel = verified_incoming_channel,
             .gossip_table_rw = RwMux(GossipTable).init(gossip_table),
-            .push_msg_queue_mux = Mux(ArrayList(GossipData)).init(ArrayList(GossipData).init(allocator)),
+            .push_msg_queue_mux = PushMessageQueue.init(push_msg_queue),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
             .entrypoints = entrypoints,
@@ -368,7 +372,7 @@ pub const GossipService = struct {
             // clear and deinit the push quee
             const queue, var lock = self.push_msg_queue_mux.writeWithLock();
             defer lock.unlock();
-            for (queue.items) |v| v.deinit(self.allocator);
+            for (queue.items) |*v| v.deinit();
             queue.deinit();
         }
     }
@@ -954,9 +958,13 @@ pub const GossipService = struct {
                     const contact_info: ContactInfo = try self.my_contact_info.clone();
                     errdefer contact_info.deinit();
 
+                    const legacy_contact_info = LegacyContactInfo.fromContactInfo(
+                        &self.my_contact_info,
+                    );
+
                     try push_msg_queue.appendSlice(&.{
-                        .{ .ContactInfo = contact_info },
-                        .{ .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info) },
+                        .{ .data = .{ .ContactInfo = contact_info } },
+                        .{ .data = .{ .LegacyContactInfo = legacy_contact_info } },
                     });
                 }
 
@@ -1886,14 +1894,17 @@ pub const GossipService = struct {
         // NOTE: this works rn because we only push contact_info whose 'deinit'
         // method does not care about the given allocator, HOWEVER, this deinit allocator
         // my not be correct for future values which are pushed into the queue.
+        // TODO: fix gossip table ownership
         const deinit_allocator = self.gossip_value_allocator;
 
         // number of items consumed, starting from the beginning of the queue
-        const consumed_item_count, const maybe_err = for (push_msg_queue.items, 0..) |*gossip_value_unsigned, i| {
+        const consumed_item_count, const maybe_err = for (push_msg_queue.items, 0..) |*data_with_alloc, i| {
             errdefer comptime unreachable;
 
-            gossip_value_unsigned.wallclockPtr().* = now;
-            const gossip_value = SignedGossipData.initSigned(&self.my_keypair, gossip_value_unsigned.*);
+            var gossip_data_unsigned = data_with_alloc.data;
+            gossip_data_unsigned.wallclockPtr().* = now;
+            const gossip_value = SignedGossipData.initSigned(&self.my_keypair, gossip_data_unsigned);
+
             const result = gossip_table.insert(gossip_value, now) catch |err| break .{ i, err };
 
             switch (result) {
@@ -1903,11 +1914,11 @@ pub const GossipService = struct {
 
                 // concerning
                 .IgnoredOldValue => {
-                    gossip_value_unsigned.deinit(deinit_allocator);
+                    data_with_alloc.deinit();
                     self.logger.warn().logf("DrainPushMessages: Ignored old value ({})", .{gossip_value});
                 },
                 .IgnoredDuplicateValue => {
-                    gossip_value_unsigned.deinit(deinit_allocator);
+                    data_with_alloc.deinit();
                     self.logger.warn().logf("DrainPushMessages: Ignored duplicate value ({})", .{gossip_value});
                 },
 
@@ -2909,7 +2920,7 @@ test "test build push messages" {
     {
         var pqlg = gossip_service.push_msg_queue_mux.lock();
         var push_queue = pqlg.mut();
-        try push_queue.append(value);
+        try push_queue.append(.{ .data = value });
         pqlg.unlock();
     }
     try gossip_service.drainPushQueueToGossipTable(getWallclockMs());
