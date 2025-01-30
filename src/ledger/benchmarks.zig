@@ -58,7 +58,8 @@ pub const BenchmarkLedger = struct {
         }
 
         var timer = try sig.time.Timer.start();
-        _ = try inserter.insertShreds(shreds, is_repairs, null, false, null, null);
+        const result = try inserter.insertShreds(shreds, is_repairs, .{});
+        defer result.deinit();
         return timer.read();
     }
 
@@ -112,7 +113,9 @@ pub const BenchmarkLedger = struct {
 
         const total_shreds = shreds.len;
 
-        _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
+        const result = try ledger.shred_inserter.shred_inserter
+            .insertShredsForTest(&inserter, shreds);
+        result.deinit();
 
         const slot: u32 = 0;
         const num_reads = total_shreds / 15;
@@ -141,7 +144,9 @@ pub const BenchmarkLedger = struct {
         defer deinitShreds(allocator, shreds);
 
         const total_shreds = shreds.len;
-        _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
+        const result = try ledger.shred_inserter.shred_inserter
+            .insertShredsForTest(&inserter, shreds);
+        result.deinit();
         const num_reads = total_shreds / 15;
 
         const slot: u32 = 0;
@@ -166,7 +171,7 @@ pub const BenchmarkLedger = struct {
         defer state.deinit();
         var reader = try state.reader();
         const result = try ledger_tests.insertDataForBlockTest(state);
-        defer result.deinit();
+        result.deinit();
 
         var timer = try sig.time.Timer.start();
         _ = try reader.getCompleteBlock(result.slot + 2, true);
@@ -178,7 +183,7 @@ pub const BenchmarkLedger = struct {
         defer state.deinit();
         var reader = try state.reader();
         const result = try ledger_tests.insertDataForBlockTest(state);
-        defer result.deinit();
+        result.deinit();
 
         var timer = try sig.time.Timer.start();
         const shreds = try reader.getDataShredsForSlot(result.slot + 2, 0);
@@ -192,7 +197,7 @@ pub const BenchmarkLedger = struct {
         defer state.deinit();
         var reader = try state.reader();
         const result = try ledger_tests.insertDataForBlockTest(state);
-        defer result.deinit();
+        result.deinit();
 
         var timer = try sig.time.Timer.start();
         const items = try reader.getSlotEntriesWithShredInfo(result.slot + 2, 0, true);
@@ -213,7 +218,9 @@ pub const BenchmarkLedger = struct {
         defer deinitShreds(allocator, shreds);
 
         const total_shreds = shreds.len;
-        _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
+        const result = try ledger.shred_inserter.shred_inserter
+            .insertShredsForTest(&inserter, shreds);
+        result.deinit();
 
         const slot: u32 = 1;
 
@@ -243,7 +250,9 @@ pub const BenchmarkLedger = struct {
         const shreds = try testShreds(std.heap.c_allocator, shreds_path);
         defer deinitShreds(allocator, shreds);
 
-        _ = try ledger.shred_inserter.shred_inserter.insertShredsForTest(&inserter, shreds);
+        const result = try ledger.shred_inserter.shred_inserter
+            .insertShredsForTest(&inserter, shreds);
+        result.deinit();
 
         const slot = 1;
         const start_index = 0;
