@@ -1,5 +1,4 @@
 // https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/error.rs
-// https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs
 // https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/lib.rs
 
 const std = @import("std");
@@ -8,15 +7,16 @@ const sig = @import("../../sig.zig");
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 
-/// Constants for the System program
+/// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L64
 pub const NONCE_STATE_SIZE: u64 = 80;
+
+/// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/lib.rs#L18
 pub const MAX_PERMITTED_DATA_LENGTH: u64 = 10 * 1024 * 1024;
+
+/// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/lib.rs#L26
 pub const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION: i64 = 2 * 10 * 1024 * 1024;
 
-/// Include executeSystemProgramInstruction in the **system_program** namespace
-const system_program_execute = @import("system_program_execute.zig");
-pub const executeSystemProgramInstruction = system_program_execute.executeSystemProgramInstruction;
-
+/// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L80
 pub const SystemProgramInstruction = union(enum) {
     /// Create a new account
     ///
@@ -196,6 +196,7 @@ pub const SystemProgramInstruction = union(enum) {
     }
 };
 
+/// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/error.rs#L12
 pub const SystemProgramError = error{
     /// An account with the same address already exists.
     AccountAlreadyInUse,

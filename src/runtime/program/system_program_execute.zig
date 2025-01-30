@@ -1062,4 +1062,6 @@ test "executeCreateAccountWithSeed" {
             .compute_meter = 150,
         },
     );
+
+    std.debug.print("base: {}\n", .{base});
 }

@@ -30,3 +30,6 @@ pub const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION: i64 = @intCas
 
 // https://github.com/firedancer-io/firedancer/blob/82ecf8392fe076afce5f9cba02a5efa976e664c8/src/flamenco/runtime/info/fd_instr_info.h#L12
 pub const MAX_INSTRUCTION_ACCOUNTS: usize = 256;
+
+/// TODO: Why do I need to define this here for the tests to run?
+pub const system_program_execute = @import("program/system_program_execute.zig");
