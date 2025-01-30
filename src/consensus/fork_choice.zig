@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const builtin = @import("builtin");
 
 const AutoHashMap = std.AutoHashMap;
 const Instant = sig.time.Instant;
@@ -148,6 +149,29 @@ pub const HeaviestSubtreeForkChoice = struct {
         };
 
         _ = try heaviest_subtree_fork_choice.addNewLeafSlot(tree_root, null);
+        return heaviest_subtree_fork_choice;
+    }
+
+    pub fn initForTest(
+        allocator: std.mem.Allocator,
+        forks: []const TreeNode,
+    ) !HeaviestSubtreeForkChoice {
+        if (!builtin.is_test) {
+            @panic("initForTest should only be called in test mode");
+        }
+
+        const root = forks[0][0]; // Assuming the first element contains the root
+        var heaviest_subtree_fork_choice = try HeaviestSubtreeForkChoice.init(allocator, root);
+
+        for (forks) |fork_tuple| {
+            const slot_hash = fork_tuple[0];
+            if (heaviest_subtree_fork_choice.fork_infos.contains(slot_hash)) {
+                continue;
+            }
+            const parent_slot_hash = fork_tuple[1];
+            try heaviest_subtree_fork_choice.addNewLeafSlot(slot_hash, parent_slot_hash);
+        }
+
         return heaviest_subtree_fork_choice;
     }
 
@@ -327,19 +351,18 @@ pub const HeaviestSubtreeForkChoice = struct {
             self.bestSlot(parent_slot_hash_key.*) orelse return error.MissingParent;
         // If this new leaf is the direct parent's best child, then propagate it up the tree
         if (try self.isBestChild(slot_hash_key)) {
-            const maybe_ancestor: ?*const SlotAndHash = parent_slot_hash_key;
+            var maybe_ancestor: ?SlotAndHash = parent_slot_hash_key.*;
             while (true) {
                 if (maybe_ancestor == null) {
                     break;
                 }
                 // Saftey: maybe_ancestor cannot be null due to the if check above.
-                var ancestor = maybe_ancestor.?;
-                if (self.fork_infos.getPtr(ancestor.*)) |ancestor_fork_info| {
+                if (self.fork_infos.getPtr(maybe_ancestor.?)) |ancestor_fork_info| {
                     // Do the update to the new best slot.
                     if (ancestor_fork_info.*.best_slot.order(parent_best_slot_hash_key) == .eq) {
                         ancestor_fork_info.*.best_slot = slot_hash_key.*;
                         // Walk up the tree.
-                        ancestor = &ancestor_fork_info.parent.?;
+                        maybe_ancestor = ancestor_fork_info.parent;
                     } else {
                         break;
                     }
@@ -350,7 +373,7 @@ pub const HeaviestSubtreeForkChoice = struct {
             }
         }
         // Propagate the deepest slot up the tree.
-        const maybe_ancestor: ?*const SlotAndHash = parent_slot_hash_key;
+        var maybe_ancestor: ?SlotAndHash = parent_slot_hash_key.*;
         var current_child = slot_hash_key.*;
         var current_height: usize = 1;
         while (true) {
@@ -360,14 +383,12 @@ pub const HeaviestSubtreeForkChoice = struct {
             if (!self.isDeepestChild(&current_child)) {
                 break;
             }
-            // Saftey: maybe_ancestor cannot be null due to the if check above.
-            var ancestor = maybe_ancestor.?;
-            if (self.fork_infos.getPtr(ancestor.*)) |ancestor_fork_info| {
+            if (self.fork_infos.getPtr(maybe_ancestor.?)) |ancestor_fork_info| {
                 ancestor_fork_info.deepest_slot = slot_hash_key.*;
                 ancestor_fork_info.height = current_height + 1;
-                current_child = ancestor.*;
+                current_child = maybe_ancestor.?;
                 current_height = ancestor_fork_info.height;
-                ancestor = &ancestor_fork_info.parent.?;
+                maybe_ancestor = ancestor_fork_info.parent;
             } else {
                 // If ancestor is given then ancestor's info must already exist.
                 return error.MissingParent;
@@ -861,3 +882,37 @@ test "HeaviestSubtreeForkChoice.markForkInvalidCandidate" {
         &SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
     );
 }
+
+test "HeaviestSubtreeForkChoice.initForTest" {
+    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    defer fc.deinit();
+}
+
+const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
+
+const fork_tuples = [_]TreeNode{
+    .{
+        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+    },
+    .{
+        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+    },
+    .{
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+    },
+    .{
+        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+    },
+    .{
+        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+    },
+    .{
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+    },
+};
