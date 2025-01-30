@@ -66,6 +66,10 @@ pub const ForkInfo = struct {
     // Set to true if this slot or a child node was duplicate confirmed.
     is_duplicate_confirmed: bool,
 
+    fn deinit(self: *ForkInfo) void {
+        self.children.deinit();
+    }
+
     /// Returns if the fork rooted at this node is included in fork choice
     fn isCandidate(self: *const ForkInfo) bool {
         return self.latest_invalid_ancestor == null;
@@ -176,6 +180,10 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     pub fn deinit(self: *HeaviestSubtreeForkChoice) void {
+        var it = self.fork_infos.iterator();
+        while (it.next()) |fork_info| {
+            fork_info.value_ptr.deinit();
+        }
         self.fork_infos.deinit();
         self.latest_votes.deinit();
     }
