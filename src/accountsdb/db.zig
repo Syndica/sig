@@ -3474,12 +3474,18 @@ test "geyser stream on load" {
     // start the geyser writer
     try geyser_writer.spawnIOLoop();
 
-    const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
+    var reader = try sig.geyser.GeyserReader.init(
         allocator,
+        geyser_pipe_path,
+        &geyser_exit,
+        .{},
+    );
+    defer reader.deinit();
+
+    const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
+        &reader,
         .noop,
         &geyser_exit,
-        geyser_pipe_path,
-        null,
         null,
     });
     defer reader_handle.join();
@@ -3505,7 +3511,7 @@ test "geyser stream on load" {
         snapshot.accounts_db_fields,
         1,
         allocator,
-        1_500,
+        500,
     );
 }
 
