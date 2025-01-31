@@ -71,12 +71,16 @@ pub fn SplitUnionList(TaggedUnion: type) type {
 
     return struct {
         lists: sig.utils.types.EnumStruct(Tag, List),
-        indices: std.ArrayListUnmanaged(struct { Tag, usize }),
 
         const Self = @This();
 
+        pub const Index = struct {
+            tag: Tag,
+            index: usize,
+        };
+
         fn List(tag: Tag) type {
-            return std.ArrayListUnmanaged(struct { outer_index: usize, item: FieldType(tag) });
+            return std.ArrayListUnmanaged(FieldType(tag));
         }
 
         fn FieldType(tag: Tag) type {
@@ -92,26 +96,25 @@ pub fn SplitUnionList(TaggedUnion: type) type {
             inline for (@typeInfo(Tag).Enum.fields) |f| {
                 @field(lists, f.name) = .{};
             }
-            return .{ .lists = lists, .indices = .{} };
+            return .{ .lists = lists };
         }
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
-            self.indices.deinit(allocator);
             inline for (@typeInfo(Tag).Enum.fields) |f| {
                 @field(self.lists, f.name).deinit(allocator);
             }
         }
 
-        pub fn append(self: *Self, allocator: Allocator, item: TaggedUnion) Allocator.Error!void {
+        pub fn append(self: *Self, allocator: Allocator, item: TaggedUnion) Allocator.Error!Index {
             switch (@as(Tag, item)) {
                 inline else => |tag| {
                     const list = self.listMut(tag);
                     const unwrapped_item = @field(item, @tagName(tag));
-                    try list.append(allocator, .{
-                        .outer_index = self.indices.items.len,
-                        .item = unwrapped_item,
-                    });
-                    try self.indices.append(allocator, .{ tag, list.items.len - 1 });
+                    try list.append(allocator, unwrapped_item);
+                    return .{
+                        .tag = tag,
+                        .index = list.items.len - 1,
+                    };
                 },
             }
         }
@@ -120,25 +123,23 @@ pub fn SplitUnionList(TaggedUnion: type) type {
             switch (tag) {
                 inline else => |comptime_tag| {
                     const list = self.listMut(comptime_tag);
-                    const ptr = try list.addOne(allocator);
-                    ptr.outer_index = self.indices.items.len;
-                    try self.indices.append(allocator, .{ comptime_tag, list.items.len - 1 });
                     return .{
-                        .tag = tag,
-                        .index = self.indices.items.len - 1,
-                        .ptr = &ptr.item,
+                        .ptr = try list.addOne(allocator),
+                        .index = .{
+                            .tag = tag,
+                            .index = list.items.len - 1,
+                        },
                     };
                 },
             }
         }
 
         pub const Entry = struct {
-            tag: Tag,
-            index: usize,
             ptr: *anyopaque,
+            index: Index,
 
             pub fn read(self: Entry) TaggedUnion {
-                switch (self.tag) {
+                switch (self.index.tag) {
                     inline else => |tag| {
                         const ptr: *FieldType(tag) = @ptrCast(@alignCast(self.ptr));
                         return @unionInit(TaggedUnion, @tagName(tag), ptr.*);
@@ -147,7 +148,7 @@ pub fn SplitUnionList(TaggedUnion: type) type {
             }
 
             pub fn write(self: Entry, item: TaggedUnion) void {
-                switch (self.tag) {
+                switch (self.index.tag) {
                     inline else => |tag| {
                         const ptr: *FieldType(tag) = @ptrCast(@alignCast(self.ptr));
                         ptr.* = @field(item, @tagName(tag));
@@ -156,94 +157,49 @@ pub fn SplitUnionList(TaggedUnion: type) type {
             }
         };
 
-        pub fn swapRemove(self: *Self, index: usize) void {
-            const tag, const inner_index = self.indices.swapRemove(index);
-            if (index < self.indices.items.len) {
-                // fix the swapped-in slot to point to the correct outer index
-                const swapped_tag, const swapped_inner_index = self.indices.items[index];
-                switch (swapped_tag) {
-                    inline else => |comptime_swapped_tag| {
-                        const list = self.listMut(comptime_swapped_tag);
-                        list.items[swapped_inner_index].outer_index = index;
-                    },
-                }
-            }
-            switch (tag) {
-                inline else => |comptime_tag| {
-                    const list = self.listMut(comptime_tag);
-                    const slot = list.swapRemove(inner_index);
-                    assert(slot.outer_index == index);
-                    if (inner_index < list.items.len) {
-                        // fix the outer index to point to the correct slot
-                        const swapped_slot = list.items[inner_index];
-                        self.indices.items[swapped_slot.outer_index][1] = inner_index;
-                    }
+        pub fn swapRemove(self: *Self, index: Index) TaggedUnion {
+            switch (index.tag) {
+                inline else => |tag| {
+                    const list = self.listMut(tag);
+                    const item = list.swapRemove(index.index);
+                    return @unionInit(TaggedUnion, @tagName(tag), item);
                 },
             }
         }
 
-        pub fn pop(self: *Self) void {
-            const tag, const inner_index = self.indices.pop();
-            switch (tag) {
-                inline else => |comptime_tag| {
-                    const list = self.listMut(comptime_tag);
-                    assert(inner_index == list.items.len - 1);
-                    const slot = list.pop();
-                    assert(slot.outer_index == self.indices.items.len);
-                },
-            }
-        }
-
-        pub fn get(self: *const Self, index: usize) TaggedUnion {
-            const tag, const inner_index = self.indices.items[index];
+        /// returns the number of contained items with this tag.
+        pub fn tagLen(self: *const Self, tag: Tag) usize {
             return switch (tag) {
+                inline else => |comptime_tag| self.listConst(comptime_tag).items.len,
+            };
+        }
+
+        pub fn get(self: *const Self, index: Index) TaggedUnion {
+            return switch (index.tag) {
                 inline else => |comptime_tag| @unionInit(
                     TaggedUnion,
                     @tagName(comptime_tag),
-                    self.listConst(comptime_tag).items[inner_index].item,
+                    self.listConst(comptime_tag).items[index.index],
                 ),
             };
         }
 
-        pub fn getEntry(self: *const Self, index: usize) Entry {
-            const tag, const inner_index = self.indices.items[index];
-            return switch (tag) {
+        pub fn getEntry(self: *const Self, index: Index) Entry {
+            return switch (index.tag) {
                 inline else => |comptime_tag| .{
-                    .tag = tag,
                     .index = index,
-                    .ptr = &self.listConst(comptime_tag).items[inner_index].item,
+                    .ptr = &self.listConst(comptime_tag).items[index.index],
                 },
             };
         }
 
-        pub fn getTypedConst(self: *const Self, comptime tag: Tag, index: usize) *const FieldType(tag) {
-            return &self.listConst(tag).items[self.indices.items[index][1]].item;
+        pub fn getTypedConst(self: *const Self, comptime tag: Tag, index: Index) *const FieldType(tag) {
+            return &self.listConst(tag).items[index.index];
         }
 
-        pub fn getTypedMut(self: *Self, comptime tag: Tag, index: usize) *FieldType(tag) {
-            return &self.listMut(tag).items[self.indices.items[index][1]].item;
+        pub fn getTypedMut(self: *Self, comptime tag: Tag, index: Index) *FieldType(tag) {
+            return &self.listMut(tag).items[index.index];
         }
-
-        pub fn getTag(self: *const Self, index: usize) Tag {
-            return self.indices.items[index][0];
-        }
-
-        pub fn iterator(self: *const Self) Iterator {
-            return .{ .list = self };
-        }
-
-        pub const Iterator = struct {
-            list: *const Self,
-            cursor: usize = 0,
-
-            pub fn next(self: *Iterator) ?Entry {
-                if (self.cursor > self.list.indices.items.len) {
-                    return null;
-                }
-                defer self.cursor += 1;
-                return self.list.getEntry(self.cursor);
-            }
-        };
 
         fn listConst(self: *const Self, comptime tag: Tag) *const List(tag) {
             return &@field(self.lists, @tagName(tag));
@@ -262,30 +218,30 @@ test "SplitUnionList: addOne, get, and swapRemove" {
     defer list.deinit(allocator);
     var entry = try list.addOne(allocator, .one);
     entry.write(.{ .one = 0 });
-    entry = try list.addOne(allocator, .two);
-    entry.write(.{ .two = 1 });
-    entry = try list.addOne(allocator, .three);
-    entry.write(.{ .three = 2 });
+    entry = try list.addOne(allocator, .one);
+    entry.write(.{ .one = 1 });
+    entry = try list.addOne(allocator, .one);
+    entry.write(.{ .one = 2 });
     entry = try list.addOne(allocator, .one);
     entry.write(.{ .one = 3 });
-    try std.testing.expectEqual(Union{ .one = 0 }, list.get(0));
-    try std.testing.expectEqual(Union{ .two = 1 }, list.get(1));
-    try std.testing.expectEqual(Union{ .three = 2 }, list.get(2));
-    try std.testing.expectEqual(Union{ .one = 3 }, list.get(3));
+    try std.testing.expectEqual(Union{ .one = 0 }, list.get(.{ .tag = .one, .index = 0 }));
+    try std.testing.expectEqual(Union{ .one = 1 }, list.get(.{ .tag = .one, .index = 1 }));
+    try std.testing.expectEqual(Union{ .one = 2 }, list.get(.{ .tag = .one, .index = 2 }));
+    try std.testing.expectEqual(Union{ .one = 3 }, list.get(.{ .tag = .one, .index = 3 }));
 
-    list.swapRemove(1);
-    try std.testing.expectEqual(Union{ .one = 0 }, list.get(0));
-    try std.testing.expectEqual(Union{ .one = 3 }, list.get(1));
-    try std.testing.expectEqual(Union{ .three = 2 }, list.get(2));
+    _ = list.swapRemove(.{ .tag = .one, .index = 1 });
+    try std.testing.expectEqual(Union{ .one = 0 }, list.get(.{ .tag = .one, .index = 0 }));
+    try std.testing.expectEqual(Union{ .one = 3 }, list.get(.{ .tag = .one, .index = 1 }));
+    try std.testing.expectEqual(Union{ .one = 2 }, list.get(.{ .tag = .one, .index = 2 }));
 
-    list.swapRemove(0);
-    try std.testing.expectEqual(Union{ .three = 2 }, list.get(0));
-    try std.testing.expectEqual(Union{ .one = 3 }, list.get(1));
+    _ = list.swapRemove(.{ .tag = .one, .index = 0 });
+    try std.testing.expectEqual(Union{ .one = 2 }, list.get(.{ .tag = .one, .index = 0 }));
+    try std.testing.expectEqual(Union{ .one = 3 }, list.get(.{ .tag = .one, .index = 1 }));
 
-    list.swapRemove(0);
-    try std.testing.expectEqual(Union{ .one = 3 }, list.get(0));
+    _ = list.swapRemove(.{ .tag = .one, .index = 0 });
+    try std.testing.expectEqual(Union{ .one = 3 }, list.get(.{ .tag = .one, .index = 0 }));
 
-    list.swapRemove(0);
+    _ = list.swapRemove(.{ .tag = .one, .index = 0 });
 }
 
 /// A set that guarantees the contained items will be sorted whenever
