@@ -83,31 +83,31 @@
             - [x] basic unit tests
             - [ ] advanced unit tests
         - [x] executeAdvanceNonceAccount 
-            - [ ] basic unit tests
+            - [x] basic unit tests
             - [ ] advanced unit tests
         - [x] executeWithdrawNonceAccount
-            - [ ] basic unit tests
+            - [x] basic unit tests
             - [ ] advanced unit tests
         - [x] executeInitializeNonceAccount
-            - [ ] basic unit tests
+            - [x] basic unit tests
             - [ ] advanced unit tests
         - [x] executeAuthorizeNonceAccount
-            - [ ] basic unit tests
+            - [x] basic unit tests
             - [ ] advanced unit tests
         - [x] executeAllocate
             - [x] basic unit tests
             - [ ] advanced unit tests
         - [x] executeAllocateWithSeed
-            - [ ] basic unit tests
+            - [x] basic unit tests
             - [ ] advanced unit tests
         - [x] executeAssignWithSeed
-            - [ ] basic unit tests
+            - [x] basic unit tests
             - [ ] advanced unit tests
         - [x] executeTransferWithSeed
-            - [ ] basic unit tests
+            - [x] basic unit tests
             - [ ] advanced unit tests
         - [x] executeUpgradeNonceAccount
-            - [ ] basic unit tests
+            - [x] basic unit tests
             - [ ] advanced unit tests
 
 ## Vote Program

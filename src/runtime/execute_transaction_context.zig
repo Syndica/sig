@@ -14,7 +14,7 @@ const SysvarCache = sig.runtime.SysvarCache;
 const FeatureSet = sig.runtime.FeatureSet;
 
 const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
-    sig.runtime.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
+    sig.runtime.program.system_program.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
 pub const MAX_INSTRUCTION_TRACE_LENGTH: usize = 100;

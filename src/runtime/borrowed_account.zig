@@ -9,7 +9,7 @@ const ExecuteTransactionContext = sig.runtime.ExecuteTransactionContext;
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
 
-const MAX_PERMITTED_DATA_LENGTH = sig.runtime.MAX_PERMITTED_DATA_LENGTH;
+const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system_program.MAX_PERMITTED_DATA_LENGTH;
 
 // https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/transaction-context/src/lib.rs#L754
 pub const BorrowedAccount = struct {
@@ -158,7 +158,7 @@ pub const BorrowedAccount = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
     pub fn setState(self: BorrowedAccount, comptime T: type, state: T) InstructionError!void {
         const data = try self.getDataMutable();
-        const serialized_size = @sizeOf(T); // TODO: evaluate `T.serializedSize() catch error.GenericError;`
+        const serialized_size = state.serializedSize() catch error.GenericError;
         if (serialized_size > data.len) return InstructionError.AccountDataTooSmall;
         const written = sig.bincode.writeToSlice(data, state, .{}) catch return InstructionError.GenericError;
         if (written.len != serialized_size) return InstructionError.GenericError;

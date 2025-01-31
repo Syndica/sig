@@ -2,6 +2,15 @@ const sig = @import("../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L35
+pub const DEFAULT_LAMPORTS_PER_BYTE_YEAR: u64 = 1_000_000_000 / 100 * 365 / (1024 * 1024);
+
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L39
+pub const DEFAULT_EXEMPTION_THRESHOLD: f64 = 2.0;
+
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L45
+pub const DEFAULT_BURN_PERCENT: u8 = 50;
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L51-L52
 pub const ACCOUNT_STORAGE_OVERHEAD: u64 = 128;
 
@@ -20,15 +29,23 @@ pub const Rent = struct {
     /// distributed to validators.
     burn_percent: u8,
 
-    pub fn mimimumBalance(self: Rent, data_len: usize) u64 {
+    pub fn id() Pubkey {
+        return sig.runtime.ids.SYSVAR_RENT_ID;
+    }
+
+    pub fn default() Rent {
+        return .{
+            .lamports_per_byte_year = DEFAULT_LAMPORTS_PER_BYTE_YEAR,
+            .exemption_threshold = DEFAULT_EXEMPTION_THRESHOLD,
+            .burn_percent = DEFAULT_BURN_PERCENT,
+        };
+    }
+
+    pub fn minimumBalance(self: Rent, data_len: usize) u64 {
         const bytes: u64 = @intCast(data_len);
         const lamports_per_year: f64 = @floatFromInt(
             (ACCOUNT_STORAGE_OVERHEAD + bytes) * self.lamports_per_byte_year,
         );
         return @intFromFloat(self.exemption_threshold * lamports_per_year);
-    }
-
-    pub fn id() Pubkey {
-        return sig.runtime.ids.SYSVAR_RENT_ID;
     }
 };

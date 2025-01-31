@@ -1,4 +1,9 @@
-# Runtime Implementations
+# Current Status Overview
+Currently, the `system_program` has been implemented along with positive outcome test cases. For now, it is probably best to comence the implementation of other native programs rather than focusing on rigorous testing of the `system_program`. A [Github issue](https://github.com/Syndica/sig/issues/528) has been opened to address the need for additional system program unit testing. 
+
+The current plan moving forward is to reveiw and merge [system program and related context PR](https://github.com/Syndica/sig/pull/518) and begin the implementation of both the vote (@dadepo) and bpf loader (@yewman) programs. Once the vote and bpf loader programs are implemented, we will consider re-prioritising the implementation of the transaction processing pipeline over more program implementations in order to facilitate @dadepo's work on consensus which may require producing a set of 'state' changes for a given sequence of vote transactions.
+
+# Current Scope
 
 Currently, this document is scoped to the logic contained within the [`execute_loaded_transaction`](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L717) method in Agave. Among other things, this includes: 
 - [Initialise TransactionContext](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L753)
@@ -15,46 +20,64 @@ Currently, this document is scoped to the logic contained within the [`execute_l
 - [Check Transaction Balanced](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L863)
 - [Return TransactionExecutionResult](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L890)
 
-## ExecuteTransactionContext 
-**Implementations**
-    - ([agave-InvokeContext](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192-L193), [agave-TransactionContext](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136))
-    - [firedance](https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/context/fd_exec_txn_ctx.h#L59)
-    - [sig](execute_transaction_context.zig)
-- ExecuteTransactionContext is the **top** level context we will work with for the moment. Any data which is required for transaction execution will be injected into this context, later down the track if it simplifies or improves the implementation we can extract dependencies into higher level contexts.
-- ExecuteTransactionContext's responsibilities are similar to the Agave [InvokeContext](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192).
-- Functionality will be added to the ExecutionTransactionContext on an as needed basis
+# Data Structures and Modules
 
-### Account Referencing
+## Account Shared Data
+- `AccountSharedData` holds account information with a shared reference to the account data field
+- `AccountSharedData`'s are loaded from `accounts_db` during the transaction loading phase
+- It should be moved to `accounts_db` at in the future
 
-- Account references in Agave are held in `InvokeContext.transaction_context.accounts: Rc<TransactionAccounts>` where:
-```rust
-#[derive(Clone, Debug, PartialEq)]
-pub struct TransactionAccounts {
-    accounts: Vec<RefCell<AccountSharedData>>,
-    touched_flags: RefCell<Box<[bool]>>,
-}
-```
-- Transaction accounts (`Vec<(Pubkey, AccountSharedData)>`) are injected into the `TransactionContext` when it is [created](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L753) in the `TransactionBatchProcessor` during `execute_loaded_transaction`.
-- The transaction accounts are read from the `LoadedTransaction` which is generated during the [account loading phase](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L286) which occurs immediately before `execute_loaded_transaction`. 
-- The key account loading logic can be found [here](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/account_loader.rs#L225-L226) where `AccountSharedData`'s are read from accounts db via [callbacks](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/account_loader.rs#L255-L256).
-- In Agave, the `get_account_shared_data` callback is implemented [here](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/runtime/src/bank.rs#L6799).
+## Borrowed Account
+- `BorrowedAccount` represents an account which has been 'borrowed' from the `ExecuteTransactionContext`
+- It contains a mutable reference to an `ExecuteTransactionContext.AccountInfo` with an associated guard, a const reference to the `ExecuteInstructionContext` which performed the borrow, and a const reference to the `ExecuteInstructionContext.AccountInfo` which contains the instruction level metadata of the borrowed account
+- It provides utility methods for accessing and modifying account state with necessary checks, returing appropriate `InstructionError`'s on failure
 
 
-## BorrowedAccounts
-**Implementations**
-    - [agave](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L706)
-    - [firedance](https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/fd_borrowed_account.h#L11)
-    - [sig](borrowed_account.zig)
-- A `BorrowedAccount` is simply a write lock over an `AccountSharedData` from the `ExecuteTransactionContext`'s list of accounts
-- During instruction execution an account may be 'borrowed' from the transaction execution context, allowing modification of its data.  
+## ExecuteInstructionContext
+- `ExecuteInstructionContext` handles all state required for executing a single program instruction
+- Functionality is limited to only support the execution of `SystemProgramInstruction`'s and will evolve as more programs are implemented
+- It defines the `program_id` of currently executing instruction, a bounded array of `ExecuteInstructionContext.AccountInfo`'s which contain account meta data, and the `instruction_data` which is the serialized program instruction
+- It provides utility methods for borrowing accounts from the `ExecuteTransactionContext`, loading sysvars from the `SysvarCache`, and performing checks during program execution.
 
-## LogCollector
-**Implementations**
-    - [agave](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L4)
-    - [firedancer](https://github.com/firedancer-io/firedancer/blob/82ecf8392fe076afce5f9cba02a5efa976e664c8/src/flamenco/log_collector/fd_log_collector.h#L19)
-    - [sig](log_collector.zig)
+## ExecuteTransactionContext
+- `ExecuteTransactionContext` handles all state required for executing a transaction
+-  Functionality is limited to only providing access to data required during the execution of a single instruction. In time, functionality will be extended to executing multiple instructions. 
+- It holds a bounded array of read-write locked `ExecuteTransactionContext.AccountInfo`'s which contain a `touched: bool` flag and an `account: AccountSharedData`. 
+- These accounts may be borrowed by programs during execution in order to perform state changes
+- For convenience, it contains dependencies that are required for transaction execution but should ultimately be located in a broader context. For example:
+    - `sysvar_cache`
+    - `lamports_per_signature`
+    - `last_blockhash`
+    - `feature_set`
 
-- The `LogCollector` is used to collect logs during transaction execution. 
-- The `LogCollector` can be configured with a max log size in bytes.
-- Each `ExecuteTransactionContext` has its own log collector.
-- Collected logs form part of the `TransactionExecutionResult` and may affect consenus.
+## Feature Set
+- `FeatureSet` is used to perform inference on currently active features during program execution
+- It should exist above the `ExecuteTransactionContext`, however, it is defined here for convenience at present
+- Its implementation is trivial and does not include any feature definitions yet
+
+## Ids
+- `ids` module defines system id's for programs, sysvars and other reserved accounts
+- The id defenitions are re-exported from relevant data structures where necessary
+- Perhaps they do not all need to be defined in one location, however, it is convenient for reference
+
+## Log Collector
+- `LogCollector` is used to collect logs at the transaction level
+- Each `ExecuteTransactionContext` has its own log collector which may be used to collect and emit logs as part of the transaction processing result
+
+## Nonce
+- `nonce` implements types for nonce accounts
+- It probably belongs somewhere other than `src/runtime/nonce.zig`, perhaps in an SDK of some sort when we get to it
+
+## Pubkey Utils
+- `pubkey_utils` defines the `createWithSeed` method which creates a `Pubkey` from a given `base`, `seed`, and `owner`
+- It returns a `PubkeyError` on failure which is set as a custom error in the `ExecuteTransactionContext` when failure occures during program execution
+- We may consider moving this logic to `src/core/pubkey.zig`
+
+## SysvarCache 
+- `SysvarCache` provides the runtime with access to sysvars during program execution
+- Currently its implementation is trivial, and only serves to facilitate an equivalent implementation of Agave's [get_sysvar_with_account_check](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/sysvar_cache.rs#L229) module.
+
+## Tmp Utils 
+- `tmp_utils` currently only redefines the `hashv` method which is currently defined in `src/ledger/shred.zig`
+- Rather than import from this location, the current approach was chosen to emphasize the need to extract this method to an appropriate module
+- The extraction is not performed as part of the current PR to simplify review, keeping `refactor` and `feature` implementations separate

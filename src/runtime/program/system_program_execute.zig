@@ -179,7 +179,6 @@ fn executeAdvanceNonceAccount(
     defer account.release();
 
     const recent_blockhashes = try eic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
-
     if (recent_blockhashes.isEmpty()) {
         eic.etc.log("Advance nonce account: recent blockhash list is empty", .{});
         eic.etc.setCustomError(@intFromError(SystemError.NonceNoRecentBlockhashes));
@@ -222,7 +221,7 @@ fn executeInitializeNonceAccount(
         return InstructionError.Custom;
     }
 
-    const rent = try eic.getSysvarWithAccountCheck(Rent, 3);
+    const rent = try eic.getSysvarWithAccountCheck(Rent, 2);
 
     try initializeNonceAccount(
         allocator,
@@ -316,9 +315,9 @@ fn executeTransferWithSeed(
 ) !void {
     try eic.checkNumberOfAccounts(3);
 
-    const from_base_index = 0;
     const from_index = 0;
-    const to_index = 1;
+    const from_base_index = 1;
+    const to_index = 2;
 
     const from_base_pubkey = try eic.getAccountPubkey(from_base_index);
     const from_pubkey = try eic.getAccountPubkey(from_index);
@@ -552,6 +551,7 @@ fn withdrawNonceAccount(
 
     {
         var from_account = try eic.getBorrowedAccount(from_account_index);
+        defer from_account.release();
 
         if (!from_account.isWritable()) {
             eic.etc.log("Withdraw nonce account: Account {} must be writeable", .{from_account.getPubkey()});
@@ -580,7 +580,7 @@ fn withdrawNonceAccount(
                     }
                     try from_account.setState(nonce.Versions, nonce.Versions{ .current = nonce.State.unintialized });
                 } else {
-                    const min_balance = rent.mimimumBalance(from_account.getData().len);
+                    const min_balance = rent.minimumBalance(from_account.getData().len);
                     const amount = std.math.add(u64, lamports, min_balance) catch {
                         return InstructionError.InsufficientFunds;
                     };
@@ -605,6 +605,7 @@ fn withdrawNonceAccount(
     }
 
     var to_account = try eic.getBorrowedAccount(to_account_index);
+    defer to_account.release();
     try to_account.addLamports(lamports);
 }
 
@@ -623,7 +624,7 @@ fn initializeNonceAccount(
     const versioned_nonce = try account.getState(allocator, nonce.Versions);
     switch (versioned_nonce.getState()) {
         .unintialized => {
-            const min_balance = rent.mimimumBalance(account.getData().len);
+            const min_balance = rent.minimumBalance(account.getData().len);
             if (min_balance > account.getLamports()) {
                 eic.etc.log("Initialize nonce account: insufficient lamports {}, need {}", .{
                     account.getLamports(),
@@ -671,15 +672,15 @@ pub fn authorizeNonceAccount(
         return err;
     };
 
-    const nonce_stace = nonce.State{ .initialized = nonce.Data.init(
+    const nonce_state = nonce.State{ .initialized = nonce.Data.init(
         authority,
         nonce_data.durable_nonce,
         nonce_data.getLamportsPerSignature(),
     ) };
 
     switch (versioned_nonce) {
-        .legacy => try account.setState(nonce.Versions, nonce.Versions{ .legacy = nonce_stace }),
-        .current => try account.setState(nonce.Versions, nonce.Versions{ .current = nonce_stace }),
+        .legacy => try account.setState(nonce.Versions, nonce.Versions{ .legacy = nonce_state }),
+        .current => try account.setState(nonce.Versions, nonce.Versions{ .current = nonce_state }),
     }
 }
 
@@ -756,7 +757,7 @@ pub const testing = struct {
         accounts_resize_delta: i64 = 0,
         compute_meter: u64 = 0,
         maybe_custom_error: ?u32 = null,
-        sysvar_cache: SysvarCache = SysvarCache.EMPTY,
+        sysvar_cache: SysvarCache = .{},
         lamports_per_signature: u64 = 0,
         last_blockhash: Hash = Hash.ZEROES,
     };
@@ -863,67 +864,6 @@ pub const testing = struct {
     }
 };
 
-test "executeAllocate" {
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    try testing.expectInstructionExecutionResult(
-        std.testing.allocator,
-        SystemProgramInstruction{
-            .allocate = .{
-                .space = 1024,
-            },
-        },
-        &.{
-            .{
-                .pubkey = Pubkey.initRandom(prng.random()),
-                .is_signer = true,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-        },
-        &.{
-            .{},
-        },
-        &.{
-            .{ .data = &[_]u8{0} ** 1024 },
-        },
-        .{
-            .compute_meter = 150,
-        },
-    );
-}
-
-test "executeAssign" {
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    const new_owner = Pubkey.initRandom(prng.random());
-    try testing.expectInstructionExecutionResult(
-        std.testing.allocator,
-        SystemProgramInstruction{
-            .assign = .{
-                .owner = new_owner,
-            },
-        },
-        &.{
-            .{
-                .pubkey = Pubkey.initRandom(prng.random()),
-                .is_signer = true,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-        },
-        &.{
-            .{},
-        },
-        &.{
-            .{ .owner = new_owner },
-        },
-        .{
-            .compute_meter = 150,
-        },
-    );
-}
-
 test "executeCreateAccount" {
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -958,7 +898,38 @@ test "executeCreateAccount" {
         },
         &.{
             .{ .lamports = 1_000_000 },
-            .{ .lamports = 1_000_000, .owner = system_program.id() },
+            .{ .lamports = 1_000_000, .owner = system_program.id(), .data = &.{} },
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}
+
+test "executeAssign" {
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const new_owner = Pubkey.initRandom(prng.random());
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .assign = .{
+                .owner = new_owner,
+            },
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = true,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+        },
+        &.{
+            .{},
+        },
+        &.{
+            .{ .owner = new_owner },
         },
         .{
             .compute_meter = 150,
@@ -1055,6 +1026,577 @@ test "executeCreateAccountWithSeed" {
             .{ .lamports = 1_000_000 },
             .{ .lamports = 1_000_000, .owner = system_program.id() },
             .{},
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}
+
+test "executeAdvanceNonceAccount" {
+    const Hash = sig.core.Hash;
+
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    // Last Blockhash is used to compute the next durable nonce
+    const last_blockhash = Hash.initRandom(prng.random());
+
+    // Lamports per signature is set when the nonce is advanced
+    const lamports_per_signature = 5_000;
+
+    // Create Initial Nonce State
+    const nonce_authority = Pubkey.initRandom(prng.random());
+    const initial_durable_nonce = nonce.createDurableNonce(Hash.initRandom(prng.random()));
+    const nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
+        nonce_authority,
+        initial_durable_nonce,
+        0,
+    ) } };
+    const nonce_state_bytes = try sig.bincode.writeAlloc(allocator, nonce_state, .{});
+    defer allocator.free(nonce_state_bytes);
+
+    // Create Final Nonce State
+    const final_nonce_state = nonce.Versions{
+        .current = nonce.State{
+            .initialized = nonce.Data.init(
+                nonce_authority, // Unchanged
+                nonce.createDurableNonce(last_blockhash), // Updated
+                lamports_per_signature, // Updated
+            ),
+        },
+    };
+    const final_nonce_state_bytes = try sig.bincode.writeAlloc(allocator, final_nonce_state, .{});
+    defer allocator.free(final_nonce_state_bytes);
+
+    // Create Sysvar Recent Blockhashes
+    const recent_blockhashes = .{
+        .entries = &.{.{
+            .blockhash = Hash.initRandom(prng.random()),
+            .fee_calculator = .{ .lamports_per_signature = 0 }, // Irrelevant
+        }},
+    };
+
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .advance_nonce_account = {},
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .pubkey = RecentBlockhashes.id(),
+                .is_signer = false,
+                .is_writable = false,
+                .index_in_transaction = 1,
+            },
+            .{
+                .pubkey = nonce_authority,
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+        },
+        &.{
+            .{ .data = nonce_state_bytes },
+            .{},
+            .{},
+        },
+        &.{
+            .{ .data = final_nonce_state_bytes },
+            .{},
+            .{},
+        },
+        .{
+            .lamports_per_signature = lamports_per_signature,
+            .last_blockhash = last_blockhash,
+            .compute_meter = 150,
+            .sysvar_cache = .{
+                .maybe_recent_blockhashes = recent_blockhashes,
+            },
+        },
+    );
+}
+
+test "executeWithdrawNonceAccount" {
+    const Hash = sig.core.Hash;
+
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    // The amount to withdraw
+    const withdraw_lamports = 1_000;
+
+    // Create Initial Nonce State
+    const nonce_authority = Pubkey.initRandom(prng.random());
+    const initial_durable_nonce = nonce.createDurableNonce(Hash.initRandom(prng.random()));
+    const nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
+        nonce_authority,
+        initial_durable_nonce,
+        0,
+    ) } };
+    const nonce_state_bytes = try sig.bincode.writeAlloc(allocator, nonce_state, .{});
+    defer allocator.free(nonce_state_bytes);
+
+    // Create Sysvars
+    const recent_blockhashes = RecentBlockhashes{ .entries = &.{} };
+    const rent = Rent.default();
+    const rent_minimum_balance = rent.minimumBalance(try nonce_state.serializedSize());
+
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .withdraw_nonce_account = 1_000,
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            },
+            .{
+                .pubkey = RecentBlockhashes.id(),
+                .is_signer = false,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+            .{
+                .pubkey = Rent.id(),
+                .is_signer = false,
+                .is_writable = false,
+                .index_in_transaction = 3,
+            },
+            .{
+                .pubkey = nonce_authority,
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 4,
+            },
+        },
+        &.{
+            .{
+                .lamports = 2 * withdraw_lamports + rent_minimum_balance,
+                .data = nonce_state_bytes,
+            },
+            .{},
+            .{},
+            .{},
+            .{},
+        },
+        &.{
+            .{
+                .lamports = withdraw_lamports + rent_minimum_balance,
+                .data = nonce_state_bytes,
+            },
+            .{
+                .lamports = withdraw_lamports,
+            },
+            .{},
+            .{},
+            .{},
+        },
+        .{
+            .compute_meter = 150,
+            .sysvar_cache = .{
+                .maybe_recent_blockhashes = recent_blockhashes,
+                .maybe_rent = rent,
+            },
+        },
+    );
+}
+
+test "executeInitializeNonceAccount" {
+    const Hash = sig.core.Hash;
+
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    // Last Blockhash is used to compute the next durable nonce
+    const last_blockhash = Hash.initRandom(prng.random());
+
+    // Lamports per signature is set when the nonce is advanced
+    const lamports_per_signature = 5_000;
+
+    // Create Final Nonce State
+    const nonce_authority = Pubkey.initRandom(prng.random());
+    const final_nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
+        nonce_authority,
+        nonce.createDurableNonce(last_blockhash),
+        lamports_per_signature,
+    ) } };
+    const final_nonce_state_bytes = try sig.bincode.writeAlloc(allocator, final_nonce_state, .{});
+    defer allocator.free(final_nonce_state_bytes);
+
+    // Create Uninitialized Nonce State
+    // The nonce state bytes must have sufficient space to store the final nonce state
+    const nonce_state = nonce.Versions{ .current = .unintialized };
+    const nonce_state_bytes = try allocator.alloc(u8, final_nonce_state_bytes.len);
+    _ = try sig.bincode.writeToSlice(nonce_state_bytes, nonce_state, .{});
+    defer allocator.free(nonce_state_bytes);
+
+    // Create Sysvar Recent Blockhashes
+    const recent_blockhashes = .{
+        .entries = &.{.{
+            .blockhash = Hash.initRandom(prng.random()),
+            .fee_calculator = .{ .lamports_per_signature = 0 }, // Irrelevant
+        }},
+    };
+    const rent = Rent.default();
+
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .initialize_nonce_account = nonce_authority,
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .pubkey = RecentBlockhashes.id(),
+                .is_signer = false,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+            .{
+                .pubkey = Rent.id(),
+                .is_signer = false,
+                .is_writable = false,
+                .index_in_transaction = 3,
+            },
+        },
+        &.{
+            .{
+                // Need rent to store final nonce state
+                .lamports = rent.minimumBalance(final_nonce_state_bytes.len),
+                .data = nonce_state_bytes,
+            },
+            .{},
+            .{},
+        },
+        &.{
+            .{
+                .lamports = rent.minimumBalance(final_nonce_state_bytes.len),
+                .data = final_nonce_state_bytes,
+            },
+            .{},
+            .{},
+        },
+        .{
+            .lamports_per_signature = lamports_per_signature,
+            .last_blockhash = last_blockhash,
+            .compute_meter = 150,
+            .sysvar_cache = .{
+                .maybe_recent_blockhashes = recent_blockhashes,
+                .maybe_rent = rent,
+            },
+        },
+    );
+}
+
+test "executeAuthorizeNonceAccount" {
+    const Hash = sig.core.Hash;
+
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    // Create Initial Nonce State
+    const initial_nonce_authority = Pubkey.initRandom(prng.random());
+    const durable_nonce = nonce.createDurableNonce(Hash.initRandom(prng.random()));
+    const nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
+        initial_nonce_authority,
+        durable_nonce,
+        0,
+    ) } };
+    const nonce_state_bytes = try sig.bincode.writeAlloc(allocator, nonce_state, .{});
+    defer allocator.free(nonce_state_bytes);
+
+    // Create Initial Nonce State
+    const final_nonce_authority = Pubkey.initRandom(prng.random());
+    const final_nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
+        final_nonce_authority,
+        durable_nonce,
+        0,
+    ) } };
+    const final_nonce_state_bytes = try sig.bincode.writeAlloc(allocator, final_nonce_state, .{});
+    defer allocator.free(final_nonce_state_bytes);
+
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .authorize_nonce_account = final_nonce_authority,
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                // Signer must be the initial nonce authority
+                .pubkey = initial_nonce_authority,
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 1,
+            },
+        },
+        &.{
+            .{
+                .data = nonce_state_bytes,
+            },
+            .{},
+        },
+        &.{
+            .{
+                .data = final_nonce_state_bytes,
+            },
+            .{},
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}
+
+test "executeAllocate" {
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .allocate = .{
+                .space = 1024,
+            },
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = true,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+        },
+        &.{
+            .{},
+        },
+        &.{
+            .{ .data = &[_]u8{0} ** 1024 },
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}
+
+test "executeAllocateWithSeed" {
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const base = Pubkey.initRandom(prng.random());
+    const seed = &[_]u8{0x10} ** 32;
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .allocate_with_seed = .{
+                .base = base,
+                .seed = seed,
+                .space = 1024,
+                .owner = system_program.id(),
+            },
+        },
+        &.{
+            .{
+                .pubkey = try pubkey_utils.createWithSeed(base, seed, system_program.id()),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .pubkey = base,
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 0,
+            },
+        },
+        &.{
+            .{},
+            .{},
+        },
+        &.{
+            .{ .data = &[_]u8{0} ** 1024 },
+            .{},
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}
+
+test "executeAssignWithSeed" {
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const new_owner = Pubkey.initRandom(prng.random());
+    const base = Pubkey.initRandom(prng.random());
+    const seed = &[_]u8{0x10} ** 32;
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .assign_with_seed = .{
+                .base = base,
+                .seed = seed,
+                .owner = new_owner,
+            },
+        },
+        &.{
+            .{
+                .pubkey = try pubkey_utils.createWithSeed(base, seed, new_owner),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .pubkey = base,
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 0,
+            },
+        },
+        &.{
+            .{},
+        },
+        &.{
+            .{ .owner = new_owner },
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}
+
+test "executeTransferWithSeed" {
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const base = Pubkey.initRandom(prng.random());
+    const from_seed = &[_]u8{0x10} ** 32;
+    const from_owner = Pubkey.initRandom(prng.random());
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .transfer_with_seed = .{
+                .lamports = 1_000_000,
+                .from_seed = from_seed,
+                .from_owner = from_owner,
+            },
+        },
+        &.{
+            .{
+                .pubkey = try pubkey_utils.createWithSeed(base, from_seed, from_owner),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .pubkey = base,
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 1,
+            },
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 2,
+            },
+        },
+        &.{
+            .{
+                .lamports = 2_000_000,
+            },
+            .{},
+            .{
+                .lamports = 0,
+            },
+        },
+        &.{
+            .{ .lamports = 1_000_000 },
+            .{},
+            .{ .lamports = 1_000_000 },
+        },
+        .{
+            .compute_meter = 150,
+        },
+    );
+}
+
+test "executeUpgradeNonceAccount" {
+    const Hash = sig.core.Hash;
+
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    // Create Initial Nonce State
+    const nonce_authority = Pubkey.initRandom(prng.random());
+    const durable_nonce = nonce.createDurableNonce(Hash.initRandom(prng.random()));
+    const lamports_per_signature = 5_000;
+    const nonce_state = nonce.Versions{ .legacy = nonce.State{ .initialized = nonce.Data.init(
+        nonce_authority,
+        durable_nonce,
+        lamports_per_signature,
+    ) } };
+    const nonce_state_bytes = try sig.bincode.writeAlloc(allocator, nonce_state, .{});
+    defer allocator.free(nonce_state_bytes);
+
+    // Create Initial Nonce State
+    const final_nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
+        nonce_authority,
+        durable_nonce,
+        lamports_per_signature,
+    ) } };
+    const final_nonce_state_bytes = try sig.bincode.writeAlloc(allocator, final_nonce_state, .{});
+    defer allocator.free(final_nonce_state_bytes);
+
+    try testing.expectInstructionExecutionResult(
+        std.testing.allocator,
+        SystemProgramInstruction{
+            .upgrade_nonce_account = {},
+        },
+        &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+        },
+        &.{
+            .{
+                .data = nonce_state_bytes,
+            },
+        },
+        &.{
+            .{
+                .data = final_nonce_state_bytes,
+            },
         },
         .{
             .compute_meter = 150,

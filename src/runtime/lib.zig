@@ -16,13 +16,7 @@ pub const LogCollector = @import("log_collector.zig").LogCollector;
 // TODO: move to accounts db
 pub const AccountSharedData = @import("account_shared_data.zig").AccountSharedData;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/system_instruction.rs#L85
-pub const MAX_PERMITTED_DATA_LENGTH: u64 = 10 * 1024 * 1024;
-
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/system_instruction.rs#L91
-pub const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION: i64 = @intCast(2 * MAX_PERMITTED_DATA_LENGTH);
-
-/// [agave] https://github.com/firedancer-io/firedancer/blob/82ecf8392fe076afce5f9cba02a5efa976e664c8/src/flamenco/runtime/info/fd_instr_info.h#L12
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/serialization.rs#L26
 pub const MAX_INSTRUCTION_ACCOUNTS: usize = 256;
 
 /// TODO: Why do I need to define this here for the tests to run?
