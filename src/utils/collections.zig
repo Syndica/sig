@@ -4,8 +4,6 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
-const assert = std.debug.assert;
-
 /// A list that recycles items that were removed from the list.
 ///
 /// Useful for types that are expensive to instantiate, like

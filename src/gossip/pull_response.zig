@@ -7,7 +7,6 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.mux.RwMux;
 const GossipTable = sig.gossip.table.GossipTable;
-const GossipData = sig.gossip.data.GossipData;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
 
