@@ -191,7 +191,11 @@ pub fn SplitUnionList(TaggedUnion: type) type {
             };
         }
 
-        pub fn getTypedConst(self: *const Self, comptime tag: Tag, index: Index) *const FieldType(tag) {
+        pub fn getTypedConst(
+            self: *const Self,
+            comptime tag: Tag,
+            index: Index,
+        ) *const FieldType(tag) {
             return &self.listConst(tag).items[index.index];
         }
 
