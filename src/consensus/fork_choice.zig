@@ -527,7 +527,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         root1: *const SlotAndHash,
         root2: *const SlotAndHash,
     ) !SortedMap(SlotAndHash, void) {
-        if (self.containsBlock(root1)) {
+        if (!self.containsBlock(root1)) {
             return SortedMap(SlotAndHash, void).init(self.allocator);
         }
         var pending_keys = std.ArrayList(SlotAndHash).init(self.allocator);
@@ -536,7 +536,6 @@ pub const HeaviestSubtreeForkChoice = struct {
         try pending_keys.append(root1.*);
 
         var reachable_set = SortedMap(SlotAndHash, void).init(self.allocator);
-        defer reachable_set.deinit();
 
         while (pending_keys.popOrNull()) |current_key| {
             if (current_key.order(root2.*) == .eq) {
