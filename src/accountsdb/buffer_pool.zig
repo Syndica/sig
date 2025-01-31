@@ -197,7 +197,7 @@ pub const BufferPool = struct {
         file_offset_end: FileOffset,
     ) ReadError!ReadHandle {
         const handle = try if (use_io_uring)
-            self.readIoUringSubmitAndWait(
+            self.readIoUring(
                 allocator,
                 file,
                 file_id,
@@ -231,7 +231,7 @@ pub const BufferPool = struct {
         return ending_frame - starting_frame + 1;
     }
 
-    fn readIoUringSubmitAndWait(
+    fn readIoUring(
         self: *BufferPool,
         /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
@@ -254,50 +254,69 @@ pub const BufferPool = struct {
         errdefer allocator.free(frame_refs);
         errdefer self.manager.getAllIndicesRollback(frame_refs);
 
-        // read into unpopulated frames
-        var queued_reads: u32 = 0;
-        for (0.., frame_refs) |i, *frame_ref| {
-            const populated = self.manager.populated[frame_ref.f_idx].load(.acquire);
-            if (populated) continue;
+        var i: u32 = 0;
+        var n_read: u32 = 0;
+        while (i < frame_refs.len or n_read < frame_refs.len) {
+            var queue_full = false;
 
-            const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
-                (file_offset_start - file_offset_start % FRAME_SIZE));
-            std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
+            if (i < frame_refs.len) {
+                const frame_ref = &frame_refs[i];
 
-            if (threadlocal_io_uring.read(
-                frame_ref.f_idx,
-                file.handle,
-                .{ .buffer = &self.frames[frame_ref.f_idx] },
-                frame_aligned_file_offset,
-            )) |_| {
-                queued_reads += 1;
-            } else |err| switch (err) {
-                error.SubmissionQueueFull => {
-                    // if the queue is full, let's submit our previous reads early, and then queue
-                    // our read again.
-                    try IouringSubmitAndWaitReads(
-                        threadlocal_io_uring,
-                        file,
-                        queued_reads,
-                    );
-                    _ = try threadlocal_io_uring.read(
-                        frame_ref.f_idx,
-                        file.handle,
-                        .{ .buffer = &self.frames[frame_ref.f_idx] },
-                        frame_aligned_file_offset,
-                    );
-                    queued_reads = 1;
-                },
-                else => |e| return e,
+                const populated = self.manager.populated[frame_ref.f_idx].load(.acquire);
+                if (populated) {
+                    n_read += 1;
+                    i += 1;
+                    continue;
+                }
+
+                const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
+                    (file_offset_start - file_offset_start % FRAME_SIZE));
+                std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
+
+                _ = threadlocal_io_uring.read(
+                    frame_ref.f_idx,
+                    file.handle,
+                    .{ .buffer = &self.frames[frame_ref.f_idx] },
+                    frame_aligned_file_offset,
+                ) catch |err| switch (err) {
+                    error.SubmissionQueueFull => {
+                        queue_full = true;
+                    },
+                    else => return err,
+                };
+
+                if (!queue_full) {
+                    i += 1;
+                    continue;
+                }
             }
-            frame_ref.hit = true;
+
+            if (queue_full or i >= frame_refs.len) {
+                // Submit without blocking
+                const n_submitted = try threadlocal_io_uring.submit();
+                std.debug.assert(n_submitted <= io_uring_entries);
+                if (queue_full) std.debug.assert(n_submitted == io_uring_entries);
+
+                // Read whatever is still available
+                var cqe_buf: [io_uring_entries]std.os.linux.io_uring_cqe = undefined;
+                const n_cqes_copied = try threadlocal_io_uring.copy_cqes(&cqe_buf, 0);
+                for (cqe_buf[0..n_cqes_copied]) |cqe| {
+                    if (cqe.err() != .SUCCESS) std.debug.panic(
+                        "Read failed, cqe: {}, err: {}, i: {}, file: {}",
+                        .{ cqe, cqe.err(), i, file },
+                    );
+                    const bytes_read: FrameOffset = @intCast(cqe.res);
+                    std.debug.assert(bytes_read > 0);
+                }
+
+                for (frame_refs[n_read..][0..n_cqes_copied]) |*frame_ref| {
+                    frame_ref.hit = true;
+                }
+                n_read += n_cqes_copied;
+            }
         }
 
         for (frame_refs) |frame_ref| std.debug.assert(frame_ref.hit);
-
-        if (queued_reads > 0) {
-            try IouringSubmitAndWaitReads(threadlocal_io_uring, file, queued_reads);
-        }
 
         return ReadHandle.initCached(
             self,
@@ -305,38 +324,6 @@ pub const BufferPool = struct {
             @intCast(file_offset_start % FRAME_SIZE),
             @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
         );
-    }
-
-    // Wait for our file reads to complete, filling the read length into the metadata as we go.
-    fn IouringSubmitAndWaitReads(
-        threadlocal_io_uring: *IoUring,
-        file: std.fs.File,
-        n_reads: u32,
-    ) !void {
-        const n_submitted = try threadlocal_io_uring.submit_and_wait(n_reads);
-        std.debug.assert(n_submitted == n_reads); // did somethng else submit an event?
-
-        var cqe_buf: [io_uring_entries]std.os.linux.io_uring_cqe = undefined;
-
-        // check our completions in order to set the frame's size;
-        // we need to wait for completion to get the bytes read
-        const cqe_count = try threadlocal_io_uring.copy_cqes(&cqe_buf, n_submitted);
-        std.debug.assert(cqe_count == n_submitted); // why did we not receive them all?
-
-        for (0.., cqe_buf[0..n_submitted]) |i, cqe| {
-            if (cqe.err() != .SUCCESS) {
-                std.debug.panicExtra(
-                    null,
-                    @returnAddress(),
-                    "cqe: {}, err: {}, i: {}, file: {}",
-                    .{ cqe, cqe.err(), i, file },
-                );
-            }
-            const f_idx: FrameIndex = @intCast(cqe.user_data);
-            const bytes_read: FrameOffset = @intCast(cqe.res);
-            _ = f_idx;
-            std.debug.assert(bytes_read <= FRAME_SIZE);
-        }
     }
 };
 
@@ -1478,7 +1465,7 @@ test "BufferPool readIoUringSubmitAndWait" {
     var bp = try BufferPool.init(allocator, 2048); // 2048 frames = 1MiB
     defer bp.deinit(allocator);
 
-    var read = try bp.readIoUringSubmitAndWait(allocator, file, file_id, 0, 1000);
+    var read = try bp.readIoUring(allocator, file, file_id, 0, 1000);
     defer read.deinit(allocator);
 }
 
