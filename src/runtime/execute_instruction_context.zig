@@ -3,11 +3,9 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const Hash = sig.core.Hash;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const ExecuteTransactionContext = sig.runtime.ExecuteTransactionContext;
 const InstructionError = sig.core.instruction.InstructionError;
-const SystemError = sig.runtime.program.system_program.SystemProgramError;
 const Pubkey = sig.core.Pubkey;
 
 const MAX_INSTRUCTION_ACCOUNTS = sig.runtime.MAX_INSTRUCTION_ACCOUNTS;
@@ -79,7 +77,11 @@ pub const ExecuteInstructionContext = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/sysvar_cache.rs#L229
-    pub fn getSysvarWithAccountCheck(self: *const ExecuteInstructionContext, comptime T: type, index: usize) InstructionError!T {
+    pub fn getSysvarWithAccountCheck(
+        self: *const ExecuteInstructionContext,
+        comptime T: type,
+        index: usize,
+    ) InstructionError!T {
         // try self.checkAccountAtIndex(index, T.id());
         if (index >= self.accounts.len) return error.NotEnoughAccountKeys;
         const actual = try self.getAccountPubkey(index);

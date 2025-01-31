@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const RwMux = sig.sync.RwMux;
-const Epoch = sig.core.Epoch;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Transaction = sig.core.Transaction;
@@ -146,7 +145,8 @@ pub fn expectInstructionExecutionResult(
 
     try executor(allocator, &eic);
 
-    const expected_transaction_accounts = try createAccountSharedDatas(allocator, post_transaction_accounts);
+    const expected_transaction_accounts =
+        try createAccountSharedDatas(allocator, post_transaction_accounts);
     defer {
         for (expected_transaction_accounts) |account| {
             account.data.deinit(allocator);

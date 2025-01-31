@@ -68,5 +68,7 @@ pub const Data = struct {
 };
 
 pub fn createDurableNonce(blockhash: Hash) Hash {
-    return .{ .data = sig.runtime.tmp_utils.hashv(&.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data }) };
+    return .{
+        .data = sig.runtime.tmp_utils.hashv(&.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data }),
+    };
 }

@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const RwMux = sig.sync.RwMux;
 const Mutable = sig.sync.mux.Mutable;
-const AccountSharedData = sig.runtime.AccountSharedData;
 const ExecuteInstructionContext = sig.runtime.ExecuteInstructionContext;
 const ExecuteTransactionContext = sig.runtime.ExecuteTransactionContext;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -38,7 +37,8 @@ pub const BorrowedAccount = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1095
     pub fn checkDataCanBeResized(self: BorrowedAccount, length: usize) InstructionError!void {
         const old_length = self.getData().len;
-        if (length != old_length and !self.isOwnedByCurrentProgram()) return InstructionError.AccountDataSizeChanged;
+        if (length != old_length and !self.isOwnedByCurrentProgram())
+            return InstructionError.AccountDataSizeChanged;
         if (length > MAX_PERMITTED_DATA_LENGTH) return InstructionError.InvalidRealloc;
         try self.eic.etc.checkAccountsResizeDelta(@intCast(length -| old_length));
     }
@@ -77,8 +77,17 @@ pub const BorrowedAccount = struct {
 
     /// Deserializes the account data into a `T` via `T.deserialize(allocator, data)`.
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L968-L969
-    pub fn getState(self: BorrowedAccount, allocator: std.mem.Allocator, comptime T: type) error{InvalidAccountData}!T {
-        return sig.bincode.readFromSlice(allocator, T, self.getData(), .{}) catch error.InvalidAccountData;
+    pub fn getState(
+        self: BorrowedAccount,
+        allocator: std.mem.Allocator,
+        comptime T: type,
+    ) error{InvalidAccountData}!T {
+        return sig.bincode.readFromSlice(
+            allocator,
+            T,
+            self.getData(),
+            .{},
+        ) catch error.InvalidAccountData;
     }
 
     /// Returns `true` if the account data is non-empty.
@@ -113,16 +122,30 @@ pub const BorrowedAccount = struct {
 
     /// Adds `lamports` to this account (transaction wide)
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L800
-    pub fn addLamports(self: *BorrowedAccount, lamports: u64) error{ArithmeticOverflow}!void {
-        self.etc_info.account.lamports = std.math.add(u64, self.etc_info.account.lamports, lamports) catch {
+    pub fn addLamports(
+        self: *BorrowedAccount,
+        lamports: u64,
+    ) error{ArithmeticOverflow}!void {
+        self.etc_info.account.lamports = std.math.add(
+            u64,
+            self.etc_info.account.lamports,
+            lamports,
+        ) catch {
             return InstructionError.ArithmeticOverflow;
         };
     }
 
     /// Subtracts `lamports` from this account (transaction wide)
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L808
-    pub fn subtractLamports(self: *BorrowedAccount, lamports: u64) error{ArithmeticOverflow}!void {
-        self.etc_info.account.lamports = std.math.sub(u64, self.etc_info.account.lamports, lamports) catch {
+    pub fn subtractLamports(
+        self: *BorrowedAccount,
+        lamports: u64,
+    ) error{ArithmeticOverflow}!void {
+        self.etc_info.account.lamports = std.math.sub(
+            u64,
+            self.etc_info.account.lamports,
+            lamports,
+        ) catch {
             return InstructionError.ArithmeticOverflow;
         };
     }
@@ -130,7 +153,11 @@ pub const BorrowedAccount = struct {
     /// Resizes the account data (transaction wide)
     /// Fills it with zeros at the end if is extended or truncates at the end otherwise.
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L885
-    pub fn setDataLength(self: BorrowedAccount, allocator: std.mem.Allocator, length: usize) !void {
+    pub fn setDataLength(
+        self: BorrowedAccount,
+        allocator: std.mem.Allocator,
+        length: usize,
+    ) !void {
         try self.checkDataCanBeResized(length);
         try self.checkDataCanBeChanged();
         if (self.getData().len == length) return;
@@ -160,7 +187,11 @@ pub const BorrowedAccount = struct {
         const data = try self.getDataMutable();
         const serialized_size = state.serializedSize() catch error.GenericError;
         if (serialized_size > data.len) return InstructionError.AccountDataTooSmall;
-        const written = sig.bincode.writeToSlice(data, state, .{}) catch return InstructionError.GenericError;
+        const written = sig.bincode.writeToSlice(
+            data,
+            state,
+            .{},
+        ) catch return InstructionError.GenericError;
         if (written.len != serialized_size) return InstructionError.GenericError;
     }
 

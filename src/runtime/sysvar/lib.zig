@@ -1,7 +1,5 @@
 const sig = @import("../../sig.zig");
 
-const Pubkey = sig.core.Pubkey;
-
 pub const Clock = @import("clock.zig").Clock;
 pub const EpochRewards = @import("epoch_rewards.zig").EpochRewards;
 pub const EpochSchedule = @import("epoch_schedule.zig").EpochSchedule;

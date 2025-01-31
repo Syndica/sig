@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const RwMux = sig.sync.RwMux;
@@ -13,7 +12,7 @@ const Transaction = sig.core.Transaction;
 const SysvarCache = sig.runtime.SysvarCache;
 const FeatureSet = sig.runtime.FeatureSet;
 
-const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
+const MAX_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
     sig.runtime.program.system_program.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
@@ -57,7 +56,7 @@ pub const ExecuteTransactionContext = struct {
         self: *const ExecuteTransactionContext,
         delta: i64,
     ) error{MaxAccountsDataAllocationsExceeded}!void {
-        if (self.accounts_resize_delta +| delta > MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION)
+        if (self.accounts_resize_delta +| delta > MAX_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION)
             return error.MaxAccountsDataAllocationsExceeded;
     }
 
@@ -71,8 +70,8 @@ pub const ExecuteTransactionContext = struct {
     }
 
     pub fn getAccountSharedData(self: *ExecuteTransactionContext, index: usize) AccountSharedData {
-        const account_info, var account_info_read_guard = self.accounts.slice()[index].readWithLock();
-        defer account_info_read_guard.unlock();
+        const account_info, var read_guard = self.accounts.slice()[index].readWithLock();
+        defer read_guard.unlock();
         return account_info.account;
     }
 
@@ -106,7 +105,10 @@ pub const ExecuteTransactionContext = struct {
         return self.feature_set;
     }
 
-    pub fn getSysvar(self: *ExecuteTransactionContext, comptime T: type) error{UnsupportedSysvar}!T {
+    pub fn getSysvar(
+        self: *ExecuteTransactionContext,
+        comptime T: type,
+    ) error{UnsupportedSysvar}!T {
         return if (self.sysvar_cache.get(T)) |value| value else error.UnsupportedSysvar;
     }
 
@@ -123,6 +125,7 @@ pub const ExecuteTransactionContext = struct {
     }
 
     pub fn log(self: *ExecuteTransactionContext, comptime fmt: []const u8, args: anytype) void {
-        if (self.maybe_log_collector) |*log_collector| log_collector.log(fmt, args) catch @panic("TODO: handle log error");
+        if (self.maybe_log_collector) |*log_collector|
+            log_collector.log(fmt, args) catch @panic("TODO: handle log error");
     }
 };

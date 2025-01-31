@@ -36,7 +36,11 @@ pub const LogCollector = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L25
-    pub fn log(self: *LogCollector, comptime fmt: []const u8, args: anytype) error{OutOfMemory}!void {
+    pub fn log(
+        self: *LogCollector,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) error{OutOfMemory}!void {
         if (self.bytes_limit_reached) return;
 
         const message = try std.fmt.allocPrint(self.allocator, fmt, args);
@@ -79,7 +83,8 @@ test "bytes_limit" {
         );
     }
 
-    { // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L108
+    // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L108
+    {
         var log_collector = LogCollector.default(allocator);
         defer log_collector.deinit();
 

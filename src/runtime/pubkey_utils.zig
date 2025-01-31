@@ -2,8 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
-const ExecuteInstructionContext = sig.runtime.ExecuteInstructionContext;
-const InstructionError = sig.core.instruction.InstructionError;
 
 // TODO: Consider moving the below to the pubkey module
 

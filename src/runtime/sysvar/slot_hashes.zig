@@ -1,6 +1,5 @@
 const sig = @import("../../sig.zig");
 
-const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 

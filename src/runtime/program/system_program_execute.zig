@@ -10,8 +10,6 @@ const Pubkey = sig.core.Pubkey;
 
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const ExecuteInstructionContext = sig.runtime.ExecuteInstructionContext;
-const ExecuteInstructionAccount = sig.runtime.ExecuteInstructionContext.AccountInfo;
-const FeatureSet = sig.runtime.FeatureSet;
 
 const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
@@ -24,7 +22,10 @@ const MAX_PERMITTED_DATA_LENGTH = system_program.MAX_PERMITTED_DATA_LENGTH;
 // TODO: Handle allocator errors with .Custom and return InstructionError
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
-pub fn executeSystemProgramInstruction(allocator: std.mem.Allocator, eic: *ExecuteInstructionContext) !void {
+pub fn executeSystemProgramInstruction(
+    allocator: std.mem.Allocator,
+    eic: *ExecuteInstructionContext,
+) !void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
     try eic.etc.consumeCompute(150);
@@ -352,7 +353,8 @@ fn executeUpgradeNonceAccount(
     try eic.checkNumberOfAccounts(1);
     var account = try eic.getBorrowedAccount(0);
     defer account.release();
-    if (!account.getOwner().equals(&system_program.id())) return InstructionError.InvalidAccountOwner;
+    if (!account.getOwner().equals(&system_program.id()))
+        return InstructionError.InvalidAccountOwner;
     if (!account.isWritable()) return InstructionError.InvalidArgument;
     const versioned_nonce = try account.getState(allocator, nonce.Versions);
     switch (versioned_nonce) {
@@ -387,7 +389,10 @@ fn allocate(
     }
 
     if (space > MAX_PERMITTED_DATA_LENGTH) {
-        eic.etc.log("Allocate: requested {}, max allowed {}", .{ space, MAX_PERMITTED_DATA_LENGTH });
+        eic.etc.log(
+            "Allocate: requested {}, max allowed {}",
+            .{ space, MAX_PERMITTED_DATA_LENGTH },
+        );
         eic.etc.setCustomError(@intFromError(SystemError.InvalidAccountDataLength));
         return InstructionError.Custom;
     }
@@ -453,7 +458,10 @@ fn transfer(
     lamports: u64,
 ) !void {
     eic.checkIsSigner(u16, from_index) catch |err| {
-        eic.etc.log("Transfer: `from` account {} must sign", .{try eic.getAccountPubkey(from_index)});
+        eic.etc.log(
+            "Transfer: `from` account {} must sign",
+            .{try eic.getAccountPubkey(from_index)},
+        );
         return err;
     };
 
@@ -482,7 +490,10 @@ fn transferVerified(
         }
 
         if (lamports > account.getLamports()) {
-            eic.etc.log("Transfer: insufficient lamports {}, need {}", .{ account.getLamports(), lamports });
+            eic.etc.log(
+                "Transfer: insufficient lamports {}, need {}",
+                .{ account.getLamports(), lamports },
+            );
             eic.etc.setCustomError(@intFromError(SystemError.ResultWithNegativeLamports));
             return InstructionError.Custom;
         }
@@ -510,12 +521,18 @@ fn advanceNonceAccount(
     const versioned_nonce = try account.getState(allocator, nonce.Versions);
     switch (versioned_nonce.getState()) {
         .unintialized => {
-            eic.etc.log("Advance nonce account: Account {} state is invalid", .{account.getPubkey()});
+            eic.etc.log(
+                "Advance nonce account: Account {} state is invalid",
+                .{account.getPubkey()},
+            );
             return InstructionError.InvalidAccountData;
         },
         .initialized => |data| {
             eic.checkIsSigner(Pubkey, data.authority) catch |err| {
-                eic.etc.log("Advance nonce account: Account {} must be a signer", .{data.authority});
+                eic.etc.log(
+                    "Advance nonce account: Account {} must be a signer",
+                    .{data.authority},
+                );
                 return err;
             };
 
@@ -554,7 +571,10 @@ fn withdrawNonceAccount(
         defer from_account.release();
 
         if (!from_account.isWritable()) {
-            eic.etc.log("Withdraw nonce account: Account {} must be writeable", .{from_account.getPubkey()});
+            eic.etc.log(
+                "Withdraw nonce account: Account {} must be writeable",
+                .{from_account.getPubkey()},
+            );
             return InstructionError.InvalidArgument;
         }
 
@@ -574,11 +594,19 @@ fn withdrawNonceAccount(
                 if (lamports == from_account.getLamports()) {
                     const durable_nonce = nonce.createDurableNonce(eic.etc.getBlockhash());
                     if (durable_nonce.eql(data.durable_nonce)) {
-                        eic.etc.log("Withdraw nonce account: nonce can only advance once per slot", .{});
-                        eic.etc.setCustomError(@intFromError(SystemError.NonceBlockhashNotExpired));
+                        eic.etc.log(
+                            "Withdraw nonce account: nonce can only advance once per slot",
+                            .{},
+                        );
+                        eic.etc.setCustomError(
+                            @intFromError(SystemError.NonceBlockhashNotExpired),
+                        );
                         return InstructionError.Custom;
                     }
-                    try from_account.setState(nonce.Versions, nonce.Versions{ .current = nonce.State.unintialized });
+                    try from_account.setState(
+                        nonce.Versions,
+                        nonce.Versions{ .current = nonce.State.unintialized },
+                    );
                 } else {
                     const min_balance = rent.minimumBalance(from_account.getData().len);
                     const amount = std.math.add(u64, lamports, min_balance) catch {
@@ -617,7 +645,10 @@ fn initializeNonceAccount(
     rent: Rent,
 ) !void {
     if (!account.isWritable()) {
-        eic.etc.log("Initialize nonce account: Account {} must be writeable", .{account.getPubkey()});
+        eic.etc.log(
+            "Initialize nonce account: Account {} must be writeable",
+            .{account.getPubkey()},
+        );
         return InstructionError.InvalidArgument;
     }
 
@@ -632,14 +663,19 @@ fn initializeNonceAccount(
                 });
                 return InstructionError.InsufficientFunds;
             }
-            try account.setState(nonce.Versions, nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
-                authority,
-                nonce.createDurableNonce(eic.etc.getBlockhash()),
-                eic.etc.getLamportsPerSignature(),
-            ) } });
+            try account.setState(nonce.Versions, nonce.Versions{
+                .current = nonce.State{ .initialized = nonce.Data.init(
+                    authority,
+                    nonce.createDurableNonce(eic.etc.getBlockhash()),
+                    eic.etc.getLamportsPerSignature(),
+                ) },
+            });
         },
         .initialized => |_| {
-            eic.etc.log("Initialize nonce account: Account {} state is invalid", .{account.getPubkey()});
+            eic.etc.log(
+                "Initialize nonce account: Account {} state is invalid",
+                .{account.getPubkey()},
+            );
             return InstructionError.InvalidAccountData;
         },
     }
@@ -653,7 +689,10 @@ pub fn authorizeNonceAccount(
     authority: Pubkey,
 ) !void {
     if (!account.isWritable()) {
-        eic.etc.log("Authorize nonce account: Account {} must be writeable", .{account.getPubkey()});
+        eic.etc.log(
+            "Authorize nonce account: Account {} must be writeable",
+            .{account.getPubkey()},
+        );
         return InstructionError.InvalidArgument;
     }
 
@@ -661,7 +700,10 @@ pub fn authorizeNonceAccount(
 
     const nonce_data = switch (versioned_nonce.getState()) {
         .unintialized => {
-            eic.etc.log("Authorize nonce account: Account {} state is invalid", .{account.getPubkey()});
+            eic.etc.log(
+                "Authorize nonce account: Account {} state is invalid",
+                .{account.getPubkey()},
+            );
             return InstructionError.InvalidAccountData;
         },
         .initialized => |data| data,
@@ -1094,11 +1136,13 @@ test "executeInitializeNonceAccount" {
 
     // Create Final Nonce State
     const nonce_authority = Pubkey.initRandom(prng.random());
-    const final_nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
-        nonce_authority,
-        nonce.createDurableNonce(last_blockhash),
-        lamports_per_signature,
-    ) } };
+    const final_nonce_state = nonce.Versions{
+        .current = nonce.State{ .initialized = nonce.Data.init(
+            nonce_authority,
+            nonce.createDurableNonce(last_blockhash),
+            lamports_per_signature,
+        ) },
+    };
     const final_nonce_state_bytes = try sig.bincode.writeAlloc(allocator, final_nonce_state, .{});
     defer allocator.free(final_nonce_state_bytes);
 
@@ -1195,11 +1239,13 @@ test "executeAuthorizeNonceAccount" {
 
     // Create Initial Nonce State
     const final_nonce_authority = Pubkey.initRandom(prng.random());
-    const final_nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
-        final_nonce_authority,
-        durable_nonce,
-        0,
-    ) } };
+    const final_nonce_state = nonce.Versions{
+        .current = nonce.State{ .initialized = nonce.Data.init(
+            final_nonce_authority,
+            durable_nonce,
+            0,
+        ) },
+    };
     const final_nonce_state_bytes = try sig.bincode.writeAlloc(allocator, final_nonce_state, .{});
     defer allocator.free(final_nonce_state_bytes);
 
@@ -1436,20 +1482,24 @@ test "executeUpgradeNonceAccount" {
     const nonce_authority = Pubkey.initRandom(prng.random());
     const durable_nonce = nonce.createDurableNonce(Hash.initRandom(prng.random()));
     const lamports_per_signature = 5_000;
-    const nonce_state = nonce.Versions{ .legacy = nonce.State{ .initialized = nonce.Data.init(
-        nonce_authority,
-        durable_nonce,
-        lamports_per_signature,
-    ) } };
+    const nonce_state = nonce.Versions{
+        .legacy = nonce.State{ .initialized = nonce.Data.init(
+            nonce_authority,
+            durable_nonce,
+            lamports_per_signature,
+        ) },
+    };
     const nonce_state_bytes = try sig.bincode.writeAlloc(allocator, nonce_state, .{});
     defer allocator.free(nonce_state_bytes);
 
     // Create Initial Nonce State
-    const final_nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
-        nonce_authority,
-        durable_nonce,
-        lamports_per_signature,
-    ) } };
+    const final_nonce_state = nonce.Versions{
+        .current = nonce.State{ .initialized = nonce.Data.init(
+            nonce_authority,
+            durable_nonce,
+            lamports_per_signature,
+        ) },
+    };
     const final_nonce_state_bytes = try sig.bincode.writeAlloc(allocator, final_nonce_state, .{});
     defer allocator.free(final_nonce_state_bytes);
 
