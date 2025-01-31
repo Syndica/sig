@@ -1,21 +1,25 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const sysvar = sig.runtime.sysvar;
-const id = sig.runtime.id;
 const nonce = sig.runtime.nonce;
 const pubkey_utils = sig.runtime.pubkey_utils;
+const system_program = sig.runtime.program.system_program;
 
-const Pubkey = sig.core.Pubkey;
-const Rent = sig.runtime.sysvar.Rent;
-const BorrowedAccount = sig.runtime.BorrowedAccount;
 const InstructionError = sig.core.instruction.InstructionError;
+const Pubkey = sig.core.Pubkey;
+
+const BorrowedAccount = sig.runtime.BorrowedAccount;
 const ExecuteInstructionContext = sig.runtime.ExecuteInstructionContext;
 const ExecuteInstructionAccount = sig.runtime.ExecuteInstructionContext.AccountInfo;
-const SystemError = sig.runtime.program.system_program.SystemProgramError;
-const SystemProgramInstruction = sig.runtime.program.system_program.SystemProgramInstruction;
+const FeatureSet = sig.runtime.FeatureSet;
 
-const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system_program.MAX_PERMITTED_DATA_LENGTH;
+const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
+const Rent = sig.runtime.sysvar.Rent;
+
+const SystemError = system_program.SystemProgramError;
+const SystemProgramInstruction = system_program.SystemProgramInstruction;
+
+const MAX_PERMITTED_DATA_LENGTH = system_program.MAX_PERMITTED_DATA_LENGTH;
 
 // TODO: Handle allocator errors with .Custom and return InstructionError
 
@@ -23,7 +27,7 @@ const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system_program.MAX_PERMITT
 pub fn executeSystemProgramInstruction(allocator: std.mem.Allocator, eic: *ExecuteInstructionContext) !void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
-    try eic.consumeCompute(150);
+    try eic.etc.consumeCompute(150);
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L304-L308
@@ -174,12 +178,11 @@ fn executeAdvanceNonceAccount(
     var account = try eic.getBorrowedAccount(0);
     defer account.release();
 
-    try eic.checkAccountAtIndex(1, id.SYSVAR_RECENT_BLOCKHASHES_ID);
-    const recent_blockhashes = try eic.getSysvar(sysvar.RecentBlockhashes);
+    const recent_blockhashes = try eic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
 
     if (recent_blockhashes.isEmpty()) {
-        eic.log("Advance nonce account: recent blockhash list is empty", .{});
-        eic.setCustomError(@intFromError(SystemError.NonceNoRecentBlockhashes));
+        eic.etc.log("Advance nonce account: recent blockhash list is empty", .{});
+        eic.etc.setCustomError(@intFromError(SystemError.NonceNoRecentBlockhashes));
         return InstructionError.Custom;
     }
 
@@ -195,12 +198,9 @@ fn executeWithdrawNonceAccount(
     try eic.checkNumberOfAccounts(2);
 
     // TODO: Is this sysvar call required for consensus despite being unused?
-    try eic.checkAccountAtIndex(2, id.SYSVAR_RECENT_BLOCKHASHES_ID);
-    const recent_blockhashes = try eic.getSysvar(sysvar.RecentBlockhashes);
-    _ = recent_blockhashes;
+    _ = try eic.getSysvarWithAccountCheck(RecentBlockhashes, 2);
 
-    try eic.checkAccountAtIndex(3, id.SYSVAR_RENT_ID);
-    const rent = try eic.getSysvar(sysvar.Rent);
+    const rent = try eic.getSysvarWithAccountCheck(Rent, 3);
 
     return withdrawNonceAccount(allocator, eic, lamports, rent);
 }
@@ -215,17 +215,14 @@ fn executeInitializeNonceAccount(
     var account = try eic.getBorrowedAccount(0);
     defer account.release();
 
-    try eic.checkAccountAtIndex(1, id.SYSVAR_RECENT_BLOCKHASHES_ID);
-    const recent_blockhashes = try eic.getSysvar(sysvar.RecentBlockhashes);
-
+    const recent_blockhashes = try eic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
     if (recent_blockhashes.isEmpty()) {
-        eic.log("Initialize nonce account: recent blockhash list is empty", .{});
-        eic.setCustomError(@intFromError(SystemError.NonceNoRecentBlockhashes));
+        eic.etc.log("Initialize nonce account: recent blockhash list is empty", .{});
+        eic.etc.setCustomError(@intFromError(SystemError.NonceNoRecentBlockhashes));
         return InstructionError.Custom;
     }
 
-    try eic.checkAccountAtIndex(3, id.SYSVAR_RENT_ID);
-    const rent = try eic.getSysvar(sysvar.Rent);
+    const rent = try eic.getSysvarWithAccountCheck(Rent, 3);
 
     try initializeNonceAccount(
         allocator,
@@ -327,7 +324,7 @@ fn executeTransferWithSeed(
     const from_pubkey = try eic.getAccountPubkey(from_index);
 
     eic.checkIsSigner(u16, from_base_index) catch |err| {
-        eic.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
+        eic.etc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
         return err;
     };
 
@@ -356,7 +353,7 @@ fn executeUpgradeNonceAccount(
     try eic.checkNumberOfAccounts(1);
     var account = try eic.getBorrowedAccount(0);
     defer account.release();
-    if (!account.getOwner().equals(&id.SYSTEM_PROGRAM_ID)) return InstructionError.InvalidAccountOwner;
+    if (!account.getOwner().equals(&system_program.id())) return InstructionError.InvalidAccountOwner;
     if (!account.isWritable()) return InstructionError.InvalidArgument;
     const versioned_nonce = try account.getState(allocator, nonce.Versions);
     switch (versioned_nonce) {
@@ -380,19 +377,19 @@ fn allocate(
     authority: Pubkey,
 ) !void {
     eic.checkIsSigner(Pubkey, authority) catch |err| {
-        eic.log("Allocate: 'base' account {} must sign", .{account.getPubkey()});
+        eic.etc.log("Allocate: 'base' account {} must sign", .{account.getPubkey()});
         return err;
     };
 
-    if (account.hasData() or !id.SYSTEM_PROGRAM_ID.equals(&account.getOwner())) {
-        eic.log("Allocate: account {} already in use", .{account.getPubkey()});
-        eic.setCustomError(@intFromError(SystemError.AccountAlreadyInUse));
+    if (account.hasData() or !system_program.id().equals(&account.getOwner())) {
+        eic.etc.log("Allocate: account {} already in use", .{account.getPubkey()});
+        eic.etc.setCustomError(@intFromError(SystemError.AccountAlreadyInUse));
         return InstructionError.Custom;
     }
 
     if (space > MAX_PERMITTED_DATA_LENGTH) {
-        eic.log("Allocate: requested {}, max allowed {}", .{ space, MAX_PERMITTED_DATA_LENGTH });
-        eic.setCustomError(@intFromError(SystemError.InvalidAccountDataLength));
+        eic.etc.log("Allocate: requested {}, max allowed {}", .{ space, MAX_PERMITTED_DATA_LENGTH });
+        eic.etc.setCustomError(@intFromError(SystemError.InvalidAccountDataLength));
         return InstructionError.Custom;
     }
 
@@ -409,7 +406,7 @@ fn assign(
     if (account.getOwner().equals(&owner)) return;
 
     eic.checkIsSigner(Pubkey, authority) catch |err| {
-        eic.log("Assign: 'base' account {} must sign", .{account.getPubkey()});
+        eic.etc.log("Assign: 'base' account {} must sign", .{account.getPubkey()});
         return err;
     };
 
@@ -432,8 +429,8 @@ fn createAccount(
         defer account.release();
 
         if (account.getLamports() > 0) {
-            eic.log("Create Account: account {} already in use", .{account.getPubkey()});
-            eic.setCustomError(@intFromError(SystemError.AccountAlreadyInUse));
+            eic.etc.log("Create Account: account {} already in use", .{account.getPubkey()});
+            eic.etc.setCustomError(@intFromError(SystemError.AccountAlreadyInUse));
             return InstructionError.Custom;
         }
 
@@ -457,7 +454,7 @@ fn transfer(
     lamports: u64,
 ) !void {
     eic.checkIsSigner(u16, from_index) catch |err| {
-        eic.log("Transfer: `from` account {} must sign", .{try eic.getAccountPubkey(from_index)});
+        eic.etc.log("Transfer: `from` account {} must sign", .{try eic.getAccountPubkey(from_index)});
         return err;
     };
 
@@ -481,13 +478,13 @@ fn transferVerified(
         defer account.release();
 
         if (account.hasData()) {
-            eic.log("Transfer: `from` must not carry data", .{});
+            eic.etc.log("Transfer: `from` must not carry data", .{});
             return InstructionError.InvalidArgument;
         }
 
         if (lamports > account.getLamports()) {
-            eic.log("Transfer: insufficient lamports {}, need {}", .{ account.getLamports(), lamports });
-            eic.setCustomError(@intFromError(SystemError.ResultWithNegativeLamports));
+            eic.etc.log("Transfer: insufficient lamports {}, need {}", .{ account.getLamports(), lamports });
+            eic.etc.setCustomError(@intFromError(SystemError.ResultWithNegativeLamports));
             return InstructionError.Custom;
         }
 
@@ -507,27 +504,27 @@ fn advanceNonceAccount(
     account: BorrowedAccount,
 ) !void {
     if (!account.isWritable()) {
-        eic.log("Advance nonce account: Account {} must be writeable", .{account.getPubkey()});
+        eic.etc.log("Advance nonce account: Account {} must be writeable", .{account.getPubkey()});
         return InstructionError.InvalidArgument;
     }
 
     const versioned_nonce = try account.getState(allocator, nonce.Versions);
     switch (versioned_nonce.getState()) {
         .unintialized => {
-            eic.log("Advance nonce account: Account {} state is invalid", .{account.getPubkey()});
+            eic.etc.log("Advance nonce account: Account {} state is invalid", .{account.getPubkey()});
             return InstructionError.InvalidAccountData;
         },
         .initialized => |data| {
             eic.checkIsSigner(Pubkey, data.authority) catch |err| {
-                eic.log("Advance nonce account: Account {} must be a signer", .{data.authority});
+                eic.etc.log("Advance nonce account: Account {} must be a signer", .{data.authority});
                 return err;
             };
 
-            const next_durable_nonce = nonce.createDurableNonce(eic.getBlockhash());
+            const next_durable_nonce = nonce.createDurableNonce(eic.etc.getBlockhash());
 
             if (data.durable_nonce.eql(next_durable_nonce)) {
-                eic.log("Advance nonce account: nonce can only advance once per slot", .{});
-                eic.setCustomError(@intFromError(SystemError.NonceBlockhashNotExpired));
+                eic.etc.log("Advance nonce account: nonce can only advance once per slot", .{});
+                eic.etc.setCustomError(@intFromError(SystemError.NonceBlockhashNotExpired));
                 return InstructionError.Custom;
             }
 
@@ -536,7 +533,7 @@ fn advanceNonceAccount(
                 nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
                     data.authority,
                     next_durable_nonce,
-                    eic.getLamportsPerSignature(),
+                    eic.etc.getLamportsPerSignature(),
                 ) } },
             );
         },
@@ -557,7 +554,7 @@ fn withdrawNonceAccount(
         var from_account = try eic.getBorrowedAccount(from_account_index);
 
         if (!from_account.isWritable()) {
-            eic.log("Withdraw nonce account: Account {} must be writeable", .{from_account.getPubkey()});
+            eic.etc.log("Withdraw nonce account: Account {} must be writeable", .{from_account.getPubkey()});
             return InstructionError.InvalidArgument;
         }
 
@@ -565,7 +562,7 @@ fn withdrawNonceAccount(
         const authority = switch (versioned_nonce.getState()) {
             .unintialized => blk: {
                 if (lamports > from_account.getLamports()) {
-                    eic.log("Withdraw nonce account: insufficient lamports {}, need {}", .{
+                    eic.etc.log("Withdraw nonce account: insufficient lamports {}, need {}", .{
                         from_account.getLamports(),
                         lamports,
                     });
@@ -575,10 +572,10 @@ fn withdrawNonceAccount(
             },
             .initialized => |data| blk: {
                 if (lamports == from_account.getLamports()) {
-                    const durable_nonce = nonce.createDurableNonce(eic.getBlockhash());
+                    const durable_nonce = nonce.createDurableNonce(eic.etc.getBlockhash());
                     if (durable_nonce.eql(data.durable_nonce)) {
-                        eic.log("Withdraw nonce account: nonce can only advance once per slot", .{});
-                        eic.setCustomError(@intFromError(SystemError.NonceBlockhashNotExpired));
+                        eic.etc.log("Withdraw nonce account: nonce can only advance once per slot", .{});
+                        eic.etc.setCustomError(@intFromError(SystemError.NonceBlockhashNotExpired));
                         return InstructionError.Custom;
                     }
                     try from_account.setState(nonce.Versions, nonce.Versions{ .current = nonce.State.unintialized });
@@ -588,7 +585,7 @@ fn withdrawNonceAccount(
                         return InstructionError.InsufficientFunds;
                     };
                     if (amount > from_account.getLamports()) {
-                        eic.log("Withdraw nonce account: insufficient lamports {}, need {}", .{
+                        eic.etc.log("Withdraw nonce account: insufficient lamports {}, need {}", .{
                             from_account.getLamports(),
                             amount,
                         });
@@ -600,7 +597,7 @@ fn withdrawNonceAccount(
         };
 
         eic.checkIsSigner(Pubkey, authority) catch |err| {
-            eic.log("Withdraw nonce account: Account {} must sign", .{authority});
+            eic.etc.log("Withdraw nonce account: Account {} must sign", .{authority});
             return err;
         };
 
@@ -619,7 +616,7 @@ fn initializeNonceAccount(
     rent: Rent,
 ) !void {
     if (!account.isWritable()) {
-        eic.log("Initialize nonce account: Account {} must be writeable", .{account.getPubkey()});
+        eic.etc.log("Initialize nonce account: Account {} must be writeable", .{account.getPubkey()});
         return InstructionError.InvalidArgument;
     }
 
@@ -628,7 +625,7 @@ fn initializeNonceAccount(
         .unintialized => {
             const min_balance = rent.mimimumBalance(account.getData().len);
             if (min_balance > account.getLamports()) {
-                eic.log("Initialize nonce account: insufficient lamports {}, need {}", .{
+                eic.etc.log("Initialize nonce account: insufficient lamports {}, need {}", .{
                     account.getLamports(),
                     min_balance,
                 });
@@ -636,12 +633,12 @@ fn initializeNonceAccount(
             }
             try account.setState(nonce.Versions, nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
                 authority,
-                nonce.createDurableNonce(eic.getBlockhash()),
-                eic.getLamportsPerSignature(),
+                nonce.createDurableNonce(eic.etc.getBlockhash()),
+                eic.etc.getLamportsPerSignature(),
             ) } });
         },
         .initialized => |_| {
-            eic.log("Initialize nonce account: Account {} state is invalid", .{account.getPubkey()});
+            eic.etc.log("Initialize nonce account: Account {} state is invalid", .{account.getPubkey()});
             return InstructionError.InvalidAccountData;
         },
     }
@@ -655,7 +652,7 @@ pub fn authorizeNonceAccount(
     authority: Pubkey,
 ) !void {
     if (!account.isWritable()) {
-        eic.log("Authorize nonce account: Account {} must be writeable", .{account.getPubkey()});
+        eic.etc.log("Authorize nonce account: Account {} must be writeable", .{account.getPubkey()});
         return InstructionError.InvalidArgument;
     }
 
@@ -663,14 +660,14 @@ pub fn authorizeNonceAccount(
 
     const nonce_data = switch (versioned_nonce.getState()) {
         .unintialized => {
-            eic.log("Authorize nonce account: Account {} state is invalid", .{account.getPubkey()});
+            eic.etc.log("Authorize nonce account: Account {} state is invalid", .{account.getPubkey()});
             return InstructionError.InvalidAccountData;
         },
         .initialized => |data| data,
     };
 
     eic.checkIsSigner(Pubkey, nonce_data.authority) catch |err| {
-        eic.log("Authorize nonce account: Account {} must sign", .{nonce_data.authority});
+        eic.etc.log("Authorize nonce account: Account {} must sign", .{nonce_data.authority});
         return err;
     };
 
@@ -696,12 +693,12 @@ fn checkSeedAddress(
     comptime log_err_fmt: []const u8,
 ) !void {
     const created = pubkey_utils.createWithSeed(base, seed, owner) catch |err| {
-        eic.setCustomError(@intFromError(err));
+        eic.etc.setCustomError(@intFromError(err));
         return InstructionError.Custom;
     };
     if (!expected.equals(&created)) {
-        eic.log(log_err_fmt, .{ expected, created });
-        eic.setCustomError(@intFromError(SystemError.AddressWithSeedMismatch));
+        eic.etc.log(log_err_fmt, .{ expected, created });
+        eic.etc.setCustomError(@intFromError(SystemError.AddressWithSeedMismatch));
         return InstructionError.Custom;
     }
 }
@@ -788,6 +785,7 @@ pub const testing = struct {
             .sysvar_cache = params.sysvar_cache,
             .lamports_per_signature = params.lamports_per_signature,
             .last_blockhash = params.last_blockhash,
+            .feature_set = FeatureSet.EMPTY,
         };
     }
 
@@ -935,7 +933,7 @@ test "executeCreateAccount" {
             .create_account = .{
                 .lamports = 1_000_000,
                 .space = 0,
-                .owner = id.SYSTEM_PROGRAM_ID,
+                .owner = system_program.id(),
             },
         },
         &.{
@@ -960,7 +958,7 @@ test "executeCreateAccount" {
         },
         &.{
             .{ .lamports = 1_000_000 },
-            .{ .lamports = 1_000_000, .owner = id.SYSTEM_PROGRAM_ID },
+            .{ .lamports = 1_000_000, .owner = system_program.id() },
         },
         .{
             .compute_meter = 150,
@@ -1023,7 +1021,7 @@ test "executeCreateAccountWithSeed" {
                 .seed = seed,
                 .lamports = 1_000_000,
                 .space = 0,
-                .owner = id.SYSTEM_PROGRAM_ID,
+                .owner = system_program.id(),
             },
         },
         &.{
@@ -1034,7 +1032,7 @@ test "executeCreateAccountWithSeed" {
                 .index_in_transaction = 0,
             },
             .{
-                .pubkey = try pubkey_utils.createWithSeed(base, seed, id.SYSTEM_PROGRAM_ID),
+                .pubkey = try pubkey_utils.createWithSeed(base, seed, system_program.id()),
                 .is_signer = false,
                 .is_writable = true,
                 .index_in_transaction = 1,
@@ -1055,13 +1053,11 @@ test "executeCreateAccountWithSeed" {
         },
         &.{
             .{ .lamports = 1_000_000 },
-            .{ .lamports = 1_000_000, .owner = id.SYSTEM_PROGRAM_ID },
+            .{ .lamports = 1_000_000, .owner = system_program.id() },
             .{},
         },
         .{
             .compute_meter = 150,
         },
     );
-
-    std.debug.print("base: {}\n", .{base});
 }

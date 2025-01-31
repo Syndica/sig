@@ -40,7 +40,7 @@ pub const BorrowedAccount = struct {
         const old_length = self.getData().len;
         if (length != old_length and !self.isOwnedByCurrentProgram()) return InstructionError.AccountDataSizeChanged;
         if (length > MAX_PERMITTED_DATA_LENGTH) return InstructionError.InvalidRealloc;
-        try self.eic.checkAccountsResizeDelta(@intCast(length -| old_length));
+        try self.eic.etc.checkAccountsResizeDelta(@intCast(length -| old_length));
     }
 
     /// Returns the public key of this account (transaction wide)
@@ -108,7 +108,7 @@ pub const BorrowedAccount = struct {
     /// Returns true if the owner of this account is the current `InstructionContext`s last program (instruction wide)
     /// https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1068-L1069
     pub fn isOwnedByCurrentProgram(self: BorrowedAccount) bool {
-        return self.eic.isOwner(self.getOwner());
+        return self.eic.program_id.equals(&self.getOwner());
     }
 
     /// Adds `lamports` to this account (transaction wide)
@@ -173,6 +173,6 @@ pub const BorrowedAccount = struct {
     /// Updates the accounts resize delta (transaction wide)
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1126-L1127
     pub fn updateAccountsResizeDelta(self: BorrowedAccount, length: usize) !void {
-        self.eic.addAccountsResizeDelta(@intCast(length -| self.getData().len));
+        self.eic.etc.addAccountsResizeDelta(@intCast(length -| self.getData().len));
     }
 };

@@ -7,15 +7,20 @@ const InstructionError = sig.core.instruction.InstructionError;
 
 // TODO: Consider moving the below to the pubkey module
 
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L26
 const MAX_SEED_LEN = 32;
+
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L32
 const PDA_MARKER = "ProgramDerivedAddress";
 
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L35
 pub const PubkeyError = error{
     MaxSeedLenExceeded,
     InvalidSeeds,
     IllegalOwner,
 };
 
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L200
 pub fn createWithSeed(
     base: Pubkey,
     seed: []const u8,

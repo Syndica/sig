@@ -1,5 +1,3 @@
-// TODO: add comments and permalinks
-
 const std = @import("std");
 const sig = @import("../sig.zig");
 
@@ -13,8 +11,9 @@ const InstructionError = sig.core.instruction.InstructionError;
 const LogCollector = sig.runtime.LogCollector;
 const Transaction = sig.core.Transaction;
 const SysvarCache = sig.runtime.SysvarCache;
+const FeatureSet = sig.runtime.FeatureSet;
 
-pub const MAX_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
+const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
     sig.runtime.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
@@ -23,6 +22,8 @@ pub const MAX_INSTRUCTION_TRACE_LENGTH: usize = 100;
 // https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/compute-budget/src/compute_budget.rs#L11-L12
 pub const MAX_INSTRUCTION_STACK_DEPTH: usize = 5;
 
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192
 pub const ExecuteTransactionContext = struct {
     accounts: std.BoundedArray(RwMux(AccountInfo), Transaction.MAX_ACCOUNTS),
 
@@ -45,6 +46,7 @@ pub const ExecuteTransactionContext = struct {
     sysvar_cache: SysvarCache,
     lamports_per_signature: u64,
     last_blockhash: Hash,
+    feature_set: FeatureSet,
 
     pub const AccountInfo = struct {
         touched: bool,
@@ -55,7 +57,7 @@ pub const ExecuteTransactionContext = struct {
         self: *const ExecuteTransactionContext,
         delta: i64,
     ) error{MaxAccountsDataAllocationsExceeded}!void {
-        if (self.accounts_resize_delta +| delta > MAX_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION)
+        if (self.accounts_resize_delta +| delta > MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION)
             return error.MaxAccountsDataAllocationsExceeded;
     }
 
@@ -98,6 +100,10 @@ pub const ExecuteTransactionContext = struct {
             .etc_info = etc_info,
             .etc_info_write_guard = etc_info_write_guard,
         };
+    }
+
+    pub fn getFeatureSet(self: *ExecuteTransactionContext) FeatureSet {
+        return self.feature_set;
     }
 
     pub fn getSysvar(self: *ExecuteTransactionContext, comptime T: type) error{UnsupportedSysvar}!T {

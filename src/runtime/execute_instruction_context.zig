@@ -32,23 +32,6 @@ pub const ExecuteInstructionContext = struct {
         index_in_transaction: u16,
     };
 
-    pub fn checkAccountsResizeDelta(
-        self: *const ExecuteInstructionContext,
-        delta: i64,
-    ) error{MaxAccountsDataAllocationsExceeded}!void {
-        try self.etc.checkAccountsResizeDelta(delta);
-    }
-
-    pub fn checkAccountAtIndex(
-        eic: *ExecuteInstructionContext,
-        index: usize,
-        expected: Pubkey,
-    ) InstructionError!void {
-        if (index >= eic.accounts.len) return error.NotEnoughAccountKeys;
-        const actual = try eic.getAccountPubkey(index);
-        if (!expected.equals(&actual)) return error.InvalidArgument;
-    }
-
     pub fn checkIsSigner(
         self: *const ExecuteInstructionContext,
         comptime T: type,
@@ -70,6 +53,15 @@ pub const ExecuteInstructionContext = struct {
         }
     }
 
+    pub fn getAccountPubkey(
+        self: *const ExecuteInstructionContext,
+        index: usize,
+    ) error{NotEnoughAccountKeys}!Pubkey {
+        if (index >= self.accounts.len) return error.NotEnoughAccountKeys;
+        return self.accounts.constSlice()[index].pubkey;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L493
     pub fn checkNumberOfAccounts(
         self: *const ExecuteInstructionContext,
         required: usize,
@@ -77,25 +69,7 @@ pub const ExecuteInstructionContext = struct {
         if (self.accounts.len < required) return error.NotEnoughAccountKeys;
     }
 
-    pub fn consumeCompute(
-        self: *const ExecuteInstructionContext,
-        units: u64,
-    ) error{ComputationalBudgetExceeded}!void {
-        try self.etc.consumeCompute(units);
-    }
-
-    pub fn getAccountPubkey(
-        self: *const ExecuteInstructionContext,
-        index: usize,
-    ) error{NotEnoughAccountKeys}!Pubkey {
-        if (index >= self.accounts.len) return error.NotEnoughAccountKeys;
-        return self.accounts.slice()[index].pubkey;
-    }
-
-    pub fn getBlockhash(self: *const ExecuteInstructionContext) Hash {
-        return self.etc.getBlockhash();
-    }
-
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L597
     pub fn getBorrowedAccount(
         self: *const ExecuteInstructionContext,
         index: usize,
@@ -104,31 +78,12 @@ pub const ExecuteInstructionContext = struct {
         return self.etc.getBorrowedAccount(self, &self.accounts.constSlice()[index]);
     }
 
-    pub fn getLamportsPerSignature(self: *const ExecuteInstructionContext) u64 {
-        return self.etc.getLamportsPerSignature();
-    }
-
-    pub fn getSysvar(self: *const ExecuteInstructionContext, comptime T: type) error{UnsupportedSysvar}!T {
-        return try self.etc.getSysvar(T);
-    }
-
-    pub fn isOwner(self: *const ExecuteInstructionContext, pubkey: Pubkey) bool {
-        return self.program_id.equals(&pubkey);
-    }
-
-    pub fn addAccountsResizeDelta(self: *const ExecuteInstructionContext, delta: i64) void {
-        self.etc.addAccountsResizeDelta(delta);
-    }
-
-    pub fn setCustomError(self: *const ExecuteInstructionContext, custom_error: u32) void {
-        self.etc.setCustomError(custom_error);
-    }
-
-    pub fn log(
-        self: *const ExecuteInstructionContext,
-        comptime fmt: []const u8,
-        args: anytype,
-    ) void {
-        self.etc.log(fmt, args);
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/sysvar_cache.rs#L229
+    pub fn getSysvarWithAccountCheck(self: *const ExecuteInstructionContext, comptime T: type, index: usize) InstructionError!T {
+        // try self.checkAccountAtIndex(index, T.id());
+        if (index >= self.accounts.len) return error.NotEnoughAccountKeys;
+        const actual = try self.getAccountPubkey(index);
+        if (!T.id().equals(&actual)) return error.InvalidArgument;
+        return self.etc.getSysvar(T);
     }
 };

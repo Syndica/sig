@@ -1,6 +1,3 @@
-// https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/error.rs
-// https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/lib.rs
-
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
@@ -15,6 +12,10 @@ pub const MAX_PERMITTED_DATA_LENGTH: u64 = 10 * 1024 * 1024;
 
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/lib.rs#L26
 pub const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION: i64 = 2 * 10 * 1024 * 1024;
+
+pub fn id() Pubkey {
+    return sig.runtime.ids.SYSTEM_PROGRAM_ID;
+}
 
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L80
 pub const SystemProgramInstruction = union(enum) {
@@ -190,9 +191,8 @@ pub const SystemProgramInstruction = union(enum) {
     ///   0. `[WRITE]` Nonce account
     upgrade_nonce_account,
 
-    pub fn program_id(self: SystemProgramInstruction) Pubkey {
-        _ = self;
-        return sig.runtime.id.SYSTEM_PROGRAM_ID;
+    pub fn program_id(_: SystemProgramInstruction) Pubkey {
+        return id();
     }
 };
 
