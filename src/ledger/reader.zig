@@ -559,14 +559,17 @@ pub const BlockstoreReader = struct {
         const block_time = try self.db.get(self.allocator, schema.blocktime, slot);
         const block_height = try self.db.get(self.allocator, schema.block_height, slot);
 
-        return VersionedConfirmedBlockWithEntries{
-            .block = VersionedConfirmedBlock{
+        const transactions = try txns_with_statuses.toOwnedSlice();
+        errdefer self.allocator.free(transactions);
+
+        return .{
+            .block = .{
                 .allocator = self.allocator,
-                .previous_blockhash = try previous_blockhash.base58EncodeAlloc(self.allocator),
-                .blockhash = try blockhash.base58EncodeAlloc(self.allocator),
+                .previous_blockhash = previous_blockhash,
+                .blockhash = blockhash,
                 // If the slot is full it should have parent_slot populated from shreds received.
                 .parent_slot = slot_meta.parent_slot orelse return error.MissingParentSlot,
-                .transactions = try txns_with_statuses.toOwnedSlice(),
+                .transactions = transactions,
                 .rewards = rewards.rewards,
                 .num_partitions = rewards.num_partitions,
                 .block_time = block_time,
@@ -839,7 +842,7 @@ pub const BlockstoreReader = struct {
             .address = address,
             .slot = slot,
             .transaction_index = 0,
-            .signature = Signature.init(.{0} ** 64),
+            .signature = Signature.ZEROES,
         });
 
         // Iterate until limit is reached
@@ -949,7 +952,7 @@ pub const BlockstoreReader = struct {
             .address = pubkey,
             .slot = @max(slot, lowest_available_slot),
             .transaction_index = 0,
-            .signature = Signature.init(.{0} ** 64),
+            .signature = Signature.ZEROES,
         });
         defer index_iterator.deinit();
         while (try index_iterator.nextKey()) |key| {
@@ -1376,8 +1379,8 @@ const CompletedRanges = ArrayList(struct { u32, u32 });
 /// is always present. Used for uploading to BigTable.
 pub const VersionedConfirmedBlock = struct {
     allocator: Allocator,
-    previous_blockhash: []const u8,
-    blockhash: []const u8,
+    previous_blockhash: Hash,
+    blockhash: Hash,
     parent_slot: Slot,
     transactions: []const VersionedTransactionWithStatusMeta,
     rewards: []const ledger.meta.Reward,
@@ -1390,8 +1393,6 @@ pub const VersionedConfirmedBlock = struct {
         for (self.rewards) |it| it.deinit(allocator);
         allocator.free(self.transactions);
         allocator.free(self.rewards);
-        allocator.free(self.previous_blockhash);
-        allocator.free(self.blockhash);
     }
 };
 

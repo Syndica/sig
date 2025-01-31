@@ -255,8 +255,8 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
     try purgeRangeWithCount(
         write_batch,
         schema.transaction_status,
-        .{ Signature.default(), from_slot },
-        .{ Signature.default(), to_slot },
+        .{ Signature.ZEROES, from_slot },
+        .{ Signature.ZEROES, to_slot },
         &delete_count,
     );
     // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason
@@ -265,15 +265,15 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
     try purgeRangeWithCount(
         write_batch,
         schema.address_signatures,
-        .{ .slot = from_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.default() },
-        .{ .slot = to_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.default() },
+        .{ .slot = from_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.ZEROES },
+        .{ .slot = to_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.ZEROES },
         &delete_count,
     );
     try purgeRangeWithCount(
         write_batch,
         schema.transaction_memos,
-        .{ Signature.default(), from_slot },
-        .{ Signature.default(), to_slot },
+        .{ Signature.ZEROES, from_slot },
+        .{ Signature.ZEROES, to_slot },
         &delete_count,
     );
     try purgeRangeWithCount(write_batch, schema.transaction_status_index, from_slot, to_slot, &delete_count);
@@ -337,8 +337,8 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
     try purgeFileRangeWithCount(
         db,
         schema.transaction_status,
-        .{ Signature.default(), from_slot },
-        .{ Signature.default(), to_slot },
+        .{ Signature.ZEROES, from_slot },
+        .{ Signature.ZEROES, to_slot },
         &delete_count,
     );
     // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason
@@ -347,15 +347,15 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
     try purgeFileRangeWithCount(
         db,
         schema.address_signatures,
-        .{ .slot = from_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.default() },
-        .{ .slot = to_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.default() },
+        .{ .slot = from_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.ZEROES },
+        .{ .slot = to_slot, .address = Pubkey.ZEROES, .transaction_index = 0, .signature = Signature.ZEROES },
         &delete_count,
     );
     try purgeFileRangeWithCount(
         db,
         schema.transaction_memos,
-        .{ Signature.default(), from_slot },
-        .{ Signature.default(), to_slot },
+        .{ Signature.ZEROES, from_slot },
+        .{ Signature.ZEROES, to_slot },
         &delete_count,
     );
     try purgeFileRangeWithCount(db, schema.transaction_status_index, from_slot, to_slot, &delete_count);

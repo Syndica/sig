@@ -1550,7 +1550,7 @@ test "recovery" {
     const code_shreds = shreds[34..68];
 
     var leader_schedule = OneSlotLeaders{
-        .leader = try Pubkey.fromString("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
+        .leader = try Pubkey.parseBase58String("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
     };
 
     const is_repairs = try allocator.alloc(bool, code_shreds.len);

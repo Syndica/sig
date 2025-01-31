@@ -1,6 +1,6 @@
 const std = @import("std");
-const base58 = @import("base58-zig");
 const sig = @import("../sig.zig");
+const base58 = @import("base58");
 
 const types = sig.rpc.types;
 
@@ -77,7 +77,7 @@ pub const Client = struct {
     pub fn getAccountInfo(self: *Client, allocator: std.mem.Allocator, pubkey: Pubkey, config: GetAccountInfoConfig) !Response(types.AccountInfo) {
         var request = try Request.init(allocator, "getAccountInfo");
         defer request.deinit();
-        try request.addParameter(pubkey.string().slice());
+        try request.addParameter(pubkey.base58String().slice());
         try request.addConfig(config);
         return self.sendFetchRequest(allocator, types.AccountInfo, request, .{});
     }
@@ -90,7 +90,7 @@ pub const Client = struct {
     pub fn getBalance(self: *Client, allocator: std.mem.Allocator, pubkey: Pubkey, config: GetBalanceConfig) !Response(types.Balance) {
         var request = try Request.init(allocator, "getBalance");
         defer request.deinit();
-        try request.addParameter(pubkey.string().slice());
+        try request.addParameter(pubkey.base58String().slice());
         try request.addConfig(config);
         return self.sendFetchRequest(allocator, types.Balance, request, .{});
     }
@@ -289,7 +289,7 @@ pub const Client = struct {
     ) !Response(types.Signature) {
         var request = try Request.init(allocator, "requestAirdrop");
         defer request.deinit();
-        try request.addParameter(pubkey.string().slice());
+        try request.addParameter(pubkey.base58String().slice());
         try request.addParameter(lamports);
         try request.addConfig(config);
         return self.sendFetchRequest(allocator, types.Signature, request, .{});
@@ -326,13 +326,12 @@ pub const Client = struct {
         var buffer: [sig.net.PACKET_DATA_SIZE]u8 = undefined;
         const written = try sig.bincode.writeToSlice(&buffer, transaction, .{});
 
-        const sized = sig.crypto.base58.Base58Sized(sig.net.PACKET_DATA_SIZE);
-        var encode_buffer: [sized.max_encoded_size]u8 = undefined;
+        const endec = base58.Table.BITCOIN;
+        var encoded_buffer: [base58.encodedMaxSize(buffer.len)]u8 = undefined;
+        const length = endec.encode(&encoded_buffer, written);
+        const encoded = encoded_buffer[0..length];
 
-        var encoder = base58.Encoder.init(.{});
-        const length = try encoder.encode(written, &encode_buffer);
-
-        try request.addParameter(encode_buffer[0..length]);
+        try request.addParameter(encoded);
         try request.addConfig(config);
 
         return self.sendFetchRequest(allocator, types.Signature, request, .{});
@@ -440,7 +439,7 @@ test "getAccountInfo: null value" {
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
     // random pubkey that should not exist
-    const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWn");
+    const pubkey = try Pubkey.parseBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWn");
     const response = try client.getAccountInfo(allocator, pubkey, .{});
     defer response.deinit();
     const x = try response.result();
@@ -453,7 +452,7 @@ test "getAccountInfo" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
-    const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
+    const pubkey = try Pubkey.parseBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
     const response = try client.getAccountInfo(allocator, pubkey, .{});
     defer response.deinit();
     _ = try response.result();
@@ -464,7 +463,7 @@ test "getBalance" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
-    const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
+    const pubkey = try Pubkey.parseBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
     const response = try client.getBalance(allocator, pubkey, .{});
     defer response.deinit();
     _ = try response.result();
@@ -558,10 +557,10 @@ test "getSignatureStatuses" {
     defer client.deinit();
     var signatures = try allocator.alloc(Signature, 2);
     defer allocator.free(signatures);
-    signatures[0] = try Signature.fromString(
+    signatures[0] = try Signature.parseBase58String(
         "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
     );
-    signatures[1] = try Signature.fromString(
+    signatures[1] = try Signature.parseBase58String(
         "4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz",
     );
     const response = try client.getSignatureStatuses(allocator, signatures, .{});
@@ -646,10 +645,14 @@ test "getVoteAccounts response parses correctly" {
             .commission = 0,
             .epochVoteAccount = true,
             .epochCredits = &.{ .{ 1, 64, 0 }, .{ 2, 192, 64 } },
-            .nodePubkey = try Pubkey.fromString("B97CCUW3AEZFGy6uUg6zUdnNYvnVq5VG8PUtb2HayTDD"),
+            .nodePubkey = try Pubkey.parseBase58String(
+                "B97CCUW3AEZFGy6uUg6zUdnNYvnVq5VG8PUtb2HayTDD",
+            ),
             .lastVote = 147,
             .activatedStake = 42,
-            .votePubkey = try Pubkey.fromString("3ZT31jkAGhUaw8jsy4bTknwBMP8i4Eueh52By4zXcsVw"),
+            .votePubkey = try Pubkey.parseBase58String(
+                "3ZT31jkAGhUaw8jsy4bTknwBMP8i4Eueh52By4zXcsVw",
+            ),
             .rootSlot = 100,
         }},
         .delinquent = &.{},
