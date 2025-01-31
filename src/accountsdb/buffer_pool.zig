@@ -36,7 +36,7 @@ const LinuxIoMode = enum {
     Blocking,
     IoUring,
 };
-const linux_io_mode: LinuxIoMode = .Blocking;
+const linux_io_mode: LinuxIoMode = .IoUring;
 
 // TODO: ideally we should be able to select this with a cli flag. (#509)
 const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
@@ -80,32 +80,17 @@ const FileIdFileOffset = packed struct(u64) {
     };
 };
 
-fn readError() type {
-    var ErrorSet = error{
-        InvalidArgument,
-        OutOfMemory,
-        OffsetsOutOfBounds,
-    };
-
-    if (use_io_uring) {
-        const extra_fns = &.{
-            IoUring.read,
-            IoUring.submit_and_wait,
-            IoUring.copy_cqes,
-            IoUring.init,
-        };
-        inline for (extra_fns) |func| {
-            const FnErrorSet = @typeInfo(
-                @typeInfo(@TypeOf(func)).Fn.return_type.?,
-            ).ErrorUnion.error_set;
-            ErrorSet = ErrorSet || FnErrorSet;
-        }
-    } else {
-        ErrorSet = ErrorSet || std.posix.PReadError;
+const IoUringError = err: {
+    var Error = error{};
+    const fns = &.{ IoUring.read, IoUring.submit_and_wait, IoUring.copy_cqes, IoUring.init };
+    for (fns) |func| {
+        Error = Error || @typeInfo(
+            @typeInfo(@TypeOf(func)).Fn.return_type.?,
+        ).ErrorUnion.error_set;
     }
 
-    return ErrorSet;
-}
+    break :err Error;
+};
 
 /// Used for obtaining cached reads.
 ///
@@ -122,7 +107,9 @@ pub const BufferPool = struct {
     frames: []Frame,
     manager: Manager,
 
-    pub const ReadError = readError();
+    pub const ReadBlockingError = FrameManager.GetError || std.posix.PReadError;
+    pub const ReadIoUringError = FrameManager.GetError || IoUringError;
+    pub const ReadError = if (use_io_uring) ReadIoUringError else ReadBlockingError;
     pub const Manager = FrameManager;
 
     pub fn init(
@@ -161,7 +148,7 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) ReadError!ReadHandle {
+    ) ReadBlockingError!ReadHandle {
         const frame_refs = try self.manager.getAllIndices(
             allocator,
             file_id,
@@ -169,23 +156,7 @@ pub const BufferPool = struct {
             file_offset_end,
         );
         errdefer allocator.free(frame_refs);
-
-        errdefer {
-            // On read failure. This should be extremely rare.
-
-            // rollback rcs
-            for (frame_refs) |f_ref| _ = self.manager.rc[f_ref.f_idx].fetchSub(1, .seq_cst);
-
-            // re-insert evicted indices
-            {
-                const eviction_lfu, var eviction_lfu_lg = self.manager.eviction_lfu.writeWithLock();
-                defer eviction_lfu_lg.unlock();
-
-                for (frame_refs) |f_ref| {
-                    if (f_ref.hit == false) eviction_lfu.insert(f_ref.f_idx);
-                }
-            }
-        }
+        errdefer self.manager.getAllIndicesRollback(frame_refs);
 
         // read into unpopulated frames
         for (0.., frame_refs) |i, *frame_ref| {
@@ -200,9 +171,11 @@ pub const BufferPool = struct {
                 &self.frames[frame_ref.f_idx],
                 frame_aligned_file_offset,
             );
-            frame_ref.hit = true;
             std.debug.assert(bytes_read <= FRAME_SIZE);
+            frame_ref.hit = true;
         }
+
+        for (frame_refs) |frame_ref| std.debug.assert(frame_ref.hit);
 
         return ReadHandle.initCached(
             self,
@@ -268,42 +241,33 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) ReadError!ReadHandle {
+    ) ReadIoUringError!ReadHandle {
         if (!use_io_uring) @compileError("io_uring disabled");
         const threadlocal_io_uring = try io_uring();
 
-        const frame_indices = try self.manager.getIndices(
+        const frame_refs = try self.manager.getAllIndices(
             allocator,
             file_id,
             file_offset_start,
             file_offset_end,
         );
-        errdefer allocator.free(frame_indices);
+        errdefer allocator.free(frame_refs);
+        errdefer self.manager.getAllIndicesRollback(frame_refs);
 
-        // fill in invalid frames with file data, replacing invalid frames with
-        // fresh ones.
+        // read into unpopulated frames
         var queued_reads: u32 = 0;
-        for (0.., frame_indices) |i, *f_idx| {
-            if (f_idx.* != INVALID_FRAME) continue;
-            // INVALID_FRAME => not found, read fresh and populate
+        for (0.., frame_refs) |i, *frame_ref| {
+            const populated = self.manager.populated[frame_ref.f_idx].load(.acquire);
+            if (populated) continue;
 
             const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
                 (file_offset_start - file_offset_start % FRAME_SIZE));
             std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
 
-            f_idx.* = self.manager.getUnused(self.frames);
-
-            errdefer {
-                // Filling this frame failed, releasing rcs of previously filled frames
-                for (frame_indices[0..i]) |alive_frame_idx| {
-                    self.manager.rc[alive_frame_idx].fetchSub(1, .seq_cst);
-                }
-            }
-
             if (threadlocal_io_uring.read(
-                f_idx.*,
+                frame_ref.f_idx,
                 file.handle,
-                .{ .buffer = &self.frames[f_idx.*] },
+                .{ .buffer = &self.frames[frame_ref.f_idx] },
                 frame_aligned_file_offset,
             )) |_| {
                 queued_reads += 1;
@@ -317,28 +281,19 @@ pub const BufferPool = struct {
                         queued_reads,
                     );
                     _ = try threadlocal_io_uring.read(
-                        f_idx.*,
+                        frame_ref.f_idx,
                         file.handle,
-                        .{ .buffer = &self.frames[f_idx.*] },
+                        .{ .buffer = &self.frames[frame_ref.f_idx] },
                         frame_aligned_file_offset,
                     );
                     queued_reads = 1;
                 },
                 else => |e| return e,
             }
-
-            self.manager.resetNewFrame(
-                f_idx.*,
-                file_id,
-                frame_aligned_file_offset,
-            );
+            frame_ref.hit = true;
         }
 
-        errdefer {
-            for (frame_indices) |alive_frame_idx| {
-                self.manager.rc[alive_frame_idx].fetchSub(1, .seq_cst);
-            }
-        }
+        for (frame_refs) |frame_ref| std.debug.assert(frame_ref.hit);
 
         if (queued_reads > 0) {
             try IouringSubmitAndWaitReads(threadlocal_io_uring, file, queued_reads);
@@ -346,7 +301,7 @@ pub const BufferPool = struct {
 
         return ReadHandle.initCached(
             self,
-            frame_indices,
+            frame_refs,
             @intCast(file_offset_start % FRAME_SIZE),
             @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
         );
@@ -381,7 +336,6 @@ pub const BufferPool = struct {
             const bytes_read: FrameOffset = @intCast(cqe.res);
             _ = f_idx;
             std.debug.assert(bytes_read <= FRAME_SIZE);
-            // TODO: check total bytes_read
         }
     }
 };
@@ -401,6 +355,8 @@ const FrameManager = struct {
     populated: []std.atomic.Value(bool),
 
     pub const Map = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
+
+    const GetError = error{ InvalidArgument, OffsetsOutOfBounds, OutOfMemory };
 
     pub fn init(allocator: std.mem.Allocator, num_frames: u32) error{OutOfMemory}!FrameManager {
         std.debug.assert(num_frames > 0);
@@ -482,7 +438,7 @@ const FrameManager = struct {
         file_id: FileId,
         file_offset_start: FileOffset,
         file_offset_end: FileOffset,
-    ) error{ InvalidArgument, OffsetsOutOfBounds, OutOfMemory }![]FrameRef {
+    ) GetError![]FrameRef {
         const n_indices = try BufferPool.computeNumberofFrameIndices(
             file_offset_start,
             file_offset_end,
@@ -584,6 +540,24 @@ const FrameManager = struct {
         for (frame_refs) |frame_ref| std.debug.assert(frame_ref.f_idx != INVALID_FRAME);
 
         return frame_refs;
+    }
+
+    /// To be called on read failure. This should be extremely rare.
+    fn getAllIndicesRollback(self: *FrameManager, frame_refs: []FrameRef) void {
+        @setCold(true);
+
+        // rollback rcs
+        for (frame_refs) |f_ref| _ = self.rc[f_ref.f_idx].fetchSub(1, .seq_cst);
+
+        // re-insert evicted indices
+        {
+            const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+            defer eviction_lfu_lg.unlock();
+
+            for (frame_refs) |f_ref| {
+                if (f_ref.hit == false) eviction_lfu.insert(f_ref.f_idx);
+            }
+        }
     }
 
     noinline fn insertNewlyWritten(
@@ -1687,7 +1661,7 @@ test "BufferPool random read" {
                 read2.cached.last_frame_end_offset,
             );
             try std.testing.expectEqualSlices(
-                u32,
+                FrameRef,
                 read.cached.frame_refs,
                 read2.cached.frame_refs,
             );
