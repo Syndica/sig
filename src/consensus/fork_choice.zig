@@ -164,7 +164,7 @@ pub const HeaviestSubtreeForkChoice = struct {
             @panic("initForTest should only be called in test mode");
         }
 
-        const root = forks[0][0]; // Assuming the first element contains the root
+        const root = forks[0][1].?;
         var heaviest_subtree_fork_choice = try HeaviestSubtreeForkChoice.init(allocator, root);
 
         for (forks) |fork_tuple| {
