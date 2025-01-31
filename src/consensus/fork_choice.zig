@@ -857,16 +857,125 @@ test "HeaviestSubtreeForkChoice.init" {
 }
 
 test "HeaviestSubtreeForkChoice.subtreeDiff" {
-    var fc = try HeaviestSubtreeForkChoice.init(
-        test_allocator,
-        SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-    );
+    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
     defer fc.deinit();
 
-    _ = try fc.subtreeDiff(
-        &SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-        &SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-    );
+    // Diff of same root is empty, no matter root, intermediate node, or leaf
+    {
+        var diff = try fc.subtreeDiff(
+            &.{ .slot = 0, .hash = Hash.ZEROES },
+            &.{ .slot = 0, .hash = Hash.ZEROES },
+        );
+        defer diff.deinit();
+        try std.testing.expect(
+            diff.count() == 0,
+        );
+    }
+
+    {
+        var diff = try fc.subtreeDiff(
+            &.{ .slot = 5, .hash = Hash.ZEROES },
+            &.{ .slot = 5, .hash = Hash.ZEROES },
+        );
+        defer diff.deinit();
+        try std.testing.expect(
+            diff.count() == 0,
+        );
+    }
+    {
+        var diff = try fc.subtreeDiff(
+            &.{ .slot = 6, .hash = Hash.ZEROES },
+            &.{ .slot = 6, .hash = Hash.ZEROES },
+        );
+        defer diff.deinit();
+        try std.testing.expect(
+            diff.count() == 0,
+        );
+    }
+
+    // The set reachable from slot 3, excluding subtree 1, is just everything
+    // in slot 3 since subtree 1 is an ancestor
+    {
+        var diff = try fc.subtreeDiff(
+            &.{ .slot = 3, .hash = Hash.ZEROES },
+            &.{ .slot = 1, .hash = Hash.ZEROES },
+        );
+        defer diff.deinit();
+
+        const items = diff.items();
+        const slotAndHashes = items[0]; // Access the keys slice
+
+        try std.testing.expect(
+            slotAndHashes.len == 3,
+        );
+
+        try std.testing.expect(
+            (slotAndHashes[0].order(.{ .slot = 3, .hash = Hash.ZEROES }) == .eq and
+                slotAndHashes[1].order(.{ .slot = 5, .hash = Hash.ZEROES }) == .eq and
+                slotAndHashes[2].order(.{ .slot = 6, .hash = Hash.ZEROES }) == .eq),
+        );
+    }
+
+    // The set reachable from slot 1, excluding subtree 3, is just 1 and
+    // the subtree at 2
+    {
+        var diff = try fc.subtreeDiff(
+            &.{ .slot = 1, .hash = Hash.ZEROES },
+            &.{ .slot = 3, .hash = Hash.ZEROES },
+        );
+        defer diff.deinit();
+
+        const items = diff.items();
+        const slotAndHashes = items[0]; // Access the keys slice
+
+        try std.testing.expect(
+            slotAndHashes.len == 3,
+        );
+
+        try std.testing.expect(
+            (slotAndHashes[0].order(.{ .slot = 1, .hash = Hash.ZEROES }) == .eq and
+                slotAndHashes[1].order(.{ .slot = 2, .hash = Hash.ZEROES }) == .eq and
+                slotAndHashes[2].order(.{ .slot = 4, .hash = Hash.ZEROES }) == .eq),
+        );
+    }
+
+    // The set reachable from slot 1, excluding leaf 6, is just everything
+    // except leaf 6
+    {
+        var diff = try fc.subtreeDiff(
+            &.{ .slot = 0, .hash = Hash.ZEROES },
+            &.{ .slot = 6, .hash = Hash.ZEROES },
+        );
+        defer diff.deinit();
+
+        const items = diff.items();
+        const slotAndHashes = items[0]; // Access the keys slice
+
+        try std.testing.expect(
+            slotAndHashes.len == 6,
+        );
+
+        try std.testing.expect(
+            (slotAndHashes[0].order(.{ .slot = 0, .hash = Hash.ZEROES }) == .eq and
+                slotAndHashes[1].order(.{ .slot = 1, .hash = Hash.ZEROES }) == .eq and
+                slotAndHashes[2].order(.{ .slot = 2, .hash = Hash.ZEROES }) == .eq and
+                slotAndHashes[3].order(.{ .slot = 3, .hash = Hash.ZEROES }) == .eq and
+                slotAndHashes[4].order(.{ .slot = 4, .hash = Hash.ZEROES }) == .eq and
+                slotAndHashes[5].order(.{ .slot = 5, .hash = Hash.ZEROES }) == .eq),
+        );
+    }
+
+    {
+        // Set root at 1
+        try fc.setTreeRoot(&.{ .slot = 1, .hash = Hash.ZEROES });
+        // Zero no longer exists, set reachable from 0 is empty
+        try std.testing.expect(
+            (try fc.subtreeDiff(
+                &.{ .slot = 0, .hash = Hash.ZEROES },
+                &.{ .slot = 6, .hash = Hash.ZEROES },
+            )).count() == 0,
+        );
+    }
 }
 
 test "HeaviestSubtreeForkChoice.setTreeRoot" {
