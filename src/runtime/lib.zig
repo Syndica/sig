@@ -23,3 +23,4 @@ pub const MAX_INSTRUCTION_ACCOUNTS: usize = 256;
 
 /// TODO: Why do I need to define this here for the tests to run?
 pub const system_program_execute = @import("program/system_program_execute.zig");
+pub const vote_program_execute = @import("program/vote_program_execute.zig");
