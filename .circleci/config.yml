@@ -1,31 +1,274 @@
-# Use the latest 2.1 version of CircleCI pipeline process engine.
-# See: https://circleci.com/docs/configuration-reference
 version: 2.1
 
-# Define a job to be invoked later in a workflow.
-# See: https://circleci.com/docs/jobs-steps/#jobs-overview & https://circleci.com/docs/configuration-reference/#jobs
-jobs:
-  say-hello:
-    # Specify the execution environment. You can specify an image from Docker Hub or use one of our convenience images from CircleCI's Developer Hub.
-    # See: https://circleci.com/docs/executor-intro/ & https://circleci.com/docs/configuration-reference/#executor-job
-    docker:
-      # Specify the version you desire here
-      # See: https://circleci.com/developer/images/image/cimg/base
-      - image: cimg/base:current
+orbs:
+  codecov: codecov/codecov@5.2.0
 
-    # Add steps to the job
-    # See: https://circleci.com/docs/jobs-steps/#steps-overview & https://circleci.com/docs/configuration-reference/#steps
+executors:
+  linux-executor:
+    docker:
+      - image: ubuntu:22.04
+  python-executor:
+    docker:
+      - image: cimg/python:3.10
+  macos-executor:
+    macos:
+      xcode: 15.4.0
+    resource_class: m2pro.medium
+
+jobs:
+  setup_zig:
+    parameters:
+      target:
+        type: string
+    executor: linux-executor
     steps:
-      # Checkout the code as the first step.
       - checkout
       - run:
-          name: "Say hello"
-          command: "echo Hello, World!"
+          name: Download Zig
+          command: |
+            apt update && apt install -y wget unzip xz-utils 
+            wget https://ziglang.org/download/0.13.0/zig-<< parameters.target >>-0.13.0.tar.xz
+            tar xf zig-<< parameters.target >>-0.13.0.tar.xz
+            mkdir -p workspace
+            mv zig-<< parameters.target >>-0.13.0 workspace/zig
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - '*'
+          
+  lint:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - run:
+          name: Lint
+          command: workspace/zig/zig fmt --check src/ build.zig
+  
+  check_style:
+    executor: python-executor
+    steps:
+      - checkout
+      - run:
+          name: Install dependencies
+          command: pip install --upgrade pip
+      - run:
+          name: Check style
+          command: python scripts/style.py --check src
+  
+  build_linux:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v2
+      - run:
+          name: Build
+          command: |
+            apt update && apt install wget -y
+            ./scripts/proxy_workaround.sh workspace/zig/zig
+            workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out --summary all
+            workspace/zig/zig build test -Denable-tsan=false -p workspace/zig-out-notsan
+      - save_cache:
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v2
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - "zig-out/bin/test"
+            - "zig-out-notsan/bin/test"
 
-# Orchestrate jobs using workflows
-# See: https://circleci.com/docs/workflows/ & https://circleci.com/docs/configuration-reference/#workflows
+  build_linux_release:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-release
+      - run:
+          name: Build
+          command: |
+            apt update && apt install wget -y
+            ./scripts/proxy_workaround.sh workspace/zig/zig
+            workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -p workspace/zig-out-release --summary all
+      - save_cache:
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-release
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - "zig-out-release/bin/sig"
+            - "zig-out-release/bin/fuzz"
+
+  build_and_test_macos:
+    executor: macos-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: macos-aarch64-0.13.0-{{ checksum "build.zig.zon" }}
+      - run:
+          name: Build
+          command: |
+            export PATH="workspace/zig:$PATH"
+            # it seems that the feature detection is a bit broken in CircleCI's virtual machines
+            # so we will manually say that it's an Apple M2.
+            zig build -Denable-tsan=false -Dno-run -Dcpu=apple_m2 --summary all
+            zig build test -Denable-tsan=false -Dblockstore=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2
+            zig-out/bin/test
+      - save_cache:
+          key: macos-aarch64-0.13.0-{{ checksum "build.zig.zon" }}
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
+  
+  build_and_test_hashmap:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v2
+      - run:
+          name: Build and Test
+          command: workspace/zig/zig build test -Denable-tsan=true -Dblockstore=hashmap -Dfilter="ledger"
+
+  test_linux:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - run:
+          name: Test
+          command: |
+            workspace/zig-out/bin/test
+
+  test_kcov_linux:
+    machine:
+      image: ubuntu-2204:2024.11.1
+      docker_layer_caching: true
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - run:
+          name: Test and Collect
+          command: |
+            workspace/zig/zig build test -Dno-run -Denable-tsan=false
+            docker run --security-opt seccomp=unconfined -v .:/opt/kcov-source/ kcov/kcov bash /opt/kcov-source/scripts/kcov_ci.sh
+      - run: ls
+      - codecov/upload:
+          dir: kcov-merged/kcov-merged
+
+  gossip:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - run:
+          name: Run Gossip
+          command: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
+    
+  gossip_service_fuzz:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - run:
+          name: Run Gossip Service Fuzzer
+          command: workspace/zig-out-release/bin/fuzz gossip_service 19 10000
+  
+  gossip_table_fuzz:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - run:
+          name: Run Gossip Service Fuzzer
+          command: workspace/zig-out-release/bin/fuzz gossip_table 19 100000
+    
+  allocators_fuzz:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - run:
+          name: Run Gossip Service Fuzzer
+          command: workspace/zig-out-release/bin/fuzz allocators 19 10000
+
+  ledger_fuzz:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - run:
+          name: Run Gossip Service Fuzzer
+          command: workspace/zig-out-release/bin/fuzz ledger 19 10000
+
+
 workflows:
-  say-hello-workflow: # This is the name of the workflow, feel free to change it to better match your workflow.
-    # Inside the workflow, you define the jobs you want to run.
+  check_linux:
     jobs:
-      - say-hello
+      # - check_style
+      - setup_zig:
+          name: setup_zig_linux
+          target: "linux-x86_64"
+      # - lint:
+      #     requires: 
+      #       - setup_zig_linux
+      # - build_linux_release:
+      #     requires:
+      #       - setup_zig_linux
+      - build_linux:
+          requires:
+            - setup_zig_linux
+      # - build_and_test_hashmap:
+      #     requires:
+      #       - build_linux
+      # - test_linux:
+      #     requires:
+      #       - build_linux
+      - test_kcov_linux:
+          requires:
+            - build_linux
+      # - gossip:
+      #     requires:
+      #       - build_linux_release
+      # - gossip_service_fuzz:
+      #     requires:
+      #       - build_linux_release
+      # - gossip_table_fuzz:
+      #     requires:
+      #       - build_linux_release
+      # - allocators_fuzz:
+      #     requires:
+      #       - build_linux_release
+      # - ledger_fuzz:
+      #     requires:
+      #       - build_linux_release
+
+  # check_macos:
+  #   jobs:
+  #     - setup_zig:
+  #         name: setup_zig_macos
+  #         target: "macos-aarch64"
+  #     - build_and_test_macos:
+  #         requires:
+  #           - setup_zig_macos
+      
