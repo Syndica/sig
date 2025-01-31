@@ -704,171 +704,14 @@ fn checkSeedAddress(
     }
 }
 
-pub const testing = struct {
-    const RwMux = sig.sync.RwMux;
-    const Epoch = sig.core.Epoch;
-    const Hash = sig.core.Hash;
-    const Transaction = sig.core.Transaction;
-    const AccountSharedData = sig.runtime.AccountSharedData;
-    const ExecuteTransactionContext = sig.runtime.ExecuteTransactionContext;
-    const ExecuteTransactionAccount = sig.runtime.ExecuteTransactionContext.AccountInfo;
-    const SysvarCache = sig.runtime.SysvarCache;
-    const MAX_INSTRUCTION_ACCOUNTS = sig.runtime.MAX_INSTRUCTION_ACCOUNTS;
-
-    const AccountSharedDataParams = struct {
-        lamports: u64 = 0,
-        data: []const u8 = &.{},
-        owner: Pubkey = Pubkey.ZEROES,
-        executable: bool = false,
-        rent_epoch: u64 = 0,
-    };
-
-    pub fn createAccountSharedData(
-        allocator: std.mem.Allocator,
-        params: AccountSharedDataParams,
-    ) !AccountSharedData {
-        const data = try allocator.create(std.ArrayListUnmanaged(u8));
-        data.* = std.ArrayListUnmanaged(u8){
-            .capacity = params.data.len,
-            .items = try allocator.dupe(u8, params.data),
-        };
-        return .{
-            .lamports = params.lamports,
-            .data = data,
-            .owner = params.owner,
-            .executable = params.executable,
-            .rent_epoch = params.rent_epoch,
-        };
-    }
-
-    pub fn createAccountSharedDatas(
-        allocator: std.mem.Allocator,
-        params: []const AccountSharedDataParams,
-    ) ![]AccountSharedData {
-        var account_shared_datas = std.ArrayList(AccountSharedData).init(allocator);
-
-        for (params) |param|
-            try account_shared_datas.append(try createAccountSharedData(allocator, param));
-
-        return account_shared_datas.toOwnedSlice();
-    }
-
-    const ExecuteTransactionContextParams = struct {
-        accounts_resize_delta: i64 = 0,
-        compute_meter: u64 = 0,
-        maybe_custom_error: ?u32 = null,
-        sysvar_cache: SysvarCache = .{},
-        lamports_per_signature: u64 = 0,
-        last_blockhash: Hash = Hash.ZEROES,
-    };
-
-    pub fn createExecuteTransactionContext(
-        accounts: []const AccountSharedData,
-        params: ExecuteTransactionContextParams,
-    ) !ExecuteTransactionContext {
-        var etc_accounts = std.BoundedArray(
-            RwMux(ExecuteTransactionAccount),
-            Transaction.MAX_ACCOUNTS,
-        ){};
-
-        for (accounts) |account_shared_data|
-            try etc_accounts.append(RwMux(ExecuteTransactionAccount).init(.{
-                .touched = false,
-                .account = account_shared_data,
-            }));
-
-        return .{
-            .accounts = etc_accounts,
-            .accounts_resize_delta = params.accounts_resize_delta,
-            .compute_meter = params.compute_meter,
-            .maybe_custom_error = params.maybe_custom_error,
-            .maybe_log_collector = null,
-            .sysvar_cache = params.sysvar_cache,
-            .lamports_per_signature = params.lamports_per_signature,
-            .last_blockhash = params.last_blockhash,
-            .feature_set = FeatureSet.EMPTY,
-        };
-    }
-
-    pub fn createExecuteInstructionContext(
-        etc: *ExecuteTransactionContext,
-        program_id: Pubkey,
-        accounts: []const ExecuteInstructionAccount,
-        instruction_data: []const u8,
-    ) !ExecuteInstructionContext {
-        const eic_accounts = try std.BoundedArray(
-            ExecuteInstructionAccount,
-            MAX_INSTRUCTION_ACCOUNTS,
-        ).fromSlice(accounts);
-
-        return .{
-            .etc = etc,
-            .program_id = program_id,
-            .accounts = eic_accounts,
-            .instruction_data = instruction_data,
-        };
-    }
-
-    /// TODO: Add Context Pre / Post Checks
-    pub fn expectInstructionExecutionResult(
-        allocator: std.mem.Allocator,
-        instruction: anytype,
-        instruction_accounts: []const ExecuteInstructionAccount,
-        pre_transaction_accounts: []const AccountSharedDataParams,
-        post_transaction_accounts: []const AccountSharedDataParams,
-        execute_transaction_context: ExecuteTransactionContextParams,
-    ) !void {
-        const instruction_data = try sig.bincode.writeAlloc(allocator, instruction, .{});
-        defer allocator.free(instruction_data);
-
-        const transaction_accounts = try createAccountSharedDatas(allocator, pre_transaction_accounts);
-        defer {
-            for (transaction_accounts) |account| {
-                account.data.deinit(allocator);
-                allocator.destroy(account.data);
-            }
-            allocator.free(transaction_accounts);
-        }
-
-        var etc = try createExecuteTransactionContext(
-            transaction_accounts,
-            execute_transaction_context,
-        );
-
-        var eic = try createExecuteInstructionContext(
-            &etc,
-            instruction.program_id(),
-            instruction_accounts,
-            instruction_data,
-        );
-
-        try executeSystemProgramInstruction(allocator, &eic);
-
-        const expected_transaction_accounts = try createAccountSharedDatas(allocator, post_transaction_accounts);
-        defer {
-            for (expected_transaction_accounts) |account| {
-                account.data.deinit(allocator);
-                allocator.destroy(account.data);
-            }
-            allocator.free(expected_transaction_accounts);
-        }
-
-        try std.testing.expectEqual(expected_transaction_accounts.len, etc.accounts.len);
-        for (expected_transaction_accounts, 0..) |expected_account, index|
-            std.testing.expect(expected_account.equals(etc.getAccountSharedData(index))) catch |err| {
-                std.debug.print("Mismatch in account at index {}\n", .{index});
-                std.debug.print("\tExpected: {}\n", .{expected_account});
-                std.debug.print("\tActual:   {}\n", .{etc.getAccountSharedData(index)});
-                return err;
-            };
-    }
-};
-
 test "executeCreateAccount" {
+    const testing = sig.runtime.program.test_execute;
+
     var prng = std.Random.DefaultPrng.init(5083);
 
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .create_account = .{
                 .lamports = 1_000_000,
@@ -907,11 +750,14 @@ test "executeCreateAccount" {
 }
 
 test "executeAssign" {
+    const testing = sig.runtime.program.test_execute;
+
     var prng = std.Random.DefaultPrng.init(5083);
 
     const new_owner = Pubkey.initRandom(prng.random());
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .assign = .{
                 .owner = new_owner,
@@ -938,10 +784,13 @@ test "executeAssign" {
 }
 
 test "executeTransfer" {
+    const testing = sig.runtime.program.test_execute;
+
     var prng = std.Random.DefaultPrng.init(5083);
 
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .transfer = .{
                 .lamports = 1_000_000,
@@ -980,12 +829,15 @@ test "executeTransfer" {
 }
 
 test "executeCreateAccountWithSeed" {
+    const testing = sig.runtime.program.test_execute;
+
     var prng = std.Random.DefaultPrng.init(5083);
 
     const base = Pubkey.initRandom(prng.random());
     const seed = &[_]u8{0x10} ** 32;
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .create_account_with_seed = .{
                 .base = base,
@@ -1034,6 +886,8 @@ test "executeCreateAccountWithSeed" {
 }
 
 test "executeAdvanceNonceAccount" {
+    const testing = sig.runtime.program.test_execute;
+
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
@@ -1080,6 +934,7 @@ test "executeAdvanceNonceAccount" {
 
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .advance_nonce_account = {},
         },
@@ -1125,6 +980,8 @@ test "executeAdvanceNonceAccount" {
 }
 
 test "executeWithdrawNonceAccount" {
+    const testing = sig.runtime.program.test_execute;
+
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
@@ -1152,6 +1009,7 @@ test "executeWithdrawNonceAccount" {
 
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .withdraw_nonce_account = 1_000,
         },
@@ -1220,6 +1078,8 @@ test "executeWithdrawNonceAccount" {
 }
 
 test "executeInitializeNonceAccount" {
+    const testing = sig.runtime.program.test_execute;
+
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
@@ -1260,6 +1120,7 @@ test "executeInitializeNonceAccount" {
 
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .initialize_nonce_account = nonce_authority,
         },
@@ -1313,6 +1174,8 @@ test "executeInitializeNonceAccount" {
 }
 
 test "executeAuthorizeNonceAccount" {
+    const testing = sig.runtime.program.test_execute;
+
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
@@ -1342,6 +1205,7 @@ test "executeAuthorizeNonceAccount" {
 
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .authorize_nonce_account = final_nonce_authority,
         },
@@ -1379,10 +1243,13 @@ test "executeAuthorizeNonceAccount" {
 }
 
 test "executeAllocate" {
+    const testing = sig.runtime.program.test_execute;
+
     var prng = std.Random.DefaultPrng.init(5083);
 
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .allocate = .{
                 .space = 1024,
@@ -1409,12 +1276,15 @@ test "executeAllocate" {
 }
 
 test "executeAllocateWithSeed" {
+    const testing = sig.runtime.program.test_execute;
+
     var prng = std.Random.DefaultPrng.init(5083);
 
     const base = Pubkey.initRandom(prng.random());
     const seed = &[_]u8{0x10} ** 32;
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .allocate_with_seed = .{
                 .base = base,
@@ -1452,6 +1322,8 @@ test "executeAllocateWithSeed" {
 }
 
 test "executeAssignWithSeed" {
+    const testing = sig.runtime.program.test_execute;
+
     var prng = std.Random.DefaultPrng.init(5083);
 
     const new_owner = Pubkey.initRandom(prng.random());
@@ -1459,6 +1331,7 @@ test "executeAssignWithSeed" {
     const seed = &[_]u8{0x10} ** 32;
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .assign_with_seed = .{
                 .base = base,
@@ -1493,6 +1366,8 @@ test "executeAssignWithSeed" {
 }
 
 test "executeTransferWithSeed" {
+    const testing = sig.runtime.program.test_execute;
+
     var prng = std.Random.DefaultPrng.init(5083);
 
     const base = Pubkey.initRandom(prng.random());
@@ -1500,6 +1375,7 @@ test "executeTransferWithSeed" {
     const from_owner = Pubkey.initRandom(prng.random());
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .transfer_with_seed = .{
                 .lamports = 1_000_000,
@@ -1548,6 +1424,8 @@ test "executeTransferWithSeed" {
 }
 
 test "executeUpgradeNonceAccount" {
+    const testing = sig.runtime.program.test_execute;
+
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
@@ -1577,6 +1455,7 @@ test "executeUpgradeNonceAccount" {
 
     try testing.expectInstructionExecutionResult(
         std.testing.allocator,
+        executeSystemProgramInstruction,
         SystemProgramInstruction{
             .upgrade_nonce_account = {},
         },
