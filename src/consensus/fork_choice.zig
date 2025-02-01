@@ -1307,6 +1307,61 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
     }
 }
 
+test "HeaviestSubtreeForkChoice.isBestChild" {
+    const tree = [_]TreeNode{
+        //         slot 0
+        //            |
+        //          slot 4
+        //         /      \
+        //   slot 10     slot 9
+        .{
+            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 10, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 9, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+        },
+    };
+    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, tree[0..]);
+    defer fc.deinit();
+
+    try std.testing.expect(
+        try fc.isBestChild(&.{ .slot = 0, .hash = Hash.ZEROES }),
+    );
+    try std.testing.expect(
+        try fc.isBestChild(&.{ .slot = 4, .hash = Hash.ZEROES }),
+    );
+    // 9 is better than 10
+    try std.testing.expect(
+        try fc.isBestChild(&.{ .slot = 9, .hash = Hash.ZEROES }),
+    );
+    try std.testing.expect(
+        !(try fc.isBestChild(&.{ .slot = 10, .hash = Hash.ZEROES })),
+    );
+    // Add new leaf 8, which is better than 9, as both have weight 0
+    //           slot 0
+    //             |
+    //            slot 4
+    //         /    \    \
+    //   slot 10   lot 9  slot 10
+    try fc.addNewLeafSlot(.{ .slot = 8, .hash = Hash.ZEROES }, .{ .slot = 4, .hash = Hash.ZEROES });
+    try std.testing.expect(
+        try fc.isBestChild(&.{ .slot = 8, .hash = Hash.ZEROES }),
+    );
+    try std.testing.expect(
+        !(try fc.isBestChild(&.{ .slot = 9, .hash = Hash.ZEROES })),
+    );
+    try std.testing.expect(
+        !(try fc.isBestChild(&.{ .slot = 10, .hash = Hash.ZEROES })),
+    );
+    // TODO complete test when vote related functions are implemented
+}
+
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
 
 const fork_tuples = [_]TreeNode{
