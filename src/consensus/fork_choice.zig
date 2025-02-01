@@ -1156,6 +1156,18 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
     // The best leaf when weights are equal should prioritize the lower leaf
     fc.aggregateSlot(.{ .slot = 1, .hash = Hash.ZEROES });
 
+    // No weights are present, weights should be zero
+    try std.testing.expectEqual(
+        fc.stakeVotedAt(&.{ .slot = 1, .hash = Hash.ZEROES }),
+        0,
+    );
+
+    try std.testing.expectEqual(
+        fc.stakeVotedSubtree(&.{ .slot = 1, .hash = Hash.ZEROES }),
+        0,
+    );
+
+    // The best leaf when weights are equal should prioritize the lower leaf
     try std.testing.expectEqual(
         fc.bestSlot(.{ .slot = 1, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
