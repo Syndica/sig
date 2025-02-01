@@ -978,6 +978,91 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
     }
 }
 
+test "HeaviestSubtreeForkChoice.ancestorIterator" {
+    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    defer fc.deinit();
+
+    {
+        var iterator = fc.ancestorIterator(SlotAndHash{ .slot = 6, .hash = Hash.ZEROES });
+        var ancestors: [4]SlotAndHash = undefined;
+        var index: usize = 0;
+
+        while (iterator.next()) |ancestor| {
+            if (index >= ancestors.len) {
+                std.testing.expect(false) catch @panic("Test failed: More than 4 ancestors.");
+            }
+            ancestors[index] = ancestor;
+            index += 1;
+        }
+
+        try std.testing.expect(
+            (ancestors[0].order(.{ .slot = 5, .hash = Hash.ZEROES }) == .eq and
+                ancestors[1].order(.{ .slot = 3, .hash = Hash.ZEROES }) == .eq and
+                ancestors[2].order(.{ .slot = 1, .hash = Hash.ZEROES }) == .eq and
+                ancestors[3].order(.{ .slot = 0, .hash = Hash.ZEROES }) == .eq),
+        );
+    }
+    {
+        var iterator = fc.ancestorIterator(SlotAndHash{ .slot = 4, .hash = Hash.ZEROES });
+        var ancestors: [3]SlotAndHash = undefined;
+        var index: usize = 0;
+
+        while (iterator.next()) |ancestor| {
+            if (index >= ancestors.len) {
+                std.testing.expect(false) catch @panic("Test failed: More than 3 ancestors.");
+            }
+            ancestors[index] = ancestor;
+            index += 1;
+        }
+
+        try std.testing.expect(
+            (ancestors[0].order(.{ .slot = 2, .hash = Hash.ZEROES }) == .eq and
+                ancestors[1].order(.{ .slot = 1, .hash = Hash.ZEROES }) == .eq and
+                ancestors[2].order(.{ .slot = 0, .hash = Hash.ZEROES }) == .eq),
+        );
+    }
+    {
+        var iterator = fc.ancestorIterator(SlotAndHash{ .slot = 1, .hash = Hash.ZEROES });
+        var ancestors: [1]SlotAndHash = undefined;
+        var index: usize = 0;
+
+        while (iterator.next()) |ancestor| {
+            if (index >= ancestors.len) {
+                std.testing.expect(false) catch @panic("Test failed: More than 1 ancestors.");
+            }
+            ancestors[index] = ancestor;
+            index += 1;
+        }
+
+        try std.testing.expect(
+            (ancestors[0].order(.{ .slot = 0, .hash = Hash.ZEROES }) == .eq),
+        );
+    }
+    {
+        var iterator = fc.ancestorIterator(SlotAndHash{ .slot = 0, .hash = Hash.ZEROES });
+        try std.testing.expect(iterator.next() == null);
+    }
+    {
+        // Set a root, everything but slots 2, 4 should be removed
+        try fc.setTreeRoot(&.{ .slot = 2, .hash = Hash.ZEROES });
+        var iterator = fc.ancestorIterator(SlotAndHash{ .slot = 4, .hash = Hash.ZEROES });
+        var ancestors: [1]SlotAndHash = undefined;
+        var index: usize = 0;
+
+        while (iterator.next()) |ancestor| {
+            if (index >= ancestors.len) {
+                std.testing.expect(false) catch @panic("Test failed: More than 1 ancestors.");
+            }
+            ancestors[index] = ancestor;
+            index += 1;
+        }
+
+        try std.testing.expect(
+            (ancestors[0].order(.{ .slot = 2, .hash = Hash.ZEROES }) == .eq),
+        );
+    }
+}
+
 test "HeaviestSubtreeForkChoice.setTreeRoot" {
     var fc = try HeaviestSubtreeForkChoice.init(
         test_allocator,
