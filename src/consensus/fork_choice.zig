@@ -1117,26 +1117,42 @@ test "HeaviestSubtreeForkChoice.testBestOverallSlot" {
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
 
 const fork_tuples = [_]TreeNode{
+    //      slot 0
+    //        |
+    //      slot 1
+    //      /    \
+    // slot 2    |
+    //    |    slot 3
+    // slot 4    |
+    //         slot 5
+    //           |
+    //         slot 6
+    // slot 1 is a child of slot 0
     .{
         SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
         SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
     },
+    // slot 2 is a child of slot 1
     .{
         SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
         SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
     },
+    // slot 4 is a child of slot 2
     .{
         SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
         SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
     },
+    // slot 3 is a child of slot 1
     .{
         SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
         SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
     },
+    // slot 5 is a child of slot 3
     .{
         SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
         SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
     },
+    // slot 6 is a child of slot 5
     .{
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
         SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
