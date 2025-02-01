@@ -287,6 +287,12 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
+    pub fn deepestOverallSlot(self: *const HeaviestSubtreeForkChoice) SlotAndHash {
+        return self.deepestSlot(&self.tree_root) orelse {
+            @panic("Root must exist in tree");
+        };
+    }
+
     pub fn stakeVotedAt(
         self: *HeaviestSubtreeForkChoice,
         key: *const SlotAndHash,
