@@ -277,6 +277,16 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
+    pub fn deepestSlot(
+        self: *const HeaviestSubtreeForkChoice,
+        slot_hash_key: *const SlotAndHash,
+    ) ?SlotAndHash {
+        if (self.fork_infos.get(slot_hash_key.*)) |fork_info| {
+            return fork_info.deepest_slot;
+        }
+        return null;
+    }
+
     pub fn stakeVotedSubtree(
         self: *const HeaviestSubtreeForkChoice,
         key: *const SlotAndHash,
@@ -1132,6 +1142,19 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
     );
     try std.testing.expectEqual(
         fc.bestSlot(.{ .slot = 3, .hash = Hash.ZEROES }),
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+    );
+    // The deepest leaf only tiebreaks by slot # when tree heights are equal
+    try std.testing.expectEqual(
+        fc.deepestSlot(&.{ .slot = 1, .hash = Hash.ZEROES }),
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+    );
+    try std.testing.expectEqual(
+        fc.deepestSlot(&.{ .slot = 2, .hash = Hash.ZEROES }),
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+    );
+    try std.testing.expectEqual(
+        fc.deepestSlot(&.{ .slot = 3, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
     );
 }
