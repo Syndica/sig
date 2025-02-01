@@ -844,7 +844,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         if (!builtin.is_test) {
             @panic("setStakeVotedAt should only be called in test mode");
         }
-        
+
         if (self.fork_infos.getPtr(slot_hash_key.*)) |fork_info| {
             fork_info.stake_voted_at = stake_voted_at;
         }
@@ -1157,9 +1157,7 @@ test "HeaviestSubtreeForkChoice.testBestOverallSlot" {
 test "HeaviestSubtreeForkChoice.aggregateSlot" {
     var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
     defer fc.deinit();
-    // TODO when vote related methods are added update this test.
 
-    // The best leaf when weights are equal should prioritize the lower leaf
     fc.aggregateSlot(.{ .slot = 1, .hash = Hash.ZEROES });
 
     // No weights are present, weights should be zero
@@ -1199,6 +1197,114 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
         fc.deepestSlot(&.{ .slot = 3, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
     );
+
+    // Update the weights that have voted *exactly* at each slot, the
+    // branch containing slots {5, 6} has weight 11, so should be heavier
+    // than the branch containing slots {2, 4}
+
+    var total_stake: usize = 0;
+    var staked_voted_slots = std.AutoHashMap(u64, void).init(std.testing.allocator);
+    defer staked_voted_slots.deinit();
+
+    // Add slots to the set
+    const slots = [_]u64{ 2, 4, 5, 6 };
+    for (slots) |slot| {
+        try staked_voted_slots.put(slot, {});
+    }
+
+    var it = staked_voted_slots.keyIterator();
+    while (it.next()) |slot| {
+        fc.setStakeVotedAt(
+            &.{ .slot = slot.*, .hash = Hash.ZEROES },
+            slot.*,
+        );
+        total_stake += slot.*;
+    }
+
+    var slots_to_aggregate = std.ArrayList(SlotAndHash).init(std.testing.allocator);
+    defer slots_to_aggregate.deinit();
+
+    try slots_to_aggregate.append(SlotAndHash{ .slot = 6, .hash = Hash.ZEROES });
+
+    var ancestors_of_6 = fc.ancestorIterator(SlotAndHash{ .slot = 6, .hash = Hash.ZEROES });
+    while (ancestors_of_6.next()) |item| {
+        try slots_to_aggregate.append(item);
+    }
+
+    try slots_to_aggregate.append(SlotAndHash{ .slot = 4, .hash = Hash.ZEROES });
+
+    var ancestors_of_4 = fc.ancestorIterator(SlotAndHash{ .slot = 4, .hash = Hash.ZEROES });
+    while (ancestors_of_4.next()) |item| {
+        try slots_to_aggregate.append(item);
+    }
+
+    for (slots_to_aggregate.items) |slot_hash| {
+        fc.aggregateSlot(slot_hash);
+    }
+
+    // The best path is now 0 -> 1 -> 3 -> 5 -> 6, so leaf 6
+    // should be the best choice
+    // It is still the deepest choice
+    try std.testing.expectEqual(
+        fc.bestOverallSlot(),
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+    );
+
+    try std.testing.expectEqual(
+        fc.deepestOverallSlot(),
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+    );
+
+    for (0..7) |slot| {
+        const expected_stake: u64 = if (staked_voted_slots.contains(slot))
+            slot
+        else
+            0;
+
+        try std.testing.expectEqual(
+            fc.stakeVotedAt(&.{ .slot = slot, .hash = Hash.ZEROES }),
+            expected_stake,
+        );
+    }
+
+    // Verify `stake_voted_subtree` for common fork
+    for ([_]u64{ 0, 1 }) |slot| {
+        // Subtree stake is sum of the `stake_voted_at` across
+        // all slots in the subtree
+        try std.testing.expectEqual(
+            fc.stakeVotedSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
+            total_stake,
+        );
+    }
+
+    {
+        // Verify `stake_voted_subtree` for fork 1
+        var total_expected_stake: u64 = 0;
+        for ([_]u64{ 4, 2 }) |slot| {
+            total_expected_stake += fc.stakeVotedAt(
+                &.{ .slot = slot, .hash = Hash.ZEROES },
+            ).?;
+            try std.testing.expectEqual(
+                fc.stakeVotedSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
+                total_expected_stake,
+            );
+        }
+    }
+
+    {
+        // Verify `stake_voted_subtree` for fork 2
+        var total_expected_stake: u64 = 0;
+        for ([_]u64{ 6, 5, 3 }) |slot| {
+            total_expected_stake += fc.stakeVotedAt(
+                &.{ .slot = slot, .hash = Hash.ZEROES },
+            ).?;
+
+            try std.testing.expectEqual(
+                fc.stakeVotedSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
+                total_expected_stake,
+            );
+        }
+    }
 }
 
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
