@@ -287,6 +287,16 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
+    pub fn stakeVotedAt(
+        self: *HeaviestSubtreeForkChoice,
+        key: *const SlotAndHash,
+    ) ?u64 {
+        if (self.fork_infos.get(key.*)) |fork_info| {
+            return fork_info.stake_voted_at;
+        }
+        return null;
+    }
+
     pub fn stakeVotedSubtree(
         self: *const HeaviestSubtreeForkChoice,
         key: *const SlotAndHash,
