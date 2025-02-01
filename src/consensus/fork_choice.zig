@@ -1114,6 +1114,28 @@ test "HeaviestSubtreeForkChoice.testBestOverallSlot" {
     );
 }
 
+test "HeaviestSubtreeForkChoice.aggregateSlot" {
+    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    defer fc.deinit();
+    // TODO when vote related methods are added update this test.
+
+    // The best leaf when weights are equal should prioritize the lower leaf
+    fc.aggregateSlot(.{ .slot = 1, .hash = Hash.ZEROES });
+
+    try std.testing.expectEqual(
+        fc.bestSlot(.{ .slot = 1, .hash = Hash.ZEROES }),
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+    );
+    try std.testing.expectEqual(
+        fc.bestSlot(.{ .slot = 2, .hash = Hash.ZEROES }),
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+    );
+    try std.testing.expectEqual(
+        fc.bestSlot(.{ .slot = 3, .hash = Hash.ZEROES }),
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+    );
+}
+
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
 
 const fork_tuples = [_]TreeNode{
