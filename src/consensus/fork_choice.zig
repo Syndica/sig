@@ -830,6 +830,20 @@ pub const HeaviestSubtreeForkChoice = struct {
         }
     }
 
+    pub fn setStakeVotedAt(
+        self: *HeaviestSubtreeForkChoice,
+        slot_hash_key: *const SlotAndHash,
+        stake_voted_at: u64,
+    ) void {
+        if (!builtin.is_test) {
+            @panic("setStakeVotedAt should only be called in test mode");
+        }
+        
+        if (self.fork_infos.getPtr(slot_hash_key.*)) |fork_info| {
+            fork_info.stake_voted_at = stake_voted_at;
+        }
+    }
+
     fn ancestorIterator(
         self: *HeaviestSubtreeForkChoice,
         start_slot_hash_key: SlotAndHash,
