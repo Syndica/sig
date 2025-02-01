@@ -1105,6 +1105,15 @@ test "HeaviestSubtreeForkChoice.testSetRoot" {
     }
 }
 
+test "HeaviestSubtreeForkChoice.testBestOverallSlot" {
+    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    defer fc.deinit();
+    try std.testing.expectEqual(
+        fc.bestOverallSlot(),
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+    );
+}
+
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
 
 const fork_tuples = [_]TreeNode{
