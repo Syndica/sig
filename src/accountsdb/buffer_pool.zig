@@ -778,6 +778,8 @@ pub const ReadHandle = union(enum) {
     unowned_allocation: []const u8,
     /// Data owned by parent ReadHandle
     sub_read: SubRead,
+    /// Used in place of a read, in callsites where it is not actually needed. Provides .len().
+    unread: Unread,
 
     const CachedRead = struct {
         buffer_pool: *BufferPool,
@@ -793,6 +795,10 @@ pub const ReadHandle = union(enum) {
         // offset into the parent's read
         start: u32,
         end: u32,
+    };
+
+    const Unread = struct {
+        len: u32,
     };
 
     pub const @"!bincode-config" = bincode.FieldConfig(ReadHandle){
@@ -828,6 +834,10 @@ pub const ReadHandle = union(enum) {
         return ReadHandle{ .unowned_allocation = data };
     }
 
+    pub fn initUnread(length: u32) ReadHandle {
+        return .{ .unread = .{ .len = length } };
+    }
+
     pub noinline fn deinit(self: ReadHandle, allocator: std.mem.Allocator) void {
         switch (self) {
             .cached => |*cached| {
@@ -842,11 +852,13 @@ pub const ReadHandle = union(enum) {
 
                 allocator.free(cached.frame_refs);
             },
-            .sub_read => |_| {},
-            .unowned_allocation => |_| {},
             .owned_allocation => |owned_allocation| {
                 allocator.free(owned_allocation);
             },
+            .sub_read,
+            .unowned_allocation,
+            .unread,
+            => {},
         }
     }
 
@@ -875,6 +887,7 @@ pub const ReadHandle = union(enum) {
         switch (self.*) {
             .owned_allocation, .unowned_allocation => |data| return @memcpy(buf, data[start..end]),
             .sub_read => |*sb| return sb.parent.read(sb.start + start, buf),
+            .unread => unreachable,
             .cached => {},
         }
 
@@ -910,6 +923,7 @@ pub const ReadHandle = union(enum) {
                     FRAME_SIZE +
                     cached.last_frame_end_offset - cached.first_frame_start_offset;
             },
+            .unread => |unread| unread.len,
             .owned_allocation, .unowned_allocation => |data| @intCast(data.len),
         };
     }
@@ -1066,7 +1080,8 @@ pub const ReadHandle = union(enum) {
                     );
                     break :buf external[read_offset..end_idx];
                 },
-                .sub_read => @panic("unimpl"),
+                .unread => unreachable,
+                .sub_read => @panic("unimplemented"),
             };
 
             if (frame_buf.len == 0) unreachable; // guarded against by the bytes_read check

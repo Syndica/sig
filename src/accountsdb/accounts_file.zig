@@ -80,7 +80,6 @@ pub const FileId = enum(Int) {
 ///
 /// Analogous to [StoredAccountMeta::AppendVec](https://github.com/anza-xyz/agave/blob/f8067ea7883e04bdfc1a82b0779f7363b71bf548/accounts-db/src/account_storage/meta.rs#L21)
 pub const AccountInFile = struct {
-    // pointers to mmap contents
     store_info: StorageInfo,
     account_info: AccountInfo,
     hash: Hash,
@@ -384,6 +383,24 @@ pub const AccountFile = struct {
         };
     }
 
+    const max_header_buf_len = max_size: {
+        var max_size = 0;
+        for (0..@sizeOf(u64)) |i| {
+            var start = i;
+
+            start += @sizeOf(AccountInFile.StorageInfo);
+            start = std.mem.alignForward(usize, start, @sizeOf(u64));
+            start += @sizeOf(AccountInFile.AccountInfo);
+            start = std.mem.alignForward(usize, start, @sizeOf(u64));
+
+            start += @sizeOf(Hash);
+            start = std.mem.alignForward(usize, start, @sizeOf(u64));
+
+            max_size = @max(max_size, start);
+        }
+        break :max_size max_size;
+    };
+
     pub fn readAccount(
         self: *const Self,
         metadata_allocator: std.mem.Allocator,
@@ -392,27 +409,127 @@ pub const AccountFile = struct {
     ) !AccountInFile {
         var offset = start_offset;
 
-        // TODO efficiency: could reduce this to one buffer_pool call, and slice that
-        const store_info = try self.getType(
-            metadata_allocator,
-            buffer_pool,
-            &offset,
-            AccountInFile.StorageInfo,
+        offset += @sizeOf(AccountInFile.StorageInfo);
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        const account_info_start = offset;
+        offset += @sizeOf(AccountInFile.AccountInfo);
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        const hash_start = offset;
+        offset += @sizeOf(Hash);
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        const header_byte_len = offset - start_offset;
+        std.debug.assert(header_byte_len <= max_header_buf_len);
+
+        var offset_restarted = start_offset;
+        const read = try self.getSlice(metadata_allocator, buffer_pool, &offset_restarted, header_byte_len);
+        std.debug.assert(offset == offset_restarted);
+        defer read.deinit(metadata_allocator);
+
+        var buf: [max_header_buf_len]u8 = undefined;
+        read.readAll(buf[0..header_byte_len]);
+
+        var store_info: AccountInFile.StorageInfo = undefined;
+        @memcpy(
+            std.mem.asBytes(&store_info),
+            buf[0..][0..@sizeOf(AccountInFile.StorageInfo)],
         );
-        const account_info = try self.getType(
-            metadata_allocator,
-            buffer_pool,
-            &offset,
-            AccountInFile.AccountInfo,
+
+        var account_info: AccountInFile.AccountInfo = undefined;
+        @memcpy(
+            std.mem.asBytes(&account_info),
+            buf[account_info_start - start_offset ..][0..@sizeOf(AccountInFile.AccountInfo)],
         );
-        const hash = try self.getType(metadata_allocator, buffer_pool, &offset, Hash);
+
+        var hash: Hash = undefined;
+        @memcpy(
+            std.mem.asBytes(&hash),
+            buf[hash_start - start_offset ..][0..@sizeOf(Hash)],
+        );
+
         const data = try self.getSlice(
             metadata_allocator,
             buffer_pool,
-            &offset,
+            &offset_restarted,
             store_info.data_len,
         );
         errdefer data.deinit(metadata_allocator);
+
+        const len = offset_restarted - start_offset;
+
+        return AccountInFile{
+            .store_info = store_info,
+            .account_info = account_info,
+            .hash = hash,
+            .data = data,
+            .len = len,
+            .offset = start_offset,
+        };
+    }
+
+    pub fn readAccountNoData(
+        self: *const Self,
+        metadata_allocator: std.mem.Allocator,
+        buffer_pool: *BufferPool,
+        start_offset: usize,
+    ) !AccountInFile {
+        var offset = start_offset;
+
+        offset += @sizeOf(AccountInFile.StorageInfo);
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        const account_info_start = offset;
+        offset += @sizeOf(AccountInFile.AccountInfo);
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        const hash_start = offset;
+        offset += @sizeOf(Hash);
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        const header_byte_len = offset - start_offset;
+        std.debug.assert(header_byte_len <= max_header_buf_len);
+
+        var offset_restarted = start_offset;
+        const read = try self.getSlice(metadata_allocator, buffer_pool, &offset_restarted, header_byte_len);
+        std.debug.assert(offset == offset_restarted);
+        defer read.deinit(metadata_allocator);
+
+        var buf: [max_header_buf_len]u8 = undefined;
+        read.readAll(buf[0..header_byte_len]);
+
+        var store_info: AccountInFile.StorageInfo = undefined;
+        @memcpy(
+            std.mem.asBytes(&store_info),
+            buf[0..][0..@sizeOf(AccountInFile.StorageInfo)],
+        );
+
+        var account_info: AccountInFile.AccountInfo = undefined;
+        @memcpy(
+            std.mem.asBytes(&account_info),
+            buf[account_info_start - start_offset ..][0..@sizeOf(AccountInFile.AccountInfo)],
+        );
+
+        var hash: Hash = undefined;
+        @memcpy(
+            std.mem.asBytes(&hash),
+            buf[hash_start - start_offset ..][0..@sizeOf(Hash)],
+        );
+
+        const start_index = offset;
+        const result = @addWithOverflow(start_index, store_info.data_len);
+        const end_index = result[0];
+        const overflow_flag = result[1];
+        if (overflow_flag == 1 or end_index > self.length) {
+            return error.EOF;
+        }
+
+        const data = ReadHandle.initUnread(
+            std.math.cast(u32, store_info.data_len) orelse return error.EOF,
+        );
+
+        offset = std.mem.alignForward(usize, end_index, @sizeOf(u64));
 
         const len = offset - start_offset;
 
@@ -478,6 +595,22 @@ pub const AccountFile = struct {
         pub fn next(self: *Iterator) !?AccountInFile {
             while (true) {
                 const account = self.accounts_file.readAccount(
+                    self.metadata_allocator,
+                    self.buffer_pool,
+                    self.offset,
+                ) catch |err| switch (err) {
+                    error.EOF => break,
+                    else => return err,
+                };
+                self.offset = self.offset + account.len;
+                return account;
+            }
+            return null;
+        }
+
+        pub fn nextNoData(self: *Iterator) !?AccountInFile {
+            while (true) {
+                const account = self.accounts_file.readAccountNoData(
                     self.metadata_allocator,
                     self.buffer_pool,
                     self.offset,
