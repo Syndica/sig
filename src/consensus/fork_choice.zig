@@ -26,16 +26,16 @@ const UpdateOperation = union(enum) {
     Aggregate,
 };
 
-const SlotHashKeyLabel = struct {
+const SlotAndHashLabel = struct {
     slot_hash_key: SlotAndHash,
     label: UpdateLabel,
-    pub fn order(a: SlotHashKeyLabel, b: SlotHashKeyLabel) std.math.Order {
+    pub fn order(a: SlotAndHashLabel, b: SlotAndHashLabel) std.math.Order {
         return a.slot_hash_key.order(b.slot_hash_key);
     }
 };
 
 const UpdateOperations = SortedMap(
-    SlotHashKeyLabel,
+    SlotAndHashLabel,
     UpdateOperation,
 );
 
@@ -166,6 +166,7 @@ pub const HeaviestSubtreeForkChoice = struct {
 
         const root = forks[0][1].?;
         var heaviest_subtree_fork_choice = try HeaviestSubtreeForkChoice.init(allocator, root);
+        errdefer heaviest_subtree_fork_choice.deinit();
 
         for (forks) |fork_tuple| {
             const slot_hash = fork_tuple[0];
@@ -193,6 +194,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         slot_hash_key: SlotAndHash,
         maybe_parent: ?SlotAndHash,
     ) !void {
+        errdefer self.deinit();
         if (self.last_root_time.elapsed().asSecs() > MAX_ROOT_PRINT_SECONDS) {
             // TODO implement self.print_state();
         }
@@ -587,7 +589,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         modify_fork_validity: ?UpdateOperation,
         slot_hash_key: SlotAndHash,
     ) !bool {
-        const aggregate_label = SlotHashKeyLabel{
+        const aggregate_label = SlotAndHashLabel{
             .slot_hash_key = slot_hash_key,
             .label = .Aggregate,
         };
@@ -600,7 +602,7 @@ pub const HeaviestSubtreeForkChoice = struct {
             switch (mark_fork_validity) {
                 .MarkValid => |slot| {
                     _ = try update_operations.put(
-                        SlotHashKeyLabel{
+                        SlotAndHashLabel{
                             .slot_hash_key = slot_hash_key,
                             .label = .MarkValid,
                         },
@@ -609,7 +611,7 @@ pub const HeaviestSubtreeForkChoice = struct {
                 },
                 .MarkInvalid => |slot| {
                     _ = try update_operations.put(
-                        SlotHashKeyLabel{
+                        SlotAndHashLabel{
                             .slot_hash_key = slot_hash_key,
                             .label = .MarkInvalid,
                         },
@@ -1360,6 +1362,65 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
         !(try fc.isBestChild(&.{ .slot = 10, .hash = Hash.ZEROES })),
     );
     // TODO complete test when vote related functions are implemented
+}
+
+test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
+    var prng = std.rand.DefaultPrng.init(91);
+    const random = prng.random();
+    const duplicate_fork = try setupDuplicateForks();
+    defer test_allocator.destroy(duplicate_fork.heaviest_subtree_fork_choice);
+    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
+    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
+    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
+
+    var fc = duplicate_fork.heaviest_subtree_fork_choice;
+    defer fc.deinit();
+    const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
+    const duplicate_leaves_descended_from_5 = duplicate_fork.duplicate_leaves_descended_from_5;
+    // Add a child to one of the duplicates
+    const duplicate_parent = duplicate_leaves_descended_from_4[0];
+    const child = SlotAndHash{ .slot = 11, .hash = Hash.initRandom(random) };
+    try fc.addNewLeafSlot(child, duplicate_parent);
+    {
+        var children_ = fc.getChildren(&duplicate_parent).?;
+        const children = children_.keys();
+
+        try std.testing.expect(
+            (children[0].slot == child.slot and children[0].hash.order(&child.hash) == .eq),
+        );
+    }
+
+    try std.testing.expectEqual(
+        fc.bestOverallSlot(),
+        child,
+    );
+
+    // All the other duplicates should have no children
+    for (duplicate_leaves_descended_from_5) |duplicate_leaf| {
+        try std.testing.expectEqual(
+            fc.getChildren(&duplicate_leaf).?.count(),
+            0,
+        );
+    }
+    try std.testing.expectEqual(
+        fc.getChildren(&duplicate_leaves_descended_from_4[1]).?.count(),
+        0,
+    );
+
+    // Re-adding same duplicate slot should not overwrite existing one
+    try fc.addNewLeafSlot(duplicate_parent, .{ .slot = 4, .hash = Hash.ZEROES });
+    {
+        var children_ = fc.getChildren(&duplicate_parent).?;
+        const children = children_.keys();
+
+        try std.testing.expect(
+            (children[0].slot == child.slot and children[0].hash.order(&child.hash) == .eq),
+        );
+    }
+    try std.testing.expectEqual(
+        fc.bestOverallSlot(),
+        child,
+    );
 }
 
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
