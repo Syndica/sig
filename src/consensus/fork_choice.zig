@@ -938,17 +938,7 @@ const AncestorIterator = struct {
     }
 };
 
-/// Testing only ensures everything compiles.
-/// TODO: Update to assert.
 const test_allocator = std.testing.allocator;
-
-test "HeaviestSubtreeForkChoice.init" {
-    var fc = try HeaviestSubtreeForkChoice.init(
-        test_allocator,
-        SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-    );
-    defer fc.deinit();
-}
 
 test "HeaviestSubtreeForkChoice.subtreeDiff" {
     var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
@@ -1158,18 +1148,6 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
 }
 
 test "HeaviestSubtreeForkChoice.setTreeRoot" {
-    var fc = try HeaviestSubtreeForkChoice.init(
-        test_allocator,
-        SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-    );
-    defer fc.deinit();
-
-    _ = try fc.setTreeRoot(
-        &SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-    );
-}
-
-test "HeaviestSubtreeForkChoice.testSetRoot" {
     var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
     defer fc.deinit();
     // Set root to 1, should only purge 0
@@ -1182,7 +1160,7 @@ test "HeaviestSubtreeForkChoice.testSetRoot" {
     }
 }
 
-test "HeaviestSubtreeForkChoice.testBestOverallSlot" {
+test "HeaviestSubtreeForkChoice.bestOverallSlot" {
     var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
     defer fc.deinit();
     try std.testing.expectEqual(
