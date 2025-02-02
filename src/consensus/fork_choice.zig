@@ -354,6 +354,45 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
+    pub fn markForkValidCandidate(
+        self: *HeaviestSubtreeForkChoice,
+        valid_slot_hash_key: *const SlotAndHash,
+    ) !std.ArrayList(SlotAndHash) {
+        var newly_duplicate_confirmed_ancestors = std.ArrayList(SlotAndHash).init(self.allocator);
+        // TODO: Revisit safety of this.
+        if (!self.isDuplicateConfirmed(valid_slot_hash_key).?) {
+            try newly_duplicate_confirmed_ancestors.append(valid_slot_hash_key);
+        }
+
+        var ancestor_iter = self.ancestorIterator(valid_slot_hash_key);
+        while (ancestor_iter.next()) |ancestor_slot_hash_key| {
+            try newly_duplicate_confirmed_ancestors.append(ancestor_slot_hash_key);
+        }
+
+        var update_operations = UpdateOperations.init(self.allocator);
+        defer update_operations.deinit();
+
+        // Notify all children that a parent was marked as valid.
+        var children_hash_keys = try self.subtreeDiff(
+            valid_slot_hash_key,
+            &.{ .slot = 0, .hash = Hash.ZEROES },
+        );
+
+        for (children_hash_keys.keys()) |child_hash_key| {
+            _ = try self.doInsertAggregateOperation(
+                &update_operations,
+                UpdateOperation{ .MarkValid = valid_slot_hash_key.slot },
+                child_hash_key,
+            );
+        }
+
+        // Aggregate across all ancestors to find new best slots excluding this fork
+        try self.insertAggregateOperations(&update_operations, valid_slot_hash_key.*);
+        self.processUpdateOperations(update_operations);
+
+        return newly_duplicate_confirmed_ancestors;
+    }
+
     pub fn markForkInvalidCandidate(
         self: *HeaviestSubtreeForkChoice,
         invalid_slot_hash_key: *const SlotAndHash,
