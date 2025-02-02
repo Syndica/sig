@@ -344,6 +344,16 @@ pub const HeaviestSubtreeForkChoice = struct {
         self.last_root_time = Instant.now();
     }
 
+    pub fn isDuplicateConfirmed(
+        self: *HeaviestSubtreeForkChoice,
+        slot_hash_key: *const SlotAndHash,
+    ) ?bool {
+        if (self.fork_infos.get(slot_hash_key)) |fork_info| {
+            return fork_info.is_duplicate_confirmed;
+        }
+        return null;
+    }
+
     pub fn markForkInvalidCandidate(
         self: *HeaviestSubtreeForkChoice,
         invalid_slot_hash_key: *const SlotAndHash,
