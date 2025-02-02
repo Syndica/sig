@@ -1406,3 +1406,135 @@ const fork_tuples = [_]TreeNode{
         SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
     },
 };
+
+fn compareSlotHashKey(_: void, a: SlotAndHash, b: SlotAndHash) bool {
+    if (a.slot == b.slot) {
+        return a.hash.order(&b.hash) == .lt;
+    }
+    return a.slot < b.slot;
+}
+
+pub fn setupDuplicateForks() !struct {
+    heaviest_subtree_fork_choice: *HeaviestSubtreeForkChoice,
+    duplicate_leaves_descended_from_4: []SlotAndHash,
+    duplicate_leaves_descended_from_5: []SlotAndHash,
+    duplicate_leaves_descended_from_6: []SlotAndHash,
+} {
+    //              slot 0
+    //                |
+    //              slot 1
+    //              /       \
+    //         slot 2        |
+    //            |          slot 3
+    //         slot 4               \
+    //         /    \                slot 5
+    // slot 10      slot 10        /     |     \
+    //                      slot 6   slot 10   slot 10
+    //                     /      \
+    //                slot 10   slot 10
+    var prng = std.rand.DefaultPrng.init(91);
+    const random = prng.random();
+    // Build fork structure
+    var heaviest_subtree_fork_choice = try test_allocator.create(HeaviestSubtreeForkChoice);
+    errdefer test_allocator.destroy(heaviest_subtree_fork_choice);
+
+    heaviest_subtree_fork_choice.* = try HeaviestSubtreeForkChoice.initForTest(
+        test_allocator,
+        fork_tuples[0..],
+    );
+
+    const duplicate_slot: u64 = 10;
+
+    // Create duplicate leaves descended from slot 4
+    var duplicate_leaves_descended_from_4 = std.ArrayList(SlotAndHash).init(test_allocator);
+    defer duplicate_leaves_descended_from_4.deinit();
+    for (0..2) |_| {
+        try duplicate_leaves_descended_from_4.append(SlotAndHash{
+            .slot = duplicate_slot,
+            .hash = Hash.initRandom(random),
+        });
+    }
+
+    // Create duplicate leaves descended from slot 5
+    var duplicate_leaves_descended_from_5 = std.ArrayList(SlotAndHash).init(test_allocator);
+    defer duplicate_leaves_descended_from_5.deinit();
+    for (0..2) |_| {
+        try duplicate_leaves_descended_from_5.append(SlotAndHash{
+            .slot = duplicate_slot,
+            .hash = Hash.initRandom(random),
+        });
+    }
+
+    // Create duplicate leaves descended from slot 6
+    var duplicate_leaves_descended_from_6 = std.ArrayList(SlotAndHash).init(test_allocator);
+    defer duplicate_leaves_descended_from_6.deinit();
+    for (0..2) |_| {
+        try duplicate_leaves_descended_from_6.append(SlotAndHash{
+            .slot = duplicate_slot,
+            .hash = Hash.initRandom(random),
+        });
+    }
+
+    std.mem.sort(SlotAndHash, duplicate_leaves_descended_from_4.items, {}, compareSlotHashKey);
+    std.mem.sort(SlotAndHash, duplicate_leaves_descended_from_5.items, {}, compareSlotHashKey);
+    std.mem.sort(SlotAndHash, duplicate_leaves_descended_from_6.items, {}, compareSlotHashKey);
+
+    // Add duplicate leaves to the fork structure
+    for (duplicate_leaves_descended_from_4.items) |duplicate_leaf| {
+        try heaviest_subtree_fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
+            .slot = 4,
+            .hash = Hash.ZEROES,
+        });
+    }
+    for (duplicate_leaves_descended_from_5.items) |duplicate_leaf| {
+        try heaviest_subtree_fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
+            .slot = 5,
+            .hash = Hash.ZEROES,
+        });
+    }
+    for (duplicate_leaves_descended_from_6.items) |duplicate_leaf| {
+        try heaviest_subtree_fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
+            .slot = 6,
+            .hash = Hash.ZEROES,
+        });
+    }
+
+    // Verify children of slot 4
+    var dup_children_4 = heaviest_subtree_fork_choice.getChildren(&.{
+        .slot = 4,
+        .hash = Hash.ZEROES,
+    }).?;
+    std.mem.sort(SlotAndHash, @constCast(dup_children_4.keys()), {}, compareSlotHashKey);
+    // std.debug.assert(std.mem.eql(
+    //     SlotAndHash,
+    //     dup_children_4.keys(),
+    //     duplicate_leaves_descended_from_4.items,
+    // ));
+
+    // Verify children of slot 5
+    var dup_children_5 = heaviest_subtree_fork_choice.getChildren(&.{
+        .slot = 5,
+        .hash = Hash.ZEROES,
+    }).?;
+    std.mem.sort(SlotAndHash, @constCast(dup_children_5.keys()), {}, compareSlotHashKey);
+    // std.debug.assert(
+    //     std.mem.eql(SlotAndHash, dup_children_5.keys(), duplicate_leaves_descended_from_5.items),
+    // );
+
+    // Verify children of slot 6
+    var dup_children_6 = heaviest_subtree_fork_choice.getChildren(&.{
+        .slot = 6,
+        .hash = Hash.ZEROES,
+    }).?;
+    std.mem.sort(SlotAndHash, @constCast(dup_children_6.keys()), {}, compareSlotHashKey);
+    // std.debug.assert(
+    //     std.mem.eql(SlotAndHash, dup_children_6.keys(), duplicate_leaves_descended_from_6.items),
+    // );
+
+    return .{
+        .heaviest_subtree_fork_choice = heaviest_subtree_fork_choice,
+        .duplicate_leaves_descended_from_4 = try duplicate_leaves_descended_from_4.toOwnedSlice(),
+        .duplicate_leaves_descended_from_5 = try duplicate_leaves_descended_from_5.toOwnedSlice(),
+        .duplicate_leaves_descended_from_6 = try duplicate_leaves_descended_from_6.toOwnedSlice(),
+    };
+}
