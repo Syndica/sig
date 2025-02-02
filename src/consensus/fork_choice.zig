@@ -348,7 +348,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         self: *HeaviestSubtreeForkChoice,
         slot_hash_key: *const SlotAndHash,
     ) ?bool {
-        if (self.fork_infos.get(slot_hash_key)) |fork_info| {
+        if (self.fork_infos.get(slot_hash_key.*)) |fork_info| {
             return fork_info.is_duplicate_confirmed;
         }
         return null;
@@ -361,10 +361,10 @@ pub const HeaviestSubtreeForkChoice = struct {
         var newly_duplicate_confirmed_ancestors = std.ArrayList(SlotAndHash).init(self.allocator);
         // TODO: Revisit safety of this.
         if (!self.isDuplicateConfirmed(valid_slot_hash_key).?) {
-            try newly_duplicate_confirmed_ancestors.append(valid_slot_hash_key);
+            try newly_duplicate_confirmed_ancestors.append(valid_slot_hash_key.*);
         }
 
-        var ancestor_iter = self.ancestorIterator(valid_slot_hash_key);
+        var ancestor_iter = self.ancestorIterator(valid_slot_hash_key.*);
         while (ancestor_iter.next()) |ancestor_slot_hash_key| {
             try newly_duplicate_confirmed_ancestors.append(ancestor_slot_hash_key);
         }
@@ -377,6 +377,7 @@ pub const HeaviestSubtreeForkChoice = struct {
             valid_slot_hash_key,
             &.{ .slot = 0, .hash = Hash.ZEROES },
         );
+        defer children_hash_keys.deinit();
 
         for (children_hash_keys.keys()) |child_hash_key| {
             _ = try self.doInsertAggregateOperation(
@@ -411,6 +412,7 @@ pub const HeaviestSubtreeForkChoice = struct {
                 invalid_slot_hash_key,
                 &.{ .slot = 0, .hash = Hash.ZEROES },
             );
+            defer children_hash_keys.deinit();
 
             for (children_hash_keys.keys()) |child_hash_key| {
                 _ = try self.doInsertAggregateOperation(
@@ -1470,6 +1472,113 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
         fc.bestOverallSlot(),
         child,
     );
+}
+
+test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
+    // slot 0
+    //    |
+    //  slot 1
+    //    |
+    //  slot 2
+    //    |
+    //  slot 3
+    //    |
+    //  slot 4
+    //    |
+    //  slot 5
+    //    |
+    //  slot 6
+    const forks = [_]TreeNode{
+        .{
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+        // slot 2 is a child of slot 1
+        .{
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        },
+        // slot 3 is a child of slot 2
+        .{
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        },
+        // slot 4 is a child of slot 3
+        .{
+            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        },
+        // slot 5 is a child of slot 4
+        .{
+            SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+        },
+        // slot 6 is a child of slot 5
+        .{
+            SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+        },
+    };
+
+    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, forks[0..]);
+    defer fc.deinit();
+    const duplicate_confirmed_slot: Slot = 1;
+    const duplicate_confirmed_key: Hash = Hash.ZEROES;
+    const candidates = try fc.markForkValidCandidate(&.{
+        .slot = duplicate_confirmed_slot,
+        .hash = duplicate_confirmed_key,
+    });
+    defer candidates.deinit();
+
+    {
+        var it = fc.fork_infos.keyIterator();
+
+        while (it.next()) |slot_hash_key| {
+            const slot = slot_hash_key.slot;
+            if (slot <= duplicate_confirmed_slot) {
+                try std.testing.expect(fc.isDuplicateConfirmed(slot_hash_key).?);
+            } else {
+                try std.testing.expect(!fc.isDuplicateConfirmed(slot_hash_key).?);
+            }
+            try std.testing.expect(fc.latestInvalidAncestor(slot_hash_key.*) == null);
+        }
+    }
+
+    // Mark a later descendant invalid
+    const invalid_descendant_slot = 5;
+    const invalid_descendant_key: Hash = Hash.ZEROES;
+    try fc.markForkInvalidCandidate(&.{
+        .slot = invalid_descendant_slot,
+        .hash = invalid_descendant_key,
+    });
+
+    {
+        var it = fc.fork_infos.keyIterator();
+        while (it.next()) |slot_hash_key| {
+            const slot = slot_hash_key.slot;
+            if (slot <= duplicate_confirmed_slot) {
+                // All ancestors of the duplicate confirmed slot should:
+                // 1) Be duplicate confirmed
+                // 2) Have no invalid ancestors
+                try std.testing.expect(fc.isDuplicateConfirmed(slot_hash_key).?);
+                try std.testing.expect(fc.latestInvalidAncestor(slot_hash_key.*) == null);
+            } else if (slot >= invalid_descendant_slot) {
+                // Anything descended from the invalid slot should:
+                // 1) Not be duplicate confirmed
+                // 2) Should have an invalid ancestor == `invalid_descendant_slot`
+                try std.testing.expect(!fc.isDuplicateConfirmed(slot_hash_key).?);
+                try std.testing.expect(
+                    fc.latestInvalidAncestor(slot_hash_key.*).? == invalid_descendant_slot,
+                );
+            } else {
+                // Anything in between the duplicate confirmed slot and the invalid slot should:
+                // 1) Not be duplicate confirmed
+                // 2) Should not have an invalid ancestor
+                try std.testing.expect(!fc.isDuplicateConfirmed(slot_hash_key).?);
+                try std.testing.expect(fc.latestInvalidAncestor(slot_hash_key.*) == null);
+            }
+        }
+    }
 }
 
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
