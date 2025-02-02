@@ -1475,52 +1475,7 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
 }
 
 test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
-    // slot 0
-    //    |
-    //  slot 1
-    //    |
-    //  slot 2
-    //    |
-    //  slot 3
-    //    |
-    //  slot 4
-    //    |
-    //  slot 5
-    //    |
-    //  slot 6
-    const forks = [_]TreeNode{
-        .{
-            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-        },
-        // slot 2 is a child of slot 1
-        .{
-            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
-        },
-        // slot 3 is a child of slot 2
-        .{
-            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
-        },
-        // slot 4 is a child of slot 3
-        .{
-            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
-        },
-        // slot 5 is a child of slot 4
-        .{
-            SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-        },
-        // slot 6 is a child of slot 5
-        .{
-            SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
-        },
-    };
-
-    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, forks[0..]);
+    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, linear_fork_tuples[0..]);
     defer fc.deinit();
     const duplicate_confirmed_slot: Slot = 1;
     const duplicate_confirmed_key: Hash = Hash.ZEROES;
@@ -1618,6 +1573,51 @@ const fork_tuples = [_]TreeNode{
     .{
         SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
         SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+    },
+    // slot 6 is a child of slot 5
+    .{
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+    },
+};
+
+const linear_fork_tuples = [_]TreeNode{
+    // slot 0
+    //    |
+    //  slot 1
+    //    |
+    //  slot 2
+    //    |
+    //  slot 3
+    //    |
+    //  slot 4
+    //    |
+    //  slot 5
+    //    |
+    //  slot 6
+    .{
+        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+    },
+    // slot 2 is a child of slot 1
+    .{
+        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+    },
+    // slot 3 is a child of slot 2
+    .{
+        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+    },
+    // slot 4 is a child of slot 3
+    .{
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+    },
+    // slot 5 is a child of slot 4
+    .{
+        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
     },
     // slot 6 is a child of slot 5
     .{
