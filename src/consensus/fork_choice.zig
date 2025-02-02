@@ -207,7 +207,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         }
 
         const parent_latest_invalid_ancestor =
-            if (maybe_parent) |p| self.latest_invalid_ancestor(p) else null;
+            if (maybe_parent) |p| self.latestInvalidAncestor(p) else null;
 
         if (self.fork_infos.getPtr(slot_hash_key)) |fork_info| {
             // Modify existing entry
@@ -255,7 +255,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         return self.fork_infos.contains(key.*);
     }
 
-    pub fn latest_invalid_ancestor(
+    pub fn latestInvalidAncestor(
         self: *const HeaviestSubtreeForkChoice,
         slot_hash_key: SlotAndHash,
     ) ?Slot {
