@@ -399,10 +399,11 @@ pub const HeaviestSubtreeForkChoice = struct {
         invalid_slot_hash_key: *const SlotAndHash,
     ) !void {
         // Get mutable reference to fork info
-        if (self.fork_infos.getPtr(invalid_slot_hash_key.*)) |_| {
+        if (self.fork_infos.getPtr(invalid_slot_hash_key.*)) |fork_info| {
             // Should not be marking duplicate confirmed blocks as invalid candidates
-            // TODO: Re-enable
-            // std.debug.assert(!fork_info.is_duplicate_confirmed);
+            if (fork_info.is_duplicate_confirmed) {
+                return error.DuplicateConfirmedCannotBeMarkedInvalid;
+            }
 
             var update_operations = UpdateOperations.init(self.allocator);
             defer update_operations.deinit();
@@ -1168,23 +1169,6 @@ test "HeaviestSubtreeForkChoice.setTreeRoot" {
     );
 }
 
-test "HeaviestSubtreeForkChoice.markForkInvalidCandidate" {
-    var fc = try HeaviestSubtreeForkChoice.init(
-        test_allocator,
-        SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-    );
-    defer fc.deinit();
-
-    _ = try fc.markForkInvalidCandidate(
-        &SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-    );
-}
-
-test "HeaviestSubtreeForkChoice.initForTest" {
-    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
-    defer fc.deinit();
-}
-
 test "HeaviestSubtreeForkChoice.testSetRoot" {
     var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
     defer fc.deinit();
@@ -1534,6 +1518,28 @@ test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
             }
         }
     }
+}
+
+test "HeaviestSubtreeForkChoice.markForkValidandidate_mark_valid_then_ancestor_invalid" {
+    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, linear_fork_tuples[0..]);
+    defer fc.deinit();
+    const duplicate_confirmed_slot: Slot = 4;
+    const duplicate_confirmed_key: Hash = Hash.ZEROES;
+    const candidates = try fc.markForkValidCandidate(&.{
+        .slot = duplicate_confirmed_slot,
+        .hash = duplicate_confirmed_key,
+    });
+    defer candidates.deinit();
+
+    // Now mark an ancestor of this fork invalid, should return an error since this ancestor
+    // was duplicate confirmed by its descendant 4 already
+    try std.testing.expectError(
+        error.DuplicateConfirmedCannotBeMarkedInvalid,
+        fc.markForkInvalidCandidate(&.{
+            .slot = 3,
+            .hash = Hash.ZEROES,
+        }),
+    );
 }
 
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
