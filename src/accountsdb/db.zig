@@ -4466,15 +4466,20 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 break :blk timer.read();
             };
 
-            const full_snapshot = full_inc_manifest.full;
+            const full_manifest = full_inc_manifest.full;
+            const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
+                inc.bank_extra.snapshot_persistence
+            else
+                null;
+
             var validate_timer = try sig.time.Timer.start();
             try accounts_db.validateLoadFromSnapshot(.{
-                .full_slot = full_snapshot.bank_fields.slot,
+                .full_slot = full_manifest.bank_fields.slot,
                 .expected_full = .{
-                    .accounts_hash = collapsed_manifest.accounts_db_fields.bank_hash_info.accounts_hash,
-                    .capitalization = full_snapshot.bank_fields.capitalization,
+                    .accounts_hash = full_manifest.accounts_db_fields.bank_hash_info.accounts_hash,
+                    .capitalization = full_manifest.bank_fields.capitalization,
                 },
-                .expected_incremental = if (collapsed_manifest.bank_extra.snapshot_persistence) |inc_persistence| .{
+                .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
                     .accounts_hash = inc_persistence.incremental_hash,
                     .capitalization = inc_persistence.incremental_capitalization,
                 } else null,
