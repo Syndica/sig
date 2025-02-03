@@ -17,7 +17,6 @@ const GossipTable = sig.gossip.GossipTable;
 const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
 const AtomicUsize = std.atomic.Value(usize);
-const ThreadPool = sig.sync.ThreadPool;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 

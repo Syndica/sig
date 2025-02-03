@@ -54,7 +54,6 @@ const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Duration = sig.time.Duration;
 const ExitCondition = sig.sync.ExitCondition;
 const SocketThread = sig.net.SocketThread;
-const GossipDataManaged = sig.gossip.data.GossipDataManaged;
 
 const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
