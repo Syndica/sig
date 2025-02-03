@@ -173,11 +173,8 @@ pub const BufferPool = struct {
                 frame_aligned_file_offset,
             );
             std.debug.assert(bytes_read <= FRAME_SIZE);
-            frame_ref.hit = true;
             self.manager.populated[frame_ref.f_idx].store(true, .seq_cst);
         }
-
-        for (frame_refs) |frame_ref| std.debug.assert(frame_ref.hit);
 
         return ReadHandle.initCached(
             self,
@@ -312,14 +309,11 @@ pub const BufferPool = struct {
                 }
 
                 for (frame_refs[n_read..][0..n_cqes_copied]) |*frame_ref| {
-                    frame_ref.hit = true;
                     self.manager.populated[frame_ref.f_idx].store(true, .seq_cst);
                 }
                 n_read += n_cqes_copied;
             }
         }
-
-        for (frame_refs) |frame_ref| std.debug.assert(frame_ref.hit);
 
         return ReadHandle.initCached(
             self,
@@ -476,14 +470,9 @@ const FrameManager = struct {
             for (0.., frame_refs) |i, *frame_ref| {
                 if (frame_ref.hit) {
                     std.debug.assert(frame_ref.f_idx != INVALID_FRAME);
-
-                    // We're already holding the lock, might as well mark it used.
-                    // eviction_lfu.insert(frame_ref.f_idx);
                     continue;
                 }
-                std.debug.assert(frame_ref.f_idx == INVALID_FRAME); // hit frame with valid idx?
-
-                // frame_ref.hit = true;
+                std.debug.assert(frame_ref.f_idx == INVALID_FRAME); // missed frame with valid idx?
 
                 const file_offset: FileOffset = @intCast(
                     (i * FRAME_SIZE) + (file_offset_start - file_offset_start % FRAME_SIZE),
@@ -845,7 +834,6 @@ pub const ReadHandle = union(enum) {
         switch (self) {
             .cached => |*cached| {
                 for (cached.frame_refs) |frame_ref| {
-                    std.debug.assert(frame_ref.hit); // was this frame never read?
                     std.debug.assert(frame_ref.f_idx != INVALID_FRAME);
                     const prev_rc = cached.buffer_pool.manager.rc[
                         frame_ref.f_idx
