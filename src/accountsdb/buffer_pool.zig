@@ -118,7 +118,8 @@ pub const BufferPool = struct {
     ) !BufferPool {
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
-        const frames = try allocator.alloc(Frame, num_frames);
+        // Alignment of frames is good for read performance (and necessary if we want to use O_DIRECT.)
+        const frames = try allocator.alignedAlloc(Frame, 4096, num_frames);
         errdefer allocator.free(frames);
 
         var manager = try FrameManager.init(allocator, num_frames);
