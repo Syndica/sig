@@ -697,7 +697,7 @@ pub const Elf = struct {
     fn safeSlice(base: anytype, start: usize, len: usize) error{OutOfBounds}!@TypeOf(base) {
         if (start >= base.len) return error.OutOfBounds;
         const end = std.math.add(usize, start, len) catch return error.OutOfBounds;
-        if (end >= base.len) return error.OutOfBounds;
+        if (end > base.len) return error.OutOfBounds;
         return base[start..][0..len];
     }
 };
