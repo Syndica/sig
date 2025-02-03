@@ -50,8 +50,14 @@ const XevThread = struct {
         flags |= @as(c_int, @bitCast(std.posix.O{ .NONBLOCK = true }));
         _ = try std.posix.fcntl(st.socket.internal, std.posix.F.SETFL, flags);
 
+        const rc: RefCount = @bitCast(ref_count.fetchAdd(
+            @bitCast(RefCount{ .active = 1 }),
+            .acquire,
+        ));
+        std.debug.assert(!rc.shutdown);
+        std.debug.assert(rc.active < std.math.maxInt(@TypeOf(rc.active)));
+
         // Start xev thread if not running.
-        const rc: RefCount = @bitCast(ref_count.fetchAdd(@bitCast(RefCount{ .active = 1 }), .acquire));
         if (rc.active == 0) {
             io_notified.store(false, .monotonic);
             io_event = try xev.Async.init();
@@ -91,19 +97,22 @@ const XevThread = struct {
     }
 
     pub fn join(st: *SocketThread) void {
-        var rc: RefCount = @bitCast(
-            ref_count.fetchSub(@bitCast(RefCount{ .active = 1 }), .release),
-        );
+        var rc: RefCount = @bitCast(ref_count.fetchSub(
+            @bitCast(RefCount{ .active = 1 }),
+            .release,
+        ));
+        std.debug.assert(!rc.shutdown);
+        std.debug.assert(rc.active >= 1);
 
         // The last SocketThread to join will stop the xev thread.
         if (rc.active == 1) {
             // Lock the ref_count to detect if theres races (i.e. another spawn()) during shutdown.
             rc = @bitCast(ref_count.swap(@bitCast(RefCount{ .shutdown = true }), .acquire));
-            std.debug.assert(rc.active == 0 and !rc.shutdown);
+            std.debug.assert(std.meta.eql(rc, RefCount{}));
 
             defer {
                 rc = @bitCast(ref_count.swap(@bitCast(RefCount{}), .release));
-                std.debug.assert(rc.active == 0 and rc.shutdown);
+                std.debug.assert(std.meta.eql(rc, RefCount{ .shutdown = true }));
             }
 
             notifyIoThread(); // wake up xev thread to see ref_count.shutdown to stop/shutdown
