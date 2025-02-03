@@ -36,7 +36,7 @@ const LinuxIoMode = enum {
     Blocking,
     IoUring,
 };
-const linux_io_mode: LinuxIoMode = .IoUring;
+const linux_io_mode: LinuxIoMode = .Blocking;
 
 // TODO: ideally we should be able to select this with a cli flag. (#509)
 const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
