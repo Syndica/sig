@@ -238,12 +238,11 @@ pub fn Registry(comptime options: RegistryOptions) type {
             if (self.nbMetrics() >= options.max_metrics) return error.TooManyMetrics;
             if (name.len > options.max_name_len) return error.NameTooLong;
 
-            var allocator = self.arena_state.allocator();
-
-            const duped_name = try allocator.dupe(u8, name);
-
             self.mutex.lock();
             defer self.mutex.unlock();
+
+            const allocator = self.arena_state.allocator();
+            const duped_name = try allocator.dupe(u8, name);
 
             const gop = try self.metrics.getOrPut(allocator, duped_name);
             if (!gop.found_existing) {

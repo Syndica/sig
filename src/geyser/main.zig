@@ -356,15 +356,22 @@ pub fn benchmark() !void {
     logger.info().logf("using pipe path: {s}", .{pipe_path});
 
     var exit = std.atomic.Value(bool).init(false);
-    try sig.geyser.core.streamReader(
+
+    var reader = try sig.geyser.GeyserReader.init(
         allocator,
-        logger,
-        &exit,
         pipe_path,
-        sig.time.Duration.fromSecs(config.measure_rate_secs),
+        &exit,
         .{
             .io_buf_len = 1 << 30,
             .bincode_buf_len = 1 << 30,
         },
+    );
+    defer reader.deinit();
+
+    try sig.geyser.core.streamReader(
+        &reader,
+        logger,
+        &exit,
+        sig.time.Duration.fromSecs(config.measure_rate_secs),
     );
 }

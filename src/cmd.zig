@@ -1501,7 +1501,6 @@ fn loadSnapshot(
             break :blk cli_n_threads_snapshot_load;
         }
     };
-    logger.info().logf("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,

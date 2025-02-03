@@ -294,13 +294,14 @@ pub const AccountsDB = struct {
             try self.fastload(fastload_dir, collapsed_manifest.accounts_db_fields);
             self.logger.info().logf("fastload: total time: {s}", .{timer.read()});
         } else {
-            const load_duration = try self.loadFromSnapshot(
+            var load_timer = try sig.time.Timer.start();
+            try self.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
                 n_threads,
                 allocator,
                 accounts_per_file_estimate,
             );
-            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_duration});
+            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_timer.read()});
         }
 
         // no need to re-save if we just loaded from a fastload
@@ -404,7 +405,7 @@ pub const AccountsDB = struct {
         /// needs to be a thread-safe allocator
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
-    ) !sig.time.Duration {
+    ) !void {
         self.logger.info().log("running loadFromSnapshot...");
 
         // used to read account files
@@ -429,27 +430,6 @@ pub const AccountsDB = struct {
             bhs.accumulate(snapshot_manifest.bank_hash_info.stats);
         }
 
-        var timer = try sig.time.Timer.start();
-        // short path
-        if (n_threads == 1) {
-            try self.loadAndVerifyAccountsFiles(
-                accounts_dir,
-                accounts_per_file_estimate,
-                snapshot_manifest.file_map,
-                0,
-                n_account_files,
-                true,
-            );
-
-            // if geyser, send end of data signal
-            if (self.geyser_writer) |geyser_writer| {
-                const end_of_snapshot: sig.geyser.core.VersionedAccountPayload = .EndOfSnapshotLoading;
-                try geyser_writer.writePayloadToPipe(end_of_snapshot);
-            }
-
-            return timer.read();
-        }
-
         // setup the parallel indexing
         const loading_threads = try self.allocator.alloc(AccountsDB, n_parse_threads);
         defer self.allocator.free(loading_threads);
@@ -457,12 +437,11 @@ pub const AccountsDB = struct {
         try initLoadingThreads(per_thread_allocator, loading_threads, self);
         defer deinitLoadingThreads(per_thread_allocator, loading_threads);
 
-        self.logger.info().logf("[{d} threads]: reading and indexing accounts...", .{n_parse_threads});
-        {
-            var wg: std.Thread.WaitGroup = .{};
-            defer wg.wait();
-            try spawnThreadTasks(loadAndVerifyAccountsFilesMultiThread, .{
-                .wg = &wg,
+        self.logger.info().logf("[{d} threads]: running loadAndVerifyAccountsFiles...", .{n_parse_threads});
+        try spawnThreadTasks(
+            self.allocator,
+            loadAndVerifyAccountsFilesMultiThread,
+            .{
                 .data_len = n_account_files,
                 .max_threads = n_parse_threads,
                 .params = .{
@@ -471,8 +450,8 @@ pub const AccountsDB = struct {
                     snapshot_manifest.file_map,
                     accounts_per_file_estimate,
                 },
-            });
-        }
+            },
+        );
 
         // if geyser, send end of data signal
         if (self.geyser_writer) |geyser_writer| {
@@ -483,9 +462,6 @@ pub const AccountsDB = struct {
         var merge_timer = try sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads, n_combine_threads);
         self.logger.debug().logf("mergeMultipleDBs: total time: {}", .{merge_timer.read()});
-
-        self.logger.debug().logf("loadFromSnapshot: total time: {s}", .{timer.read()});
-        return timer.read();
     }
 
     /// Initializes a slice of children `AccountsDB`s, used to divide the work of loading from a snapshot.
@@ -777,10 +753,7 @@ pub const AccountsDB = struct {
     ) !void {
         self.logger.info().logf("[{d} threads]: running mergeMultipleDBs...", .{n_threads});
 
-        var merge_indexes_wg: std.Thread.WaitGroup = .{};
-        defer merge_indexes_wg.wait();
-        try spawnThreadTasks(mergeThreadIndexesMultiThread, .{
-            .wg = &merge_indexes_wg,
+        try spawnThreadTasks(self.allocator, mergeThreadIndexesMultiThread, .{
             .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
             .max_threads = n_threads,
             .params = .{
@@ -954,35 +927,20 @@ pub const AccountsDB = struct {
 
         // split processing the bins over muliple threads
         self.logger.info().logf(
-            "collecting hashes from accounts using {} threads...",
+            "[{} threads] collecting hashes from accounts",
             .{n_threads},
         );
-        if (n_threads == 1) {
-            try getHashesFromIndex(
+        try spawnThreadTasks(self.allocator, getHashesFromIndexMultiThread, .{
+            .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
+            .max_threads = n_threads,
+            .params = .{
                 self,
                 config,
-                self.account_index.pubkey_ref_map.shards,
                 self.allocator,
-                &hashes[0],
-                &lamports[0],
-                true,
-            );
-        } else {
-            var wg: std.Thread.WaitGroup = .{};
-            defer wg.wait();
-            try spawnThreadTasks(getHashesFromIndexMultiThread, .{
-                .wg = &wg,
-                .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
-                .max_threads = n_threads,
-                .params = .{
-                    self,
-                    config,
-                    self.allocator,
-                    hashes,
-                    lamports,
-                },
-            });
-        }
+                hashes,
+                lamports,
+            },
+        });
         self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
         timer.reset();
 
@@ -3215,7 +3173,7 @@ pub fn getAccountPerFileEstimateFromCluster(
     cluster: sig.core.Cluster,
 ) error{NotImplementedYet}!u64 {
     return switch (cluster) {
-        .testnet => 1_000,
+        .testnet => 500,
         else => error.NotImplementedYet,
     };
 }
@@ -3267,7 +3225,7 @@ fn testWriteSnapshotFull(
     var snap_fields = try SnapshotManifest.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
-    _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 1_500);
+    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 500);
 
     const snapshot_gen_info = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
@@ -3306,7 +3264,7 @@ fn testWriteSnapshotIncremental(
     var snap_fields = try SnapshotManifest.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
-    _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 1_500);
+    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 500);
 
     const snapshot_gen_info = try accounts_db.generateIncrementalSnapshot(.{
         .target_slot = slot,
@@ -3474,7 +3432,7 @@ fn loadTestAccountsDB(
     });
     errdefer accounts_db.deinit();
 
-    _ = try accounts_db.loadFromSnapshot(
+    try accounts_db.loadFromSnapshot(
         manifest.accounts_db_fields,
         n_threads,
         allocator,
@@ -3516,12 +3474,18 @@ test "geyser stream on load" {
     // start the geyser writer
     try geyser_writer.spawnIOLoop();
 
-    const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
+    var reader = try sig.geyser.GeyserReader.init(
         allocator,
+        geyser_pipe_path,
+        &geyser_exit,
+        .{},
+    );
+    defer reader.deinit();
+
+    const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
+        &reader,
         .noop,
         &geyser_exit,
-        geyser_pipe_path,
-        null,
         null,
     });
     defer reader_handle.join();
@@ -3543,11 +3507,11 @@ test "geyser stream on load" {
     });
     defer accounts_db.deinit();
 
-    _ = try accounts_db.loadFromSnapshot(
+    try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields,
         1,
         allocator,
-        1_500,
+        500,
     );
 }
 
@@ -4487,12 +4451,14 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             });
             defer accounts_db.deinit();
 
-            const loading_duration = try accounts_db.loadFromSnapshot(
+            var load_timer = try sig.time.Timer.start();
+            try accounts_db.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
                 bench_args.n_threads,
                 allocator,
                 try getAccountPerFileEstimateFromCluster(bench_args.cluster),
             );
+            const loading_duration = load_timer.read();
 
             const fastload_save_duration = blk: {
                 var timer = try sig.time.Timer.start();
