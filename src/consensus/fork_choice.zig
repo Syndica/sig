@@ -265,8 +265,8 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
-    pub fn bestOverallSlot(self: *const HeaviestSubtreeForkChoice) ?SlotAndHash {
-        return self.bestSlot(self.tree_root);
+    pub fn bestOverallSlot(self: *const HeaviestSubtreeForkChoice) !SlotAndHash {
+        return self.bestSlot(self.tree_root) orelse return error.BestSlotNotFound;
     }
 
     pub fn bestSlot(
@@ -1164,7 +1164,7 @@ test "HeaviestSubtreeForkChoice.bestOverallSlot" {
     var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
     defer fc.deinit();
     try std.testing.expectEqual(
-        fc.bestOverallSlot(),
+        try fc.bestOverallSlot(),
         SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
     );
 }
@@ -1261,7 +1261,7 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
     // should be the best choice
     // It is still the deepest choice
     try std.testing.expectEqual(
-        fc.bestOverallSlot(),
+        try fc.bestOverallSlot(),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
     );
 
@@ -1404,7 +1404,7 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
     }
 
     try std.testing.expectEqual(
-        fc.bestOverallSlot(),
+        try fc.bestOverallSlot(),
         child,
     );
 
@@ -1431,7 +1431,7 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
         );
     }
     try std.testing.expectEqual(
-        fc.bestOverallSlot(),
+        try fc.bestOverallSlot(),
         child,
     );
 }
