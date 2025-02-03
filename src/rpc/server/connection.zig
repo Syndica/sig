@@ -27,13 +27,10 @@ pub fn acceptHandled(
     /// See `have_accept4`.
     sync_hint: enum { blocking, nonblocking },
 ) AcceptHandledError!std.net.Server.Connection {
-    const accept_flags: u32 = blk: {
-        var accept_flags: u32 = std.posix.SOCK.CLOEXEC;
-        accept_flags |= switch (sync_hint) {
-            .blocking => 0,
-            .nonblocking => std.posix.SOCK.NONBLOCK,
-        };
-        break :blk accept_flags;
+    var accept_flags: u32 = std.posix.SOCK.CLOEXEC;
+    accept_flags |= switch (sync_hint) {
+        .blocking => 0,
+        .nonblocking => std.posix.SOCK.NONBLOCK,
     };
 
     while (true) {
