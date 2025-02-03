@@ -32,7 +32,12 @@ const XevThread = struct {
         io: enum { idle, pending, cancelled } = .idle,
     });
 
-    var ref_count = std.atomic.Value(usize).init(0);
+    const RefCount = packed struct(u32) {
+        shutdown: bool = false,
+        active: u31 = 0,
+    };
+
+    var ref_count = std.atomic.Value(u32).init(0); // Ref
     var register = std.atomic.Value(?*List.Node).init(null);
     var io_notified = std.atomic.Value(bool).init(false);
     var io_thread: std.Thread = undefined;
@@ -46,7 +51,8 @@ const XevThread = struct {
         _ = try std.posix.fcntl(st.socket.internal, std.posix.F.SETFL, flags);
 
         // Start xev thread if not running.
-        if (ref_count.fetchAdd(2, .acquire) == 0) {
+        const rc: RefCount = @bitCast(ref_count.fetchAdd(@bitCast(RefCount{ .active = 1 }), .acquire));
+        if (rc.active == 0) {
             io_notified.store(false, .monotonic);
             io_event = try xev.Async.init();
             io_thread = try std.Thread.spawn(.{}, runIoThread, .{});
@@ -85,13 +91,22 @@ const XevThread = struct {
     }
 
     pub fn join(st: *SocketThread) void {
-        // The last SocketThread to join will stop the xev thread.
-        if (ref_count.fetchSub(2, .release) == 2) {
-            // Lock the ref_count to detect if theres races (i.e. another spawn()) during shutdown.
-            std.debug.assert(ref_count.swap(1, .acquire) == 0);
-            defer std.debug.assert(ref_count.swap(0, .release) == 1);
+        var rc: RefCount = @bitCast(
+            ref_count.fetchSub(@bitCast(RefCount{ .active = 1 }), .release),
+        );
 
-            notifyIoThread(); // wake up xev thread to see ref_count == 1 to stop/shutdown
+        // The last SocketThread to join will stop the xev thread.
+        if (rc.active == 1) {
+            // Lock the ref_count to detect if theres races (i.e. another spawn()) during shutdown.
+            rc = @bitCast(ref_count.swap(@bitCast(RefCount{ .shutdown = true }), .acquire));
+            std.debug.assert(rc.active == 0 and !rc.shutdown);
+
+            defer {
+                rc = @bitCast(ref_count.swap(@bitCast(RefCount{}), .release));
+                std.debug.assert(rc.active == 0 and rc.shutdown);
+            }
+
+            notifyIoThread(); // wake up xev thread to see ref_count.shutdown to stop/shutdown
             io_thread.join();
             io_event.deinit();
         }
@@ -138,7 +153,7 @@ const XevThread = struct {
     }
 
     fn onTick(
-        maybe_timer: ?*xev.Timer,
+        timer: ?*xev.Timer,
         loop: *xev.Loop,
         completion: *xev.Completion,
         result: xev.Timer.RunError!void,
@@ -146,12 +161,12 @@ const XevThread = struct {
         result catch |e| std.debug.panic("xev notify event failed: {}", .{e});
 
         pollIo(loop);
-        maybe_timer.?.run(loop, completion, SOCKET_TIMEOUT_US, xev.Timer, maybe_timer, onTick);
+        timer.?.run(loop, completion, SOCKET_TIMEOUT_US, xev.Timer, timer, onTick);
         return .disarm;
     }
 
     fn pollIo(loop: *xev.Loop) void {
-        const shutdown = ref_count.load(.acquire) == 1;
+        const shutdown = @as(RefCount, @bitCast(ref_count.load(.acquire))).shutdown;
         defer if (shutdown) loop.stop();
 
         // Move registered nodes into the active list.
