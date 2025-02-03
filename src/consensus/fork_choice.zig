@@ -96,7 +96,6 @@ pub const ForkInfo = struct {
             // If the latest invalid ancestor is less than or equal to the newly valid ancestor,
             // clear the latest invalid ancestor
             if (invalid_ancestor <= newly_valid_ancestor) {
-                // TODO change to logger.
                 self.logger.info().logf(
                     \\ Fork choice for {} clearing latest invalid ancestor  
                     \\ {} because {} was duplicate confirmed
