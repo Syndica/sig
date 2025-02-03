@@ -8,8 +8,6 @@ const Instruction = sbpf.Instruction;
 const Executable = lib.Executable;
 const BuiltinProgram = lib.BuiltinProgram;
 
-const assert = std.debug.assert;
-
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     executable: *const Executable,
@@ -19,7 +17,6 @@ pub const Vm = struct {
     loader: *const BuiltinProgram,
 
     vm_addr: u64,
-    stack_pointer: u64,
     call_frames: std.ArrayListUnmanaged(CallFrame),
     depth: u64,
     instruction_count: u64,
@@ -35,13 +32,18 @@ pub const Vm = struct {
         executable: *const Executable,
         memory_map: MemoryMap,
         loader: *const BuiltinProgram,
+        stack_len: u64,
     ) !Vm {
+        const offset = if (executable.version.enableDynamicStackFrames())
+            stack_len
+        else
+            executable.config.stack_frame_size;
+        const stack_pointer = memory.STACK_START +% offset;
         var self: Vm = .{
             .executable = executable,
             .allocator = allocator,
             .registers = std.EnumArray(sbpf.Instruction.Register, u64).initFill(0),
             .memory_map = memory_map,
-            .stack_pointer = memory.STACK_START + 4096,
             .depth = 0,
             .call_frames = try std.ArrayListUnmanaged(CallFrame).initCapacity(allocator, 64),
             .instruction_count = 0,
@@ -49,7 +51,7 @@ pub const Vm = struct {
             .loader = loader,
         };
 
-        self.registers.set(.r10, memory.STACK_START + 4096);
+        self.registers.set(.r10, stack_pointer);
         self.registers.set(.r1, memory.INPUT_START);
         self.registers.set(.pc, executable.entry_pc);
 
@@ -68,6 +70,7 @@ pub const Vm = struct {
     }
 
     fn step(self: *Vm) !bool {
+        const version = self.executable.version;
         const registers = &self.registers;
         const pc = registers.get(.pc);
         var next_pc: u64 = pc + 1;
@@ -120,6 +123,7 @@ pub const Vm = struct {
             .arsh64_imm,
             .arsh32_reg,
             .arsh32_imm,
+            .hor64_imm,
             .lsh64_reg,
             .lsh64_imm,
             .lsh32_reg,
@@ -134,22 +138,22 @@ pub const Vm = struct {
                     registers.get(inst.src)
                 else
                     extend(inst.imm);
-                const lhs = if (opcode.is64()) lhs_large else @as(u32, @truncate(lhs_large));
-                const rhs = if (opcode.is64()) rhs_large else @as(u32, @truncate(rhs_large));
+                const lhs: u64 = if (opcode.is64()) lhs_large else @as(u32, @truncate(lhs_large));
+                const rhs: u64 = if (opcode.is64()) rhs_large else @as(u32, @truncate(rhs_large));
 
                 var result: u64 = switch (@intFromEnum(opcode) & 0xF0) {
                     // zig fmt: off
-                Instruction.add    => lhs +% rhs,
-                Instruction.sub    => lhs -% rhs,
-                Instruction.div    => try std.math.divTrunc(u64, lhs, rhs),
-                Instruction.xor    => lhs ^ rhs,
-                Instruction.@"or"  => lhs | rhs,
-                Instruction.@"and" => lhs & rhs,
-                Instruction.mod    => try std.math.mod(u64, lhs, rhs),
-                Instruction.lsh    => lhs << @truncate(rhs),
-                Instruction.rsh    => lhs >> @truncate(rhs),
-                Instruction.mov    => rhs,
-                // zig fmt: on
+                    Instruction.add    => lhs +% rhs,
+                    Instruction.sub    => lhs -% rhs,
+                    Instruction.div    => try std.math.divTrunc(u64, lhs, rhs),
+                    Instruction.xor    => lhs ^ rhs,
+                    Instruction.@"or"  => lhs | rhs,
+                    Instruction.@"and" => lhs & rhs,
+                    Instruction.mod    => try std.math.mod(u64, lhs, rhs),
+                    Instruction.lsh    => lhs << @truncate(rhs),
+                    Instruction.rsh    => lhs >> @truncate(rhs),
+                    Instruction.mov    => rhs,
+                    // zig fmt: on
                     Instruction.mul => value: {
                         if (opcode.is64()) break :value lhs *% rhs;
                         const lhs_signed: i32 = @bitCast(@as(u32, @truncate(lhs)));
@@ -157,6 +161,7 @@ pub const Vm = struct {
                         break :value @bitCast(@as(i64, lhs_signed *% rhs_signed));
                     },
                     Instruction.neg => value: {
+                        if (!version.enableNegation()) return error.UnknownInstruction;
                         const signed: i64 = @bitCast(lhs);
                         const negated: u64 = @bitCast(-signed);
                         break :value if (opcode.is64()) negated else @as(u32, @truncate(negated));
@@ -172,6 +177,9 @@ pub const Vm = struct {
                             break :value shifted;
                         }
                     },
+                    Instruction.hor => if (!version.enableLDDW()) value: {
+                        break :value lhs_large | @as(u64, inst.imm) << 32;
+                    } else return error.UnknownInstruction,
                     else => unreachable,
                 };
 
@@ -244,18 +252,21 @@ pub const Vm = struct {
 
             .be,
             .le,
-            => registers.set(inst.dst, switch (inst.imm) {
-                inline //
-                16,
-                32,
-                64,
-                => |size| std.mem.nativeTo(
-                    std.meta.Int(.unsigned, size),
-                    @truncate(registers.get(inst.dst)),
-                    if (opcode == .le) .little else .big,
-                ),
-                else => return error.InvalidInstruction,
-            }),
+            => {
+                if (opcode == .le and !version.enableLe()) return error.UnknownInstruction;
+                registers.set(inst.dst, switch (inst.imm) {
+                    inline //
+                    16,
+                    32,
+                    64,
+                    => |size| std.mem.nativeTo(
+                        std.meta.Int(.unsigned, size),
+                        @truncate(registers.get(inst.dst)),
+                        if (opcode == .le) .little else .big,
+                    ),
+                    else => return error.UnknownInstruction,
+                });
+            },
 
             // branching
             .ja,
@@ -322,17 +333,33 @@ pub const Vm = struct {
                 const frame = self.call_frames.pop();
                 self.registers.set(.r10, frame.fp);
                 @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
-                self.stack_pointer -= 4096;
+                if (!version.enableDynamicStackFrames()) {
+                    registers.getPtr(.r10).* -= self.executable.config.stack_frame_size;
+                }
                 next_pc = frame.return_pc;
             },
             .call_imm => {
-                if (self.executable.function_registry.lookupKey(inst.imm)) |entry| {
-                    try self.pushCallFrame();
-                    next_pc = entry.value;
-                } else if (self.loader.functions.lookupKey(inst.imm)) |entry| {
-                    const builtin_fn = entry.value;
-                    try builtin_fn(self);
-                } else {
+                var resolved = false;
+                const external, const internal = if (version.enableStaticSyscalls())
+                    .{ inst.src == .r0, inst.src != .r0 }
+                else
+                    .{ true, true };
+                if (external) {
+                    if (self.loader.functions.lookupKey(inst.imm)) |entry| {
+                        resolved = true;
+                        const builtin_fn = entry.value;
+                        try builtin_fn(self);
+                    }
+                }
+                if (internal and !resolved) {
+                    if (self.executable.function_registry.lookupKey(inst.imm)) |entry| {
+                        resolved = true;
+                        try self.pushCallFrame();
+                        next_pc = entry.value;
+                    }
+                }
+
+                if (!resolved) {
                     return error.UnresolvedFunction;
                 }
             },
@@ -345,11 +372,12 @@ pub const Vm = struct {
 
             // other instructions
             .ld_dw_imm => {
-                assert(self.executable.version == .v1);
+                if (!version.enableLDDW()) return error.UnknownInstruction;
                 const value: u64 = (@as(u64, instructions[next_pc].imm) << 32) | inst.imm;
                 registers.set(inst.dst, value);
                 next_pc += 1;
             },
+            else => return error.UnknownInstruction,
         }
 
         if (next_pc >= instructions.len) return error.PcOutOfBounds;
@@ -376,12 +404,13 @@ pub const Vm = struct {
         };
 
         self.depth += 1;
-        if (self.depth == 64) {
+        if (self.depth == self.executable.config.max_call_depth) {
             return error.CallDepthExceeded;
         }
 
-        self.stack_pointer += 4096;
-        self.registers.set(.r10, self.stack_pointer);
+        if (!self.executable.version.enableDynamicStackFrames()) {
+            self.registers.getPtr(.r10).* += self.executable.config.stack_frame_size;
+        }
     }
 
     /// Performs a i64 sign-extension. This is commonly needed in SBPV1.
