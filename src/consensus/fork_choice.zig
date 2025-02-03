@@ -2,6 +2,8 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 
+const ScopedLogger = sig.trace.ScopedLogger;
+
 const AutoHashMap = std.AutoHashMap;
 const Instant = sig.time.Instant;
 const Hash = sig.core.Hash;
@@ -43,6 +45,7 @@ pub const ForkWeight = u64;
 
 /// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
 pub const ForkInfo = struct {
+    logger: ScopedLogger(@typeName(ForkInfo)),
     // Amount of stake that has voted for exactly this slot
     stake_voted_at: ForkWeight,
     // Amount of stake that has voted for this slot and the subtree
@@ -94,7 +97,7 @@ pub const ForkInfo = struct {
             // clear the latest invalid ancestor
             if (invalid_ancestor <= newly_valid_ancestor) {
                 // TODO change to logger.
-                std.debug.print(
+                self.logger.info().logf(
                     \\ Fork choice for {} clearing latest invalid ancestor  
                     \\ {} because {} was duplicate confirmed
                 ,
@@ -125,8 +128,7 @@ pub const ForkInfo = struct {
 
         // If the condition is met, update the latest invalid ancestor
         if (should_update) {
-            // TODO: Switch to logger.
-            std.debug.print(
+            self.logger.info().logf(
                 "Fork choice for {} setting latest invalid ancestor from {?} to {}",
                 .{ my_key, self.latest_invalid_ancestor, newly_invalid_ancestor },
             );
@@ -138,14 +140,20 @@ pub const ForkInfo = struct {
 /// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L187)
 pub const HeaviestSubtreeForkChoice = struct {
     allocator: std.mem.Allocator,
+    logger: ScopedLogger(@typeName(HeaviestSubtreeForkChoice)),
     fork_infos: AutoHashMap(SlotAndHash, ForkInfo),
     latest_votes: AutoHashMap(Pubkey, SlotAndHash),
     tree_root: SlotAndHash,
     last_root_time: Instant,
 
-    pub fn init(allocator: std.mem.Allocator, tree_root: SlotAndHash) !HeaviestSubtreeForkChoice {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        logger: sig.trace.Logger,
+        tree_root: SlotAndHash,
+    ) !HeaviestSubtreeForkChoice {
         var heaviest_subtree_fork_choice = HeaviestSubtreeForkChoice{
             .allocator = allocator,
+            .logger = logger.withScope(@typeName(HeaviestSubtreeForkChoice)),
             .fork_infos = AutoHashMap(SlotAndHash, ForkInfo).init(allocator),
             .latest_votes = AutoHashMap(Pubkey, SlotAndHash).init(allocator),
             .tree_root = tree_root,
@@ -165,7 +173,11 @@ pub const HeaviestSubtreeForkChoice = struct {
         }
 
         const root = forks[0][1].?;
-        var heaviest_subtree_fork_choice = try HeaviestSubtreeForkChoice.init(allocator, root);
+        var heaviest_subtree_fork_choice = try HeaviestSubtreeForkChoice.init(
+            allocator,
+            .noop,
+            root,
+        );
         errdefer heaviest_subtree_fork_choice.deinit();
 
         for (forks) |fork_tuple| {
@@ -218,6 +230,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         } else {
             // Insert new entry
             const new_fork_info = ForkInfo{
+                .logger = self.logger.withScope(@typeName(ForkInfo)),
                 .stake_voted_at = 0,
                 .stake_voted_subtree = 0,
                 .height = 1,
