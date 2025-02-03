@@ -139,7 +139,7 @@ pub const BufferPool = struct {
         self.manager.deinit(allocator);
     }
 
-    noinline fn readBlocking(
+    fn readBlocking(
         self: *BufferPool,
         /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
@@ -186,7 +186,7 @@ pub const BufferPool = struct {
         );
     }
 
-    pub noinline fn read(
+    pub fn read(
         self: *BufferPool,
         /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
@@ -420,7 +420,7 @@ const FrameManager = struct {
         return @intCast(self.rc.len);
     }
 
-    noinline fn getAllIndices(
+    fn getAllIndices(
         self: *FrameManager,
         allocator: std.mem.Allocator,
         file_id: FileId,
@@ -839,7 +839,7 @@ pub const ReadHandle = union(enum) {
         return .{ .unread = .{ .len = length } };
     }
 
-    pub noinline fn deinit(self: ReadHandle, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: ReadHandle, allocator: std.mem.Allocator) void {
         switch (self) {
             .cached => |*cached| {
                 for (cached.frame_refs) |frame_ref| {
