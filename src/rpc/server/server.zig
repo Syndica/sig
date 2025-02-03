@@ -30,10 +30,7 @@ pub const Context = struct {
 
     pub const WorkPool = union(enum) {
         basic,
-        linux_io_uring: switch (sig.rpc.server.LinuxIoUring.can_use) {
-            .yes, .check => *sig.rpc.server.LinuxIoUring,
-            .no => noreturn,
-        },
+        linux_io_uring: if (LinuxIoUring.can_use) *LinuxIoUring else noreturn,
     };
 
     /// The returned result must be pinned to a memory location before calling any methods.

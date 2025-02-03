@@ -14,14 +14,7 @@ pub const LinuxIoUring = struct {
     pending_cqes_count: u8,
     pending_cqes_buf: [255]std.os.linux.io_uring_cqe,
 
-    pub const can_use: enum { no, yes, check } = switch (builtin.os.getVersionRange()) {
-        .linux => |version| can_use: {
-            const min_version: std.SemanticVersion = .{ .major = 6, .minor = 0, .patch = 0 };
-            const is_at_least = version.isAtLeast(min_version) orelse break :can_use .check;
-            break :can_use if (is_at_least) .yes else .no;
-        },
-        else => .no,
-    };
+    pub const can_use: bool = builtin.os.tag == .linux;
 
     pub const InitError = std.posix.MMapError || error{
         EntriesZero,
@@ -41,19 +34,14 @@ pub const LinuxIoUring = struct {
     // separately seems to help ZLS with understanding the types involved better, which is
     // why I've done it like that here. If ZLS gets smarter in the future, you could probably
     // inline this into a single branch in the return type expression.
-    const InitErrOrEmpty = if (can_use == .no) error{} else InitError;
-    const InitResultOrNoreturn = if (can_use == .no) noreturn else LinuxIoUring;
+    const InitErrOrEmpty = if (!can_use) error{} else InitError;
+    const InitResultOrNoreturn = if (!can_use) noreturn else LinuxIoUring;
     pub fn init() InitErrOrEmpty!?InitResultOrNoreturn {
-        const need_runtime_check = switch (can_use) {
-            .no => return null,
-            .yes => false,
-            .check => true,
-        };
-
+        if (!can_use) return null;
         var io_uring = IoUring.init(4096, 0) catch |err| return switch (err) {
             error.SystemOutdated,
             error.PermissionDenied,
-            => |e| if (!need_runtime_check) e else return null,
+            => return null,
             else => |e| e,
         };
         errdefer io_uring.deinit();
