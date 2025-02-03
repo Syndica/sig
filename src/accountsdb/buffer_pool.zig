@@ -1121,47 +1121,6 @@ pub const ReadHandle = union(enum) {
     }
 };
 
-/// An std.fifo.LinearFifo-like type with atomics and a minimal API.
-pub fn AtomicLinearFifo(T: type) type {
-    return struct {
-        const Self = @This();
-
-        buf: []T,
-        head: std.atomic.Value(usize),
-        tail: std.atomic.Value(usize) align(64), // align to avoid false share
-
-        pub fn init(buf: []T) Self {
-            return .{
-                .buf = buf,
-                .head = std.atomic.Value(usize).init(0),
-                .tail = std.atomic.Value(usize).init(0),
-            };
-        }
-
-        pub fn writeItemAssumeCapacity(self: *Self, item: T) void {
-            const tail = self.tail.fetchAdd(1, .monotonic) % self.buf.len;
-            self.buf[tail] = item;
-        }
-
-        pub fn readItem(self: *Self) ?T {
-            const current_head = self.head.load(.acquire);
-            const current_tail = self.tail.load(.acquire);
-
-            if (current_head == current_tail) return null;
-
-            const item = self.buf[current_head % self.buf.len];
-            self.head.store(current_head + 1, .release);
-            return item;
-        }
-
-        pub fn writableLengthIsZero(self: *Self) bool {
-            const current_head = self.head.load(.acquire);
-            const current_tail = self.tail.load(.acquire);
-            return (current_tail - current_head) >= self.buf.len;
-        }
-    };
-}
-
 test "BufferPool indicesRequired" {
     const TestCase = struct {
         start: FileOffset,
