@@ -174,6 +174,7 @@ pub const BufferPool = struct {
             );
             std.debug.assert(bytes_read <= FRAME_SIZE);
             frame_ref.hit = true;
+            self.manager.populated[frame_ref.f_idx].store(true, .seq_cst);
         }
 
         for (frame_refs) |frame_ref| std.debug.assert(frame_ref.hit);
@@ -312,6 +313,7 @@ pub const BufferPool = struct {
 
                 for (frame_refs[n_read..][0..n_cqes_copied]) |*frame_ref| {
                     frame_ref.hit = true;
+                    self.manager.populated[frame_ref.f_idx].store(true, .seq_cst);
                 }
                 n_read += n_cqes_copied;
             }
