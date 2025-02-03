@@ -476,7 +476,7 @@ const TestEnvironment = struct {
         var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
         errdefer staked_nodes.deinit();
 
-        var gossip_table = try GossipTable.init(params.allocator);
+        var gossip_table = try GossipTable.init(params.allocator, params.allocator);
         errdefer gossip_table.deinit();
 
         // Add known nodes to the gossip table
@@ -843,10 +843,9 @@ pub fn makeTestCluster(params: struct {
     var stakes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
     errdefer stakes.deinit();
 
-    var gossip_table_tp = ThreadPool.init(.{});
     var gossip_table = try GossipTable.init(
         params.allocator,
-        &gossip_table_tp,
+        params.allocator,
     );
     errdefer gossip_table.deinit();
 

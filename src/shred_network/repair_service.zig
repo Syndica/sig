@@ -575,7 +575,7 @@ test "RepairService sends repair request to gossip peer" {
     const keypair = try KeyPair.create(null);
     const my_shred_version = Atomic(u16).init(random.int(u16));
     const wallclock = 100;
-    var gossip = try GossipTable.init(allocator);
+    var gossip = try GossipTable.init(allocator, allocator);
     defer gossip.deinit();
     var test_logger = TestLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
 
@@ -662,7 +662,7 @@ test "RepairPeerProvider selects correct peers" {
     // my details
     const keypair = KeyPair.create(null) catch unreachable;
     const my_shred_version = Atomic(u16).init(random.int(u16));
-    var gossip = try GossipTable.init(allocator);
+    var gossip = try GossipTable.init(allocator, allocator);
     defer gossip.deinit();
 
     // peers

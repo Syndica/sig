@@ -453,25 +453,6 @@ pub const GossipData = union(GossipDataTag) {
     }
 };
 
-// most gossip data types require an allocator to deinit correctly.
-// this struct makes the deinit process easier to track since the data
-// (specifically from the push_msg_queue_mux) can
-// come from many different places throughout the validator.
-pub const GossipDataManaged = struct {
-    data: GossipData,
-    allocator: ?std.mem.Allocator = null,
-
-    pub fn deinit(self: GossipDataManaged) void {
-        if (self.allocator) |alloc|
-            self.data.deinit(alloc)
-        else
-            self.data.deinit(sig.utils.allocators.failing.allocator(.{
-                // if the allocator is null, there shouldnt be anything to free
-                .free = .panics,
-            }));
-    }
-};
-
 /// analogous to [LegactContactInfo](https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/gossip/src/legacy_contact_info.rs#L26)
 pub const LegacyContactInfo = struct {
     id: Pubkey,

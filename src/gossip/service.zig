@@ -134,7 +134,7 @@ pub const GossipService = struct {
     /// used for general allocation purposes
     allocator: std.mem.Allocator,
     /// used specifically to allocate the gossip values
-    gossip_value_allocator: std.mem.Allocator,
+    gossip_data_allocator: std.mem.Allocator,
 
     gossip_socket: UdpSocket,
     /// This contact info is mutated by the buildMessages thread (specifically, .shred_version and .wallclock),
@@ -185,7 +185,10 @@ pub const GossipService = struct {
     pub const LOG_SCOPE = "gossip_service";
     pub const ScopedLogger = sig.trace.log.ScopedLogger(LOG_SCOPE);
 
-    pub const PushMessageQueue = Mux(ArrayList(GossipDataManaged));
+    pub const PushMessageQueue = Mux(struct {
+        queue: ArrayList(GossipData),
+        data_allocator: std.mem.Allocator,
+    });
     const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
 
     pub fn create(
@@ -193,7 +196,7 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         /// Can be supplied as a different allocator in order to reduce contention.
         /// Must be thread safe.
-        gossip_value_allocator: std.mem.Allocator,
+        gossip_data_allocator: std.mem.Allocator,
         my_contact_info: ContactInfo,
         my_keypair: KeyPair,
         maybe_entrypoints: ?[]const SocketAddr,
@@ -202,7 +205,7 @@ pub const GossipService = struct {
         const self = try allocator.create(Self);
         self.* = try Self.init(
             allocator,
-            gossip_value_allocator,
+            gossip_data_allocator,
             my_contact_info,
             my_keypair,
             maybe_entrypoints,
@@ -216,7 +219,7 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         /// Can be supplied as a different allocator in order to reduce contention.
         /// Must be thread safe.
-        gossip_value_allocator: std.mem.Allocator,
+        gossip_data_allocator: std.mem.Allocator,
         my_contact_info: ContactInfo,
         my_keypair: KeyPair,
         maybe_entrypoints: ?[]const SocketAddr,
@@ -249,7 +252,7 @@ pub const GossipService = struct {
         gossip_logger.info().logf("starting threadpool with {} threads", .{n_threads});
 
         // setup the table
-        var gossip_table = try GossipTable.init(gossip_value_allocator);
+        var gossip_table = try GossipTable.init(allocator, gossip_data_allocator);
         errdefer gossip_table.deinit();
 
         // setup the active set for push messages
@@ -292,11 +295,9 @@ pub const GossipService = struct {
             .{},
         );
 
-        const push_msg_queue = ArrayList(GossipDataManaged).init(allocator);
-
         return .{
             .allocator = allocator,
-            .gossip_value_allocator = gossip_value_allocator,
+            .gossip_data_allocator = gossip_data_allocator,
             .my_contact_info = my_contact_info,
             .my_keypair = my_keypair,
             .my_pubkey = my_pubkey,
@@ -306,7 +307,10 @@ pub const GossipService = struct {
             .packet_outgoing_channel = packet_outgoing_channel,
             .verified_incoming_channel = verified_incoming_channel,
             .gossip_table_rw = RwMux(GossipTable).init(gossip_table),
-            .push_msg_queue_mux = PushMessageQueue.init(push_msg_queue),
+            .push_msg_queue_mux = PushMessageQueue.init(.{
+                .queue = ArrayList(GossipData).init(allocator),
+                .data_allocator = gossip_data_allocator,
+            }),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
             .entrypoints = entrypoints,
@@ -370,10 +374,10 @@ pub const GossipService = struct {
 
         {
             // clear and deinit the push quee
-            const queue, var lock = self.push_msg_queue_mux.writeWithLock();
+            const push_msg_queue, var lock = self.push_msg_queue_mux.writeWithLock();
             defer lock.unlock();
-            for (queue.items) |*v| v.deinit();
-            queue.deinit();
+            for (push_msg_queue.queue.items) |*v| v.deinit(push_msg_queue.data_allocator);
+            push_msg_queue.queue.deinit();
         }
     }
 
@@ -461,7 +465,7 @@ pub const GossipService = struct {
 
     const VerifyMessageTask = ThreadPoolTask(VerifyMessageEntry);
     const VerifyMessageEntry = struct {
-        gossip_value_allocator: std.mem.Allocator,
+        gossip_data_allocator: std.mem.Allocator,
         packet: Packet,
         verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
         logger: ScopedLogger,
@@ -469,7 +473,7 @@ pub const GossipService = struct {
         pub fn callback(self: *VerifyMessageEntry) !void {
             const packet = self.packet;
             var message = bincode.readFromSlice(
-                self.gossip_value_allocator,
+                self.gossip_data_allocator,
                 GossipMessage,
                 packet.data[0..packet.size],
                 bincode.Params.standard,
@@ -480,7 +484,7 @@ pub const GossipService = struct {
 
             message.sanitize() catch |e| {
                 self.logger.err().logf("packet_verify: failed to sanitize: {s}", .{@errorName(e)});
-                bincode.free(self.gossip_value_allocator, message);
+                bincode.free(self.gossip_data_allocator, message);
                 return;
             };
 
@@ -489,7 +493,7 @@ pub const GossipService = struct {
                     "packet_verify: failed to verify signature from {}: {s}",
                     .{ packet.addr, @errorName(e) },
                 );
-                bincode.free(self.gossip_value_allocator, message);
+                bincode.free(self.gossip_data_allocator, message);
                 return;
             };
 
@@ -519,7 +523,7 @@ pub const GossipService = struct {
         // pre-allocate all the tasks
         for (tasks) |*task| {
             task.entry = .{
-                .gossip_value_allocator = self.gossip_value_allocator,
+                .gossip_data_allocator = self.gossip_data_allocator,
                 .verified_incoming_channel = self.verified_incoming_channel,
                 .packet = undefined,
                 .logger = self.logger,
@@ -587,7 +591,7 @@ pub const GossipService = struct {
         defer {
             // empty the channel and release the memory
             while (self.verified_incoming_channel.tryReceive()) |message| {
-                bincode.free(self.gossip_value_allocator, message.message);
+                bincode.free(self.gossip_data_allocator, message.message);
             }
             // even if we fail, trigger the next thread to close
             exit_condition.afterExit();
@@ -688,7 +692,7 @@ pub const GossipService = struct {
 
                         if (should_drop) {
                             pull[0].deinit();
-                            value.deinit(self.gossip_value_allocator);
+                            value.deinit(self.gossip_data_allocator);
                         } else {
                             try pull_requests.append(.{
                                 .filter = pull[0],
@@ -706,7 +710,7 @@ pub const GossipService = struct {
                         const incorrect_destination = !prune_data.destination.equals(&self.my_pubkey);
                         if (too_old or incorrect_destination) {
                             self.metrics.prune_messages_dropped.add(1);
-                            prune_data.deinit(self.gossip_value_allocator);
+                            prune_data.deinit(self.gossip_data_allocator);
                             continue;
                         }
                         try prune_messages.append(prune_data);
@@ -767,7 +771,7 @@ pub const GossipService = struct {
                 for (push_messages.items) |push| {
                     // NOTE: this just frees the slice of values, not the values themselves
                     // (which were either inserted into the store, or freed)
-                    self.gossip_value_allocator.free(push.gossip_values);
+                    self.gossip_data_allocator.free(push.gossip_values);
                 }
                 push_messages.clearRetainingCapacity();
             }
@@ -779,7 +783,7 @@ pub const GossipService = struct {
                 self.metrics.handle_batch_prune_time.observe(elapsed);
 
                 for (prune_messages.items) |prune| {
-                    prune.deinit(self.gossip_value_allocator);
+                    prune.deinit(self.gossip_data_allocator);
                 }
                 prune_messages.clearRetainingCapacity();
             }
@@ -811,7 +815,7 @@ pub const GossipService = struct {
                 for (pull_responses.items) |*pull| {
                     // NOTE: this just frees the slice of values, not the values themselves
                     // (which were either inserted into the store, or freed)
-                    self.gossip_value_allocator.free(pull.gossip_values);
+                    self.gossip_data_allocator.free(pull.gossip_values);
                 }
                 pull_responses.clearRetainingCapacity();
             }
@@ -962,9 +966,9 @@ pub const GossipService = struct {
                         &self.my_contact_info,
                     );
 
-                    try push_msg_queue.appendSlice(&.{
-                        .{ .data = .{ .ContactInfo = contact_info } },
-                        .{ .data = .{ .LegacyContactInfo = legacy_contact_info } },
+                    try push_msg_queue.queue.appendSlice(&.{
+                        .{ .ContactInfo = contact_info },
+                        .{ .LegacyContactInfo = legacy_contact_info },
                     });
                 }
 
@@ -1052,12 +1056,12 @@ pub const GossipService = struct {
 
             const gossip_table: *const GossipTable = gossip_table_lock.get();
             break :blk try gossip_table.getClonedEntriesWithCursor(
-                self.gossip_value_allocator,
+                self.gossip_data_allocator,
                 &buf,
                 push_cursor,
             );
         };
-        defer for (gossip_entries) |*ge| ge.deinit(self.gossip_value_allocator);
+        defer for (gossip_entries) |*ge| ge.deinit(self.gossip_data_allocator);
 
         var packet_batch = ArrayList(Packet).init(self.allocator);
         errdefer packet_batch.deinit();
@@ -1364,9 +1368,9 @@ pub const GossipService = struct {
                 };
                 switch (result) {
                     .InsertedNewEntry => {},
-                    .OverwroteExistingEntry => |x| x.deinit(self.gossip_value_allocator),
+                    .OverwroteExistingEntry => |x| x.deinit(self.gossip_data_allocator),
                     else => {
-                        req.value.deinit(self.gossip_value_allocator);
+                        req.value.deinit(self.gossip_data_allocator);
                     },
                 }
             }
@@ -1564,7 +1568,7 @@ pub const GossipService = struct {
                         switch (result) {
                             .OverwroteExistingEntry => |old_data| {
                                 // if the value was overwritten, we need to free the old value
-                                old_data.deinit(self.gossip_value_allocator);
+                                old_data.deinit(self.gossip_data_allocator);
                             },
                             else => {},
                         }
@@ -1592,7 +1596,7 @@ pub const GossipService = struct {
                 };
                 const value_hash = Hash.generateSha256Hash(bytes);
                 try failed_pull_hashes.insert(value_hash, now);
-                gossip_value_ptr.deinit(self.gossip_value_allocator);
+                gossip_value_ptr.deinit(self.gossip_data_allocator);
             }
         }
     }
@@ -1693,7 +1697,7 @@ pub const GossipService = struct {
                         .OverwroteExistingEntry => |old_data| {
                             self.metrics.push_message_n_overwrite_existing.inc();
                             // if the value was overwritten, we need to free the old value
-                            old_data.deinit(self.gossip_value_allocator);
+                            old_data.deinit(self.gossip_data_allocator);
                         },
                         .IgnoredOldValue => self.metrics.push_message_n_old_value.inc(),
                         .IgnoredDuplicateValue => self.metrics.push_message_n_duplicate_value.inc(),
@@ -1721,7 +1725,7 @@ pub const GossipService = struct {
                 defer {
                     for (insert_results.items, 0..) |result, index| {
                         if (!result.wasInserted()) {
-                            push_message.gossip_values[index].deinit(self.gossip_value_allocator);
+                            push_message.gossip_values[index].deinit(self.gossip_data_allocator);
                         }
                     }
                 }
@@ -1888,24 +1892,20 @@ pub const GossipService = struct {
         const push_msg_queue, var push_msg_queue_lock = self.push_msg_queue_mux.writeWithLock();
         defer push_msg_queue_lock.unlock();
 
+        const deinit_allocator = push_msg_queue.data_allocator;
+
         const gossip_table, var gossip_table_lock = self.gossip_table_rw.writeWithLock();
         defer gossip_table_lock.unlock();
 
-        // NOTE: this works rn because we only push contact_info whose 'deinit'
-        // method does not care about the given allocator, HOWEVER, this deinit allocator
-        // my not be correct for future values which are pushed into the queue.
-        // TODO: fix gossip table ownership
-        const deinit_allocator = self.gossip_value_allocator;
-
         // number of items consumed, starting from the beginning of the queue
-        const consumed_item_count, const maybe_err = for (push_msg_queue.items, 0..) |*data_with_alloc, i| {
+        const consumed_item_count, const maybe_err = for (push_msg_queue.queue.items, 0..) |*data, i| {
             errdefer comptime unreachable;
 
-            var gossip_data_unsigned = data_with_alloc.data;
+            var gossip_data_unsigned = data.*;
             gossip_data_unsigned.wallclockPtr().* = now;
-            const gossip_value = SignedGossipData.initSigned(&self.my_keypair, gossip_data_unsigned);
+            const signed_gossip_data = SignedGossipData.initSigned(&self.my_keypair, gossip_data_unsigned);
 
-            const result = gossip_table.insert(gossip_value, now) catch |err| break .{ i, err };
+            const result = gossip_table.insert(signed_gossip_data, now) catch |err| break .{ i, err };
 
             switch (result) {
                 // good and expected
@@ -1914,12 +1914,12 @@ pub const GossipService = struct {
 
                 // concerning
                 .IgnoredOldValue => {
-                    data_with_alloc.deinit();
-                    self.logger.warn().logf("DrainPushMessages: Ignored old value ({})", .{gossip_value});
+                    data.deinit(deinit_allocator);
+                    self.logger.warn().logf("DrainPushMessages: Ignored old value ({})", .{signed_gossip_data});
                 },
                 .IgnoredDuplicateValue => {
-                    data_with_alloc.deinit();
-                    self.logger.warn().logf("DrainPushMessages: Ignored duplicate value ({})", .{gossip_value});
+                    data.deinit(deinit_allocator);
+                    self.logger.warn().logf("DrainPushMessages: Ignored duplicate value ({})", .{signed_gossip_data});
                 },
 
                 // not possible to reach from `insert`.
@@ -1928,11 +1928,11 @@ pub const GossipService = struct {
                 // retry this value
                 .GossipTableFull => break .{ i, {} },
             }
-        } else .{ push_msg_queue.items.len, {} };
+        } else .{ push_msg_queue.queue.items.len, {} };
 
         // remove the gossip values which were inserted
         for (0..consumed_item_count) |_| {
-            _ = push_msg_queue.swapRemove(0);
+            _ = push_msg_queue.queue.swapRemove(0);
         }
 
         return maybe_err;
@@ -2048,7 +2048,7 @@ pub const GossipService = struct {
                         !gossip_table.checkMatchingShredVersion(gossip_value.id(), my_shred_version))
                     {
                         const removed_value = gossip_values_array.swapRemove(i);
-                        removed_value.deinit(self.gossip_value_allocator);
+                        removed_value.deinit(self.gossip_data_allocator);
                         continue; // do not incrememnt `i`. it has a new value we need to inspect.
                     }
                 },
@@ -2920,7 +2920,7 @@ test "test build push messages" {
     {
         var pqlg = gossip_service.push_msg_queue_mux.lock();
         var push_queue = pqlg.mut();
-        try push_queue.append(.{ .data = value });
+        try push_queue.queue.append(value);
         pqlg.unlock();
     }
     try gossip_service.drainPushQueueToGossipTable(getWallclockMs());
