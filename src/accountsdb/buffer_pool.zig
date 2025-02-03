@@ -1211,7 +1211,8 @@ test "BufferPool basic usage" {
         try std.math.divCeil(usize, 1000, FRAME_SIZE),
         read.cached.frame_refs.len,
     );
-    for (read.cached.frame_refs) |frame_ref| try std.testing.expect(frame_ref.f_idx != INVALID_FRAME);
+    for (read.cached.frame_refs) |frame_ref|
+        try std.testing.expect(frame_ref.f_idx != INVALID_FRAME);
 
     {
         var iter1 = read.iterator();

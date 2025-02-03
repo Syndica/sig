@@ -1672,8 +1672,6 @@ pub const AccountsDB = struct {
 
             var account_iter = account_file.iterator(self.allocator, &self.buffer_pool);
             while (try account_iter.nextNoData()) |account| {
-            while (try account_iter.next()) |account| {
-            while (try account_iter.nextNoData()) |account| {
                 defer account.deinit(self.allocator);
                 const pubkey = account.pubkey().*;
 
@@ -1920,8 +1918,6 @@ pub const AccountsDB = struct {
             var accounts_dead_size: u64 = 0;
             var account_iter = shrink_account_file.iterator(self.allocator, &self.buffer_pool);
             while (try account_iter.nextNoData()) |*account_in_file| {
-            while (try account_iter.next()) |*account_in_file| {
-            while (try account_iter.nextNoData()) |*account_in_file| {
                 defer account_in_file.deinit(self.allocator);
 
                 const pubkey = account_in_file.pubkey();
@@ -2015,12 +2011,6 @@ pub const AccountsDB = struct {
             account_iter.reset();
             var offset_index: u64 = 0;
             for (is_alive_flags.items) |is_alive| {
-            for (is_alive_flags.items) |is_alive| {
-                const account = (try account_iter.nextNoData()).?;
-                const account = (try account_iter.nextNoData()).?;
-                const account = (try account_iter.nextNoData()).?;
-                const account = (try account_iter.nextNoData()).?;
-                const account = (try account_iter.nextNoData()).?;
                 // SAFE: we know is_alive_flags is the same length as the account_iter
                 const account = (try account_iter.nextNoData()).?;
                 defer account.deinit(self.allocator);

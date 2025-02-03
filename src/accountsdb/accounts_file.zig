@@ -424,7 +424,12 @@ pub const AccountFile = struct {
         std.debug.assert(header_byte_len <= max_header_buf_len);
 
         var offset_restarted = start_offset;
-        const read = try self.getSlice(metadata_allocator, buffer_pool, &offset_restarted, header_byte_len);
+        const read = try self.getSlice(
+            metadata_allocator,
+            buffer_pool,
+            &offset_restarted,
+            header_byte_len,
+        );
         std.debug.assert(offset == offset_restarted);
         defer read.deinit(metadata_allocator);
 
@@ -487,12 +492,22 @@ pub const AccountFile = struct {
         const hash_start = offset;
         offset += @sizeOf(Hash);
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
-
+        const read = try self.getSlice(
+            metadata_allocator,
+            buffer_pool,
+            &offset_restarted,
+            header_byte_len,
+        );
         const header_byte_len = offset - start_offset;
         std.debug.assert(header_byte_len <= max_header_buf_len);
 
         var offset_restarted = start_offset;
-        const read = try self.getSlice(metadata_allocator, buffer_pool, &offset_restarted, header_byte_len);
+        const read = try self.getSlice(
+            metadata_allocator,
+            buffer_pool,
+            &offset_restarted,
+            header_byte_len,
+        );
         std.debug.assert(offset == offset_restarted);
         defer read.deinit(metadata_allocator);
 
