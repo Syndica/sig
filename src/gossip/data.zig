@@ -18,7 +18,7 @@ const Pubkey = sig.core.Pubkey;
 const IpAddr = sig.net.IpAddr;
 const ClientVersion = sig.version.ClientVersion;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
-const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
+const SlotAndHash = sig.core.hash.SlotAndHash;
 
 const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;

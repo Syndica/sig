@@ -19,17 +19,13 @@
             .url = "https://github.com/sam701/zig-cli/archive/8c7a798c0f7fa0358d7ab41106fc872fca4cd995.tar.gz",
             .hash = "1220c008492d9460c3be2b209600a948181e6efb3bf0d79a1633def499632e708f4b",
         },
-        .httpz = .{
-            .url = "https://github.com/karlseguin/http.zig/archive/79dad0f0cc652830cd8e49bf3e73aa77155ad4b2.tar.gz",
-            .hash = "1220b8a918dfcee4fc8326ec337776e2ffd3029511c35f6b96d10aa7be98ca2faf99",
-        },
         .zstd = .{
             .url = "git+https://github.com/Syndica/zstd.zig#5095f011c1183aa67d696172795440d6a33732c9",
             .hash = "122030ebe280b73693963a67ed656226a67b7f00a0a05665155da00c9fcdee90de88",
         },
         .rocksdb = .{
-            .url = "https://github.com/Syndica/rocksdb-zig/archive/6d4230e131183cccb730a7248bd4ca30c559b8bd.tar.gz",
-            .hash = "12207766d25ba350d6e2f2153fc74a2b3ff204224e1c08adf211cd9e400075033898",
+            .url = "https://github.com/Syndica/rocksdb-zig/archive/cf966c0c6bb6205a08bb2006f399719542e4e770.tar.gz",
+            .hash = "1220d25e3ef18526cb6c980b441f05dc96330bedd88a512dcb3aed775a981ce3707d",
         },
         .lsquic = .{
             .url = "https://github.com/Syndica/lsquic/archive/ed6ced0cbc6447f7135a32db491e398debdf8af7.tar.gz",

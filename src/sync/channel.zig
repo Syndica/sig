@@ -5,14 +5,23 @@ const Backoff = @import("backoff.zig").Backoff;
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 
+const ExitCondition = sig.sync.ExitCondition;
+
 pub fn Channel(T: type) type {
     return struct {
         head: Position,
         tail: Position,
         closed: Atomic(bool) = Atomic(bool).init(false),
         allocator: Allocator,
-        mutex: std.Thread.Mutex = .{},
-        condition: std.Thread.Condition = .{},
+        event: std.Thread.ResetEvent = .{},
+        send_hook: ?*SendHook = null,
+
+        pub const SendHook = struct {
+            /// Called after the channel has pushed the value.
+            after_send: *const fn (*SendHook, *Self) void = defaultAfterSend,
+
+            fn defaultAfterSend(_: *SendHook, _: *Self) void {}
+        };
 
         const Self = @This();
         const BLOCK_CAP = 31;
@@ -134,13 +143,15 @@ pub fn Channel(T: type) type {
 
         pub fn close(channel: *Self) void {
             channel.closed.store(true, .monotonic);
-            channel.condition.broadcast();
         }
 
         pub fn send(channel: *Self, value: T) !void {
             if (channel.closed.load(.monotonic)) {
                 return error.ChannelClosed;
             }
+
+            const send_hook = channel.send_hook;
+
             var backoff: Backoff = .{};
             var tail = channel.tail.index.load(.acquire);
             var block = channel.tail.block.load(.acquire);
@@ -195,58 +206,24 @@ pub fn Channel(T: type) type {
                     // to read the data we've just assigned.
                     _ = slot.state.fetchOr(WRITTEN_TO, .release);
 
-                    channel.mutex.lock();
-                    channel.condition.signal();
-                    channel.mutex.unlock();
+                    channel.event.set();
+
+                    if (send_hook) |hook| {
+                        hook.after_send(hook, channel);
+                    }
+
                     return;
                 }
             }
         }
 
-        /// Attempt to receive an item. If the channel is empty, waits until
-        /// an item is available or the channel is closed.
-        ///
-        /// Returns:
-        /// - T: when an item is available.
-        /// - error.ChannelClosed: if the channel is both empty and closed.
-        pub fn receive(channel: *Self) error{ChannelClosed}!T {
-            while (true) {
-                if (channel.tryReceive()) |item| {
-                    return item;
-                } else if (channel.closed.load(.monotonic)) {
-                    return error.ChannelClosed;
-                }
-                channel.mutex.lock();
-                channel.condition.wait(&channel.mutex);
-                channel.mutex.unlock();
-            }
-        }
-
-        /// Attempt to receive an item. If the channel is empty, waits until
-        /// the timeout, an item is available, or the channel is closed.
-        ///
-        /// Returns:
-        /// - T: if item was available before the timeout.
-        /// - null: if empty and timed out before an item arrived.
-        /// - error.ChannelClosed: if the channel is both empty and closed.
-        pub fn receiveTimeout(channel: *Self, timeout: sig.time.Duration) error{ChannelClosed}!?T {
-            const end = std.time.nanoTimestamp() + timeout.asNanos();
-            while (true) {
-                if (channel.tryReceive()) |item| {
-                    return item;
-                } else if (channel.closed.load(.monotonic)) {
-                    return error.ChannelClosed;
-                }
-                const now = std.time.nanoTimestamp();
-                if (now > end) {
-                    return null;
-                }
-                channel.mutex.lock();
-                defer channel.mutex.unlock();
-                channel.condition.timedWait(&channel.mutex, @intCast(end - now)) catch |e|
-                    switch (e) {
-                    error.Timeout => return null,
-                };
+        /// Waits untli the channel potentially has items, periodically checking for the ExitCondition.
+        /// Must be called by only one receiver thread at a time.
+        pub fn waitToReceive(channel: *Self, exit: ExitCondition) error{Exit}!void {
+            while (channel.isEmpty()) {
+                channel.event.timedWait(1 * std.time.ns_per_s) catch {};
+                if (exit.shouldExit()) return error.Exit;
+                if (channel.event.isSet()) return channel.event.reset();
             }
         }
 
@@ -473,53 +450,52 @@ test "spsc" {
     producer.join();
 }
 
-test "blocking receive" {
-    const S = struct {
-        fn producer(ch: *Channel(u64)) !void {
-            try ch.send(123);
-        }
+test "send-hook" {
+    const Counter = struct {
+        count: usize = 0,
+        hook: Channel(u64).SendHook = .{ .after_send = afterSend },
 
-        fn consumer(ch: *Channel(u64)) void {
-            std.debug.assert(123 == ch.receive() catch @panic("error receiving"));
-        }
-    };
-
-    var ch = try Channel(u64).init(std.testing.allocator);
-    defer ch.deinit();
-
-    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
-    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
-
-    consumer.join();
-    producer.join();
-}
-
-test "timeout receive receives" {
-    const S = struct {
-        fn producer(ch: *Channel(u64)) !void {
-            try ch.send(123);
-        }
-
-        fn consumer(ch: *Channel(u64)) void {
-            std.debug.assert(123 == ch.receiveTimeout(sig.time.Duration.fromSecs(1)) catch
-                @panic("error receiving"));
+        fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
+            const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
+            self.count += 1;
+            std.debug.assert(channel.len() == self.count);
         }
     };
 
-    var ch = try Channel(u64).init(std.testing.allocator);
+    const Consumer = struct {
+        collected: std.ArrayList(u64),
+        hook: Channel(u64).SendHook = .{ .after_send = afterSend },
+
+        fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
+            const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
+            const value = channel.tryReceive() orelse @panic("empty channel after send");
+            self.collected.append(value) catch @panic("oom");
+        }
+    };
+
+    const to_send = 100;
+    const allocator = std.testing.allocator;
+
+    var ch = try Channel(u64).init(allocator);
     defer ch.deinit();
 
-    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
-    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
+    // Check that afterSend counts sent channel items.
+    var counter = Counter{};
+    ch.send_hook = &counter.hook;
 
-    consumer.join();
-    producer.join();
-}
+    for (0..to_send) |i| try ch.send(i);
+    try expect(ch.len() == to_send);
+    try expect(counter.count == to_send);
 
-test "timeout receive times out" {
-    var ch = try Channel(u64).init(std.testing.allocator);
-    defer ch.deinit();
-    try std.testing.expectEqual(null, try ch.receiveTimeout(sig.time.Duration.fromMillis(10)));
+    // Check that afterSend consumes any sent values.
+    var consumer = Consumer{ .collected = std.ArrayList(u64).init(allocator) };
+    ch.send_hook = &consumer.hook;
+    defer consumer.collected.deinit();
+
+    while (ch.tryReceive()) |_| {} // drain before starting.
+    for (0..to_send) |i| try ch.send(i);
+    try expect(ch.isEmpty());
+    try expect(consumer.collected.items.len == to_send);
 }
 
 test "mpmc" {
@@ -618,127 +594,89 @@ pub const BenchmarkChannel = struct {
 
     pub const BenchmarkArgs = struct {
         name: []const u8 = "",
-        n_items: usize,
-        n_senders: usize,
-        n_receivers: usize,
+        n_senders: ?usize,
+        receives: bool,
     };
 
     pub const args = [_]BenchmarkArgs{
         .{
-            .name = "  10k_items-   1_senders-   1_receivers ",
-            .n_items = 10_000,
+            .name = "1_senders-   1_receivers ",
             .n_senders = 1,
-            .n_receivers = 1,
+            .receives = true,
         },
         .{
-            .name = " 100k_items-   4_senders-   4_receivers ",
-            .n_items = 100_000,
-            .n_senders = 4,
-            .n_receivers = 4,
+            .name = "N_senders-   0_receivers ",
+            .n_senders = null, // null = num_cpus
+            .receives = false,
         },
         .{
-            .name = " 500k_items-   8_senders-   8_receivers ",
-            .n_items = 500_000,
-            .n_senders = 8,
-            .n_receivers = 8,
-        },
-        .{
-            .name = "   1m_items-  16_senders-  16_receivers ",
-            .n_items = 1_000_000,
-            .n_senders = 16,
-            .n_receivers = 16,
+            .name = "N_senders-   1_receivers ",
+            .n_senders = null, // null = num_cpus
+            .receives = true,
         },
     };
 
-    pub fn benchmarkSimpleUsizeBetterChannel(argss: BenchmarkArgs) !sig.time.Duration {
-        var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
-        const n_items = argss.n_items;
-        const senders_count = argss.n_senders;
-        const receivers_count = argss.n_receivers;
-        var timer = try sig.time.Timer.start();
+    const Context = struct {
+        channel: Channel(Packet),
+        start: std.Thread.ResetEvent = .{},
+        stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        popped: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    };
 
+    fn runSender(ctx: *Context) !void {
+        ctx.start.wait();
+        while (!ctx.stop.load(.monotonic)) {
+            try ctx.channel.send(Packet.default());
+        }
+    }
+
+    fn runReceiver(ctx: *Context) !void {
+        ctx.start.wait();
+        while (!ctx.stop.load(.monotonic)) {
+            std.mem.doNotOptimizeAway(ctx.channel.tryReceive() orelse continue);
+            // NOTE: should happen-after len() update from tryReceive().
+            ctx.popped.store(ctx.popped.load(.monotonic) + 1, .release);
+        }
+    }
+
+    pub fn benchmarkSimplePacketBetterChannel(argss: BenchmarkArgs) !sig.time.Duration {
+        const num_cpus = @max(1, try std.Thread.getCpuCount());
         const allocator = if (@import("builtin").is_test)
             std.testing.allocator
         else
             std.heap.c_allocator;
-        var channel = try Channel(usize).init(allocator);
-        defer channel.deinit();
 
-        const sends_per_sender: usize = n_items / senders_count;
-        const receives_per_receiver: usize = n_items / receivers_count;
+        var ctx = Context{ .channel = try Channel(Packet).init(allocator) };
+        defer ctx.channel.deinit();
 
-        var thread_index: usize = 0;
-        while (thread_index < senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{
-                &channel,
-                sends_per_sender,
-            });
+        var threads = std.ArrayList(std.Thread).init(allocator);
+        defer {
+            ctx.stop.store(true, .monotonic);
+            for (threads.items) |t| t.join();
+            threads.deinit();
         }
 
-        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{
-                &channel,
-                receives_per_receiver,
-            });
+        const num_senders = argss.n_senders orelse num_cpus;
+        for (0..num_senders) |_| {
+            try threads.append(try std.Thread.spawn(.{}, runSender, .{&ctx}));
         }
 
-        for (0..thread_handles.len) |i| {
-            if (thread_handles[i]) |handle| {
-                handle.join();
-            } else {
-                break;
-            }
+        if (argss.receives) {
+            try threads.append(try std.Thread.spawn(.{}, runReceiver, .{&ctx}));
         }
 
-        const elapsed = timer.read();
-        return elapsed;
-    }
+        ctx.start.set();
+        std.time.sleep(1 * std.time.ns_per_s);
 
-    pub fn benchmarkSimplePacketBetterChannel(argss: BenchmarkArgs) !sig.time.Duration {
-        var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
-        const n_items = argss.n_items;
-        const senders_count = argss.n_senders;
-        const receivers_count = argss.n_receivers;
-        var timer = try sig.time.Timer.start();
-
-        const allocator = std.heap.c_allocator;
-        var channel = try Channel(Packet).init(allocator);
-        defer channel.deinit();
-
-        const sends_per_sender: usize = n_items / senders_count;
-        const receives_per_receiver: usize = n_items / receivers_count;
-
-        var thread_index: usize = 0;
-        while (thread_index < senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketSender, .{
-                &channel,
-                sends_per_sender,
-            });
-        }
-
-        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
-            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketReceiver, .{
-                &channel,
-                receives_per_receiver,
-            });
-        }
-
-        for (0..thread_handles.len) |i| {
-            if (thread_handles[i]) |handle| {
-                handle.join();
-            } else {
-                break;
-            }
-        }
-
-        return timer.read();
+        const popped = ctx.popped.load(.acquire); // NOTE: should happen-before len() read.
+        const total = popped + ctx.channel.len();
+        return .{ .ns = std.time.ns_per_s / total };
     }
 };
 
 test "BenchmarkChannel.benchmarkSimplePacketBetterChannel" {
     _ = try BenchmarkChannel.benchmarkSimplePacketBetterChannel(.{
-        .n_items = 100_000,
         .n_senders = 4,
-        .n_receivers = 4,
+        .receives = true,
     });
 }

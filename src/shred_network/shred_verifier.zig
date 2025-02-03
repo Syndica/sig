@@ -13,7 +13,7 @@ const Registry = sig.prometheus.Registry;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const VariantCounter = sig.prometheus.VariantCounter;
 
-const VerifiedMerkleRoots = sig.common.lru.LruCache(.non_locking, sig.core.Hash, void);
+const VerifiedMerkleRoots = sig.utils.lru.LruCache(.non_locking, sig.core.Hash, void);
 
 /// Analogous to [run_shred_sigverify](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/turbine/src/sigverify_shreds.rs#L82)
 pub fn runShredVerifier(
@@ -29,9 +29,9 @@ pub fn runShredVerifier(
 ) !void {
     const metrics = try registry.initStruct(Metrics);
     var verified_merkle_roots = try VerifiedMerkleRoots.init(std.heap.c_allocator, 1024);
-    while (!exit.load(.acquire) or
-        unverified_shred_receiver.len() != 0)
-    {
+    while (true) {
+        unverified_shred_receiver.waitToReceive(.{ .unordered = exit }) catch break;
+
         var packet_count: usize = 0;
         while (unverified_shred_receiver.tryReceive()) |packet| {
             packet_count += 1;

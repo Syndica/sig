@@ -5,7 +5,7 @@ const zstd = @import("zstd");
 
 const Account = sig.core.Account;
 const Pubkey = sig.core.pubkey.Pubkey;
-const LruCacheCustom = sig.common.lru.LruCacheCustom;
+const LruCacheCustom = sig.utils.lru.LruCacheCustom;
 const ReferenceCounter = sig.sync.reference_counter.ReferenceCounter;
 const Slot = sig.core.Slot;
 const Counter = sig.prometheus.counter.Counter;
