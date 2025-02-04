@@ -7,27 +7,14 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 
+const shortVecConfig = sig.bincode.shortvec.sliceConfig;
+
 pub const Transaction = struct {
-    /// MAX_BYTES is the maximum size of a transaction.
-    pub const MAX_BYTES: u32 = 1232;
-
-    /// MAX_SIGNATURES is the maximum number of signatures that can be applied to a transaction.
-    pub const MAX_SIGNATURES: u8 = 127;
-
-    /// MAX_ACCOUNTS is the maximum number of accounts that can be loaded by a transaction.
-    pub const MAX_ACCOUNTS: u16 = 128;
-
-    /// MAX_INSTRUCTIONS is the maximum number of instructions that can be executed by a transaction.
-    pub const MAX_INSTRUCTIONS: u8 = 64;
-
-    /// MAX_ADDRESS_LOOKUP_TABLES is the maximum number of address lookup tables that can be used by a transaction.
-    pub const MAX_ADDRESS_LOOKUP_TABLES: u16 = 127;
-
     /// Signatures
     signatures: []Signature,
 
     /// The message version, either legacy or v0.
-    version: Version,
+    version: TransactionVersion,
 
     /// The number of signatures required for this transaction to be considered
     /// valid. The signers of those signatures must match the first
@@ -57,10 +44,25 @@ pub const Transaction = struct {
     ///   1) `account_keys`
     ///   2) ordered list of account_keys loaded from `writable` lookup table indexes
     ///   3) ordered list of account_keys loaded from `readable` lookup table indexes
-    instructions: []const Instruction,
+    instructions: []const TransactionInstruction,
 
     /// `AddressLookup`'s are used to load account account addresses from lookup tables.
-    address_lookups: []const AddressLookup = &.{},
+    address_lookups: []const TransactionAddressLookup = &.{},
+
+    /// MAX_BYTES is the maximum size of a transaction.
+    pub const MAX_BYTES: u32 = 1232;
+
+    /// MAX_SIGNATURES is the maximum number of signatures that can be applied to a transaction.
+    pub const MAX_SIGNATURES: u8 = 127;
+
+    /// MAX_ACCOUNTS is the maximum number of accounts that can be loaded by a transaction.
+    pub const MAX_ACCOUNTS: u16 = 128;
+
+    /// MAX_INSTRUCTIONS is the maximum number of instructions that can be executed by a transaction.
+    pub const MAX_INSTRUCTIONS: u8 = 64;
+
+    /// MAX_ADDRESS_LOOKUP_TABLES is the maximum number of address lookup tables that can be used by a transaction.
+    pub const MAX_ADDRESS_LOOKUP_TABLES: u16 = 127;
 
     pub const @"!bincode-config": sig.bincode.FieldConfig(Transaction) = .{
         .deserializer = deserialize,
@@ -69,7 +71,7 @@ pub const Transaction = struct {
 
     pub const EMPTY = Transaction{
         .signatures = &.{},
-        .version = .Legacy,
+        .version = .legacy,
         .signature_count = 0,
         .readonly_signed_count = 0,
         .readonly_unsigned_count = 0,
@@ -79,136 +81,20 @@ pub const Transaction = struct {
         .address_lookups = &.{},
     };
 
-    pub const Version = enum(u8) {
-        /// Legacy transaction without address lookups.
-        Legacy = 0xFF,
-        /// Transaction with address lookups.
-        V0 = 0x00,
-    };
-
-    pub const Instruction = struct {
-        /// Index into the transactions account_keys array
-        program_index: u8,
-        /// Index into the concatenation of the transactions account_keys array,
-        /// writable lookup results, and readable lookup results
-        account_indexes: []const u8,
-        /// Serialized program instruction.
-        data: []const u8,
-
-        pub fn clone(self: *const Instruction, allocator: std.mem.Allocator) !Instruction {
-            return .{
-                .program_index = self.program_index,
-                .account_indexes = try allocator.dupe(u8, self.account_indexes),
-                .data = try allocator.dupe(u8, self.data),
-            };
-        }
-
-        pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
-            allocator.free(self.account_indexes);
-            allocator.free(self.data);
-        }
-
-        pub fn serialize(self: *const Instruction, writer: anytype) !void {
-            try writer.writeByte(self.program_index);
-
-            // WARN: Truncate okay if transaction is valid
-            try leb.writeULEB128(writer, @as(u16, @truncate(self.account_indexes.len)));
-            try writer.writeAll(self.account_indexes);
-
-            // WARN: Truncate okay if transaction is valid
-            try leb.writeULEB128(writer, @as(u16, @truncate(self.data.len)));
-            try writer.writeAll(self.data);
-        }
-
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !Instruction {
-            const program_index = try reader.readByte();
-
-            const account_indexes = try allocator.alloc(
-                u8,
-                try leb.readULEB128(u16, reader),
-            );
-            errdefer allocator.free(account_indexes);
-            try reader.readNoEof(account_indexes);
-
-            const data = try allocator.alloc(
-                u8,
-                try leb.readULEB128(u16, reader),
-            );
-            errdefer allocator.free(data);
-            try reader.readNoEof(data);
-
-            return .{
-                .program_index = program_index,
-                .account_indexes = account_indexes,
-                .data = data,
-            };
-        }
-    };
-
-    pub const AddressLookup = struct {
-        /// Address of the lookup table
-        table_address: Pubkey,
-        /// List of indexes used to load writable account ids
-        writable_indexes: []const u8,
-        /// List of indexes used to load readonly account ids
-        readonly_indexes: []const u8,
-
-        pub fn clone(self: *const AddressLookup, allocator: std.mem.Allocator) !AddressLookup {
-            const writable_indexes = try allocator.dupe(u8, self.writable_indexes);
-            errdefer allocator.free(writable_indexes);
-            const readonly_indexes = try allocator.dupe(u8, self.readonly_indexes);
-            return .{
-                .table_address = self.table_address,
-                .writable_indexes = writable_indexes,
-                .readonly_indexes = readonly_indexes,
-            };
-        }
-
-        pub fn deinit(self: AddressLookup, allocator: std.mem.Allocator) void {
-            allocator.free(self.writable_indexes);
-            allocator.free(self.readonly_indexes);
-        }
-
-        pub fn serialize(self: *const AddressLookup, writer: anytype) !void {
-            try writer.writeAll(&self.table_address.data);
-
-            try leb.writeULEB128(writer, @as(u16, @truncate(self.writable_indexes.len)));
-            try writer.writeAll(self.writable_indexes);
-
-            try leb.writeULEB128(writer, @as(u16, @truncate(self.readonly_indexes.len)));
-            try writer.writeAll(self.readonly_indexes);
-        }
-
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !AddressLookup {
-            const table_address: Pubkey = .{ .data = try reader.readBytesNoEof(Pubkey.SIZE) };
-
-            const writable_indexes = try allocator.alloc(
-                u8,
-                try leb.readULEB128(u16, reader),
-            );
-            errdefer allocator.free(writable_indexes);
-            try reader.readNoEof(writable_indexes);
-
-            const readonly_indexes = try allocator.alloc(
-                u8,
-                try leb.readULEB128(u16, reader),
-            );
-            errdefer allocator.free(readonly_indexes);
-            try reader.readNoEof(readonly_indexes);
-
-            return .{
-                .table_address = table_address,
-                .writable_indexes = writable_indexes,
-                .readonly_indexes = readonly_indexes,
-            };
-        }
-    };
+    pub fn deinit(self: Transaction, allocator: std.mem.Allocator) void {
+        allocator.free(self.signatures);
+        allocator.free(self.account_keys);
+        for (self.instructions) |instr| instr.deinit(allocator);
+        allocator.free(self.instructions);
+        for (self.address_lookups) |alt| alt.deinit(allocator);
+        allocator.free(self.address_lookups);
+    }
 
     pub fn clone(self: Transaction, allocator: std.mem.Allocator) !Transaction {
         const signatures = try allocator.dupe(Signature, self.signatures);
         errdefer allocator.free(signatures);
 
-        var instructions = try allocator.alloc(Instruction, self.instructions.len);
+        var instructions = try allocator.alloc(TransactionInstruction, self.instructions.len);
         errdefer {
             for (instructions) |instr| instr.deinit(allocator);
             allocator.free(instructions);
@@ -216,7 +102,7 @@ pub const Transaction = struct {
         for (self.instructions, 0..) |instr, i|
             instructions[i] = try instr.clone(allocator);
 
-        const address_lookups = try allocator.alloc(AddressLookup, self.address_lookups.len);
+        const address_lookups = try allocator.alloc(TransactionAddressLookup, self.address_lookups.len);
         errdefer {
             for (address_lookups) |alt| alt.deinit(allocator);
             allocator.free(address_lookups);
@@ -237,15 +123,6 @@ pub const Transaction = struct {
             .instructions = instructions,
             .address_lookups = address_lookups,
         };
-    }
-
-    pub fn deinit(self: Transaction, allocator: std.mem.Allocator) void {
-        allocator.free(self.signatures);
-        allocator.free(self.account_keys);
-        for (self.instructions) |instr| instr.deinit(allocator);
-        allocator.free(self.instructions);
-        for (self.address_lookups) |alt| alt.deinit(allocator);
-        allocator.free(self.address_lookups);
     }
 
     pub fn sanitize(self: Transaction) !void {
@@ -274,37 +151,31 @@ pub const Transaction = struct {
 
         // WARN: Truncate okay if transaction is valid
         try leb.writeULEB128(writer, @as(u16, @truncate(self.instructions.len)));
-        for (self.instructions) |instr| try instr.serialize(writer);
+        for (self.instructions) |instr| try sig.bincode.write(writer, instr, .{});
 
         // WARN: Truncate okay if transaction is valid
-        if (self.version != Version.Legacy) {
+        if (self.version != TransactionVersion.legacy) {
             try leb.writeULEB128(writer, @as(u16, @truncate(self.address_lookups.len)));
-            for (self.address_lookups) |alt| try alt.serialize(writer);
+            for (self.address_lookups) |alt| try sig.bincode.write(writer, alt, .{});
         }
     }
 };
 
 /// Serialize a **valid** transaction to a slice of bytes.
-pub fn serialize(writer: anytype, data: anytype, params: sig.bincode.Params) !void {
-    _ = params;
-
+pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
     // WARN: Truncate okay if transaction is valid
     try writer.writeByte(@truncate(data.signatures.len));
     for (data.signatures) |sgn| try writer.writeAll(&sgn.data);
 
     switch (data.version) {
-        Transaction.Version.Legacy => {},
-        Transaction.Version.V0 => try writer.writeByte(0x80),
+        TransactionVersion.legacy => {},
+        TransactionVersion.v0 => try writer.writeByte(0x80),
     }
 
     try data.serializeSignable(writer);
 }
 
-/// TODO: Check for validity of the transaction as it is deserialized and return an error if the transaction is invalid.
-/// [firedancer] https://github.com/firedancer-io/firedancer/blob/8f77acd876ba3c13b6628b66c4266c0454a357f7/src/ballet/txn/fd_txn_parse.c#L7
-pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: sig.bincode.Params) !Transaction {
-    _ = params;
-
+pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) !Transaction {
     const signatures = try allocator.alloc(Signature, try reader.readByte());
     errdefer allocator.free(signatures);
     for (signatures) |*sgn| sgn.* = .{ .data = try reader.readBytesNoEof(Signature.SIZE) };
@@ -315,13 +186,13 @@ pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: sig.bi
     const version_or_signature_count = try reader.readByte();
     const version = if (version_or_signature_count & 0x80 == 0x80)
         if (version_or_signature_count == 0x80)
-            Transaction.Version.V0
+            TransactionVersion.v0
         else
             return error.InvalidVersion
     else
-        Transaction.Version.Legacy;
+        TransactionVersion.legacy;
 
-    const signature_count = if (version == Transaction.Version.Legacy) version_or_signature_count else try reader.readByte();
+    const signature_count = if (version == TransactionVersion.legacy) version_or_signature_count else try reader.readByte();
     const readonly_signed_count = try reader.readByte();
     const readonly_unsigned_count = try reader.readByte();
 
@@ -331,21 +202,21 @@ pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: sig.bi
 
     const recent_blockhash: Hash = .{ .data = try reader.readBytesNoEof(Hash.SIZE) };
 
-    const instructions = try allocator.alloc(Transaction.Instruction, try leb.readULEB128(u16, reader));
+    const instructions = try allocator.alloc(TransactionInstruction, try leb.readULEB128(u16, reader));
 
     errdefer {
         for (instructions) |instr| instr.deinit(allocator);
         allocator.free(instructions);
     }
-    for (instructions) |*instr| instr.* = try Transaction.Instruction.deserialize(allocator, reader);
+    for (instructions) |*instr| instr.* = try sig.bincode.read(allocator, TransactionInstruction, reader, .{});
 
-    const maybe_address_lookups = if (version == Transaction.Version.V0) blk: {
-        const alts = try allocator.alloc(Transaction.AddressLookup, try leb.readULEB128(u16, reader));
+    const maybe_address_lookups = if (version == TransactionVersion.v0) blk: {
+        const alts = try allocator.alloc(TransactionAddressLookup, try leb.readULEB128(u16, reader));
         errdefer {
             for (alts) |alt| alt.deinit(allocator);
             allocator.free(alts);
         }
-        for (alts) |*alt| alt.* = try Transaction.AddressLookup.deserialize(allocator, reader);
+        for (alts) |*alt| alt.* = try sig.bincode.read(allocator, TransactionAddressLookup, reader, .{});
         break :blk alts;
     } else null;
 
@@ -362,28 +233,72 @@ pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: sig.bi
     };
 }
 
+pub const TransactionVersion = enum(u8) {
+    /// legacy transaction without address lookups.
+    legacy = 0xFF,
+    /// Transaction with address lookups.
+    v0 = 0x00,
+};
+
+pub const TransactionInstruction = struct {
+    /// Index into the transactions account_keys array
+    program_index: u8,
+    /// Index into the concatenation of the transactions account_keys array,
+    /// writable lookup results, and readable lookup results
+    account_indexes: []const u8,
+    /// Serialized program instruction.
+    data: []const u8,
+
+    pub const @"!bincode-config:account_indexes" = shortVecConfig([]const u8);
+    pub const @"!bincode-config:data" = shortVecConfig([]const u8);
+
+    pub fn clone(self: *const TransactionInstruction, allocator: std.mem.Allocator) !TransactionInstruction {
+        const account_indexes = try allocator.dupe(u8, self.account_indexes);
+        errdefer allocator.free(account_indexes);
+        return .{
+            .program_index = self.program_index,
+            .account_indexes = account_indexes,
+            .data = try allocator.dupe(u8, self.data),
+        };
+    }
+
+    pub fn deinit(self: TransactionInstruction, allocator: std.mem.Allocator) void {
+        allocator.free(self.account_indexes);
+        allocator.free(self.data);
+    }
+};
+
+pub const TransactionAddressLookup = struct {
+    /// Adadress of the lookup table
+    table_address: Pubkey,
+    /// List of indexes used to load writable account ids
+    writable_indexes: []const u8,
+    /// List of indexes used to load readonly account ids
+    readonly_indexes: []const u8,
+
+    pub const @"!bincode-config:writable_indexes" = shortVecConfig([]const u8);
+    pub const @"!bincode-config:readonly_indexes" = shortVecConfig([]const u8);
+
+    pub fn clone(self: *const TransactionAddressLookup, allocator: std.mem.Allocator) !TransactionAddressLookup {
+        const writable_indexes = try allocator.dupe(u8, self.writable_indexes);
+        errdefer allocator.free(writable_indexes);
+        return .{
+            .table_address = self.table_address,
+            .writable_indexes = writable_indexes,
+            .readonly_indexes = try allocator.dupe(u8, self.readonly_indexes),
+        };
+    }
+
+    pub fn deinit(self: TransactionAddressLookup, allocator: std.mem.Allocator) void {
+        allocator.free(self.writable_indexes);
+        allocator.free(self.readonly_indexes);
+    }
+};
+
 test "legacy_transaction_parse" {
-    const allocator = std.testing.allocator;
-
-    const deserialized_transaction = try sig.bincode.readFromSlice(
-        allocator,
-        Transaction,
-        transaction_legacy_example.as_bytes[0..],
-        .{},
-    );
-    defer deserialized_transaction.deinit(allocator);
-
-    var serialize_buffer = [_]u8{0} ** Transaction.MAX_BYTES;
-    const serialized_transaction = try sig.bincode.writeToSlice(
-        &serialize_buffer,
-        deserialized_transaction,
-        .{},
-    );
-
-    try std.testing.expectEqualSlices(
-        u8,
-        transaction_legacy_example.as_bytes[0..],
-        serialized_transaction,
+    try sig.bincode.testRoundTrip(
+        transaction_legacy_example.as_struct,
+        &transaction_legacy_example.as_bytes,
     );
 }
 
@@ -396,7 +311,7 @@ pub const transaction_legacy_example = struct {
 
     const as_struct = Transaction{
         .signatures = &signatures,
-        .version = .Legacy,
+        .version = .legacy,
         .signature_count = 1,
         .readonly_signed_count = 0,
         .readonly_unsigned_count = 1,
@@ -443,7 +358,7 @@ pub const transaction_v0_example = struct {
 
     pub const as_struct: Transaction = .{
         .signatures = signatures[0..],
-        .version = .V0,
+        .version = .v0,
         .signature_count = 39,
         .readonly_signed_count = 12,
         .readonly_unsigned_count = 102,

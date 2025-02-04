@@ -405,7 +405,7 @@ pub const MockTransferService = struct {
         try writer.writeInt(u32, 2, .little);
         try writer.writeInt(u64, lamports, .little);
 
-        const instructions = try allocator.alloc(sig.core.Transaction.Instruction, 1);
+        const instructions = try allocator.alloc(sig.core.transaction.TransactionInstruction, 1);
         errdefer allocator.free(instructions);
         instructions[0] = .{
             .program_index = 2,
@@ -415,7 +415,7 @@ pub const MockTransferService = struct {
 
         const transaction = sig.core.Transaction{
             .signatures = signatures,
-            .version = .V0,
+            .version = .legacy,
             .signature_count = 1,
             .readonly_signed_count = 0,
             .readonly_unsigned_count = 1,
