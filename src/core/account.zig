@@ -47,7 +47,7 @@ pub const Account = struct {
     pub fn cloneCached(self: *const Account, allocator: std.mem.Allocator) !Account {
         return .{
             .lamports = self.lamports,
-            .data = try self.data.duplicateCached(allocator),
+            .data = try self.data.duplicateBufferPoolRead(allocator),
             .owner = self.owner,
             .executable = self.executable,
             .rent_epoch = self.rent_epoch,

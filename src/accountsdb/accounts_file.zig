@@ -8,7 +8,7 @@ const Slot = sig.core.time.Slot;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
 const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
-const ReadHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
 
 const writeIntLittleMem = sig.core.account.writeIntLittleMem;
@@ -84,7 +84,7 @@ pub const AccountInFile = struct {
     account_info: AccountInfo,
     hash: Hash,
 
-    data: ReadHandle,
+    data: AccountDataHandle,
 
     // other info (used when parsing accounts out)
     offset: usize = 0,
@@ -201,7 +201,7 @@ pub const AccountInFile = struct {
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!Account {
         return .{
-            .data = try self.data.duplicateCached(allocator),
+            .data = try self.data.duplicateBufferPoolRead(allocator),
             .executable = self.executable().*,
             .lamports = self.lamports().*,
             .owner = self.owner().*,
@@ -525,7 +525,7 @@ pub const AccountFile = struct {
             return error.EOF;
         }
 
-        const data = ReadHandle.initEmpty(
+        const data = AccountDataHandle.initEmpty(
             std.math.cast(u32, store_info.data_len) orelse return error.EOF,
         );
 
@@ -549,7 +549,7 @@ pub const AccountFile = struct {
         buffer_pool: *BufferPool,
         start_index_ptr: *usize,
         length: usize,
-    ) !ReadHandle {
+    ) !AccountDataHandle {
         const start_index = start_index_ptr.*;
         const result = @addWithOverflow(start_index, length);
         const end_index = result[0];

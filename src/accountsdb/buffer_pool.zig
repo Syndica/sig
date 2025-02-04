@@ -176,7 +176,7 @@ pub const BufferPool = struct {
             self.frame_manager.contains_valid_data[frame_ref.index].store(true, .seq_cst);
         }
 
-        return AccountDataHandle.initCached(
+        return AccountDataHandle.initBufferPoolRead(
             self,
             frame_refs,
             @intCast(file_offset_start % FRAME_SIZE),
@@ -262,7 +262,9 @@ pub const BufferPool = struct {
             if (i < frame_refs.len) {
                 const frame_ref = &frame_refs[i];
 
-                const contains_valid_data = self.frame_manager.contains_valid_data[frame_ref.index].load(.acquire);
+                const contains_valid_data = self.frame_manager.contains_valid_data[
+                    frame_ref.index
+                ].load(.acquire);
                 if (contains_valid_data) {
                     n_read += 1;
                     i += 1;
@@ -316,7 +318,7 @@ pub const BufferPool = struct {
             }
         }
 
-        return AccountDataHandle.initCached(
+        return AccountDataHandle.initBufferPoolRead(
             self,
             frame_refs,
             @intCast(file_offset_start % FRAME_SIZE),
@@ -759,7 +761,7 @@ pub const HierarchicalFIFO = struct {
 /// view over one or more buffers owned by the BufferPool
 pub const AccountDataHandle = union(enum) {
     /// Data owned by BufferPool, returned by .read() - do not construct this yourself (!)
-    cached: CachedRead,
+    buffer_pool_read: BufferPoolRead,
 
     /// Data allocated elsewhere, not owned or created by BufferPool. BufferPool will deallocate.
     owned_allocation: []const u8,
@@ -770,7 +772,7 @@ pub const AccountDataHandle = union(enum) {
     /// Used in place of a read, in callsites where it is not actually needed. Provides .len().
     empty: Empty,
 
-    const CachedRead = struct {
+    const BufferPoolRead = struct {
         buffer_pool: *BufferPool,
         frame_refs: []FrameRef,
         /// inclusive, the offset into the first frame
@@ -797,14 +799,14 @@ pub const AccountDataHandle = union(enum) {
     };
 
     /// Only called by the BufferPool
-    fn initCached(
+    fn initBufferPoolRead(
         buffer_pool: *BufferPool,
         frame_refs: []FrameRef,
         first_frame_start_offset: FrameOffset,
         last_frame_end_offset: FrameOffset,
     ) AccountDataHandle {
         return .{
-            .cached = .{
+            .buffer_pool_read = .{
                 .buffer_pool = buffer_pool,
                 .frame_refs = frame_refs,
                 .first_frame_start_offset = first_frame_start_offset,
@@ -829,16 +831,16 @@ pub const AccountDataHandle = union(enum) {
 
     pub fn deinit(self: AccountDataHandle, allocator: std.mem.Allocator) void {
         switch (self) {
-            .cached => |*cached| {
-                for (cached.frame_refs) |frame_ref| {
+            .buffer_pool_read => |*buffer_pool_read| {
+                for (buffer_pool_read.frame_refs) |frame_ref| {
                     std.debug.assert(frame_ref.index != INVALID_FRAME);
-                    const prev_rc = cached.buffer_pool.frame_manager.frame_ref_counts[
+                    const prev_rc = buffer_pool_read.buffer_pool.frame_manager.frame_ref_counts[
                         frame_ref.index
                     ].fetchSub(1, .seq_cst);
                     std.debug.assert(prev_rc != 0); // deinit of dead frame
                 }
 
-                allocator.free(cached.frame_refs);
+                allocator.free(buffer_pool_read.frame_refs);
             },
             .owned_allocation => |owned_allocation| {
                 allocator.free(owned_allocation);
@@ -876,7 +878,7 @@ pub const AccountDataHandle = union(enum) {
             .owned_allocation, .unowned_allocation => |data| return @memcpy(buf, data[start..end]),
             .sub_read => |*sb| return sb.parent.read(sb.start + start, buf),
             .empty => unreachable,
-            .cached => {},
+            .buffer_pool_read => {},
         }
 
         var bytes_copied: u32 = 0;
@@ -905,45 +907,58 @@ pub const AccountDataHandle = union(enum) {
     pub fn len(self: AccountDataHandle) u32 {
         return switch (self) {
             .sub_read => |sr| sr.end - sr.start,
-            .cached => |cached| {
-                if (cached.frame_refs.len == 0) return 0;
-                return (@as(u32, @intCast(cached.frame_refs.len)) - 1) *
+            .buffer_pool_read => |buffer_pool_read| {
+                if (buffer_pool_read.frame_refs.len == 0) return 0;
+                return (@as(u32, @intCast(buffer_pool_read.frame_refs.len)) - 1) *
                     FRAME_SIZE +
-                    cached.last_frame_end_offset - cached.first_frame_start_offset;
+                    buffer_pool_read.last_frame_end_offset -
+                    buffer_pool_read.first_frame_start_offset;
             },
             .empty => |empty| empty.len,
             .owned_allocation, .unowned_allocation => |data| @intCast(data.len),
         };
     }
 
-    pub fn iteratorRanged(self: *const AccountDataHandle, start: FileOffset, end: FileOffset) Iterator {
+    pub fn iteratorRanged(
+        self: *const AccountDataHandle,
+        start: FileOffset,
+        end: FileOffset,
+    ) Iterator {
         std.debug.assert(self.len() >= end);
         std.debug.assert(end >= start);
 
         return .{ .read_handle = self, .start = start, .end = end };
     }
 
-    pub fn dupeAllocatedOwned(self: AccountDataHandle, allocator: std.mem.Allocator) !AccountDataHandle {
+    pub fn dupeAllocatedOwned(
+        self: AccountDataHandle,
+        allocator: std.mem.Allocator,
+    ) !AccountDataHandle {
         const data_copy = try self.readAllAllocate(allocator);
         return initAllocatedOwned(data_copy);
     }
 
-    pub fn duplicateCached(self: AccountDataHandle, allocator: std.mem.Allocator) !AccountDataHandle {
+    pub fn duplicateBufferPoolRead(
+        self: AccountDataHandle,
+        allocator: std.mem.Allocator,
+    ) !AccountDataHandle {
         switch (self) {
-            .cached => |*cached| {
-                const refs = try allocator.dupe(FrameRef, cached.frame_refs);
+            .buffer_pool_read => |*buffer_pool_read| {
+                const refs = try allocator.dupe(FrameRef, buffer_pool_read.frame_refs);
                 for (refs) |ref| {
-                    const prev_rc = cached.buffer_pool.frame_manager.frame_ref_counts[ref.index].fetchAdd(1, .seq_cst);
+                    const prev_rc = buffer_pool_read.buffer_pool.frame_manager.frame_ref_counts[
+                        ref.index
+                    ].fetchAdd(1, .seq_cst);
                     std.debug.assert(prev_rc > 0); // duplicated AccountDataHandle with dead frame
                 }
-                return AccountDataHandle.initCached(
-                    cached.buffer_pool,
+                return AccountDataHandle.initBufferPoolRead(
+                    buffer_pool_read.buffer_pool,
                     refs,
-                    cached.first_frame_start_offset,
-                    cached.last_frame_end_offset,
+                    buffer_pool_read.first_frame_start_offset,
+                    buffer_pool_read.last_frame_end_offset,
                 );
             },
-            else => unreachable, // duplicateCached called with non-cached AccountDataHandle
+            else => unreachable, // duplicateBufferPoolRead called with handle not from BufferPool.
         }
     }
 
@@ -957,7 +972,8 @@ pub const AccountDataHandle = union(enum) {
 
     /// testing purposes only
     pub fn expectEqual(expected: AccountDataHandle, actual: AccountDataHandle) !void {
-        if (!builtin.is_test) @compileError("AccountDataHandle.expectEqual is for testing purposes only");
+        if (!builtin.is_test)
+            @compileError("AccountDataHandle.expectEqual is for testing purposes only");
         const expected_buf = try expected.readAllocate(std.testing.allocator, 0, expected.len());
         defer std.testing.allocator.free(expected_buf);
         const actual_buf = try actual.readAllocate(std.testing.allocator, 0, actual.len());
@@ -1035,7 +1051,7 @@ pub const AccountDataHandle = union(enum) {
             if (self.bytesRemaining() == 0) return null;
 
             const first_frame_offset: FrameIndex = switch (self.read_handle.*) {
-                .cached => |*cached| cached.first_frame_start_offset,
+                .buffer_pool_read => |*buffer_pool_read| buffer_pool_read.first_frame_start_offset,
                 else => 0,
             };
 
@@ -1043,20 +1059,20 @@ pub const AccountDataHandle = union(enum) {
             const read_offset: FileOffset = self.start + first_frame_offset + self.bytes_read;
 
             const frame_buf = switch (self.read_handle.*) {
-                .cached => |*cached| buf: {
+                .buffer_pool_read => |*buffer_pool_read| buf: {
                     const current_frame: FrameIndex = @intCast(read_offset / FRAME_SIZE);
 
                     const frame_start: FrameOffset = @intCast(read_offset % FRAME_SIZE);
                     const frame_end: FrameOffset = if (current_frame ==
-                        cached.frame_refs.len - 1)
-                        cached.last_frame_end_offset
+                        buffer_pool_read.frame_refs.len - 1)
+                        buffer_pool_read.last_frame_end_offset
                     else
                         FRAME_SIZE;
 
                     const end_idx = @min(frame_end, frame_start + self.bytesRemaining());
 
-                    const buf = cached.buffer_pool.frames[
-                        cached.frame_refs[current_frame].index
+                    const buf = buffer_pool_read.buffer_pool.frames[
+                        buffer_pool_read.frame_refs[current_frame].index
                     ][frame_start..end_idx];
 
                     break :buf buf;
@@ -1196,9 +1212,9 @@ test "BufferPool basic usage" {
 
     try std.testing.expectEqual(
         try std.math.divCeil(usize, 1000, FRAME_SIZE),
-        read.cached.frame_refs.len,
+        read.buffer_pool_read.frame_refs.len,
     );
-    for (read.cached.frame_refs) |frame_ref|
+    for (read.buffer_pool_read.frame_refs) |frame_ref|
         try std.testing.expect(frame_ref.index != INVALID_FRAME);
 
     {
@@ -1283,10 +1299,10 @@ test "BufferPool filesize > frame_size * num_frames" {
             offset + FRAME_SIZE,
         );
 
-        try std.testing.expectEqual(1, read_frame.cached.frame_refs.len);
+        try std.testing.expectEqual(1, read_frame.buffer_pool_read.frame_refs.len);
 
         const frame: []const u8 = &bp.frames[
-            read_frame.cached.frame_refs[0].index
+            read_frame.buffer_pool_read.frame_refs[0].index
         ];
 
         var frame2: [FRAME_SIZE]u8 = undefined;
@@ -1350,18 +1366,25 @@ test "BufferPool random read" {
             defer read2.deinit(gpa.allocator());
 
             try std.testing.expectEqual(
-                read.cached.first_frame_start_offset,
-                read2.cached.first_frame_start_offset,
+                read.buffer_pool_read.first_frame_start_offset,
+                read2.buffer_pool_read.first_frame_start_offset,
             );
             try std.testing.expectEqual(
-                read.cached.last_frame_end_offset,
-                read2.cached.last_frame_end_offset,
+                read.buffer_pool_read.last_frame_end_offset,
+                read2.buffer_pool_read.last_frame_end_offset,
             );
-            try std.testing.expectEqualSlices(
-                FrameRef,
-                read.cached.frame_refs,
-                read2.cached.frame_refs,
+
+            try std.testing.expectEqual(
+                read.buffer_pool_read.frame_refs.len,
+                read2.buffer_pool_read.frame_refs.len,
             );
+
+            for (
+                read.buffer_pool_read.frame_refs,
+                read2.buffer_pool_read.frame_refs,
+            ) |read_frameref, read2_frameref| {
+                try std.testing.expectEqual(read_frameref.index, read2_frameref.index);
+            }
         }
 
         errdefer std.debug.print("failed with read: {}\n", .{read});
