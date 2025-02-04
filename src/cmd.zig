@@ -1640,7 +1640,7 @@ fn getTrustedValidators(allocator: std.mem.Allocator) !?std.ArrayList(Pubkey) {
         );
         for (current_config.gossip.trusted_validators) |trusted_validator_str| {
             trusted_validators.?.appendAssumeCapacity(
-                try Pubkey.fromString(trusted_validator_str),
+                try Pubkey.parseBase58String(trusted_validator_str),
             );
         }
     }

@@ -167,11 +167,10 @@ pub const MockTransferService = struct {
     pub fn rpcTransferAndWait(self: *MockTransferService, random: std.Random, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
         const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
         for (0..MAX_RPC_RETRIES) |_| {
-            self.logger.debug().logf("rpc transfer: amount={} from_pubkey={s} to_pubkey={s}", .{
-                lamports,
-                from_pubkey.string().slice(),
-                to_pubkey.string().slice(),
-            });
+            self.logger.debug().logf(
+                "rpc transfer: amount={} from_pubkey={s} to_pubkey={s}",
+                .{ lamports, from_pubkey, to_pubkey },
+            );
 
             const latest_blockhash, _ = blk: {
                 const blockhash_response = try self.rpc_client.getLatestBlockhash(self.allocator, .{});
@@ -200,7 +199,7 @@ pub const MockTransferService = struct {
                     self.logger.debug().logf("rpc transfer failed with: {}", .{err});
                     return error.RpcTransferFailed;
                 };
-                break :blk try Signature.fromString(signature_string);
+                break :blk try Signature.parseBase58String(signature_string);
             };
 
             const signature_confirmed = try self.waitForSignatureConfirmation(
@@ -362,7 +361,7 @@ pub const MockTransferService = struct {
                 const response = try self.rpc_client.requestAirDrop(self.allocator, pubkey, lamports, .{});
                 defer response.deinit();
                 const signature_string = try response.result();
-                break :blk try Signature.fromString(signature_string);
+                break :blk try Signature.parseBase58String(signature_string);
             };
             const signature_confirmed = try self.waitForSignatureConfirmation(
                 signature,

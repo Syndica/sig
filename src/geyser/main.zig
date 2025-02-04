@@ -120,9 +120,9 @@ pub fn getOwnerFilters(
     var owner_pubkeys = std.AutoArrayHashMap(sig.core.Pubkey, void).init(allocator);
     errdefer owner_pubkeys.deinit();
 
-    try owner_pubkeys.ensureTotalCapacity(@intCast(owner_accounts_str.len));
+    try owner_pubkeys.ensureTotalCapacity(owner_accounts_str.len);
     for (owner_accounts_str) |owner_str| {
-        const owner_pubkey = try sig.core.Pubkey.fromString(owner_str);
+        const owner_pubkey = try sig.core.Pubkey.parseBase58String(owner_str);
         owner_pubkeys.putAssumeCapacity(owner_pubkey, {});
     }
 
@@ -142,7 +142,7 @@ pub fn getAccountFilters(
 
     try account_pubkeys.ensureTotalCapacity(@intCast(accounts_str.len));
     for (accounts_str) |account_str| {
-        const account_pubkey = try sig.core.Pubkey.fromString(account_str);
+        const account_pubkey = try sig.core.Pubkey.parseBase58String(account_str);
         account_pubkeys.putAssumeCapacity(account_pubkey, {});
     }
 

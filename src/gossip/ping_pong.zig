@@ -25,31 +25,29 @@ pub const Ping = struct {
     token: [PING_TOKEN_SIZE]u8,
     signature: Signature,
 
-    const Self = @This();
-
-    pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: *const KeyPair) !Self {
+    pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: *const KeyPair) !Ping {
         const signature = try keypair.sign(&token, null);
-        const self = Self{
+        const self = .{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
-            .signature = Signature.init(signature.toBytes()),
+            .signature = .{ .data = signature.toBytes() },
         };
         return self;
     }
 
-    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Self {
+    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Ping {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
         random.bytes(&token);
-        var signature = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
+        const signature = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
 
-        return Self{
+        return Ping{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
-            .signature = Signature.init(signature.toBytes()),
+            .signature = .{ .data = signature.toBytes() },
         };
     }
 
-    pub fn verify(self: *const Self) !void {
+    pub fn verify(self: *const Ping) !void {
         if (!try self.signature.verify(self.from, &self.token)) {
             return error.InvalidSignature;
         }
@@ -61,32 +59,30 @@ pub const Pong = struct {
     hash: Hash, // Hash of received ping token.
     signature: Signature,
 
-    const Self = @This();
-
-    pub fn init(ping: *const Ping, keypair: *const KeyPair) !Self {
+    pub fn init(ping: *const Ping, keypair: *const KeyPair) !Pong {
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
         const signature = keypair.sign(&hash.data, null) catch return error.SignatureError;
 
-        return Self{
+        return .{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .hash = hash,
-            .signature = Signature.init(signature.toBytes()),
+            .signature = .{ .data = signature.toBytes() },
         };
     }
 
-    pub fn verify(self: *const Self) !void {
+    pub fn verify(self: *const Pong) !void {
         if (!try self.signature.verify(self.from, &self.hash.data)) {
             return error.InvalidSignature;
         }
     }
 
-    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Self {
+    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Pong {
         const ping = try Ping.initRandom(random, keypair);
         return try Pong.init(&ping, keypair);
     }
 
-    pub fn eql(self: *const @This(), other: *const @This()) bool {
+    pub fn eql(self: *const Pong, other: *const @This()) bool {
         return std.mem.eql(u8, &self.from.data, &other.from.data) and
             std.mem.eql(u8, &self.hash.data, &other.hash.data) and
             std.mem.eql(u8, &self.signature.data, &other.signature.data);
