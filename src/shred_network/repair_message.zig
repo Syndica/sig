@@ -51,9 +51,9 @@ pub fn serializeRepairRequest(
     timestamp: u64,
     nonce: Nonce,
 ) ![]u8 {
-    const header = RepairRequestHeader{
-        .signature = Signature.init(undefined),
-        .sender = try Pubkey.fromBytes(&keypair.public_key.bytes),
+    const header: RepairRequestHeader = .{
+        .signature = .{ .data = undefined },
+        .sender = .{ .data = keypair.public_key.bytes },
         .recipient = recipient,
         .timestamp = timestamp,
         .nonce = nonce,
@@ -78,8 +78,8 @@ pub fn serializeRepairRequest(
 
     var signer = try keypair.signer(null); // TODO noise
     signer.update(serialized[0..4]);
-    signer.update(serialized[4 + Signature.size ..]);
-    @memcpy(serialized[4 .. 4 + Signature.size], &signer.finalize().toBytes());
+    signer.update(serialized[4 + Signature.SIZE ..]);
+    @memcpy(serialized[4 .. 4 + Signature.SIZE], &signer.finalize().toBytes());
 
     return serialized;
 }
@@ -166,14 +166,14 @@ pub const RepairMessage = union(enum(u8)) {
                 }
 
                 // signature is valid
-                if (serialized.len < 4 + Signature.size) {
+                if (serialized.len < 4 + Signature.SIZE) {
                     return error.Malformed;
                 }
                 var verifier = header.signature.verifier(header.sender) catch {
                     return error.InvalidSignature;
                 };
                 verifier.update(serialized[0..4]);
-                verifier.update(serialized[4 + Signature.size ..]);
+                verifier.update(serialized[4 + Signature.SIZE ..]);
                 verifier.verify() catch {
                     return error.InvalidSignature;
                 };
@@ -238,11 +238,11 @@ test "signed/serialized RepairRequest is valid" {
 
 test "RepairRequestHeader serialization round trip" {
     var prng = std.rand.DefaultPrng.init(5224);
-    var signature: [Signature.size]u8 = undefined;
+    var signature: [Signature.SIZE]u8 = undefined;
     prng.fill(&signature);
 
-    const header = RepairRequestHeader{
-        .signature = Signature.init(signature),
+    const header: RepairRequestHeader = .{
+        .signature = .{ .data = signature },
         .sender = Pubkey.initRandom(prng.random()),
         .recipient = Pubkey.initRandom(prng.random()),
         .timestamp = 5924,
@@ -405,11 +405,11 @@ const testHelpers = struct {
     }
 
     fn randomRepairRequestHeader(random: std.rand.Random) RepairRequestHeader {
-        var signature: [Signature.size]u8 = undefined;
+        var signature: [Signature.SIZE]u8 = undefined;
         random.bytes(&signature);
 
-        return RepairRequestHeader{
-            .signature = Signature.init(signature),
+        return .{
+            .signature = .{ .data = signature },
             .sender = Pubkey.initRandom(random),
             .recipient = Pubkey.initRandom(random),
             .timestamp = random.int(u64),

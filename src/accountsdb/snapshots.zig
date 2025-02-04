@@ -3,7 +3,7 @@
 const std = @import("std");
 const zstd = @import("zstd");
 const sig = @import("../sig.zig");
-const base58 = @import("base58-zig");
+const base58 = @import("base58");
 
 const bincode = sig.bincode;
 
@@ -351,7 +351,7 @@ test "deserialize VoteState.node_pubkey" {
         90, 174, 158, 6, 199, 179, 134, 194, 112, 248, 166, 232, 144, 253, 128, 249, 67, 118,
     } ++ .{0} ** 1586 ++ .{ 31, 0, 0, 0, 0, 0, 0, 0, 1 } ++ .{0} ** 24;
     const vote_state = try bincode.readFromSlice(undefined, VoteState, &bytes, .{});
-    const expected_pubkey = try Pubkey.fromString("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
+    const expected_pubkey = try Pubkey.parseBase58String("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
     try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
 }
 
@@ -2221,7 +2221,7 @@ pub const FullSnapshotFileInfo = struct {
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .hash = "1" ** Hash.BASE58_MAX_SIZE,
     });
 
     pub fn snapshotArchiveName(self: FullSnapshotFileInfo) SnapshotArchiveNameStr {
@@ -2303,11 +2303,10 @@ pub const FullSnapshotFileInfo = struct {
                 return error.MissingHash;
             }
 
-            const str_max_len = Hash.base58_max_encoded_size;
-            const end_max = @max(filename.len, start + str_max_len + 1);
+            const str_max_len = Hash.BASE58_MAX_SIZE;
+            const end_max = @min(filename.len, start + str_max_len + 1);
             const filename_truncated = filename[0..end_max];
-            // TODO: accessing it this way is dirty, the base58 API should be improved
-            const alphabet = &base58.Alphabet.DEFAULT.encode;
+            const alphabet = std.mem.asBytes(&base58.Table.BITCOIN.alphabet);
             const end = std.mem.indexOfNonePos(u8, filename_truncated, start + 1, alphabet) orelse
                 filename_truncated.len;
 
@@ -2349,7 +2348,7 @@ pub const IncrementalSnapshotFileInfo = struct {
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .base_slot = std.math.maxInt(Slot),
         .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .hash = "1" ** Hash.BASE58_MAX_SIZE,
     });
 
     pub fn snapshotArchiveName(self: IncrementalSnapshotFileInfo) SnapshotArchiveNameStr {
@@ -2460,11 +2459,10 @@ pub const IncrementalSnapshotFileInfo = struct {
                 return error.MissingHash;
             }
 
-            const str_max_len = Hash.base58_max_encoded_size;
-            const end_max = @max(filename.len, start + str_max_len + 1);
+            const str_max_len = Hash.BASE58_MAX_SIZE;
+            const end_max = @min(filename.len, start + str_max_len + 1);
             const filename_truncated = filename[0..end_max];
-            // TODO: accessing it this way is dirty, the base58 API should be improved
-            const alphabet = &base58.Alphabet.DEFAULT.encode;
+            const alphabet = std.mem.asBytes(&base58.Table.BITCOIN.alphabet);
             const end = std.mem.indexOfNonePos(u8, filename_truncated, start + 1, alphabet) orelse
                 filename_truncated.len;
 

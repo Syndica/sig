@@ -62,7 +62,6 @@ test "insert shreds and transaction statuses then get blocks" {
     defer result.deinit();
 
     const blockhash = result.entries[result.entries.len - 1].hash;
-    const blockhash_string = blockhash.base58String();
 
     defer state.deinit();
     const allocator = state.allocator;
@@ -84,12 +83,12 @@ test "insert shreds and transaction statuses then get blocks" {
         const confirmed_block = try reader.getRootedBlock(slot, false);
         defer confirmed_block.deinit(allocator);
         try std.testing.expectEqual(100, confirmed_block.transactions.len);
-        const expected_block = ledger.reader.VersionedConfirmedBlock{
+        const expected_block: ledger.reader.VersionedConfirmedBlock = .{
             .allocator = allocator,
             .transactions = result.expected_transactions,
             .parent_slot = slot - 1,
-            .blockhash = blockhash_string.slice(),
-            .previous_blockhash = sig.core.Hash.ZEROES.base58String().slice(),
+            .blockhash = blockhash,
+            .previous_blockhash = sig.core.Hash.ZEROES,
             .rewards = &.{},
             .num_partitions = null,
             .block_time = null,
@@ -105,8 +104,8 @@ test "insert shreds and transaction statuses then get blocks" {
         .allocator = allocator,
         .transactions = result.expected_transactions,
         .parent_slot = slot,
-        .blockhash = blockhash_string.slice(),
-        .previous_blockhash = blockhash_string.slice(),
+        .blockhash = blockhash,
+        .previous_blockhash = blockhash,
         .rewards = &.{},
         .num_partitions = null,
         .block_time = null,
@@ -123,8 +122,8 @@ test "insert shreds and transaction statuses then get blocks" {
         .allocator = allocator,
         .transactions = result.expected_transactions,
         .parent_slot = slot + 1,
-        .blockhash = blockhash_string.slice(),
-        .previous_blockhash = blockhash_string.slice(),
+        .blockhash = blockhash,
+        .previous_blockhash = blockhash,
         .rewards = &.{},
         .num_partitions = null,
         .block_time = null,

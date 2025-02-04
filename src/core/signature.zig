@@ -1,6 +1,8 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const core = @import("lib.zig");
+const base58 = @import("base58");
+const BASE58_ENDEC = base58.Table.BITCOIN;
 
 const Ed25519 = std.crypto.sign.Ed25519;
 const Verifier = std.crypto.sign.Ed25519.Verifier;
@@ -9,59 +11,58 @@ const e = std.crypto.errors;
 const Pubkey = core.Pubkey;
 
 pub const Signature = struct {
-    data: [size]u8 = [_]u8{0} ** size,
+    data: [SIZE]u8,
 
-    pub const size: usize = 64;
+    pub const SIZE: usize = 64;
 
-    const base58 = sig.crypto.base58.Base58Sized(size);
-    const Self = @This();
+    pub const ZEROES: Signature = .{ .data = .{0} ** SIZE };
 
-    pub fn default() Self {
-        return .{ .data = [_]u8{0} ** size };
-    }
-
-    pub fn init(bytes: [size]u8) Self {
-        return .{ .data = bytes };
-    }
-
-    pub fn fromString(str: []const u8) !Self {
-        return .{ .data = try base58.decode(str) };
-    }
-
+    pub const VerifyError = e.NonCanonicalError;
     pub fn verify(
-        self: Self,
+        self: Signature,
         pubkey: Pubkey,
         msg: []const u8,
-    ) e.NonCanonicalError!bool {
+    ) VerifyError!bool {
         const signature = Ed25519.Signature.fromBytes(self.data);
         const byte_pubkey = try Ed25519.PublicKey.fromBytes(pubkey.data);
         signature.verify(msg, byte_pubkey) catch return false;
         return true;
     }
 
-    pub fn verifier(
-        self: Self,
-        pubkey: Pubkey,
-    ) (e.NonCanonicalError ||
+    pub const VerifierError =
+        e.NonCanonicalError ||
         e.EncodingError ||
-        e.IdentityElementError)!Verifier {
+        e.IdentityElementError;
+    pub fn verifier(
+        self: Signature,
+        pubkey: Pubkey,
+    ) VerifierError!Verifier {
         const signature = Ed25519.Signature.fromBytes(self.data);
         return signature.verifier(try Ed25519.PublicKey.fromBytes(pubkey.data));
     }
 
-    pub fn eql(self: *const Self, other: *const Self) bool {
+    pub fn eql(self: *const Signature, other: *const Signature) bool {
         return std.mem.eql(u8, self.data[0..], other.data[0..]);
     }
 
-    pub fn base58String(self: Signature) std.BoundedArray(u8, 88) {
-        return base58.encode(self.data);
+    pub fn parseBase58String(str: []const u8) error{InvalidSignature}!Signature {
+        if (str.len > BASE58_MAX_SIZE) return error.InvalidSignature;
+        var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
+        encoded.appendSliceAssumeCapacity(str);
+
+        if (@inComptime()) @setEvalBranchQuota(str.len * str.len * str.len);
+        const decoded = BASE58_ENDEC.decodeBounded(BASE58_MAX_SIZE, encoded) catch {
+            return error.InvalidSignature;
+        };
+
+        if (decoded.len != SIZE) return error.InvalidSignature;
+        return .{ .data = decoded.constSlice()[0..SIZE].* };
     }
 
-    pub fn base58StringAlloc(
-        self: Signature,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error![]const u8 {
-        return base58.encodeAlloc(self.data, allocator);
+    pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
+    pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
+    pub fn base58String(self: Signature) Base58String {
+        return BASE58_ENDEC.encodeArray(SIZE, self.data);
     }
 
     pub fn format(
@@ -70,10 +71,11 @@ pub const Signature = struct {
         _: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
-        return base58.format(self.data, writer);
+        const str = self.base58String();
+        return writer.writeAll(str.constSlice());
     }
 
-    pub fn jsonStringify(self: Signature, writer: anytype) !void {
+    pub fn jsonStringify(self: Signature, writer: anytype) @TypeOf(writer.*).Error!void {
         try writer.print("\"{s}\"", .{self.base58String().slice()});
     }
 };

@@ -1501,7 +1501,6 @@ fn loadSnapshot(
             break :blk cli_n_threads_snapshot_load;
         }
     };
-    logger.info().logf("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
@@ -1641,7 +1640,7 @@ fn getTrustedValidators(allocator: std.mem.Allocator) !?std.ArrayList(Pubkey) {
         );
         for (current_config.gossip.trusted_validators) |trusted_validator_str| {
             trusted_validators.?.appendAssumeCapacity(
-                try Pubkey.fromString(trusted_validator_str),
+                try Pubkey.parseBase58String(trusted_validator_str),
             );
         }
     }
