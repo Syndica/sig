@@ -791,7 +791,7 @@ pub const HeaviestSubtreeForkChoice = struct {
 
     /// Aggregates stake and height information for the subtree rooted at `slot_hash_key`.
     /// Updates the fork info with the aggregated values.
-    pub fn aggregateSlot(self: *HeaviestSubtreeForkChoice, slot_hash_key: SlotAndHash) void {
+    fn aggregateSlot(self: *HeaviestSubtreeForkChoice, slot_hash_key: SlotAndHash) void {
         var stake_voted_subtree: u64 = 0;
         var deepest_child_height: u64 = 0;
         var best_slot_hash_key: SlotAndHash = slot_hash_key;
@@ -875,7 +875,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     /// Adds `stake` to the stake voted at and stake voted subtree for the fork identified by `slot_hash_key`.
-    pub fn addSlotStake(
+    fn addSlotStake(
         self: *HeaviestSubtreeForkChoice,
         slot_hash_key: *const SlotAndHash,
         stake: u64,
@@ -889,7 +889,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     /// Subtracts `stake` from the stake voted at and stake voted subtree for the fork identified by `slot_hash_key`.
-    pub fn subtractSlotStake(
+    fn subtractSlotStake(
         self: *HeaviestSubtreeForkChoice,
         slot_hash_key: *const SlotAndHash,
         stake: u64,
@@ -902,7 +902,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         }
     }
 
-    pub fn setStakeVotedAt(
+    fn setStakeVotedAt(
         self: *HeaviestSubtreeForkChoice,
         slot_hash_key: *const SlotAndHash,
         stake_voted_at: u64,
