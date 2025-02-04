@@ -200,6 +200,39 @@ pub const HeaviestSubtreeForkChoice = struct {
         self.latest_votes.deinit();
     }
 
+    /// This function inserts a new `SlotAndHash` into the tree and ensures that the tree's properties
+    /// (such as `best_slot`, `deepest_slot`, and parent-child relationships) are correctly updated.
+    ///
+    /// If the new leaf already exists in the tree, the function updates the leaf's parent with the provided parent.
+    ///
+    /// If the new leaf has a parent, the function propagates updates to the tree's `best_slot` and
+    /// `deepest_slot` properties up the tree hierarchy.
+    ///
+    /// ### Before Adding a New Leaf
+    /// ```
+    ///         Root (A)
+    ///        /     \
+    ///    Child (B)  Child (C)
+    ///    /            \
+    /// Leaf (D)      Leaf (E)
+    /// ```
+    ///
+    /// ### After Adding a New Leaf (F) as Child of (C)
+    /// ```
+    ///         Root (A)
+    ///        /     \
+    ///    Child (B)  Child (C)
+    ///    /            /    \
+    /// Leaf (D)   Leaf (E) Leaf (F)
+    ///
+    /// ### Or After Adding an Existing Leaf (E) as Child of (B)
+    /// ```
+    ///         Root (A)
+    ///        /     \
+    ///    Child (B)  Child (C)
+    ///       /    \
+    /// Leaf (D)   Leaf (E)
+    /// ```
     pub fn addNewLeafSlot(
         self: *HeaviestSubtreeForkChoice,
         slot_hash_key: SlotAndHash,
@@ -221,10 +254,7 @@ pub const HeaviestSubtreeForkChoice = struct {
             if (maybe_parent) |p| self.latestInvalidAncestor(p) else null;
 
         if (self.fork_infos.getPtr(slot_hash_key)) |fork_info| {
-            // Modify existing entry
-            // TODO:
-            // - Why is it okay to modify just the parent and not other fields modified in the else branch
-            // - Is this branch necessary given the self.fork_infos.contains(&slot_hash_key) return null check above?
+            // Set the parent of the existing entry with the newly provided parent.
             fork_info.parent = maybe_parent;
         } else {
             // Insert new entry
