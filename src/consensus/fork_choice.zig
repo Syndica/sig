@@ -474,6 +474,55 @@ pub const HeaviestSubtreeForkChoice = struct {
     /// Updates the fork tree's metadata for ancestors when a new slot (slot_hash_key) is added.
     /// Specifically, it propagates updates about the best slot and deepest slot upwards through
     /// the ancestors of the new slot.
+    ///
+    /// ## Before and After Example:
+    /// ```
+    ///          -- Root (A, Best = B) --
+    ///            /         |          \
+    ///     (B, Best=B)  (C, Best=F)  (D, Best=D)
+    ///                    /     \
+    ///             (D, Best=F)  (E, Best=E)
+    ///                /    \
+    ///       (F, Best=F)  (G, Best=G)
+    ///
+    /// Adding a new leaf (H) as a child of (D) which update the best slot of D (and C) to (H)
+    ///
+    ///          -- Root (A, Best = B) --
+    ///            /         |          \
+    ///     (B, Best=B)  (C, Best=H*)  (D, Best=D)
+    ///                    /     \
+    ///             (D, Best=H*)  (E, Best=E)
+    ///              /     |    \
+    ///   (F, Best=F) (H, Best=H) (G, Best=G)
+    ///
+    /// ```
+    ///
+    /// For propagating the deepest slot, the function:
+    ///
+    /// 1. Starts from the newly inserted slot.
+    /// 2. Checks if it is the **deepest child**.
+    /// 3. If it is, updates the ancestor's `deepest_slot` and increases its `height`.
+    /// 4. Continues moving up the tree, repeating the process.
+    ///
+    /// ## Before and After Example:
+    ///
+    /// **Before insertion of `D`:**
+    ///
+    /// ```
+    ///     (A: depth=2, deepest=C)
+    ///    /       \
+    ///  (B)      (C: depth=1, deepest=C) # Note: tie are broken by weight and slot number.
+    /// ```
+    ///
+    /// **After inserting `D` under `C`:**
+    ///
+    /// ```
+    ///     (A: depth=3, deepest=D)  <- Updated
+    ///    /       \
+    ///  (B)      (C: depth=2, deepest=D)  <- Updated
+    ///           /
+    ///         (D: depth=1)  <- New deepest slot
+    ///
     fn propagateNewLeaf(
         self: *HeaviestSubtreeForkChoice,
         slot_hash_key: *const SlotAndHash,
@@ -580,6 +629,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         }
         // Saftety: maybe_parent cannot be null due to the if check above.
         const parent = maybe_parent.?;
+        // Get the other chidren of the parent. i.e. siblings of the deepest_child.
         var children = self.getChildren(&parent) orelse return false;
 
         for (children.keys()) |child| {
