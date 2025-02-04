@@ -125,8 +125,10 @@ test Context {
     defer tmp_dir_root.cleanup();
     const tmp_dir = tmp_dir_root.dir;
 
-    // const logger: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
-    const logger: sig.trace.Logger = .noop;
+    // const logger_unscoped: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
+    const logger_unscoped: sig.trace.Logger = .noop;
+
+    const logger = logger_unscoped.withScope(@src().fn_name);
 
     // the directory into which the snapshots will be unpacked.
     var unpacked_snap_dir = try tmp_dir.makeOpenPath("snapshot", .{});
@@ -145,7 +147,7 @@ test Context {
         const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
         const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
             allocator,
-            logger,
+            logger.unscoped(),
             unpacked_snap_dir,
             snap_files,
         );
@@ -182,12 +184,13 @@ test Context {
         if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else null,
     }) |maybe_work_pool| {
         const work_pool = maybe_work_pool orelse continue;
+        logger.info().logf("Running with {s}", .{@tagName(work_pool)});
 
         const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
         const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
         var rpc_server_ctx = try Context.init(.{
             .allocator = allocator,
-            .logger = logger,
+            .logger = logger.unscoped(),
             .snapshot_dir = test_data_dir,
             .latest_snapshot_gen_info = &latest_snapshot_gen_info,
             .socket_addr = sock_addr,

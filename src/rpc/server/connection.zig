@@ -18,6 +18,7 @@ pub const have_accept4 = !builtin.target.isDarwin();
 
 pub const AcceptHandledError = HandleAcceptError || error{
     ConnectionAborted,
+    ProtocolFailure,
     WouldBlock,
 };
 
@@ -53,6 +54,7 @@ pub fn acceptHandled(
         return switch (try handleAcceptResult(std.posix.errno(rc))) {
             .intr => continue,
             .conn_aborted => error.ConnectionAborted,
+            .proto_fail => error.ProtocolFailure,
             .again => error.WouldBlock,
             .success => .{
                 .stream = .{ .handle = rc },
@@ -87,7 +89,6 @@ pub const HandleAcceptError = error{
     ProcessFdQuotaExceeded,
     SystemFdQuotaExceeded,
     SystemResources,
-    ProtocolFailure,
     BlockedByFirewall,
 } || std.posix.UnexpectedError;
 
@@ -96,6 +97,7 @@ pub const HandleAcceptResult = enum {
     intr,
     again,
     conn_aborted,
+    proto_fail,
 };
 
 /// Resembles the error handling of `std.posix.accept`.
@@ -111,6 +113,7 @@ pub fn handleAcceptResult(
         .INTR => .intr,
         .AGAIN => .again,
         .CONNABORTED => .conn_aborted,
+        .PROTO => .proto_fail,
 
         .BADF, // always a race condition
         .FAULT, // don't address bad memory
@@ -123,7 +126,6 @@ pub fn handleAcceptResult(
         .NFILE => return error.SystemFdQuotaExceeded,
         .NOBUFS => return error.SystemResources,
         .NOMEM => return error.SystemResources,
-        .PROTO => return error.ProtocolFailure,
         .PERM => return error.BlockedByFirewall,
         else => |err| return std.posix.unexpectedErrno(err),
     };
@@ -175,7 +177,6 @@ pub const HandleSendError = error{
     FastOpenAlreadyInProgress,
     MessageTooBig,
     SystemResources,
-    BrokenPipe,
     NetworkSubsystemFailed,
 } || std.posix.UnexpectedError;
 
@@ -184,6 +185,7 @@ pub const HandleSendResult = enum {
     intr,
     again,
     conn_reset,
+    broken_pipe,
 };
 
 pub fn handleSendResult(
@@ -198,6 +200,7 @@ pub fn handleSendResult(
         .INTR => .intr,
         .AGAIN => .again,
         .CONNRESET => .conn_reset,
+        .PIPE => .broken_pipe,
 
         .BADF, // always a race condition
         .DESTADDRREQ, // The socket is not connection-mode, and no peer address is set.
@@ -222,7 +225,6 @@ pub fn handleSendResult(
         .ALREADY => return error.FastOpenAlreadyInProgress,
         .MSGSIZE => return error.MessageTooBig,
         .NOBUFS, .NOMEM => return error.SystemResources,
-        .PIPE => return error.BrokenPipe,
         .NETDOWN => return error.NetworkSubsystemFailed,
         else => |e| std.posix.unexpectedErrno(e),
     };
