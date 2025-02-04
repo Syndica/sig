@@ -149,7 +149,7 @@ pub fn SplitUnionList(TaggedUnion: type) type {
                 switch (self.index.tag) {
                     inline else => |tag| {
                         const ptr: *FieldType(tag) = @ptrCast(@alignCast(self.ptr));
-                        ptr.* = @field(item, @tagName(tag));
+                        ptr.* = @field(item, @tagName(tag)); // implicitly asserts tag is correct
                     },
                 }
             }
