@@ -104,6 +104,7 @@ pub fn build(b: *Build) void {
     sig_exe.linkLibC();
     sig_exe.root_module.addOptions("build-options", build_options);
 
+    sig_exe.root_module.addImport("xev", xev_mod);
     sig_exe.root_module.addImport("base58-zig", base58_module);
     sig_exe.root_module.addImport("httpz", httpz_mod);
     sig_exe.root_module.addImport("zig-cli", zig_cli_module);
@@ -143,6 +144,7 @@ pub fn build(b: *Build) void {
     unit_tests_exe.linkLibC();
     unit_tests_exe.root_module.addOptions("build-options", build_options);
 
+    unit_tests_exe.root_module.addImport("xev", xev_mod);
     unit_tests_exe.root_module.addImport("base58-zig", base58_module);
     unit_tests_exe.root_module.addImport("httpz", httpz_mod);
     unit_tests_exe.root_module.addImport("zig-network", zig_network_module);
@@ -177,6 +179,7 @@ pub fn build(b: *Build) void {
     fuzz_exe.linkLibC();
     fuzz_exe.root_module.addOptions("build-options", build_options);
 
+    fuzz_exe.root_module.addImport("xev", xev_mod);
     fuzz_exe.root_module.addImport("base58-zig", base58_module);
     fuzz_exe.root_module.addImport("zig-network", zig_network_module);
     fuzz_exe.root_module.addImport("httpz", httpz_mod);
@@ -212,6 +215,7 @@ pub fn build(b: *Build) void {
     benchmark_exe.linkLibC();
     benchmark_exe.root_module.addOptions("build-options", build_options);
 
+    benchmark_exe.root_module.addImport("xev", xev_mod);
     benchmark_exe.root_module.addImport("base58-zig", base58_module);
     benchmark_exe.root_module.addImport("zig-network", zig_network_module);
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
