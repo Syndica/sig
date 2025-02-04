@@ -161,8 +161,9 @@ pub const BufferPool = struct {
 
         // read into unpopulated frames
         for (0.., frame_refs) |i, *frame_ref| {
-            const populated = self.manager.populated[frame_ref.f_idx].load(.acquire);
-            if (populated) continue;
+            const contains_valid_data = self.manager
+                .contains_valid_data[frame_ref.f_idx].load(.acquire);
+            if (contains_valid_data) continue;
 
             const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
                 (file_offset_start - file_offset_start % FRAME_SIZE));
@@ -173,7 +174,7 @@ pub const BufferPool = struct {
                 frame_aligned_file_offset,
             );
             std.debug.assert(bytes_read <= FRAME_SIZE);
-            self.manager.populated[frame_ref.f_idx].store(true, .seq_cst);
+            self.manager.contains_valid_data[frame_ref.f_idx].store(true, .seq_cst);
         }
 
         return ReadHandle.initCached(
@@ -261,7 +262,7 @@ pub const BufferPool = struct {
             if (i < frame_refs.len) {
                 const frame_ref = &frame_refs[i];
 
-                const populated = self.manager.populated[frame_ref.f_idx].load(.acquire);
+                const populated = self.manager.contains_valid_data[frame_ref.f_idx].load(.acquire);
                 if (populated) {
                     n_read += 1;
                     i += 1;
@@ -309,7 +310,7 @@ pub const BufferPool = struct {
                 }
 
                 for (frame_refs[n_read..][0..n_cqes_copied]) |*frame_ref| {
-                    self.manager.populated[frame_ref.f_idx].store(true, .seq_cst);
+                    self.manager.contains_valid_data[frame_ref.f_idx].store(true, .seq_cst);
                 }
                 n_read += n_cqes_copied;
             }
@@ -336,7 +337,7 @@ const FrameManager = struct {
     /// Per-frame refcounts. Used to track what frames still have handles associated with them.
     rc: []Rc,
 
-    populated: []std.atomic.Value(bool),
+    contains_valid_data: []std.atomic.Value(bool),
 
     pub const Map = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
 
@@ -377,15 +378,15 @@ const FrameManager = struct {
         errdefer allocator.free(rc);
         @memset(rc, .{ .raw = 0 });
 
-        const populated = try allocator.alloc(std.atomic.Value(bool), num_frames);
-        errdefer allocator.free(populated);
-        @memset(populated, std.atomic.Value(bool).init(false));
+        const contains_valid_data = try allocator.alloc(std.atomic.Value(bool), num_frames);
+        errdefer allocator.free(contains_valid_data);
+        @memset(contains_valid_data, std.atomic.Value(bool).init(false));
 
         return .{
             .frame_map_rw = sig.sync.RwMux(Map).init(frame_map),
             .eviction_lfu = sig.sync.RwMux(HierarchicalFIFO).init(eviction_lfu),
             .rc = rc,
-            .populated = populated,
+            .contains_valid_data = contains_valid_data,
         };
     }
 
@@ -409,7 +410,7 @@ const FrameManager = struct {
             }
         }
         allocator.free(self.rc);
-        allocator.free(self.populated);
+        allocator.free(self.contains_valid_data);
     }
 
     fn numFrames(self: *const FrameManager) u32 {
@@ -498,7 +499,7 @@ const FrameManager = struct {
 
                 frame_ref.f_idx = evicted_f_idx;
                 self.rc[frame_ref.f_idx].store(1, .seq_cst);
-                self.populated[frame_ref.f_idx].store(false, .seq_cst);
+                self.contains_valid_data[frame_ref.f_idx].store(false, .seq_cst);
 
                 eviction_lfu.insert(frame_ref.f_idx);
 
@@ -510,10 +511,6 @@ const FrameManager = struct {
                 const removed = frame_map.remove(evicted_key);
                 std.debug.assert(removed); // evicted key was not in map
             }
-        }
-
-        for (frame_refs) |*frame_ref| {
-            std.debug.assert(frame_ref.f_idx != INVALID_FRAME);
         }
 
         for (frame_refs) |frame_ref| std.debug.assert(frame_ref.f_idx != INVALID_FRAME);
@@ -764,7 +761,7 @@ pub const ReadHandle = union(enum) {
     /// Data owned by BufferPool, returned by .read() - do not construct this yourself (!)
     cached: CachedRead,
 
-    /// Data allocated elsewhere, not owned or created by BufferPool.
+    /// Data allocated elsewhere, not owned or created by BufferPool. BufferPool will deallocate.
     owned_allocation: []const u8,
     /// Data allocated elsewhere, not owned or created by BufferPool.
     unowned_allocation: []const u8,
