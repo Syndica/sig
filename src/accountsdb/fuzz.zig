@@ -130,9 +130,19 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         manager_handle.join();
     }
 
-    var tracked_accounts = std.AutoArrayHashMap(Pubkey, TrackedAccount).init(allocator);
-    defer tracked_accounts.deinit();
-    try tracked_accounts.ensureTotalCapacity(10_000);
+    const Map = std.AutoArrayHashMap(Pubkey, TrackedAccount);
+    var tracked_accounts_rw = sig.sync.RwMux(Map).init(blk: {
+        var tracked_accounts = Map.init(allocator);
+        try tracked_accounts.ensureTotalCapacity(10_000);
+        break :blk tracked_accounts;
+    });
+    var map_alive = std.atomic.Value(bool).init(true);
+    defer {
+        map_alive.store(false, .seq_cst);
+        const tracked_accounts, var tracked_accounts_lg = tracked_accounts_rw.writeWithLock();
+        defer tracked_accounts_lg.unlock();
+        tracked_accounts.deinit();
+    }
 
     var random_bank_fields = try BankFields.initRandom(allocator, random, 1 << 8);
     defer random_bank_fields.deinit(allocator);
@@ -145,6 +155,17 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var pubkeys_this_slot = std.AutoHashMap(Pubkey, void).init(allocator);
     defer pubkeys_this_slot.deinit();
+
+    for (0..8) |i| {
+        _ = try std.Thread.spawn(.{}, readRandomAccountThread, .{
+            &accounts_db,
+            &tracked_accounts_rw,
+            seed + i,
+            &map_alive,
+            i,
+        });
+        std.debug.print("started random read thread {}\n", .{i});
+    }
 
     // get/put a bunch of accounts
     while (true) {
@@ -160,42 +181,49 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         switch (action) {
             .put => {
                 var update_all_existing = false;
-                if (N_ACCOUNTS_MAX != null and tracked_accounts.count() > N_ACCOUNTS_MAX.?) {
-                    // NOTE: we don't want to grow the db indefinitely -- so when we reach
-                    // the max, we only update existing accounts
-                    update_all_existing = true;
-                }
 
                 var accounts: [N_ACCOUNTS_PER_SLOT]Account = undefined;
                 var pubkeys: [N_ACCOUNTS_PER_SLOT]Pubkey = undefined;
-                pubkeys_this_slot.clearRetainingCapacity();
 
-                for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
-                    errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
+                {
+                    const tracked_accounts, var tracked_accounts_lg = tracked_accounts_rw.writeWithLock();
+                    defer tracked_accounts_lg.unlock();
 
-                    var tracked_account = try TrackedAccount.initRandom(random, slot);
-
-                    const existing_pubkey = random.boolean();
-                    if ((existing_pubkey and tracked_accounts.count() > 0) or
-                        update_all_existing)
-                    {
-                        const index = random.intRangeLessThan(usize, 0, tracked_accounts.count());
-                        const key = tracked_accounts.keys()[index];
-                        // only if the pubkey is not already in this slot
-                        if (!pubkeys_this_slot.contains(key)) {
-                            tracked_account.pubkey = key;
-                        }
+                    if (N_ACCOUNTS_MAX != null and tracked_accounts.count() > N_ACCOUNTS_MAX.?) {
+                        // NOTE: we don't want to grow the db indefinitely -- so when we reach
+                        // the max, we only update existing accounts
+                        update_all_existing = true;
                     }
 
-                    account.* = try tracked_account.toAccount(allocator);
-                    pubkey.* = tracked_account.pubkey;
+                    pubkeys_this_slot.clearRetainingCapacity();
 
-                    // always overwrite the old slot
-                    try tracked_accounts.put(tracked_account.pubkey, tracked_account);
-                    try pubkeys_this_slot.put(pubkey.*, {});
+                    for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
+                        errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
 
-                    // // NOTE: useful for debugging
-                    // std.debug.print("put account @ slot {d}: {any}\n", .{ slot, tracked_account });
+                        var tracked_account = try TrackedAccount.initRandom(random, slot);
+
+                        const existing_pubkey = random.boolean();
+                        if ((existing_pubkey and tracked_accounts.count() > 0) or
+                            update_all_existing)
+                        {
+                            const index = random.intRangeLessThan(usize, 0, tracked_accounts.count());
+                            const key = tracked_accounts.keys()[index];
+                            // only if the pubkey is not already in this slot
+                            if (!pubkeys_this_slot.contains(key)) {
+                                tracked_account.pubkey = key;
+                            }
+                        }
+
+                        account.* = try tracked_account.toAccount(allocator);
+                        pubkey.* = tracked_account.pubkey;
+
+                        // always overwrite the old slot
+                        try tracked_accounts.put(tracked_account.pubkey, tracked_account);
+                        try pubkeys_this_slot.put(pubkey.*, {});
+
+                        // // NOTE: useful for debugging
+                        // std.debug.print("put account @ slot {d}: {any}\n", .{ slot, tracked_account });
+                    }
                 }
                 defer for (accounts) |account| account.deinit(allocator);
 
@@ -207,14 +235,19 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 );
             },
             .get => {
-                const n_keys = tracked_accounts.count();
-                if (n_keys == 0) {
-                    continue;
-                }
-                const index = random.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
-                const key = tracked_accounts.keys()[index];
+                const key, const tracked_account = blk: {
+                    const tracked_accounts, var tracked_accounts_lg = tracked_accounts_rw.readWithLock();
+                    defer tracked_accounts_lg.unlock();
 
-                const tracked_account = tracked_accounts.get(key).?;
+                    const n_keys = tracked_accounts.count();
+                    if (n_keys == 0) {
+                        continue;
+                    }
+                    const index = random.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
+                    const key = tracked_accounts.keys()[index];
+
+                    break :blk .{ key, tracked_accounts.get(key).? };
+                };
                 const account, const ref =
                     try accounts_db.getAccountAndReference(&tracked_account.pubkey);
                 defer account.deinit(allocator);
@@ -372,4 +405,41 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     }
 
     std.debug.print("fuzzing complete\n", .{});
+}
+
+fn readRandomAccountThread(
+    self: *AccountsDB,
+    tracked_accounts_rw: *sig.sync.RwMux(std.AutoArrayHashMap(Pubkey, TrackedAccount)),
+    seed: u64,
+    alive: *std.atomic.Value(bool),
+    thread_num: usize,
+) void {
+    var prng = std.Random.DefaultPrng.init(seed);
+    const random = prng.random();
+
+    while (true) {
+        if (!alive.load(.seq_cst)) {
+            std.debug.print("finishing random read thread {}\n", .{thread_num});
+            return;
+        }
+
+        var pubkeys: [50]Pubkey = undefined;
+        {
+            const tracked_accounts, var tracked_accounts_lg = tracked_accounts_rw.readWithLock();
+            defer tracked_accounts_lg.unlock();
+
+            const tracked_pubkeys = tracked_accounts.keys();
+            if (tracked_pubkeys.len == 0) continue;
+
+            for (&pubkeys) |*pubkey| pubkey.* = blk: {
+                const index = random.intRangeLessThan(usize, 0, tracked_pubkeys.len);
+                break :blk tracked_pubkeys[index];
+            };
+        }
+
+        for (pubkeys) |pubkey| {
+            const account = self.getAccount(&pubkey) catch continue;
+            defer account.deinit(self.allocator);
+        }
+    }
 }
