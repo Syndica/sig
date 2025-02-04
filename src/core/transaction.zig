@@ -126,8 +126,27 @@ pub const Transaction = struct {
     }
 
     pub fn sanitize(self: Transaction) !void {
-        // TODO: Implement
-        _ = self;
+        // number of accounts should match spec in header. signed and unsigned should not overlap.
+        if (self.signature_count +| self.readonly_unsigned_count > self.account_keys.len)
+            return error.NotEnoughAccounts;
+
+        // there should be at least 1 RW fee-payer account.
+        if (self.readonly_signed_count >= self.signature_count)
+            return error.MissingWritableFeePayer;
+
+        for (self.instructions) |ti| {
+            if (ti.program_index >= self.account_keys.len)
+                return error.ProgramIdAccountMissing;
+
+            // A program cannot be a payer.
+            if (ti.program_index == 0)
+                return error.ProgramIdCannotBePayer;
+
+            for (ti.account_indexes) |ai| {
+                if (ai >= self.account_keys.len)
+                    return error.AccountIndexOutOfBounds;
+            }
+        }
     }
 
     /// Write a signable component of **valid** transaction to a slice of bytes.
