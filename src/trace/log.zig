@@ -8,6 +8,8 @@ const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 const Channel = sig.sync.Channel;
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
+const ThreadPool = sig.sync.ThreadPool;
+const Spawner = sig.utils.thread.Spawner;
 
 const Level = trace.level.Level;
 const NewEntry = trace.entry.NewEntry;
@@ -22,6 +24,7 @@ pub const Config = struct {
 pub fn ScopedLogger(comptime scope: ?[]const u8) type {
     return union(enum) {
         channel_print: *ChannelPrintLogger,
+        thread_print: *ThreadPrintLogger,
         direct_print: DirectPrintLogger,
         noop: void,
 
@@ -33,6 +36,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
         pub fn unscoped(self: Self) Logger {
             return switch (self) {
                 .channel_print => |logger| .{ .channel_print = logger },
+                .thread_print => |logger| .{ .thread_print = logger },
                 .direct_print => |logger| .{ .direct_print = logger },
                 .noop => .noop,
             };
@@ -41,6 +45,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
         pub fn withScope(self: Self, comptime new_scope: []const u8) ScopedLogger(new_scope) {
             return switch (self) {
                 .channel_print => |logger| .{ .channel_print = logger },
+                .thread_print => |logger| .{ .thread_print = logger },
                 .direct_print => |logger| .{ .direct_print = logger },
                 .noop => .noop,
             };
@@ -49,6 +54,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
         pub fn deinit(self: *const Self) void {
             switch (self.*) {
                 .channel_print => |logger| logger.deinit(),
+                .thread_print => |logger| logger.deinit(),
                 .direct_print, .noop => {},
             }
         }
@@ -111,6 +117,109 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
 }
 
 pub const Logger = ScopedLogger(null);
+
+/// An instance of `ScopedLogger` that uses a thread pool.
+pub const ThreadPrintLogger = struct {
+    allocator: std.mem.Allocator,
+    max_level: Level,
+    max_buffer: usize,
+    spawner: sig.utils.thread.Spawner,
+
+    pub fn init(config: Config, thread_pool: *sig.sync.ThreadPool) !*ThreadPrintLogger {
+        const self = try config.allocator.create(ThreadPrintLogger);
+        errdefer config.allocator.destroy(self);
+
+        self.* = .{
+            .allocator = config.allocator,
+            .max_level = config.max_level,
+            .max_buffer = config.max_buffer orelse return error.MaxBufferNotSet,
+            .spawner = sig.utils.thread.Spawner.init(thread_pool),
+        };
+    }
+
+    pub fn deinit(self: *ThreadPrintLogger) void {
+        self.spawner.deinit();
+        self.allocator.destroy(self);
+    }
+
+    pub fn logger(self: *ThreadPrintLogger) Logger {
+        return .{ .thread_print = self };
+    }
+
+    pub fn scopedLogger(
+        self: *ThreadPrintLogger,
+        comptime new_scope: anytype,
+    ) ScopedLogger(new_scope) {
+        return .{ .thread_print = self };
+    }
+
+    const Message = struct {
+        task: Spawner.Task,
+        size: usize,
+        allocator: std.mem.Allocator,
+
+        fn alloc(allocator: std.mem.Allocator, size: usize) !*Message {
+            const bytes = size + @sizeOf(Message);
+            const buf = try allocator.alignedAlloc(u8, @alignOf(Message), bytes);
+            
+            const msg: *Message = @ptrCast(buf);
+            msg.* = .{
+                .task = undefined,
+                .size = size,
+                .allocator = allocator,
+            };
+            return msg;
+        }
+        
+        fn buffer(self: *Message) []u8 {
+            const ptr: [*]u8 = @ptrCast(self);
+            return ptr[0..@sizeOf(Message)][0..self.size];
+        }
+
+        fn free(self: *Message) void {
+            const ptr: [*]align(@alignOf(Message)) u8 = @ptrCast(self);
+            const buf = ptr[0..@sizeOf(Message) + self.size];
+            self.allocator.free(buf);
+        }
+    };
+
+    pub fn log(
+        self: *ThreadPrintLogger,
+        comptime scope: ?[]const u8,
+        level: Level,
+        fields: anytype,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) void {
+        if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
+
+        const size = logfmt.countLog(scope, level, fields, fmt, args);
+        const msg = Message.alloc(self.allocator, size) catch |err| {
+            std.debug.print("ThreadPrint allocator failed with err: {any}", .{err});
+            return;
+        };
+
+        var stream = std.io.fixedBufferStream(msg.buffer());
+        logfmt.writeLog(stream.writer(), scope, level, fields, fmt, args) catch |e| {
+            std.debug.print("writeLog failed with err: {any}", .{e});
+            msg.free();
+            return;
+        };
+
+        std.debug.assert(stream.pos == msg.buffer().len);
+        self.spawner.spawn(&msg.task, onTask);
+    }
+
+    fn onTask(task: *Spawner.Task) void {
+        const msg: *Message = @alignCast(@fieldParentPtr("task", task));
+        defer msg.free();
+
+        const writer = std.io.getStdErr().writer();
+        std.debug.lockStdErr();
+        defer std.debug.unlockStdErr();
+        writer.writeAll(msg.buffer()) catch {};
+    }
+};
 
 /// An instance of `ScopedLogger` that logs via the channel.
 pub const ChannelPrintLogger = struct {
