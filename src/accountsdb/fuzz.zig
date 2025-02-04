@@ -186,7 +186,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 var pubkeys: [N_ACCOUNTS_PER_SLOT]Pubkey = undefined;
 
                 {
-                    const tracked_accounts, var tracked_accounts_lg = tracked_accounts_rw.writeWithLock();
+                    const tracked_accounts, var tracked_accounts_lg =
+                        tracked_accounts_rw.writeWithLock();
                     defer tracked_accounts_lg.unlock();
 
                     if (N_ACCOUNTS_MAX != null and tracked_accounts.count() > N_ACCOUNTS_MAX.?) {
@@ -206,7 +207,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                         if ((existing_pubkey and tracked_accounts.count() > 0) or
                             update_all_existing)
                         {
-                            const index = random.intRangeLessThan(usize, 0, tracked_accounts.count());
+                            const index = random.intRangeLessThan(
+                                usize,
+                                0,
+                                tracked_accounts.count(),
+                            );
                             const key = tracked_accounts.keys()[index];
                             // only if the pubkey is not already in this slot
                             if (!pubkeys_this_slot.contains(key)) {
@@ -236,7 +241,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             },
             .get => {
                 const key, const tracked_account = blk: {
-                    const tracked_accounts, var tracked_accounts_lg = tracked_accounts_rw.readWithLock();
+                    const tracked_accounts, var tracked_accounts_lg =
+                        tracked_accounts_rw.readWithLock();
                     defer tracked_accounts_lg.unlock();
 
                     const n_keys = tracked_accounts.count();
