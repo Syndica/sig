@@ -617,6 +617,14 @@ pub const HeaviestSubtreeForkChoice = struct {
         return true;
     }
 
+    /// Checks if `deepest_child` is the deepest among its siblings.
+    ///
+    /// - A node is the deepest if no sibling has:
+    ///   1. A greater height.
+    ///   2. The same height but higher stake weight.
+    ///   3. The same height & stake but a higher slot number.
+    ///
+    /// - If `deepest_child` has no parent, it is the root and deepest by default.
     fn isDeepestChild(self: *HeaviestSubtreeForkChoice, deepest_child: *const SlotAndHash) bool {
         const maybe_deepest_child_weight =
             self.stakeVotedSubtree(deepest_child) orelse return false;
