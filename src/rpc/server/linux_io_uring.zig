@@ -10,23 +10,10 @@ const IoUring = std.os.linux.IoUring;
 
 pub const LinuxIoUring = struct {
     io_uring: IoUring,
-    multishot_accept_submitted: bool,
 
     pub const can_use: bool = builtin.os.tag == .linux;
 
-    pub const InitError = std.posix.MMapError || error{
-        EntriesZero,
-        EntriesNotPowerOfTwo,
-
-        ParamsOutsideAccessibleAddressSpace,
-        ArgumentsInvalid,
-        ProcessFdQuotaExceeded,
-        SystemFdQuotaExceeded,
-        SystemResources,
-
-        PermissionDenied,
-        SystemOutdated,
-    };
+    pub const InitError = IouInitError || GetSqeRetryError;
 
     // NOTE(ink): constructing the return type as `E!?T`, where `E` and `T` are resolved
     // separately seems to help ZLS with understanding the types involved better, which is
@@ -34,7 +21,10 @@ pub const LinuxIoUring = struct {
     // inline this into a single branch in the return type expression.
     const InitErrOrEmpty = if (!can_use) error{} else InitError;
     const InitResultOrNoreturn = if (!can_use) noreturn else LinuxIoUring;
-    pub fn init() InitErrOrEmpty!?InitResultOrNoreturn {
+    pub fn init(
+        /// Not stored, only used for some initial SQE preps, the pointer needn't remain stable.
+        server_ctx: *const server.Context,
+    ) InitErrOrEmpty!?InitResultOrNoreturn {
         if (!can_use) return null;
         var io_uring = IoUring.init(4096, 0) catch |err| return switch (err) {
             error.SystemOutdated,
@@ -44,10 +34,8 @@ pub const LinuxIoUring = struct {
         };
         errdefer io_uring.deinit();
 
-        return .{
-            .io_uring = io_uring,
-            .multishot_accept_submitted = false,
-        };
+        try prepMultishotAccept(&io_uring, server_ctx.tcp);
+        return .{ .io_uring = io_uring };
     }
 
     pub fn deinit(self: *LinuxIoUring) void {
@@ -55,7 +43,7 @@ pub const LinuxIoUring = struct {
     }
 
     pub const AcceptAndServeConnectionsError =
-        IouEnterError ||
+        GetSqeRetryError ||
         ConsumeOurCqeError ||
         std.mem.Allocator.Error;
 
@@ -63,8 +51,6 @@ pub const LinuxIoUring = struct {
         self: *LinuxIoUring,
         server_ctx: *server.Context,
     ) AcceptAndServeConnectionsError!void {
-        try self.prepMultishotAcceptIfNeeded(server_ctx.tcp);
-
         const timeout_ts: std.os.linux.kernel_timespec = comptime .{
             .tv_sec = 1,
             .tv_nsec = 0,
@@ -88,20 +74,16 @@ pub const LinuxIoUring = struct {
             try consumeOurCqe(self, server_ctx, our_cqe);
         }
     }
-
-    fn prepMultishotAcceptIfNeeded(
-        self: *LinuxIoUring,
-        tcp: std.net.Server,
-    ) !void {
-        if (self.multishot_accept_submitted) return;
-
-        const sqe = try getSqeRetry(&self.io_uring);
-        sqe.prep_multishot_accept(tcp.stream.handle, null, null, std.os.linux.SOCK.CLOEXEC);
-        sqe.user_data = @bitCast(Entry.ACCEPT);
-
-        self.multishot_accept_submitted = true;
-    }
 };
+
+fn prepMultishotAccept(
+    io_uring: *IoUring,
+    tcp: std.net.Server,
+) GetSqeRetryError!void {
+    const sqe = try getSqeRetry(io_uring);
+    sqe.prep_multishot_accept(tcp.stream.handle, null, null, std.os.linux.SOCK.CLOEXEC);
+    sqe.user_data = @bitCast(Entry.ACCEPT);
+}
 
 const ConsumeOurCqeError =
     HandleRecvBodyError ||
@@ -135,7 +117,7 @@ fn consumeOurCqe(
 
         // we may need to re-submit the `accept_multishot` sqe.
         const accept_cancelled = cqe.flags & std.os.linux.IORING_CQE_F_MORE == 0;
-        if (accept_cancelled) liou.multishot_accept_submitted = false;
+        if (accept_cancelled) try prepMultishotAccept(&liou.io_uring, server_ctx.tcp);
 
         switch (try connection.handleAcceptResult(cqe.err())) {
             .success => {},
@@ -410,7 +392,7 @@ fn consumeOurCqe(
 }
 
 const HandleRecvBodyError =
-    IouEnterError ||
+    GetSqeRetryError ||
     std.fs.Dir.StatFileError ||
     std.fs.File.OpenError ||
     std.fs.File.GetSeekPosError ||
@@ -605,7 +587,7 @@ const EntryState = union(enum) {
             self: *const RecvHead,
             entry: Entry,
             io_uring: *IoUring,
-        ) IouEnterError!void {
+        ) GetSqeRetryError!void {
             const entry_ptr = entry.ptr.?;
             std.debug.assert(self == &entry_ptr.state.recv_head);
 
@@ -663,7 +645,7 @@ const EntryState = union(enum) {
             self: *SendFileHead,
             entry: Entry,
             io_uring: *IoUring,
-        ) IouEnterError!enum {
+        ) GetSqeRetryError!enum {
             /// The head has been fully sent already, no send was prepped.
             all_sent,
             /// There is still more head data to send.
@@ -728,7 +710,7 @@ const EntryState = union(enum) {
             self: *const SendFileBody,
             entry: Entry,
             io_uring: *IoUring,
-        ) IouEnterError!void {
+        ) GetSqeRetryError!void {
             const entry_ptr = entry.ptr.?;
             std.debug.assert(self == &entry_ptr.state.send_file_body);
             std.debug.assert(self.which == .to_pipe);
@@ -748,7 +730,7 @@ const EntryState = union(enum) {
             self: *const SendFileBody,
             entry: Entry,
             io_uring: *IoUring,
-        ) IouEnterError!void {
+        ) GetSqeRetryError!void {
             const entry_ptr = entry.ptr.?;
             std.debug.assert(self == &entry_ptr.state.send_file_body);
             std.debug.assert(self.which == .to_socket);
@@ -795,7 +777,7 @@ const EntryState = union(enum) {
             self: *const SendNoBody,
             entry: Entry,
             io_uring: *IoUring,
-        ) IouEnterError!void {
+        ) GetSqeRetryError!void {
             const entry_ptr = entry.ptr.?;
             std.debug.assert(self == &entry_ptr.state.send_no_body);
 
@@ -806,14 +788,30 @@ const EntryState = union(enum) {
     };
 };
 
+const GetSqeRetryError = IouEnterError;
+
 /// Try to `get_sqe`; if the submission queue is too full for that, call `submit()`,
 /// and then try again, and panic if there's still somehow no room.
-fn getSqeRetry(io_uring: *std.os.linux.IoUring) IouEnterError!*std.os.linux.io_uring_sqe {
+fn getSqeRetry(io_uring: *std.os.linux.IoUring) GetSqeRetryError!*std.os.linux.io_uring_sqe {
     if (io_uring.get_sqe()) |sqe| return sqe else |_| {}
     _ = try io_uring.submit();
     return io_uring.get_sqe() catch
         std.debug.panic("Failed to queue entry after flushing submission queue", .{});
 }
+
+const IouInitError = std.posix.MMapError || error{
+    EntriesZero,
+    EntriesNotPowerOfTwo,
+
+    ParamsOutsideAccessibleAddressSpace,
+    ArgumentsInvalid,
+    ProcessFdQuotaExceeded,
+    SystemFdQuotaExceeded,
+    SystemResources,
+
+    PermissionDenied,
+    SystemOutdated,
+};
 
 /// Extracted from `std.os.linux.IoUring.enter`.
 const IouEnterError = error{

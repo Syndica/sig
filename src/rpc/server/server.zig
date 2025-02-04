@@ -95,6 +95,8 @@ pub const Context = struct {
         work_pool: WorkPool,
         exit: *std.atomic.Value(bool),
     ) AcceptAndServeConnectionError!void {
+        self.wait_group.start();
+        defer self.wait_group.finish();
         while (!exit.load(.acquire)) {
             try self.acceptAndServeConnection(work_pool);
         }
@@ -173,7 +175,20 @@ test Context {
         };
     });
 
-    var maybe_liou = try sig.rpc.server.LinuxIoUring.init();
+    const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
+    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
+    var rpc_server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = logger.unscoped(),
+        .snapshot_dir = test_data_dir,
+        .latest_snapshot_gen_info = &latest_snapshot_gen_info,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer rpc_server_ctx.joinDeinit();
+
+    var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&rpc_server_ctx);
     // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
     // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
     defer if (maybe_liou != null) maybe_liou.?.deinit();
@@ -185,19 +200,6 @@ test Context {
     }) |maybe_work_pool| {
         const work_pool = maybe_work_pool orelse continue;
         logger.info().logf("Running with {s}", .{@tagName(work_pool)});
-
-        const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
-        const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
-        var rpc_server_ctx = try Context.init(.{
-            .allocator = allocator,
-            .logger = logger.unscoped(),
-            .snapshot_dir = test_data_dir,
-            .latest_snapshot_gen_info = &latest_snapshot_gen_info,
-            .socket_addr = sock_addr,
-            .read_buffer_size = 4096,
-            .reuse_address = true,
-        });
-        defer rpc_server_ctx.joinDeinit();
 
         var exit = std.atomic.Value(bool).init(false);
         const serve_thread = try rpc_server_ctx.serveSpawn(work_pool, &exit);
