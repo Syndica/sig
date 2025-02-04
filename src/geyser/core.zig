@@ -479,16 +479,11 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
 }
 
 pub fn streamReader(
-    allocator: std.mem.Allocator,
+    reader: *GeyserReader,
     logger: sig.trace.Logger,
     exit: *std.atomic.Value(bool),
-    pipe_path: []const u8,
     measure_rate: ?sig.time.Duration,
-    allocator_config: ?GeyserReader.AllocatorConfig,
 ) !void {
-    var reader = try sig.geyser.GeyserReader.init(allocator, pipe_path, exit, allocator_config orelse .{});
-    defer reader.deinit();
-
     var bytes_read: usize = 0;
     var timer = try sig.time.Timer.start();
 

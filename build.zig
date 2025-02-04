@@ -28,14 +28,17 @@ pub fn build(b: *Build) !void {
     // Dependencies
     const dep_opts = .{ .target = config.target, .optimize = config.optimize };
 
-    const base58_dep = b.dependency("base58-zig", dep_opts);
-    const base58_module = base58_dep.module("base58-zig");
+    const base58_dep = b.dependency("base58", dep_opts);
+    const base58_mod = base58_dep.module("base58");
 
     const zig_network_dep = b.dependency("zig-network", dep_opts);
-    const zig_network_module = zig_network_dep.module("network");
+    const zig_network_mod = zig_network_dep.module("network");
 
     const zig_cli_dep = b.dependency("zig-cli", dep_opts);
-    const zig_cli_module = zig_cli_dep.module("zig-cli");
+    const zig_cli_mod = zig_cli_dep.module("zig-cli");
+
+    const httpz_dep = b.dependency("httpz", dep_opts);
+    const httpz_mod = httpz_dep.module("httpz");
 
     const zstd_dep = b.dependency("zstd", dep_opts);
     const zstd_mod = zstd_dep.module("zstd");
@@ -62,9 +65,10 @@ pub fn build(b: *Build) !void {
 
     sig_mod.addOptions("build-options", build_options);
 
-    sig_mod.addImport("zig-network", zig_network_module);
-    sig_mod.addImport("base58-zig", base58_module);
-    sig_mod.addImport("zig-cli", zig_cli_module);
+    sig_mod.addImport("zig-network", zig_network_mod);
+    sig_mod.addImport("base58", base58_mod);
+    sig_mod.addImport("zig-cli", zig_cli_mod);
+    sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
     switch (config.blockstore_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
@@ -90,9 +94,11 @@ pub fn build(b: *Build) !void {
     sig_exe.linkLibC();
     sig_exe.root_module.addOptions("build-options", build_options);
 
-    sig_exe.root_module.addImport("base58-zig", base58_module);
-    sig_exe.root_module.addImport("zig-cli", zig_cli_module);
-    sig_exe.root_module.addImport("zig-network", zig_network_module);
+    sig_exe.root_module.addImport("xev", xev_mod);
+    sig_exe.root_module.addImport("base58", base58_mod);
+    sig_exe.root_module.addImport("httpz", httpz_mod);
+    sig_exe.root_module.addImport("zig-cli", zig_cli_mod);
+    sig_exe.root_module.addImport("zig-network", zig_network_mod);
     sig_exe.root_module.addImport("zstd", zstd_mod);
     sig_exe.root_module.addImport("lsquic", lsquic_mod);
     sig_exe.root_module.addImport("ssl", ssl_mod);
@@ -117,8 +123,10 @@ pub fn build(b: *Build) !void {
     unit_tests_exe.linkLibC();
     unit_tests_exe.root_module.addOptions("build-options", build_options);
 
-    unit_tests_exe.root_module.addImport("base58-zig", base58_module);
-    unit_tests_exe.root_module.addImport("zig-network", zig_network_module);
+    unit_tests_exe.root_module.addImport("xev", xev_mod);
+    unit_tests_exe.root_module.addImport("base58", base58_mod);
+    unit_tests_exe.root_module.addImport("httpz", httpz_mod);
+    unit_tests_exe.root_module.addImport("zig-network", zig_network_mod);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
     switch (config.blockstore_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -140,8 +148,10 @@ pub fn build(b: *Build) !void {
     fuzz_exe.linkLibC();
     fuzz_exe.root_module.addOptions("build-options", build_options);
 
-    fuzz_exe.root_module.addImport("base58-zig", base58_module);
-    fuzz_exe.root_module.addImport("zig-network", zig_network_module);
+    fuzz_exe.root_module.addImport("xev", xev_mod);
+    fuzz_exe.root_module.addImport("base58", base58_mod);
+    fuzz_exe.root_module.addImport("zig-network", zig_network_mod);
+    fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
     switch (config.blockstore_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -163,8 +173,10 @@ pub fn build(b: *Build) !void {
     benchmark_exe.linkLibC();
     benchmark_exe.root_module.addOptions("build-options", build_options);
 
-    benchmark_exe.root_module.addImport("base58-zig", base58_module);
-    benchmark_exe.root_module.addImport("zig-network", zig_network_module);
+    benchmark_exe.root_module.addImport("xev", xev_mod);
+    benchmark_exe.root_module.addImport("base58", base58_mod);
+    benchmark_exe.root_module.addImport("zig-network", zig_network_mod);
+    benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
     switch (config.blockstore_db) {
@@ -185,7 +197,7 @@ pub fn build(b: *Build) !void {
     install_step.dependOn(&geyser_reader_exe.step);
 
     geyser_reader_exe.root_module.addImport("sig", sig_mod);
-    geyser_reader_exe.root_module.addImport("zig-cli", zig_cli_module);
+    geyser_reader_exe.root_module.addImport("zig-cli", zig_cli_mod);
     try addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
 
     const svm_exe = b.addExecutable(.{
