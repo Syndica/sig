@@ -100,7 +100,7 @@ pub const SignedGossipData = struct {
             error.NonCanonical => unreachable,
         };
         return .{
-            .signature = Signature.init(signature.toBytes()),
+            .signature = .{ .data = signature.toBytes() },
             .data = data,
         };
     }
@@ -1758,7 +1758,9 @@ test "contact info bincode serialize matches rust bincode" {
 
     // Build identical Sig contact info
     var sig_contact_info = ContactInfo{
-        .pubkey = Pubkey.fromString("4NftWecdfGcYZMJahnAAX5Cw1PLGLZhYFB19wL6AkXqW") catch unreachable,
+        .pubkey = Pubkey.parseBase58String(
+            "4NftWecdfGcYZMJahnAAX5Cw1PLGLZhYFB19wL6AkXqW",
+        ) catch unreachable,
         .wallclock = 1721060646885,
         .outset = 1721060141617172,
         .shred_version = 0,
@@ -1938,7 +1940,7 @@ test "RestartHeaviestFork serialization matches rust" {
     var rust_bytes = [_]u8{ 82, 182, 93, 119, 193, 123, 4, 235, 68, 64, 82, 233, 51, 34, 232, 123, 245, 237, 236, 142, 251, 1, 123, 124, 26, 40, 219, 84, 165, 116, 208, 63, 19, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 20, 0 };
 
     const x = RestartHeaviestFork{
-        .from = try Pubkey.fromString("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
+        .from = try Pubkey.parseBase58String("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
         .wallclock = 19,
         .last_slot = 12,
         .observed_stake = 11,
@@ -1964,7 +1966,7 @@ test "RestartLastVotedForkSlots serialization matches rust" {
     };
 
     const data = RestartLastVotedForkSlots{
-        .from = try Pubkey.fromString("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
+        .from = try Pubkey.parseBase58String("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
         .wallclock = 0,
         .last_voted_slot = 0,
         .last_voted_hash = Hash.ZEROES,

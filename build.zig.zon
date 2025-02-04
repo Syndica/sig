@@ -7,10 +7,6 @@
         "src",
     },
     .dependencies = .{
-        .@"base58-zig" = .{
-            .url = "https://github.com/Syndica/base58-zig/archive/e1001fbe8b41eed36d81e37931ada66b784e51dc.tar.gz",
-            .hash = "12206e5050a03cd9dcb896781de0cf541081488006532675371653f61d00c1f27433",
-        },
         .@"zig-network" = .{
             .url = "https://github.com/ikskuh/zig-network/archive/d4506cd1950de8a6e6d3f28aed68a0b4f64e0b44.tar.gz",
             .hash = "122080b2675fa7fdd7410af5f62942dec99e0ea766827c8c6506e6672b575fb0a50e",
@@ -18,6 +14,10 @@
         .@"zig-cli" = .{
             .url = "https://github.com/sam701/zig-cli/archive/8c7a798c0f7fa0358d7ab41106fc872fca4cd995.tar.gz",
             .hash = "1220c008492d9460c3be2b209600a948181e6efb3bf0d79a1633def499632e708f4b",
+        },
+        .httpz = .{
+            .url = "https://github.com/karlseguin/http.zig/archive/79dad0f0cc652830cd8e49bf3e73aa77155ad4b2.tar.gz",
+            .hash = "1220b8a918dfcee4fc8326ec337776e2ffd3029511c35f6b96d10aa7be98ca2faf99",
         },
         .zstd = .{
             .url = "git+https://github.com/Syndica/zstd.zig#5095f011c1183aa67d696172795440d6a33732c9",
@@ -38,6 +38,10 @@
         .prettytable = .{
             .url = "https://github.com/dying-will-bullet/prettytable-zig/archive/46b6ad9b5970def35fa43c9613cd244f28862fa9.tar.gz",
             .hash = "122098d444c9c7112c66481e7655bb5389829c67e04b280a029200545e1971187443",
+        },
+        .base58 = .{
+            .url = "git+https://github.com/Syndica/base58-zig#e6337e7eb3dc7ca77cad4c3b2fe4a34357bd50ea",
+            .hash = "122092353c0b494c2a4968c10a527dc90d6e89eaac48637fda1a0af3efd948bf4ee3",
         },
     },
 }

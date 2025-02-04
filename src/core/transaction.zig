@@ -516,7 +516,7 @@ pub const CompileError = error{
     UnknownInstructionKey,
 };
 
-const SYSTEM_PROGRAM_ID = Pubkey{ .data = [_]u8{0} ** Pubkey.size };
+const SYSTEM_PROGRAM_ID = Pubkey.ZEROES;
 
 const SystemInstruction = union(enum(u8)) {
     CreateAccount,
@@ -551,7 +551,7 @@ pub fn buildTransferTansaction(
     var signatures = try allocator.alloc(Signature, 1);
     var noise: [KeyPair.seed_length]u8 = undefined;
     random.bytes(noise[0..]);
-    signatures[0] = Signature.init((try from_keypair.sign(message_bytes, noise)).toBytes());
+    signatures[0] = .{ .data = (try from_keypair.sign(message_bytes, noise)).toBytes() };
 
     return .{
         .signatures = signatures,
@@ -611,8 +611,8 @@ test "create transfer transaction" {
     const random = prng.random();
 
     const from_keypair = try KeyPair.create([_]u8{0} ** KeyPair.seed_length);
-    const to_pubkey = Pubkey{ .data = [_]u8{1} ** Pubkey.size };
-    const recent_blockhash = Hash.generateSha256Hash(&[_]u8{0});
+    const to_pubkey: Pubkey = .{ .data = .{1} ** Pubkey.SIZE };
+    const recent_blockhash = Hash.generateSha256Hash(&.{0});
     const tx = try buildTransferTansaction(
         allocator,
         random,
@@ -765,12 +765,12 @@ test "VersionedMessage v0 serialization and deserialization" {
 }
 
 pub const test_v0_transaction = struct {
-    pub const as_struct = VersionedTransaction{
+    pub const as_struct: VersionedTransaction = .{
         .signatures = &.{
-            Signature.fromString(
+            Signature.parseBase58String(
                 "2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw",
             ) catch unreachable,
-            Signature.fromString(
+            Signature.parseBase58String(
                 "4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj",
             ) catch unreachable,
         },
@@ -824,8 +824,8 @@ pub const test_v0_message = struct {
             .num_readonly_unsigned_accounts = 102,
         },
         .account_keys = &.{
-            Pubkey.fromString("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE") catch unreachable,
-            Pubkey.fromString("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4") catch unreachable,
+            Pubkey.parseBase58String("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE") catch unreachable,
+            Pubkey.parseBase58String("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4") catch unreachable,
         },
         .recent_blockhash = Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW") catch unreachable,
         .instructions = &.{.{
@@ -837,7 +837,7 @@ pub const test_v0_message = struct {
             },
         }},
         .address_table_lookups = &.{.{
-            .account_key = Pubkey.fromString("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD") catch unreachable,
+            .account_key = Pubkey.parseBase58String("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD") catch unreachable,
             .writable_indexes = &.{ 1, 3, 5, 7, 90 },
             .readonly_indexes = &.{},
         }},

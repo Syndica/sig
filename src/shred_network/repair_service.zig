@@ -102,6 +102,7 @@ pub const RepairService = struct {
         peer_provider: RepairPeerProvider,
         shred_tracker: *BasicShredTracker,
     ) !Self {
+        const n_threads = maxRequesterThreads();
         return RepairService{
             .allocator = allocator,
             .requester = requester,
@@ -110,7 +111,7 @@ pub const RepairService = struct {
             .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
-            .thread_pool = RequestBatchThreadPool.init(allocator, maxRequesterThreads()),
+            .thread_pool = try RequestBatchThreadPool.init(allocator, n_threads, n_threads),
             .metrics = try registry.initStruct(Metrics),
             .prng = std.Random.DefaultPrng.init(0),
         };
@@ -170,12 +171,12 @@ pub const RepairService = struct {
             for (0..num_threads) |i| {
                 const start = (addressed_requests.items.len * i) / num_threads;
                 const end = (addressed_requests.items.len * (i + 1)) / num_threads;
-                try self.thread_pool.schedule(.{
+                self.thread_pool.schedule(.{
                     .requester = &self.requester,
                     .requests = addressed_requests.items[start..end],
                 });
-                try self.thread_pool.joinFallible();
             }
+            try self.thread_pool.joinFallible();
         }
 
         return addressed_requests.items.len;

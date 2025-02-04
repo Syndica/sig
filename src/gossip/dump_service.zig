@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const base58 = @import("base58");
 
 const Allocator = std.mem.Allocator;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
@@ -52,22 +53,23 @@ pub const GossipDumpService = struct {
             const writer = stream.writer();
 
             // write records to string
-            var encoder_buf: [50]u8 = undefined;
-            const base58Encoder = @import("base58-zig").Encoder.init(.{});
+            const endec = base58.Table.BITCOIN;
             var iterator = gossip_table.store.iterator();
             while (iterator.next()) |entry| {
                 const gossip_versioned_data = entry.getVersionedData();
                 const val: SignedGossipData = gossip_versioned_data.value;
-                const size = try base58Encoder.encode(
+
+                var encoded_buf: [50]u8 = undefined;
+                const encoded_len = endec.encode(
+                    &encoded_buf,
                     &gossip_versioned_data.value_hash.data,
-                    &encoder_buf,
                 );
-                try writer.print("{s},{s},{s},{},", .{
-                    @tagName(val.data),
-                    val.id(),
-                    encoder_buf[0..size],
-                    val.wallclock(),
-                });
+                const encoded = encoded_buf[0..encoded_len];
+
+                try writer.print(
+                    "{s},{s},{s},{},",
+                    .{ @tagName(val.data), val.id(), encoded, val.wallclock() },
+                );
                 if (val.data.gossipAddr()) |addr| {
                     try addr.toAddress().format("", .{}, writer);
                 }
