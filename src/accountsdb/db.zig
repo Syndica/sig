@@ -34,7 +34,7 @@ const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
-const ReadHandle = sig.accounts_db.buffer_pool.ReadHandle;
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 const PubkeyShardCalculator = sig.accounts_db.index.PubkeyShardCalculator;
 const ShardedPubkeyRefMap = sig.accounts_db.index.ShardedPubkeyRefMap;
 
@@ -2373,7 +2373,7 @@ pub const AccountsDB = struct {
             lock_guard.unlock();
         }
 
-        const file_data: ReadHandle = switch (account) {
+        const file_data: AccountDataHandle = switch (account) {
             .file => |in_file_account| in_file_account.data,
             .unrooted_map => |unrooted_map_account| unrooted_map_account.data,
         };
@@ -3664,7 +3664,7 @@ test "write and read an account" {
     const pubkey = Pubkey.initRandom(prng.random());
     var data = [_]u8{ 1, 2, 3 };
     const test_account = Account{
-        .data = ReadHandle.initAllocated(&data),
+        .data = AccountDataHandle.initAllocated(&data),
         .executable = false,
         .lamports = 100,
         .owner = Pubkey.ZEROES,

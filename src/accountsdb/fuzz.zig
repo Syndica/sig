@@ -11,7 +11,7 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
-const ReadHandle = sig.accounts_db.buffer_pool.ReadHandle;
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
@@ -31,7 +31,7 @@ pub const TrackedAccount = struct {
     pub fn toAccount(self: *const TrackedAccount, allocator: std.mem.Allocator) !Account {
         return .{
             .lamports = 19,
-            .data = ReadHandle.initAllocatedOwned(try allocator.dupe(u8, &self.data)),
+            .data = AccountDataHandle.initAllocatedOwned(try allocator.dupe(u8, &self.data)),
             .owner = Pubkey.ZEROES,
             .executable = false,
             .rent_epoch = 0,

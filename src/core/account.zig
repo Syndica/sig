@@ -3,11 +3,11 @@ const sig = @import("../sig.zig");
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
-const ReadHandle = sig.accounts_db.buffer_pool.ReadHandle;
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 
 pub const Account = struct {
     lamports: u64,
-    data: ReadHandle,
+    data: AccountDataHandle,
     owner: Pubkey,
     executable: bool,
     rent_epoch: Epoch,
@@ -21,7 +21,7 @@ pub const Account = struct {
         errdefer allocator.free(data_buf);
 
         random.bytes(data_buf);
-        const data = ReadHandle.initAllocatedOwned(data_buf);
+        const data = AccountDataHandle.initAllocatedOwned(data_buf);
 
         return .{
             .lamports = random.int(u64),
@@ -134,7 +134,7 @@ const Hash = @import("hash.zig").Hash;
 
 pub fn hashAccount(
     lamports: u64,
-    data: *ReadHandle.Iterator,
+    data: *AccountDataHandle.Iterator,
     owner_pubkey_data: []const u8,
     executable: bool,
     rent_epoch: u64,
@@ -175,7 +175,7 @@ test "core.account: test account hash matches rust" {
     var data: [3]u8 = .{ 1, 2, 3 };
     var account: Account = .{
         .lamports = 10,
-        .data = ReadHandle.initAllocated(&data),
+        .data = AccountDataHandle.initAllocated(&data),
         .owner = Pubkey.ZEROES,
         .executable = false,
         .rent_epoch = 20,

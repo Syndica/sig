@@ -8,7 +8,7 @@ const Slot = sig.core.time.Slot;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
 const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
-const ReadHandle = sig.accounts_db.buffer_pool.ReadHandle;
+const ReadHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
 
 const writeIntLittleMem = sig.core.account.writeIntLittleMem;
@@ -525,7 +525,7 @@ pub const AccountFile = struct {
             return error.EOF;
         }
 
-        const data = ReadHandle.initUnread(
+        const data = ReadHandle.initEmpty(
             std.math.cast(u32, store_info.data_len) orelse return error.EOF,
         );
 
