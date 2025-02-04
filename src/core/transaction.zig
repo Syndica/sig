@@ -314,10 +314,119 @@ pub const TransactionAddressLookup = struct {
     }
 };
 
-test "legacy_transaction_parse" {
+test "sanitize succeeds minimal valid transaction" {
+    const transaction = Transaction{
+        .signatures = &.{},
+        .version = .legacy,
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 0,
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .address_lookups = &.{},
+    };
+    try std.testing.expectEqual({}, transaction.sanitize());
+}
+
+test "sanitize fails empty transaction" {
+    try std.testing.expectError(error.MissingWritableFeePayer, Transaction.EMPTY.sanitize());
+}
+
+test "sanitize fails missing signers" {
+    const transaction = Transaction{
+        .signatures = &.{},
+        .version = .legacy,
+        .signature_count = 2,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 0,
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .address_lookups = &.{},
+    };
+    try std.testing.expectEqual(error.NotEnoughAccounts, transaction.sanitize());
+}
+
+test "sanitize fails missing unsigned" {
+    const transaction = Transaction{
+        .signatures = &.{},
+        .version = .legacy,
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 1,
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .address_lookups = &.{},
+    };
+    try std.testing.expectEqual(error.NotEnoughAccounts, transaction.sanitize());
+}
+
+test "sanitize fails no writable signed" {
+    const transaction = Transaction{
+        .signatures = &.{},
+        .version = .legacy,
+        .signature_count = 1,
+        .readonly_signed_count = 1,
+        .readonly_unsigned_count = 0,
+        .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .address_lookups = &.{},
+    };
+    try std.testing.expectEqual(error.MissingWritableFeePayer, transaction.sanitize());
+}
+
+test "sanitize fails missing program id" {
+    const transaction = Transaction{
+        .signatures = &.{},
+        .version = .legacy,
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 0,
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{.{
+            .program_index = 1,
+            .account_indexes = &.{},
+            .data = &.{},
+        }},
+        .address_lookups = &.{},
+    };
+    try std.testing.expectEqual(error.ProgramIdAccountMissing, transaction.sanitize());
+}
+
+test "satinize fails account index out of bounds" {
+    const transaction = Transaction{
+        .signatures = &.{},
+        .version = .legacy,
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 1,
+        .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{.{
+            .program_index = 1,
+            .account_indexes = &.{2},
+            .data = &.{},
+        }},
+        .address_lookups = &.{},
+    };
+    try std.testing.expectEqual(error.AccountIndexOutOfBounds, transaction.sanitize());
+}
+
+test "parse legacy" {
     try sig.bincode.testRoundTrip(
         transaction_legacy_example.as_struct,
         &transaction_legacy_example.as_bytes,
+    );
+}
+
+test "parse v0" {
+    try sig.bincode.testRoundTrip(
+        transaction_v0_example.as_struct,
+        &transaction_v0_example.as_bytes,
     );
 }
 
