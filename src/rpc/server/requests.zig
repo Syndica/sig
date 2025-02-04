@@ -78,7 +78,7 @@ pub const MAX_TARGET_LEN: usize = blk: {
     break :blk "/".len + SnapSpec.fmtLenValue(.{
         .base_slot = std.math.maxInt(sig.core.Slot),
         .slot = std.math.maxInt(sig.core.Slot),
-        .hash = sig.core.Hash.base58String(.{ .data = .{255} ** sig.core.Hash.size }).constSlice(),
+        .hash = sig.core.Hash.base58String(.{ .data = .{255} ** sig.core.Hash.SIZE }).constSlice(),
     });
 };
 pub const TargetBoundedStr = std.BoundedArray(u8, MAX_TARGET_LEN);

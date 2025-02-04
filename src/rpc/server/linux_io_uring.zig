@@ -138,22 +138,17 @@ fn consumeOurCqe(
         const buffer = try server_ctx.allocator.alloc(u8, server_ctx.read_buffer_size);
         errdefer server_ctx.allocator.free(buffer);
 
-        const new_recv_entry: Entry = entry: {
-            const data_ptr = try server_ctx.allocator.create(EntryData);
-            errdefer comptime unreachable;
-
-            data_ptr.* = .{
-                .buffer = buffer,
-                .stream = stream,
-                .state = EntryState.INIT,
-            };
-            break :entry .{ .ptr = data_ptr };
+        const data_ptr = try server_ctx.allocator.create(EntryData);
+        errdefer server_ctx.allocator.destroy(data_ptr);
+        data_ptr.* = .{
+            .buffer = buffer,
+            .stream = stream,
+            .state = EntryState.INIT,
         };
-        errdefer if (new_recv_entry.ptr) |data_ptr| server_ctx.allocator.destroy(data_ptr);
 
         const sqe = try getSqeRetry(&liou.io_uring);
         sqe.prep_recv(stream.handle, buffer, 0);
-        sqe.user_data = @bitCast(new_recv_entry);
+        sqe.user_data = @bitCast(Entry{ .ptr = data_ptr });
         return;
     };
     errdefer server_ctx.wait_group.finish();
