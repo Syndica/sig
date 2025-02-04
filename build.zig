@@ -428,7 +428,7 @@ const ssh = struct {
             .argv = &.{ "which", "rsync" },
         });
         const send = if (which_rsync.term == .Exited and which_rsync.term.Exited == 0)
-            b.addSystemCommand(&.{ "rsync", "--info=progress2", local_path, remote_uri })
+            b.addSystemCommand(&.{ "rsync", "--progress", local_path, remote_uri })
         else
             b.addSystemCommand(&.{ "scp", local_path, remote_uri });
         send.step.dependOn(&mkdir.step);
