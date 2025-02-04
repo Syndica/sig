@@ -10,8 +10,14 @@ const bincode = sig.bincode;
 
 /// arbitrarily chosen, I believe >95% of accounts will be <= 512 bytes
 pub const FRAME_SIZE = 512;
-const INVALID_FRAME = std.math.maxInt(FrameIndex);
 pub const Frame = [FRAME_SIZE]u8;
+
+const INVALID_FRAME = std.math.maxInt(FrameIndex);
+const LINUX_IO_MODE: LinuxIoMode = .Blocking;
+// TODO: ideally we should be able to select this with a cli flag. (#509)
+const USE_IO_URING = builtin.os.tag == .linux and LINUX_IO_MODE == .IoUring;
+const IO_URING_ENTRIES = 128;
+
 const FrameIndex = u31;
 const FileOffset = u32;
 const FrameOffset = u10; // 0..=FRAME_SIZE
@@ -36,12 +42,6 @@ const LinuxIoMode = enum {
     Blocking,
     IoUring,
 };
-const LINUX_IO_MODE: LinuxIoMode = .Blocking;
-
-// TODO: ideally we should be able to select this with a cli flag. (#509)
-const USE_IO_URING = builtin.os.tag == .linux and LINUX_IO_MODE == .IoUring;
-
-const IO_URING_ENTRIES = 128;
 
 fn io_uring() !*IoUring {
     // We use one io_uring instance per-thread internally for fast thread-safe usage.
