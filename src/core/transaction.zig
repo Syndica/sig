@@ -397,6 +397,25 @@ test "sanitize fails missing program id" {
     try std.testing.expectEqual(error.ProgramIdAccountMissing, transaction.sanitize());
 }
 
+test "sanitize fails if program id has index 0" {
+    const transaction = Transaction{
+        .signatures = &.{},
+        .version = .legacy,
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 0,
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{.{
+            .program_index = 0,
+            .account_indexes = &.{},
+            .data = &.{},
+        }},
+        .address_lookups = &.{},
+    };
+    try std.testing.expectEqual(error.ProgramIdCannotBePayer, transaction.sanitize());
+}
+
 test "satinize fails account index out of bounds" {
     const transaction = Transaction{
         .signatures = &.{},
