@@ -462,7 +462,7 @@ const expected_metadata = blk: {
 
     break :blk RecoveryMetadata{
         .common_header = CommonHeader{
-            .leader_signature = Signature.fromString(
+            .leader_signature = Signature.parseBase58String(
                 "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2s" ++
                     "AmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m",
             ) catch unreachable,
