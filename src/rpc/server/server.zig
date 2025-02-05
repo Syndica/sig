@@ -2,13 +2,13 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
-
 pub const connection = @import("connection.zig");
 pub const requests = @import("requests.zig");
 
 pub const basic = @import("basic.zig");
 pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
+
+const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
