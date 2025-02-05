@@ -1,7 +1,13 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
+/// When this is false, it means `accept[Handled]` can't apply
+/// flags to the accepted socket, and the caller will have to
+/// to ensure relevant flags are enabled/disabled after acceptance.
+pub const HAVE_ACCEPT4 = !builtin.target.isDarwin();
+
 pub const GetSockNameError = std.posix.GetSockNameError;
+
 pub fn getSockName(
     socket_handle: std.posix.socket_t,
 ) GetSockNameError!std.net.Address {
@@ -10,11 +16,6 @@ pub fn getSockName(
     try std.posix.getsockname(socket_handle, &addr.any, &addr_len);
     return addr;
 }
-
-/// When this is false, it means `accept[Handled]` can't apply
-/// flags to the accepted socket, and the caller will have to
-/// to ensure relevant flags are enabled/disabled after acceptance.
-pub const have_accept4 = !builtin.target.isDarwin();
 
 pub const AcceptHandledError = HandleAcceptError || error{
     ConnectionAborted,
@@ -37,7 +38,7 @@ pub fn acceptHandled(
     while (true) {
         var addr: std.net.Address = .{ .any = undefined };
         var addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(addr.any));
-        const rc = if (have_accept4)
+        const rc = if (HAVE_ACCEPT4)
             std.posix.system.accept4(
                 tcp_server.stream.handle,
                 &addr.any,
@@ -64,13 +65,13 @@ pub fn acceptHandled(
     }
 }
 
-pub const SetSocketSync = std.posix.FcntlError;
+pub const SetSocketSyncError = std.posix.FcntlError;
 
 /// Ensure the socket is set to be blocking or nonblocking.
 pub fn setSocketSync(
     socket: std.posix.socket_t,
     sync: enum { blocking, nonblocking },
-) !void {
+) SetSocketSyncError!void {
     const FlagsInt = @typeInfo(std.posix.O).Struct.backing_integer.?;
     var flags_int: FlagsInt = @intCast(try std.posix.fcntl(socket, std.posix.F.GETFL, 0));
     const flags = std.mem.bytesAsValue(std.posix.O, std.mem.asBytes(&flags_int));

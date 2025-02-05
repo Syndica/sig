@@ -7,7 +7,7 @@ const connection = server.connection;
 
 pub const AcceptAndServeConnectionError =
     connection.AcceptHandledError ||
-    connection.SetSocketSync ||
+    connection.SetSocketSyncError ||
     std.mem.Allocator.Error ||
     std.http.Server.ReceiveHeadError ||
     requests.HandleRequestError;
@@ -22,7 +22,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
     };
     defer conn.stream.close();
 
-    if (!connection.have_accept4) {
+    if (!connection.HAVE_ACCEPT4) {
         // make sure the accepted socket is in blocking mode
         try connection.setSocketSync(conn.stream.handle, .blocking);
     }

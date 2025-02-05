@@ -93,13 +93,6 @@ const ConsumeOurCqeError =
     connection.HandleSendError ||
     connection.HandleSpliceError;
 
-/// Panic message for handling `EAGAIN`; we're not using nonblocking sockets at all,
-/// so it should be impossible to receive that error, or for such an error to be
-/// triggered just from malicious connections.
-const EAGAIN_PANIC_MSG =
-    "The file/socket should not be in nonblocking mode;" ++
-    " server or file/socket configuration error.";
-
 /// On return, `cqe.user_data` is in an undefined state - this is to say,
 /// it has either already been `deinit`ed, or it has been been re-submitted
 /// in a new `SQE` and should not be modified; in either scenario, the caller
@@ -160,12 +153,19 @@ fn consumeOurCqe(
     );
     errdefer addr_err_logger.log("Dropping connection");
 
+    // Panic message for handling `EAGAIN`; we're not using nonblocking sockets at all,
+    // so it should be impossible to receive that error, or for such an error to be
+    // triggered just from malicious connections.
+    const eagain_panic_msg =
+        "The file/socket should not be in nonblocking mode;" ++
+        " server or file/socket configuration error.";
+
     switch (entry_data.state) {
         .recv_head => |*head| {
             switch (try connection.handleRecvResult(cqe.err())) {
                 .success => {},
 
-                .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                .again => std.debug.panic(eagain_panic_msg, .{}),
 
                 .intr => {
                     try head.prepRecv(entry, &liou.io_uring);
@@ -253,7 +253,7 @@ fn consumeOurCqe(
         .recv_body => |*body| {
             switch (try connection.handleRecvResult(cqe.err())) {
                 .success => {},
-                .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                .again => std.debug.panic(eagain_panic_msg, .{}),
                 .intr => @panic("TODO:"),
                 .conn_refused,
                 .conn_reset,
@@ -276,7 +276,7 @@ fn consumeOurCqe(
         .send_file_head => |*sfh| {
             switch (try connection.handleSendResult(cqe.err())) {
                 .success => {},
-                .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                .again => std.debug.panic(eagain_panic_msg, .{}),
                 .intr => @panic("TODO:"),
                 .conn_reset,
                 .broken_pipe,
@@ -315,7 +315,7 @@ fn consumeOurCqe(
             .to_pipe => {
                 switch (try connection.handleSpliceResult(cqe.err())) {
                     .success => {},
-                    .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                    .again => std.debug.panic(eagain_panic_msg, .{}),
                     .bad_file_descriptors,
                     .bad_fd_offset,
                     .invalid_splice,
@@ -334,7 +334,7 @@ fn consumeOurCqe(
             .to_socket => {
                 switch (try connection.handleSpliceResult(cqe.err())) {
                     .success => {},
-                    .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                    .again => std.debug.panic(eagain_panic_msg, .{}),
                     .bad_file_descriptors,
                     .bad_fd_offset,
                     .invalid_splice,
@@ -360,7 +360,7 @@ fn consumeOurCqe(
         .send_no_body => |*snb| {
             switch (try connection.handleSendResult(cqe.err())) {
                 .success => {},
-                .again => std.debug.panic(EAGAIN_PANIC_MSG, .{}),
+                .again => std.debug.panic(eagain_panic_msg, .{}),
                 .intr => @panic("TODO:"),
                 .conn_reset,
                 .broken_pipe,
