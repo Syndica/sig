@@ -43,7 +43,7 @@ const LinuxIoMode = enum {
     IoUring,
 };
 
-fn io_uring() !*IoUring {
+fn ioUring() !*IoUring {
     // We use one io_uring instance per-thread internally for fast thread-safe usage.
 
     // From https://github.com/axboe/liburing/wiki/io_uring-and-networking-in-2023:
@@ -159,7 +159,7 @@ pub const BufferPool = struct {
         errdefer self.frame_manager.getAllIndicesRollback(frame_refs);
 
         // read into frames without valid data
-        for (0.., frame_refs) |i, *frame_ref| {
+        for (frame_refs, 0..) |*frame_ref, i| {
             const contains_valid_data = self.frame_manager
                 .contains_valid_data[frame_ref.index].load(.acquire);
             if (contains_valid_data) continue;
@@ -215,7 +215,7 @@ pub const BufferPool = struct {
         return handle;
     }
 
-    pub fn computeNumberofFrameIndices(
+    pub fn computeNumberOfFrameIndices(
         /// inclusive
         file_offset_start: FileOffset,
         /// exclusive
@@ -242,7 +242,7 @@ pub const BufferPool = struct {
         file_offset_end: FileOffset,
     ) ReadIoUringError!AccountDataHandle {
         if (!USE_IO_URING) @compileError("io_uring disabled");
-        const threadlocal_io_uring = try io_uring();
+        const threadlocal_io_uring = try ioUring();
 
         const frame_refs = try self.frame_manager.getAllIndices(
             allocator,
@@ -401,7 +401,7 @@ pub const FrameManager = struct {
         frame_map.deinit(allocator);
         frame_map_lg.unlock();
 
-        for (0.., self.frame_ref_counts) |i, *frame_ref_count| {
+        for (self.frame_ref_counts, 0..) |*frame_ref_count, i| {
             if (frame_ref_count.load(.seq_cst) > 0) {
                 std.debug.panicExtra(
                     null,
@@ -426,7 +426,7 @@ pub const FrameManager = struct {
         file_offset_start: FileOffset,
         file_offset_end: FileOffset,
     ) GetError![]FrameRef {
-        const n_indices = try BufferPool.computeNumberofFrameIndices(
+        const n_indices = try BufferPool.computeNumberOfFrameIndices(
             file_offset_start,
             file_offset_end,
         );
@@ -445,7 +445,7 @@ pub const FrameManager = struct {
             const frame_map, var frame_map_lg = self.frame_map_rw.readWithLock();
             defer frame_map_lg.unlock();
 
-            for (0.., frame_refs) |i, *frame_ref| {
+            for (frame_refs, 0..) |*frame_ref, i| {
                 const file_offset: FileOffset = @intCast(
                     (i * FRAME_SIZE) + (file_offset_start - file_offset_start % FRAME_SIZE),
                 );
@@ -470,7 +470,7 @@ pub const FrameManager = struct {
             const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
             defer eviction_lfu_lg.unlock();
 
-            for (0.., frame_refs) |i, *frame_ref| {
+            for (frame_refs, 0..) |*frame_ref, i| {
                 if (frame_ref.found_in_cache) {
                     std.debug.assert(frame_ref.index != INVALID_FRAME);
                     continue;
@@ -663,7 +663,7 @@ pub const HierarchicalFIFO = struct {
     /// This does not return an optional, as the caller *requires* a key to be
     /// evicted. Not being able to return a key means illegal internal state in
     /// the BufferPool.
-    pub fn evict(self: *HierarchicalFIFO, frame_ref_counts: []Atomic(u32)) Key {
+    pub fn evict(self: *HierarchicalFIFO, frame_ref_counts: []const Atomic(u32)) Key {
         var alive_eviction_attempts: usize = 0;
 
         const dead_key: Key = while (true) {
@@ -1140,11 +1140,11 @@ test "BufferPool indicesRequired" {
         .{ .start = F_SIZE, .end = F_SIZE * 2, .expected = 1 },
     };
 
-    for (0.., cases) |i, case| {
+    for (cases, 0..) |case, i| {
         errdefer std.debug.print("failed on case(i={}): {}", .{ i, case });
         try std.testing.expectEqual(
             case.expected,
-            BufferPool.computeNumberofFrameIndices(case.start, case.end),
+            BufferPool.computeNumberOfFrameIndices(case.start, case.end),
         );
     }
 }
@@ -1152,12 +1152,15 @@ test "BufferPool indicesRequired" {
 test "BufferPool init deinit" {
     const allocator = std.testing.allocator;
 
-    for (0.., &[_]u32{
-        2,     3,     4,     8,
-        16,    32,    256,   4096,
-        16384, 16385, 24576, 32767,
-        32768, 49152, 65535, 65536,
-    }) |i, frame_count| {
+    for (
+        &[_]u32{
+            2,     3,     4,     8,
+            16,    32,    256,   4096,
+            16384, 16385, 24576, 32767,
+            32768, 49152, 65535, 65536,
+        },
+        0..,
+    ) |frame_count, i| {
         errdefer std.debug.print("failed on case(i={}): {}", .{ i, frame_count });
         var bp = try BufferPool.init(allocator, frame_count);
         bp.deinit(allocator);
@@ -1347,7 +1350,7 @@ test "BufferPool random read" {
             .{ reads, range_start, range_end },
         );
 
-        if (try BufferPool.computeNumberofFrameIndices(range_start, range_end) > num_frames) {
+        if (try BufferPool.computeNumberOfFrameIndices(range_start, range_end) > num_frames) {
             continue;
         }
 
