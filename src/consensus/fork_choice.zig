@@ -366,6 +366,32 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
+    /// Updates the root of the tree, removing unreachable nodes.
+    ///
+    /// # Description:
+    /// - Computes the difference between the current tree (`tree_root`) and `new_root`.
+    /// - Removes nodes that are not reachable from `new_root`.
+    /// - Updates `tree_root` to `new_root` and resets `last_root_time`.
+    ///
+    /// # Example:
+    ///
+    /// **Before Root Change (`A` is root):**
+    /// ```
+    ///        (A) <- Current root
+    ///       /   \
+    ///     (B)   (C)
+    ///    /   \
+    ///  (D)   (E)
+    /// ```
+    ///
+    /// **After `setTreeRoot(new_root=B)`:**
+    /// ```
+    ///        (B) <- New root
+    ///       /   \
+    ///     (D)   (E)
+    /// ```
+    ///
+    /// - Nodes `{ A, C }` are **removed**.
     pub fn setTreeRoot(self: *HeaviestSubtreeForkChoice, new_root: *const SlotAndHash) !void {
         // Remove everything reachable from old root but not new root
         var remove_set = try self.subtreeDiff(&self.tree_root, new_root);
