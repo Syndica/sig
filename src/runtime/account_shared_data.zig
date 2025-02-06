@@ -9,7 +9,7 @@ pub const AccountSharedData = struct {
     /// lamports in the account
     lamports: u64,
     /// data held in this account
-    data: *std.ArrayListUnmanaged(u8),
+    data: []u8,
     /// the program that owns this account. If executable, the program that loads this account.
     owner: Pubkey,
     /// this account's data contains a loaded program (and is now read-only)
@@ -17,15 +17,19 @@ pub const AccountSharedData = struct {
     /// the epoch at which this account will next owe rent
     rent_epoch: Epoch,
 
-    pub fn resize(self: *AccountSharedData, allocator: std.mem.Allocator, new_size: usize) !void {
-        try self.data.appendNTimes(allocator, 0, new_size - self.data.items.len);
+    pub fn isZeroed(self: AccountSharedData) bool {
+        // TODO: naive implementation
+        for (self.data) |byte| if (byte != 0) return false;
+        return true;
     }
 
-    pub fn equals(self: AccountSharedData, other: AccountSharedData) bool {
-        return self.lamports == other.lamports and
-            std.mem.eql(u8, self.data.items, other.data.items) and
-            self.owner.equals(&other.owner) and
-            self.executable == other.executable and
-            self.rent_epoch == other.rent_epoch;
+    pub fn resize(self: *AccountSharedData, allocator: std.mem.Allocator, new_size: usize) !void {
+        // TODO: naive implementation
+        const new_memory = try allocator.alloc(u8, new_size);
+        @memset(new_memory, 0);
+        @memcpy(new_memory[0..self.data.len], self.data);
+        allocator.free(self.data);
+        self.data.ptr = new_memory.ptr;
+        self.data.len = new_size;
     }
 };
