@@ -1,0 +1,51 @@
+---
+sidebar_position: 1
+title: Gossip
+---
+
+For an introduction to Solana's gossip protocol, check out the technical sections of our [Sig announcement blog post](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/).
+
+Check out the full associated blog post here: [https://blog.syndica.io/sig-engineering-1-gossip-protocol/](https://blog.syndica.io/sig-engineering-1-gossip-protocol/).
+
+## Repository File Outline 
+
+The main gossip files are in `src/gossip`
+
+- `service.zig`: main logic for reading, processing, and sending gossip messages
+- `table.zig`: where gossip data is stored 
+- `data.zig`: various gossip data structure definitions 
+- `pull_request.zig`: logic for sending pull *requests* 
+- `pull_response.zig`: logic for sending pull *responses* (/handling incoming pull requests)
+- `gossip_shards.zig`: data structure which stores gossip data hashes for quick lookup
+- `active_set.zig`: logic for deriving a list of peers to send push messages to
+- `ping_pong.zig`: logic for sending ping/pong messages as a heartbeat check
+
+## Benchmarks 
+
+benchmarks are located at the bottom of `service.zig`.
+
+to run the benchmarks: 
+- build sig in `ReleaseSafe` (ie, `zig build -Doptimize=ReleaseSafe`)
+- run `./zig-out/bin/benchmark gossip`
+
+this includes processing times for pings, push messages, pull responses, and 
+pull requests.
+
+```
+Benchmark                                  Iterations    Min(ms)    Max(ms)   Variance   Mean(ms)
+-------------------------------------------------------------------------------------------------
+benchmarkGossipService(10k_ping_msgs)               1       1489       1489          0       1489
+benchmarkGossipService(10k_push_msgs)               1      11811      11811          0      11811
+benchmarkGossipService(10k_pull_resp_msgs)          1      11761      11761          0      11761
+
+Benchmark                                   Iterations    Min(ms)    Max(ms)   Variance   Mean(ms)
+--------------------------------------------------------------------------------------------------
+benchmarkPullRequests(1k_data_1k_pull_reqs)           1        528        528          0        528
+benchmarkPullRequests(10k_data_1k_pull_reqs)          1        575        575          0        575
+```
+
+## Fuzzing
+
+The fuzzing client is located in `fuzz.zig`. 
+
+See the [contributing docs](../contributing/dev-tools#fuzzing) for instructions on how to run it.

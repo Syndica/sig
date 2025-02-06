@@ -1,4 +1,8 @@
-# benchmarks
+---
+sidebar_position: 8
+title: Benchmarks
+---
+# Benchmarks
 
 - run all benchmarks: `./zig-out/bin/benchmark`
 - filter specific cases: `./zig-out/bin/benchmark accounts_db_readwrite`
@@ -45,7 +49,7 @@ python scripts/view_bench.py readWriteAccounts_runtimes.csv readWriteAccounts_ru
 # benchmark2, 1, 2, 3, 4, 5
 ```
 
-![example_benchmark_viz](imgs/bench_eg.png)
+![example_benchmark_viz](/img/bench_eg.png)
 - each point on y-axis=0 is a runtime
 - the point on y-axis=1 is the mean with the bar surrounding it being the standard deviation
 
