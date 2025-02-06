@@ -125,7 +125,7 @@ pub const Transaction = struct {
         };
     }
 
-    pub fn sanitize(self: Transaction) !void {
+    pub fn validate(self: Transaction) !void {
         // number of accounts should match spec in header. signed and unsigned should not overlap.
         if (self.signature_count +| self.readonly_unsigned_count > self.account_keys.len)
             return error.NotEnoughAccounts;
@@ -326,11 +326,11 @@ test "sanitize succeeds minimal valid transaction" {
         .instructions = &.{},
         .address_lookups = &.{},
     };
-    try std.testing.expectEqual({}, transaction.sanitize());
+    try std.testing.expectEqual({}, transaction.validate());
 }
 
 test "sanitize fails empty transaction" {
-    try std.testing.expectError(error.MissingWritableFeePayer, Transaction.EMPTY.sanitize());
+    try std.testing.expectError(error.MissingWritableFeePayer, Transaction.EMPTY.validate());
 }
 
 test "sanitize fails missing signers" {
@@ -345,7 +345,7 @@ test "sanitize fails missing signers" {
         .instructions = &.{},
         .address_lookups = &.{},
     };
-    try std.testing.expectEqual(error.NotEnoughAccounts, transaction.sanitize());
+    try std.testing.expectEqual(error.NotEnoughAccounts, transaction.validate());
 }
 
 test "sanitize fails missing unsigned" {
@@ -360,7 +360,7 @@ test "sanitize fails missing unsigned" {
         .instructions = &.{},
         .address_lookups = &.{},
     };
-    try std.testing.expectEqual(error.NotEnoughAccounts, transaction.sanitize());
+    try std.testing.expectEqual(error.NotEnoughAccounts, transaction.validate());
 }
 
 test "sanitize fails no writable signed" {
@@ -375,7 +375,7 @@ test "sanitize fails no writable signed" {
         .instructions = &.{},
         .address_lookups = &.{},
     };
-    try std.testing.expectEqual(error.MissingWritableFeePayer, transaction.sanitize());
+    try std.testing.expectEqual(error.MissingWritableFeePayer, transaction.validate());
 }
 
 test "sanitize fails missing program id" {
@@ -394,7 +394,7 @@ test "sanitize fails missing program id" {
         }},
         .address_lookups = &.{},
     };
-    try std.testing.expectEqual(error.ProgramIdAccountMissing, transaction.sanitize());
+    try std.testing.expectEqual(error.ProgramIdAccountMissing, transaction.validate());
 }
 
 test "sanitize fails if program id has index 0" {
@@ -413,7 +413,7 @@ test "sanitize fails if program id has index 0" {
         }},
         .address_lookups = &.{},
     };
-    try std.testing.expectEqual(error.ProgramIdCannotBePayer, transaction.sanitize());
+    try std.testing.expectEqual(error.ProgramIdCannotBePayer, transaction.validate());
 }
 
 test "satinize fails account index out of bounds" {
@@ -432,7 +432,7 @@ test "satinize fails account index out of bounds" {
         }},
         .address_lookups = &.{},
     };
-    try std.testing.expectEqual(error.AccountIndexOutOfBounds, transaction.sanitize());
+    try std.testing.expectEqual(error.AccountIndexOutOfBounds, transaction.validate());
 }
 
 test "parse legacy" {

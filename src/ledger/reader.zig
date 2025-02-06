@@ -510,9 +510,9 @@ pub const BlockstoreReader = struct {
             txns_with_statuses.deinit();
         }
         for (slot_transactions.items) |transaction| {
-            transaction.sanitize() catch |err| {
+            transaction.validate() catch |err| {
                 self.logger.warn().logf(
-                    "getCompleteeBlockWithEntries sanitize failed: {any}, slot: {any}, {any}",
+                    "getCompleteeBlockWithEntries validate failed: {any}, slot: {any}, {any}",
                     .{ err, slot, transaction },
                 );
             };
@@ -721,10 +721,10 @@ pub const BlockstoreReader = struct {
         // NOTE perf: linear search runs from scratch every time this is called
         for (slot_entries.items) |entry| {
             for (entry.transactions.items) |transaction| {
-                // NOTE perf: redundant calls to sanitize every time this is called
-                if (transaction.sanitize()) |_| {} else |err| {
+                // NOTE perf: redundant calls to validate every time this is called
+                if (transaction.validate()) |_| {} else |err| {
                     self.logger.warn().logf(
-                        "BlockstoreReader.findTransactionInSlot sanitize failed: {any}, slot: {}, {any}",
+                        "BlockstoreReader.findTransactionInSlot validate failed: {any}, slot: {}, {any}",
                         .{ err, slot, transaction },
                     );
                 }
