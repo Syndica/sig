@@ -2,6 +2,9 @@ const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 
+pub const NATIVE_LOADER_ID =
+    Pubkey.fromString("NativeLoader1111111111111111111111111111111") catch unreachable;
+
 pub const SYSVAR_OWNER_ID =
     Pubkey.fromString("Sysvar1111111111111111111111111111111111111") catch unreachable;
 pub const SYSVAR_CLOCK_ID =
