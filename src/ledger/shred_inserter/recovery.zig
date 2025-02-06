@@ -5,7 +5,7 @@ const ledger = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
-const Lru = sig.common.lru.LruCacheCustom;
+const Lru = sig.utils.lru.LruCacheCustom;
 
 const CodeShred = ledger.shred.CodeShred;
 const CodeShredHeader = ledger.shred.CodeHeader;
@@ -301,7 +301,8 @@ fn setMerkleProofs(
     var tree = try std.ArrayList(Hash).initCapacity(allocator, all_shreds.len);
     defer tree.deinit();
     for (all_shreds) |shred| {
-        tree.appendAssumeCapacity(try shred.merkleNode());
+        const merkle_node = try sig.ledger.shred.getMerkleNode(shred.payload());
+        tree.appendAssumeCapacity(merkle_node);
     }
     try makeMerkleTree(&tree);
 
@@ -319,7 +320,7 @@ fn setMerkleProofs(
             return error.InvalidMerkleProof;
         }
         if (was_present) {
-            const expected_proof = try shred.merkleProof();
+            const expected_proof = try sig.ledger.shred.getMerkleProof(shred.payload());
             var expected_proof_iterator = expected_proof.iterator();
             var i: usize = 0;
             while (expected_proof_iterator.next()) |expected_entry| : (i += 1) {
@@ -329,8 +330,8 @@ fn setMerkleProofs(
                 }
             }
         } else {
-            try shred.setMerkleProof(proof);
-            std.debug.assert(!std.meta.isError(shred.sanitize()));
+            try sig.ledger.shred.setMerkleProof(shred.payloadMut(), proof);
+            std.debug.assert(!std.meta.isError(shred.sanitize())); // TODO error somewhere else
             // TODO: Assert that shred payload is fully populated.
         }
     }
@@ -461,7 +462,7 @@ const expected_metadata = blk: {
 
     break :blk RecoveryMetadata{
         .common_header = CommonHeader{
-            .leader_signature = Signature.fromString(
+            .leader_signature = Signature.parseBase58String(
                 "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2s" ++
                     "AmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m",
             ) catch unreachable,

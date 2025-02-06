@@ -277,8 +277,15 @@ pub const BytesRef = struct {
     data: []const u8,
     deinitializer: ?Deinitializer = null,
 
-    pub fn deinit(self: @This()) void {
+    pub fn deinit(self: BytesRef) void {
         if (self.deinitializer) |d| d.deinit(self.data);
+    }
+
+    pub fn clone(self: BytesRef, allocator: Allocator) Allocator.Error!BytesRef {
+        return .{
+            .data = try allocator.dupe(u8, self.data),
+            .deinitializer = .{ .allocator = allocator },
+        };
     }
 
     pub const Deinitializer = union(enum) {

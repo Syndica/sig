@@ -510,9 +510,9 @@ pub const BlockstoreReader = struct {
             txns_with_statuses.deinit();
         }
         for (slot_transactions.items) |transaction| {
-            transaction.sanitize() catch |err| {
+            transaction.validate() catch |err| {
                 self.logger.warn().logf(
-                    "getCompleteeBlockWithEntries sanitize failed: {any}, slot: {any}, {any}",
+                    "getCompleteeBlockWithEntries validate failed: {any}, slot: {any}, {any}",
                     .{ err, slot, transaction },
                 );
             };
@@ -558,14 +558,17 @@ pub const BlockstoreReader = struct {
         const block_time = try self.db.get(self.allocator, schema.blocktime, slot);
         const block_height = try self.db.get(self.allocator, schema.block_height, slot);
 
-        return VersionedConfirmedBlockWithEntries{
-            .block = VersionedConfirmedBlock{
+        const transactions = try txns_with_statuses.toOwnedSlice();
+        errdefer self.allocator.free(transactions);
+
+        return .{
+            .block = .{
                 .allocator = self.allocator,
-                .previous_blockhash = try previous_blockhash.base58EncodeAlloc(self.allocator),
-                .blockhash = try blockhash.base58EncodeAlloc(self.allocator),
+                .previous_blockhash = previous_blockhash,
+                .blockhash = blockhash,
                 // If the slot is full it should have parent_slot populated from shreds received.
                 .parent_slot = slot_meta.parent_slot orelse return error.MissingParentSlot,
-                .transactions = try txns_with_statuses.toOwnedSlice(),
+                .transactions = transactions,
                 .rewards = rewards.rewards,
                 .num_partitions = rewards.num_partitions,
                 .block_time = block_time,
@@ -718,10 +721,10 @@ pub const BlockstoreReader = struct {
         // NOTE perf: linear search runs from scratch every time this is called
         for (slot_entries.items) |entry| {
             for (entry.transactions.items) |transaction| {
-                // NOTE perf: redundant calls to sanitize every time this is called
-                if (transaction.sanitize()) |_| {} else |err| {
+                // NOTE perf: redundant calls to validate every time this is called
+                if (transaction.validate()) |_| {} else |err| {
                     self.logger.warn().logf(
-                        "BlockstoreReader.findTransactionInSlot sanitize failed: {any}, slot: {}, {any}",
+                        "BlockstoreReader.findTransactionInSlot validate failed: {any}, slot: {}, {any}",
                         .{ err, slot, transaction },
                     );
                 }
@@ -838,7 +841,7 @@ pub const BlockstoreReader = struct {
             .address = address,
             .slot = slot,
             .transaction_index = 0,
-            .signature = Signature.init(.{0} ** 64),
+            .signature = Signature.ZEROES,
         });
 
         // Iterate until limit is reached
@@ -948,7 +951,7 @@ pub const BlockstoreReader = struct {
             .address = pubkey,
             .slot = @max(slot, lowest_available_slot),
             .transaction_index = 0,
-            .signature = Signature.init(.{0} ** 64),
+            .signature = Signature.ZEROES,
         });
         defer index_iterator.deinit();
         while (try index_iterator.nextKey()) |key| {
@@ -1379,8 +1382,8 @@ const CompletedRanges = ArrayList(struct { u32, u32 });
 /// is always present. Used for uploading to BigTable.
 pub const VersionedConfirmedBlock = struct {
     allocator: Allocator,
-    previous_blockhash: []const u8,
-    blockhash: []const u8,
+    previous_blockhash: Hash,
+    blockhash: Hash,
     parent_slot: Slot,
     transactions: []const VersionedTransactionWithStatusMeta,
     rewards: []const ledger.meta.Reward,
@@ -1393,8 +1396,6 @@ pub const VersionedConfirmedBlock = struct {
         for (self.rewards) |it| it.deinit(allocator);
         allocator.free(self.transactions);
         allocator.free(self.rewards);
-        allocator.free(self.previous_blockhash);
-        allocator.free(self.blockhash);
     }
 };
 
@@ -2106,7 +2107,7 @@ test "findMissingDataIndexes" {
         .resigned = false,
     };
     shred.data.common.variant = variant;
-    try shred.data.writePayload(&(.{2} ** 100));
+    try ledger.shred.overwriteShredForTest(allocator, &shred, &(.{2} ** 100));
 
     var slot_meta = SlotMeta.init(allocator, shred_slot, null);
     slot_meta.last_index = 4;
@@ -2175,7 +2176,7 @@ test "getCodeShred" {
     shred.code.common.variant = variant;
     shred.code.custom.num_data_shreds = 1;
     shred.code.custom.num_code_shreds = 1;
-    try shred.code.writePayload(&(.{2} ** 100));
+    try ledger.shred.overwriteShredForTest(allocator, &shred, &(.{2} ** 100));
 
     const shred_slot = shred.commonHeader().slot;
     const shred_index = shred.commonHeader().index;

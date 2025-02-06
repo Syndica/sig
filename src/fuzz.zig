@@ -1,6 +1,5 @@
 const std = @import("std");
 const sig = @import("sig.zig");
-const config = @import("./cmd/config.zig");
 
 const accountsdb_fuzz = sig.accounts_db.fuzz;
 const gossip_fuzz_service = sig.gossip.fuzz_service;
@@ -43,12 +42,14 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
-    logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
+    const metrics_port: u16 = 12345;
+
+    logger.info().logf("metrics port: {d}", .{metrics_port});
     const metrics_thread = try spawnMetrics(
         // TODO: use the GPA here, the server is just leaking because we're losing the handle
         // to it and never deiniting.
         std.heap.c_allocator,
-        config.current.metrics_port,
+        metrics_port,
     );
     metrics_thread.detach();
 

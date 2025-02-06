@@ -17,7 +17,6 @@ const GossipTable = sig.gossip.GossipTable;
 const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
 const AtomicUsize = std.atomic.Value(usize);
-const ThreadPool = sig.sync.ThreadPool;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 
@@ -476,7 +475,7 @@ const TestEnvironment = struct {
         var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
         errdefer staked_nodes.deinit();
 
-        var gossip_table = try GossipTable.init(params.allocator);
+        var gossip_table = try GossipTable.init(params.allocator, params.allocator);
         errdefer gossip_table.deinit();
 
         // Add known nodes to the gossip table
@@ -492,7 +491,10 @@ const TestEnvironment = struct {
             );
             try contact_info.setSocket(.turbine_recv, SocketAddr.initRandom(params.random));
             _ = try gossip_table.insert(
-                SignedGossipData{ .signature = .{}, .data = .{ .ContactInfo = contact_info } },
+                .{
+                    .signature = sig.core.Signature.ZEROES,
+                    .data = .{ .ContactInfo = contact_info },
+                },
                 0,
             );
             if (i == 0) my_contact_info = ThreadSafeContactInfo.fromContactInfo(contact_info);
@@ -807,7 +809,9 @@ test "agave: get retransmit nodes round trip" {
 
 test "agave-equivalence: get seeeded rng" {
     {
-        const pubkey = try Pubkey.fromString("57fFnkGGWzfnhmQEqbCBtZoYnNh26QxFa3FXZJhLmA19");
+        const pubkey = try Pubkey.parseBase58String(
+            "57fFnkGGWzfnhmQEqbCBtZoYnNh26QxFa3FXZJhLmA19",
+        );
         const shred_id = ShredId{ .slot = 1_013, .index = 10, .shred_type = .data };
         var chacha = TurbineTree.getSeededRng(pubkey, shred_id);
         const rng = chacha.random();
@@ -816,7 +820,9 @@ test "agave-equivalence: get seeeded rng" {
         try std.testing.expectEqual(3913197096749217054, rng.int(u64));
     }
     {
-        const pubkey = try Pubkey.fromString("3qChSzvc79TAKbd7jM8uAGHzeNh6PTjvQR8WPFiftNUq");
+        const pubkey = try Pubkey.parseBase58String(
+            "3qChSzvc79TAKbd7jM8uAGHzeNh6PTjvQR8WPFiftNUq",
+        );
         const shred_id = ShredId{ .slot = 200_378, .index = 0, .shred_type = .data };
         var chacha = TurbineTree.getSeededRng(pubkey, shred_id);
         const rng = chacha.random();
@@ -843,10 +849,9 @@ pub fn makeTestCluster(params: struct {
     var stakes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
     errdefer stakes.deinit();
 
-    var gossip_table_tp = ThreadPool.init(.{});
     var gossip_table = try GossipTable.init(
         params.allocator,
-        &gossip_table_tp,
+        params.allocator,
     );
     errdefer gossip_table.deinit();
 

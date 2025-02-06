@@ -1,14 +1,9 @@
-const std = @import("std");
 const builtin = @import("builtin");
-const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
-const network = @import("zig-network");
-const sig = @import("../sig.zig");
-const config = @import("config.zig");
-const zstd = @import("zstd");
+const sig = @import("sig.zig");
+const std = @import("std");
+const config = @import("cmd/config.zig");
 
-const Allocator = std.mem.Allocator;
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
 const Bank = sig.accounts_db.Bank;
@@ -18,11 +13,8 @@ const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
-const Network = config.Network;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.Pubkey;
-const ShredCollectorDependencies = sig.shred_network.ShredCollectorDependencies;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
@@ -33,13 +25,12 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 const SocketTag = sig.gossip.SocketTag;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
-const getOrInitIdentity = sig.cmd.helpers.getOrInitIdentity;
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
 const spawnMetrics = sig.prometheus.spawnMetrics;
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
-const createGeyserWriterFromConfig = sig.geyser.core.createGeyserWriterFromConfig;
+const createGeyserWriter = sig.geyser.core.createGeyserWriter;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = if (builtin.mode == .Debug)
@@ -55,14 +46,32 @@ const gossip_value_gpa_allocator = if (builtin.mode == .Debug)
 else
     std.heap.c_allocator;
 
-// The identifier for the scoped logger used in this file.
+/// The identifier for the scoped logger used in this file.
 const LOG_SCOPE = "cmd";
+const ScopedLogger = sig.trace.ScopedLogger(LOG_SCOPE);
 
-pub fn run() !void {
+var current_config: config.Cmd = .{};
+
+// We set this so that std.log knows not to log .debug level messages
+// which libraries we import will use
+pub const std_options: std.Options = .{
+    // Set the log level to info
+    .log_level = .info,
+};
+
+pub fn main() !void {
     defer {
         // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
         // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
     }
+
+    var shred_version_option = cli.Option{
+        .long_name = "shred-version",
+        .help = "The shred version for the network",
+        .value_ref = cli.mkRef(&current_config.shred_version),
+        .required = false,
+        .value_name = "Shred Version",
+    };
 
     var gossip_host_option = cli.Option{
         .long_name = "gossip-host",
@@ -70,7 +79,7 @@ pub fn run() !void {
         \\IPv4 address for the validator to advertise in gossip
         \\ - default: get from --entrypoint, fallback to 127.0.0.1"
         ,
-        .value_ref = cli.mkRef(&config.current.gossip.host),
+        .value_ref = cli.mkRef(&current_config.gossip.host),
         .required = false,
         .value_name = "Gossip Host",
     };
@@ -79,7 +88,7 @@ pub fn run() !void {
         .long_name = "gossip-port",
         .help = "The port to run gossip listener - default: 8001",
         .short_alias = 'p',
-        .value_ref = cli.mkRef(&config.current.gossip.port),
+        .value_ref = cli.mkRef(&current_config.gossip.port),
         .required = false,
         .value_name = "Gossip Port",
     };
@@ -87,7 +96,7 @@ pub fn run() !void {
     var repair_port_option = cli.Option{
         .long_name = "repair-port",
         .help = "The port to run shred repair listener - default: 8002",
-        .value_ref = cli.mkRef(&config.current.shred_network.repair_port),
+        .value_ref = cli.mkRef(&current_config.shred_network.repair_port),
         .required = false,
         .value_name = "Repair Port",
     };
@@ -95,15 +104,16 @@ pub fn run() !void {
     var turbine_recv_port_option = cli.Option{
         .long_name = "turbine-port",
         .help = "The port to run turbine shred listener (aka TVU port) - default: 8003",
-        .value_ref = cli.mkRef(&config.current.shred_network.turbine_recv_port),
+        .value_ref = cli.mkRef(&current_config.shred_network.turbine_recv_port),
         .required = false,
         .value_name = "Turbine Port",
     };
 
     var turbine_num_retransmit_threads = cli.Option{
         .long_name = "num-retransmit-threads",
-        .help = "The number of retransmit threads to use for the turbine service - default: cpu count",
-        .value_ref = cli.mkRef(&config.current.turbine.num_retransmit_threads),
+        .help = "The number of retransmit threads to use for the turbine service" ++
+            " - default: cpu count",
+        .value_ref = cli.mkRef(&current_config.turbine.num_retransmit_threads),
         .required = false,
         .value_name = "Number of turbine retransmit threads",
     };
@@ -112,7 +122,7 @@ pub fn run() !void {
     var turbine_overwrite_stake_for_testing = cli.Option{
         .long_name = "overwrite-stake-for-testing",
         .help = "Overwrite the stake for testing purposes",
-        .value_ref = cli.mkRef(&config.current.turbine.overwrite_stake_for_testing),
+        .value_ref = cli.mkRef(&current_config.turbine.overwrite_stake_for_testing),
         .required = false,
         .value_name = "Overwrite stake for testing",
     };
@@ -120,7 +130,7 @@ pub fn run() !void {
     var leader_schedule_option = cli.Option{
         .long_name = "leader-schedule",
         .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
-        .value_ref = cli.mkRef(&config.current.leader_schedule_path),
+        .value_ref = cli.mkRef(&current_config.leader_schedule_path),
         .required = false,
         .value_name = "Leader schedule source",
     };
@@ -128,24 +138,42 @@ pub fn run() !void {
     var max_shreds_option = cli.Option{
         .long_name = "max-shreds",
         .help = "Max number of shreds to store in the blockstore",
-        .value_ref = cli.mkRef(&config.current.leader_schedule_path),
+        .value_ref = cli.mkRef(&current_config.leader_schedule_path),
         .required = false,
         .value_name = "max shreds",
     };
 
     var test_repair_option = cli.Option{
         .long_name = "test-repair-for-slot",
-        .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
-        .value_ref = cli.mkRef(&config.current.shred_network.start_slot),
+        .help = "Set a slot here to repeatedly send repair requests for shreds from this slot." ++
+            " This is only intended for use during short-lived tests of the repair service." ++
+            " Do not set this during normal usage.",
+        .value_ref = cli.mkRef(&current_config.shred_network.start_slot),
         .required = false,
         .value_name = "slot number",
+    };
+
+    var retransmit_option = cli.Option{
+        .long_name = "no-retransmit",
+        .help = "Shreds will be received and stored but not retransmitted",
+        .value_ref = cli.mkRef(&current_config.shred_network.no_retransmit),
+        .required = false,
+        .value_name = "Disable Shred Retransmission",
+    };
+
+    var dump_shred_tracker = cli.Option{
+        .long_name = "dump-shred-tracker",
+        .help = "Create shred-tracker.txt to visually represent the currently tracked slots.",
+        .value_ref = cli.mkRef(&current_config.shred_network.dump_shred_tracker),
+        .required = false,
+        .value_name = "Dump Shred Tracker",
     };
 
     var gossip_entrypoints_option = cli.Option{
         .long_name = "entrypoint",
         .help = "gossip address of the entrypoint validators",
         .short_alias = 'e',
-        .value_ref = cli.mkRef(&config.current.gossip.entrypoints),
+        .value_ref = cli.mkRef(&current_config.gossip.entrypoints),
         .required = false,
         .value_name = "Entrypoints",
     };
@@ -154,7 +182,7 @@ pub fn run() !void {
         .long_name = "network",
         .help = "cluster to connect to - adds gossip entrypoints, sets default genesis file path",
         .short_alias = 'n',
-        .value_ref = cli.mkRef(&config.current.gossip.network),
+        .value_ref = cli.mkRef(&current_config.gossip.network),
         .required = false,
         .value_name = "Network for Entrypoints",
     };
@@ -163,7 +191,7 @@ pub fn run() !void {
         .long_name = "trusted_validator",
         .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
         .short_alias = 't',
-        .value_ref = cli.mkRef(&config.current.gossip.trusted_validators),
+        .value_ref = cli.mkRef(&current_config.gossip.trusted_validators),
         .required = false,
         .value_name = "Trusted Validator",
     };
@@ -171,7 +199,7 @@ pub fn run() !void {
     var gossip_spy_node_option = cli.Option{
         .long_name = "spy-node",
         .help = "run as a gossip spy node (minimize outgoing packets)",
-        .value_ref = cli.mkRef(&config.current.gossip.spy_node),
+        .value_ref = cli.mkRef(&current_config.gossip.spy_node),
         .required = false,
         .value_name = "Spy Node",
     };
@@ -179,7 +207,7 @@ pub fn run() !void {
     var gossip_dump_option = cli.Option{
         .long_name = "dump-gossip",
         .help = "periodically dump gossip table to csv files and logs",
-        .value_ref = cli.mkRef(&config.current.gossip.dump),
+        .value_ref = cli.mkRef(&current_config.gossip.dump),
         .required = false,
         .value_name = "Gossip Table Dump",
     };
@@ -188,7 +216,7 @@ pub fn run() !void {
         .long_name = "log-level",
         .help = "The amount of detail to log (default = debug)",
         .short_alias = 'l',
-        .value_ref = cli.mkRef(&config.current.log_level),
+        .value_ref = cli.mkRef(&current_config.log_level),
         .required = false,
         .value_name = "err|warn|info|debug",
     };
@@ -197,7 +225,7 @@ pub fn run() !void {
         .long_name = "metrics-port",
         .help = "port to expose prometheus metrics via http - default: 12345",
         .short_alias = 'm',
-        .value_ref = cli.mkRef(&config.current.metrics_port),
+        .value_ref = cli.mkRef(&current_config.metrics_port),
         .required = false,
         .value_name = "port_number",
     };
@@ -207,7 +235,7 @@ pub fn run() !void {
         .long_name = "n-threads-snapshot-load",
         .help = "number of threads used to initialize the account index: - default: ncpus",
         .short_alias = 't',
-        .value_ref = cli.mkRef(&config.current.accounts_db.num_threads_snapshot_load),
+        .value_ref = cli.mkRef(&current_config.accounts_db.num_threads_snapshot_load),
         .required = false,
         .value_name = "n_threads_snapshot_load",
     };
@@ -216,7 +244,7 @@ pub fn run() !void {
         .long_name = "n-threads-snapshot-unpack",
         .help = "number of threads to unpack snapshots (from .tar.zst) - default: ncpus * 2",
         .short_alias = 'u',
-        .value_ref = cli.mkRef(&config.current.accounts_db.num_threads_snapshot_unpack),
+        .value_ref = cli.mkRef(&current_config.accounts_db.num_threads_snapshot_unpack),
         .required = false,
         .value_name = "n_threads_snapshot_unpack",
     };
@@ -225,7 +253,7 @@ pub fn run() !void {
         .long_name = "force-unpack-snapshot",
         .help = "unpacks a snapshot (even if it exists)",
         .short_alias = 'f',
-        .value_ref = cli.mkRef(&config.current.accounts_db.force_unpack_snapshot),
+        .value_ref = cli.mkRef(&current_config.accounts_db.force_unpack_snapshot),
         .required = false,
         .value_name = "force_unpack_snapshot",
     };
@@ -233,7 +261,7 @@ pub fn run() !void {
     var use_disk_index_option = cli.Option{
         .long_name = "use-disk-index",
         .help = "use disk-memory for the account index",
-        .value_ref = cli.mkRef(&config.current.accounts_db.use_disk_index),
+        .value_ref = cli.mkRef(&current_config.accounts_db.use_disk_index),
         .required = false,
         .value_name = "use_disk_index",
     };
@@ -241,16 +269,18 @@ pub fn run() !void {
     var force_new_snapshot_download_option = cli.Option{
         .long_name = "force-new-snapshot-download",
         .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
-        .value_ref = cli.mkRef(&config.current.accounts_db.force_new_snapshot_download),
+        .value_ref = cli.mkRef(&current_config.accounts_db.force_new_snapshot_download),
         .required = false,
         .value_name = "force_new_snapshot_download",
     };
 
     var snapshot_dir_option = cli.Option{
         .long_name = "snapshot-dir",
-        .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: {VALIDATOR_DIR}/accounts_db",
+        .help = "path to snapshot directory" ++
+            " (where snapshots are downloaded and/or unpacked to/from)" ++
+            " - default: {VALIDATOR_DIR}/accounts_db",
         .short_alias = 's',
-        .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_dir),
+        .value_ref = cli.mkRef(&current_config.accounts_db.snapshot_dir),
         .required = false,
         .value_name = "snapshot_dir",
     };
@@ -258,24 +288,26 @@ pub fn run() !void {
     var snapshot_metadata_only = cli.Option{
         .long_name = "snapshot-metadata-only",
         .help = "load only the snapshot metadata",
-        .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_metadata_only),
+        .value_ref = cli.mkRef(&current_config.accounts_db.snapshot_metadata_only),
         .required = false,
         .value_name = "snapshot_metadata_only",
     };
 
     var genesis_file_path = cli.Option{
         .long_name = "genesis-file-path",
-        .help = "path to the genesis file. defaults to 'data/genesis-files/<network>_genesis.bin' if --network option is set",
+        .help = "path to the genesis file." ++
+            " defaults to 'data/genesis-files/<network>_genesis.bin' if --network option is set",
         .short_alias = 'g',
-        .value_ref = cli.mkRef(&config.current.genesis_file_path),
+        .value_ref = cli.mkRef(&current_config.genesis_file_path),
         .required = false,
         .value_name = "genesis_file_path",
     };
 
     var min_snapshot_download_speed_mb_option = cli.Option{
         .long_name = "min-snapshot-download-speed",
-        .help = "minimum download speed of full snapshots in megabytes per second - default: 20MB/s",
-        .value_ref = cli.mkRef(&config.current.accounts_db.min_snapshot_download_speed_mbs),
+        .help = "minimum download speed of full snapshots in megabytes per second" ++
+            " - default: 20MB/s",
+        .value_ref = cli.mkRef(&current_config.accounts_db.min_snapshot_download_speed_mbs),
         .required = false,
         .value_name = "min_snapshot_download_speed_mb",
     };
@@ -283,7 +315,7 @@ pub fn run() !void {
     var number_of_index_shards_option = cli.Option{
         .long_name = "number-of-index-bins",
         .help = "number of shards for the account index's pubkey_ref_map",
-        .value_ref = cli.mkRef(&config.current.accounts_db.number_of_index_shards),
+        .value_ref = cli.mkRef(&current_config.accounts_db.number_of_index_shards),
         .required = false,
         .value_name = "number_of_index_shards",
     };
@@ -292,7 +324,7 @@ pub fn run() !void {
         .long_name = "accounts-per-file-estimate",
         .short_alias = 'a',
         .help = "number of accounts to estimate inside of account files (used for pre-allocation)",
-        .value_ref = cli.mkRef(&config.current.accounts_db.accounts_per_file_estimate),
+        .value_ref = cli.mkRef(&current_config.accounts_db.accounts_per_file_estimate),
         .required = false,
         .value_name = "accounts_per_file_estimate",
     };
@@ -300,7 +332,7 @@ pub fn run() !void {
     var fastload_option = cli.Option{
         .long_name = "fastload",
         .help = "fastload the accounts db",
-        .value_ref = cli.mkRef(&config.current.accounts_db.fastload),
+        .value_ref = cli.mkRef(&current_config.accounts_db.fastload),
         .required = false,
         .value_name = "fastload",
     };
@@ -308,7 +340,7 @@ pub fn run() !void {
     var save_index_option = cli.Option{
         .long_name = "save-index",
         .help = "save the account index to disk",
-        .value_ref = cli.mkRef(&config.current.accounts_db.save_index),
+        .value_ref = cli.mkRef(&current_config.accounts_db.save_index),
         .required = false,
         .value_name = "save_index",
     };
@@ -317,7 +349,7 @@ pub fn run() !void {
     var enable_geyser_option = cli.Option{
         .long_name = "enable-geyser",
         .help = "enable geyser",
-        .value_ref = cli.mkRef(&config.current.geyser.enable),
+        .value_ref = cli.mkRef(&current_config.geyser.enable),
         .required = false,
         .value_name = "enable_geyser",
     };
@@ -325,7 +357,7 @@ pub fn run() !void {
     var geyser_pipe_path_option = cli.Option{
         .long_name = "geyser-pipe-path",
         .help = "path to the geyser pipe",
-        .value_ref = cli.mkRef(&config.current.geyser.pipe_path),
+        .value_ref = cli.mkRef(&current_config.geyser.pipe_path),
         .required = false,
         .value_name = "geyser_pipe_path",
     };
@@ -333,7 +365,7 @@ pub fn run() !void {
     var geyser_writer_fba_bytes_option = cli.Option{
         .long_name = "geyser-writer-fba-bytes",
         .help = "number of bytes to allocate for the geyser writer",
-        .value_ref = cli.mkRef(&config.current.geyser.writer_fba_bytes),
+        .value_ref = cli.mkRef(&current_config.geyser.writer_fba_bytes),
         .required = false,
         .value_name = "geyser_writer_fba_bytes",
     };
@@ -343,7 +375,7 @@ pub fn run() !void {
         .long_name = "n-transactions",
         .short_alias = 't',
         .help = "number of transactions to send",
-        .value_ref = cli.mkRef(&config.current.test_transaction_sender.n_transactions),
+        .value_ref = cli.mkRef(&current_config.test_transaction_sender.n_transactions),
         .required = false,
         .value_name = "n_transactions",
     };
@@ -352,7 +384,7 @@ pub fn run() !void {
         .long_name = "n-lamports-per-tx",
         .short_alias = 'l',
         .help = "number of lamports to send per transaction",
-        .value_ref = cli.mkRef(&config.current.test_transaction_sender.n_lamports_per_transaction),
+        .value_ref = cli.mkRef(&current_config.test_transaction_sender.n_lamports_per_transaction),
         .required = false,
         .value_name = "n_lamports_per_tx",
     };
@@ -363,7 +395,9 @@ pub fn run() !void {
         .command = .{
             .name = "sig",
             .description = .{
-                .one_line = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
+                .one_line =
+                \\Sig is a Solana client implementation written in Zig.
+                \\This is still a WIP, PRs welcome.
                 // .detailed = "",
             },
             .options = &.{ &log_level_option, &metrics_port_option },
@@ -401,6 +435,7 @@ pub fn run() !void {
                             &gossip_spy_node_option,
                             &gossip_dump_option,
                             &network_option,
+                            &shred_version_option,
                         },
                         .target = .{
                             .action = .{
@@ -418,6 +453,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &gossip_host_option,
                             &gossip_port_option,
@@ -462,33 +498,38 @@ pub fn run() !void {
                     },
 
                     &cli.Command{
-                        .name = "shred-collector",
-                        .description = .{ .one_line = "Run the shred collector to collect and store shreds", .detailed = 
-                        \\ This command runs the shred collector without running the full validator
-                        \\ (mainly excluding the accounts-db setup).
-                        \\
-                        \\ NOTE: this means that this command *requires* a leader schedule to be provided
-                        \\ (which would usually be derived from the accountsdb snapshot).
-                        \\
-                        \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well
-                        \\ (which is usually derived from the accountsdb snapshot).
-                        \\ This can be done with `--test-repair-for-slot $(solana slot -u testnet)`
-                        \\ for testnet or another `-u` for mainnet/devnet.
+                        .name = "shred-network",
+                        .description = .{
+                            .one_line = "Run the shred network to collect and store shreds",
+                            .detailed =
+                            \\ This command runs the shred network without running the full validator
+                            \\ (mainly excluding the accounts-db setup).
+                            \\
+                            \\ NOTE: this means that this command *requires* a leader schedule to be provided
+                            \\ (which would usually be derived from the accountsdb snapshot).
+                            \\
+                            \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well
+                            \\ (which is usually derived from the accountsdb snapshot).
+                            \\ This can be done with `--test-repair-for-slot $(solana slot -u testnet)`
+                            \\ for testnet or another `-u` for mainnet/devnet.
+                            ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &gossip_host_option,
                             &gossip_port_option,
                             &gossip_entrypoints_option,
                             &gossip_spy_node_option,
                             &gossip_dump_option,
-                            // repair
+                            // shred_network
                             &turbine_recv_port_option,
                             &repair_port_option,
                             &test_repair_option,
-                            // turbine
+                            &dump_shred_tracker,
                             &turbine_num_retransmit_threads,
                             &turbine_overwrite_stake_for_testing,
+                            &retransmit_option,
                             // blockstore cleanup service
                             &max_shreds_option,
                             // general
@@ -498,7 +539,7 @@ pub fn run() !void {
                         },
                         .target = .{
                             .action = .{
-                                .exec = shredCollector,
+                                .exec = shredNetwork,
                             },
                         },
                     },
@@ -512,6 +553,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // where to download the snapshot
                             &snapshot_dir_option,
                             // download options
@@ -564,7 +606,9 @@ pub fn run() !void {
                     &cli.Command{
                         .name = "snapshot-create",
                         .description = .{
-                            .one_line = "Loads from a snapshot and outputs to new snapshot alt_{VALIDATOR_DIR}/",
+                            .one_line =
+                            \\Loads from a snapshot and outputs to new snapshot alt_{VALIDATOR_DIR}/
+                            ,
                         },
                         .options = &.{
                             &snapshot_dir_option,
@@ -609,6 +653,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &gossip_host_option,
                             &gossip_port_option,
@@ -648,6 +693,7 @@ pub fn run() !void {
                             ,
                         },
                         .options = &.{
+                            &shred_version_option,
                             // gossip
                             &network_option,
                             &gossip_host_option,
@@ -679,7 +725,7 @@ fn identity() !void {
     const logger = try spawnLogger(gpa_allocator);
     defer logger.deinit();
 
-    const keypair = try getOrInitIdentity(gpa_allocator, logger);
+    const keypair = try sig.identity.getOrInit(gpa_allocator, logger);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
     logger.info().logf("Identity: {s}\n", .{pubkey});
@@ -713,9 +759,9 @@ fn validator() !void {
         app_base.deinit();
     }
 
-    const repair_port: u16 = config.current.shred_network.repair_port;
-    const turbine_recv_port: u16 = config.current.shred_network.turbine_recv_port;
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const repair_port: u16 = current_config.shred_network.repair_port;
+    const turbine_recv_port: u16 = current_config.shred_network.turbine_recv_port;
+    const snapshot_dir_str = current_config.accounts_db.snapshot_dir;
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
@@ -730,19 +776,19 @@ fn validator() !void {
         allocator.destroy(gossip_service);
     }
 
-    const geyser_writer: ?*GeyserWriter = createGeyserWriterFromConfig(
-        allocator,
-        config.current.geyser,
-    ) catch |err| switch (err) {
-        error.GeyserWriterIsDisabled => null,
-        else => return err,
+    const geyser_writer: ?*GeyserWriter = if (!current_config.geyser.enable)
+        null
+    else
+        try createGeyserWriter(
+            allocator,
+            current_config.geyser.pipe_path,
+            current_config.geyser.writer_fba_bytes,
+        );
+    defer if (geyser_writer) |geyser| {
+        geyser.deinit();
+        allocator.destroy(geyser.exit);
+        allocator.destroy(geyser);
     };
-    defer {
-        if (geyser_writer) |geyser| {
-            geyser.deinit();
-            allocator.destroy(geyser.exit);
-        }
-    }
 
     // snapshot
     var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
@@ -752,14 +798,17 @@ fn validator() !void {
     });
     defer loaded_snapshot.deinit();
 
+    const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
+    const bank_fields = &collapsed_manifest.bank_fields;
+
     // leader schedule
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, loaded_snapshot.collapsed_manifest.bank_fields.epoch_schedule);
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, bank_fields.epoch_schedule);
     if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
-        try leader_schedule_cache.put(loaded_snapshot.collapsed_manifest.bank_fields.epoch, leader_schedule[1]);
+        try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
     } else {
-        const schedule = try loaded_snapshot.collapsed_manifest.bank_fields.leaderSchedule(allocator);
+        const schedule = try bank_fields.leaderSchedule(allocator);
         errdefer schedule.deinit();
-        try leader_schedule_cache.put(loaded_snapshot.collapsed_manifest.bank_fields.epoch, schedule);
+        try leader_schedule_cache.put(bank_fields.epoch, schedule);
     }
 
     // blockstore
@@ -800,7 +849,7 @@ fn validator() !void {
         blockstore_reader,
         &blockstore_db,
         lowest_cleanup_slot,
-        config.current.max_shreds,
+        current_config.max_shreds,
         &app_base.exit,
     });
     defer cleanup_service_handle.join();
@@ -809,34 +858,51 @@ fn validator() !void {
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
     // shred networking
-    const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+    const my_contact_info =
+        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
-    const epoch_schedule = loaded_snapshot.collapsed_manifest.bank_fields.epoch_schedule;
-    const epoch = loaded_snapshot.collapsed_manifest.bank_fields.epoch;
-    const staked_nodes = try loaded_snapshot.collapsed_manifest.bank_fields.getStakedNodes(allocator, epoch);
+    const epoch_schedule = bank_fields.epoch_schedule;
+    const epoch = bank_fields.epoch;
+    const staked_nodes =
+        try bank_fields.getStakedNodes(allocator, epoch);
 
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
+    var epoch_context_manager = try sig.adapter.EpochContextManager.init(
+        allocator,
+        epoch_schedule,
+    );
     try epoch_context_manager.put(epoch, .{
         .staked_nodes = try staked_nodes.clone(allocator),
-        .leader_schedule = try LeaderSchedule
-            .fromStakedNodes(allocator, epoch, epoch_schedule.slots_per_epoch, staked_nodes),
+        .leader_schedule = try LeaderSchedule.fromStakedNodes(
+            allocator,
+            epoch,
+            epoch_schedule.slots_per_epoch,
+            staked_nodes,
+        ),
     });
-    var rpc_client = sig.rpc.Client.init(allocator, loaded_snapshot.genesis_config.cluster_type, .{});
+
+    const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
+    var rpc_client = sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
     defer rpc_client.deinit();
-    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
-        .init(allocator, app_base.logger.unscoped(), &epoch_context_manager, rpc_client);
+
+    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
+        allocator,
+        app_base.logger.unscoped(),
+        &epoch_context_manager,
+        rpc_client,
+    );
+
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
         .{ &rpc_epoch_ctx_service, &app_base.exit },
     );
 
-    // shred collector
-    var shred_col_conf = config.current.shred_network;
-    shred_col_conf.start_slot = shred_col_conf.start_slot orelse loaded_snapshot.collapsed_manifest.bank_fields.slot;
+    const turbine_config = current_config.turbine;
+
+    // shred network
     var shred_network_manager = try sig.shred_network.start(
-        shred_col_conf,
-        ShredCollectorDependencies{
+        current_config.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
+        .{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
             .registry = app_base.metrics_registry,
@@ -848,8 +914,8 @@ fn validator() !void {
             .epoch_context_mgr = &epoch_context_manager,
             .shred_inserter = shred_inserter,
             .my_contact_info = my_contact_info,
-            .n_retransmit_threads = config.current.turbine.num_retransmit_threads,
-            .overwrite_turbine_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
+            .n_retransmit_threads = turbine_config.num_retransmit_threads,
+            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
         },
     );
     defer shred_network_manager.deinit();
@@ -859,7 +925,7 @@ fn validator() !void {
     shred_network_manager.join();
 }
 
-fn shredCollector() !void {
+fn shredNetwork() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
     defer {
@@ -867,21 +933,23 @@ fn shredCollector() !void {
         app_base.deinit();
     }
 
-    const genesis_path = try config.current.genesisFilePath() orelse
+    const genesis_path = try current_config.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
     const genesis_config = try GenesisConfig.init(allocator, genesis_path);
 
     var rpc_client = sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
 
-    var shred_network_conf = config.current.shred_network;
-    shred_network_conf.start_slot = shred_network_conf.start_slot orelse blk: {
-        const response = try rpc_client.getSlot(allocator, .{});
-        break :blk try response.result();
-    };
+    const shred_network_conf = current_config.shred_network.toConfig(
+        current_config.shred_network.start_slot orelse blk: {
+            const response = try rpc_client.getSlot(allocator, .{});
+            break :blk try response.result();
+        },
+    );
+    app_base.logger.info().logf("Starting from slot: {?}", .{shred_network_conf.start_slot});
 
-    const repair_port: u16 = config.current.shred_network.repair_port;
-    const turbine_recv_port: u16 = config.current.shred_network.turbine_recv_port;
+    const repair_port: u16 = shred_network_conf.repair_port;
+    const turbine_recv_port: u16 = shred_network_conf.turbine_recv_port;
 
     var gossip_service = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
@@ -941,34 +1009,32 @@ fn shredCollector() !void {
         blockstore_reader,
         &blockstore_db,
         lowest_cleanup_slot,
-        config.current.max_shreds,
+        current_config.max_shreds,
         &app_base.exit,
     });
     defer cleanup_service_handle.join();
 
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
-    const my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+    const my_contact_info =
+        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
-    var shred_network_manager = try sig.shred_network.start(
-        shred_network_conf,
-        .{
-            .allocator = allocator,
-            .logger = app_base.logger.unscoped(),
-            .registry = app_base.metrics_registry,
-            .random = prng.random(),
-            .my_keypair = &app_base.my_keypair,
-            .exit = &app_base.exit,
-            .gossip_table_rw = &gossip_service.gossip_table_rw,
-            .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_context_mgr = &epoch_context_manager,
-            .shred_inserter = shred_inserter,
-            .my_contact_info = my_contact_info,
-            .n_retransmit_threads = config.current.turbine.num_retransmit_threads,
-            .overwrite_turbine_stake_for_testing = config.current.turbine.overwrite_stake_for_testing,
-        },
-    );
+    var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
+        .allocator = allocator,
+        .logger = app_base.logger.unscoped(),
+        .registry = app_base.metrics_registry,
+        .random = prng.random(),
+        .my_keypair = &app_base.my_keypair,
+        .exit = &app_base.exit,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .my_shred_version = &gossip_service.my_shred_version,
+        .epoch_context_mgr = &epoch_context_manager,
+        .shred_inserter = shred_inserter,
+        .my_contact_info = my_contact_info,
+        .n_retransmit_threads = current_config.turbine.num_retransmit_threads,
+        .overwrite_turbine_stake_for_testing = current_config.turbine.overwrite_stake_for_testing,
+    });
     defer shred_network_manager.deinit();
 
     rpc_epoch_ctx_service_thread.join();
@@ -984,7 +1050,7 @@ fn printManifest() !void {
         app_base.deinit();
     }
 
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const snapshot_dir_str = current_config.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
@@ -1012,7 +1078,7 @@ fn createSnapshot() !void {
         app_base.deinit();
     }
 
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const snapshot_dir_str = current_config.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
@@ -1039,7 +1105,10 @@ fn createSnapshot() !void {
     var output_dir = try std.fs.cwd().makeOpenPath(output_dir_name, .{});
     defer output_dir.close();
 
-    app_base.logger.info().logf("accountsdb[manager]: generating full snapshot for slot {d}", .{slot});
+    app_base.logger.info().logf(
+        "accountsdb[manager]: generating full snapshot for slot {d}",
+        .{slot},
+    );
     _ = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
         .bank_fields = &loaded_snapshot.combined_manifest.full.bank_fields,
@@ -1059,23 +1128,23 @@ fn validateSnapshot() !void {
         app_base.deinit();
     }
 
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const snapshot_dir_str = current_config.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const geyser_writer: ?*GeyserWriter = createGeyserWriterFromConfig(
-        allocator,
-        config.current.geyser,
-    ) catch |err| switch (err) {
-        error.GeyserWriterIsDisabled => null,
-        else => return err,
+    const geyser_writer: ?*GeyserWriter = if (!current_config.geyser.enable)
+        null
+    else
+        try createGeyserWriter(
+            allocator,
+            current_config.geyser.pipe_path,
+            current_config.geyser.writer_fba_bytes,
+        );
+    defer if (geyser_writer) |geyser| {
+        geyser.deinit();
+        allocator.destroy(geyser.exit);
+        allocator.destroy(geyser);
     };
-    defer {
-        if (geyser_writer) |geyser| {
-            geyser.deinit();
-            allocator.destroy(geyser.exit);
-        }
-    }
 
     var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
         .gossip_service = null,
@@ -1127,8 +1196,8 @@ fn printLeaderSchedule() !void {
     try stdout.flush();
 }
 
-fn getLeaderScheduleFromCli(allocator: Allocator) !?struct { Slot, LeaderSchedule } {
-    return if (config.current.leader_schedule_path) |path|
+fn getLeaderScheduleFromCli(allocator: std.mem.Allocator) !?struct { Slot, LeaderSchedule } {
+    return if (current_config.leader_schedule_path) |path|
         if (std.mem.eql(u8, "--", path))
             try LeaderSchedule.read(allocator, std.io.getStdIn().reader())
         else
@@ -1147,7 +1216,7 @@ pub fn testTransactionSenderService() !void {
     }
 
     // read genesis (used for leader schedule)
-    const genesis_file_path = try config.current.genesisFilePath() orelse
+    const genesis_file_path = try current_config.genesisFilePath() orelse
         @panic("No genesis file path found: use -g or -n");
     const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
@@ -1159,7 +1228,7 @@ pub fn testTransactionSenderService() !void {
     }
 
     // define cluster of where to land transactions
-    const rpc_cluster: ClusterType = if (try config.current.gossip.getCluster()) |n| switch (n) {
+    const rpc_cluster: ClusterType = if (try current_config.gossip.getCluster()) |n| switch (n) {
         .mainnet => .MainnetBeta,
         .devnet => .Devnet,
         .testnet => .Testnet,
@@ -1167,11 +1236,15 @@ pub fn testTransactionSenderService() !void {
     } else {
         @panic("network option (-n) not provided");
     };
-    app_base.logger.warn().logf("Starting transaction sender service on {s}...", .{@tagName(rpc_cluster)});
+    app_base.logger.warn().logf(
+        "Starting transaction sender service on {s}...",
+        .{@tagName(rpc_cluster)},
+    );
 
     // setup channel for communication to the tx-sender service
-    const transaction_channel = try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
-    defer transaction_channel.deinit();
+    const transaction_channel =
+        try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
+    defer transaction_channel.destroy();
 
     // this handles transactions and forwards them to leaders TPU ports
     var transaction_sender_service = try sig.transaction_sender.Service.init(
@@ -1190,7 +1263,9 @@ pub fn testTransactionSenderService() !void {
     );
 
     // rpc is used to get blockhashes and other balance information
-    var rpc_client = sig.rpc.Client.init(allocator, rpc_cluster, .{ .logger = app_base.logger.unscoped() });
+    var rpc_client = sig.rpc.Client.init(allocator, rpc_cluster, .{
+        .logger = app_base.logger.unscoped(),
+    });
     defer rpc_client.deinit();
 
     // this sends mock txs to the transaction sender
@@ -1203,8 +1278,8 @@ pub fn testTransactionSenderService() !void {
     );
     // send and confirm mock transactions
     try mock_transfer_service.run(
-        config.current.test_transaction_sender.n_transactions,
-        config.current.test_transaction_sender.n_lamports_per_transaction,
+        current_config.test_transaction_sender.n_transactions,
+        current_config.test_transaction_sender.n_lamports_per_transaction,
     );
 
     gossip_service.shutdown();
@@ -1216,11 +1291,11 @@ pub fn testTransactionSenderService() !void {
 /// and deinitialized only when the app exits.
 const AppBase = struct {
     allocator: std.mem.Allocator,
-    logger: ScopedLogger(LOG_SCOPE),
+    logger: ScopedLogger,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
 
-    my_keypair: KeyPair,
+    my_keypair: sig.identity.KeyPair,
     entrypoints: []SocketAddr,
     shred_version: u16,
     my_ip: IpAddr,
@@ -1229,35 +1304,34 @@ const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     closed: bool,
 
-    const Self = @This();
-
-    fn init(allocator: Allocator) !AppBase {
+    fn init(allocator: std.mem.Allocator) !AppBase {
         const logger = (try spawnLogger(allocator)).withScope(LOG_SCOPE);
         errdefer logger.deinit();
 
         const metrics_registry = globalRegistry();
-        const metrics_thread = try spawnMetrics(allocator, config.current.metrics_port);
+        const metrics_thread = try spawnMetrics(allocator, current_config.metrics_port);
         errdefer metrics_thread.detach();
 
-        const my_keypair = try getOrInitIdentity(allocator, logger.unscoped());
+        const my_keypair = try sig.identity.getOrInit(allocator, logger.unscoped());
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-        const entrypoints = try config.current.gossip.getEntrypointAddrs(allocator);
+        const entrypoints = try current_config.gossip.getEntrypointAddrs(allocator);
 
-        const echo_data = try getShredAndIPFromEchoServer(
-            logger.unscoped(),
-            allocator,
-            entrypoints,
-        );
-        const my_shred_version = echo_data.shred_version orelse 0;
+        const echo_data = try getShredAndIPFromEchoServer(logger.unscoped(), entrypoints);
 
-        const config_host = config.current.gossip.getHost() catch null;
+        // zig fmt: off
+        const my_shred_version = current_config.shred_version
+            orelse echo_data.shred_version
+            orelse 0;
+        // zig fmt: on
+
+        const config_host = current_config.gossip.getHost() catch null;
         const my_ip = config_host orelse echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
 
-        const my_port = config.current.gossip.port;
+        const my_port = current_config.gossip.port;
 
         logger.info()
-            .field("metrics_port", config.current.metrics_port)
+            .field("metrics_port", current_config.metrics_port)
             .field("identity", my_pubkey)
             .field("entrypoints", entrypoints)
             .field("shred_version", my_shred_version)
@@ -1293,7 +1367,7 @@ const AppBase = struct {
 };
 
 fn startGossip(
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     app_base: *AppBase,
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
@@ -1305,9 +1379,14 @@ fn startGossip(
 
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
+
     var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
+    errdefer contact_info.deinit();
+
     try contact_info.setSocket(.gossip, SocketAddr.init(app_base.my_ip, app_base.my_port));
-    for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));
+    for (extra_sockets) |s| {
+        try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));
+    }
     contact_info.shred_version = app_base.shred_version;
 
     const service = try GossipService.create(
@@ -1320,8 +1399,8 @@ fn startGossip(
     );
 
     try service.start(.{
-        .spy_node = config.current.gossip.spy_node,
-        .dump = config.current.gossip.dump,
+        .spy_node = current_config.gossip.spy_node,
+        .dump = current_config.gossip.dump,
     });
 
     return service;
@@ -1330,14 +1409,14 @@ fn startGossip(
 fn spawnLogger(allocator: std.mem.Allocator) !Logger {
     var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = config.current.log_level,
+        .max_level = current_config.log_level,
         .max_buffer = 1 << 20,
     });
     return std_logger.logger();
 }
 
 const LoadedSnapshot = struct {
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     accounts_db: AccountsDB,
     combined_manifest: sig.accounts_db.snapshots.FullAndIncrementalManifest,
     collapsed_manifest: sig.accounts_db.snapshots.Manifest,
@@ -1367,7 +1446,7 @@ const LoadSnapshotOptions = struct {
 };
 
 fn loadSnapshot(
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     unscoped_logger: Logger,
     options: LoadSnapshotOptions,
 ) !LoadedSnapshot {
@@ -1376,30 +1455,35 @@ fn loadSnapshot(
     var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});
     defer validator_dir.close();
 
-    const genesis_file_path = try config.current.genesisFilePath() orelse
+    const genesis_file_path = try current_config.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
 
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const adb_config = current_config.accounts_db;
+    const snapshot_dir_str = adb_config.snapshot_dir;
 
-    const combined_manifest, const snapshot_files = try sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
+    const combined_manifest, //
+    const snapshot_files //
+    = try sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
         allocator,
         logger.unscoped(),
         snapshot_dir_str,
         .{
             .gossip_service = options.gossip_service,
-            .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
-            .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
-            .num_threads_snapshot_unpack = config.current.accounts_db.num_threads_snapshot_unpack,
-            .min_snapshot_download_speed_mbs = config.current.accounts_db.min_snapshot_download_speed_mbs,
+            .force_unpack_snapshot = adb_config.force_unpack_snapshot,
+            .force_new_snapshot_download = adb_config.force_new_snapshot_download,
+            .num_threads_snapshot_unpack = adb_config.num_threads_snapshot_unpack,
+            .max_number_of_download_attempts = adb_config.max_number_of_snapshot_download_attempts,
+            .min_snapshot_download_speed_mbs = adb_config.min_snapshot_download_speed_mbs,
         },
     );
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    logger.info().logf("full snapshot: {s}", .{
-        sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full.snapshotArchiveName().constSlice()),
-    });
+    logger.info().logf("full snapshot: {s}", .{sig.utils.fmt.tryRealPath(
+        snapshot_dir,
+        snapshot_files.full.snapshotArchiveName().constSlice(),
+    )});
     if (snapshot_files.incremental()) |inc_snap| {
         logger.info().logf("incremental snapshot: {s}", .{
             sig.utils.fmt.tryRealPath(snapshot_dir, inc_snap.snapshotArchiveName().constSlice()),
@@ -1408,24 +1492,27 @@ fn loadSnapshot(
 
     // cli parsing
     const n_threads_snapshot_load: u32 = blk: {
-        const cli_n_threads_snapshot_load: u32 = config.current.accounts_db.num_threads_snapshot_load;
+        const cli_n_threads_snapshot_load: u32 =
+            current_config.accounts_db.num_threads_snapshot_load;
         if (cli_n_threads_snapshot_load == 0) {
             // default value
-            break :blk @as(u32, @truncate(try std.Thread.getCpuCount()));
+            break :blk std.math.lossyCast(u32, try std.Thread.getCpuCount());
         } else {
             break :blk cli_n_threads_snapshot_load;
         }
     };
-    logger.info().logf("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger.unscoped(),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = options.geyser_writer,
-        .gossip_view = if (options.gossip_service) |service| try AccountsDB.GossipView.fromService(service) else null,
-        .index_allocation = if (config.current.accounts_db.use_disk_index) .disk else .ram,
-        .number_of_index_shards = config.current.accounts_db.number_of_index_shards,
+        .gossip_view = if (options.gossip_service) |service|
+            try AccountsDB.GossipView.fromService(service)
+        else
+            null,
+        .index_allocation = if (current_config.accounts_db.use_disk_index) .disk else .ram,
+        .number_of_index_shards = current_config.accounts_db.number_of_index_shards,
         .lru_size = 10_000,
     });
     errdefer accounts_db.deinit();
@@ -1438,9 +1525,9 @@ fn loadSnapshot(
             combined_manifest,
             n_threads_snapshot_load,
             options.validate_snapshot,
-            config.current.accounts_db.accounts_per_file_estimate,
-            config.current.accounts_db.fastload,
-            config.current.accounts_db.save_index,
+            current_config.accounts_db.accounts_per_file_estimate,
+            current_config.accounts_db.fastload,
+            current_config.accounts_db.save_index,
         );
     errdefer collapsed_manifest.deinit(allocator);
 
@@ -1449,7 +1536,10 @@ fn loadSnapshot(
 
     const genesis_config = GenesisConfig.init(allocator, genesis_file_path) catch |err| {
         if (err == error.FileNotFound) {
-            logger.err().logf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
+            logger.err().logf(
+                "genesis config not found - expecting {s} to exist",
+                .{genesis_file_path},
+            );
         }
         return err;
     };
@@ -1521,8 +1611,8 @@ fn downloadSnapshot() !void {
     const trusted_validators = try getTrustedValidators(gpa_allocator);
     defer if (trusted_validators) |*tvs| tvs.deinit();
 
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
-    const min_mb_per_sec = config.current.accounts_db.min_snapshot_download_speed_mbs;
+    const snapshot_dir_str = current_config.accounts_db.snapshot_dir;
+    const min_mb_per_sec = current_config.accounts_db.min_snapshot_download_speed_mbs;
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
@@ -1534,22 +1624,23 @@ fn downloadSnapshot() !void {
         gossip_service,
         snapshot_dir,
         @intCast(min_mb_per_sec),
-        config.current.accounts_db.max_number_of_snapshot_download_attempts,
+        current_config.accounts_db.max_number_of_snapshot_download_attempts,
+        null,
     );
     defer full_file.close();
     defer if (maybe_inc_file) |inc_file| inc_file.close();
 }
 
-fn getTrustedValidators(allocator: Allocator) !?std.ArrayList(Pubkey) {
+fn getTrustedValidators(allocator: std.mem.Allocator) !?std.ArrayList(Pubkey) {
     var trusted_validators: ?std.ArrayList(Pubkey) = null;
-    if (config.current.gossip.trusted_validators.len > 0) {
+    if (current_config.gossip.trusted_validators.len > 0) {
         trusted_validators = try std.ArrayList(Pubkey).initCapacity(
             allocator,
-            config.current.gossip.trusted_validators.len,
+            current_config.gossip.trusted_validators.len,
         );
-        for (config.current.gossip.trusted_validators) |trusted_validator_str| {
+        for (current_config.gossip.trusted_validators) |trusted_validator_str| {
             trusted_validators.?.appendAssumeCapacity(
-                try Pubkey.fromString(trusted_validator_str),
+                try Pubkey.parseBase58String(trusted_validator_str),
             );
         }
     }

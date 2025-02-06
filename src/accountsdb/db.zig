@@ -151,12 +151,12 @@ pub const AccountsDB = struct {
         /// Used to initialize snapshot hashes to be sent to gossip.
         my_pubkey: Pubkey,
         /// Reference to the gossip service's message push queue, used to push updates to snapshot info.
-        push_msg_queue: *sig.sync.Mux(std.ArrayList(sig.gossip.GossipData)),
+        push_msg_queue: *sig.gossip.GossipService.PushMessageQueue,
 
         // TODO/NOTE: this will be more useful/nicer to use as a decl literal
         pub fn fromService(gossip_service: *sig.gossip.GossipService) !GossipView {
             return .{
-                .my_pubkey = Pubkey.fromPublicKey(&gossip_service.my_keypair.public_key),
+                .my_pubkey = gossip_service.my_pubkey,
                 .push_msg_queue = &gossip_service.push_msg_queue_mux,
             };
         }
@@ -294,13 +294,14 @@ pub const AccountsDB = struct {
             try self.fastload(fastload_dir, collapsed_manifest.accounts_db_fields);
             self.logger.info().logf("fastload: total time: {s}", .{timer.read()});
         } else {
-            const load_duration = try self.loadFromSnapshot(
+            var load_timer = try sig.time.Timer.start();
+            try self.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
                 n_threads,
                 allocator,
                 accounts_per_file_estimate,
             );
-            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_duration});
+            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_timer.read()});
         }
 
         // no need to re-save if we just loaded from a fastload
@@ -404,7 +405,7 @@ pub const AccountsDB = struct {
         /// needs to be a thread-safe allocator
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
-    ) !sig.time.Duration {
+    ) !void {
         self.logger.info().log("running loadFromSnapshot...");
 
         // used to read account files
@@ -429,27 +430,6 @@ pub const AccountsDB = struct {
             bhs.accumulate(snapshot_manifest.bank_hash_info.stats);
         }
 
-        var timer = try sig.time.Timer.start();
-        // short path
-        if (n_threads == 1) {
-            try self.loadAndVerifyAccountsFiles(
-                accounts_dir,
-                accounts_per_file_estimate,
-                snapshot_manifest.file_map,
-                0,
-                n_account_files,
-                true,
-            );
-
-            // if geyser, send end of data signal
-            if (self.geyser_writer) |geyser_writer| {
-                const end_of_snapshot: sig.geyser.core.VersionedAccountPayload = .EndOfSnapshotLoading;
-                try geyser_writer.writePayloadToPipe(end_of_snapshot);
-            }
-
-            return timer.read();
-        }
-
         // setup the parallel indexing
         const loading_threads = try self.allocator.alloc(AccountsDB, n_parse_threads);
         defer self.allocator.free(loading_threads);
@@ -457,12 +437,11 @@ pub const AccountsDB = struct {
         try initLoadingThreads(per_thread_allocator, loading_threads, self);
         defer deinitLoadingThreads(per_thread_allocator, loading_threads);
 
-        self.logger.info().logf("[{d} threads]: reading and indexing accounts...", .{n_parse_threads});
-        {
-            var wg: std.Thread.WaitGroup = .{};
-            defer wg.wait();
-            try spawnThreadTasks(loadAndVerifyAccountsFilesMultiThread, .{
-                .wg = &wg,
+        self.logger.info().logf("[{d} threads]: running loadAndVerifyAccountsFiles...", .{n_parse_threads});
+        try spawnThreadTasks(
+            self.allocator,
+            loadAndVerifyAccountsFilesMultiThread,
+            .{
                 .data_len = n_account_files,
                 .max_threads = n_parse_threads,
                 .params = .{
@@ -471,8 +450,8 @@ pub const AccountsDB = struct {
                     snapshot_manifest.file_map,
                     accounts_per_file_estimate,
                 },
-            });
-        }
+            },
+        );
 
         // if geyser, send end of data signal
         if (self.geyser_writer) |geyser_writer| {
@@ -483,9 +462,6 @@ pub const AccountsDB = struct {
         var merge_timer = try sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads, n_combine_threads);
         self.logger.debug().logf("mergeMultipleDBs: total time: {}", .{merge_timer.read()});
-
-        self.logger.debug().logf("loadFromSnapshot: total time: {s}", .{timer.read()});
-        return timer.read();
     }
 
     /// Initializes a slice of children `AccountsDB`s, used to divide the work of loading from a snapshot.
@@ -777,10 +753,7 @@ pub const AccountsDB = struct {
     ) !void {
         self.logger.info().logf("[{d} threads]: running mergeMultipleDBs...", .{n_threads});
 
-        var merge_indexes_wg: std.Thread.WaitGroup = .{};
-        defer merge_indexes_wg.wait();
-        try spawnThreadTasks(mergeThreadIndexesMultiThread, .{
-            .wg = &merge_indexes_wg,
+        try spawnThreadTasks(self.allocator, mergeThreadIndexesMultiThread, .{
             .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
             .max_threads = n_threads,
             .params = .{
@@ -954,35 +927,20 @@ pub const AccountsDB = struct {
 
         // split processing the bins over muliple threads
         self.logger.info().logf(
-            "collecting hashes from accounts using {} threads...",
+            "[{} threads] collecting hashes from accounts",
             .{n_threads},
         );
-        if (n_threads == 1) {
-            try getHashesFromIndex(
+        try spawnThreadTasks(self.allocator, getHashesFromIndexMultiThread, .{
+            .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
+            .max_threads = n_threads,
+            .params = .{
                 self,
                 config,
-                self.account_index.pubkey_ref_map.shards,
                 self.allocator,
-                &hashes[0],
-                &lamports[0],
-                true,
-            );
-        } else {
-            var wg: std.Thread.WaitGroup = .{};
-            defer wg.wait();
-            try spawnThreadTasks(getHashesFromIndexMultiThread, .{
-                .wg = &wg,
-                .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
-                .max_threads = n_threads,
-                .params = .{
-                    self,
-                    config,
-                    self.allocator,
-                    hashes,
-                    lamports,
-                },
-            });
-        }
+                hashes,
+                lamports,
+            },
+        });
         self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
         timer.reset();
 
@@ -2729,7 +2687,8 @@ pub const AccountsDB = struct {
         if (self.gossip_view) |gossip_view| { // advertise new snapshot via gossip
             const push_msg_queue, var push_msg_queue_lg = gossip_view.push_msg_queue.writeWithLock();
             defer push_msg_queue_lg.unlock();
-            try push_msg_queue.append(.{
+
+            try push_msg_queue.queue.append(.{
                 .SnapshotHashes = .{
                     .from = gossip_view.my_pubkey,
                     .full = .{ .slot = params.target_slot, .hash = full_hash },
@@ -2959,7 +2918,8 @@ pub const AccountsDB = struct {
         if (self.gossip_view) |gossip_view| { // advertise new snapshot via gossip
             const push_msg_queue, var push_msg_queue_lg = gossip_view.push_msg_queue.writeWithLock();
             defer push_msg_queue_lg.unlock();
-            try push_msg_queue.append(.{
+
+            try push_msg_queue.queue.append(.{
                 .SnapshotHashes = .{
                     .from = gossip_view.my_pubkey,
                     .full = .{ .slot = full_snapshot_info.slot, .hash = full_snapshot_info.hash },
@@ -3215,7 +3175,7 @@ pub fn getAccountPerFileEstimateFromCluster(
     cluster: sig.core.Cluster,
 ) error{NotImplementedYet}!u64 {
     return switch (cluster) {
-        .testnet => 1_000,
+        .testnet => 500,
         else => error.NotImplementedYet,
     };
 }
@@ -3267,7 +3227,7 @@ fn testWriteSnapshotFull(
     var snap_fields = try SnapshotManifest.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
-    _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 1_500);
+    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 500);
 
     const snapshot_gen_info = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
@@ -3306,7 +3266,7 @@ fn testWriteSnapshotIncremental(
     var snap_fields = try SnapshotManifest.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
-    _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 1_500);
+    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 500);
 
     const snapshot_gen_info = try accounts_db.generateIncrementalSnapshot(.{
         .target_slot = slot,
@@ -3474,7 +3434,7 @@ fn loadTestAccountsDB(
     });
     errdefer accounts_db.deinit();
 
-    _ = try accounts_db.loadFromSnapshot(
+    try accounts_db.loadFromSnapshot(
         manifest.accounts_db_fields,
         n_threads,
         allocator,
@@ -3516,12 +3476,18 @@ test "geyser stream on load" {
     // start the geyser writer
     try geyser_writer.spawnIOLoop();
 
-    const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
+    var reader = try sig.geyser.GeyserReader.init(
         allocator,
+        geyser_pipe_path,
+        &geyser_exit,
+        .{},
+    );
+    defer reader.deinit();
+
+    const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
+        &reader,
         .noop,
         &geyser_exit,
-        geyser_pipe_path,
-        null,
         null,
     });
     defer reader_handle.join();
@@ -3543,11 +3509,11 @@ test "geyser stream on load" {
     });
     defer accounts_db.deinit();
 
-    _ = try accounts_db.loadFromSnapshot(
+    try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields,
         1,
         allocator,
-        1_500,
+        500,
     );
 }
 
@@ -3720,7 +3686,7 @@ test "load other sysvars" {
         full_inc_manifest.deinit(allocator);
     }
 
-    const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
+    const SlotAndHash = sig.core.hash.SlotAndHash;
     _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
     _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.Rent, &sysvars.IDS.rent);
     _ = try accounts_db.getTypeFromAccount(panic_allocator, SlotAndHash, &sysvars.IDS.slot_hashes);
@@ -4302,9 +4268,11 @@ test "generate snapshot & update gossip snapshot hashes" {
     defer full_inc_manifest.deinit(allocator);
 
     // mock gossip service
-    const Queue = std.ArrayList(sig.gossip.GossipData);
-    var push_msg_queue_mux = sig.sync.Mux(Queue).init(Queue.init(allocator));
-    defer push_msg_queue_mux.private.v.deinit();
+    var push_msg_queue_mux = sig.gossip.GossipService.PushMessageQueue.init(.{
+        .queue = std.ArrayList(sig.gossip.data.GossipData).init(allocator),
+        .data_allocator = allocator,
+    });
+    defer push_msg_queue_mux.private.v.queue.deinit();
     const my_keypair = try KeyPair.create(null);
 
     var accounts_db = try AccountsDB.init(.{
@@ -4358,8 +4326,8 @@ test "generate snapshot & update gossip snapshot hashes" {
         const queue, var queue_lg = push_msg_queue_mux.readWithLock();
         defer queue_lg.unlock();
 
-        try std.testing.expectEqual(1, queue.items.len);
-        const queue_item_0 = queue.items[0]; // should be from the full generation
+        try std.testing.expectEqual(1, queue.queue.items.len);
+        const queue_item_0 = queue.queue.items[0]; // should be from the full generation
         try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_0));
 
         try std.testing.expectEqualDeep(
@@ -4394,8 +4362,8 @@ test "generate snapshot & update gossip snapshot hashes" {
             const queue, var queue_lg = push_msg_queue_mux.readWithLock();
             defer queue_lg.unlock();
 
-            try std.testing.expectEqual(2, queue.items.len);
-            const queue_item_1 = queue.items[1]; // should be from the incremental generation
+            try std.testing.expectEqual(2, queue.queue.items.len);
+            const queue_item_1 = queue.queue.items[1]; // should be from the incremental generation
             try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_1));
 
             try std.testing.expectEqualDeep(
@@ -4487,12 +4455,14 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             });
             defer accounts_db.deinit();
 
-            const loading_duration = try accounts_db.loadFromSnapshot(
+            var load_timer = try sig.time.Timer.start();
+            try accounts_db.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
                 bench_args.n_threads,
                 allocator,
                 try getAccountPerFileEstimateFromCluster(bench_args.cluster),
             );
+            const loading_duration = load_timer.read();
 
             const fastload_save_duration = blk: {
                 var timer = try sig.time.Timer.start();
@@ -4500,15 +4470,20 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 break :blk timer.read();
             };
 
-            const full_snapshot = full_inc_manifest.full;
+            const full_manifest = full_inc_manifest.full;
+            const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
+                inc.bank_extra.snapshot_persistence
+            else
+                null;
+
             var validate_timer = try sig.time.Timer.start();
             try accounts_db.validateLoadFromSnapshot(.{
-                .full_slot = full_snapshot.bank_fields.slot,
+                .full_slot = full_manifest.bank_fields.slot,
                 .expected_full = .{
-                    .accounts_hash = collapsed_manifest.accounts_db_fields.bank_hash_info.accounts_hash,
-                    .capitalization = full_snapshot.bank_fields.capitalization,
+                    .accounts_hash = full_manifest.accounts_db_fields.bank_hash_info.accounts_hash,
+                    .capitalization = full_manifest.bank_fields.capitalization,
                 },
-                .expected_incremental = if (collapsed_manifest.bank_extra.snapshot_persistence) |inc_persistence| .{
+                .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
                     .accounts_hash = inc_persistence.incremental_hash,
                     .capitalization = inc_persistence.incremental_capitalization,
                 } else null,

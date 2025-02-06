@@ -167,11 +167,10 @@ pub const MockTransferService = struct {
     pub fn rpcTransferAndWait(self: *MockTransferService, random: std.Random, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
         const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
         for (0..MAX_RPC_RETRIES) |_| {
-            self.logger.debug().logf("rpc transfer: amount={} from_pubkey={s} to_pubkey={s}", .{
-                lamports,
-                from_pubkey.string().slice(),
-                to_pubkey.string().slice(),
-            });
+            self.logger.debug().logf(
+                "rpc transfer: amount={} from_pubkey={s} to_pubkey={s}",
+                .{ lamports, from_pubkey, to_pubkey },
+            );
 
             const latest_blockhash, _ = blk: {
                 const blockhash_response = try self.rpc_client.getLatestBlockhash(self.allocator, .{});
@@ -200,7 +199,7 @@ pub const MockTransferService = struct {
                     self.logger.debug().logf("rpc transfer failed with: {}", .{err});
                     return error.RpcTransferFailed;
                 };
-                break :blk try Signature.fromString(signature_string);
+                break :blk try Signature.parseBase58String(signature_string);
             };
 
             const signature_confirmed = try self.waitForSignatureConfirmation(
@@ -362,7 +361,7 @@ pub const MockTransferService = struct {
                 const response = try self.rpc_client.requestAirDrop(self.allocator, pubkey, lamports, .{});
                 defer response.deinit();
                 const signature_string = try response.result();
-                break :blk try Signature.fromString(signature_string);
+                break :blk try Signature.parseBase58String(signature_string);
             };
             const signature_confirmed = try self.waitForSignatureConfirmation(
                 signature,
@@ -393,7 +392,8 @@ pub const MockTransferService = struct {
         errdefer allocator.free(addresses);
         addresses[0] = from_pubkey;
         addresses[1] = to_pubkey;
-        addresses[2] = try Pubkey.fromString("11111111111111111111111111111111");
+        // TODO: replace with system_program_id once it's available
+        addresses[2] = try Pubkey.parseBase58String("11111111111111111111111111111111");
 
         const account_indexes = try allocator.alloc(u8, 2);
         errdefer allocator.free(account_indexes);
@@ -406,7 +406,7 @@ pub const MockTransferService = struct {
         try writer.writeInt(u32, 2, .little);
         try writer.writeInt(u64, lamports, .little);
 
-        const instructions = try allocator.alloc(sig.core.Transaction.Instruction, 1);
+        const instructions = try allocator.alloc(sig.core.transaction.TransactionInstruction, 1);
         errdefer allocator.free(instructions);
         instructions[0] = .{
             .program_index = 2,
@@ -416,8 +416,8 @@ pub const MockTransferService = struct {
 
         const transaction = sig.core.Transaction{
             .signatures = signatures,
-            .version = .V0,
-            .signature_count = 1,
+            .version = .legacy,
+            .signature_count = signatures.len,
             .readonly_signed_count = 0,
             .readonly_unsigned_count = 1,
             .account_keys = addresses,
@@ -429,7 +429,7 @@ pub const MockTransferService = struct {
         const signable = try transaction.writeSignableToSlice(&buffer);
         var noise: [KeyPair.seed_length]u8 = undefined;
         random.bytes(noise[0..]);
-        transaction.signatures[0] = Signature.init((try from_keypair.sign(signable, noise)).toBytes());
+        transaction.signatures[0] = .{ .data = (try from_keypair.sign(signable, noise)).toBytes() };
 
         return transaction;
     }
