@@ -392,6 +392,7 @@ pub const MockTransferService = struct {
         errdefer allocator.free(addresses);
         addresses[0] = from_pubkey;
         addresses[1] = to_pubkey;
+        // TODO: replace with system_program_id once it's available
         addresses[2] = try Pubkey.parseBase58String("11111111111111111111111111111111");
 
         const account_indexes = try allocator.alloc(u8, 2);
@@ -416,7 +417,7 @@ pub const MockTransferService = struct {
         const transaction = sig.core.Transaction{
             .signatures = signatures,
             .version = .legacy,
-            .signature_count = 1,
+            .signature_count = signatures.len,
             .readonly_signed_count = 0,
             .readonly_unsigned_count = 1,
             .account_keys = addresses,

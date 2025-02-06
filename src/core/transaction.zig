@@ -46,7 +46,7 @@ pub const Transaction = struct {
     ///   3) ordered list of account_keys loaded from `readable` lookup table indexes
     instructions: []const TransactionInstruction,
 
-    /// `AddressLookup`'s are used to load account account addresses from lookup tables.
+    /// `AddressLookup`'s are used to load account addresses from lookup tables.
     address_lookups: []const TransactionAddressLookup = &.{},
 
     /// MAX_BYTES is the maximum size of a transaction.
@@ -288,7 +288,7 @@ pub const TransactionInstruction = struct {
 };
 
 pub const TransactionAddressLookup = struct {
-    /// Adadress of the lookup table
+    /// Address of the lookup table
     table_address: Pubkey,
     /// List of indexes used to load writable account ids
     writable_indexes: []const u8,
