@@ -1,0 +1,10 @@
+{
+	"position": 4,
+	"label": "Contributing",
+	"collapsible": true,
+	"collapsed": true,
+	"className": "red",
+	"customProps": {
+		"description": "How to contribute to this project"
+	}
+}
