@@ -33,7 +33,10 @@ pub const InstructionContext = struct {
     accounts: []const InstructionAccountInfo,
 
     /// Return if the account at a given index is a signer with bounds checking
-    pub fn isIndexSigner(self: *const InstructionContext, index: anytype) error{NotEnoughAccountKeys}!bool {
+    pub fn isIndexSigner(
+        self: *const InstructionContext,
+        index: anytype,
+    ) error{NotEnoughAccountKeys}!bool {
         if (index >= self.accounts.len) return InstructionError.NotEnoughAccountKeys;
         return self.accounts[index].is_signer;
     }
@@ -69,7 +72,8 @@ pub const InstructionContext = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L619
     pub fn borrowProgramAccount(self: *const InstructionContext) InstructionError!BorrowedAccount {
         if (self.program_index >= self.tc.accounts.len) return InstructionError.MissingAccount;
-        const account, const account_write_guard = try self.tc.accounts[self.program_index].writeWithLock();
+        const account, const account_write_guard =
+            try self.tc.accounts[self.program_index].writeWithLock();
         return .{
             .pubkey = self.program_id,
             .account = account,
@@ -90,7 +94,8 @@ pub const InstructionContext = struct {
         const index_in_transaction = self.accounts[index].index_in_transaction;
 
         if (index_in_transaction >= self.tc.accounts.len) return InstructionError.MissingAccount;
-        const account, const account_write_guard = try self.tc.accounts[index_in_transaction].writeWithLock();
+        const account, const account_write_guard =
+            try self.tc.accounts[index_in_transaction].writeWithLock();
 
         return .{
             .pubkey = self.accounts[index].pubkey,
@@ -112,6 +117,9 @@ pub const InstructionContext = struct {
         if (index >= self.accounts.len) return InstructionError.NotEnoughAccountKeys;
         const actual = self.accounts[index].pubkey;
         if (!T.id().equals(&actual)) return InstructionError.InvalidArgument;
-        return if (self.tc.sysvar_cache.get(T)) |value| value else InstructionError.UnsupportedSysvar;
+        return if (self.tc.sysvar_cache.get(T)) |value|
+            value
+        else
+            InstructionError.UnsupportedSysvar;
     }
 };

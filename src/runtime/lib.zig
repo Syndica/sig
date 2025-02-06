@@ -5,7 +5,6 @@ pub const instruction_context = @import("instruction_context.zig");
 pub const log_collector = @import("log_collector.zig");
 pub const nonce = @import("nonce.zig");
 pub const program = @import("program/lib.zig");
-pub const sysvar = @import("sysvar/lib.zig");
 pub const pubkey_utils = @import("pubkey_utils.zig");
 pub const sysvar = @import("sysvar/lib.zig");
 pub const sysvar_cache = @import("sysvar_cache.zig");

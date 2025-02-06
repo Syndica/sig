@@ -1,14 +1,9 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const bincode = sig.bincode;
-
-const Epoch = sig.core.Epoch;
 const Hash = sig.core.Hash;
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
-const RwMux = sig.sync.RwMux;
-const Mutable = sig.sync.mux.Mutable;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const FeatureSet = sig.runtime.FeatureSet;

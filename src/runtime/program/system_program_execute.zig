@@ -517,7 +517,8 @@ fn transferVerified(
                 "Transfer: insufficient lamports {}, need {}",
                 .{ account.getLamports(), lamports },
             );
-            ic.tc.maybe_custom_error = @intFromError(SystemProgramError.ResultWithNegativeLamports);
+            ic.tc.maybe_custom_error =
+                @intFromError(SystemProgramError.ResultWithNegativeLamports);
             return InstructionError.Custom;
         }
 
@@ -537,7 +538,10 @@ fn advanceNonceAccount(
     account: *BorrowedAccount,
 ) !void {
     if (!account.isWritable()) {
-        try ic.tc.log("Advance nonce account: Account {} must be writeable", .{account.getPubkey()});
+        try ic.tc.log(
+            "Advance nonce account: Account {} must be writeable",
+            .{account.getPubkey()},
+        );
         return InstructionError.InvalidArgument;
     }
 
@@ -563,7 +567,8 @@ fn advanceNonceAccount(
 
             if (data.durable_nonce.eql(next_durable_nonce)) {
                 try ic.tc.log("Advance nonce account: nonce can only advance once per slot", .{});
-                ic.tc.maybe_custom_error = @intFromError(SystemProgramError.NonceBlockhashNotExpired);
+                ic.tc.maybe_custom_error =
+                    @intFromError(SystemProgramError.NonceBlockhashNotExpired);
                 return InstructionError.Custom;
             }
 
@@ -632,10 +637,13 @@ fn withdrawNonceAccount(
                     const amount = std.math.add(u64, lamports, min_balance) catch
                         return InstructionError.InsufficientFunds;
                     if (amount > from_account.getLamports()) {
-                        try ic.tc.log("Withdraw nonce account: insufficient lamports {}, need {}", .{
-                            from_account.getLamports(),
-                            amount,
-                        });
+                        try ic.tc.log(
+                            "Withdraw nonce account: insufficient lamports {}, need {}",
+                            .{
+                                from_account.getLamports(),
+                                amount,
+                            },
+                        );
                         return InstructionError.InsufficientFunds;
                     }
                 }
@@ -767,7 +775,8 @@ fn checkSeedAddress(
 }
 
 test "executeCreateAccount" {
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -820,7 +829,8 @@ test "executeCreateAccount" {
 }
 
 test "executeAssign" {
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -859,7 +869,8 @@ test "executeAssign" {
 }
 
 test "executeTransfer" {
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -905,7 +916,8 @@ test "executeTransfer" {
 }
 
 test "executeCreateAccountWithSeed" {
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -966,7 +978,8 @@ test "executeCreateAccountWithSeed" {
 
 test "executeAdvanceNonceAccount" {
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1066,7 +1079,8 @@ test "executeAdvanceNonceAccount" {
 
 test "executeWithdrawNonceAccount" {
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1168,7 +1182,8 @@ test "executeWithdrawNonceAccount" {
 
 test "executeInitializeNonceAccount" {
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1274,7 +1289,8 @@ test "executeInitializeNonceAccount" {
 
 test "executeAuthorizeNonceAccount" {
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1341,7 +1357,8 @@ test "executeAuthorizeNonceAccount" {
 }
 
 test "executeAllocate" {
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1382,7 +1399,8 @@ test "executeAllocate" {
 }
 
 test "executeAllocateWithSeed" {
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1435,7 +1453,8 @@ test "executeAllocateWithSeed" {
 }
 
 test "executeAssignWithSeed" {
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1486,7 +1505,8 @@ test "executeAssignWithSeed" {
 }
 
 test "executeTransferWithSeed" {
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1546,7 +1566,8 @@ test "executeTransferWithSeed" {
 
 test "executeUpgradeNonceAccount" {
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult = sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);

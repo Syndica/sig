@@ -4,16 +4,10 @@ const sig = @import("../sig.zig");
 const bincode = sig.bincode;
 
 const Epoch = sig.core.Epoch;
-const Hash = sig.core.Hash;
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
-const RwMux = sig.sync.RwMux;
-const Mutable = sig.sync.mux.Mutable;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
-const FeatureSet = sig.runtime.FeatureSet;
-const LogCollector = sig.runtime.LogCollector;
-const SysvarCache = sig.runtime.SysvarCache;
 const TransactionContext = sig.runtime.TransactionContext;
 const WLockGuard = sig.runtime.TransactionAccount.WLockGuard;
 
@@ -92,7 +86,11 @@ pub const BorrowedAccount = struct {
         if (!self.isOwnedByCurrentProgram()) return InstructionError.ExternalAccountDataModified;
     }
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1095
-    pub fn checkCanSetDataLength(self: BorrowedAccount, etc: *TransactionContext, length: usize) InstructionError!void {
+    pub fn checkCanSetDataLength(
+        self: BorrowedAccount,
+        etc: *TransactionContext,
+        length: usize,
+    ) InstructionError!void {
         const old_length = self.getData().len;
 
         if (length != old_length and !self.isOwnedByCurrentProgram())
@@ -101,7 +99,8 @@ pub const BorrowedAccount = struct {
         if (length > MAX_PERMITTED_DATA_LENGTH)
             return InstructionError.InvalidRealloc;
 
-        const resize_delta: i64 = @intCast(length -| old_length); // Safe since length and old_length <= MAX_PERMITTED_DATA_LENGTH
+        // Safe since length and old_length <= MAX_PERMITTED_DATA_LENGTH
+        const resize_delta: i64 = @intCast(length -| old_length);
         const new_accounts_resize_delta = etc.accounts_resize_delta +| resize_delta;
 
         if (new_accounts_resize_delta > MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION)

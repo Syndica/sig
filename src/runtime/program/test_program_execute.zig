@@ -11,7 +11,6 @@ const InstructionContext = sig.runtime.InstructionContext;
 const InstructionAccountInfo = sig.runtime.InstructionAccountInfo;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
-const BorrowedAccount = sig.runtime.BorrowedAccount;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionAccount = sig.runtime.TransactionAccount;
 
