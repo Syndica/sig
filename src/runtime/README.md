@@ -1,7 +1,7 @@
 # TODO: Last written for 31b6111c
 
 # Current Status Overview
-Currently, the `system_program` has been implemented along with positive outcome test cases. For now, it is probably best to comence the implementation of other native programs rather than focusing on rigorous testing of the `system_program`. A [Github issue](https://github.com/Syndica/sig/issues/528) has been opened to address the need for additional system program unit testing. 
+Currently, the `system_program` has been implemented along with basic test cases. For now, it is probably best to comence the implementation of other native programs rather than focusing on rigorous testing of the `system_program`. A [Github issue](https://github.com/Syndica/sig/issues/528) has been opened to address the need for additional system program unit testing. 
 
 The current plan moving forward is to reveiw and merge [system program and related context PR](https://github.com/Syndica/sig/pull/518) and begin the implementation of both the vote (@dadepo) and bpf loader (@yewman) programs. Once the vote and bpf loader programs are implemented, we will consider re-prioritising the implementation of the transaction processing pipeline over more program implementations in order to facilitate @dadepo's work on consensus which may require producing a set of 'state' changes for a given sequence of vote transactions.
 
@@ -30,22 +30,24 @@ Currently, this document is scoped to the logic contained within the [`execute_l
 - It should be moved to `accounts_db` at in the future
 
 ## Borrowed Account
-- `BorrowedAccount` represents an account which has been 'borrowed' from the `ExecuteTransactionContext`
-- It contains a mutable reference to an `ExecuteTransactionContext.AccountInfo` with an associated guard, a const reference to the `ExecuteInstructionContext` which performed the borrow, and a const reference to the `ExecuteInstructionContext.AccountInfo` which contains the instruction level metadata of the borrowed account
-- It provides utility methods for accessing and modifying account state with necessary checks, returing appropriate `InstructionError`'s on failure
+- `BorrowedAccount` represents an account which has been 'borrowed' from the `TransactionContext`
+- It contains the accounts `Pubkey`, a mutable reference to an `AccountSharedData` with an associated single threaded write guard, and a `borrow_context` which represents the context under which account was borrowed
+- The `borrow_context` is an unamed struct which contains:
+    - `program_id: Pubkey`: the program which borrowed the account
+    - `is_writable: bool`: whether the account is writable within the program instruction which borrowed the account
+- `BorrowedAccount` provides methods for accessing and modifying account state with necessary checks
 
-
-## ExecuteInstructionContext
-- `ExecuteInstructionContext` handles all state required for executing a single program instruction
+## InstructionContext
+- `InstructionContext` handles all state required for executing a single program instruction
 - Functionality is limited to only support the execution of `SystemProgramInstruction`'s and will evolve as more programs are implemented
-- It defines the `program_id` of currently executing instruction, a bounded array of `ExecuteInstructionContext.AccountInfo`'s which contain account meta data, and the `instruction_data` which is the serialized program instruction
-- It provides utility methods for borrowing accounts from the `ExecuteTransactionContext`, loading sysvars from the `SysvarCache`, and performing checks during program execution.
+- It defines the `program_id` of currently executing instruction, an array of `InstructionAccountInfo`'s which contain account meta data, and the `instruction` which is the serialized program instruction
+- It provides methods for borrowing accounts from the `TransactionContext`, loading sysvars from the `SysvarCache`, and performing checks during program execution
 
-## ExecuteTransactionContext
-- `ExecuteTransactionContext` handles all state required for executing a transaction
--  Functionality is limited to only providing access to data required during the execution of a single instruction. In time, functionality will be extended to executing multiple instructions. 
-- It holds a bounded array of read-write locked `ExecuteTransactionContext.AccountInfo`'s which contain a `touched: bool` flag and an `account: AccountSharedData`. 
-- These accounts may be borrowed by programs during execution in order to perform state changes
+## TransactionContext
+- `TransactionContext` handles all state required for executing a transaction
+-  Functionality is limited to only providing access to data required during the execution of a single instruction. In time, functionality will be extended to executing multiple instructions
+- It has an array of `TransactionAccount`'s which contain the account `Pubkey`, and `AccountSharedData`, as well as constructs for basic single threaded read/write locking of the `AccountSharedData`
+- These accounts are borrowed by programs during execution in order to perform state changes
 - For convenience, it contains dependencies that are required for transaction execution but should ultimately be located in a broader context. For example:
     - `sysvar_cache`
     - `lamports_per_signature`
@@ -54,7 +56,7 @@ Currently, this document is scoped to the logic contained within the [`execute_l
 
 ## Feature Set
 - `FeatureSet` is used to perform inference on currently active features during program execution
-- It should exist above the `ExecuteTransactionContext`, however, it is defined here for convenience at present
+- It should exist above the `TransactionContext`, however, it is defined here for convenience at present
 - Its implementation is trivial and does not include any feature definitions yet
 
 ## Ids
@@ -64,7 +66,7 @@ Currently, this document is scoped to the logic contained within the [`execute_l
 
 ## Log Collector
 - `LogCollector` is used to collect logs at the transaction level
-- Each `ExecuteTransactionContext` has its own log collector which may be used to collect and emit logs as part of the transaction processing result
+- Each `TransactionContext` has its own log collector which may be used to collect and emit logs as part of the transaction processing result
 
 ## Nonce
 - `nonce` implements types for nonce accounts
@@ -72,12 +74,12 @@ Currently, this document is scoped to the logic contained within the [`execute_l
 
 ## Pubkey Utils
 - `pubkey_utils` defines the `createWithSeed` method which creates a `Pubkey` from a given `base`, `seed`, and `owner`
-- It returns a `PubkeyError` on failure which is set as a custom error in the `ExecuteTransactionContext` when failure occures during program execution
+- It returns a `PubkeyError` on failure which is set as a custom error in the `TransactionContext` when failure occures during program execution
 - We may consider moving this logic to `src/core/pubkey.zig`
 
 ## SysvarCache 
 - `SysvarCache` provides the runtime with access to sysvars during program execution
-- Currently its implementation is trivial, and only serves to facilitate an equivalent implementation of Agave's [get_sysvar_with_account_check](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/sysvar_cache.rs#L229) module.
+- Currently its implementation is trivial, and only serves to facilitate an equivalent implementation of Agave's [get_sysvar_with_account_check](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/sysvar_cache.rs#L229) module
 
 ## Tmp Utils 
 - `tmp_utils` currently only redefines the `hashv` method which is currently defined in `src/ledger/shred.zig`
