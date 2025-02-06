@@ -553,6 +553,9 @@ pub const Config = struct {
     minimum_version: sbpf.Version = .v3,
     stack_frame_size: u64 = 4096,
     max_call_depth: u64 = 64,
+    // TODO: switch this to default `true` when the JIT backend is passing
+    // all of the tests
+    jit_compile: bool = false,
 
     pub fn stackSize(config: Config) u64 {
         return config.stack_frame_size * config.max_call_depth;

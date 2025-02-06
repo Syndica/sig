@@ -355,7 +355,7 @@ pub const Instruction = packed struct(u64) {
             return switch (class) {
                 alu64 => true,
                 alu32 => false,
-                else => std.debug.panic("TODO: {s}", .{@tagName(opcode)}),
+                else => false,
             };
         }
 
@@ -364,7 +364,7 @@ pub const Instruction = packed struct(u64) {
             return switch (class) {
                 ld, ldx => .constant,
                 st, stx => .mutable,
-                else => std.debug.panic("TODO: {s}", .{@tagName(opcode)}),
+                else => unreachable,
             };
         }
     };

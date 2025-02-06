@@ -2,11 +2,13 @@ const std = @import("std");
 const lib = @import("lib.zig");
 const sbpf = @import("sbpf.zig");
 const memory = @import("memory.zig");
+const jit = @import("jit.zig");
 
 const MemoryMap = memory.MemoryMap;
 const Instruction = sbpf.Instruction;
 const Executable = lib.Executable;
 const BuiltinProgram = lib.BuiltinProgram;
+const Engine = jit.Engine;
 
 pub const Vm = struct {
     allocator: std.mem.Allocator,
@@ -67,6 +69,21 @@ pub const Vm = struct {
             self.instruction_count += 1;
         }
         return self.registers.get(.r0);
+    }
+
+    pub fn runJit(self: *Vm) !u64 {
+        var engine = Engine.init(self.allocator);
+        defer engine.deinit();
+
+        try engine.compile(self.executable.instructions);
+        const code = engine.code.items;
+        const page = code.ptr[0..engine.code.capacity];
+        try std.posix.mprotect(page, std.posix.PROT.READ | std.posix.PROT.EXEC);
+        defer std.posix.mprotect(page, std.posix.PROT.WRITE) catch @panic("failed to mprotect");
+
+        const main: *const fn () callconv(.C) u64 = @ptrCast(code.ptr);
+        const result = main();
+        return result;
     }
 
     fn step(self: *Vm) !bool {
@@ -150,6 +167,14 @@ pub const Vm = struct {
                         .sub64_reg, .sub32_reg => lhs -% rhs,
                         else => unreachable,
                     },
+                    Instruction.lsh => if (opcode.is64())
+                        lhs << @truncate(rhs)
+                    else
+                        @as(u32, @truncate(lhs)) << @truncate(rhs),
+                    Instruction.rsh => if (opcode.is64())
+                        lhs >> @truncate(rhs)
+                    else
+                        @as(u32, @truncate(lhs)) >> @truncate(rhs),
                     // zig fmt: off
                     Instruction.add    => lhs +% rhs,
                     Instruction.div    => try std.math.divTrunc(u64, lhs, rhs),
@@ -157,8 +182,6 @@ pub const Vm = struct {
                     Instruction.@"or"  => lhs | rhs,
                     Instruction.@"and" => lhs & rhs,
                     Instruction.mod    => try std.math.mod(u64, lhs, rhs),
-                    Instruction.lsh    => lhs << @truncate(rhs),
-                    Instruction.rsh    => lhs >> @truncate(rhs),
                     Instruction.mov    => rhs,
                     // zig fmt: on
                     Instruction.mul => value: {
@@ -193,7 +216,7 @@ pub const Vm = struct {
                 switch (@intFromEnum(opcode) & 0xF0) {
                     Instruction.add,
                     => if (!opcode.is64()) {
-                        result = extend(result);
+                        result = @as(u32, @truncate(result));
                     },
                     else => {},
                 }

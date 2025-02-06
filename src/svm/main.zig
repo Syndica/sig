@@ -23,12 +23,24 @@ pub fn main() !void {
 
     var input_path: ?[]const u8 = null;
     var assemble: bool = false;
+    var jit: bool = false;
+    var version: sbpf.Version = .v3;
 
     var args = try std.process.argsWithAllocator(allocator);
     _ = args.next();
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "-a")) {
             assemble = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-j")) {
+            jit = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-v")) {
+            const version_string = args.next() orelse fail("provide SBPF version", .{});
+            version = std.meta.stringToEnum(sbpf.Version, version_string) orelse
+                fail("invalid SBPF version", .{});
             continue;
         }
 
@@ -40,6 +52,10 @@ pub fn main() !void {
     }
     if (input_path == null) {
         fail("no input file provided", .{});
+    }
+
+    if (jit and builtin.cpu.arch != .aarch64) {
+        fail("TODO: JIT engine support on {s}", .{@tagName(builtin.cpu.arch)});
     }
 
     const input_file = try std.fs.cwd().openFile(input_path.?, .{});
@@ -68,9 +84,7 @@ pub fn main() !void {
         );
     }
 
-    const config: Config = .{
-        .minimum_version = if (assemble) .v3 else .v0,
-    };
+    const config: Config = .{ .minimum_version = version };
     var executable = if (assemble)
         try Executable.fromAsm(allocator, bytes, config)
     else exec: {
@@ -97,8 +111,10 @@ pub fn main() !void {
 
     var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
     defer vm.deinit();
-    const result = try vm.run();
-
+    const result = if (jit and builtin.cpu.arch == .aarch64)
+        try vm.runJit()
+    else
+        try vm.run();
     std.debug.print("result: {}, count: {}\n", .{ result, vm.instruction_count });
 }
 
