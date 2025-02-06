@@ -1,0 +1,18 @@
+name: setup
+
+inputs:
+  name:
+    required: true
+    type: string
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/download-artifact@v4
+      with:
+          name: ${{ inputs.name }}
+
+    - run: tar xf ${{ inputs.name }}.tar
+      shell: bash

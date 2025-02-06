@@ -13,18 +13,19 @@ pub const Executable = struct {
     from_elf: bool,
     ro_section: Section,
     text_vaddr: u64,
-    function_registry: Registry(u32),
+    function_registry: Registry(u64),
+    config: Config,
 
     pub const Section = union(enum) {
         owned: Owned,
-        assembly: Assembly,
+        borrowed: Borrowed,
 
         const Owned = struct {
             offset: u64,
             data: []const u8,
         };
 
-        const Assembly = struct {
+        const Borrowed = struct {
             offset: u64,
             start: u64,
             end: u64,
@@ -33,29 +34,28 @@ pub const Executable = struct {
         pub fn deinit(section: Section, allocator: std.mem.Allocator) void {
             switch (section) {
                 .owned => |owned| allocator.free(owned.data),
-                .assembly => {},
+                .borrowed => {},
             }
         }
     };
 
-    pub fn fromElf(allocator: std.mem.Allocator, elf: *const Elf) !Executable {
-        const ro_section = try elf.parseRoSections(allocator);
-        errdefer ro_section.deinit(allocator);
-
+    /// Takes ownership of the `Elf`.
+    pub fn fromElf(elf: Elf) !Executable {
         return .{
             .bytes = elf.bytes,
-            .ro_section = ro_section,
-            .instructions = try elf.getInstructions(),
+            .ro_section = elf.ro_section,
+            .instructions = elf.getInstructions(),
             .version = elf.version,
             .entry_pc = elf.entry_pc,
             .from_elf = true,
-            .text_vaddr = elf.getShdrByName(".text").?.sh_addr,
+            .text_vaddr = elf.getShdrByName(".text").?.sh_addr +| memory.PROGRAM_START,
             .function_registry = elf.function_registry,
+            .config = elf.config,
         };
     }
 
-    pub fn fromAsm(allocator: std.mem.Allocator, source: []const u8) !Executable {
-        return Assembler.parse(allocator, source);
+    pub fn fromAsm(allocator: std.mem.Allocator, source: []const u8, config: Config) !Executable {
+        return Assembler.parse(allocator, source, config);
     }
 
     /// When the executable comes from the assembler, we need to guarantee that the
@@ -75,7 +75,7 @@ pub const Executable = struct {
     pub fn getProgramRegion(self: *const Executable) memory.Region {
         const offset, const ro_data = switch (self.ro_section) {
             .owned => |o| .{ o.offset, o.data },
-            .assembly => |a| .{ a.offset, self.bytes[a.start..a.end] },
+            .borrowed => |b| .{ b.offset, self.bytes[b.start..b.end] },
         };
         return memory.Region.init(.constant, ro_data, memory.PROGRAM_START +| offset);
     }
@@ -106,7 +106,11 @@ pub const Assembler = struct {
         };
     };
 
-    fn parse(allocator: std.mem.Allocator, source: []const u8) !Executable {
+    fn parse(
+        allocator: std.mem.Allocator,
+        source: []const u8,
+        config: Config,
+    ) !Executable {
         var assembler: Assembler = .{ .source = source };
         const statements = try assembler.tokenize(allocator);
         defer {
@@ -122,7 +126,7 @@ pub const Assembler = struct {
         var labels: std.StringHashMapUnmanaged(u64) = .{};
         defer labels.deinit(allocator);
 
-        var function_registry: Registry(u32) = .{};
+        var function_registry: Registry(u64) = .{};
 
         try labels.put(allocator, "entrypoint", 0);
         var inst_ptr: u32 = 0;
@@ -334,13 +338,14 @@ pub const Assembler = struct {
 
         return .{
             .bytes = source,
-            .ro_section = .{ .assembly = .{ .offset = 0, .start = 0, .end = source.len } },
+            .ro_section = .{ .borrowed = .{ .offset = 0, .start = 0, .end = source.len } },
             .instructions = try instructions.toOwnedSlice(allocator),
-            .version = .v1,
+            .version = config.minimum_version,
             .entry_pc = entry_pc,
             .from_elf = false,
             .text_vaddr = memory.PROGRAM_START,
             .function_registry = function_registry,
+            .config = config,
         };
     }
 
@@ -498,5 +503,17 @@ pub const BuiltinProgram = struct {
 
     pub fn deinit(self: *BuiltinProgram, allocator: std.mem.Allocator) void {
         self.functions.deinit(allocator);
+    }
+};
+
+pub const Config = struct {
+    optimize_rodata: bool = true,
+    reject_broken_elfs: bool = false,
+    minimum_version: sbpf.SBPFVersion = .v2,
+    stack_frame_size: u64 = 4096,
+    max_call_depth: u64 = 64,
+
+    pub fn stackSize(config: Config) u64 {
+        return config.stack_frame_size * config.max_call_depth;
     }
 };

@@ -3,7 +3,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
+const SlotAndHash = sig.core.hash.SlotAndHash;
 const Pubkey = sig.core.Pubkey;
 const GossipTable = sig.gossip.GossipTable;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
@@ -179,6 +179,7 @@ pub fn downloadSnapshotsFromGossip(
     output_dir: std.fs.Dir,
     min_mb_per_sec: usize,
     max_number_of_download_attempts: u64,
+    timeout: ?sig.time.Duration,
 ) !struct { std.fs.File, ?std.fs.File } {
     const logger = logger_.withScope(LOG_SCOPE);
     logger
@@ -196,6 +197,7 @@ pub fn downloadSnapshotsFromGossip(
     var slow_peer_pubkeys = std.ArrayList(Pubkey).init(allocator);
     defer slow_peer_pubkeys.deinit();
 
+    var function_duration = try std.time.Timer.start();
     var download_attempts: u64 = 0;
     while (true) {
         std.time.sleep(5 * std.time.ns_per_s); // wait while gossip table updates
@@ -203,6 +205,13 @@ pub fn downloadSnapshotsFromGossip(
         if (download_attempts > max_number_of_download_attempts) {
             logger.err().logf("exceeded max download attempts: {d}", .{max_number_of_download_attempts});
             return error.UnableToDownloadSnapshot;
+        }
+
+        if (timeout) |t| {
+            if (function_duration.read() > t.asNanos()) {
+                logger.err().logf("exceeded download timeout: {any}", .{t});
+                return error.UnableToDownloadSnapshot;
+            }
         }
 
         // only hold gossip table lock for this block
@@ -431,8 +440,6 @@ fn downloadFile(
     return output_file;
 }
 
-const default_adb_config = sig.cmd.config.AccountsDBConfig{};
-
 pub fn getOrDownloadAndUnpackSnapshot(
     allocator: std.mem.Allocator,
     logger_: Logger,
@@ -448,7 +455,8 @@ pub fn getOrDownloadAndUnpackSnapshot(
         num_threads_snapshot_unpack: u16 = 0,
         min_snapshot_download_speed_mbs: usize = 20,
         trusted_validators: ?[]const Pubkey = null,
-        max_number_of_download_attempts: u64 = default_adb_config.max_number_of_snapshot_download_attempts,
+        max_number_of_download_attempts: u64,
+        download_timeout: ?sig.time.Duration = null,
     },
 ) !struct { FullAndIncrementalManifest, SnapshotFiles } {
     const logger = logger_.withScope(LOG_SCOPE);
@@ -504,6 +512,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
             snapshot_dir,
             @intCast(min_mb_per_sec),
             options.max_number_of_download_attempts,
+            options.download_timeout,
         );
         defer full.close();
         defer if (maybe_inc) |inc| inc.close();
@@ -612,7 +621,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
 
 test "accounts_db.download: test remove untrusted peers" {
     const allocator = std.testing.allocator;
-    var table = try GossipTable.init(allocator);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     var prng = std.rand.DefaultPrng.init(0);
@@ -688,7 +697,7 @@ test "accounts_db.download: test remove untrusted peers" {
 
 test "accounts_db.download: test finding peers" {
     const allocator = std.testing.allocator;
-    var table = try GossipTable.init(allocator);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     var prng = std.rand.DefaultPrng.init(0);

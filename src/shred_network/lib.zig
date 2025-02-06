@@ -9,7 +9,7 @@ pub const shred_tracker = @import("shred_tracker.zig");
 pub const shred_verifier = @import("shred_verifier.zig");
 pub const turbine_tree = @import("turbine_tree.zig");
 
-pub const ShredCollectorConfig = service.ShredCollectorConfig;
-pub const ShredCollectorDependencies = service.ShredCollectorDependencies;
+pub const ShredNetworkConfig = service.ShredNetworkConfig;
+pub const ShredNetworkDependencies = service.ShredNetworkDependencies;
 
 pub const start = service.start;

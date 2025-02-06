@@ -125,7 +125,6 @@ files_excluded_from_line_length_check = [
     "src/prometheus/metric.zig",
     "src/prometheus/histogram.zig",
     "src/prometheus/registry.zig",
-    "src/cmd/helpers.zig",
     "src/geyser/core.zig",
     "src/rpc/request.zig",
     "src/bincode/shortvec.zig",
@@ -174,7 +173,6 @@ files_excluded_from_line_length_check = [
     "src/transaction_sender/mock_transfer_generator.zig",
     "src/core/transaction.zig",
     "src/net/net.zig",
-    "src/cmd/cmd.zig",
     "src/bincode/bincode.zig",
     "src/accountsdb/snapshots.zig",
     "src/gossip/data.zig",
@@ -203,9 +201,9 @@ def line_length(args, files_to_check):
         for i, line in enumerate(lines):
             # ignore comments. these are lines where the first non-whitespace characters
             # are "//"
-            if line.strip().startswith("//"):
+            if line.strip().startswith(("//", "\\" + "\\")):
                 continue
-            if len(line) > MAX_LINE_LENGTH:
+            if len(line) > MAX_LINE_LENGTH + 1:  # +1 for \n
                 print(f"{path}:{i + 1} is too long: {len(line)}")
                 lines_found += 1
                 if path not in unique_files:

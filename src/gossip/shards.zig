@@ -151,7 +151,7 @@ fn filterGossipVersionedDatas(
 }
 
 test "gossip.gossip_shards: test shard find" {
-    var gossip_table = try GossipTable.init(std.testing.allocator);
+    var gossip_table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer gossip_table.deinit();
 
     // gen ranndom values

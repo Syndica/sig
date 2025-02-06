@@ -1,13 +1,15 @@
 <br/>
 
 <p align="center">
-  <h1 align="center">&nbsp;🤖⚡ &nbsp;<code>Sig</code> - a Solana Zig validator client</h1>
+  <h1 align="center">&nbsp;🤖⚡ &nbsp;<code>Sig</code> - a Solana validator client written in Zig</h1>
     <br/>
 <div align="center">
   <a href="https://github.com/syndica/sig/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/syndica/sig?include_prereleases&label=version"></a>
-  <a href="https://github.com/syndica/sig/actions/workflows/check.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/syndica/sig/check.yml?branch=main" /></a>
   <a href="https://ziglang.org/download"><img alt="Zig" src="https://img.shields.io/badge/zig-0.13.0-green.svg"></a>
   <a href="https://github.com/syndica/sig/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache_2.0-blue.svg"></a>
+  <a href="https://dl.circleci.com/status-badge/redirect/gh/Syndica/sig/tree/main"><img alt="Build status" src="https://dl.circleci.com/status-badge/img/gh/Syndica/sig/tree/main.svg?style=svg" /></a>
+  <a href="https://codecov.io/gh/Syndica/sig" > 
+  <img src="https://codecov.io/gh/Syndica/sig/graph/badge.svg?token=XGD0LHK04Y"/></a>
   </div>
 </p>
 <br/>
@@ -16,7 +18,7 @@ _Sig_ is a Solana validator client implemented in Zig. Read the [introductory bl
 <br/>
 <br/>
 
-⚠️ NOTE: This is a WIP, please open any issues for any bugs/improvements.
+⚠️ NOTE: This is a WIP project, please open any issues for any bugs/improvements.
 
 ## File Structure 
 
@@ -33,7 +35,6 @@ metrics
 ├─ grafana/
 scripts/
 src/
-├─ main.zig # exec entrypoint 
 ├─ sig.zig # library entrypoint
 ├─ tests.zig 
 ├─ fuzz.zig 
@@ -53,9 +54,11 @@ src/
   - [Install with a package manager](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
   - Manage multiple versions with [zigup](https://github.com/marler8997/zigup) or [zvm](https://www.zvm.app/)
 
-<details><summary>
+<details>
 
-### Developer Tools</summary>
+<summary>
+<strong>Developer Tools</strong>
+</summary>
 
 These tools are optional but recommended for a smooth development process.
 
@@ -207,7 +210,7 @@ Include `--summary all` with any test command to see a summary of the test resul
 Include a filter to limit which tests are run. Sig tests include their module name. For example, you can run all tests in `gossip.table` like this:
 
 ```bash
-zig build test --summary all -- gossip.table
+zig build test -Dfilter="gossip.table" --summary all
 ```
 
 ### 📊 Benchmark
@@ -218,8 +221,9 @@ Run all benchmarks.
 zig build benchmark
 ```
 
-Run a benchmark group: socket_utils, gossip, or sync.
+Run `zig build benchmark -- --help` to see a list of available benchmarks.
 
+Example:
 ```bash
 zig build benchmark -- gossip
 ```
@@ -228,77 +232,45 @@ zig build benchmark -- gossip
 
 ## 📦 Import Sig
 
-Sig can be included as a dependency in your Zig project using `build.zig.zon` file (available for Zig >= 0.12). See the [API documentation](docs/api.md) to learn more about how to use Sig as a library.
+Sig can be included as a dependency in your Zig project using `build.zig.zon` file (available for Zig = 0.13). See the [API documentation](docs/api.md) to learn more about how to use Sig as a library.
 
 <details>
 <summary><code>Steps</code> - how to install Sig in your Zig project</summary>
+<br>
 
-1. Declare Sig as a dependency in `build.zig.zon`:
+1. Add Sig as a dependency in `build.zig.zon`:
 
-   ```diff
-   .{
-       .name = "my-project",
-       .version = "1.0.0",
-       .dependencies = .{
-   +       .sig = .{
-   +           .url = "https://github.com/syndica/sig/archive/<COMMIT>.tar.gz",
-   +       },
-       },
-   }
-   ```
+```
+zig fetch --save=sig https://github.com/Syndica/sig/archive/<COMMIT>.tar.gz
+```
 
 2. Expose Sig as a module in `build.zig`:
 
-   ```diff
-   const std = @import("std");
+```diff
+const std = @import("std");
 
-   pub fn build(b: *std.Build) void {
-       const target = b.standardTargetOptions(.{});
-       const optimize = b.standardOptimizeOption(.{});
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
 
-   +   const opts = .{ .target = target, .optimize = optimize };
-   +   const sig_module = b.dependency("sig", opts).module("sig");
++   const opts = .{ .target = target, .optimize = optimize };
++   const sig_module = b.dependency("sig", opts).module("sig");
 
-       const exe = b.addExecutable(.{
-           .name = "test",
-           .root_source_file = .{ .path = "src/main.zig" },
-           .target = target,
-           .optimize = optimize,
-       });
-   +   exe.addModule("sig", sig_module);
-       exe.install();
+    const exe = b.addExecutable(.{
+        .name = "test",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
++   exe.root_module.addImport("sig", sig_module);
+    b.installArtifact(exe)
 
-       ...
-   }
-   ```
+    ...
+}
+```
 
-3. Obtain Sig's package hash:
-
-   ```
-   $ zig build
-   my-project/build.zig.zon:6:20: error: url field is missing corresponding hash field
-           .url = "https://github.com/syndica/sig/archive/<COMMIT>.tar.gz",
-                  ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-   note: expected .hash = "<HASH>",
-   ```
-
-4. Update `build.zig.zon` with hash value:
-
-   ```diff
-   .{
-       .name = "my-project",
-       .version = "1.0.0",
-       .dependencies = .{
-           .sig = .{
-               .url = "https://github.com/syndica/sig/archive/<COMMIT>.tar.gz",
-   +           .hash = "<HASH>",
-           },
-       },
-   }
-   ```
-
-      </details>
-   <br>
+</details>
+<br>
 
 ## 🤔 Why Zig?
 
@@ -308,7 +280,7 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 2. **Safety focus**: Zig has features built in to prevent common bugs and safety issues common in C. For example, it includes built-in testing and bounds checking, which can help avoid problems such as buffer overflows and undefined behavior.
 
-3. **Readability and maintainability**: Zig syntax is designed to be straightforward and clear. This can make the code easier to understand, more maintainable, and less prone to bugs.
+3. **Readability and maintainability**: Zig syntax is designed to be straightforward and clear. This can make the code more verbose, easier to understand, and less prone to bugs.
 
 4. **No hidden control flow**: Zig doesn't allow hidden control-flow like exceptions in some other languages. This can make it easier to reason about what your program is doing.
 
@@ -316,20 +288,15 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 6. **Custom allocators**: Zig allows you to define custom memory allocation strategies for different parts of your program. This provides the flexibility to optimize memory usage for specific use-cases or workloads.
 
-### Note
-
-- Zig is still an evolving language.
-- Many of the low-level APIs have been stabilized but `std.http.Client` and `std.json` are still WIP targetting stable implementations by `>=0.12`.
-- Currently, `std.http.Client` [leaks](https://github.com/ziglang/zig/blob/447a30299073ce88b7b26d18d060a345beac5276/lib/std/http/Client.zig#L913) and is failing some tests, fix is in works.
-  <br><br>
+Note that Zig is still a rapidly evolving language.
 
 ## 🧩 Modules
 
-- **[Gossip](src/gossip)** - A gossip spy node, run by: `sig gossip` or `zig build run -- gossip`
+- [Gossip](src/gossip) - A gossip spy node, run by: `sig gossip` or `zig build run -- gossip`
 
-- **[Core](src/core)** - Core data structures shared across modules.
+- [Core](src/core) - Core data structures shared across modules.
 
-- **[RPC Client](src/rpc)** ([docs](docs/api.md#rpcclient---api-reference)) - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions.
+- [RPC Client](src/rpc) ([docs](docs/api.md#rpcclient---api-reference)) - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions.
   <br><br>
 
 ## 📚 Learn More
@@ -352,3 +319,4 @@ Sig
 - [Introduction](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/)
 - [Gossip Deep Dive](https://blog.syndica.io/sig-engineering-1-gossip-protocol/)
 - [Solana's AccountsDB](https://blog.syndica.io/sig-engineering-part-3-solanas-accountsdb/)
+- [Sig's Ledger and Blockstore](https://blog.syndica.io/sig-engineering-part-5-sigs-ledger-and-blockstore/)

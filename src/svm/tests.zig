@@ -9,23 +9,29 @@ const Elf = @import("elf.zig").Elf;
 
 const Executable = lib.Executable;
 const BuiltinProgram = lib.BuiltinProgram;
+const Config = lib.Config;
 const Region = memory.Region;
 const MemoryMap = memory.MemoryMap;
 const expectEqual = std.testing.expectEqual;
 
-fn testAsm(source: []const u8, expected: anytype) !void {
-    return testAsmWithMemory(source, &.{}, expected);
+fn testAsm(config: Config, source: []const u8, expected: anytype) !void {
+    return testAsmWithMemory(config, source, &.{}, expected);
 }
 
-fn testAsmWithMemory(source: []const u8, program_memory: []const u8, expected: anytype) !void {
+fn testAsmWithMemory(
+    config: Config,
+    source: []const u8,
+    program_memory: []const u8,
+    expected: anytype,
+) !void {
     const allocator = std.testing.allocator;
-    var executable = try Executable.fromAsm(allocator, source);
+    var executable = try Executable.fromAsm(allocator, source, config);
     defer executable.deinit(allocator);
 
     const mutable = try allocator.dupe(u8, program_memory);
     defer allocator.free(mutable);
 
-    const stack_memory = try allocator.alloc(u8, 4096);
+    const stack_memory = try allocator.alloc(u8, config.stackSize());
     defer allocator.free(stack_memory);
 
     const m = try MemoryMap.init(&.{
@@ -36,7 +42,7 @@ fn testAsmWithMemory(source: []const u8, program_memory: []const u8, expected: a
     }, .v1);
 
     var loader: BuiltinProgram = .{};
-    var vm = try Vm.init(allocator, &executable, m, &loader);
+    var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
     defer vm.deinit();
 
     const result = vm.run();
@@ -44,7 +50,7 @@ fn testAsmWithMemory(source: []const u8, program_memory: []const u8, expected: a
 }
 
 test "basic mov" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r1, 1
         \\  mov r0, r1
@@ -53,7 +59,7 @@ test "basic mov" {
 }
 
 test "mov32 imm large" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, -1
         \\  exit
@@ -61,7 +67,7 @@ test "mov32 imm large" {
 }
 
 test "mov large" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r1, -1
         \\  mov32 r0, r1
@@ -70,7 +76,7 @@ test "mov large" {
 }
 
 test "bounce" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 1
         \\  mov r6, r0
@@ -83,7 +89,7 @@ test "bounce" {
 }
 
 test "add32" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 2
@@ -94,7 +100,7 @@ test "add32" {
 }
 
 test "add64" {
-    try testAsm(
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  lddw r0, 0x300000fff
         \\  add r0, -1
@@ -103,7 +109,7 @@ test "add64" {
 }
 
 test "alu32 logic" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 1
@@ -129,7 +135,7 @@ test "alu32 logic" {
     , 0x11);
 }
 test "alu64 logic" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 0
         \\  mov r1, 1
@@ -158,7 +164,7 @@ test "alu64 logic" {
 }
 
 test "mul32 imm" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 3
         \\  mul32 r0, 4
@@ -167,7 +173,7 @@ test "mul32 imm" {
 }
 
 test "mul32 reg" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 3
         \\  mov r1, 4
@@ -177,7 +183,7 @@ test "mul32 reg" {
 }
 
 test "mul32 overflow" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mov r1, 4
@@ -187,7 +193,7 @@ test "mul32 overflow" {
 }
 
 test "mul64 imm" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mul r0, 4
@@ -196,7 +202,7 @@ test "mul64 imm" {
 }
 
 test "mul64 reg" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mov r1, 4
@@ -206,7 +212,7 @@ test "mul64 reg" {
 }
 
 test "mul32 negative" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, -1
         \\  mul32 r0, 4
@@ -215,7 +221,7 @@ test "mul32 negative" {
 }
 
 test "div32 imm" {
-    try testAsm(
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  lddw r0, 0x10000000c
         \\  div32 r0, 4
@@ -224,7 +230,7 @@ test "div32 imm" {
 }
 
 test "div32 reg" {
-    try testAsm(
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  mov r0, 12
         \\  lddw r1, 0x100000004
@@ -234,7 +240,7 @@ test "div32 reg" {
 }
 
 test "div32 small" {
-    try testAsm(
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  lddw r0, 0x10000000c
         \\  mov r1, 4
@@ -244,7 +250,7 @@ test "div32 small" {
 }
 
 test "div64 imm" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 0xc
         \\  lsh r0, 32
@@ -254,7 +260,7 @@ test "div64 imm" {
 }
 
 test "div64 reg" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 0xc
         \\  lsh r0, 32
@@ -265,7 +271,7 @@ test "div64 reg" {
 }
 
 test "div division by zero" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
@@ -275,7 +281,7 @@ test "div division by zero" {
 }
 
 test "div32 division by zero" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
@@ -285,7 +291,7 @@ test "div32 division by zero" {
 }
 
 test "neg32" {
-    try testAsm(
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  mov32 r0, 2
         \\  neg32 r0
@@ -294,7 +300,7 @@ test "neg32" {
 }
 
 test "neg64" {
-    try testAsm(
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  mov r0, 2
         \\  neg r0
@@ -302,8 +308,22 @@ test "neg64" {
     , 0xFFFFFFFFFFFFFFFE);
 }
 
+test "neg invalid on v2" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  neg32 r0
+        \\  exit
+    , error.UnknownInstruction);
+
+    try testAsm(.{},
+        \\entrypoint:
+        \\  neg64 r0
+        \\  exit
+    , error.UnknownInstruction);
+}
+
 test "sub32 imm" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 3
         \\  sub32 r0, 1
@@ -312,7 +332,7 @@ test "sub32 imm" {
 }
 
 test "sub32 reg" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 4
         \\  mov32 r1, 2
@@ -322,7 +342,7 @@ test "sub32 reg" {
 }
 
 test "sub64 imm" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 3
         \\  sub r0, 1
@@ -331,7 +351,7 @@ test "sub64 imm" {
 }
 
 test "sub64 imm negative" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 3
         \\  sub r0, -1
@@ -340,7 +360,7 @@ test "sub64 imm negative" {
 }
 
 test "sub64 reg" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 4
         \\  mov r1, 2
@@ -350,31 +370,27 @@ test "sub64 reg" {
 }
 
 test "mod32" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 5748
         \\  mod32 r0, 92
         \\  mov32 r1, 13
         \\  mod32 r0, r1
         \\  exit
-    ,
-        0x5,
-    );
+    , 0x5);
 }
 
 test "mod32 overflow" {
-    try testAsm(
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  lddw r0, 0x100000003
         \\  mod32 r0, 3
         \\  exit
-    ,
-        0x0,
-    );
+    , 0x0);
 }
 
 test "mod32 all" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, -1316649930
         \\  lsh r0, 32
@@ -385,62 +401,63 @@ test "mod32 all" {
         \\  mod r0, r1
         \\  mod r0, 0x658f1778
         \\  exit
-    ,
-        0x30ba5a04,
-    );
+    , 0x30ba5a04);
 }
 
 test "mod64 divide by zero" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
         \\  mod r0, r1
         \\  exit
-    ,
-        error.DivisionByZero,
-    );
+    , error.DivisionByZero);
 }
 
 test "mod32 divide by zero" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
         \\  mod32 r0, r1
         \\  exit
-    ,
-        error.DivisionByZero,
-    );
+    , error.DivisionByZero);
+}
+
+test "arsh32 high shift" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov r0, 8
+        \\  mov32 r1, 0x00000001
+        \\  hor64 r1, 0x00000001
+        \\  arsh32 r0, r1
+        \\  exit
+    , 0x4);
 }
 
 test "arsh32 imm" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 0xf8
         \\  lsh32 r0, 28
         \\  arsh32 r0, 16
         \\  exit
-    ,
-        0xffff8000,
-    );
+    , 0xffff8000);
 }
 
 test "arsh32 reg" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 0xf8
         \\  mov32 r1, 16
         \\  lsh32 r0, 28
         \\  arsh32 r0, r1
         \\  exit
-    ,
-        0xffff8000,
-    );
+    , 0xffff8000);
 }
 
 test "arsh64" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov32 r0, 1
         \\  lsh r0, 63
@@ -448,25 +465,36 @@ test "arsh64" {
         \\  mov32 r1, 5
         \\  arsh r0, r1
         \\  exit
-    ,
-        0xfffffffffffffff8,
-    );
+    , 0xfffffffffffffff8);
+}
+
+test "hor64" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  hor64 r0, 0x10203040
+        \\  hor64 r0, 0x01020304
+        \\  exit
+    , 0x1122334400000000);
 }
 
 test "lddw" {
-    try testAsm(
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  lddw r0, 0x1122334455667788
         \\  exit
     , 0x1122334455667788);
+}
 
-    try testAsm(
+test "lddw bottom" {
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  lddw r0, 0x0000000080000000
         \\  exit
     , 0x80000000);
+}
 
-    try testAsm(
+test "lddw logic" {
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  mov r0, 0
         \\  mov r1, 0
@@ -481,38 +509,94 @@ test "lddw" {
     , 0x2);
 }
 
-test "lsh64 reg" {
-    try testAsm(
+test "lddw invalid on v2" {
+    try testAsm(.{},
         \\entrypoint:
-        \\  mov r0, 0x1
-        \\  mov r7, 4
-        \\  lsh r0, r7
+        \\  lddw r0, 0x1122334455667788
         \\  exit
-    , 0x10);
+    , error.UnknownInstruction);
 }
 
-test "rhs32 imm" {
-    try testAsm(
-        \\entrypoint:
-        \\  xor r0, r0
-        \\  add r0, -1
-        \\  rsh32 r0, 8
+test "le16" {
+    try testAsmWithMemory(
+        .{ .minimum_version = .v1 },
+        \\  ldxh r0, [r1]
+        \\  le16 r0
         \\  exit
-    , 0x00ffffff);
+    ,
+        &.{ 0x22, 0x11 },
+        0x1122,
+    );
 }
 
-test "rhs64 reg" {
-    try testAsm(
-        \\entrypoint:
-        \\  mov r0, 0x10
-        \\  mov r7, 4
-        \\  rsh r0, r7
+test "le16 high" {
+    try testAsmWithMemory(
+        .{ .minimum_version = .v1 },
+        \\  ldxdw r0, [r1]
+        \\  le16 r0
         \\  exit
-    , 0x1);
+    ,
+        &.{ 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 },
+        0x2211,
+    );
+}
+
+test "le32" {
+    try testAsmWithMemory(
+        .{ .minimum_version = .v1 },
+        \\  ldxw r0, [r1]
+        \\  le32 r0
+        \\  exit
+    ,
+        &.{ 0x44, 0x33, 0x22, 0x11 },
+        0x11223344,
+    );
+}
+
+test "le32 high" {
+    try testAsmWithMemory(
+        .{ .minimum_version = .v1 },
+        \\  ldxdw r0, [r1]
+        \\  le32 r0
+        \\  exit
+    ,
+        &.{ 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 },
+        0x44332211,
+    );
+}
+
+test "le64" {
+    try testAsmWithMemory(
+        .{ .minimum_version = .v1 },
+        \\  ldxdw r0, [r1]
+        \\  le64 r0
+        \\  exit
+    ,
+        &.{ 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11 },
+        0x1122334455667788,
+    );
+}
+
+test "le invalid on v2" {
+    try testAsm(.{},
+        \\  le16 r0
+        \\  exit
+    , error.UnknownInstruction);
+
+    try testAsm(.{},
+        \\  le32 r0
+        \\  exit
+    , error.UnknownInstruction);
+
+    try testAsm(.{},
+        \\  le64 r0
+        \\  exit
+    , error.UnknownInstruction);
 }
 
 test "be16" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxh r0, [r1]
         \\  be16 r0
@@ -525,6 +609,7 @@ test "be16" {
 
 test "be16 high" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxdw r0, [r1]
         \\  be16 r0
@@ -537,6 +622,7 @@ test "be16 high" {
 
 test "be32" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxw r0, [r1]
         \\  be32 r0
@@ -549,6 +635,7 @@ test "be32" {
 
 test "be32 high" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxdw r0, [r1]
         \\  be32 r0
@@ -561,6 +648,7 @@ test "be32 high" {
 
 test "be64" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxdw r0, [r1]
         \\  be64 r0
@@ -571,8 +659,39 @@ test "be64" {
     );
 }
 
+test "lsh64 reg" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov r0, 0x1
+        \\  mov r7, 4
+        \\  lsh r0, r7
+        \\  exit
+    , 0x10);
+}
+
+test "rhs32 imm" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  xor r0, r0
+        \\  add r0, -1
+        \\  rsh32 r0, 8
+        \\  exit
+    , 0x00ffffff);
+}
+
+test "rhs64 reg" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov r0, 0x10
+        \\  mov r7, 4
+        \\  rsh r0, r7
+        \\  exit
+    , 0x1);
+}
+
 test "ldxb" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxb r0, [r1+2]
         \\  exit
@@ -584,6 +703,7 @@ test "ldxb" {
 
 test "ldxh" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxh r0, [r1+2]
         \\  exit
@@ -595,6 +715,7 @@ test "ldxh" {
 
 test "ldxw" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxw r0, [r1+2]
         \\  exit
@@ -606,6 +727,7 @@ test "ldxw" {
 
 test "ldxw same reg" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov r0, r1
         \\  sth [r0], 0x1234
@@ -619,6 +741,7 @@ test "ldxw same reg" {
 
 test "ldxdw" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxdw r0, [r1+2]
         \\  exit
@@ -633,6 +756,7 @@ test "ldxdw" {
 
 test "ldxdw oob" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxdw r0, [r1+6]
         \\  exit
@@ -647,6 +771,7 @@ test "ldxdw oob" {
 
 test "ldxdw oom" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  ldxdw r0, [r1+6]
         \\  exit
@@ -658,6 +783,7 @@ test "ldxdw oom" {
 
 test "ldxb all" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov r0, r1
         \\  ldxb r9, [r0+0]
@@ -701,6 +827,7 @@ test "ldxb all" {
 
 test "ldxh all" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov r0, r1
         \\  ldxh r9, [r0+0]
@@ -755,6 +882,7 @@ test "ldxh all" {
     );
 
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov r0, r1
         \\  ldxh r9, [r0+0]
@@ -799,6 +927,7 @@ test "ldxh all" {
 
 test "ldxw all" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov r0, r1
         \\  ldxw r9, [r0+0]
@@ -845,6 +974,7 @@ test "ldxw all" {
 
 test "stb" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  stb [r1+2], 0x11
         \\  ldxb r0, [r1+2]
@@ -857,6 +987,7 @@ test "stb" {
 
 test "sth" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\ sth [r1+2], 0x2211
         \\ ldxh r0, [r1+2]
@@ -872,6 +1003,7 @@ test "sth" {
 
 test "stw" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  stw [r1+2], 0x44332211
         \\  ldxw r0, [r1+2]
@@ -887,6 +1019,7 @@ test "stw" {
 
 test "stdw" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  stdw [r1+2], 0x44332211
         \\  ldxdw r0, [r1+2]
@@ -902,6 +1035,7 @@ test "stdw" {
 
 test "stxb" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov32 r2, 0x11
         \\  stxb [r1+2], r2
@@ -915,6 +1049,7 @@ test "stxb" {
 
 test "stxh" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov32 r2, 0x2211
         \\  stxh [r1+2], r2
@@ -928,6 +1063,7 @@ test "stxh" {
 
 test "stxw" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov32 r2, 0x44332211
         \\  stxw [r1+2], r2
@@ -941,6 +1077,7 @@ test "stxw" {
 
 test "stxdw" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov r2, -2005440939
         \\  lsh r2, 32
@@ -959,6 +1096,7 @@ test "stxdw" {
 
 test "stxb all" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov r0, 0xf0
         \\  mov r2, 0xf2
@@ -985,6 +1123,7 @@ test "stxb all" {
     );
 
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov r0, r1
         \\  mov r1, 0xf1
@@ -1002,6 +1141,7 @@ test "stxb all" {
 
 test "stxb chain" {
     try testAsmWithMemory(
+        .{},
         \\entrypoint:
         \\  mov r0, r1
         \\  ldxb r9, [r0+0]
@@ -1035,6 +1175,7 @@ test "stxb chain" {
 
 test "exit without value" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  exit
     ,
@@ -1043,7 +1184,7 @@ test "exit without value" {
 }
 
 test "exit" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 0
         \\  exit
@@ -1051,7 +1192,7 @@ test "exit" {
 }
 
 test "early exit" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r0, 3
         \\  exit
@@ -1062,6 +1203,7 @@ test "early exit" {
 
 test "ja" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov r0, 1
         \\  ja +1
@@ -1074,6 +1216,7 @@ test "ja" {
 
 test "jeq imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 0xa
@@ -1090,6 +1233,7 @@ test "jeq imm" {
 
 test "jeq reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 0xa
@@ -1107,6 +1251,7 @@ test "jeq reg" {
 
 test "jge imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 0xa
@@ -1123,6 +1268,7 @@ test "jge imm" {
 
 test "jge reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 0xa
@@ -1140,6 +1286,7 @@ test "jge reg" {
 
 test "jle imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 5
@@ -1157,6 +1304,7 @@ test "jle imm" {
 
 test "jle reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov r0, 0
         \\  mov r1, 5
@@ -1176,6 +1324,7 @@ test "jle reg" {
 
 test "jgt imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 5
@@ -1192,6 +1341,7 @@ test "jgt imm" {
 
 test "jgt reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov r0, 0
         \\  mov r1, 5
@@ -1210,6 +1360,7 @@ test "jgt reg" {
 
 test "jlt imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 5
@@ -1226,6 +1377,7 @@ test "jlt imm" {
 
 test "jlt reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov r0, 0
         \\  mov r1, 5
@@ -1244,6 +1396,7 @@ test "jlt reg" {
 
 test "jlt extend" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov r0, 0
         \\  add r0, -3  
@@ -1259,6 +1412,7 @@ test "jlt extend" {
 
 test "jne imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 0xb
@@ -1275,6 +1429,7 @@ test "jne imm" {
 
 test "jne reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 0xb
@@ -1292,6 +1447,7 @@ test "jne reg" {
 
 test "jset imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 0x7
@@ -1308,6 +1464,7 @@ test "jset imm" {
 
 test "jset reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 0x7
@@ -1325,6 +1482,7 @@ test "jset reg" {
 
 test "jsge imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov r1, -2
@@ -1342,6 +1500,7 @@ test "jsge imm" {
 
 test "jsge reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov r1, -2
@@ -1361,6 +1520,7 @@ test "jsge reg" {
 
 test "jsle imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov r1, -2
@@ -1378,6 +1538,7 @@ test "jsle imm" {
 
 test "jsle reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov r1, -1
@@ -1398,6 +1559,7 @@ test "jsle reg" {
 
 test "jsgt imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov r1, -2
@@ -1414,6 +1576,7 @@ test "jsgt imm" {
 
 test "jsgt reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov r1, -2
@@ -1431,6 +1594,7 @@ test "jsgt reg" {
 
 test "jslt imm" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov r1, -2
@@ -1447,6 +1611,7 @@ test "jslt imm" {
 
 test "jslt reg" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov r1, -2
@@ -1465,6 +1630,7 @@ test "jslt reg" {
 
 test "stack1" {
     try testAsm(
+        .{},
         \\entrypoint:
         \\  mov r1, 51
         \\  stdw [r10-16], 0xab
@@ -1481,7 +1647,7 @@ test "stack1" {
 }
 
 test "entrypoint exit" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  call function_foo
         \\  mov r0, 42
@@ -1493,7 +1659,7 @@ test "entrypoint exit" {
 }
 
 test "call depth in bounds" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r1, 0
         \\  mov r2, 63
@@ -1509,7 +1675,7 @@ test "call depth in bounds" {
 }
 
 test "call depth out of bounds" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov r1, 0
         \\  mov r2, 64
@@ -1525,7 +1691,7 @@ test "call depth out of bounds" {
 }
 
 test "callx imm" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov64 r0, 0x0
         \\  mov64 r8, 0x1
@@ -1540,7 +1706,7 @@ test "callx imm" {
 }
 
 test "callx out of bounds" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov64 r0, 0x3
         \\  callx r0
@@ -1549,7 +1715,7 @@ test "callx out of bounds" {
 }
 
 test "call bpf 2 bpf" {
-    try testAsm(
+    try testAsm(.{},
         \\entrypoint:
         \\  mov64 r6, 0x11
         \\  mov64 r7, 0x22
@@ -1571,18 +1737,57 @@ test "call bpf 2 bpf" {
 }
 
 test "fixed stack out of bounds" {
-    try testAsm(
+    try testAsm(.{ .minimum_version = .v1 },
         \\entrypoint:
         \\  stb [r10-0x4000], 0
         \\  exit
     , error.AccessNotMapped);
 }
 
-fn testElf(path: []const u8, expected: anytype) !void {
-    return testElfWithSyscalls(path, &.{}, expected);
+test "dynamic frame pointer" {
+    const config: Config = .{};
+    try testAsm(config,
+        \\entrypoint: 
+        \\  add r10, -64
+        \\  stxdw [r10+8], r10
+        \\  call function_foo
+        \\  ldxdw r0, [r10+8]
+        \\  exit
+        \\function_foo:
+        \\  exit
+    , memory.STACK_START + config.stackSize() - 64);
+
+    try testAsm(config,
+        \\entrypoint: 
+        \\  add r10, -64
+        \\  call function_foo
+        \\  exit
+        \\function_foo:
+        \\  mov r0, r10
+        \\  exit
+    , memory.STACK_START + config.stackSize() - 64);
+
+    try testAsm(config,
+        \\entrypoint: 
+        \\  call function_foo
+        \\  mov r0, r10
+        \\  exit
+        \\function_foo:
+        \\  add r10, -64
+        \\  exit
+    , memory.STACK_START + config.stackSize());
+}
+
+fn testElf(
+    config: Config,
+    path: []const u8,
+    expected: anytype,
+) !void {
+    return testElfWithSyscalls(config, path, &.{}, expected);
 }
 
 fn testElfWithSyscalls(
+    config: Config,
     path: []const u8,
     extra_syscalls: []const syscalls.Syscall,
     expected: anytype,
@@ -1604,12 +1809,14 @@ fn testElfWithSyscalls(
         );
     }
 
-    const elf = try Elf.parse(allocator, bytes, &loader);
-
-    var executable = try Executable.fromElf(allocator, &elf);
+    var executable = exec: {
+        const elf = try Elf.parse(allocator, bytes, &loader, config);
+        errdefer elf.deinit(allocator);
+        break :exec try Executable.fromElf(elf);
+    };
     defer executable.deinit(allocator);
 
-    const stack_memory = try allocator.alloc(u8, 4096);
+    const stack_memory = try allocator.alloc(u8, config.stackSize());
     defer allocator.free(stack_memory);
 
     const m = try MemoryMap.init(&.{
@@ -1619,7 +1826,7 @@ fn testElfWithSyscalls(
         Region.init(.mutable, &.{}, memory.INPUT_START),
     }, .v1);
 
-    var vm = try Vm.init(allocator, &executable, m, &loader);
+    var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
     defer vm.deinit();
 
     const result = vm.run();
@@ -1630,23 +1837,43 @@ test "BPF_64_64 sbpfv1" {
     // [ 1] .text             PROGBITS        0000000000000120 000120 000018 00  AX  0   0  8
     // prints the address of the first byte in the .text section
     try testElf(
+        .{ .minimum_version = .v1 },
         sig.ELF_DATA_DIR ++ "reloc_64_64_sbpfv1.so",
         memory.PROGRAM_START + 0x120,
     );
 }
 
-test "BPF_64_RELATIVE data sbpv1" {
-    // [ 1] .text             PROGBITS        00000000000000e8 0000e8 000020 00  AX  0   0  8
-    // [ 2] .rodata           PROGBITS        0000000000000108 000108 000019 01 AMS  0   0  1
-    // prints the address of the first byte in the .rodata sections
+test "BPF_64_64" {
+    // 0000000100000000  0000000100000001 R_SBF_64_64            0000000100000000 entrypoint
     try testElf(
+        .{},
+        sig.ELF_DATA_DIR ++ "reloc_64_64.so",
+        memory.PROGRAM_START,
+    );
+}
+
+test "BPF_64_RELATIVE data sbpv1" {
+    // 4: 0000000000000140     8 OBJECT  LOCAL  DEFAULT     3 reloc_64_relative_data.DATA
+    // 0000000000000140  0000000000000008 R_BPF_64_RELATIVE
+    try testElf(
+        .{ .minimum_version = .v1 },
         sig.ELF_DATA_DIR ++ "reloc_64_relative_data_sbpfv1.so",
-        memory.PROGRAM_START + 0x108,
+        memory.PROGRAM_START + 0x140,
+    );
+}
+
+test "BPF_64_RELATIVE data" {
+    // 0000000100000020  0000000000000008 R_SBF_64_RELATIVE
+    try testElf(
+        .{},
+        sig.ELF_DATA_DIR ++ "reloc_64_relative_data.so",
+        memory.PROGRAM_START + 0x20,
     );
 }
 
 test "BPF_64_RELATIVE sbpv1" {
     try testElf(
+        .{ .minimum_version = .v1 },
         sig.ELF_DATA_DIR ++ "reloc_64_relative_sbpfv1.so",
         memory.PROGRAM_START + 0x138,
     );
@@ -1654,22 +1881,69 @@ test "BPF_64_RELATIVE sbpv1" {
 
 test "load elf rodata sbpfv1" {
     try testElf(
+        .{ .minimum_version = .v1 },
         sig.ELF_DATA_DIR ++ "rodata_section_sbpfv1.so",
         42,
     );
 }
 
-test "static internal call sbpv1" {
+test "load elf rodata" {
     try testElf(
-        sig.ELF_DATA_DIR ++ "static_internal_call_sbpfv1.so",
-        10,
+        .{},
+        sig.ELF_DATA_DIR ++ "rodata_section.so",
+        42,
     );
 }
 
 test "syscall reloc 64_32" {
     try testElfWithSyscalls(
+        .{},
         sig.ELF_DATA_DIR ++ "syscall_reloc_64_32.so",
         &.{.{ .name = "log", .builtin_fn = syscalls.printString }},
+        error.UnresolvedFunction,
+    );
+}
+
+test "static syscall" {
+    try testElfWithSyscalls(
+        .{},
+        sig.ELF_DATA_DIR ++ "syscall_static.so",
+        &.{.{ .name = "log", .builtin_fn = syscalls.printString }},
         0,
+    );
+}
+
+test "struct func pointer" {
+    try testElfWithSyscalls(
+        .{},
+        sig.ELF_DATA_DIR ++ "struct_func_pointer.so",
+        &.{},
+        0x0102030405060708,
+    );
+}
+
+test "data section" {
+    // [ 6] .data             PROGBITS        0000000000000250 000250 000004 00  WA  0   0  4
+    try expectEqual(
+        testElfWithSyscalls(
+            .{},
+            sig.ELF_DATA_DIR ++ "data_section.so",
+            &.{},
+            0,
+        ),
+        error.WritableSectionsNotSupported,
+    );
+}
+
+test "bss section" {
+    // [ 6] .bss              NOBITS          0000000000000250 000250 000004 00  WA  0   0  4
+    try expectEqual(
+        testElfWithSyscalls(
+            .{},
+            sig.ELF_DATA_DIR ++ "bss_section.so",
+            &.{},
+            0,
+        ),
+        error.WritableSectionsNotSupported,
     );
 }

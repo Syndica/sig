@@ -112,13 +112,13 @@ pub const PendingInsertShredsState = struct {
         };
     }
 
+    /// duplicate_shreds is not deinitialized. ownership is transfered to caller
     pub fn deinit(self: *Self) void {
         self.just_inserted_shreds.deinit();
         self.erasure_metas.deinit();
         self.merkle_root_metas.deinit();
         deinitMapRecursive(&self.slot_meta_working_set);
         deinitMapRecursive(&self.index_working_set);
-        self.duplicate_shreds.deinit();
         self.write_batch.deinit();
     }
 
@@ -127,7 +127,6 @@ pub const PendingInsertShredsState = struct {
         var timer = try Timer.start();
         const entry = try self.index_working_set.getOrPut(slot);
         if (!entry.found_existing) {
-            // TODO lifetimes (conflicting?)
             if (try self.db.get(self.allocator, schema.index, slot)) |item| {
                 entry.value_ptr.* = .{ .index = item };
             } else {
@@ -477,16 +476,32 @@ pub const SlotMetaWorkingSetEntry = struct {
 };
 
 pub const PossibleDuplicateShred = union(enum) {
-    Exists: Shred, // Blockstore has another shred in its spot
-    LastIndexConflict: ShredConflict, // The index of this shred conflicts with `slot_meta.last_index`
-    ErasureConflict: ShredConflict, // The code shred has a conflict in the erasure_meta
-    MerkleRootConflict: ShredConflict, // Merkle root conflict in the same fec set
-    ChainedMerkleRootConflict: ShredConflict, // Merkle root chaining conflict with previous fec set
+    /// Blockstore has another shred in its spot
+    Exists: Shred,
+    /// The index of this shred conflicts with `slot_meta.last_index`
+    LastIndexConflict: ShredConflict,
+    /// The code shred has a conflict in the erasure_meta
+    ErasureConflict: ShredConflict,
+    /// Merkle root conflict in the same fec set
+    MerkleRootConflict: ShredConflict,
+    /// Merkle root chaining conflict with previous fec set
+    ChainedMerkleRootConflict: ShredConflict,
+
+    pub fn deinit(self: PossibleDuplicateShred) void {
+        switch (self) {
+            inline else => |conflict| conflict.deinit(),
+        }
+    }
 };
 
 const ShredConflict = struct {
     original: Shred,
     conflict: BytesRef,
+
+    pub fn deinit(self: ShredConflict) void {
+        self.original.deinit();
+        self.conflict.deinit();
+    }
 };
 
 pub const ShredWorkingStore = struct {
@@ -497,6 +512,7 @@ pub const ShredWorkingStore = struct {
     const Self = @This();
 
     /// returned shred lifetime does not exceed this struct
+    /// you should call deinit on the returned data
     pub fn get(self: Self, id: ShredId) !?BytesRef {
         if (self.just_inserted_shreds.get(id)) |shred| {
             return .{ .data = shred.payload(), .deinitializer = null };
@@ -507,7 +523,7 @@ pub const ShredWorkingStore = struct {
         };
     }
 
-    // TODO consider lifetime -> return may be owned by different contexts
+    /// Returned shred is owned by the caller (you must deinit it)
     /// This does almost the same thing as `get` and may not actually be necessary.
     /// This just adds a check on the index and evaluates the cf at comptime instead of runtime.
     pub fn getWithIndex(
@@ -524,7 +540,7 @@ pub const ShredWorkingStore = struct {
         };
         const id = ShredId{ .slot = slot, .index = @intCast(shred_index), .shred_type = shred_type };
         return if (self.just_inserted_shreds.get(id)) |shred|
-            shred
+            try shred.clone() // TODO perf - avoid clone without causing memory issues
         else if (index.contains(shred_index)) blk: {
             const shred = try self.db.getBytes(cf, .{ slot, @intCast(id.index) }) orelse {
                 self.logger.err().logf(&newlinesToSpaces(
@@ -540,10 +556,7 @@ pub const ShredWorkingStore = struct {
     }
 
     fn getFromDb(self: Self, comptime cf: ColumnFamily, id: ShredId) !?BytesRef {
-        return if (try self.db.getBytes(cf, .{ id.slot, @intCast(id.index) })) |s|
-            s
-        else
-            null;
+        return try self.db.getBytes(cf, .{ id.slot, @intCast(id.index) });
     }
 };
 

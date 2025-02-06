@@ -61,10 +61,18 @@ pub fn runBenchmark(logger: sig.trace.Logger) !void {
 
     exit.* = std.atomic.Value(bool).init(false);
 
+    var reader = try sig.geyser.GeyserReader.init(
+        allocator,
+        PIPE_PATH,
+        exit,
+        .{},
+    );
+    defer reader.deinit();
+
     const reader_handle = try std.Thread.spawn(
         .{},
         geyser.core.streamReader,
-        .{ allocator, logger, exit, PIPE_PATH, MEASURE_RATE, null },
+        .{ &reader, logger, exit, MEASURE_RATE },
     );
     const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{ allocator, exit });
 

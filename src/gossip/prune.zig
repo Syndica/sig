@@ -26,19 +26,17 @@ pub const PruneData = struct {
     /// Wallclock of the node that generated this message
     wallclock: u64,
 
-    const Self = @This();
-
-    pub fn init(pubkey: Pubkey, prunes: []Pubkey, destination: Pubkey, now: u64) Self {
-        return Self{
+    pub fn init(pubkey: Pubkey, prunes: []const Pubkey, destination: Pubkey, now: u64) PruneData {
+        return .{
             .pubkey = pubkey,
             .prunes = prunes,
             .destination = destination,
-            .signature = Signature.init(.{0} ** 64),
+            .signature = Signature.ZEROES,
             .wallclock = now,
         };
     }
 
-    pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: PruneData, allocator: std.mem.Allocator) void {
         allocator.free(self.prunes);
     }
 
@@ -61,7 +59,7 @@ pub const PruneData = struct {
         var self = PruneData{
             .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
             .prunes = &[0]Pubkey{},
-            .signature = Signature.init(.{0} ** 64),
+            .signature = Signature.ZEROES,
             .destination = Pubkey.initRandom(random),
             .wallclock = getWallclockMs(),
         };
@@ -156,15 +154,17 @@ test "sign/verify PruneData with prefix" {
         230, 102, 29,  182, 139, 6,   61,  35,  28,  233, 6,   63, 229,
     }));
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-    const expected_pubkey = try Pubkey.fromString("5zYQ7PqYa81fw3rXAYUtmUcoL9TFwG67wcE9LW8hwtfE");
+    const expected_pubkey = try Pubkey.parseBase58String(
+        "5zYQ7PqYa81fw3rXAYUtmUcoL9TFwG67wcE9LW8hwtfE",
+    );
     try std.testing.expectEqual(expected_pubkey.data, pubkey.data);
 
-    const prune1 = try Pubkey.fromString("1111111QLbz7JHiBTspS962RLKV8GndWFwiEaqKM");
-    const prune2 = try Pubkey.fromString("1111111ogCyDbaRMvkdsHB3qfdyFYaG1WtRUAfdh");
-    const prune3 = try Pubkey.fromString("11111112D1oxKts8YPdTJRG5FzxTNpMtWmq8hkVx3");
-    const destination = try Pubkey.fromString("11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP");
+    const prune1 = try Pubkey.parseBase58String("1111111QLbz7JHiBTspS962RLKV8GndWFwiEaqKM");
+    const prune2 = try Pubkey.parseBase58String("1111111ogCyDbaRMvkdsHB3qfdyFYaG1WtRUAfdh");
+    const prune3 = try Pubkey.parseBase58String("11111112D1oxKts8YPdTJRG5FzxTNpMtWmq8hkVx3");
+    const destination = try Pubkey.parseBase58String("11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP");
 
-    const expected_signature = try Signature.fromString(
+    const expected_signature = try Signature.parseBase58String(
         "XjXQxG6vhrfPPQtddCgkfmKsH69YoUvG6GTrQfvmB73GUTjXCL5VDBE3Na94e4uT2MWPTBP3cinVdpHdBb9zAxY",
     );
 
@@ -207,7 +207,7 @@ test "PruneData sig verify" {
     var prune_v2 = PruneData{
         .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
         .prunes = &[0]Pubkey{},
-        .signature = Signature.init(.{0} ** 64),
+        .signature = Signature.ZEROES,
         .destination = Pubkey.fromPublicKey(&keypair.public_key),
         .wallclock = 0,
     };

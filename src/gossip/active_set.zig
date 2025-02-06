@@ -134,7 +134,7 @@ pub const ActiveSet = struct {
 test "init/denit" {
     const alloc = std.testing.allocator;
 
-    var table = try GossipTable.init(alloc);
+    var table = try GossipTable.init(alloc, alloc);
     defer table.deinit();
 
     // insert some contacts

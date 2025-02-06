@@ -31,6 +31,14 @@ There are two main guidelines to keep in mind when naming interfaces and interfa
   - As an example, a generic implementation of `std.Random` which is a pseudo-random number generator should be named `prng` (ie this is relevant when making appropriate use of `std.Random.DefaultPrng`).
   - As another example, an instance of `std.heap.GeneralPurposeAllocator(config)` should be called `gpa_state`, `std.heap.ArenaAllocator` `arena_state`, and so on.
 
+### Container Type Ordering
+Container types should be declared with the following ordering:
+
+- Fields first
+- Constants
+- (if applicable) init functions, followed by deinit functions
+- All other functions, keeping the most relevant for the reader at the top
+
 #### Method Parameters
 The first parameter of a method should be named `self`. The type should be the name of the struct. 
 For example:

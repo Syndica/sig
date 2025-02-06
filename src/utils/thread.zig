@@ -1,6 +1,5 @@
 const std = @import("std");
 
-const Allocator = std.mem.Allocator;
 const Condition = std.Thread.Condition;
 const Mutex = std.Thread.Mutex;
 
@@ -14,25 +13,20 @@ pub const TaskParams = struct {
 };
 
 fn chunkSizeAndThreadCount(data_len: usize, max_n_threads: usize) struct { usize, usize } {
-    var chunk_size = data_len / max_n_threads;
     var n_threads = max_n_threads;
+    var chunk_size = data_len / n_threads;
     if (chunk_size == 0) {
+        // default to one thread for all the data
         n_threads = 1;
         chunk_size = data_len;
     }
     return .{ chunk_size, n_threads };
 }
 
-pub fn SpawnThreadTasksConfig(comptime TaskFn: type) type {
+pub fn SpawnThreadTasksParams(comptime TaskFn: type) type {
     return struct {
-        wg: *std.Thread.WaitGroup,
         data_len: usize,
         max_threads: usize,
-        /// If non-null, set to the coverage over the data which was achieved.
-        /// On a successful call, this will be equal to `data_len`.
-        /// On a failed call, this will be less than `data_len`,
-        /// representing the length of the data which was successfully
-        coverage: ?*usize = null,
         params: Params,
 
         pub const Params = std.meta.ArgsTuple(@Type(.{ .Fn = blk: {
@@ -43,41 +37,46 @@ pub fn SpawnThreadTasksConfig(comptime TaskFn: type) type {
     };
 }
 
+/// this function spawns a number of threads to run the same task function.
 pub fn spawnThreadTasks(
+    allocator: std.mem.Allocator,
     comptime taskFn: anytype,
-    config: SpawnThreadTasksConfig(@TypeOf(taskFn)),
-) std.Thread.SpawnError!void {
-    const Config = SpawnThreadTasksConfig(@TypeOf(taskFn));
+    config: SpawnThreadTasksParams(@TypeOf(taskFn)),
+) !void {
     const chunk_size, const n_threads = chunkSizeAndThreadCount(config.data_len, config.max_threads);
 
-    if (config.coverage) |coverage| coverage.* = 0;
-
     const S = struct {
-        fn taskFnWg(wg: *std.Thread.WaitGroup, fn_params: Config.Params, task_params: TaskParams) @typeInfo(@TypeOf(taskFn)).Fn.return_type.? {
-            defer wg.finish();
-            return @call(.auto, taskFn, fn_params ++ .{task_params});
+        task_params: TaskParams,
+        fcn_params: @TypeOf(config).Params,
+
+        fn run(self: *const @This()) @typeInfo(@TypeOf(taskFn)).Fn.return_type.? {
+            return @call(.auto, taskFn, self.fcn_params ++ .{self.task_params});
         }
     };
+
+    var thread_pool = try HomogeneousThreadPool(S).init(
+        allocator,
+        @intCast(n_threads),
+        n_threads,
+    );
+    defer thread_pool.deinit();
 
     var start_index: usize = 0;
     for (0..n_threads) |thread_id| {
         const end_index = if (thread_id == n_threads - 1) config.data_len else (start_index + chunk_size);
-        const task_params: TaskParams = .{
-            .start_index = start_index,
-            .end_index = end_index,
-            .thread_id = thread_id,
-        };
+        thread_pool.schedule(.{
+            .task_params = .{
+                .start_index = start_index,
+                .end_index = end_index,
+                .thread_id = thread_id,
+            },
+            .fcn_params = config.params,
+        });
 
-        config.wg.start();
-        const handle = std.Thread.spawn(.{}, S.taskFnWg, .{ config.wg, config.params, task_params }) catch |err| {
-            if (config.coverage) |coverage| coverage.* = start_index;
-            return err;
-        };
-        handle.detach();
         start_index = end_index;
     }
 
-    if (config.coverage) |coverage| coverage.* = config.data_len;
+    try thread_pool.joinFallible();
 }
 
 pub fn ThreadPoolTask(comptime Entry: type) type {
@@ -201,12 +200,16 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
         const Self = @This();
 
-        pub fn init(allocator: std.mem.Allocator, num_threads: u32) Self {
+        pub fn init(
+            allocator: std.mem.Allocator,
+            num_threads: u32,
+            num_tasks: u64,
+        ) !Self {
             return .{
                 .allocator = allocator,
                 .pool = ThreadPool.init(.{ .max_threads = num_threads }),
-                .tasks = std.ArrayList(TaskAdapter).init(allocator),
-                .results = std.ArrayList(TaskResult).init(allocator),
+                .tasks = try std.ArrayList(TaskAdapter).initCapacity(allocator, num_tasks),
+                .results = try std.ArrayList(TaskResult).initCapacity(allocator, num_tasks),
             };
         }
 
@@ -217,30 +220,75 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             self.pool.deinit();
         }
 
-        pub fn schedule(self: *Self, typed_task: TaskType) Allocator.Error!void {
-            const result = try self.results.addOne();
-            var task = try self.tasks.addOne();
+        pub fn schedule(self: *Self, typed_task: TaskType) void {
+            // NOTE: this breaks other pre-scheduled tasks on re-allocs so we dont
+            // allow re-allocations
+            const result = self.results.addOneAssumeCapacity();
+            var task = self.tasks.addOneAssumeCapacity();
             task.* = .{ .typed_task = typed_task, .result = result };
             self.pool.schedule(Batch.from(&task.pool_task));
         }
 
         /// blocks until all tasks are complete
         /// returns a list of any results for tasks that did not have a pointer provided
-        pub fn join(self: *Self) std.ArrayList(TaskResult) {
+        /// NOTE: if this fails then the result field is left in a bad state in which case the
+        /// thread pool should be discarded/reset
+        pub fn join(self: *Self) std.mem.Allocator.Error!std.ArrayList(TaskResult) {
             for (self.tasks.items) |*task| task.join();
             const results = self.results;
-            self.results = std.ArrayList(TaskResult).init(self.allocator);
+            self.results = try std.ArrayList(TaskResult).initCapacity(self.allocator, self.tasks.capacity);
             self.tasks.clearRetainingCapacity();
             return results;
         }
 
         /// Like join, but it returns an error if any tasks failed, and otherwise discards task output.
+        /// NOTE: this will return the first error encountered which may be inconsistent between runs.
         pub fn joinFallible(self: *Self) !void {
-            const results = self.join();
+            const results = try self.join();
             for (results.items) |result| try result;
             results.deinit();
         }
     };
+}
+
+fn testSpawnThreadTasks(
+    values: []const u64,
+    sums: []u64,
+    task: TaskParams,
+) !void {
+    std.debug.assert(@import("builtin").is_test);
+    var sum: u64 = 0;
+    for (task.start_index..task.end_index) |i| {
+        sum += values[i];
+    }
+    sums[task.thread_id] = sum;
+}
+
+test spawnThreadTasks {
+    const n_threads = 4;
+    const allocator = std.testing.allocator;
+
+    const sums = try allocator.alloc(u64, n_threads);
+    defer allocator.free(sums);
+
+    try spawnThreadTasks(
+        std.testing.allocator,
+        testSpawnThreadTasks,
+        .{
+            .data_len = 10,
+            .max_threads = n_threads,
+            .params = .{
+                &[_]u64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 },
+                sums,
+            },
+        },
+    );
+
+    var total_sum: u64 = 0;
+    for (sums) |sum| {
+        total_sum += sum;
+    }
+    try std.testing.expectEqual(55, total_sum);
 }
 
 test "typed thread pool" {
@@ -252,13 +300,17 @@ test "typed thread pool" {
         }
     };
 
-    var pool = HomogeneousThreadPool(AdditionTask).init(std.testing.allocator, 2);
+    var pool = try HomogeneousThreadPool(AdditionTask).init(
+        std.testing.allocator,
+        2,
+        3,
+    );
     defer pool.deinit();
-    try pool.schedule(.{ .a = 1, .b = 1 });
-    try pool.schedule(.{ .a = 1, .b = 2 });
-    try pool.schedule(.{ .a = 1, .b = 4 });
+    pool.schedule(.{ .a = 1, .b = 1 });
+    pool.schedule(.{ .a = 1, .b = 2 });
+    pool.schedule(.{ .a = 1, .b = 4 });
 
-    const results = pool.join();
+    const results = try pool.join();
     defer results.deinit();
 
     try std.testing.expect(3 == results.items.len);

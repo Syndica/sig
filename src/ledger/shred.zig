@@ -18,7 +18,7 @@ const checkedSub = sig.utils.math.checkedSub;
 pub const MAX_SHREDS_PER_SLOT: usize = code_shred_constants.max_per_slot + data_shred_constants.max_per_slot;
 
 pub const DATA_SHREDS_PER_FEC_BLOCK: usize = 32;
-const SIZE_OF_MERKLE_ROOT: usize = sig.core.Hash.size;
+const SIZE_OF_MERKLE_ROOT: usize = sig.core.Hash.SIZE;
 
 pub const code_shred_constants = ShredConstants{
     .max_per_slot = 32_768,
@@ -61,7 +61,20 @@ pub const Shred = union(ShredType) {
         };
     }
 
+    pub fn clone(self: Self) Allocator.Error!Self {
+        return switch (self) {
+            .code => |shred| .{ .code = try shred.clone() },
+            .data => |shred| .{ .data = try shred.clone() },
+        };
+    }
+
     pub fn payload(self: Self) []const u8 {
+        return switch (self) {
+            inline .code, .data => |shred| shred.payload,
+        };
+    }
+
+    pub fn payloadMut(self: Self) []u8 {
         return switch (self) {
             inline .code, .data => |shred| shred.payload,
         };
@@ -136,12 +149,6 @@ pub const Shred = union(ShredType) {
         };
     }
 
-    pub fn setMerkleProof(self: *Self, proof: MerkleProofEntryList) !void {
-        return switch (self.*) {
-            inline .data, .code => |*s| @TypeOf(s.*).generic.setMerkleProof(s, proof),
-        };
-    }
-
     pub fn id(self: Self) ShredId {
         return switch (self) {
             inline .data, .code => |s| s.id(),
@@ -170,6 +177,12 @@ pub const CodeShred = struct {
         self.allocator.free(self.payload);
     }
 
+    pub fn clone(self: Self) Allocator.Error!Self {
+        var new = self;
+        new.payload = try new.allocator.dupe(u8, new.payload);
+        return new;
+    }
+
     /// agave: ShredCode::from_recovered_shard
     pub fn fromRecoveredShard(
         allocator: Allocator,
@@ -195,14 +208,16 @@ pub const CodeShred = struct {
         const writer = buf.writer();
         try bincode.write(writer, common_header, .{});
         try bincode.write(writer, code_header, .{});
-        var shred = Self{
+        if (chained_merkle_root) |hash|
+            try setChainedMerkleRoot(payload, common_header.variant, hash);
+        if (retransmitter_signature) |sign|
+            try setRetransmitterSignatureFor(payload, common_header.variant, sign);
+        const shred = Self{
             .allocator = allocator,
             .common = common_header,
             .custom = code_header,
             .payload = payload,
         };
-        if (chained_merkle_root) |hash| try generic.setChainedMerkleRoot(&shred, hash);
-        if (retransmitter_signature) |sign| try generic.setRetransmitterSignature(&shred, sign);
         try shred.sanitize();
         return shred;
     }
@@ -286,6 +301,12 @@ pub const DataShred = struct {
         self.allocator.free(self.payload);
     }
 
+    pub fn clone(self: Self) Allocator.Error!Self {
+        var new = self;
+        new.payload = try new.allocator.dupe(u8, new.payload);
+        return new;
+    }
+
     /// agave: ShredData::from_recovered_shard
     pub fn fromRecoveredShard(
         allocator: Allocator,
@@ -295,20 +316,21 @@ pub const DataShred = struct {
         shard: []const u8,
     ) !Self {
         const shard_size = shard.len;
-        if (shard_size + Signature.size > constants.payload_size) {
+        if (shard_size + Signature.SIZE > constants.payload_size) {
             return error.InvalidShardSize;
         }
         const payload = try allocator.alloc(u8, constants.payload_size);
         errdefer allocator.free(payload);
-        @memcpy(payload[0..Signature.size], &leader_signature.data);
-        @memcpy(payload[Signature.size..][0..shard_size], shard);
-        @memset(payload[Signature.size + shard_size ..], 0);
+        @memcpy(payload[0..Signature.SIZE], &leader_signature.data);
+        @memcpy(payload[Signature.SIZE..][0..shard_size], shard);
+        @memset(payload[Signature.SIZE + shard_size ..], 0);
         var shred = try generic.fromPayloadOwned(allocator, payload);
-        if (shard_size != try capacity(code_shred_constants, shred.common.variant)) {
+        if (shard_size != try capacity(code_shred_constants, shred.common.variant))
             return error.InvalidShardSize;
-        }
-        if (chained_merkle_root) |hash| try generic.setChainedMerkleRoot(&shred, hash);
-        if (retransmitter_signature) |sign| try generic.setRetransmitterSignature(&shred, sign);
+        if (chained_merkle_root) |hash|
+            try setChainedMerkleRoot(payload, shred.common.variant, hash);
+        if (retransmitter_signature) |sign|
+            try setRetransmitterSignatureFor(payload, shred.common.variant, sign);
         try shred.sanitize();
         return shred;
     }
@@ -385,29 +407,19 @@ pub const DataShred = struct {
 
 /// Analogous to [Shred trait](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred/traits.rs#L6)
 fn generic_shred(shred_type: ShredType) type {
-    const Self: type, //
-    const CustomHeader: type, //
+    const Self = switch (shred_type) {
+        .data => DataShred,
+        .code => CodeShred,
+    };
+    const CustomHeader = switch (shred_type) {
+        .data => DataHeader,
+        .code => CodeHeader,
+    };
     const constants: ShredConstants = switch (shred_type) {
-        .data => .{ DataShred, DataHeader, data_shred_constants },
-        .code => .{ CodeShred, CodeHeader, code_shred_constants },
+        .data => data_shred_constants,
+        .code => code_shred_constants,
     };
     return struct {
-        fn writePayload(self: *Self, data: []const u8) !void {
-            if (self.payload.len < constants.payload_size) {
-                return error.InvalidPayloadSize;
-            }
-            @memset(self.payload, 0);
-
-            var buf = std.io.fixedBufferStream(self.payload[0..constants.payload_size]);
-            const writer = buf.writer();
-
-            try bincode.write(writer, self.common, .{});
-            try bincode.write(writer, self.custom, .{});
-
-            const offset = writer.context.pos;
-            @memcpy(self.payload[offset .. offset + data.len], data);
-        }
-
         fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
             // NOTE(x19): is it ok if payload.len > constants.payload_size? the test_data_shred is 1207 bytes
             if (payload.len < constants.payload_size) {
@@ -472,12 +484,12 @@ fn generic_shred(shred_type: ShredType) type {
 
         /// The return contains a pointer to data owned by the shred.
         fn merkleProof(self: *const Self) !MerkleProofEntryList {
-            return getMerkleProof(self.payload, constants, self.common.variant);
+            return getMerkleProofFor(self.payload, constants, self.common.variant);
         }
 
         fn merkleNode(self: Self) !Hash {
             const offset = try proofOffset(constants, self.common.variant);
-            return getMerkleNode(self.payload, Signature.size, offset);
+            return getMerkleNodeAt(self.payload, Signature.SIZE, offset);
         }
 
         fn erasureShardAsSlice(self: *const Self) ![]const u8 {
@@ -490,7 +502,7 @@ fn generic_shred(shred_type: ShredType) type {
                 return error.InsufficientPayloadSize;
             }
             const start = switch (self.common.variant.shred_type) {
-                .data => Signature.size,
+                .data => Signature.SIZE,
                 .code => constants.headers_size,
             };
             return self.payload[start..end];
@@ -511,57 +523,16 @@ fn generic_shred(shred_type: ShredType) type {
             return layout.getChainedMerkleRoot(self.payload) orelse error.InvalidPayloadSize;
         }
 
-        /// agave: set_chained_merkle_root
-        fn setChainedMerkleRoot(self: *Self, chained_merkle_root: Hash) !void {
-            const offset = try getChainedMerkleRootOffset(self.common.variant);
-            const end = offset + SIZE_OF_MERKLE_ROOT;
-            if (self.payload.len < end) {
-                return error.InvalidPayloadSize;
-            }
-            @memcpy(self.payload[offset..end], &chained_merkle_root.data);
-        }
-
-        /// agave: set_merkle_proof
-        fn setMerkleProof(self: *Self, proof: MerkleProofEntryList) !void {
-            try proof.sanitize();
-            const proof_size = self.common.variant.proof_size;
-            if (proof.len != proof_size) {
-                return error.InvalidMerkleProof;
-            }
-            const offset = try proofOffset(constants, self.common.variant);
-            if (self.payload.len < offset + proof.len * merkle_proof_entry_size) {
-                return error.InvalidProofSize;
-            }
-            var start = offset;
-            var proof_iterator = proof.iterator();
-            while (proof_iterator.next()) |entry| {
-                // TODO test: agave uses bincode here. does that make any difference?
-                const end = merkle_proof_entry_size + start;
-                @memcpy(self.payload[start..end], entry);
-                start = end;
-            }
-        }
-
         /// agave: retransmitter_signature
         fn retransmitterSignature(self: Self) !Signature {
             const offset = try retransmitterSignatureOffset(self.common.variant);
-            const end = offset + Signature.size;
+            const end = offset + Signature.SIZE;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
             }
-            var sig_bytes: [Signature.size]u8 = undefined;
+            var sig_bytes: [Signature.SIZE]u8 = undefined;
             @memcpy(&sig_bytes, self.payload[offset..end]);
             return .{ .data = sig_bytes };
-        }
-
-        /// agave: setRetransmitterSignature
-        fn setRetransmitterSignature(self: *Self, signature: Signature) !void {
-            const offset = try retransmitterSignatureOffset(self.common.variant);
-            const end = offset + Signature.size;
-            if (self.payload.len < end) {
-                return error.InvalidPayloadSize;
-            }
-            @memcpy(self.payload[offset..end], &signature.data);
         }
     };
 }
@@ -601,13 +572,28 @@ fn getMerkleRoot(
         .code => codeIndex(shred) orelse return error.InvalidErasureShardIndex,
         .data => dataIndex(shred) orelse return error.InvalidErasureShardIndex,
     };
-    const proof = try getMerkleProof(shred, constants, variant);
+    const proof = try getMerkleProofFor(shred, constants, variant);
     const offset = try proofOffset(constants, variant);
-    const node = try getMerkleNode(shred, Signature.size, offset);
+    const node = try getMerkleNodeAt(shred, Signature.SIZE, offset);
     return calculateMerkleRoot(index, node, proof);
 }
 
-fn getMerkleProof(
+/// agave: set_chained_merkle_root
+fn setChainedMerkleRoot(shred: []u8, variant: ShredVariant, chained_merkle_root: Hash) !void {
+    const offset = try getChainedMerkleRootOffset(variant);
+    const end = offset + SIZE_OF_MERKLE_ROOT;
+    if (shred.len < end) {
+        return error.InvalidPayloadSize;
+    }
+    @memcpy(shred[offset..end], &chained_merkle_root.data);
+}
+
+pub fn getMerkleProof(shred: []const u8) !MerkleProofEntryList {
+    const variant = layout.getShredVariant(shred) orelse return error.UnknownShredVariant;
+    return getMerkleProofFor(shred, variant.constants(), variant);
+}
+
+fn getMerkleProofFor(
     shred: []const u8,
     constants: ShredConstants,
     variant: ShredVariant,
@@ -624,7 +610,35 @@ fn getMerkleProof(
     };
 }
 
-fn getMerkleNode(shred: []const u8, start: usize, end: usize) !Hash {
+/// agave: set_merkle_proof
+pub fn setMerkleProof(shred: []u8, proof: MerkleProofEntryList) !void {
+    const variant = layout.getShredVariant(shred) orelse return error.UnknownShredVariant;
+    try proof.sanitize();
+    const proof_size = variant.proof_size;
+    if (proof.len != proof_size) {
+        return error.InvalidMerkleProof;
+    }
+    const offset = try proofOffset(variant.constants(), variant);
+    if (shred.len < offset + proof.len * merkle_proof_entry_size) {
+        return error.InvalidProofSize;
+    }
+    var start = offset;
+    var proof_iterator = proof.iterator();
+    while (proof_iterator.next()) |entry| {
+        // TODO test: agave uses bincode here. does that make any difference?
+        const end = merkle_proof_entry_size + start;
+        @memcpy(shred[start..end], entry);
+        start = end;
+    }
+}
+
+pub fn getMerkleNode(shred: []const u8) !Hash {
+    const variant = layout.getShredVariant(shred) orelse return error.UnknownShredVariant;
+    const offset = try proofOffset(variant.constants(), variant);
+    return getMerkleNodeAt(shred, Signature.SIZE, offset);
+}
+
+fn getMerkleNodeAt(shred: []const u8, start: usize, end: usize) !Hash {
     if (shred.len < end) return error.InvalidPayloadSize;
     return hashv(&.{ MERKLE_HASH_PREFIX_LEAF, shred[start..end] });
 }
@@ -759,7 +773,7 @@ fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
         constants.headers_size +
             (if (variant.chained) SIZE_OF_MERKLE_ROOT else 0) +
             variant.proof_size * merkle_proof_entry_size +
-            (if (variant.resigned) Signature.size else 0),
+            (if (variant.resigned) Signature.SIZE else 0),
     ) catch error.InvalidProofSize;
 }
 
@@ -837,6 +851,16 @@ pub const MerkleProofEntryList = struct {
     }
 };
 
+/// agave: setRetransmitterSignature
+fn setRetransmitterSignatureFor(shred: []u8, variant: ShredVariant, signature: Signature) !void {
+    const offset = try retransmitterSignatureOffset(variant);
+    const end = offset + Signature.SIZE;
+    if (shred.len < end) {
+        return error.InvalidPayloadSize;
+    }
+    @memcpy(shred[offset..end], &signature.data);
+}
+
 pub const CommonHeader = struct {
     leader_signature: Signature,
     variant: ShredVariant,
@@ -850,10 +874,8 @@ pub const CommonHeader = struct {
 
     pub const @"!bincode-config:variant" = ShredVariantConfig;
 
-    const Self = @This();
-
-    const ZEROED_FOR_TEST = Self{
-        .leader_signature = Signature{ .data = .{0} ** Signature.size },
+    const ZEROED_FOR_TEST = .{
+        .leader_signature = Signature{ .data = .{0} ** Signature.SIZE },
         .variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
         .slot = 0,
         .index = 0,
@@ -862,8 +884,8 @@ pub const CommonHeader = struct {
     };
 
     // Identifier for the erasure code set that the shred belongs to.
-    pub fn erasureSetId(self: @This()) ErasureSetId {
-        return ErasureSetId{
+    pub fn erasureSetId(self: CommonHeader) ErasureSetId {
+        return .{
             .slot = self.slot,
             .erasure_set_index = self.erasure_set_index,
         };
@@ -1051,7 +1073,7 @@ pub const layout = struct {
     const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
     const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
     const SIZE_OF_CODE_SHRED_HEADERS: usize = 89;
-    const SIZE_OF_SIGNATURE: usize = sig.core.Signature.size;
+    const SIZE_OF_SIGNATURE: usize = sig.core.Signature.SIZE;
     const SIZE_OF_SHRED_VARIANT: usize = 1;
     const SIZE_OF_SHRED_SLOT: usize = 8;
     const SIZE_OF_INDEX: usize = 4;
@@ -1103,10 +1125,10 @@ pub const layout = struct {
     }
 
     pub fn getLeaderSignature(shred: []const u8) ?Signature {
-        if (shred.len < Signature.size) {
+        if (shred.len < Signature.SIZE) {
             return null;
         }
-        return Signature.init(shred[0..SIZE_OF_SIGNATURE].*);
+        return .{ .data = shred[0..SIZE_OF_SIGNATURE].* };
     }
 
     pub fn merkleRoot(shred: []const u8) ?Hash {
@@ -1134,20 +1156,12 @@ pub const layout = struct {
         const offset = getChainedMerkleRootOffset(variant) catch return null;
         const end = offset +| SIZE_OF_MERKLE_ROOT;
         if (shred.len < end) return null;
-        return Hash.fromSizedSlice(shred[offset..][0..SIZE_OF_MERKLE_ROOT]);
+        return .{ .data = shred[offset..][0..SIZE_OF_MERKLE_ROOT].* };
     }
 
-    pub fn setRetransmitterSignature(
-        shred: []u8,
-        signature: Signature,
-    ) !void {
-        const variant = getShredVariant(shred) orelse return error.UnknownVariant;
-        const offset = try retransmitterSignatureOffset(variant);
-        const end = offset + Signature.size;
-        if (shred.len < end) {
-            return error.InvalidPayloadSize;
-        }
-        @memcpy(shred[offset..end], &signature.data);
+    pub fn setRetransmitterSignature(shred: []u8, signature: Signature) !void {
+        const variant = getShredVariant(shred) orelse return error.UnknownShredVariant;
+        return setRetransmitterSignatureFor(shred, variant, signature);
     }
 
     /// agave: get_reference_tick
@@ -1170,6 +1184,33 @@ fn getInt(
     if (data.len < end_index) return null;
     const bytes: *const [@sizeOf(Int)]u8 = @ptrCast(data[start_index..end_index]);
     return std.mem.readInt(Int, bytes, .little);
+}
+
+pub fn overwriteShredForTest(allocator: Allocator, shred: *Shred, data: []const u8) !void {
+    const constants = switch (shred.*) {
+        .code => code_shred_constants,
+        .data => data_shred_constants,
+    };
+    if (shred.payload().len < constants.payload_size) {
+        return error.InvalidPayloadSize;
+    }
+    const new_payload = try allocator.dupe(u8, shred.payload());
+    @memset(new_payload, 0);
+
+    var buf = std.io.fixedBufferStream(new_payload[0..constants.payload_size]);
+    const writer = buf.writer();
+
+    switch (shred.*) {
+        inline .code, .data => |*typed_shred| {
+            try bincode.write(writer, typed_shred.common, .{});
+            try bincode.write(writer, typed_shred.custom, .{});
+            allocator.free(typed_shred.payload);
+            typed_shred.payload = new_payload;
+        },
+    }
+
+    const offset = writer.context.pos;
+    @memcpy(new_payload[offset .. offset + data.len], data);
 }
 
 test "basic shred variant round trip" {

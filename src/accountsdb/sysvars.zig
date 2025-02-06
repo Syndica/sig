@@ -24,14 +24,14 @@ pub const SlotCheckResult = enum { Future, TooOld, Found, NotFound };
 ///
 /// Analogous to [SysvarCache](https://github.com/anza-xyz/agave/blob/ebd063eb79c6e2f14da660ccfc90f1d4c0b7db1f/program-runtime/src/sysvar_cache.rs#L28)
 pub const IDS = struct {
-    pub const clock = Pubkey.fromString("SysvarC1ock11111111111111111111111111111111") catch unreachable;
-    pub const epoch_schedule = Pubkey.fromString("SysvarEpochSchedu1e111111111111111111111111") catch unreachable;
-    pub const epoch_rewards = Pubkey.fromString("SysvarEpochRewards1111111111111111111111111") catch unreachable;
-    pub const rent = Pubkey.fromString("SysvarRent111111111111111111111111111111111") catch unreachable;
-    pub const slot_hashes = Pubkey.fromString("SysvarS1otHashes111111111111111111111111111") catch unreachable;
-    pub const slot_history = Pubkey.fromString("SysvarS1otHistory11111111111111111111111111") catch unreachable;
-    pub const stake_history = Pubkey.fromString("SysvarStakeHistory1111111111111111111111111") catch unreachable;
-    pub const last_restart_slot = Pubkey.fromString("SysvarLastRestartS1ot1111111111111111111111") catch unreachable;
+    pub const clock = Pubkey.parseBase58String("SysvarC1ock11111111111111111111111111111111") catch unreachable;
+    pub const epoch_schedule = Pubkey.parseBase58String("SysvarEpochSchedu1e111111111111111111111111") catch unreachable;
+    pub const epoch_rewards = Pubkey.parseBase58String("SysvarEpochRewards1111111111111111111111111") catch unreachable;
+    pub const rent = Pubkey.parseBase58String("SysvarRent111111111111111111111111111111111") catch unreachable;
+    pub const slot_hashes = Pubkey.parseBase58String("SysvarS1otHashes111111111111111111111111111") catch unreachable;
+    pub const slot_history = Pubkey.parseBase58String("SysvarS1otHistory11111111111111111111111111") catch unreachable;
+    pub const stake_history = Pubkey.parseBase58String("SysvarStakeHistory1111111111111111111111111") catch unreachable;
+    pub const last_restart_slot = Pubkey.parseBase58String("SysvarLastRestartS1ot1111111111111111111111") catch unreachable;
 };
 
 /// Analogous to [Clock](https://github.com/anza-xyz/agave/blob/fc2a8794be2526e9fd6cdbc9b304c055b2d9cc57/sdk/program/src/clock.rs#L180)

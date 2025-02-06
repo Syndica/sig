@@ -46,7 +46,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const random = prng.random();
 
     // init gossip table
-    var gossip_table = try GossipTable.init(allocator);
+    var gossip_table = try GossipTable.init(allocator, allocator);
     defer gossip_table.deinit();
 
     var put_count: u64 = 0;

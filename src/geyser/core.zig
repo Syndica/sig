@@ -153,7 +153,9 @@ pub const GeyserWriter = struct {
     }
 
     pub fn IOStreamLoop(self: *Self) !void {
-        while (!self.exit.load(.acquire)) {
+        while (true) {
+            self.io_channel.waitToReceive(.{ .unordered = self.exit }) catch break;
+
             while (self.io_channel.tryReceive()) |payload| {
                 _ = self.writeToPipe(payload) catch |err| {
                     if (err == WritePipeError.PipeBlockedWithExitSignaled) {
@@ -250,22 +252,25 @@ pub const GeyserWriter = struct {
     }
 };
 
-pub fn createGeyserWriterFromConfig(
+pub fn createGeyserWriter(
     allocator: std.mem.Allocator,
-    geyser_config: sig.cmd.config.GeyserConfig,
+    pipe_path: []const u8,
+    writer_fba_bytes: usize,
 ) !*GeyserWriter {
-    if (!geyser_config.enable) return error.GeyserWriterIsDisabled;
-
     const exit = try allocator.create(Atomic(bool));
+    errdefer allocator.destroy(exit);
     exit.* = Atomic(bool).init(false);
 
     const geyser_writer = try allocator.create(GeyserWriter);
+    errdefer allocator.destroy(geyser_writer);
+
     geyser_writer.* = try GeyserWriter.init(
         allocator,
-        geyser_config.pipe_path,
+        pipe_path,
         exit,
-        geyser_config.writer_fba_bytes,
+        writer_fba_bytes,
     );
+    errdefer geyser_writer.deinit();
 
     // start the geyser writer
     try geyser_writer.spawnIOLoop();
@@ -474,16 +479,11 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
 }
 
 pub fn streamReader(
-    allocator: std.mem.Allocator,
+    reader: *GeyserReader,
     logger: sig.trace.Logger,
     exit: *std.atomic.Value(bool),
-    pipe_path: []const u8,
     measure_rate: ?sig.time.Duration,
-    allocator_config: ?GeyserReader.AllocatorConfig,
 ) !void {
-    var reader = try sig.geyser.GeyserReader.init(allocator, pipe_path, exit, allocator_config orelse .{});
-    defer reader.deinit();
-
     var bytes_read: usize = 0;
     var timer = try sig.time.Timer.start();
 
@@ -517,172 +517,172 @@ pub fn streamReader(
     }
 }
 
-// test "streaming accounts" {
-//     const allocator = std.testing.allocator;
-//     const batch_len = 2;
+test "streaming accounts" {
+    const allocator = std.testing.allocator;
+    const batch_len = 2;
 
-//     var prng = std.rand.DefaultPrng.init(19);
-//     const random = prng.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
-//     // generate some data
-//     const accounts = try allocator.alloc(Account, batch_len);
-//     defer {
-//         for (accounts) |*account| account.deinit(allocator);
-//         allocator.free(accounts);
-//     }
-//     const pubkeys = try allocator.alloc(Pubkey, batch_len);
-//     defer allocator.free(pubkeys);
+    // generate some data
+    const accounts = try allocator.alloc(Account, batch_len);
+    defer {
+        for (accounts) |*account| account.deinit(allocator);
+        allocator.free(accounts);
+    }
+    const pubkeys = try allocator.alloc(Pubkey, batch_len);
+    defer allocator.free(pubkeys);
 
-//     for (0..batch_len) |i| {
-//         accounts[i] = try Account.initRandom(allocator, random, 10);
-//         pubkeys[i] = Pubkey.initRandom(random);
-//     }
+    for (0..batch_len) |i| {
+        accounts[i] = try Account.initRandom(allocator, random, 10);
+        pubkeys[i] = Pubkey.initRandom(random);
+    }
 
-//     var exit = std.atomic.Value(bool).init(false);
+    var exit = std.atomic.Value(bool).init(false);
 
-//     // setup writer
-//     var stream_writer = try GeyserWriter.init(
-//         allocator,
-//         sig.TEST_DATA_DIR ++ "stream_test.pipe",
-//         &exit,
-//         1 << 18,
-//     );
-//     defer stream_writer.deinit();
+    // setup writer
+    var stream_writer = try GeyserWriter.init(
+        allocator,
+        sig.TEST_DATA_DIR ++ "stream_test.pipe",
+        &exit,
+        1 << 18,
+    );
+    defer stream_writer.deinit();
 
-//     try stream_writer.spawnIOLoop();
+    try stream_writer.spawnIOLoop();
 
-//     // setup reader
-//     var stream_reader = try GeyserReader.init(
-//         allocator,
-//         sig.TEST_DATA_DIR ++ "stream_test.pipe",
-//         null,
-//         .{
-//             .bincode_buf_len = 1 << 18,
-//             .io_buf_len = 1 << 18,
-//         },
-//     );
-//     defer stream_reader.deinit();
+    // setup reader
+    var stream_reader = try GeyserReader.init(
+        allocator,
+        sig.TEST_DATA_DIR ++ "stream_test.pipe",
+        null,
+        .{
+            .bincode_buf_len = 1 << 18,
+            .io_buf_len = 1 << 18,
+        },
+    );
+    defer stream_reader.deinit();
 
-//     // write to the pipe
-//     const v_payload = VersionedAccountPayload{
-//         .AccountPayloadV1 = .{
-//             .accounts = accounts,
-//             .pubkeys = pubkeys,
-//             .slot = 100,
-//         },
-//     };
-//     try stream_writer.writePayloadToPipe(v_payload);
+    // write to the pipe
+    const v_payload = VersionedAccountPayload{
+        .AccountPayloadV1 = .{
+            .accounts = accounts,
+            .pubkeys = pubkeys,
+            .slot = 100,
+        },
+    };
+    try stream_writer.writePayloadToPipe(v_payload);
 
-//     // read from the pipe
-//     _, const data = try stream_reader.readPayload();
+    // read from the pipe
+    _, const data = try stream_reader.readPayload();
 
-//     try std.testing.expectEqualDeep(v_payload, data);
-//     stream_reader.resetMemory();
+    try std.testing.expectEqualDeep(v_payload, data);
+    stream_reader.resetMemory();
 
-//     // write to the pipe twice
-//     // #1
-//     try stream_writer.writePayloadToPipe(v_payload);
+    // write to the pipe twice
+    // #1
+    try stream_writer.writePayloadToPipe(v_payload);
 
-//     const accounts2 = try allocator.alloc(Account, batch_len);
-//     defer {
-//         for (accounts2) |*account| account.deinit(allocator);
-//         allocator.free(accounts2);
-//     }
-//     const pubkeys2 = try allocator.alloc(Pubkey, batch_len);
-//     defer allocator.free(pubkeys2);
-//     for (0..batch_len) |i| {
-//         accounts2[i] = try Account.initRandom(allocator, random, 10);
-//         pubkeys2[i] = Pubkey.initRandom(random);
-//     }
+    const accounts2 = try allocator.alloc(Account, batch_len);
+    defer {
+        for (accounts2) |*account| account.deinit(allocator);
+        allocator.free(accounts2);
+    }
+    const pubkeys2 = try allocator.alloc(Pubkey, batch_len);
+    defer allocator.free(pubkeys2);
+    for (0..batch_len) |i| {
+        accounts2[i] = try Account.initRandom(allocator, random, 10);
+        pubkeys2[i] = Pubkey.initRandom(random);
+    }
 
-//     // #2
-//     const v_payload2 = VersionedAccountPayload{
-//         .AccountPayloadV1 = .{
-//             .accounts = accounts2,
-//             .pubkeys = pubkeys2,
-//             .slot = 100,
-//         },
-//     };
-//     try stream_writer.writePayloadToPipe(v_payload2);
+    // #2
+    const v_payload2 = VersionedAccountPayload{
+        .AccountPayloadV1 = .{
+            .accounts = accounts2,
+            .pubkeys = pubkeys2,
+            .slot = 100,
+        },
+    };
+    try stream_writer.writePayloadToPipe(v_payload2);
 
-//     // first payload matches
-//     _, const data2 = try stream_reader.readPayload();
-//     try std.testing.expectEqualDeep(v_payload, data2);
-//     stream_reader.resetMemory();
+    // first payload matches
+    _, const data2 = try stream_reader.readPayload();
+    try std.testing.expectEqualDeep(v_payload, data2);
+    stream_reader.resetMemory();
 
-//     // second payload matches
-//     _, const data3 = try stream_reader.readPayload();
-//     try std.testing.expectEqualDeep(v_payload2, data3);
-//     stream_reader.resetMemory();
-// }
+    // second payload matches
+    _, const data3 = try stream_reader.readPayload();
+    try std.testing.expectEqualDeep(v_payload2, data3);
+    stream_reader.resetMemory();
+}
 
-// test "buf resizing" {
-//     const allocator = std.testing.allocator;
-//     const batch_len = 2;
+test "buf resizing" {
+    const allocator = std.testing.allocator;
+    const batch_len = 2;
 
-//     var prng = std.rand.DefaultPrng.init(19);
-//     const random = prng.random();
+    var prng = std.rand.DefaultPrng.init(19);
+    const random = prng.random();
 
-//     // generate some data
-//     const accounts = try allocator.alloc(Account, batch_len);
-//     defer {
-//         for (accounts) |*account| account.deinit(allocator);
-//         allocator.free(accounts);
-//     }
-//     const pubkeys = try allocator.alloc(Pubkey, batch_len);
-//     defer allocator.free(pubkeys);
+    // generate some data
+    const accounts = try allocator.alloc(Account, batch_len);
+    defer {
+        for (accounts) |*account| account.deinit(allocator);
+        allocator.free(accounts);
+    }
+    const pubkeys = try allocator.alloc(Pubkey, batch_len);
+    defer allocator.free(pubkeys);
 
-//     for (0..batch_len) |i| {
-//         accounts[i] = try Account.initRandom(allocator, random, 10);
-//         pubkeys[i] = Pubkey.initRandom(random);
-//     }
+    for (0..batch_len) |i| {
+        accounts[i] = try Account.initRandom(allocator, random, 10);
+        pubkeys[i] = Pubkey.initRandom(random);
+    }
 
-//     // setup writer
-//     const exit = try allocator.create(std.atomic.Value(bool));
-//     defer allocator.destroy(exit);
-//     exit.* = std.atomic.Value(bool).init(false);
+    // setup writer
+    const exit = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(exit);
+    exit.* = std.atomic.Value(bool).init(false);
 
-//     // setup writer
-//     var stream_writer = try GeyserWriter.init(
-//         allocator,
-//         sig.TEST_DATA_DIR ++ "stream_test.pipe",
-//         exit,
-//         1 << 18,
-//     );
-//     defer stream_writer.deinit();
+    // setup writer
+    var stream_writer = try GeyserWriter.init(
+        allocator,
+        sig.TEST_DATA_DIR ++ "stream_test.pipe",
+        exit,
+        1 << 18,
+    );
+    defer stream_writer.deinit();
 
-//     try stream_writer.spawnIOLoop();
+    try stream_writer.spawnIOLoop();
 
-//     // setup reader
-//     var stream_reader = try GeyserReader.init(
-//         allocator,
-//         sig.TEST_DATA_DIR ++ "stream_test.pipe",
-//         null,
-//         .{
-//             .bincode_buf_len = 1,
-//             .io_buf_len = 1,
-//         },
-//     );
-//     defer stream_reader.deinit();
+    // setup reader
+    var stream_reader = try GeyserReader.init(
+        allocator,
+        sig.TEST_DATA_DIR ++ "stream_test.pipe",
+        null,
+        .{
+            .bincode_buf_len = 1,
+            .io_buf_len = 1,
+        },
+    );
+    defer stream_reader.deinit();
 
-//     const v_payload = VersionedAccountPayload{
-//         .AccountPayloadV1 = .{
-//             .accounts = accounts,
-//             .pubkeys = pubkeys,
-//             .slot = 100,
-//         },
-//     };
+    const v_payload = VersionedAccountPayload{
+        .AccountPayloadV1 = .{
+            .accounts = accounts,
+            .pubkeys = pubkeys,
+            .slot = 100,
+        },
+    };
 
-//     // write to the pipe
-//     try stream_writer.writePayloadToPipe(v_payload);
+    // write to the pipe
+    try stream_writer.writePayloadToPipe(v_payload);
 
-//     // read from the pipe
-//     _, const data = try stream_reader.readPayload();
+    // read from the pipe
+    _, const data = try stream_reader.readPayload();
 
-//     try std.testing.expectEqualDeep(v_payload, data);
-//     stream_reader.resetMemory();
+    try std.testing.expectEqualDeep(v_payload, data);
+    stream_reader.resetMemory();
 
-//     // check that the buffers have been resized
-//     try std.testing.expect(stream_reader.io_buf.len > 1);
-//     try std.testing.expect(stream_reader.bincode_buf.len > 1);
-// }
+    // check that the buffers have been resized
+    try std.testing.expect(stream_reader.io_buf.len > 1);
+    try std.testing.expect(stream_reader.bincode_buf.len > 1);
+}

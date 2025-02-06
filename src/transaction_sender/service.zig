@@ -61,6 +61,9 @@ pub const Service = struct {
         epoch_schedule: EpochSchedule,
         exit: *AtomicBool,
     ) !Service {
+        const send_channel = try Channel(Packet).create(allocator);
+        errdefer send_channel.destroy();
+
         return .{
             .allocator = allocator,
             .config = config,
@@ -76,7 +79,7 @@ pub const Service = struct {
                 gossip_table_rw,
                 epoch_schedule,
             )),
-            .send_channel = try Channel(Packet).create(allocator),
+            .send_channel = send_channel,
             .input_channel = input_channel,
             .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
@@ -120,9 +123,9 @@ pub const Service = struct {
         var transaction_batch = std.AutoArrayHashMap(Signature, TransactionInfo).init(self.allocator);
         defer transaction_batch.deinit();
 
-        while (!self.exit.load(.monotonic) or
-            self.input_channel.len() != 0)
-        {
+        while (true) {
+            self.input_channel.waitToReceive(.{ .unordered = self.exit }) catch break;
+
             while (self.input_channel.tryReceive()) |transaction| {
                 self.metrics.received_count.inc();
 
