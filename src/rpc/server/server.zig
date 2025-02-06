@@ -1,4 +1,9 @@
-const builtin = @import("builtin");
+//! RPC Server implementation.
+//!
+//! This file defines and exposes the relevant public API for
+//! the RPC Server, as well as the internal API for backends
+//! and any other internal code.
+
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
@@ -10,6 +15,21 @@ pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
 
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
 
+/// The minimum buffer read size.
+pub const MIN_READ_BUFFER_SIZE = 4096;
+
+pub const LOGGER_SCOPE = "rpc.server";
+pub const ScopedLogger = sig.trace.log.ScopedLogger(LOGGER_SCOPE);
+
+/// The work pool is a tagged union, representing one of various possible backends.
+/// It acts merely as a reference to a specific backend's state, or a tag for stateless
+/// backends.
+pub const WorkPool = union(enum) {
+    basic,
+    linux_io_uring: if (LinuxIoUring.can_use) *LinuxIoUring else noreturn,
+};
+
+/// The basic state required for the server to operate.
 pub const Context = struct {
     allocator: std.mem.Allocator,
     logger: ScopedLogger,
@@ -22,16 +42,6 @@ pub const Context = struct {
     tcp: std.net.Server,
     /// Must not be mutated.
     read_buffer_size: u32,
-
-    pub const LOGGER_SCOPE = "rpc.server";
-    pub const ScopedLogger = sig.trace.log.ScopedLogger(LOGGER_SCOPE);
-
-    pub const MIN_READ_BUFFER_SIZE = 4096;
-
-    pub const WorkPool = union(enum) {
-        basic,
-        linux_io_uring: if (LinuxIoUring.can_use) *LinuxIoUring else noreturn,
-    };
 
     /// The returned result must be pinned to a memory location before calling any methods.
     pub fn init(params: struct {
@@ -77,47 +87,39 @@ pub const Context = struct {
         self.wait_group.wait();
         self.tcp.deinit();
     }
-
-    /// Spawn the serve loop as a separate thread.
-    pub fn serveSpawn(
-        self: *Context,
-        /// The pool to dispatch work to.
-        work_pool: WorkPool,
-        exit: *std.atomic.Value(bool),
-    ) std.Thread.SpawnError!std.Thread {
-        return try std.Thread.spawn(.{}, serve, .{ self, work_pool, exit });
-    }
-
-    /// Calls `acceptAndServeConnection` in a loop until `exit.load(.acquire)`.
-    pub fn serve(
-        self: *Context,
-        /// The pool to dispatch work to.
-        work_pool: WorkPool,
-        exit: *std.atomic.Value(bool),
-    ) AcceptAndServeConnectionError!void {
-        self.wait_group.start();
-        defer self.wait_group.finish();
-        while (!exit.load(.acquire)) {
-            try self.acceptAndServeConnection(work_pool);
-        }
-    }
-
-    pub const AcceptAndServeConnectionError =
-        sig.rpc.server.basic.AcceptAndServeConnectionError ||
-        sig.rpc.server.LinuxIoUring.AcceptAndServeConnectionsError;
-
-    pub fn acceptAndServeConnection(
-        self: *Context,
-        work_pool: WorkPool,
-    ) AcceptAndServeConnectionError!void {
-        switch (work_pool) {
-            .basic => try sig.rpc.server.basic.acceptAndServeConnection(self),
-            .linux_io_uring => |linux| try linux.acceptAndServeConnections(self),
-        }
-    }
 };
 
-test Context {
+/// Spawn `serve` as a separate thread.
+pub fn serveSpawn(
+    exit: *std.atomic.Value(bool),
+    ctx: *Context,
+    work_pool: WorkPool,
+) std.Thread.SpawnError!std.Thread {
+    return try std.Thread.spawn(.{}, serve, .{ exit, ctx, work_pool });
+}
+
+pub const ServeError =
+    basic.AcceptAndServeConnectionError ||
+    LinuxIoUring.AcceptAndServeConnectionsError;
+
+/// Until `exit.load(.acquire)`, accepts and serves connections in a loop.
+pub fn serve(
+    /// The exit condition.
+    exit: *std.atomic.Value(bool),
+    /// The context to operate with.
+    ctx: *Context,
+    /// The pool to dispatch work to.
+    work_pool: WorkPool,
+) ServeError!void {
+    while (!exit.load(.acquire)) {
+        switch (work_pool) {
+            .basic => try basic.acceptAndServeConnection(ctx),
+            .linux_io_uring => |linux| try linux.acceptAndServeConnections(ctx),
+        }
+    }
+}
+
+test serveSpawn {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
@@ -177,7 +179,7 @@ test Context {
 
     const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
     const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
-    var rpc_server_ctx = try Context.init(.{
+    var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = logger.unscoped(),
         .snapshot_dir = test_data_dir,
@@ -186,14 +188,14 @@ test Context {
         .read_buffer_size = 4096,
         .reuse_address = true,
     });
-    defer rpc_server_ctx.joinDeinit();
+    defer server_ctx.joinDeinit();
 
-    var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&rpc_server_ctx);
+    var maybe_liou = try LinuxIoUring.init(&server_ctx);
     // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
     // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
     defer if (maybe_liou != null) maybe_liou.?.deinit();
 
-    for ([_]?Context.WorkPool{
+    for ([_]?WorkPool{
         .basic,
         // TODO: see above TODO about `if (a) |*b|` on `?noreturn`.
         if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else null,
@@ -202,14 +204,14 @@ test Context {
         logger.info().logf("Running with {s}", .{@tagName(work_pool)});
 
         var exit = std.atomic.Value(bool).init(false);
-        const serve_thread = try rpc_server_ctx.serveSpawn(work_pool, &exit);
+        const serve_thread = try serveSpawn(&exit, &server_ctx, work_pool);
         defer serve_thread.join();
         defer exit.store(true, .release);
 
         try testExpectSnapshotResponse(
             allocator,
             test_data_dir,
-            rpc_server_ctx.tcp.listen_address.getPort(),
+            server_ctx.tcp.listen_address.getPort(),
             .full,
             snap_files.full,
         );
@@ -218,7 +220,7 @@ test Context {
             try testExpectSnapshotResponse(
                 allocator,
                 test_data_dir,
-                rpc_server_ctx.tcp.listen_address.getPort(),
+                server_ctx.tcp.listen_address.getPort(),
                 .incremental,
                 inc,
             );

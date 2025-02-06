@@ -4,9 +4,8 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const connection = @import("connection.zig");
+const server = @import("server.zig");
 
-const ServerCtx = sig.rpc.server.Context;
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
@@ -95,7 +94,7 @@ pub const GetRequestTargetResolved = union(enum) {
 
 /// Resolve a `GET` request target.
 pub fn getRequestTargetResolve(
-    logger: ServerCtx.ScopedLogger,
+    logger: server.ScopedLogger,
     target: []const u8,
     latest_snapshot_gen_info_rw: *sig.sync.RwMux(?SnapshotGenerationInfo),
 ) GetRequestTargetResolved {
@@ -159,98 +158,6 @@ pub fn getRequestTargetResolve(
     }
 
     return .unrecognized;
-}
-
-pub const HandleRequestError =
-    std.fs.File.OpenError ||
-    std.http.Server.Response.WriteError ||
-    std.fs.File.GetSeekPosError ||
-    std.fs.File.ReadError;
-
-pub fn handleRequest(
-    logger: ServerCtx.ScopedLogger,
-    request: *std.http.Server.Request,
-    snapshot_dir: std.fs.Dir,
-    latest_snapshot_gen_info_rw: *sig.sync.RwMux(?SnapshotGenerationInfo),
-) !void {
-    const conn_address = request.server.connection.address;
-    logger.info().logf("Responding to request from {}: {} {s}", .{
-        conn_address, methodFmt(request.head.method), request.head.target,
-    });
-
-    switch (request.head.method) {
-        .HEAD, .GET => switch (getRequestTargetResolve(
-            logger,
-            request.head.target,
-            latest_snapshot_gen_info_rw,
-        )) {
-            inline .full_snapshot, .inc_snapshot => |pair| {
-                const snap_info, var full_info_lg = pair;
-                defer full_info_lg.unlock();
-
-                const archive_name_bounded = snap_info.snapshotArchiveName();
-                const archive_name = archive_name_bounded.constSlice();
-
-                const archive_file = try snapshot_dir.openFile(archive_name, .{});
-                defer archive_file.close();
-
-                const archive_len = try archive_file.getEndPos();
-
-                var send_buffer: [4096]u8 = undefined;
-                var response = request.respondStreaming(.{
-                    .send_buffer = &send_buffer,
-                    .content_length = archive_len,
-                    .respond_options = .{},
-                });
-
-                if (!response.elide_body) {
-                    // use a length which is still a multiple of 2, greater than the send_buffer length,
-                    // in order to almost always force the http server method to flush, instead of
-                    // pointlessly copying data into the send buffer.
-                    const read_buffer_len = comptime std.mem.alignForward(
-                        usize,
-                        send_buffer.len + 1,
-                        2,
-                    );
-                    var read_buffer: [read_buffer_len]u8 = undefined;
-
-                    while (true) {
-                        const file_data_len = try archive_file.read(&read_buffer);
-                        if (file_data_len == 0) break;
-                        const file_data = read_buffer[0..file_data_len];
-                        try response.writeAll(file_data);
-                    }
-                } else {
-                    std.debug.assert(response.transfer_encoding.content_length == archive_len);
-                    // NOTE: in order to avoid needing to actually spend time writing the response body,
-                    // just trick the API into thinking we already wrote the entire thing by setting this
-                    // to 0.
-                    response.transfer_encoding.content_length = 0;
-                }
-
-                try response.end();
-                return;
-            },
-            .unrecognized => {},
-        },
-        .POST => {
-            logger.err().logf("{} tried to invoke our RPC", .{conn_address});
-            return try request.respond("RPCs are not yet implemented", .{
-                .status = .service_unavailable,
-                .keep_alive = false,
-            });
-        },
-        else => {},
-    }
-
-    logger.err().logf(
-        "{} made an unrecognized request '{} {s}'",
-        .{ conn_address, methodFmt(request.head.method), request.head.target },
-    );
-    try request.respond("", .{
-        .status = .not_found,
-        .keep_alive = false,
-    });
 }
 
 pub fn methodFmt(method: std.http.Method) MethodFmt {

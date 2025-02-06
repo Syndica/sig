@@ -1,8 +1,8 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
-
 const server = @import("server.zig");
+
 const requests = server.requests;
 const connection = server.connection;
 
@@ -149,7 +149,7 @@ fn consumeOurCqe(
     const addr_err_logger = server_ctx.logger.err().field(
         "address",
         // if we fail to getSockName, just print the error in place of the address;
-        connection.getSockName(entry_data.stream.handle),
+        getSocketName(entry_data.stream.handle),
     );
     errdefer addr_err_logger.log("Dropping connection");
 
@@ -782,6 +782,15 @@ const EntryState = union(enum) {
         }
     };
 };
+
+fn getSocketName(
+    socket_handle: std.posix.socket_t,
+) std.posix.GetSockNameError!std.net.Address {
+    var addr: std.net.Address = .{ .any = undefined };
+    var addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(addr.any));
+    try std.posix.getsockname(socket_handle, &addr.any, &addr_len);
+    return addr;
+}
 
 const GetSqeRetryError = IouEnterError;
 
