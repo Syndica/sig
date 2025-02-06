@@ -1141,7 +1141,7 @@ pub const SnapshotHashes = struct {
         pub fn deinit(self: *const IncrementalSnapshotsList, allocator: std.mem.Allocator) void {
             switch (self.*) {
                 .single => {},
-                .multiple => |list| allocator.free(list),
+                .multiple => |list| if (list.len > 0) allocator.free(list),
             }
         }
 
