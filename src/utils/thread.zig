@@ -21,10 +21,10 @@ pub fn IntrusiveMPSC(comptime Node: type) type {
             const old_tail = self.tail.swap(node, .acq_rel);
 
             // Link the previous tail node to the one we just pushed. No tail means we're the first
-            // so it links to `self.head` instead (which should be null). 
+            // so it links to `self.head` instead (which should be null).
             const link = if (old_tail) |prev| &prev.next else &self.head.raw;
             @atomicStore(?*Node, link, node, .release);
-            
+
             // Return if the tail was empty (first to push).
             return old_tail == null;
         }
@@ -60,43 +60,6 @@ pub fn IntrusiveMPSC(comptime Node: type) type {
         }
     };
 }
-
-pub const Spawner = struct {
-    pool: *ThreadPool,
-    wg: std.Thread.WaitGroup = .{},
-
-    pub fn init(pool: *ThreadPool) Spawner {
-        return .{ .pool = pool };
-    }
-
-    pub fn deinit(self: *Spawner) void {
-        self.wg.wait();
-    }
-
-    pub const Task = struct {
-        tp_task: ThreadPool.Task,
-        spawner: *Spawner,
-    };
-
-    pub fn spawn(self: *Spawner, task: *Task, comptime func: fn (*Task) void) void {
-        const Wrapper = struct {
-            fn callback(tp_task: *ThreadPool.Task) void {
-                const task_: *Task = @alignCast(@fieldParentPtr("tp_task", tp_task));
-                const wg = &task_.spawner.wg; // read before func() in case it invalidates it.
-                func(task_);
-                wg.finish();
-            }
-        };
-        
-        task.* = .{
-            .tp_task = .{ .callback = Wrapper.callback },
-            .spawner = self,
-        };
-
-        self.wg.start();
-        self.pool.schedule(Batch.from(&task.tp_task));
-    }
-};
 
 pub const TaskParams = struct {
     start_index: usize,

@@ -65,13 +65,13 @@ const XevThread = struct {
         }
 
         // When a sender SocketThread receives a message, it needs to wake up xev to udp send it.
-        if (st.direction == .sender) {
-            st.channel.send_hook = &(struct {
+        if (st.direction == .send) {
+            st.direction.send.send_hook.store(&(struct {
                 var send_hook: Channel(Packet).SendHook = .{ .after_send = afterSend };
                 fn afterSend(_: *Channel(Packet).SendHook, _: *Channel(Packet)) void {
                     notifyIoThread();
                 }
-            }).send_hook;
+            }).send_hook, .release);
         }
 
         // When the node exits, it will trigger this event.
@@ -208,8 +208,8 @@ const XevThread = struct {
         }
 
         switch (st.direction) {
-            .sender => {
-                node.data.packet = st.channel.tryReceive() orelse return;
+            .send => |channel| {
+                node.data.packet = channel.tryReceive() orelse return;
                 node.data.io = .pending;
                 node.data.udp.write(
                     loop,
@@ -227,7 +227,7 @@ const XevThread = struct {
                     onSend,
                 );
             },
-            .receiver => {
+            .recv => {
                 node.data.packet = Packet.default();
                 node.data.io = .pending;
                 node.data.udp.read(
@@ -248,8 +248,9 @@ const XevThread = struct {
         node.data.st = null;
 
         // Sender drains the channel when closing.
-        if (st.direction == .sender) {
-            while (st.channel.tryReceive()) |_| {}
+        switch (st.direction) {
+            .send => |channel| while (channel.tryReceive()) |_| {},
+            .recv => |_| {},
         }
 
         const logger = st.logger.withScope(LOG_SCOPE);
@@ -349,7 +350,9 @@ const XevThread = struct {
             break :blk try network.EndPoint.parse(buf.slice());
         };
 
-        try st.channel.send(node.data.packet);
+        const receiver = st.direction.recv;
+        receiver.on_packet(receiver, &node.data.packet);
+
         try pollNode(node, loop);
     }
 };
@@ -359,8 +362,8 @@ const PerThread = struct {
 
     pub fn spawn(st: *SocketThread) !void {
         st.handle = switch (st.direction) {
-            .sender => try std.Thread.spawn(.{}, runSender, .{st}),
-            .receiver => try std.Thread.spawn(.{}, runReceiver, .{st}),
+            .send => try std.Thread.spawn(.{}, runSender, .{st}),
+            .recv => try std.Thread.spawn(.{}, runReceiver, .{st}),
         };
     }
 
@@ -387,27 +390,31 @@ const PerThread = struct {
                     return e;
                 },
             };
+
             const bytes_read = recv_meta.numberOfBytes;
             if (bytes_read == 0) return error.SocketClosed;
             packet.addr = recv_meta.sender;
             packet.size = bytes_read;
-            try st.channel.send(packet);
+
+            const receiver = st.direction.recv;
+            receiver.on_packet(receiver, &packet);
         }
     }
 
     fn runSender(st: *SocketThread) !void {
         const logger = st.logger.withScope(LOG_SCOPE);
+        const channel = st.direction.send;
         defer {
             // empty the channel
-            while (st.channel.tryReceive()) |_| {}
+            while (channel.tryReceive()) |_| {}
             st.exit.afterExit();
             logger.debug().log("sendSocket loop closed");
         }
 
         while (true) {
-            st.channel.waitToReceive(st.exit) catch break;
+            channel.waitToReceive(st.exit) catch break;
 
-            while (st.channel.tryReceive()) |p| {
+            while (channel.tryReceive()) |p| {
                 if (st.exit.shouldExit()) return; // drop the rest (like above) if exit prematurely.
                 const bytes_sent = st.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                     logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
@@ -426,38 +433,43 @@ pub const SocketThread = struct {
     allocator: Allocator,
     logger: Logger,
     socket: UdpSocket,
-    channel: *Channel(Packet),
     exit: ExitCondition,
     direction: Direction,
     handle: SocketBackend.Handle,
 
-    const Direction = enum { sender, receiver };
+    pub const Receiver = struct {
+        on_packet: *const fn (*Receiver, *const Packet) void,
+    };
+
+    const Direction = union(enum) {
+        send: *Channel(Packet),
+        recv: *Receiver,
+    };
 
     pub fn spawnSender(
         allocator: Allocator,
         logger: Logger,
         socket: UdpSocket,
-        outgoing_channel: *Channel(Packet),
         exit: ExitCondition,
+        outgoing_channel: *Channel(Packet),
     ) !*SocketThread {
-        return spawn(allocator, logger, socket, outgoing_channel, exit, .sender);
+        return spawn(allocator, logger, socket, exit, .{ .send = outgoing_channel });
     }
 
     pub fn spawnReceiver(
         allocator: Allocator,
         logger: Logger,
         socket: UdpSocket,
-        incoming_channel: *Channel(Packet),
         exit: ExitCondition,
+        receiver: *Receiver,
     ) !*SocketThread {
-        return spawn(allocator, logger, socket, incoming_channel, exit, .receiver);
+        return spawn(allocator, logger, socket, exit, .{ .recv = receiver });
     }
 
     fn spawn(
         allocator: Allocator,
         logger: Logger,
         socket: UdpSocket,
-        channel: *Channel(Packet),
         exit: ExitCondition,
         direction: Direction,
     ) !*SocketThread {
@@ -468,7 +480,6 @@ pub const SocketThread = struct {
             .allocator = allocator,
             .logger = logger,
             .socket = socket,
-            .channel = channel,
             .exit = exit,
             .direction = direction,
             .handle = undefined,
@@ -515,17 +526,28 @@ pub const BenchmarkPacketProcessing = struct {
 
         // Setup incoming
 
-        var incoming_channel = try Channel(Packet).init(allocator);
-        defer incoming_channel.deinit();
+        var incoming: struct {
+            channel: Channel(Packet) = undefined,
+            thread: *SocketThread = undefined,
+            receiver: SocketThread.Receiver = .{ .on_packet = onPacket },
 
-        const incoming_pipe = try SocketThread.spawnReceiver(
+            fn onPacket(receiver: *SocketThread.Receiver, packet: *const Packet) void {
+                const self: *@This() = @alignCast(@fieldParentPtr("receiver", receiver));
+                self.channel.send(packet.*) catch @panic("failed to send to incoming channel");
+            }
+        } = .{};
+
+        incoming.channel = try Channel(Packet).init(allocator);
+        defer incoming.channel.deinit();
+
+        incoming.thread = try SocketThread.spawnReceiver(
             allocator,
             .noop,
             socket,
-            &incoming_channel,
             exit_condition,
+            &incoming.receiver,
         );
-        defer incoming_pipe.join();
+        defer incoming.thread.join();
 
         // Start outgoing
 
@@ -559,14 +581,14 @@ pub const BenchmarkPacketProcessing = struct {
         var outgoing_channel = try Channel(Packet).init(allocator);
         defer outgoing_channel.deinit();
 
-        const outgoing_pipe = try SocketThread.spawnSender(
+        const outgoing_thread = try SocketThread.spawnSender(
             allocator,
             .noop,
             socket,
-            &outgoing_channel,
             exit_condition,
+            &outgoing_channel,
         );
-        defer outgoing_pipe.join();
+        defer outgoing_thread.join();
 
         const outgoing_handle = try std.Thread.spawn(
             .{},
@@ -580,8 +602,9 @@ pub const BenchmarkPacketProcessing = struct {
         var packets_to_recv = n_packets;
         var timer = try sig.time.Timer.start();
         while (packets_to_recv > 0) {
-            incoming_channel.waitToReceive(exit_condition) catch break;
-            while (incoming_channel.tryReceive()) |_| {
+            incoming.channel.waitToReceive(exit_condition) catch break;
+
+            while (incoming.channel.tryReceive()) |_| {
                 packets_to_recv -|= 1;
             }
         }

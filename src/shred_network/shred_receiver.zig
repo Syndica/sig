@@ -56,8 +56,8 @@ pub const ShredReceiver = struct {
             self.allocator,
             self.logger.unscoped(),
             self.repair_socket,
-            response_sender,
             exit,
+            response_sender,
         );
         defer response_sender_thread.join();
 
@@ -89,31 +89,32 @@ pub const ShredReceiver = struct {
         exit: ExitCondition,
         comptime is_repair: bool,
     ) !void {
-        // Setup a channel.
-        const receiver = try Channel(Packet).create(self.allocator);
-        defer receiver.destroy();
+        // Setup SocketThread handler
+        var ctx: struct {
+            sender: *Channel(Packet),
+            shred_receiver: *Self,
+            socket_receiver: SocketThread.Receiver = .{ .on_packet = onPacket },
+
+            fn onPacket(receiver: *SocketThread.Receiver, packet: *const Packet) void {
+                const ctx: *@This() = @alignCast(@fieldParentPtr("socket_receiver", receiver));
+                ctx.shred_receiver.handlePacket(packet.*, ctx.sender, is_repair) catch |err| {
+                    ctx.shred_receiver.logger.err().logf("handlePacket: {}", .{err});
+                };
+            }
+        } = .{
+            .sender = response_sender,
+            .shred_receiver = self,
+        };
 
         // Receive from the socket into the channel.
         const receiver_thread = try SocketThread.spawnReceiver(
             self.allocator,
             self.logger.unscoped(),
             receiver_socket,
-            receiver,
             exit,
+            &ctx.socket_receiver,
         );
         defer receiver_thread.join();
-
-        // Handle packets from the channel.
-        while (true) {
-            receiver.waitToReceive(exit) catch break;
-            var packet_count: usize = 0;
-            while (receiver.tryReceive()) |packet| {
-                self.metrics.incReceived(is_repair);
-                packet_count += 1;
-                try self.handlePacket(packet, response_sender, is_repair);
-            }
-            self.metrics.observeBatchSize(is_repair, packet_count);
-        }
     }
 
     /// Handle a single packet and return.
@@ -123,6 +124,8 @@ pub const ShredReceiver = struct {
         response_sender: *Channel(Packet),
         comptime is_repair: bool,
     ) !void {
+        self.metrics.incReceived(is_repair);
+
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
             if (try self.handlePing(&packet)) |pong_packet| {
                 try response_sender.send(pong_packet);

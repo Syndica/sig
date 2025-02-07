@@ -14,7 +14,7 @@ pub fn Channel(T: type) type {
         closed: Atomic(bool) = Atomic(bool).init(false),
         allocator: Allocator,
         event: std.Thread.ResetEvent = .{},
-        send_hook: ?*SendHook = null,
+        send_hook: Atomic(?*SendHook) = Atomic(?*SendHook).init(null),
 
         pub const SendHook = struct {
             /// Called after the channel has pushed the value.
@@ -150,7 +150,7 @@ pub fn Channel(T: type) type {
                 return error.ChannelClosed;
             }
 
-            const send_hook = channel.send_hook;
+            const send_hook = channel.send_hook.load(.acquire);
 
             var backoff: Backoff = .{};
             var tail = channel.tail.index.load(.acquire);
@@ -481,7 +481,7 @@ test "send-hook" {
 
     // Check that afterSend counts sent channel items.
     var counter = Counter{};
-    ch.send_hook = &counter.hook;
+    ch.send_hook.store(&counter.hook, .release);
 
     for (0..to_send) |i| try ch.send(i);
     try expect(ch.len() == to_send);
@@ -489,7 +489,7 @@ test "send-hook" {
 
     // Check that afterSend consumes any sent values.
     var consumer = Consumer{ .collected = std.ArrayList(u64).init(allocator) };
-    ch.send_hook = &consumer.hook;
+    ch.send_hook.store(&consumer.hook, .release);
     defer consumer.collected.deinit();
 
     while (ch.tryReceive()) |_| {} // drain before starting.

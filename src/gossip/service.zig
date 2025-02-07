@@ -25,7 +25,6 @@ const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
-const ThreadPoolTask = sig.utils.thread.ThreadPoolTask;
 const ThreadPool = sig.sync.ThreadPool;
 const Task = sig.sync.ThreadPool.Task;
 const Batch = sig.sync.ThreadPool.Batch;
@@ -151,6 +150,7 @@ pub const GossipService = struct {
     /// Piping data between the gossip_socket and the channels.
     /// Set to null until start() is called as they represent threads.
     incoming_socket_thread: ?*SocketThread = null,
+    incoming_socket_receiver: SocketThread.Receiver = .{ .on_packet = onIncomingPacket },
     outgoing_socket_thread: ?*SocketThread = null,
 
     /// communication between threads
@@ -341,7 +341,7 @@ pub const GossipService = struct {
         // wait for all threads to shutdown correctly
         self.service_manager.deinit();
 
-        // Wait for pipes to shutdown if any
+        // Wait for threads to shutdown if any
         if (self.incoming_socket_thread) |thread| thread.join();
         if (self.outgoing_socket_thread) |thread| thread.join();
 
@@ -415,8 +415,8 @@ pub const GossipService = struct {
             self.allocator,
             self.logger.unscoped(),
             self.gossip_socket,
-            self.packet_incoming_channel,
             exit_condition,
+            &self.incoming_socket_receiver,
         );
         exit_condition.ordered.exit_index += 1;
 
@@ -446,8 +446,8 @@ pub const GossipService = struct {
             self.allocator,
             self.logger.unscoped(),
             self.gossip_socket,
-            self.packet_outgoing_channel,
             exit_condition,
+            self.packet_outgoing_channel,
         );
         exit_condition.ordered.exit_index += 1;
 
@@ -462,99 +462,128 @@ pub const GossipService = struct {
         }
     }
 
-    const VerifyMessageTask = ThreadPoolTask(VerifyMessageEntry);
-    const VerifyMessageEntry = struct {
-        gossip_data_allocator: std.mem.Allocator,
-        packet: Packet,
-        verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
-        logger: ScopedLogger,
+    fn onIncomingPacket(receiver: *SocketThread.Receiver, packet: *const Packet) void {
+        const self: *Self = @alignCast(@fieldParentPtr("incoming_socket_receiver", receiver));
+        self.packet_incoming_channel.send(packet.*) catch |e| {
+            self.logger.err().logf("failed to send packet incoming: {}", .{e});
+            return;
+        };
+    }
 
-        pub fn callback(self: *VerifyMessageEntry) !void {
-            const packet = self.packet;
-            var message = bincode.readFromSlice(
-                self.gossip_data_allocator,
-                GossipMessage,
-                packet.data[0..packet.size],
-                bincode.Params.standard,
-            ) catch |e| {
-                self.logger.err().logf("packet_verify: failed to deserialize: {s}", .{@errorName(e)});
-                return;
-            };
+    pub fn verifyPackets(self: *Self, exit: ExitCondition) !void {
+        (struct {
+            const Ctx = @This();
 
-            message.sanitize() catch |e| {
-                self.logger.err().logf("packet_verify: failed to sanitize: {s}", .{@errorName(e)});
-                bincode.free(self.gossip_data_allocator, message);
-                return;
-            };
+            gossip: *Self,
+            exit_condition: ExitCondition,
+            wg: std.Thread.WaitGroup = .{},
+            workers: [VERIFY_PACKET_PARALLEL_TASKS]Worker = undefined,
+            send_hook: Channel(Packet).SendHook = .{ .after_send = afterSend },
 
-            message.verifySignature() catch |e| {
-                self.logger.err().logf(
-                    "packet_verify: failed to verify signature from {}: {s}",
-                    .{ packet.addr, @errorName(e) },
-                );
-                bincode.free(self.gossip_data_allocator, message);
-                return;
-            };
+            fn run(gossip: *Self, exit_condition: ExitCondition) void {
+                defer {
+                    while (gossip.packet_incoming_channel.tryReceive()) |_| {}
+                    exit_condition.afterExit();
+                    gossip.logger.debug().log("verifyPackets loop closed");
+                }
 
-            const msg: GossipMessageWithEndpoint = .{
-                .from_endpoint = packet.addr,
-                .message = message,
+                var ctx = Ctx{ .gossip = gossip, .exit_condition = exit_condition };
+                for (&ctx.workers) |*worker| worker.* = .{ .ctx = &ctx };
+                defer ctx.wg.wait();
+
+                gossip.packet_incoming_channel.send_hook.store(&ctx.send_hook, .release);
+                defer gossip.packet_incoming_channel.send_hook.store(null, .release);
+
+                ctx.notify();
+                while (exit_condition.shouldRun()) std.time.sleep(1 * std.time.ns_per_s);
+            }
+
+            fn afterSend(hook: *Channel(Packet).SendHook, channel: *Channel(Packet)) void {
+                const ctx: *Ctx = @alignCast(@fieldParentPtr("send_hook", hook));
+                std.debug.assert(channel == ctx.gossip.packet_incoming_channel);
+                ctx.notify();
+            }
+
+            fn notify(ctx: *Ctx) void {
+                var batch = ThreadPool.Batch{};
+                defer ctx.gossip.thread_pool.schedule(batch);
+
+                const num_wake = @min(ctx.workers.len, ctx.gossip.packet_incoming_channel.len());
+                for (ctx.workers[0..num_wake]) |*worker| {
+                    if (worker.trySchedule()) {
+                        worker.task = .{ .callback = Worker.onSchedule };
+                        batch.push(ThreadPool.Batch.from(&worker.task));
+                        ctx.wg.start();
+                    }
+                }
+            }
+
+            const Worker = struct {
+                ctx: *Ctx,
+                task: ThreadPool.Task = undefined,
+                is_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+                fn trySchedule(worker: *Worker) bool {
+                    if (worker.ctx.gossip.packet_incoming_channel.isEmpty()) return false;
+                    if (worker.is_running.swap(true, .release)) return false;
+                    return true;
+                }
+
+                fn onSchedule(task: *ThreadPool.Task) void {
+                    const worker: *Worker = @alignCast(@fieldParentPtr("task", task));
+                    defer worker.ctx.wg.finish();
+
+                    std.debug.assert(worker.is_running.load(.acquire));
+                    while (worker.ctx.exit_condition.shouldRun()) {
+                        while (worker.ctx.gossip.packet_incoming_channel.tryReceive()) |packet| {
+                            worker.ctx.gossip.verifyPacket(packet);
+                        }
+                        std.debug.assert(worker.is_running.swap(false, .acq_rel));
+                        if (!worker.trySchedule()) break;
+                    }
+                }
             };
-            try self.verified_incoming_channel.send(msg);
-        }
-    };
+        }).run(self, exit);
+    }
 
     /// main logic for deserializing Packets into GossipMessage messages
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
-    fn verifyPackets(self: *Self, exit_condition: ExitCondition) !void {
-        defer {
-            // empty the channel
-            while (self.packet_incoming_channel.tryReceive()) |_| {}
-            // trigger the next service in the chain to close
-            exit_condition.afterExit();
-            self.logger.debug().log("verifyPackets loop closed");
-        }
+    fn verifyPacket(self: *Self, packet: Packet) void {
+        var message = bincode.readFromSlice(
+            self.gossip_data_allocator,
+            GossipMessage,
+            packet.data[0..packet.size],
+            bincode.Params.standard,
+        ) catch |e| {
+            self.logger.err().logf("packet_verify: failed to deserialize: {s}", .{@errorName(e)});
+            return;
+        };
 
-        const tasks = try VerifyMessageTask.init(self.allocator, VERIFY_PACKET_PARALLEL_TASKS);
-        defer self.allocator.free(tasks);
+        message.sanitize() catch |e| {
+            self.logger.err().logf("packet_verify: failed to sanitize: {s}", .{@errorName(e)});
+            bincode.free(self.gossip_data_allocator, message);
+            return;
+        };
 
-        // pre-allocate all the tasks
-        for (tasks) |*task| {
-            task.entry = .{
-                .gossip_data_allocator = self.gossip_data_allocator,
-                .verified_incoming_channel = self.verified_incoming_channel,
-                .packet = undefined,
-                .logger = self.logger,
-            };
-        }
+        message.verifySignature() catch |e| {
+            self.logger.err().logf(
+                "packet_verify: failed to verify signature from {}: {s}",
+                .{ packet.addr, @errorName(e) },
+            );
+            bincode.free(self.gossip_data_allocator, message);
+            return;
+        };
 
-        // loop until the previous service closes and triggers us to close
-        while (true) {
-            self.packet_incoming_channel.waitToReceive(exit_condition) catch break;
-
-            // verify in parallel using the threadpool
-            // PERF: investigate CPU pinning
-            var task_search_start_idx: usize = 0;
-            while (self.packet_incoming_channel.tryReceive()) |packet| {
-                defer self.metrics.gossip_packets_received_total.inc();
-
-                const acquired_task_idx = VerifyMessageTask.awaitAndAcquireFirstAvailableTask(tasks, task_search_start_idx);
-                task_search_start_idx = (acquired_task_idx + 1) % tasks.len;
-
-                const task_ptr = &tasks[acquired_task_idx];
-                task_ptr.entry.packet = packet;
-                task_ptr.result catch |err| self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
-
-                const batch = Batch.from(&task_ptr.task);
-                self.thread_pool.schedule(batch);
-            }
-        }
-
-        for (tasks) |*task| {
-            task.blockUntilCompletion();
-            task.result catch |err| self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
-        }
+        const msg: GossipMessageWithEndpoint = .{
+            .from_endpoint = packet.addr,
+            .message = message,
+        };
+        self.verified_incoming_channel.send(msg) catch |e| {
+            self.logger.err().logf("packet_verify: failed to send verified: {s}", .{@errorName(e)});
+            bincode.free(self.gossip_value_allocator, message);
+            return;
+        };
     }
 
     // structs used in process_messages loop

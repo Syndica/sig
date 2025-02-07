@@ -117,8 +117,8 @@ pub fn runShredRetransmitter(params: struct {
         params.allocator,
         params.logger,
         retransmit_socket,
-        &retransmit_to_socket_channel,
         .{ .unordered = params.exit },
+        &retransmit_to_socket_channel,
     );
     defer sender_thread.join();
 

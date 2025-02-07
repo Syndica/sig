@@ -351,8 +351,8 @@ pub const RepairRequester = struct {
             allocator,
             logger,
             udp_send_socket,
-            channel,
             .{ .unordered = exit },
+            channel,
         );
 
         return .{
