@@ -28,13 +28,13 @@ install_config:
 	fi
 
 uninstall: stop
-	rm "$(prefix)/$(bin)/sig-update"
-	rm "$(prefix)/$(systemd)/system/sig.service"
-	rm "$(prefix)/$(systemd)/system/sig-update.service"
-	rm "$(prefix)/$(systemd)/system/sig-update.timer"
-	systemctl daemon-reload
-	userdel sig
-	rm -rf /home/sig/sig
+	-rm "$(prefix)/$(bin)/sig-update"
+	-rm "$(prefix)/$(systemd)/system/sig.service"
+	-rm "$(prefix)/$(systemd)/system/sig-update.service"
+	-rm "$(prefix)/$(systemd)/system/sig-update.timer"
+	-systemctl daemon-reload
+	-userdel sig
+	-rm -rf /home/sig/sig
 
 start:
 	systemctl enable sig.service
