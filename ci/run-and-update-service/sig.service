@@ -1,0 +1,13 @@
+[Unit]
+Description=Run user-installed Sig as sig user with the provided arguments.
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/sig.conf
+ExecStart=/home/sig/sig/zig-out/bin/sig $CLI_ARGS
+Restart=always
+User=sig
+Group=sig
+
+[Install]
+WantedBy=multi-user.target

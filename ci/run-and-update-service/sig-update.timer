@@ -1,0 +1,11 @@
+[Unit]
+Description=Update sig weekly and on boot
+After=network.target
+
+[Timer]
+OnBootSec=0min
+OnActiveSec= 
+OnUnitActiveSec=1w
+
+[Install]
+WantedBy=timers.target

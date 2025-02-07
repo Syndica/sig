@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+# check if there is an update. if so rebuild sig. otherwise exit
+sudo -iu sig bash <<EOF
+    set -euxo pipefail
+    cd /home/sig/sig
+    git fetch
+
+    if [[ $(git rev-parse HEAD) == $(git rev-parse remotes/origin/main) ]]; then
+        exit 58
+    fi
+
+    git checkout remotes/origin/main
+    cd service
+    make
+EOF
+code=$?
+
+set -euxo pipefail
+
+if [[ $code == 58 ]]; then
+    # 58 means there were no changes. just make sure sig is running
+    systemctl start sig
+elif [[ $code == 0 ]]; then
+    # 0 means there was a change and rebuild, so restart sig
+    systemctl restart sig
+else
+    # other codes indicate error and should be propagated
+    exit $code
+fi

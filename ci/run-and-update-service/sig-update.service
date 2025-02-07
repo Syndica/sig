@@ -1,0 +1,5 @@
+[Unit]
+Description=Runs sig-update command.
+
+[Service]
+ExecStart=/usr/local/bin/sig-update
