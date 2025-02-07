@@ -223,16 +223,17 @@ pub fn main() !void {
 
     var log_file_option = cli.Option{
         .long_name = "log-file",
-        .help = "File to write the logs into",
+        .help = "Write logs to this file instead of stderr",
         .value_ref = cli.mkRef(&current_config.log_file),
         .required = false,
         .value_name = "Log File",
     };
 
-    var no_log_stderr_option = cli.Option{
-        .long_name = "no-log-stderr",
-        .help = "Disables printing of logs to stderr",
-        .value_ref = cli.mkRef(&current_config.no_log_stderr),
+    var tee_logs_option = cli.Option{
+        .long_name = "tee-logs",
+        .help = "If --log-file is set, it disables logging to stderr. " ++
+            "Enable this flag to reactivate stderr logging when using --log-file.",
+        .value_ref = cli.mkRef(&current_config.tee_logs),
         .required = false,
         .value_name = "Log File",
     };
@@ -419,7 +420,7 @@ pub fn main() !void {
             .options = &.{
                 &log_level_option,
                 &log_file_option,
-                &no_log_stderr_option,
+                &tee_logs_option,
                 &metrics_port_option,
             },
             .target = .{
@@ -1436,7 +1437,7 @@ fn spawnLogger(allocator: std.mem.Allocator, cmd_config: config.Cmd) !Logger {
         .allocator = allocator,
         .max_level = cmd_config.log_level,
         .max_buffer = 1 << 20,
-        .write_stderr = !cmd_config.no_log_stderr,
+        .write_stderr = cmd_config.tee_logs or cmd_config.log_file == null,
     }, writer);
     return std_logger.logger();
 }

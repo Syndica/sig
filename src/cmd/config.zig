@@ -21,7 +21,7 @@ pub const Cmd = struct {
     // general config
     log_level: sig.trace.Level = .debug,
     log_file: ?[]const u8 = null,
-    no_log_stderr: bool = true,
+    tee_logs: bool = false,
     metrics_port: u16 = 12345,
     shred_version: ?u16 = null,
 
