@@ -5,7 +5,7 @@ systemd := lib/systemd
 build: 
 	zig build -Doptimize=ReleaseSafe -Dno-run sig
 
-install: create_user create_config
+install: create_user install_config
 	install -Dm755 sig-update         "$(prefix)/$(bin)/sig-update"
 	install -Dm644 sig.service        "$(prefix)/$(systemd)/system/sig.service"
 	install -Dm644 sig-update.service "$(prefix)/$(systemd)/system/sig-update.service"
