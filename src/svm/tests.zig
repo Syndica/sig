@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 const lib = @import("lib.zig");
 const memory = @import("memory.zig");
@@ -48,10 +49,15 @@ fn testAsmWithMemory(
 
     const result = vm.run();
     try expectEqual(expected, result);
+
+    if (config.jit_compile and builtin.cpu.arch == .aarch64) {
+        const jit_result = vm.runJit();
+        try expectEqual(expected, jit_result);
+    }
 }
 
 test "basic mov" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov r1, 1
         \\  mov r0, r1
@@ -60,15 +66,15 @@ test "basic mov" {
 }
 
 test "mov32 imm large" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov32 r0, -1
         \\  exit
     , 0xFFFFFFFF);
 }
 
-test "mov large" {
-    try testAsm(.{},
+test "mov32 large" {
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov32 r1, -1
         \\  mov32 r0, r1
@@ -76,8 +82,17 @@ test "mov large" {
     , 0xFFFFFFFF);
 }
 
+test "mov large" {
+    try testAsm(.{ .jit_compile = true },
+        \\entrypoint:
+        \\  mov64 r1, -1
+        \\  mov64 r0, r1
+        \\  exit
+    , 0xFFFFFFFFFFFFFFFF);
+}
+
 test "bounce" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov r0, 1
         \\  mov r6, r0
@@ -90,7 +105,7 @@ test "bounce" {
 }
 
 test "add32" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 2
@@ -100,8 +115,20 @@ test "add32" {
     , 3);
 }
 
+test "add32 negative" {
+    try testAsm(.{ .jit_compile = true },
+        \\entrypoint:
+        \\  mov32 r0, 0
+        \\  add32 r0, -1
+        \\  exit
+    , 0xFFFFFFFF);
+}
+
 test "add64" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{
+        .jit_compile = true,
+        .minimum_version = .v0,
+    },
         \\entrypoint:
         \\  lddw r0, 0x300000fff
         \\  add r0, -1
@@ -110,7 +137,7 @@ test "add64" {
 }
 
 test "alu32 logic" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov32 r0, 0
         \\  mov32 r1, 1
@@ -162,7 +189,7 @@ test "alu32 arithmetic" {
 }
 
 test "alu64 logic" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov r0, 0
         \\  mov r1, 1
@@ -191,7 +218,7 @@ test "alu64 logic" {
 }
 
 test "mul32 imm" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov r0, 3
         \\  mul32 r0, 4
@@ -200,7 +227,7 @@ test "mul32 imm" {
 }
 
 test "mul32 reg" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov r0, 3
         \\  mov r1, 4
@@ -210,7 +237,7 @@ test "mul32 reg" {
 }
 
 test "mul32 overflow" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mov r1, 4
@@ -220,7 +247,7 @@ test "mul32 overflow" {
 }
 
 test "mul64 imm" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mul r0, 4
@@ -229,7 +256,7 @@ test "mul64 imm" {
 }
 
 test "mul64 reg" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mov r1, 4
@@ -239,7 +266,7 @@ test "mul64 reg" {
 }
 
 test "mul32 negative" {
-    try testAsm(.{},
+    try testAsm(.{ .jit_compile = true },
         \\entrypoint:
         \\  mov r0, -1
         \\  mul32 r0, 4
@@ -694,6 +721,15 @@ test "lsh64 reg" {
         \\  lsh r0, r7
         \\  exit
     , 0x10);
+}
+
+test "lsh32 overflow" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov32 r0, 5
+        \\  lsh32 r0, 30
+        \\  exit
+    , 0x40000000);
 }
 
 test "rhs32 imm" {
