@@ -24,7 +24,7 @@ install_config:
 	@if ! [ -f /etc/sig.conf ]; then \
 		echo "Installing /etc/sig.conf"; \
 		install -Dm644 sig.conf /etc/sig.conf; \
-		sed -i s/BRANCH=main/BRANCH=$(branch)/g /etc/sig.conf
+		sed -i s/BRANCH=main/BRANCH=$(branch)/g /etc/sig.conf; \
 	fi
 
 uninstall: stop
