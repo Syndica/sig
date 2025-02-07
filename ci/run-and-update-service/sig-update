@@ -12,8 +12,7 @@ sudo -iu sig bash <<EOF
     fi
 
     git checkout remotes/origin/main
-    cd ci/run-and-update-service
-    make
+    zig build -Doptimize=ReleaseSafe -Dno-run sig
 EOF
 code=$?
 
