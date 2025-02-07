@@ -8,8 +8,6 @@ const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 const Channel = sig.sync.Channel;
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
-const ThreadPool = sig.sync.ThreadPool;
-const Spawner = sig.utils.thread.Spawner;
 
 const Level = trace.level.Level;
 const NewEntry = trace.entry.NewEntry;

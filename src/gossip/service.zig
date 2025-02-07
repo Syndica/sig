@@ -581,7 +581,7 @@ pub const GossipService = struct {
         };
         self.verified_incoming_channel.send(msg) catch |e| {
             self.logger.err().logf("packet_verify: failed to send verified: {s}", .{@errorName(e)});
-            bincode.free(self.gossip_value_allocator, message);
+            bincode.free(self.gossip_data_allocator, message);
             return;
         };
     }
