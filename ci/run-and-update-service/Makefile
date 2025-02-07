@@ -40,7 +40,8 @@ start:
 	systemctl start sig-update.timer
 
 stop:
-	systemctl stop sig.service
-	systemctl stop sig-update.timer
-	systemctl disable sig.service
-	systemctl disable sig-update.timer
+	-systemctl stop sig.service
+	-systemctl stop sig-update.timer
+	-systemctl stop sig-update.service
+	-systemctl disable sig.service
+	-systemctl disable sig-update.timer
