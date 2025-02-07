@@ -39,6 +39,7 @@ pub fn log64(vm: *Vm) Error!void {
     const arg2 = vm.registers.get(.r2);
 
     const arg3 = vm.registers.get(.r3);
+
     const arg4 = vm.registers.get(.r4);
 
     const arg5 = vm.registers.get(.r5);
