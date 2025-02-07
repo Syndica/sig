@@ -5,12 +5,12 @@ systemd := lib/systemd
 build: 
 	zig build -Doptimize=ReleaseSafe -Dno-run sig
 
-install: create_user clone_repo
+install: create_user create_config
 	install -Dm755 sig-update         "$(prefix)/$(bin)/sig-update"
 	install -Dm644 sig.service        "$(prefix)/$(systemd)/system/sig.service"
 	install -Dm644 sig-update.service "$(prefix)/$(systemd)/system/sig-update.service"
 	install -Dm644 sig-update.timer   "$(prefix)/$(systemd)/system/sig-update.timer"
-	install -Dm644 sig.conf           /etc/sig.conf
+	sudo -u sig git clone https://github.com/Syndica/sig.git /home/sig/sig
 	systemctl daemon-reload
 
 create_user:
@@ -19,9 +19,10 @@ create_user:
 		useradd -m sig; \
 	fi
 
-clone_repo:
-	@if ! [ -d /home/sig/sig ]; then \
-		sudo -u sig git clone https://github.com/Syndica/sig.git /home/sig/sig; \
+install_config:
+	@if ! [ -f /etc/sig.conf ]; then \
+		echo "Installing /etc/sig.conf"; \
+		install -Dm644 sig.conf /etc/sig.conf; \
 	fi
 
 uninstall: stop
