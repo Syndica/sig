@@ -12,7 +12,7 @@ sudo -iu sig bash <<EOF
     fi
 
     git checkout remotes/origin/main
-    cd service
+    cd ci/run-and-update-service
     make
 EOF
 code=$?
