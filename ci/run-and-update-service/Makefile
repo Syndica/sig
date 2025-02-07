@@ -20,7 +20,7 @@ create_user:
 	fi
 
 clone_repo:
-	@if ! [[ -d /home/sig/sig ]]; then \
+	@if ! [ -d /home/sig/sig ]; then \
 		sudo -u sig git clone https://github.com/Syndica/sig.git /home/sig/sig; \
 	fi
 
