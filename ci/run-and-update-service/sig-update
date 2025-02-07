@@ -6,7 +6,8 @@ sudo -iu sig bash <<EOF
     cd /home/sig/sig
     git fetch
 
-    if [[ $(git rev-parse HEAD) == $(git rev-parse remotes/origin/main) ]]; then
+    if [[ $(git rev-parse HEAD) == $(git rev-parse remotes/origin/main) ]] && \
+        [ -f /home/sig/sig/zig-out/bin/sig ]; then
         exit 58
     fi
 
