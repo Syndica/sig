@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # check if there is an update. if so rebuild sig. otherwise exit
-sudo -iu sig bash <<EOF
+sudo -iu sig bash <<'EOF'
     set -euxo pipefail
     cd /home/sig/sig
     git fetch
