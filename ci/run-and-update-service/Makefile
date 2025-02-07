@@ -36,7 +36,6 @@ uninstall: stop
 start:
 	systemctl enable sig.service
 	systemctl enable sig-update.timer
-	systemctl start sig.service
 	systemctl start sig-update.timer
 
 stop:

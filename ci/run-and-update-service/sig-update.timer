@@ -3,8 +3,8 @@ Description=Update sig weekly and on boot
 After=network.target
 
 [Timer]
-OnBootSec=0min
-OnActiveSec= 
+OnBootSec=0
+OnActiveSec=0
 OnUnitActiveSec=1w
 
 [Install]
