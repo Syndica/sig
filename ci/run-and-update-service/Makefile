@@ -1,6 +1,6 @@
-prefix := "/usr/local"
-bin := "bin"
-systemd := "lib/systemd"
+prefix := /usr/local
+bin := bin
+systemd := lib/systemd
 
 build: 
 	zig build -Doptimize=ReleaseSafe -Dno-run sig
@@ -10,6 +10,7 @@ install: create_user clone_repo
 	install -Dm644 sig.service        "$(prefix)/$(systemd)/system/sig.service"
 	install -Dm644 sig-update.service "$(prefix)/$(systemd)/system/sig-update.service"
 	install -Dm644 sig-update.timer   "$(prefix)/$(systemd)/system/sig-update.timer"
+	install -Dm644 sig.conf           /etc/sig.conf
 	systemctl daemon-reload
 
 create_user:
@@ -25,9 +26,9 @@ clone_repo:
 
 uninstall: stop
 	rm "$(prefix)/$(bin)/sig-update"
-	rm "$(prefix)/$(systemd)/user/sig.service"
-	rm "$(prefix)/$(systemd)/user/sig-update.service"
-	rm "$(prefix)/$(systemd)/user/sig-update.timer"
+	rm "$(prefix)/$(systemd)/system/sig.service"
+	rm "$(prefix)/$(systemd)/system/sig-update.service"
+	rm "$(prefix)/$(systemd)/system/sig-update.timer"
 	systemctl daemon-reload
 	userdel sig
 	rm -rf /home/sig/sig
