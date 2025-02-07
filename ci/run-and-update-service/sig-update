@@ -3,16 +3,17 @@
 # check if there is an update. if so rebuild sig. otherwise exit
 sudo -iu sig bash <<'EOF' | tee /dev/null
     set -euxo pipefail
+    . /etc/sig.conf
     cd /home/sig/sig
     git fetch
 
-    if [[ $(git rev-parse HEAD) == $(git rev-parse remotes/origin/main) ]] && \
+    if [[ $(git rev-parse HEAD) == $(git rev-parse remotes/origin/$BRANCH) ]] && \
         [ -f /home/sig/sig/zig-out/bin/sig ]; then
         echo sig is unchanged, skipping update
         exit 58
     fi
 
-    git checkout remotes/origin/main
+    git checkout remotes/origin/$BRANCH
     echo building sig
     zig build -Doptimize=ReleaseSafe -Dno-run sig
 EOF
