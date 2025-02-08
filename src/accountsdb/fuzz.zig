@@ -17,7 +17,7 @@ pub const TrackedAccount = struct {
     slot: u64,
     data: [32]u8,
 
-    pub fn initRandom(random: std.rand.Random, slot: Slot) TrackedAccount {
+    pub fn initRandom(random: std.Random, slot: Slot) !TrackedAccount {
         var data: [32]u8 = undefined;
         random.bytes(&data);
         return .{
@@ -54,9 +54,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{
+    var gpa_state: std.heap.DebugAllocator(.{
         .safety = true,
-    }){};
+    }) = .init;
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
 
@@ -167,7 +167,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
                     errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
 
-                    var tracked_account = TrackedAccount.initRandom(random, slot);
+                    var tracked_account = try TrackedAccount.initRandom(random, slot);
 
                     const existing_pubkey = random.boolean();
                     if ((existing_pubkey and tracked_accounts.count() > 0) or

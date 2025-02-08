@@ -160,8 +160,8 @@ pub fn fillHashmapWithRng(
 /// This implementationc is based on the implementation in the rust rand crate
 /// and ensures the same sequence is generated.
 pub fn uintLessThanRust(comptime T: type, random: Random, less_than: T) T {
-    comptime std.debug.assert(@typeInfo(T).Int.signedness == .unsigned);
-    const bits = @typeInfo(T).Int.bits;
+    comptime std.debug.assert(@typeInfo(T).int.signedness == .unsigned);
+    const bits = @typeInfo(T).int.bits;
     const max = std.math.maxInt(T);
     std.debug.assert(0 < less_than);
 
@@ -467,8 +467,8 @@ pub const WeightedAliasSampler = struct {
         }
 
         while (small.items.len > 0 and large.items.len > 0) {
-            const less = small.pop();
-            const more = large.pop();
+            const less = small.pop().?;
+            const more = large.pop().?;
 
             probability[less] = weights[less] * @as(f32, @floatFromInt(n));
             alias[less] = more;
@@ -480,8 +480,8 @@ pub const WeightedAliasSampler = struct {
             }
         }
 
-        while (small.popOrNull()) |less| probability[less] = 1.0;
-        while (large.popOrNull()) |more| probability[more] = 1.0;
+        while (small.pop()) |less| probability[less] = 1.0;
+        while (large.pop()) |more| probability[more] = 1.0;
         small.deinit();
         large.deinit();
 

@@ -110,7 +110,7 @@ pub const Histogram = struct {
         /// Must be f64 or int
         value: anytype,
     ) void {
-        const float: f64 = if (@typeInfo(@TypeOf(value)) == .Int) @floatFromInt(value) else value;
+        const float: f64 = if (@typeInfo(@TypeOf(value)) == .int) @floatFromInt(value) else value;
         const shard_sync = self.incrementCount(.acquire); // acquires lock. must be first step.
         const shard = &self.shards[shard_sync.shard];
         for (self.upper_bounds.items, 0..) |bound, i| {

@@ -467,7 +467,7 @@ const TestEnvironment = struct {
 
     pub fn init(params: struct {
         allocator: std.mem.Allocator,
-        random: std.rand.Random,
+        random: std.Random,
         num_known_nodes: usize,
         num_unknown_staked_nodes: usize,
         known_nodes_unstaked_ratio: struct { u64, u64 },
@@ -557,7 +557,7 @@ const TestEnvironment = struct {
     }
 };
 
-fn testGetRandomNodes(n: comptime_int, rng: std.rand.Random) [n]TurbineTree.Node {
+fn testGetRandomNodes(n: comptime_int, rng: std.Random) [n]TurbineTree.Node {
     var nodes: [n]TurbineTree.Node = undefined;
     for (0..n) |i| nodes[i] = .{
         .id = .{ .pubkey = Pubkey.initRandom(rng) },
@@ -619,7 +619,7 @@ fn testCheckRetransmitNodesRoundTrip(
     fanout: usize,
     size: comptime_int,
 ) !void {
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     const rand = prng.random();
 
     var nodes = testGetRandomNodes(size, rand);
@@ -677,7 +677,7 @@ fn testCheckRetransmitNodesRoundTrip(
 
 test "agave: cluster nodes retransmit" {
     const allocator = std.testing.allocator;
-    var xrng = std.rand.DefaultPrng.init(0);
+    var xrng = std.Random.DefaultPrng.init(0);
     const rng = xrng.random();
 
     // Setup Environment
@@ -727,7 +727,7 @@ test "agave: cluster nodes retransmit" {
 
 test "agave: get retransmit nodes" {
     { // 20 nodes, 2 fanout
-        var prng = std.rand.DefaultPrng.init(0);
+        var prng = std.Random.DefaultPrng.init(0);
         const nds = testGetRandomNodes(20, prng.random());
         const nodes: []const TurbineTree.Node = &.{
             nds[7], // root
@@ -760,7 +760,7 @@ test "agave: get retransmit nodes" {
         try testCheckRetransmitNodes(std.testing.allocator, 2, nodes, peers);
     }
     { // 36 nodes, 3 fanout
-        var prng = std.rand.DefaultPrng.init(0);
+        var prng = std.Random.DefaultPrng.init(0);
         const nds = testGetRandomNodes(36, prng.random());
         const nodes: []const TurbineTree.Node = &.{
             nds[19], // root
@@ -834,7 +834,7 @@ test "agave-equivalence: get seeeded rng" {
 
 pub fn makeTestCluster(params: struct {
     allocator: std.mem.Allocator,
-    random: std.rand.Random,
+    random: std.Random,
     my_pubkey: Pubkey,
     my_stake: u64,
     min_stake: u64,

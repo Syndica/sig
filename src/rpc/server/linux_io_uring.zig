@@ -56,8 +56,8 @@ pub const LinuxIoUring = struct {
         server_ctx: *server.Context,
     ) AcceptAndServeConnectionsError!void {
         const timeout_ts: std.os.linux.kernel_timespec = comptime .{
-            .tv_sec = 1,
-            .tv_nsec = 0,
+            .sec = 1,
+            .nsec = 0,
         };
 
         const timeout_sqe = try getSqeRetry(&self.io_uring);

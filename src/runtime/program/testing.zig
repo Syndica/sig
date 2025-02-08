@@ -23,7 +23,7 @@ pub fn expectProgramExecuteResult(
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
-    var prng_0 = std.rand.DefaultPrng.init(0);
+    var prng_0 = std.Random.DefaultPrng.init(0);
     var transaction_context = try createTransactionContext(
         allocator,
         prng_0.random(),
@@ -31,7 +31,7 @@ pub fn expectProgramExecuteResult(
     );
     defer transaction_context.deinit(allocator);
 
-    var prng_1 = std.rand.DefaultPrng.init(0);
+    var prng_1 = std.Random.DefaultPrng.init(0);
     var expected_transaction_context = try createTransactionContext(
         allocator,
         prng_1.random(),

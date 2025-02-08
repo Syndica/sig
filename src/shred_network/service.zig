@@ -6,7 +6,7 @@ const shred_network = @import("lib.zig");
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const Random = std.rand.Random;
+const Random = std.Random;
 const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
@@ -153,7 +153,7 @@ pub fn start(
         try service_manager.spawn(
             "Shred Retransmitter",
             shred_network.shred_retransmitter.runShredRetransmitter,
-            .{.{
+            .{shred_network.shred_retransmitter.ShredRetransmitterParams{
                 .allocator = deps.allocator,
                 .my_contact_info = deps.my_contact_info,
                 .epoch_context_mgr = deps.epoch_context_mgr,

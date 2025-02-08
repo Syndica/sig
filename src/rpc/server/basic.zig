@@ -137,10 +137,10 @@ const SyncKind = enum { blocking, nonblocking };
 
 const AcceptHandledError =
     error{
-    ConnectionAborted,
-    ProtocolFailure,
-    WouldBlock,
-} || connection.HandleAcceptError ||
+        ConnectionAborted,
+        ProtocolFailure,
+        WouldBlock,
+    } || connection.HandleAcceptError ||
     SetSocketSyncError;
 
 fn acceptHandled(
@@ -156,7 +156,7 @@ fn acceptHandled(
     // When this is false, it means we can't apply flags to
     // the accepted socket, and we'll have to ensure that the
     // relevant flags are enabled/disabled after acceptance.
-    const have_accept4 = comptime !builtin.target.isDarwin();
+    const have_accept4 = comptime !builtin.target.os.tag.isDarwin();
 
     const conn: std.net.Server.Connection = while (true) {
         var addr: std.net.Address = .{ .any = undefined };
@@ -193,7 +193,7 @@ fn setSocketSync(
     socket: std.posix.socket_t,
     sync: SyncKind,
 ) SetSocketSyncError!void {
-    const FlagsInt = @typeInfo(std.posix.O).Struct.backing_integer.?;
+    const FlagsInt = @typeInfo(std.posix.O).@"struct".backing_integer.?;
     var flags_int: FlagsInt = @intCast(try std.posix.fcntl(socket, std.posix.F.GETFL, 0));
     const flags = std.mem.bytesAsValue(std.posix.O, std.mem.asBytes(&flags_int));
 

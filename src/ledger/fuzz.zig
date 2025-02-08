@@ -119,7 +119,7 @@ pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
         std.debug.print("using seed: {}\n", .{seed});
     }
 
-    inline for (@typeInfo(Actions).Enum.fields) |field| {
+    inline for (@typeInfo(Actions).@"enum".fields) |field| {
         const variant = @field(Actions, field.name);
         if (!executed_actions.contains(variant)) {
             std.debug.print("Action: '{s}' not executed by the fuzzer", .{@tagName(variant)});

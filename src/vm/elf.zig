@@ -86,7 +86,7 @@ pub const Elf = struct {
             return std.mem.sliceTo(ptr, 0);
         }
 
-        fn getPhdrIndexByType(self: Headers, p_type: elf.Elf64_Word) ?u32 {
+        fn getPhdrIndexByType(self: Headers, p_type: elf.Word) ?u32 {
             for (self.phdrs, 0..) |phdr, i| {
                 if (phdr.p_type == p_type) return @intCast(i);
             }
@@ -668,7 +668,7 @@ pub const Elf = struct {
         class: u8,
         data: u8,
         version: u8,
-        osabi: u8,
+        osabi: elf.OSABI,
         abiversion: u8,
         padding: [7]u8,
     };
@@ -698,7 +698,7 @@ pub const Elf = struct {
             ident.class != elf.ELFCLASS64 or
             ident.data != elf.ELFDATA2LSB or
             ident.version != 1 or
-            ident.osabi != sbpf.ELFOSABI_NONE or
+            ident.osabi != elf.OSABI.NONE or
             ident.abiversion != 0x00 or
             !std.mem.allEqual(u8, &ident.padding, 0) or
             @intFromEnum(header.e_machine) != sbpf.EM_SBPF or
@@ -892,8 +892,8 @@ pub const Elf = struct {
         if (header.e_ident[elf.EI_DATA] != elf.ELFDATA2LSB) {
             return error.WrongEndianess;
         }
-        // ensure no OS_ABI was set
-        if (header.e_ident[sbpf.EI_OSABI] != sbpf.ELFOSABI_NONE) {
+        // ensure the NONE (0) OS_ABI was set
+        if (header.e_ident[elf.EI_OSABI] != 0) {
             return error.WrongAbi;
         }
         // ensure the ELF was compiled for BPF or possibly the custom SBPF machine number
@@ -1178,7 +1178,7 @@ test "elf load" {
 fn newSection(
     sh_addr: elf.Elf64_Addr,
     sh_size: elf.Elf64_Xword,
-    sh_name: elf.Elf64_Word,
+    sh_name: elf.Word,
 ) elf.Elf64_Shdr {
     return .{
         .sh_name = sh_name,
