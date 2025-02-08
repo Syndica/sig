@@ -20,7 +20,7 @@ pub fn servePrometheus(
     registry: *Registry(.{}),
     port: u16,
 ) !void {
-    const our_ip = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
+    const our_ip = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, port);
     var tcp = try our_ip.listen(.{
         .force_nonblocking = true,
         .reuse_address = true,
@@ -54,7 +54,6 @@ pub fn servePrometheus(
             !std.mem.eql(u8, request.head.target, "/metrics") //
         ) {
             try request.respond("", .{
-                .version = .@"HTTP/1.0",
                 .status = .not_found,
                 .keep_alive = false,
             });
@@ -65,9 +64,9 @@ pub fn servePrometheus(
         var response = request.respondStreaming(.{
             .send_buffer = &send_buffer,
             .respond_options = .{
-                .version = .@"HTTP/1.0",
                 .status = .ok,
                 .keep_alive = true,
+                .extra_headers = &.{.{ .name = "Content-Type", .value = "text/plain" }},
             },
         });
         try registry.write(allocator, response.writer());
