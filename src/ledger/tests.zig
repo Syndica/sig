@@ -415,7 +415,7 @@ pub fn insertDataForBlockTest(state: *TestState) !InsertDataForBlockResult {
         for (entry.transactions.items) |transaction| {
             var pre_balances = std.ArrayList(u64).init(allocator);
             var post_balances = std.ArrayList(u64).init(allocator);
-            const num_accounts = transaction.account_keys.len;
+            const num_accounts = transaction.msg.account_keys.len;
             for (0..num_accounts) |i| {
                 try pre_balances.append(i * 10);
                 try post_balances.append(i * 11);
