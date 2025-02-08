@@ -47,9 +47,6 @@ pub fn build(b: *Build) void {
     const zig_cli_dep = b.dependency("zig-cli", dep_opts);
     const zig_cli_mod = zig_cli_dep.module("zig-cli");
 
-    const httpz_dep = b.dependency("httpz", dep_opts);
-    const httpz_mod = httpz_dep.module("httpz");
-
     const zstd_dep = b.dependency("zstd", dep_opts);
     const zstd_mod = zstd_dep.module("zstd");
 
@@ -78,7 +75,6 @@ pub fn build(b: *Build) void {
     sig_mod.addImport("zig-network", zig_network_mod);
     sig_mod.addImport("base58", base58_mod);
     sig_mod.addImport("zig-cli", zig_cli_mod);
-    sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
     switch (blockstore_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
@@ -106,7 +102,6 @@ pub fn build(b: *Build) void {
 
     sig_exe.root_module.addImport("xev", xev_mod);
     sig_exe.root_module.addImport("base58", base58_mod);
-    sig_exe.root_module.addImport("httpz", httpz_mod);
     sig_exe.root_module.addImport("zig-cli", zig_cli_mod);
     sig_exe.root_module.addImport("zig-network", zig_network_mod);
     sig_exe.root_module.addImport("zstd", zstd_mod);
@@ -146,7 +141,6 @@ pub fn build(b: *Build) void {
 
     unit_tests_exe.root_module.addImport("xev", xev_mod);
     unit_tests_exe.root_module.addImport("base58", base58_mod);
-    unit_tests_exe.root_module.addImport("httpz", httpz_mod);
     unit_tests_exe.root_module.addImport("zig-network", zig_network_mod);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
     switch (blockstore_db) {
@@ -182,7 +176,6 @@ pub fn build(b: *Build) void {
     fuzz_exe.root_module.addImport("xev", xev_mod);
     fuzz_exe.root_module.addImport("base58", base58_mod);
     fuzz_exe.root_module.addImport("zig-network", zig_network_mod);
-    fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
     switch (blockstore_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -218,7 +211,6 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("xev", xev_mod);
     benchmark_exe.root_module.addImport("base58", base58_mod);
     benchmark_exe.root_module.addImport("zig-network", zig_network_mod);
-    benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
     switch (blockstore_db) {
