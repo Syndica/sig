@@ -8,7 +8,7 @@ const socket_utils = sig.net.socket_utils;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicU64 = std.atomic.Value(u64);
 const EndPoint = net.EndPoint;
-const Random = std.rand.Random;
+const Random = std.Random;
 const UdpSocket = net.Socket;
 
 const Channel = sig.sync.Channel;

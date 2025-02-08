@@ -908,7 +908,7 @@ pub const HashTimeQueue = struct {
 test "remove old values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
 
     var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
@@ -937,7 +937,7 @@ test "remove old values" {
 test "insert and remove value" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
 
     var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
@@ -955,7 +955,7 @@ test "insert and remove value" {
 test "trim pruned values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
 
     var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
@@ -997,7 +997,7 @@ test "gossip.HashTimeQueue: insert multiple values" {
     var htq = HashTimeQueue.init(std.testing.allocator);
     defer htq.deinit();
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
     try htq.insert(Hash.initRandom(random), 100);
@@ -1018,7 +1018,7 @@ test "gossip.HashTimeQueue: insert multiple values" {
 test "gossip.HashTimeQueue: trim pruned values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
     const data = GossipData{
         .LegacyContactInfo = LegacyContactInfo.initRandom(random),
@@ -1052,7 +1052,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
 test "insert and get" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
     var value = SignedGossipData.initRandom(random, &keypair);
 
@@ -1070,7 +1070,7 @@ test "insert and get contact_info" {
     const kp = try KeyPair.create([_]u8{1} ** 32);
     var id = Pubkey.fromPublicKey(&kp.public_key);
 
-    var prng = std.rand.Xoshiro256.init(10);
+    var prng = std.Random.Xoshiro256.init(10);
     const random = prng.random();
 
     const ci = try ContactInfo.initRandom(

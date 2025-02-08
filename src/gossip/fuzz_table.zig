@@ -42,7 +42,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     );
     const logger = std_logger.logger();
 
-    var prng = std.rand.DefaultPrng.init(seed);
+    var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
     // init gossip table

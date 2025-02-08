@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const testing = std.testing;
 
-const DefaultPrng = std.rand.DefaultPrng;
+const DefaultPrng = std.Random.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const LruCache = sig.utils.lru.LruCache;
 const Pubkey = sig.core.Pubkey;
@@ -35,7 +35,7 @@ pub const Ping = struct {
         return self;
     }
 
-    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Ping {
+    pub fn initRandom(random: std.Random, keypair: *const KeyPair) !Ping {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
         random.bytes(&token);
         const signature = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
@@ -77,7 +77,7 @@ pub const Pong = struct {
         }
     }
 
-    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Pong {
+    pub fn initRandom(random: std.Random, keypair: *const KeyPair) !Pong {
         const ping = try Ping.initRandom(random, keypair);
         return try Pong.init(&ping, keypair);
     }
@@ -248,7 +248,7 @@ test "PingCache works" {
     );
     defer ping_cache.deinit();
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
     const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.initRandom(random), .socket_addr = SocketAddr.UNSPECIFIED };

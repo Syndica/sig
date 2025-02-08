@@ -3529,7 +3529,7 @@ test "write and read an account" {
     defer accounts_db.deinit();
     defer full_inc_manifest.deinit(allocator);
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     const pubkey = Pubkey.initRandom(prng.random());
     var data = [_]u8{ 1, 2, 3 };
     const test_account = Account{
@@ -3722,7 +3722,7 @@ test "flushing slots works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const n_accounts = 3;
 
@@ -3784,7 +3784,7 @@ test "purge accounts in cache works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const n_accounts = 3;
 
@@ -3852,7 +3852,7 @@ test "clean to shrink account file works with zero-lamports" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const n_accounts = 10;
 
@@ -3939,7 +3939,7 @@ test "clean to shrink account file works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const n_accounts = 10;
 
@@ -4018,7 +4018,7 @@ test "full clean account file works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const n_accounts = 3;
 
@@ -4114,7 +4114,7 @@ test "shrink account file works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
 
     const n_accounts = 10;

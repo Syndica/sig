@@ -268,7 +268,7 @@ test "building pull filters" {
     // insert a some value
     const kp = try KeyPair.create([_]u8{1} ** 32);
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
     for (0..64) |_| {

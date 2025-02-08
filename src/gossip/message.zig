@@ -12,7 +12,7 @@ const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
 const Ping = sig.gossip.ping_pong.Ping;
 const Pong = sig.gossip.ping_pong.Pong;
-const DefaultPrng = std.rand.DefaultPrng;
+const DefaultPrng = std.Random.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const PruneData = sig.gossip.prune.PruneData;
 
@@ -124,7 +124,7 @@ test "push message serialization is predictable" {
 test "ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var original = GossipMessage{ .PingMessage = try Ping.initRandom(prng.random(), &keypair) };
     var buf = [_]u8{0} ** 1232;
@@ -141,7 +141,7 @@ test "ping message serializes and deserializes correctly" {
 test "test ping pong sig verify" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     var ping = try Ping.initRandom(prng.random(), &keypair);
     var msg = GossipMessage{ .PingMessage = ping };
     try msg.verifySignature();

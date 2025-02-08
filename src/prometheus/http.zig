@@ -35,7 +35,7 @@ pub fn servePrometheus(
 
         // TODO: unify this with the code for the RPC server
         if (comptime builtin.target.isDarwin()) set_flags: {
-            const FlagsInt = @typeInfo(std.posix.O).Struct.backing_integer.?;
+            const FlagsInt = @typeInfo(std.posix.O).@"struct".backing_integer.?;
             var flags_int: FlagsInt =
                 @intCast(try std.posix.fcntl(conn.stream.handle, std.posix.F.GETFL, 0));
             const flags: *std.posix.O =

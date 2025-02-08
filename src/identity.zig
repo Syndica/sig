@@ -65,7 +65,7 @@ pub fn getOrInit(
             });
             defer file.close();
 
-            const keypair = try KeyPair.create(null);
+            const keypair = KeyPair.generate();
             try file.writeAll(&keypair.secret_key.toBytes());
 
             return keypair;

@@ -17,7 +17,7 @@ pub const TrackedAccount = struct {
     slot: u64,
     data: [32]u8,
 
-    pub fn initRandom(random: std.rand.Random, slot: Slot) !TrackedAccount {
+    pub fn initRandom(random: std.Random, slot: Slot) !TrackedAccount {
         var data: [32]u8 = undefined;
         random.bytes(&data);
         return .{

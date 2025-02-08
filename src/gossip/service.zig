@@ -452,12 +452,14 @@ pub const GossipService = struct {
         exit_condition.ordered.exit_index += 1;
 
         if (params.dump) {
-            try self.service_manager.spawn("[gossip] dumpService", GossipDumpService.run, .{.{
-                .allocator = self.allocator,
-                .logger = self.logger.withScope(@typeName(GossipDumpService)),
-                .gossip_table_rw = &self.gossip_table_rw,
-                .exit_condition = exit_condition,
-            }});
+            try self.service_manager.spawn("[gossip] dumpService", GossipDumpService.run, .{
+                GossipDumpService{
+                    .allocator = self.allocator,
+                    .logger = self.logger.withScope(@typeName(GossipDumpService)),
+                    .gossip_table_rw = &self.gossip_table_rw,
+                    .exit_condition = exit_condition,
+                },
+            });
             exit_condition.ordered.exit_index += 1;
         }
     }
@@ -896,7 +898,7 @@ pub const GossipService = struct {
         var stats_publish_timer = try sig.time.Timer.start();
         var trim_memory_timer = try sig.time.Timer.start();
 
-        var prng = std.rand.DefaultPrng.init(seed);
+        var prng = std.Random.DefaultPrng.init(seed);
         const random = prng.random();
 
         var push_cursor: u64 = 0;
@@ -2137,7 +2139,7 @@ pub const GossipMetrics = struct {
     }
 
     pub fn reset(self: *Self) void {
-        inline for (@typeInfo(GossipMetrics).Struct.fields) |field| {
+        inline for (@typeInfo(GossipMetrics).@"struct".fields) |field| {
             @field(self, field.name).reset();
         }
     }
@@ -2388,7 +2390,7 @@ test "build messages startup and shutdown" {
 }
 
 test "handling prune messages" {
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
 
     const allocator = std.testing.allocator;
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -2464,7 +2466,7 @@ test "handling prune messages" {
 test "handling pull responses" {
     const allocator = std.testing.allocator;
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2526,7 +2528,7 @@ test "handling pull responses" {
 test "handle old prune & pull request message" {
     const allocator = std.testing.allocator;
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -2619,7 +2621,7 @@ test "handle old prune & pull request message" {
 test "handle pull request" {
     const allocator = std.testing.allocator;
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2730,7 +2732,7 @@ test "handle pull request" {
 
 test "test build prune messages and handle push messages" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2810,7 +2812,7 @@ test "test build prune messages and handle push messages" {
 
 test "build pull requests" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2870,7 +2872,7 @@ test "build pull requests" {
 
 test "test build push messages" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2944,7 +2946,7 @@ test "test build push messages" {
 
 test "test large push messages" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -3032,7 +3034,7 @@ test "test packet verification" {
         packet_verifier_handle.join();
     }
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     var data = GossipData.randomFromIndex(prng.random(), 0);
     data.LegacyContactInfo.id = id;
     data.LegacyContactInfo.wallclock = 0;
@@ -3226,7 +3228,7 @@ test "process contact info push packet" {
 test "init, exit, and deinit" {
     const gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     const my_keypair = try KeyPair.create(null);
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
 
     var contact_info = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(std.testing.allocator);
     try contact_info.setSocket(.gossip, gossip_address);
@@ -3335,7 +3337,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         const outgoing_channel = gossip_service.packet_incoming_channel;
 
         // generate messages
-        var prng = std.rand.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(19);
         const random = prng.random();
 
         var msg_sent: usize = 0;
@@ -3454,7 +3456,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         });
 
         const now = getWallclockMs();
-        var prng = std.rand.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(19);
         const random = prng.random();
 
         {

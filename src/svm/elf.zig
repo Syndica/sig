@@ -68,7 +68,7 @@ pub const Elf = struct {
             return try safeSlice(self.bytes, p_offset, p_filesz);
         }
 
-        fn getPhdrIndexByType(self: Headers, p_type: elf.Elf64_Word) ?u32 {
+        fn getPhdrIndexByType(self: Headers, p_type: elf.Word) ?u32 {
             for (self.phdrs, 0..) |phdr, i| {
                 if (phdr.p_type == p_type) return @intCast(i);
             }
@@ -395,7 +395,7 @@ pub const Elf = struct {
             return error.WrongEndianess;
         }
         // ensure no OS_ABI was set
-        if (header.e_ident[sbpf.EI_OSABI] != sbpf.ELFOSABI_NONE) {
+        if (@as(elf.OSABI, @enumFromInt(header.e_ident[elf.EI_OSABI])) != elf.OSABI.NONE) {
             return error.WrongAbi;
         }
         // ensure the ELF was compiled for BPF or possibly the custom SBPF machine number

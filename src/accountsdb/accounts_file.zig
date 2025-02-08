@@ -8,6 +8,7 @@ const Slot = sig.core.time.Slot;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
 const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
+const bincode = sig.bincode;
 
 const writeIntLittleMem = sig.core.account.writeIntLittleMem;
 
@@ -19,7 +20,7 @@ pub const FileId = enum(Int) {
 
     pub const Int = u32;
 
-    pub const BincodeConfig = .{
+    pub const BincodeConfig: bincode.FieldConfig(FileId) = .{
         .serializer = serialize,
         .deserializer = deserialize,
     };

@@ -373,8 +373,8 @@ pub fn order(a: anytype, b: anytype) std.math.Order {
     if (T != @TypeOf(b)) @compileError("types do not match");
     const info = @typeInfo(T);
     switch (info) {
-        .Int, .Float => return std.math.order(a, b),
-        .Struct, .Enum, .Union, .Opaque => {
+        .Int, .float => return std.math.order(a, b),
+        .@"struct", .@"enum", .@"union", .@"opaque" => {
             if (@hasDecl(T, "order") and
                 (@TypeOf(T.order) == fn (a: T, b: T) std.math.Order or
                 @TypeOf(T.order) == fn (a: anytype, b: anytype) std.math.Order))
@@ -382,10 +382,10 @@ pub fn order(a: anytype, b: anytype) std.math.Order {
                 return T.order(a, b);
             }
         },
-        .Pointer => {
-            const child = @typeInfo(info.Pointer.child);
-            if (info.Pointer.size == .Slice and (child == .Int or child == .Float)) {
-                return orderSlices(info.Pointer.child, std.math.order, a, b);
+        .pointer => {
+            const child = @typeInfo(info.pointer.child);
+            if (info.pointer.size == .slice and (child == .int or child == .float)) {
+                return orderSlices(info.pointer.child, std.math.order, a, b);
             }
         },
         else => {},

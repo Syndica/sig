@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const Random = std.rand.Random;
+const Random = std.Random;
 const Socket = zig_network.Socket;
 
 const ContactInfo = sig.gossip.ContactInfo;
@@ -568,7 +568,7 @@ pub const RepairPeerProvider = struct {
 test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
     const registry = sig.prometheus.globalRegistry();
-    var prng = std.rand.DefaultPrng.init(4328095);
+    var prng = std.Random.DefaultPrng.init(4328095);
     const random = prng.random();
     const TestLogger = sig.trace.DirectPrintLogger;
 
@@ -657,7 +657,7 @@ test "RepairService sends repair request to gossip peer" {
 
 test "RepairPeerProvider selects correct peers" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(4328095);
+    var prng = std.Random.DefaultPrng.init(4328095);
     const random = prng.random();
 
     // my details

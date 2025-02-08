@@ -5,7 +5,7 @@ const bincode = sig.bincode;
 
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
-const DefaultPrng = std.rand.DefaultPrng;
+const DefaultPrng = std.Random.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 
@@ -55,7 +55,7 @@ pub const PruneData = struct {
         wallclock: u64,
     };
 
-    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !PruneData {
+    pub fn initRandom(random: std.Random, keypair: *const KeyPair) !PruneData {
         var self = PruneData{
             .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
             .prunes = &[0]Pubkey{},

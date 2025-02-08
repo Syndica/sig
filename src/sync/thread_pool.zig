@@ -753,7 +753,7 @@ pub const ThreadPool = struct {
                 // Acquire barrier to ensure operations before the shutdown() are seen after the wait().
                 // Shutdown is rare so it's better to have an Acquire barrier here instead of on CAS failure + load which are common.
                 if (state == SHUTDOWN) {
-                    self.state.fence(.acquire);
+                    //TODO:(0.14) self.state.fence(.acquire);
                     return;
                 }
 
@@ -805,7 +805,7 @@ pub const ThreadPool = struct {
                 // Acquire barrier to ensure operations before the shutdown() are seen after the wait().
                 // Shutdown is rare so it's better to have an Acquire barrier here instead of on CAS failure + load which are common.
                 if (state == SHUTDOWN) {
-                    std.atomic.fence(.acquire);
+                    //TODO:(0.14) std.atomic.fence(.acquire);
                     return;
                 }
 
@@ -1008,7 +1008,7 @@ pub const ThreadPool = struct {
                             const node = nodes orelse break;
                             nodes = node.next;
 
-                            // Array written atomically with weakest ordering since it could be getting atomically read by steal().
+                            // array written atomically with weakest ordering since it could be getting atomically read by steal().
                             self.array[tail % capacity].store(node, .release);
                             tail +%= 1;
                         }

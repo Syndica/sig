@@ -6,7 +6,7 @@ const shred_network = @import("lib.zig");
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const Random = std.rand.Random;
+const Random = std.Random;
 const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;

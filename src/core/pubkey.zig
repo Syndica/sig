@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const base58 = @import("base58");
 const BASE58_ENDEC = base58.Table.BITCOIN;
-
 pub const Pubkey = extern struct {
     data: [SIZE]u8,
 

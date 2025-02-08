@@ -64,327 +64,328 @@ pub fn main() !void {
         // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
         // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
     }
+    var r = try cli.AppRunner.init(gpa_allocator);
 
-    var shred_version_option = cli.Option{
+    const shred_version_option = cli.Option{
         .long_name = "shred-version",
         .help = "The shred version for the network",
-        .value_ref = cli.mkRef(&current_config.shred_version),
+        .value_ref = r.mkRef(&current_config.shred_version),
         .required = false,
         .value_name = "Shred Version",
     };
 
-    var gossip_host_option = cli.Option{
+    const gossip_host_option = cli.Option{
         .long_name = "gossip-host",
         .help =
         \\IPv4 address for the validator to advertise in gossip
         \\ - default: get from --entrypoint, fallback to 127.0.0.1"
         ,
-        .value_ref = cli.mkRef(&current_config.gossip.host),
+        .value_ref = r.mkRef(&current_config.gossip.host),
         .required = false,
         .value_name = "Gossip Host",
     };
 
-    var gossip_port_option = cli.Option{
+    const gossip_port_option = cli.Option{
         .long_name = "gossip-port",
         .help = "The port to run gossip listener - default: 8001",
         .short_alias = 'p',
-        .value_ref = cli.mkRef(&current_config.gossip.port),
+        .value_ref = r.mkRef(&current_config.gossip.port),
         .required = false,
         .value_name = "Gossip Port",
     };
 
-    var repair_port_option = cli.Option{
+    const repair_port_option = cli.Option{
         .long_name = "repair-port",
         .help = "The port to run shred repair listener - default: 8002",
-        .value_ref = cli.mkRef(&current_config.shred_network.repair_port),
+        .value_ref = r.mkRef(&current_config.shred_network.repair_port),
         .required = false,
         .value_name = "Repair Port",
     };
 
-    var turbine_recv_port_option = cli.Option{
+    const turbine_recv_port_option = cli.Option{
         .long_name = "turbine-port",
         .help = "The port to run turbine shred listener (aka TVU port) - default: 8003",
-        .value_ref = cli.mkRef(&current_config.shred_network.turbine_recv_port),
+        .value_ref = r.mkRef(&current_config.shred_network.turbine_recv_port),
         .required = false,
         .value_name = "Turbine Port",
     };
 
-    var turbine_num_retransmit_threads = cli.Option{
+    const turbine_num_retransmit_threads = cli.Option{
         .long_name = "num-retransmit-threads",
         .help = "The number of retransmit threads to use for the turbine service" ++
             " - default: cpu count",
-        .value_ref = cli.mkRef(&current_config.turbine.num_retransmit_threads),
+        .value_ref = r.mkRef(&current_config.turbine.num_retransmit_threads),
         .required = false,
         .value_name = "Number of turbine retransmit threads",
     };
 
     // TODO: Remove when no longer needed
-    var turbine_overwrite_stake_for_testing = cli.Option{
+    const turbine_overwrite_stake_for_testing = cli.Option{
         .long_name = "overwrite-stake-for-testing",
         .help = "Overwrite the stake for testing purposes",
-        .value_ref = cli.mkRef(&current_config.turbine.overwrite_stake_for_testing),
+        .value_ref = r.mkRef(&current_config.turbine.overwrite_stake_for_testing),
         .required = false,
         .value_name = "Overwrite stake for testing",
     };
 
-    var leader_schedule_option = cli.Option{
+    const leader_schedule_option = cli.Option{
         .long_name = "leader-schedule",
         .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
-        .value_ref = cli.mkRef(&current_config.leader_schedule_path),
+        .value_ref = r.mkRef(&current_config.leader_schedule_path),
         .required = false,
         .value_name = "Leader schedule source",
     };
 
-    var max_shreds_option = cli.Option{
+    const max_shreds_option = cli.Option{
         .long_name = "max-shreds",
         .help = "Max number of shreds to store in the blockstore",
-        .value_ref = cli.mkRef(&current_config.leader_schedule_path),
+        .value_ref = r.mkRef(&current_config.leader_schedule_path),
         .required = false,
         .value_name = "max shreds",
     };
 
-    var test_repair_option = cli.Option{
+    const test_repair_option = cli.Option{
         .long_name = "test-repair-for-slot",
         .help = "Set a slot here to repeatedly send repair requests for shreds from this slot." ++
             " This is only intended for use during short-lived tests of the repair service." ++
             " Do not set this during normal usage.",
-        .value_ref = cli.mkRef(&current_config.shred_network.start_slot),
+        .value_ref = r.mkRef(&current_config.shred_network.start_slot),
         .required = false,
         .value_name = "slot number",
     };
 
-    var retransmit_option = cli.Option{
+    const retransmit_option = cli.Option{
         .long_name = "no-retransmit",
         .help = "Shreds will be received and stored but not retransmitted",
-        .value_ref = cli.mkRef(&current_config.shred_network.no_retransmit),
+        .value_ref = r.mkRef(&current_config.shred_network.no_retransmit),
         .required = false,
         .value_name = "Disable Shred Retransmission",
     };
 
-    var dump_shred_tracker = cli.Option{
+    const dump_shred_tracker = cli.Option{
         .long_name = "dump-shred-tracker",
         .help = "Create shred-tracker.txt to visually represent the currently tracked slots.",
-        .value_ref = cli.mkRef(&current_config.shred_network.dump_shred_tracker),
+        .value_ref = r.mkRef(&current_config.shred_network.dump_shred_tracker),
         .required = false,
         .value_name = "Dump Shred Tracker",
     };
 
-    var gossip_entrypoints_option = cli.Option{
+    const gossip_entrypoints_option = cli.Option{
         .long_name = "entrypoint",
         .help = "gossip address of the entrypoint validators",
         .short_alias = 'e',
-        .value_ref = cli.mkRef(&current_config.gossip.entrypoints),
+        .value_ref = r.mkRef(&current_config.gossip.entrypoints),
         .required = false,
         .value_name = "Entrypoints",
     };
 
-    var network_option = cli.Option{
+    const network_option = cli.Option{
         .long_name = "network",
         .help = "cluster to connect to - adds gossip entrypoints, sets default genesis file path",
         .short_alias = 'n',
-        .value_ref = cli.mkRef(&current_config.gossip.network),
+        .value_ref = r.mkRef(&current_config.gossip.network),
         .required = false,
         .value_name = "Network for Entrypoints",
     };
 
-    var trusted_validators_option = cli.Option{
+    const trusted_validators_option = cli.Option{
         .long_name = "trusted_validator",
         .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
         .short_alias = 't',
-        .value_ref = cli.mkRef(&current_config.gossip.trusted_validators),
+        .value_ref = r.mkRef(&current_config.gossip.trusted_validators),
         .required = false,
         .value_name = "Trusted Validator",
     };
 
-    var gossip_spy_node_option = cli.Option{
+    const gossip_spy_node_option = cli.Option{
         .long_name = "spy-node",
         .help = "run as a gossip spy node (minimize outgoing packets)",
-        .value_ref = cli.mkRef(&current_config.gossip.spy_node),
+        .value_ref = r.mkRef(&current_config.gossip.spy_node),
         .required = false,
         .value_name = "Spy Node",
     };
 
-    var gossip_dump_option = cli.Option{
+    const gossip_dump_option = cli.Option{
         .long_name = "dump-gossip",
         .help = "periodically dump gossip table to csv files and logs",
-        .value_ref = cli.mkRef(&current_config.gossip.dump),
+        .value_ref = r.mkRef(&current_config.gossip.dump),
         .required = false,
         .value_name = "Gossip Table Dump",
     };
 
-    var log_level_option = cli.Option{
+    const log_level_option = cli.Option{
         .long_name = "log-level",
         .help = "The amount of detail to log (default = debug)",
         .short_alias = 'l',
-        .value_ref = cli.mkRef(&current_config.log_level),
+        .value_ref = r.mkRef(&current_config.log_level),
         .required = false,
         .value_name = "err|warn|info|debug",
     };
 
-    var metrics_port_option = cli.Option{
+    const metrics_port_option = cli.Option{
         .long_name = "metrics-port",
         .help = "port to expose prometheus metrics via http - default: 12345",
         .short_alias = 'm',
-        .value_ref = cli.mkRef(&current_config.metrics_port),
+        .value_ref = r.mkRef(&current_config.metrics_port),
         .required = false,
         .value_name = "port_number",
     };
 
     // accounts-db options
-    var n_threads_snapshot_load_option = cli.Option{
+    const n_threads_snapshot_load_option = cli.Option{
         .long_name = "n-threads-snapshot-load",
         .help = "number of threads used to initialize the account index: - default: ncpus",
         .short_alias = 't',
-        .value_ref = cli.mkRef(&current_config.accounts_db.num_threads_snapshot_load),
+        .value_ref = r.mkRef(&current_config.accounts_db.num_threads_snapshot_load),
         .required = false,
         .value_name = "n_threads_snapshot_load",
     };
 
-    var n_threads_snapshot_unpack_option = cli.Option{
+    const n_threads_snapshot_unpack_option = cli.Option{
         .long_name = "n-threads-snapshot-unpack",
         .help = "number of threads to unpack snapshots (from .tar.zst) - default: ncpus * 2",
         .short_alias = 'u',
-        .value_ref = cli.mkRef(&current_config.accounts_db.num_threads_snapshot_unpack),
+        .value_ref = r.mkRef(&current_config.accounts_db.num_threads_snapshot_unpack),
         .required = false,
         .value_name = "n_threads_snapshot_unpack",
     };
 
-    var force_unpack_snapshot_option = cli.Option{
+    const force_unpack_snapshot_option = cli.Option{
         .long_name = "force-unpack-snapshot",
         .help = "unpacks a snapshot (even if it exists)",
         .short_alias = 'f',
-        .value_ref = cli.mkRef(&current_config.accounts_db.force_unpack_snapshot),
+        .value_ref = r.mkRef(&current_config.accounts_db.force_unpack_snapshot),
         .required = false,
         .value_name = "force_unpack_snapshot",
     };
 
-    var use_disk_index_option = cli.Option{
+    const use_disk_index_option = cli.Option{
         .long_name = "use-disk-index",
         .help = "use disk-memory for the account index",
-        .value_ref = cli.mkRef(&current_config.accounts_db.use_disk_index),
+        .value_ref = r.mkRef(&current_config.accounts_db.use_disk_index),
         .required = false,
         .value_name = "use_disk_index",
     };
 
-    var force_new_snapshot_download_option = cli.Option{
+    const force_new_snapshot_download_option = cli.Option{
         .long_name = "force-new-snapshot-download",
         .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
-        .value_ref = cli.mkRef(&current_config.accounts_db.force_new_snapshot_download),
+        .value_ref = r.mkRef(&current_config.accounts_db.force_new_snapshot_download),
         .required = false,
         .value_name = "force_new_snapshot_download",
     };
 
-    var snapshot_dir_option = cli.Option{
+    const snapshot_dir_option = cli.Option{
         .long_name = "snapshot-dir",
         .help = "path to snapshot directory" ++
             " (where snapshots are downloaded and/or unpacked to/from)" ++
             " - default: {VALIDATOR_DIR}/accounts_db",
         .short_alias = 's',
-        .value_ref = cli.mkRef(&current_config.accounts_db.snapshot_dir),
+        .value_ref = r.mkRef(&current_config.accounts_db.snapshot_dir),
         .required = false,
         .value_name = "snapshot_dir",
     };
 
-    var snapshot_metadata_only = cli.Option{
+    const snapshot_metadata_only = cli.Option{
         .long_name = "snapshot-metadata-only",
         .help = "load only the snapshot metadata",
-        .value_ref = cli.mkRef(&current_config.accounts_db.snapshot_metadata_only),
+        .value_ref = r.mkRef(&current_config.accounts_db.snapshot_metadata_only),
         .required = false,
         .value_name = "snapshot_metadata_only",
     };
 
-    var genesis_file_path = cli.Option{
+    const genesis_file_path = cli.Option{
         .long_name = "genesis-file-path",
         .help = "path to the genesis file." ++
             " defaults to 'data/genesis-files/<network>_genesis.bin' if --network option is set",
         .short_alias = 'g',
-        .value_ref = cli.mkRef(&current_config.genesis_file_path),
+        .value_ref = r.mkRef(&current_config.genesis_file_path),
         .required = false,
         .value_name = "genesis_file_path",
     };
 
-    var min_snapshot_download_speed_mb_option = cli.Option{
+    const min_snapshot_download_speed_mb_option = cli.Option{
         .long_name = "min-snapshot-download-speed",
         .help = "minimum download speed of full snapshots in megabytes per second" ++
             " - default: 20MB/s",
-        .value_ref = cli.mkRef(&current_config.accounts_db.min_snapshot_download_speed_mbs),
+        .value_ref = r.mkRef(&current_config.accounts_db.min_snapshot_download_speed_mbs),
         .required = false,
         .value_name = "min_snapshot_download_speed_mb",
     };
 
-    var number_of_index_shards_option = cli.Option{
+    const number_of_index_shards_option = cli.Option{
         .long_name = "number-of-index-bins",
         .help = "number of shards for the account index's pubkey_ref_map",
-        .value_ref = cli.mkRef(&current_config.accounts_db.number_of_index_shards),
+        .value_ref = r.mkRef(&current_config.accounts_db.number_of_index_shards),
         .required = false,
         .value_name = "number_of_index_shards",
     };
 
-    var accounts_per_file_estimate = cli.Option{
+    const accounts_per_file_estimate = cli.Option{
         .long_name = "accounts-per-file-estimate",
         .short_alias = 'a',
         .help = "number of accounts to estimate inside of account files (used for pre-allocation)",
-        .value_ref = cli.mkRef(&current_config.accounts_db.accounts_per_file_estimate),
+        .value_ref = r.mkRef(&current_config.accounts_db.accounts_per_file_estimate),
         .required = false,
         .value_name = "accounts_per_file_estimate",
     };
 
-    var fastload_option = cli.Option{
+    const fastload_option = cli.Option{
         .long_name = "fastload",
         .help = "fastload the accounts db",
-        .value_ref = cli.mkRef(&current_config.accounts_db.fastload),
+        .value_ref = r.mkRef(&current_config.accounts_db.fastload),
         .required = false,
         .value_name = "fastload",
     };
 
-    var save_index_option = cli.Option{
+    const save_index_option = cli.Option{
         .long_name = "save-index",
         .help = "save the account index to disk",
-        .value_ref = cli.mkRef(&current_config.accounts_db.save_index),
+        .value_ref = r.mkRef(&current_config.accounts_db.save_index),
         .required = false,
         .value_name = "save_index",
     };
 
     // geyser options
-    var enable_geyser_option = cli.Option{
+    const enable_geyser_option = cli.Option{
         .long_name = "enable-geyser",
         .help = "enable geyser",
-        .value_ref = cli.mkRef(&current_config.geyser.enable),
+        .value_ref = r.mkRef(&current_config.geyser.enable),
         .required = false,
         .value_name = "enable_geyser",
     };
 
-    var geyser_pipe_path_option = cli.Option{
+    const geyser_pipe_path_option = cli.Option{
         .long_name = "geyser-pipe-path",
         .help = "path to the geyser pipe",
-        .value_ref = cli.mkRef(&current_config.geyser.pipe_path),
+        .value_ref = r.mkRef(&current_config.geyser.pipe_path),
         .required = false,
         .value_name = "geyser_pipe_path",
     };
 
-    var geyser_writer_fba_bytes_option = cli.Option{
+    const geyser_writer_fba_bytes_option = cli.Option{
         .long_name = "geyser-writer-fba-bytes",
         .help = "number of bytes to allocate for the geyser writer",
-        .value_ref = cli.mkRef(&current_config.geyser.writer_fba_bytes),
+        .value_ref = r.mkRef(&current_config.geyser.writer_fba_bytes),
         .required = false,
         .value_name = "geyser_writer_fba_bytes",
     };
 
     // test-transaction sender options
-    var n_transactions_option = cli.Option{
+    const n_transactions_option = cli.Option{
         .long_name = "n-transactions",
         .short_alias = 't',
         .help = "number of transactions to send",
-        .value_ref = cli.mkRef(&current_config.test_transaction_sender.n_transactions),
+        .value_ref = r.mkRef(&current_config.test_transaction_sender.n_transactions),
         .required = false,
         .value_name = "n_transactions",
     };
 
-    var n_lamports_per_tx_option = cli.Option{
+    const n_lamports_per_tx_option = cli.Option{
         .long_name = "n-lamports-per-tx",
         .short_alias = 'l',
         .help = "number of lamports to send per transaction",
-        .value_ref = cli.mkRef(&current_config.test_transaction_sender.n_lamports_per_transaction),
+        .value_ref = r.mkRef(&current_config.test_transaction_sender.n_lamports_per_transaction),
         .required = false,
         .value_name = "n_lamports_per_tx",
     };
@@ -400,10 +401,10 @@ pub fn main() !void {
                 \\This is still a WIP, PRs welcome.
                 // .detailed = "",
             },
-            .options = &.{ &log_level_option, &metrics_port_option },
+            .options = &.{ log_level_option, metrics_port_option },
             .target = .{
                 .subcommands = &.{
-                    &cli.Command{
+                    .{
                         .name = "identity",
                         .description = .{
                             .one_line = "Get own identity",
@@ -419,8 +420,7 @@ pub fn main() !void {
                             },
                         },
                     },
-
-                    &cli.Command{
+                    .{
                         .name = "gossip",
                         .description = .{
                             .one_line = "Run gossip client",
@@ -429,13 +429,13 @@ pub fn main() !void {
                             ,
                         },
                         .options = &.{
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &gossip_spy_node_option,
-                            &gossip_dump_option,
-                            &network_option,
-                            &shred_version_option,
+                            gossip_host_option,
+                            gossip_port_option,
+                            gossip_entrypoints_option,
+                            gossip_spy_node_option,
+                            gossip_dump_option,
+                            network_option,
+                            shred_version_option,
                         },
                         .target = .{
                             .action = .{
@@ -444,7 +444,7 @@ pub fn main() !void {
                         },
                     },
 
-                    &cli.Command{
+                    .{
                         .name = "validator",
                         .description = .{
                             .one_line = "Run Solana validator",
@@ -453,42 +453,42 @@ pub fn main() !void {
                             ,
                         },
                         .options = &.{
-                            &shred_version_option,
+                            shred_version_option,
                             // gossip
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &gossip_spy_node_option,
-                            &gossip_dump_option,
+                            gossip_host_option,
+                            gossip_port_option,
+                            gossip_entrypoints_option,
+                            gossip_spy_node_option,
+                            gossip_dump_option,
                             // repair
-                            &turbine_recv_port_option,
-                            &repair_port_option,
-                            &test_repair_option,
+                            turbine_recv_port_option,
+                            repair_port_option,
+                            test_repair_option,
                             // blockstore cleanup service
-                            &max_shreds_option,
+                            max_shreds_option,
                             // turbine
-                            &turbine_num_retransmit_threads,
+                            turbine_num_retransmit_threads,
                             // accounts-db
-                            &snapshot_dir_option,
-                            &use_disk_index_option,
-                            &n_threads_snapshot_load_option,
-                            &n_threads_snapshot_unpack_option,
-                            &force_unpack_snapshot_option,
-                            &min_snapshot_download_speed_mb_option,
-                            &force_new_snapshot_download_option,
-                            &trusted_validators_option,
-                            &number_of_index_shards_option,
-                            &genesis_file_path,
-                            &accounts_per_file_estimate,
-                            &fastload_option,
-                            &save_index_option,
+                            snapshot_dir_option,
+                            use_disk_index_option,
+                            n_threads_snapshot_load_option,
+                            n_threads_snapshot_unpack_option,
+                            force_unpack_snapshot_option,
+                            min_snapshot_download_speed_mb_option,
+                            force_new_snapshot_download_option,
+                            trusted_validators_option,
+                            number_of_index_shards_option,
+                            genesis_file_path,
+                            accounts_per_file_estimate,
+                            fastload_option,
+                            save_index_option,
                             // geyser
-                            &enable_geyser_option,
-                            &geyser_pipe_path_option,
-                            &geyser_writer_fba_bytes_option,
+                            enable_geyser_option,
+                            geyser_pipe_path_option,
+                            geyser_writer_fba_bytes_option,
                             // general
-                            &leader_schedule_option,
-                            &network_option,
+                            leader_schedule_option,
+                            network_option,
                         },
                         .target = .{
                             .action = .{
@@ -497,7 +497,7 @@ pub fn main() !void {
                         },
                     },
 
-                    &cli.Command{
+                    .{
                         .name = "shred-network",
                         .description = .{
                             .one_line = "Run the shred network to collect and store shreds",
@@ -515,27 +515,27 @@ pub fn main() !void {
                             ,
                         },
                         .options = &.{
-                            &shred_version_option,
+                            shred_version_option,
                             // gossip
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &gossip_spy_node_option,
-                            &gossip_dump_option,
+                            gossip_host_option,
+                            gossip_port_option,
+                            gossip_entrypoints_option,
+                            gossip_spy_node_option,
+                            gossip_dump_option,
                             // shred_network
-                            &turbine_recv_port_option,
-                            &repair_port_option,
-                            &test_repair_option,
-                            &dump_shred_tracker,
-                            &turbine_num_retransmit_threads,
-                            &turbine_overwrite_stake_for_testing,
-                            &retransmit_option,
+                            turbine_recv_port_option,
+                            repair_port_option,
+                            test_repair_option,
+                            dump_shred_tracker,
+                            turbine_num_retransmit_threads,
+                            turbine_overwrite_stake_for_testing,
+                            retransmit_option,
                             // blockstore cleanup service
-                            &max_shreds_option,
+                            max_shreds_option,
                             // general
-                            &leader_schedule_option,
-                            &network_option,
-                            &snapshot_metadata_only,
+                            leader_schedule_option,
+                            network_option,
+                            snapshot_metadata_only,
                         },
                         .target = .{
                             .action = .{
@@ -544,7 +544,7 @@ pub fn main() !void {
                         },
                     },
 
-                    &cli.Command{
+                    .{
                         .name = "snapshot-download",
                         .description = .{
                             .one_line = "Downloads a snapshot",
@@ -553,17 +553,17 @@ pub fn main() !void {
                             ,
                         },
                         .options = &.{
-                            &shred_version_option,
+                            shred_version_option,
                             // where to download the snapshot
-                            &snapshot_dir_option,
+                            snapshot_dir_option,
                             // download options
-                            &trusted_validators_option,
-                            &min_snapshot_download_speed_mb_option,
+                            trusted_validators_option,
+                            min_snapshot_download_speed_mb_option,
                             // gossip options
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &network_option,
+                            gossip_host_option,
+                            gossip_port_option,
+                            gossip_entrypoints_option,
+                            network_option,
                         },
                         .target = .{
                             .action = .{
@@ -571,7 +571,7 @@ pub fn main() !void {
                             },
                         },
                     },
-                    &cli.Command{
+                    .{
                         .name = "snapshot-validate",
                         .description = .{
                             .one_line = "Validates a snapshot",
@@ -580,21 +580,21 @@ pub fn main() !void {
                             ,
                         },
                         .options = &.{
-                            &snapshot_dir_option,
-                            &use_disk_index_option,
-                            &n_threads_snapshot_load_option,
-                            &n_threads_snapshot_unpack_option,
-                            &force_unpack_snapshot_option,
-                            &number_of_index_shards_option,
-                            &genesis_file_path,
-                            &accounts_per_file_estimate,
-                            &fastload_option,
-                            &save_index_option,
-                            &network_option,
+                            snapshot_dir_option,
+                            use_disk_index_option,
+                            n_threads_snapshot_load_option,
+                            n_threads_snapshot_unpack_option,
+                            force_unpack_snapshot_option,
+                            number_of_index_shards_option,
+                            genesis_file_path,
+                            accounts_per_file_estimate,
+                            fastload_option,
+                            save_index_option,
+                            network_option,
                             // geyser
-                            &enable_geyser_option,
-                            &geyser_pipe_path_option,
-                            &geyser_writer_fba_bytes_option,
+                            enable_geyser_option,
+                            geyser_pipe_path_option,
+                            geyser_writer_fba_bytes_option,
                         },
                         .target = .{
                             .action = .{
@@ -603,7 +603,7 @@ pub fn main() !void {
                         },
                     },
 
-                    &cli.Command{
+                    .{
                         .name = "snapshot-create",
                         .description = .{
                             .one_line =
@@ -611,8 +611,8 @@ pub fn main() !void {
                             ,
                         },
                         .options = &.{
-                            &snapshot_dir_option,
-                            &genesis_file_path,
+                            snapshot_dir_option,
+                            genesis_file_path,
                         },
                         .target = .{
                             .action = .{
@@ -621,7 +621,7 @@ pub fn main() !void {
                         },
                     },
 
-                    &cli.Command{
+                    .{
                         .name = "print-manifest",
                         .description = .{
                             .one_line = "Prints a manifest file",
@@ -630,7 +630,7 @@ pub fn main() !void {
                             ,
                         },
                         .options = &.{
-                            &snapshot_dir_option,
+                            snapshot_dir_option,
                         },
                         .target = .{
                             .action = .{
@@ -639,7 +639,7 @@ pub fn main() !void {
                         },
                     },
 
-                    &cli.Command{
+                    .{
                         .name = "leader-schedule",
                         .description = .{
                             .one_line = "Prints the leader schedule from the snapshot",
@@ -653,28 +653,28 @@ pub fn main() !void {
                             ,
                         },
                         .options = &.{
-                            &shred_version_option,
+                            shred_version_option,
                             // gossip
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &gossip_spy_node_option,
-                            &gossip_dump_option,
+                            gossip_host_option,
+                            gossip_port_option,
+                            gossip_entrypoints_option,
+                            gossip_spy_node_option,
+                            gossip_dump_option,
                             // accounts-db
-                            &snapshot_dir_option,
-                            &use_disk_index_option,
-                            &n_threads_snapshot_load_option,
-                            &n_threads_snapshot_unpack_option,
-                            &force_unpack_snapshot_option,
-                            &min_snapshot_download_speed_mb_option,
-                            &force_new_snapshot_download_option,
-                            &trusted_validators_option,
-                            &number_of_index_shards_option,
-                            &genesis_file_path,
-                            &accounts_per_file_estimate,
+                            snapshot_dir_option,
+                            use_disk_index_option,
+                            n_threads_snapshot_load_option,
+                            n_threads_snapshot_unpack_option,
+                            force_unpack_snapshot_option,
+                            min_snapshot_download_speed_mb_option,
+                            force_new_snapshot_download_option,
+                            trusted_validators_option,
+                            number_of_index_shards_option,
+                            genesis_file_path,
+                            accounts_per_file_estimate,
                             // general
-                            &leader_schedule_option,
-                            &network_option,
+                            leader_schedule_option,
+                            network_option,
                         },
                         .target = .{
                             .action = .{
@@ -682,7 +682,7 @@ pub fn main() !void {
                             },
                         },
                     },
-                    &cli.Command{
+                    .{
                         .name = "test-transaction-sender",
                         .description = .{
                             .one_line = "Test transaction sender service",
@@ -693,19 +693,19 @@ pub fn main() !void {
                             ,
                         },
                         .options = &.{
-                            &shred_version_option,
+                            shred_version_option,
                             // gossip
-                            &network_option,
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &gossip_spy_node_option,
-                            &gossip_dump_option,
-                            &network_option,
-                            &genesis_file_path,
+                            network_option,
+                            gossip_host_option,
+                            gossip_port_option,
+                            gossip_entrypoints_option,
+                            gossip_spy_node_option,
+                            gossip_dump_option,
+                            network_option,
+                            genesis_file_path,
                             // command specific
-                            &n_transactions_option,
-                            &n_lamports_per_tx_option,
+                            n_transactions_option,
+                            n_lamports_per_tx_option,
                         },
                         .target = .{
                             .action = .{
@@ -717,7 +717,9 @@ pub fn main() !void {
             },
         },
     };
-    return cli.run(&app, gpa_allocator);
+
+    const action = try r.getAction(&app);
+    return action();
 }
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key

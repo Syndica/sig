@@ -274,7 +274,7 @@ pub const BenchmarkLedger = struct {
         const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
         var writer = try state.writer();
-        var rng = std.rand.DefaultPrng.init(100);
+        var rng = std.Random.DefaultPrng.init(100);
 
         var signatures: std.ArrayList(Signature) = try std.ArrayList(Signature).initCapacity(state.allocator, 64);
         defer signatures.deinit();

@@ -6,11 +6,7 @@ const assert = std.debug.assert;
 pub const EF_SBPF_V2: u32 = 0x20;
 
 /// Solana BPF Elf Machine
-pub const EM_SBPF: std.elf.Elf64_Half = 263;
-
-// TODO(upgrade) these are in 0.14, we just haven't upgraded
-pub const ELFOSABI_NONE: u8 = 0;
-pub const EI_OSABI: u8 = 7;
+pub const EM_SBPF: std.elf.Half = 263;
 
 pub const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -59,7 +55,7 @@ pub const Instruction = packed struct(u64) {
 
     pub const OpCode = enum(u8) {
         /// BPF opcode: `lddw dst, imm` /// `dst = imm`. [DEPRECATED]
-        ld_dw_imm = ld | imm | dw,
+        ld_dw_imm = ld | immediate | dw,
         /// bpf opcode: `ldxb dst, [src + off]` /// `dst = (src + off) as u8`.
         ld_b_reg = ldx | mem | b,
         /// bpf opcode: `ldxh dst, [src + off]` /// `dst = (src + off) as u16`.
@@ -310,102 +306,101 @@ pub const Instruction = packed struct(u64) {
 
     pub const map = std.StaticStringMap(Entry).initComptime(&.{
         // zig fmt: off
-        .{ "mov"  , .{ .inst = .alu_binary, .opc = mov | alu64 } }, 
-        .{ "mov64", .{ .inst = .alu_binary, .opc = mov | alu64 } },
-        .{ "mov32", .{ .inst = .alu_binary, .opc = mov | alu32  } },
-        
-        .{ "add"  , .{ .inst = .alu_binary, .opc = add | alu64 } },
-        .{ "add64", .{ .inst = .alu_binary, .opc = add | alu64 } },
-        .{ "add32", .{ .inst = .alu_binary, .opc = add | alu32  } },
+        .{ "mov"  , Entry{ .inst = .alu_binary, .opc = mov | alu64 } }, 
+        .{ "mov64", Entry{ .inst = .alu_binary, .opc = mov | alu64 } },
+        .{ "mov32", Entry{ .inst = .alu_binary, .opc = mov | alu32  } },
 
-        .{ "mul"  , .{ .inst = .alu_binary, .opc = mul | alu64 } },
-        .{ "mul64", .{ .inst = .alu_binary, .opc = mul | alu64 } },
-        .{ "mul32", .{ .inst = .alu_binary, .opc = mul | alu32  } },
+        .{ "add"  , Entry{ .inst = .alu_binary, .opc = add | alu64 } },
+        .{ "add64", Entry{ .inst = .alu_binary, .opc = add | alu64 } },
+        .{ "add32", Entry{ .inst = .alu_binary, .opc = add | alu32  } },
 
-        .{ "sub"  , .{ .inst = .alu_binary, .opc = sub | alu64 } },
-        .{ "sub64", .{ .inst = .alu_binary, .opc = sub | alu64 } },
-        .{ "sub32", .{ .inst = .alu_binary, .opc = sub | alu32  } },
+        .{ "mul"  , Entry{ .inst = .alu_binary, .opc = mul | alu64 } },
+        .{ "mul64", Entry{ .inst = .alu_binary, .opc = mul | alu64 } },
+        .{ "mul32", Entry{ .inst = .alu_binary, .opc = mul | alu32  } },
 
-        .{ "div"  , .{ .inst = .alu_binary, .opc = div | alu64 } },
-        .{ "div64", .{ .inst = .alu_binary, .opc = div | alu64 } },
-        .{ "div32", .{ .inst = .alu_binary, .opc = div | alu32  } },
-        
-        .{ "xor"  , .{ .inst = .alu_binary, .opc = xor | alu64 } },
-        .{ "xor64", .{ .inst = .alu_binary, .opc = xor | alu64 } },
-        .{ "xor32", .{ .inst = .alu_binary, .opc = xor | alu32  } },
+        .{ "sub"  , Entry{ .inst = .alu_binary, .opc = sub | alu64 } },
+        .{ "sub64", Entry{ .inst = .alu_binary, .opc = sub | alu64 } },
+        .{ "sub32", Entry{ .inst = .alu_binary, .opc = sub | alu32  } },
 
-        .{ "or"  , .{ .inst = .alu_binary, .opc = @"or" | alu64 } },
-        .{ "or64", .{ .inst = .alu_binary, .opc = @"or" | alu64 } },
-        .{ "or32", .{ .inst = .alu_binary, .opc = @"or" | alu32  } },
+        .{ "div"  , Entry{ .inst = .alu_binary, .opc = div | alu64 } },
+        .{ "div64", Entry{ .inst = .alu_binary, .opc = div | alu64 } },
+        .{ "div32", Entry{ .inst = .alu_binary, .opc = div | alu32  } },
 
-        .{ "and"  , .{ .inst = .alu_binary, .opc = @"and" | alu64 } },
-        .{ "and64", .{ .inst = .alu_binary, .opc = @"and" | alu64 } },
-        .{ "and32", .{ .inst = .alu_binary, .opc = @"and" | alu32  } },
+        .{ "xor"  , Entry{ .inst = .alu_binary, .opc = xor | alu64 } },
+        .{ "xor64", Entry{ .inst = .alu_binary, .opc = xor | alu64 } },
+        .{ "xor32", Entry{ .inst = .alu_binary, .opc = xor | alu32  } },
 
-        .{ "mod"  , .{ .inst = .alu_binary, .opc = mod | alu64 } },
-        .{ "mod64", .{ .inst = .alu_binary, .opc = mod | alu64 } },
-        .{ "mod32", .{ .inst = .alu_binary, .opc = mod | alu32  } },
+        .{ "or"  , Entry{ .inst = .alu_binary, .opc = @"or" | alu64 } },
+        .{ "or64", Entry{ .inst = .alu_binary, .opc = @"or" | alu64 } },
+        .{ "or32", Entry{ .inst = .alu_binary, .opc = @"or" | alu32  } },
 
-        .{ "arsh"  , .{ .inst = .alu_binary, .opc = arsh | alu64 } },
-        .{ "arsh64", .{ .inst = .alu_binary, .opc = arsh | alu64 } },
-        .{ "arsh32", .{ .inst = .alu_binary, .opc = arsh | alu32  } },
+        .{ "and"  , Entry{ .inst = .alu_binary, .opc = @"and" | alu64 } },
+        .{ "and64", Entry{ .inst = .alu_binary, .opc = @"and" | alu64 } },
+        .{ "and32", Entry{ .inst = .alu_binary, .opc = @"and" | alu32  } },
 
-        .{ "lsh"  , .{ .inst = .alu_binary, .opc = lsh | alu64 } },
-        .{ "lsh64", .{ .inst = .alu_binary, .opc = lsh | alu64 } },
-        .{ "lsh32", .{ .inst = .alu_binary, .opc = lsh | alu32  } },
+        .{ "mod"  , Entry{ .inst = .alu_binary, .opc = mod | alu64 } },
+        .{ "mod64", Entry{ .inst = .alu_binary, .opc = mod | alu64 } },
+        .{ "mod32", Entry{ .inst = .alu_binary, .opc = mod | alu32  } },
 
-        .{ "rsh"  , .{ .inst = .alu_binary, .opc = rsh | alu64 } },
-        .{ "rsh64", .{ .inst = .alu_binary, .opc = rsh | alu64 } },
-        .{ "rsh32", .{ .inst = .alu_binary, .opc = rsh | alu32  } },
+        .{ "arsh"  , Entry{ .inst = .alu_binary, .opc = arsh | alu64 } },
+        .{ "arsh64", Entry{ .inst = .alu_binary, .opc = arsh | alu64 } },
+        .{ "arsh32", Entry{ .inst = .alu_binary, .opc = arsh | alu32  } },
 
-        .{ "hor64", .{ .inst = .alu_binary, .opc = hor | alu64 } },
-        
-        .{ "neg"  , .{ .inst = .alu_unary,  .opc = neg | alu64 } },
-        .{ "neg64", .{ .inst = .alu_unary,  .opc = neg | alu64 } },
-        .{ "neg32", .{ .inst = .alu_unary,  .opc = neg | alu32  } },
+        .{ "lsh"  , Entry{ .inst = .alu_binary, .opc = lsh | alu64 } },
+        .{ "lsh64", Entry{ .inst = .alu_binary, .opc = lsh | alu64 } },
+        .{ "lsh32", Entry{ .inst = .alu_binary, .opc = lsh | alu32  } },
 
-        .{ "ja"   , .{ .inst = .jump_unconditional, .opc = ja | jmp } },
+        .{ "rsh"  , Entry{ .inst = .alu_binary, .opc = rsh | alu64 } },
+        .{ "rsh64", Entry{ .inst = .alu_binary, .opc = rsh | alu64 } },
+        .{ "rsh32", Entry{ .inst = .alu_binary, .opc = rsh | alu32  } },
 
-        .{ "jeq"  , .{ .inst = .jump_conditional, .opc = jeq  |  jmp  } },
-        .{ "jgt"  , .{ .inst = .jump_conditional, .opc = jgt  |  jmp  } },
-        .{ "jge"  , .{ .inst = .jump_conditional, .opc = jge  |  jmp  } },
-        .{ "jlt"  , .{ .inst = .jump_conditional, .opc = jlt  |  jmp  } },
-        .{ "jle"  , .{ .inst = .jump_conditional, .opc = jle  |  jmp  } },
-        .{ "jset" , .{ .inst = .jump_conditional, .opc = jset |  jmp  } },
-        .{ "jne"  , .{ .inst = .jump_conditional, .opc = jne  |  jmp  } },
-        .{ "jsgt" , .{ .inst = .jump_conditional, .opc = jsgt |  jmp  } },
-        .{ "jsge" , .{ .inst = .jump_conditional, .opc = jsge |  jmp  } },
-        .{ "jslt" , .{ .inst = .jump_conditional, .opc = jslt |  jmp  } },
-        .{ "jsle" , .{ .inst = .jump_conditional, .opc = jsle |  jmp  } },
+        .{ "hor64", Entry{ .inst = .alu_binary, .opc = hor | alu64 } },
 
-        .{ "ldxb"  , .{ .inst = .load_reg,         .opc = mem | ldx | b   } },
-        .{ "ldxh"  , .{ .inst = .load_reg,         .opc = mem | ldx | h   } },
-        .{ "ldxw"  , .{ .inst = .load_reg,         .opc = mem | ldx | w   } },
-        .{ "ldxdw" , .{ .inst = .load_reg,         .opc = mem | ldx | dw  } },
+        .{ "neg"  , Entry{ .inst = .alu_unary,  .opc = neg | alu64 } },
+        .{ "neg64", Entry{ .inst = .alu_unary,  .opc = neg | alu64 } },
+        .{ "neg32", Entry{ .inst = .alu_unary,  .opc = neg | alu32  } },
 
-        .{ "stb"  , .{ .inst = .store_imm,        .opc = mem | st | b   } },
-        .{ "sth"  , .{ .inst = .store_imm,        .opc = mem | st | h   } },
-        .{ "stw"  , .{ .inst = .store_imm,        .opc = mem | st | w   } },
-        .{ "stdw" , .{ .inst = .store_imm,        .opc = mem | st | dw  } },
+        .{ "ja"   , Entry{ .inst = .jump_unconditional, .opc = ja | jmp } },
 
-        .{ "stxb"  , .{ .inst = .store_reg,        .opc = mem | stx | b   } },
-        .{ "stxh"  , .{ .inst = .store_reg,        .opc = mem | stx | h   } },
-        .{ "stxw"  , .{ .inst = .store_reg,        .opc = mem | stx | w   } },
-        .{ "stxdw" , .{ .inst = .store_reg,        .opc = mem | stx | dw  } },
+        .{ "jeq"  , Entry{ .inst = .jump_conditional, .opc = jeq  |  jmp  } },
+        .{ "jgt"  , Entry{ .inst = .jump_conditional, .opc = jgt  |  jmp  } },
+        .{ "jge"  , Entry{ .inst = .jump_conditional, .opc = jge  |  jmp  } },
+        .{ "jlt"  , Entry{ .inst = .jump_conditional, .opc = jlt  |  jmp  } },
+        .{ "jle"  , Entry{ .inst = .jump_conditional, .opc = jle  |  jmp  } },
+        .{ "jset" , Entry{ .inst = .jump_conditional, .opc = jset |  jmp  } },
+        .{ "jne"  , Entry{ .inst = .jump_conditional, .opc = jne  |  jmp  } },
+        .{ "jsgt" , Entry{ .inst = .jump_conditional, .opc = jsgt |  jmp  } },
+        .{ "jsge" , Entry{ .inst = .jump_conditional, .opc = jsge |  jmp  } },
+        .{ "jslt" , Entry{ .inst = .jump_conditional, .opc = jslt |  jmp  } },
+        .{ "jsle" , Entry{ .inst = .jump_conditional, .opc = jsle |  jmp  } },
 
-        .{ "be16", .{ .inst = .{.endian = 16 }, .opc = alu32 | x | end } },
-        .{ "be32", .{ .inst = .{.endian = 32 }, .opc = alu32 | x | end } },
-        .{ "be64", .{ .inst = .{.endian = 64 }, .opc = alu32 | x | end } },
+        .{ "ldxb"  , Entry{ .inst = .load_reg, .opc = mem | ldx | b   } },
+        .{ "ldxh"  , Entry{ .inst = .load_reg, .opc = mem | ldx | h   } },
+        .{ "ldxw"  , Entry{ .inst = .load_reg, .opc = mem | ldx | w   } },
+        .{ "ldxdw" , Entry{ .inst = .load_reg, .opc = mem | ldx | dw  } },
 
-        .{ "le16", .{ .inst = .{.endian = 16 }, .opc = alu32 | k | end } },
-        .{ "le32", .{ .inst = .{.endian = 32 }, .opc = alu32 | k | end } },
-        .{ "le64", .{ .inst = .{.endian = 64 }, .opc = alu32 | k | end } },
+        .{ "stb"  , Entry{ .inst = .store_imm, .opc = mem | st | b   } },
+        .{ "sth"  , Entry{ .inst = .store_imm, .opc = mem | st | h   } },
+        .{ "stw"  , Entry{ .inst = .store_imm, .opc = mem | st | w   } },
+        .{ "stdw" , Entry{ .inst = .store_imm, .opc = mem | st | dw  } },
 
-        .{ "exit"  , .{ .inst = .no_operand,       .opc = jmp | exit_code } },
-        .{ "lddw"  , .{ .inst = .load_dw_imm,      .opc = ld  | imm | dw  } },
-        .{ "call"  , .{ .inst = .call_imm,         .opc = jmp | call      } },
-        .{ "callx" , .{ .inst = .call_reg,         .opc = jmp | call | x  } },
+        .{ "stxb"  , Entry{ .inst = .store_reg, .opc = mem | stx | b   } },
+        .{ "stxh"  , Entry{ .inst = .store_reg, .opc = mem | stx | h   } },
+        .{ "stxw"  , Entry{ .inst = .store_reg, .opc = mem | stx | w   } },
+        .{ "stxdw" , Entry{ .inst = .store_reg, .opc = mem | stx | dw  } },
 
+        .{ "be16", Entry{ .inst = .{.endian = 16 }, .opc = alu32 | x | end } },
+        .{ "be32", Entry{ .inst = .{.endian = 32 }, .opc = alu32 | x | end } },
+        .{ "be64", Entry{ .inst = .{.endian = 64 }, .opc = alu32 | x | end } },
+
+        .{ "le16", Entry{ .inst = .{.endian = 16 }, .opc = alu32 | k | end } },
+        .{ "le32", Entry{ .inst = .{.endian = 32 }, .opc = alu32 | k | end } },
+        .{ "le64", Entry{ .inst = .{.endian = 64 }, .opc = alu32 | k | end } },
+
+        .{ "exit"  , Entry{ .inst = .no_operand,  .opc = jmp | exit_code       } },
+        .{ "lddw"  , Entry{ .inst = .load_dw_imm, .opc = ld  | immediate | dw  } },
+        .{ "call"  , Entry{ .inst = .call_imm,    .opc = jmp | call            } },
+        .{ "callx" , Entry{ .inst = .call_reg,    .opc = jmp | call      | x   } },
         // zig fmt: on
     });
 
@@ -480,7 +475,7 @@ pub const Instruction = packed struct(u64) {
     pub const jsle: u8 = 0xd0;
 
     /// mode modifier:
-    pub const imm = 0b0000000;
+    pub const immediate = 0b0000000;
     pub const abs = 0b0100000;
     pub const mem = 0b1100000;
 
@@ -560,5 +555,5 @@ pub const Instruction = packed struct(u64) {
 };
 
 pub fn hashSymbolName(name: []const u8) u32 {
-   return std.hash.Murmur3_32.hashWithSeed(name, 0);
+    return std.hash.Murmur3_32.hashWithSeed(name, 0);
 }

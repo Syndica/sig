@@ -32,7 +32,7 @@ pub fn ShredDeduper(comptime K: usize) type {
 
         pub fn init(
             allocator: std.mem.Allocator,
-            rand: std.rand.Random,
+            rand: std.Random,
             num_bits: u64,
         ) !ShredDeduper(K) {
             return .{
@@ -51,7 +51,7 @@ pub fn ShredDeduper(comptime K: usize) type {
         /// were saturated respectively.
         pub fn maybeReset(
             self: *ShredDeduper(K),
-            rand: std.rand.Random,
+            rand: std.Random,
             false_positive_rate: f64,
             reset_cycle: Duration,
         ) struct { bool, bool } {

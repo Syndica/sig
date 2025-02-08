@@ -255,7 +255,7 @@ pub fn Channel(T: type) type {
                 if (new_head & HAS_NEXT == 0) {
                     // A rare usecase for fence :P, we need to create a barrier before anything else modifying
                     // the index. This is just easier than creating an acquire-release pair.
-                    channel.tail.index.fence(.seq_cst);
+                    //TODO:(0.14) channel.tail.index.fence(.seq_cst);
                     const tail = channel.tail.index.load(.monotonic);
 
                     // If the indicies are the same, the channel is empty and there's nothing to receive.

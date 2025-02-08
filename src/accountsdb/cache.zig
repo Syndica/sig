@@ -167,7 +167,7 @@ pub const AccountsCacheMetrics = struct {
 
 test "CachedAccount ref_count" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
 
     const account = try Account.initRandom(allocator, random, 1);
@@ -189,7 +189,7 @@ test "CachedAccount ref_count" {
 
 test "AccountsCache put and get account" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
 
     var accounts_cache = try AccountsCache.init(allocator, null, 10);
@@ -211,7 +211,7 @@ test "AccountsCache put and get account" {
 
 test "AccountsCache returns null when account is missing" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
 
     var accounts_cache = try AccountsCache.init(allocator, null, 10);
@@ -227,7 +227,7 @@ test "AccountsCache returns null when account is missing" {
 
 test "AccountsCache put ref counting" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
 
     var accounts_cache = try AccountsCache.init(allocator, null, 10);

@@ -65,8 +65,8 @@ const VariantIndexer = struct {
 
     pub fn init(comptime EnumOrError: type) Self {
         const variants = switch (@typeInfo(EnumOrError)) {
-            .ErrorSet => |es| es.?,
-            .Enum => |e| e.fields,
+            .error_set => |es| es.?,
+            .@"enum" => |e| e.fields,
             else => @compileError(@typeName(EnumOrError) ++ " is neither error nor enum"),
         };
 
@@ -114,24 +114,24 @@ const VariantIndexer = struct {
 
     fn toInt(err: anytype) u16 {
         return switch (@typeInfo(@TypeOf(err))) {
-            .ErrorSet => @intFromError(err),
-            .Enum => @intFromEnum(err),
+            .error_set => @intFromError(err),
+            .@"enum" => @intFromEnum(err),
             else => unreachable, // init prevents this
         };
     }
 
     fn fromInt(self: Self, int: u16) self.EnumOrError {
         return switch (@typeInfo(self.EnumOrError)) {
-            .ErrorSet => @errorCast(@errorFromInt(int)),
-            .Enum => @enumFromInt(int),
+            .error_set => @errorCast(@errorFromInt(int)),
+            .@"enum" => @enumFromInt(int),
             else => unreachable, // init prevents this
         };
     }
 
     fn toName(self: Self, item: self.EnumOrError) []const u8 {
         return switch (@typeInfo(self.EnumOrError)) {
-            .ErrorSet => @errorName(item),
-            .Enum => @tagName(item),
+            .error_set => @errorName(item),
+            .@"enum" => @tagName(item),
             else => unreachable, // init prevents this
         };
     }
