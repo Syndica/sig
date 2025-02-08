@@ -117,7 +117,7 @@ pub const SocketAddr = union(enum(u8)) {
         } };
     }
 
-    pub fn initRandom(random: std.rand.Random) Self {
+    pub fn initRandom(random: std.Random) Self {
         const pport = random.int(u16);
 
         const version = random.int(u8);
@@ -578,7 +578,7 @@ test "valid ipv4 socket parsing" {
 }
 
 test "SocketAddr.initRandom" {
-    var prng = std.rand.DefaultPrng.init(100);
+    var prng = std.Random.DefaultPrng.init(100);
     const addr = SocketAddr.initRandom(prng.random());
     _ = addr;
 }

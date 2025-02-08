@@ -18,9 +18,7 @@ pub const Bloom = struct {
 
     pub const @"!bincode-config:bits" = BitVecConfig(u64);
 
-    const Self = @This();
-
-    pub fn init(alloc: std.mem.Allocator, n_bits: u64, keys: ?ArrayList(u64)) Self {
+    pub fn init(alloc: std.mem.Allocator, n_bits: u64, keys: ?ArrayList(u64)) !Bloom {
         // note: we do this to match the rust deserialization
         // needs to be power of 2 < 64
         const bitset_bits = blk: {
@@ -34,24 +32,24 @@ pub const Bloom = struct {
             }
         };
 
-        return Self{
+        return .{
             .keys = keys orelse ArrayList(u64).init(alloc),
-            .bits = DynamicArrayBitSet(u64).initEmpty(alloc, bitset_bits) catch unreachable,
+            .bits = try DynamicArrayBitSet(u64).initEmpty(alloc, bitset_bits),
             .num_bits_set = 0,
         };
     }
 
-    pub fn deinit(self: *const Self) void {
+    pub fn deinit(self: *const Bloom) void {
         self.bits.deinit(self.keys.allocator);
         self.keys.deinit();
     }
 
     // used in tests
-    pub fn addKey(self: *Self, key: u64) !void {
+    pub fn addKey(self: *Bloom, key: u64) !void {
         try self.keys.append(key);
     }
 
-    pub fn add(self: *Self, key: []const u8) void {
+    pub fn add(self: *Bloom, key: []const u8) void {
         for (self.keys.items) |hash_index| {
             const i = self.pos(key, hash_index);
             if (!self.bits.isSet(i)) {
@@ -61,7 +59,7 @@ pub const Bloom = struct {
         }
     }
 
-    pub fn contains(self: *const Self, key: []const u8) bool {
+    pub fn contains(self: *const Bloom, key: []const u8) bool {
         for (self.keys.items) |hash_index| {
             const i = self.pos(key, hash_index);
             if (self.bits.isSet(i)) {
@@ -72,7 +70,7 @@ pub const Bloom = struct {
         return true;
     }
 
-    pub fn pos(self: *const Self, bytes: []const u8, hash_index: u64) u64 {
+    pub fn pos(self: *const Bloom, bytes: []const u8, hash_index: u64) u64 {
         return hashAtIndex(bytes, hash_index) % @as(u64, self.bits.capacity());
     }
 
@@ -82,7 +80,13 @@ pub const Bloom = struct {
         return hasher.final();
     }
 
-    pub fn initRandom(alloc: std.mem.Allocator, random: std.Random, num_items: usize, false_rate: f64, max_bits: usize) error{OutOfMemory}!Self {
+    pub fn initRandom(
+        alloc: std.mem.Allocator,
+        random: std.Random,
+        num_items: usize,
+        false_rate: f64,
+        max_bits: usize,
+    ) error{OutOfMemory}!Bloom {
         const n_items_f: f64 = @floatFromInt(num_items);
         const m = Bloom.numBits(n_items_f, false_rate);
         const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
@@ -132,7 +136,7 @@ test "helper methods match rust" {
 }
 
 test "serializes/deserializes correctly" {
-    const bloom = Bloom.init(testing.allocator, 0, null);
+    const bloom = try Bloom.init(testing.allocator, 0, null);
 
     var buf: [10000]u8 = undefined;
     const out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
@@ -146,7 +150,7 @@ test "serializes/deserializes correctly" {
 }
 
 test "serializes/deserializes correctly with set bits" {
-    var bloom = Bloom.init(testing.allocator, 128, null);
+    var bloom = try Bloom.init(testing.allocator, 128, null);
     try bloom.addKey(10);
     // required for memory leaks
     defer bloom.deinit();
@@ -162,7 +166,7 @@ test "serializes/deserializes correctly with set bits" {
 
 test "serialized bytes equal rust (one key)" {
     // note: need to init with len 2^i
-    var bloom = Bloom.init(testing.allocator, 128, null);
+    var bloom = try Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
     try bloom.addKey(1);
 
@@ -178,7 +182,7 @@ test "serialized bytes equal rust (one key)" {
 }
 
 test "serialized bytes equal rust (multiple keys)" {
-    var bloom = Bloom.init(testing.allocator, 128, null);
+    var bloom = try Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
 
     try bloom.addKey(1);

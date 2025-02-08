@@ -14,13 +14,13 @@ pub fn servePrometheus(
         .allocator = allocator,
         .registry = registry,
     };
-    var server = try httpz.ServerCtx(*const MetricsEndpoint, *const MetricsEndpoint).init(
+    var server = try httpz.Server(*const MetricsEndpoint).init(
         allocator,
         .{ .port = port, .address = "0.0.0.0" },
         &endpoint,
     );
-    var router = server.router();
-    router.get("/metrics", getMetrics);
+    var router = try server.router(.{});
+    router.get("/metrics", getMetrics, .{});
     return server.listen();
 }
 

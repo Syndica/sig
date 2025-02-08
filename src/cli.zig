@@ -24,13 +24,13 @@ pub fn CommandInfo(comptime S: type) type {
 /// but where each field is of type `OptionInfo(FieldType)`.
 pub fn OptionInfoGroup(comptime S: type) type {
     const Type = std.builtin.Type;
-    const s_info = @typeInfo(S).Struct;
+    const s_info = @typeInfo(S).@"struct";
 
     var sub_fields: [s_info.fields.len]Type.StructField = undefined;
     for (&sub_fields, s_info.fields) |*new_s_field, s_field| {
-        if (@typeInfo(s_field.type) == .Union or
-            (@typeInfo(s_field.type) == .Optional and
-            @typeInfo(@typeInfo(s_field.type).Optional.child) == .Union))
+        if (@typeInfo(s_field.type) == .@"union" or
+            (@typeInfo(s_field.type) == .optional and
+                @typeInfo(@typeInfo(s_field.type).optional.child) == .@"union"))
         {
             @compileError("The subcommand field cannot be part of an option group");
         }
@@ -38,13 +38,13 @@ pub fn OptionInfoGroup(comptime S: type) type {
         new_s_field.* = .{
             .name = s_field.name,
             .type = OptionInfo(s_field.type),
-            .default_value = null,
+            .default_value_ptr = null,
             .is_comptime = false,
             .alignment = 0,
         };
     }
 
-    return @Type(.{ .Struct = .{
+    return @Type(.{ .@"struct" = .{
         .layout = .auto,
         .backing_integer = null,
         .fields = &sub_fields,
@@ -93,7 +93,7 @@ pub fn OptionInfo(comptime Opt: type) type {
 
 inline fn isOptionInfo(comptime T: type) bool {
     comptime {
-        if (@typeInfo(T) != .Struct) return false;
+        if (@typeInfo(T) != .@"struct") return false;
         if (!@hasDecl(T, "Option")) return false;
         if (@TypeOf(&T.Option) != *const type) return false;
         return OptionInfo(T.Option) == T;
@@ -102,8 +102,8 @@ inline fn isOptionInfo(comptime T: type) bool {
 
 fn OptionConfig(comptime Opt: type) type {
     return switch (@typeInfo(Opt)) {
-        .Pointer => |p_info| blk: {
-            if (p_info.size != .Slice) {
+        .pointer => |p_info| blk: {
+            if (p_info.size != .slice) {
                 @compileError("Cannot have non-slice pointer options");
             }
 
@@ -115,12 +115,12 @@ fn OptionConfig(comptime Opt: type) type {
 
             break :blk SubConfig;
         },
-        .Optional => |o_info| blk: {
+        .optional => |o_info| blk: {
             switch (@typeInfo(o_info.child)) {
-                .Optional => {
+                .optional => {
                     @compileError("Cannot have optional optional options");
                 },
-                .Pointer => |p_info| if (p_info.size == .Slice and p_info.child != u8) {
+                .pointer => |p_info| if (p_info.size == .slice and p_info.child != u8) {
                     @compileError("Cannot have optional list options;" ++
                         " an unspecified list is simply empty");
                 },
@@ -134,7 +134,7 @@ fn OptionConfig(comptime Opt: type) type {
 
             break :blk SubConfig;
         },
-        .Int, .Enum, .Bool => void,
+        .int, .@"enum", .bool => void,
         else => @compileError("Unexpected option type: " ++ @typeName(Opt)),
     };
 }
@@ -633,8 +633,8 @@ fn CmdHelper(
     const parent_prefix = parent_name ++ ".";
 
     const cmd_fields: []const Type.StructField = switch (@typeInfo(Cmd)) {
-        .Struct => |cmd_s_info| cmd_s_info.fields,
-        .Void => &.{},
+        .@"struct" => |cmd_s_info| cmd_s_info.fields,
+        .void => &.{},
         else => unreachable,
     };
 
@@ -666,16 +666,16 @@ fn CmdHelper(
 
         @setEvalBranchQuota(cmd_fields.len * 3 + 1);
         for (cmd_fields, 0..) |s_field, s_field_i| {
-            if (@typeInfo(s_field.type) == .Union or
-                (@typeInfo(s_field.type) == .Optional and
-                @typeInfo(@typeInfo(s_field.type).Optional.child) == .Union))
+            if (@typeInfo(s_field.type) == .@"union" or
+                (@typeInfo(s_field.type) == .optional and
+                    @typeInfo(@typeInfo(s_field.type).optional.child) == .@"union"))
             {
                 continue;
             }
 
             const maybe_opt_info = @field(cmd_info.sub, s_field.name);
             if (isOptionInfo(@TypeOf(maybe_opt_info))) {
-                opt_enum_to_field_map = opt_enum_to_field_map ++ .{.{
+                opt_enum_to_field_map = opt_enum_to_field_map ++ .{OptStructIndex{
                     .index = s_field_i,
                     .sub = null,
                 }};
@@ -697,10 +697,10 @@ fn CmdHelper(
             }
 
             // handle `OptionInfoGroup`
-            const s_sub_info = @typeInfo(s_field.type).Struct;
+            const s_sub_info = @typeInfo(s_field.type).@"struct";
             @setEvalBranchQuota(cmd_fields.len * 3 + 1 + s_sub_info.fields.len * 2 + 1);
             for (s_sub_info.fields, 0..) |s_sub_field, s_sub_field_i| {
-                opt_enum_to_field_map = opt_enum_to_field_map ++ .{.{
+                opt_enum_to_field_map = opt_enum_to_field_map ++ .{OptStructIndex{
                     .index = s_field_i,
                     .sub = s_sub_field_i,
                 }};
@@ -721,7 +721,7 @@ fn CmdHelper(
             }
         }
 
-        const OptEnum = @Type(.{ .Enum = .{
+        const OptEnum = @Type(.{ .@"enum" = .{
             .tag_type = OptEnumInt,
             .fields = opt_enum_fields,
             .decls = &.{},
@@ -735,7 +735,7 @@ fn CmdHelper(
             default_init,
         };
     };
-    const opt_enum_fields = @typeInfo(OptEnum).Enum.fields;
+    const opt_enum_fields = @typeInfo(OptEnum).@"enum".fields;
 
     // create the subcommand list once at comptime
     // so that we don't have to do two inline loops
@@ -749,11 +749,11 @@ fn CmdHelper(
         const CmdMaybeUnion = sub_cmd_s_field_info.type;
 
         const CmdUnion = switch (@typeInfo(CmdMaybeUnion)) {
-            .Union => CmdMaybeUnion,
-            .Optional => |o_info| o_info.child,
+            .@"union" => CmdMaybeUnion,
+            .optional => |o_info| o_info.child,
             else => unreachable,
         };
-        const u_info = @typeInfo(CmdUnion).Union;
+        const u_info = @typeInfo(CmdUnion).@"union";
 
         var subcmd_list: [u_info.fields.len]SubCmdNameHelpPair = undefined;
         @setEvalBranchQuota(u_info.fields.len * 3 + 1);
@@ -780,7 +780,7 @@ fn CmdHelper(
         const sentinel_vec: OptEnumIntVec = @splat(alias_table_sentinel);
         const used_aliases_mask_vec = alias_table_wip != sentinel_vec;
 
-        const UsedAliasesBits = @Type(.{ .Int = .{
+        const UsedAliasesBits = @Type(.{ .int = .{
             .signedness = .unsigned,
             .bits = MAX_ALIAS_TABLE_LEN,
         } });
@@ -807,7 +807,7 @@ fn CmdHelper(
             const CmdMaybeUnion = sub_cmd_s_field_info.type;
 
             const sub_cmd_info_map = @field(cmd_info.sub, sub_cmd_s_field_name);
-            const is_optional_cmd = @typeInfo(CmdMaybeUnion) == .Optional;
+            const is_optional_cmd = @typeInfo(CmdMaybeUnion) == .optional;
 
             const maybe_cmd_field_value = @field(args, sub_cmd_s_field_name);
             const cmd_field_value = if (is_optional_cmd)
@@ -834,15 +834,15 @@ fn CmdHelper(
                 const maybe_target_field = @field(partial_args, s_field.name);
                 const target_field = blk: {
                     const s_sub_field_idx = s_field_idx.sub orelse break :blk maybe_target_field;
-                    const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
+                    const s_sub_fields = @typeInfo(s_field.type).@"struct".fields;
                     const s_sub_field = s_sub_fields[s_sub_field_idx];
                     break :blk @field(maybe_target_field, s_sub_field.name);
                 };
                 const ptr_info = switch (@typeInfo(@TypeOf(target_field))) {
-                    .Pointer => |ptr_info| ptr_info,
+                    .pointer => |ptr_info| ptr_info,
                     else => continue,
                 };
-                if (ptr_info.size != .Slice) continue;
+                if (ptr_info.size != .slice) continue;
                 if (ptr_info.child == u8) continue;
                 allocator.free(target_field);
             }
@@ -906,7 +906,7 @@ fn CmdHelper(
                                     s_field_ptr,
                                     maybe_opt_info,
                                 };
-                                const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
+                                const s_sub_fields = @typeInfo(s_field.type).@"struct".fields;
                                 const s_sub_field = s_sub_fields[s_sub_field_idx];
                                 const s_sub_field_ptr = &@field(s_field_ptr, s_sub_field.name);
                                 break :opt .{
@@ -918,8 +918,8 @@ fn CmdHelper(
 
                             const Opt = @TypeOf(opt_ptr.*);
                             const is_list, const ValueType = switch (@typeInfo(Opt)) {
-                                .Pointer => |ptr_info| blk: {
-                                    const is_list = ptr_info.size == .Slice and
+                                .pointer => |ptr_info| blk: {
+                                    const is_list = ptr_info.size == .slice and
                                         (ptr_info.child != u8 or opt_info.config == .list);
                                     const ListElem = if (is_list) ptr_info.child else Opt;
                                     break :blk .{ is_list, ListElem };
@@ -956,12 +956,12 @@ fn CmdHelper(
 
                 const sub_cmd_info_map = @field(cmd_info.sub, sub_cmd_s_field_name);
                 const CmdUnion, const is_optional_cmd = switch (@typeInfo(CmdMaybeUnion)) {
-                    .Union => .{ CmdMaybeUnion, false },
-                    .Optional => |o_info| .{ o_info.child, true },
+                    .@"union" => .{ CmdMaybeUnion, false },
+                    .optional => |o_info| .{ o_info.child, true },
                     else => unreachable,
                 };
 
-                const CmdEnum = @typeInfo(CmdUnion).Union.tag_type.?;
+                const CmdEnum = @typeInfo(CmdUnion).@"union".tag_type.?;
                 const cmd_tag = enumFromStringAfterReplacingScalarInTag(
                     arg,
                     CmdEnum,
@@ -1009,7 +1009,7 @@ fn CmdHelper(
                     const sub_cmd_s_field_name = sub_cmd_s_field_info.name;
                     const CmdMaybeUnion = sub_cmd_s_field_info.type;
 
-                    if (@typeInfo(CmdMaybeUnion) != .Optional) return error.MissingCommand;
+                    if (@typeInfo(CmdMaybeUnion) != .optional) return error.MissingCommand;
                     @field(result, sub_cmd_s_field_name) = null;
                 },
             }
@@ -1101,7 +1101,7 @@ fn CmdHelper(
                     const s_field = cmd_fields[s_field_idx.index];
                     const maybe_opt_info = @field(cmd_info.sub, s_field.name);
                     const opt_info = if (s_field_idx.sub) |s_sub_field_idx| blk: {
-                        const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
+                        const s_sub_fields = @typeInfo(s_field.type).@"struct".fields;
                         const s_sub_field = s_sub_fields[s_sub_field_idx];
                         break :blk @field(maybe_opt_info, s_sub_field.name);
                     } else @as(OptionInfo(s_field.type), maybe_opt_info);
@@ -1137,7 +1137,7 @@ fn CmdHelper(
                 const s_field = cmd_fields[s_field_idx.index];
                 const maybe_opt_info = @field(cmd_info.sub, s_field.name);
                 const opt_info = if (s_field_idx.sub) |s_sub_field_idx| blk: {
-                    const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
+                    const s_sub_fields = @typeInfo(s_field.type).@"struct".fields;
                     const s_sub_field = s_sub_fields[s_sub_field_idx];
                     break :blk @field(maybe_opt_info, s_sub_field.name);
                 } else @as(OptionInfo(s_field.type), maybe_opt_info);
@@ -1246,7 +1246,7 @@ fn computeOptFieldInfo(
     );
 
     const opt_enum_field_idx = opt_enum_fields.len;
-    opt_enum_fields.* = opt_enum_fields.* ++ .{.{
+    opt_enum_fields.* = opt_enum_fields.* ++ .{std.builtin.Type.EnumField{
         .name = opt_enum_field_name,
         .value = opt_enum_field_idx,
     }};
@@ -1257,8 +1257,8 @@ fn computeOptFieldInfo(
     }
 
     const is_slice = switch (@typeInfo(FieldType)) {
-        .Pointer => |ptr_info| switch (ptr_info.size) {
-            .Slice => ptr_info.child != u8 or opt_info.config == .list,
+        .pointer => |ptr_info| switch (ptr_info.size) {
+            .slice => ptr_info.child != u8 or opt_info.config == .list,
             else => false,
         },
         else => false,
@@ -1292,8 +1292,8 @@ fn computeCmdAndOptBasicInfo(
     const parent_name = maybe_parent_name orelse "root";
 
     const s_info = switch (@typeInfo(T)) {
-        .Struct => |s_info| s_info,
-        .Void => @typeInfo(struct {}).Struct,
+        .@"struct" => |s_info| s_info,
+        .void => @typeInfo(struct {}).@"struct",
         else => unreachable,
     };
 
@@ -1304,15 +1304,15 @@ fn computeCmdAndOptBasicInfo(
     @setEvalBranchQuota(s_info.fields.len * 2 + 1);
     for (&fields, s_info.fields, 0..) |*new_s_field, s_field, s_field_i| {
         const UnwrappedStructFieldType = switch (@typeInfo(s_field.type)) {
-            .Optional => |o_info| switch (@typeInfo(o_info.child)) {
-                .Union => o_info.child,
+            .optional => |o_info| switch (@typeInfo(o_info.child)) {
+                .@"union" => o_info.child,
                 else => s_field.type,
             },
             else => s_field.type,
         };
 
         const FieldType = switch (@typeInfo(UnwrappedStructFieldType)) {
-            .Union => |sub_u_info| sub_infos: {
+            .@"union" => |sub_u_info| sub_infos: {
                 if (maybe_sub_cmd_s_field_index) |prev| @compileError(
                     "Cannot have two sub-command union fields in " ++ parent_name ++ ": " ++
                         s_info.fields[prev].name ++ " & " ++ s_field.name,
@@ -1326,7 +1326,7 @@ fn computeCmdAndOptBasicInfo(
                 );
                 break :sub_infos UnionOptDescSubMap(UnwrappedStructFieldType);
             },
-            .Struct => |s_sub_info| sub_map: {
+            .@"struct" => |s_sub_info| sub_map: {
                 opt_count += s_sub_info.fields.len;
                 @setEvalBranchQuota(
                     s_info.fields.len * 2 + 1 +
@@ -1343,13 +1343,13 @@ fn computeCmdAndOptBasicInfo(
         new_s_field.* = .{
             .name = s_field.name,
             .type = FieldType,
-            .default_value = null,
+            .default_value_ptr = null,
             .is_comptime = false,
             .alignment = 0,
         };
     }
 
-    const SubInfo = @Type(.{ .Struct = .{
+    const SubInfo = @Type(.{ .@"struct" = .{
         .layout = .auto,
         .backing_integer = null,
         .fields = &fields,
@@ -1364,20 +1364,20 @@ fn computeCmdAndOptBasicInfo(
 }
 
 fn UnionOptDescSubMap(comptime U: type) type {
-    const sub_u_info = @typeInfo(U).Union;
+    const sub_u_info = @typeInfo(U).@"union";
     var new_s_fields: [sub_u_info.fields.len]std.builtin.Type.StructField = undefined;
 
     for (&new_s_fields, sub_u_info.fields) |*new_s_field, u_field| {
         new_s_field.* = .{
             .name = u_field.name,
             .type = CommandInfo(u_field.type),
-            .default_value = null,
+            .default_value_ptr = null,
             .is_comptime = false,
             .alignment = 0,
         };
     }
 
-    return @Type(.{ .Struct = .{
+    return @Type(.{ .@"struct" = .{
         .layout = .auto,
         .backing_integer = null,
         .fields = &new_s_fields,
@@ -1476,13 +1476,13 @@ fn parseSingleOptValue(
     }
 
     switch (@typeInfo(T)) {
-        .Bool => {
+        .bool => {
             const value_str = maybe_value orelse return true;
             if (std.mem.eql(u8, value_str, "true")) return true;
             if (std.mem.eql(u8, value_str, "false")) return false;
             return error.InvalidValue;
         },
-        .Int => {
+        .int => {
             const value_str = maybe_value orelse return {
                 return error.MissingValue;
             };
@@ -1490,7 +1490,7 @@ fn parseSingleOptValue(
                 return error.InvalidValue;
             };
         },
-        .Enum => {
+        .@"enum" => {
             const value_str = maybe_value orelse return {
                 return error.MissingValue;
             };
@@ -1498,7 +1498,7 @@ fn parseSingleOptValue(
                 return error.InvalidValue;
             };
         },
-        .Optional => |optional| if (@typeInfo(optional.child) != .Optional) {
+        .optional => |optional| if (@typeInfo(optional.child) != .optional) {
             return try parseSingleOptValue(option_name, optional.child, maybe_value);
         },
         else => {},
@@ -1540,11 +1540,11 @@ inline fn renderOptionDefaultValue(
     const value, const fmt_str = if (T == []const u8)
         .{ std.zig.fmtEscapes(default_value), "" }
     else switch (@typeInfo(T)) {
-        .Bool => .{ default_value, "any" },
-        .Enum => .{ @tagName(default_value), "s" },
-        .Int => .{ default_value, "d" },
-        .Optional => |optional| {
-            if (@typeInfo(optional.child) == .Optional) return false;
+        .bool => .{ default_value, "any" },
+        .@"enum" => .{ @tagName(default_value), "s" },
+        .int => .{ default_value, "d" },
+        .optional => |optional| {
+            if (@typeInfo(optional.child) == .optional) return false;
             return renderOptionDefaultValue(default_value orelse return false, writer);
         },
         else => return false,
@@ -1581,7 +1581,7 @@ fn enumFromStringAfterReplacingScalarInTag(
     comptime target: u8,
     comptime replacement: u8,
 ) ?E {
-    const e_info = @typeInfo(E).Enum;
+    const e_info = @typeInfo(E).@"enum";
     @setEvalBranchQuota(e_info.fields.len * 3 + 2);
     inline for (e_info.fields) |e_field| {
         const replaced_tag = comptime comptimeReplaceScalar(e_field.name, target, replacement);
@@ -1612,8 +1612,8 @@ inline fn comptimeReplaceScalar(
 /// as well as a way to compare strings at comptime whilst consuming only a single unit of
 /// eval branch quota (1 for the function call) - ie, a comptime optimization.
 inline fn constEql(a: []const u8, b: []const u8) bool {
-    const a_is_const = @typeInfo(@TypeOf(.{a.len})).Struct.fields[0].is_comptime;
-    const b_is_const = @typeInfo(@TypeOf(.{b.len})).Struct.fields[0].is_comptime;
+    const a_is_const = @typeInfo(@TypeOf(.{a.len})).@"struct".fields[0].is_comptime;
+    const b_is_const = @typeInfo(@TypeOf(.{b.len})).@"struct".fields[0].is_comptime;
     if (!a_is_const and !b_is_const) @compileError("Neither a nor b is of constant length");
 
     if (a.len != b.len) return false;

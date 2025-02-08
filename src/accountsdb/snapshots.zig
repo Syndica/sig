@@ -544,7 +544,7 @@ pub const UnusedAccounts = struct {
         };
         errdefer unused_accounts.deinit(allocator);
 
-        inline for (@typeInfo(UnusedAccounts).Struct.fields) |field| {
+        inline for (@typeInfo(UnusedAccounts).@"struct".fields) |field| {
             const hm_info = sig.utils.types.hashMapInfo(field.type).?;
 
             const ptr = &@field(unused_accounts, field.name);
@@ -1080,7 +1080,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
         random: std.Random,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!VersionedEpochStake {
-        comptime std.debug.assert(@typeInfo(VersionedEpochStake).Union.fields.len == 1); // randomly generate the tag otherwise
+        comptime std.debug.assert(@typeInfo(VersionedEpochStake).@"union".fields.len == 1); // randomly generate the tag otherwise
         return .{
             .current = try Current.initRandom(allocator, random, max_list_entries),
         };
@@ -1387,7 +1387,7 @@ pub const ExtraFields = struct {
         errdefer extra_fields.deinit(allocator);
 
         const FieldTag = std.meta.FieldEnum(ExtraFields);
-        const field_infos = @typeInfo(ExtraFields).Struct.fields;
+        const field_infos = @typeInfo(ExtraFields).@"struct".fields;
 
         const NonEofCount = std.math.IntFittingRange(0, field_infos.len);
         const non_eof_count = random.uintLessThan(NonEofCount, field_infos.len);
@@ -1447,7 +1447,7 @@ pub const ExtraFields = struct {
                 .free = .assert,
             });
 
-            inline for (@typeInfo(ExtraFields).Struct.fields) |field| {
+            inline for (@typeInfo(ExtraFields).@"struct".fields) |field| {
                 const field_ptr = &@field(extra_fields, field.name);
                 field_ptr.* = switch (@field(FieldTag, field.name)) {
                     .lamports_per_signature,
@@ -1672,16 +1672,16 @@ pub const AccountsDbFields = struct {
 
         const rooted_slots: []const Slot =
             bincode.read(allocator, []const Slot, reader, params) catch |err| switch (err) {
-            error.EndOfStream => &.{},
-            else => |e| return e,
-        };
+                error.EndOfStream => &.{},
+                else => |e| return e,
+            };
         errdefer allocator.free(rooted_slots);
 
         const rooted_slot_hashes: []const SlotAndHash =
             bincode.read(allocator, []const SlotAndHash, reader, params) catch |err| switch (err) {
-            error.EndOfStream => &.{},
-            else => |e| return e,
-        };
+                error.EndOfStream => &.{},
+                else => |e| return e,
+            };
         errdefer allocator.free(rooted_slot_hashes);
 
         return .{

@@ -109,7 +109,7 @@ pub const RepairMessage = union(enum(u8)) {
         slot: Slot,
     },
 
-    pub const Tag: type = @typeInfo(Self).Union.tag_type.?;
+    pub const Tag: type = @typeInfo(Self).@"union".tag_type.?;
     const Self = @This();
 
     const MAX_SERIALIZED_SIZE: usize = 160;
@@ -200,7 +200,7 @@ pub const RepairRequestHeader = struct {
 
 test "signed/serialized RepairRequest is valid" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(392138);
+    var prng = std.Random.DefaultPrng.init(392138);
     const random = prng.random();
 
     inline for (.{
@@ -210,7 +210,7 @@ test "signed/serialized RepairRequest is valid" {
     }) |request| {
         var kp_noise: [32]u8 = undefined;
         random.bytes(&kp_noise);
-        const keypair = try KeyPair.create(kp_noise);
+        const keypair = try KeyPair.generateDeterministic(kp_noise);
         const recipient = Pubkey.initRandom(random);
         const timestamp = random.int(u64);
         const nonce = random.int(Nonce);
@@ -237,7 +237,7 @@ test "signed/serialized RepairRequest is valid" {
 }
 
 test "RepairRequestHeader serialization round trip" {
-    var prng = std.rand.DefaultPrng.init(5224);
+    var prng = std.Random.DefaultPrng.init(5224);
     var signature: [Signature.SIZE]u8 = undefined;
     prng.fill(&signature);
 
@@ -347,9 +347,9 @@ test "RepairProtocolMessage.AncestorHashes serialization round trip" {
 }
 
 test "RepairProtocolMessage serializes to size <= MAX_SERIALIZED_SIZE" {
-    var prng = std.rand.DefaultPrng.init(184837);
+    var prng = std.Random.DefaultPrng.init(184837);
     for (0..10) |_| {
-        inline for (@typeInfo(RepairMessage.Tag).Enum.fields) |enum_field| {
+        inline for (@typeInfo(RepairMessage.Tag).@"enum".fields) |enum_field| {
             const tag = @field(RepairMessage.Tag, enum_field.name);
             const msg = testHelpers.randomRepairProtocolMessage(prng.random(), tag);
             var buf: [RepairMessage.MAX_SERIALIZED_SIZE]u8 = undefined;
@@ -364,7 +364,7 @@ const testHelpers = struct {
         tag: RepairMessage.Tag,
         expected: []const u8,
     ) !void {
-        var prng = std.rand.DefaultPrng.init(seed);
+        var prng = std.Random.DefaultPrng.init(seed);
         const msg = testHelpers.randomRepairProtocolMessage(prng.random(), tag);
         debugMessage(&msg);
 
@@ -404,7 +404,7 @@ const testHelpers = struct {
         // println!("{data:?}");
     }
 
-    fn randomRepairRequestHeader(random: std.rand.Random) RepairRequestHeader {
+    fn randomRepairRequestHeader(random: std.Random) RepairRequestHeader {
         var signature: [Signature.SIZE]u8 = undefined;
         random.bytes(&signature);
 
@@ -418,15 +418,15 @@ const testHelpers = struct {
     }
 
     fn randomRepairProtocolMessage(
-        random: std.rand.Random,
+        random: std.Random,
         message_type: RepairMessage.Tag,
     ) RepairMessage {
         return switch (message_type) {
             .Pong => x: {
                 var buf: [32]u8 = undefined;
                 random.bytes(&buf);
-                const kp = KeyPair.create(buf) catch unreachable;
-                break :x .{ .Pong = Pong.initRandom(random, &(kp)) catch unreachable };
+                const kp = KeyPair.generateDeterministic(buf) catch unreachable;
+                break :x .{ .Pong = Pong.initRandom(random, &kp) catch unreachable };
             },
             .WindowIndex => .{ .WindowIndex = .{
                 .header = randomRepairRequestHeader(random),

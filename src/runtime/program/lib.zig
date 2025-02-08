@@ -14,9 +14,9 @@ pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
 
 const EntrypointFn =
     *const fn (
-    std.mem.Allocator,
-    *InstructionContext,
-) (error{OutOfMemory} || InstructionError)!void;
+        std.mem.Allocator,
+        *InstructionContext,
+    ) (error{OutOfMemory} || InstructionError)!void;
 
 fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {
     @setEvalBranchQuota(5000);

@@ -577,7 +577,7 @@ pub const BenchmarkPacketProcessing = struct {
             fn sender(channel: *Channel(Packet), addr: network.EndPoint, e: ExitCondition) !void {
                 var i: usize = 0;
                 var packet: Packet = undefined;
-                var prng = std.rand.DefaultPrng.init(0);
+                var prng = std.Random.DefaultPrng.init(0);
                 var timer = try std.time.Timer.start();
 
                 while (e.shouldRun()) {

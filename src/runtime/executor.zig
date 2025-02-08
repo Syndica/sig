@@ -371,7 +371,7 @@ test "pushInstruction" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -454,7 +454,7 @@ test "processNextInstruction" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var tc = try testing.createTransactionContext(
         allocator,
@@ -518,7 +518,7 @@ test "popInstruction" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -597,7 +597,7 @@ test "prepareCpiInstructionInfo" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var tc = try testing.createTransactionContext(
         allocator,
@@ -747,7 +747,7 @@ test "prepareCpiInstructionInfo" {
 test "sumAccountLamports" {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),

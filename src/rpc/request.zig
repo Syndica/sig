@@ -30,7 +30,7 @@ pub fn serializeTuple(
 
 fn asTuple(item: anytype) AsTuple(@TypeOf(item)) {
     var tuple: AsTuple(@TypeOf(item)) = undefined;
-    inline for (@typeInfo(@TypeOf(item)).Struct.fields, 0..) |*field, i| {
+    inline for (@typeInfo(@TypeOf(item)).@"struct".fields, 0..) |*field, i| {
         tuple[i] = @field(item, field.name);
     }
     return tuple;
@@ -53,16 +53,17 @@ fn methodName(request: anytype) []const u8 {
 }
 
 fn AsTuple(comptime Struct: type) type {
-    var info = @typeInfo(Struct).Struct;
+    var info = @typeInfo(Struct).@"struct";
     var new_fields: [info.fields.len]std.builtin.Type.StructField = undefined;
     inline for (&new_fields, 0..) |*field, i| {
         field.* = info.fields[i];
         field.name = std.fmt.comptimePrint("{}", .{i});
+        field.default_value_ptr = null;
     }
     info.fields = &new_fields;
     info.is_tuple = true;
     info.decls = &.{};
-    return @Type(.{ .Struct = info });
+    return @Type(.{ .@"struct" = info });
 }
 
 test "serialize" {

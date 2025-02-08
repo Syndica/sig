@@ -93,7 +93,7 @@ fn checkImplements(
         const iface_decls, _ = declTypes(Interface);
         _, const impl_decls = declTypes(Impl);
         var errors = ComptimeStringBuilder{};
-        const state = .{
+        const state: CheckState = .{
             .Interface = Interface,
             .Impl = Impl,
             .impl_errors_must_be = impl_errors_must_be,
@@ -197,8 +197,8 @@ const DeclType = union(enum) {
     func: FunctionSignature,
 
     pub fn init(comptime T: type) DeclType {
-        if (@typeInfo(T) == .Fn) {
-            return .{ .func = FunctionSignature.init(@typeInfo(T).Fn) };
+        if (@typeInfo(T) == .@"fn") {
+            return .{ .func = FunctionSignature.init(@typeInfo(T).@"fn") };
         } else {
             return .{ .type = T };
         }
@@ -282,10 +282,10 @@ const FunctionSignature = struct {
             }
         }
         if (self.Return != null and other.Return != null and
-            @typeInfo(self.Return.?) == .ErrorUnion and @typeInfo(other.Return.?) == .ErrorUnion)
+            @typeInfo(self.Return.?) == .error_union and @typeInfo(other.Return.?) == .error_union)
         {
-            const self_union = @typeInfo(self.Return.?).ErrorUnion;
-            const other_union = @typeInfo(other.Return.?).ErrorUnion;
+            const self_union = @typeInfo(self.Return.?).error_union;
+            const other_union = @typeInfo(other.Return.?).error_union;
             if (self_union.payload != other_union.payload) {
                 return false;
             }
@@ -295,7 +295,7 @@ const FunctionSignature = struct {
                 .subset => .{ other_union.error_set, self_union.error_set },
                 .superset => .{ self_union.error_set, other_union.error_set },
             };
-            if (@typeInfo(sub).ErrorSet) |sub_set| if (@typeInfo(super).ErrorSet) |super_set| {
+            if (@typeInfo(sub).error_set) |sub_set| if (@typeInfo(super).error_set) |super_set| {
                 sub: for (sub_set) |sub_err| {
                     for (super_set) |super_err| {
                         if (std.mem.eql(u8, sub_err.name, super_err.name)) {
@@ -355,21 +355,21 @@ fn convertType(comptime T: type, comptime map: []const [2]type) type {
     return if (get(map, T)) |NewT|
         NewT
     else switch (@typeInfo(T)) {
-        .Pointer => |ptr| {
+        .pointer => |ptr| {
             var new_ptr = ptr;
             new_ptr.child = convertType(new_ptr.child, map);
-            return @Type(.{ .Pointer = new_ptr });
+            return @Type(.{ .pointer = new_ptr });
         },
-        .ErrorUnion => |eu| {
+        .error_union => |eu| {
             var new_eu = eu;
             new_eu.payload = convertType(eu.payload, map);
             new_eu.error_set = convertType(eu.error_set, map);
-            return @Type(.{ .ErrorUnion = new_eu });
+            return @Type(.{ .error_union = new_eu });
         },
-        .Optional => |opt| {
+        .optional => |opt| {
             var new_opt = opt;
             new_opt.child = convertType(opt.child, map);
-            return @Type(.{ .Optional = new_opt });
+            return @Type(.{ .optional = new_opt });
         },
         else => T,
     };
