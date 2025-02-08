@@ -547,7 +547,7 @@ pub const Vm = struct {
                         return false;
                     }
                     self.depth -= 1;
-                    const frame = self.call_frames.pop();
+                    const frame = self.call_frames.pop().?;
                     self.registers.set(.r10, frame.fp);
                     @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
                     if (!version.enableDynamicStackFrames()) {

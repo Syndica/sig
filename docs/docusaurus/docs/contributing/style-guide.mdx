@@ -28,7 +28,7 @@ There are two main guidelines to keep in mind when naming interfaces and interfa
 - The name of the collective state of an interface should be derived from the name of the specific implementation, or from the behavior expected of the interface, in such a way that it is clearly
   denoted as being related to the instance of the interface it will represent.
   - As an example, a generic implementation of `std.Random` which is a pseudo-random number generator should be named `prng` (ie this is relevant when making appropriate use of `std.Random.DefaultPrng`).
-  - As another example, an instance of `std.heap.GeneralPurposeAllocator(config)` should be called `gpa_state`, `std.heap.ArenaAllocator` `arena_state`, and so on.
+  - As another example, an instance of `std.heap.DebugAllocator(config)` should be called `gpa_state`, `std.heap.ArenaAllocator` `arena_state`, and so on.
 
 ### Container Type Ordering
 

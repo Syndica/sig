@@ -38,7 +38,7 @@ pub const BasicShredTracker = struct {
     /// The highest slot that has been seen at all.
     max_slot_seen: Slot,
     /// ring buffer
-    slots: [num_slots]MonitoredSlot = .{.{}} ** num_slots,
+    slots: [num_slots]MonitoredSlot = @splat(.{}),
     metrics: Metrics,
 
     const num_slots: usize = 1024;

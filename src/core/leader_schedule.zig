@@ -238,7 +238,7 @@ pub const LeaderSchedule = struct {
                 error.EndOfStream => break,
                 else => return e,
             };
-            var word_iter = std.mem.split(u8, line, " ");
+            var word_iter = std.mem.splitScalar(u8, line, ' ');
             const slot = try std.fmt.parseInt(Slot, nextNonEmpty(&word_iter) orelse continue, 10);
             if (expect) |*exp_slot| {
                 if (slot != exp_slot.*) {

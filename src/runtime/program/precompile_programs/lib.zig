@@ -7,6 +7,7 @@ pub const secp256r1 = @import("secp256r1.zig");
 
 const Pubkey = sig.core.Pubkey;
 const Ed25519 = std.crypto.sign.Ed25519;
+const TransactionInstruction = sig.core.transaction.TransactionInstruction;
 
 pub const ed25519Verify = ed25519.verify;
 pub const secp256k1Verify = secp256k1.verify;
@@ -135,7 +136,7 @@ test "verify ed25519" {
     const bad_ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
         .msg = .{
             .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
-            .instructions = &.{
+            .instructions = &[_]TransactionInstruction{
                 .{
                     .program_index = 0,
                     .account_indexes = &.{0},
@@ -151,7 +152,7 @@ test "verify ed25519" {
         verifyPrecompiles(std.testing.allocator, bad_ed25519_tx, sig.runtime.FeatureSet.EMPTY),
     );
 
-    const keypair = try Ed25519.KeyPair.create(null);
+    const keypair = Ed25519.KeyPair.generate();
     const ed25519_instruction = try ed25519.newInstruction(
         std.testing.allocator,
         keypair,
@@ -178,7 +179,7 @@ test "verify ed25519" {
 }
 
 test "verify cost" {
-    const keypair = try Ed25519.KeyPair.create(null);
+    const keypair = Ed25519.KeyPair.generate();
     const ed25519_instruction = try ed25519.newInstruction(
         std.testing.allocator,
         keypair,
@@ -213,7 +214,7 @@ test "verify secp256k1" {
     const bad_secp256k1_tx = std.mem.zeroInit(sig.core.Transaction, .{
         .msg = .{
             .account_keys = &.{sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID},
-            .instructions = &.{
+            .instructions = &[_]TransactionInstruction{
                 .{
                     .program_index = 0,
                     .account_indexes = &.{0},

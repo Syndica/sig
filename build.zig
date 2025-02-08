@@ -15,12 +15,11 @@ pub const Config = struct {
     ssh_install_dir: []const u8,
     ssh_workdir: []const u8,
     no_network_tests: bool,
+    use_llvm: bool,
 
     pub fn fromBuild(b: *Build) !Config {
         var self = Config{
-            .target = b.standardTargetOptions(.{
-                .default_target = defaultTargetDetectM3() orelse .{},
-            }),
+            .target = b.standardTargetOptions(.{}),
             .optimize = b.standardOptimizeOption(.{}),
             .filters = b.option([]const []const u8, "filter", "List of filters, used for example" ++
                 " to filter unit tests by name. specified as a series like `-Dfilter='filter1' " ++
@@ -46,6 +45,7 @@ pub const Config = struct {
                 "sig",
             .no_network_tests = b.option(bool, "no-network-tests", "Do not run any tests that " ++
                 "depend on the network.") orelse false,
+            .use_llvm = b.option(bool, "use-llvm", "Use LLVM for compilation") orelse true,
         };
 
         if (self.ssh_host) |host| {
@@ -96,7 +96,9 @@ pub fn build(b: *Build) !void {
     const poseidon_mod = poseidon_dep.module("poseidon");
 
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
-    const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
+    const rocksdb_mod = rocksdb_dep.module("bindings");
+    // TODO: maybe facebook learns how to write C++ and fixes obvious UB
+    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = false;
 
     const secp256k1_dep = b.dependency("secp256k1", dep_opts);
     const secp256k1_mod = secp256k1_dep.module("secp256k1");
@@ -147,6 +149,7 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
         .sanitize_thread = config.enable_tsan,
     });
+    sig_exe.use_llvm = config.use_llvm;
     sig_step.dependOn(&sig_exe.step);
     install_step.dependOn(&sig_exe.step);
 
@@ -182,8 +185,7 @@ pub fn build(b: *Build) !void {
         .sanitize_thread = config.enable_tsan,
         .filters = config.filters orelse &.{},
     });
-    b.installArtifact(unit_tests_exe);
-    test_step.dependOn(&unit_tests_exe.step);
+    unit_tests_exe.use_llvm = config.use_llvm;
     install_step.dependOn(&unit_tests_exe.step);
 
     unit_tests_exe.linkLibC();
@@ -211,6 +213,7 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
         .sanitize_thread = config.enable_tsan,
     });
+    fuzz_exe.use_llvm = config.use_llvm;
     fuzz_step.dependOn(&fuzz_exe.step);
     install_step.dependOn(&fuzz_exe.step);
 
@@ -237,6 +240,7 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
         .sanitize_thread = config.enable_tsan,
     });
+    benchmark_exe.use_llvm = config.use_llvm;
     benchmark_step.dependOn(&benchmark_exe.step);
     install_step.dependOn(&benchmark_exe.step);
 
@@ -247,8 +251,6 @@ pub fn build(b: *Build) !void {
     benchmark_exe.build_id = .fast;
     benchmark_exe.root_module.omit_frame_pointer = false;
     benchmark_exe.root_module.strip = false;
-
-    b.installArtifact(benchmark_exe);
 
     benchmark_exe.root_module.addImport("secp256k1", secp256k1_mod);
     benchmark_exe.root_module.addImport("base58", base58_mod);
@@ -270,6 +272,7 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
         .sanitize_thread = config.enable_tsan,
     });
+    geyser_reader_exe.use_llvm = config.use_llvm;
     geyser_reader_step.dependOn(&geyser_reader_exe.step);
     install_step.dependOn(&geyser_reader_exe.step);
 
@@ -369,37 +372,6 @@ fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
     }
 }
 
-/// TODO: remove after updating to 0.14, where M3/M4 feature detection is fixed.
-/// Ref: https://github.com/ziglang/zig/pull/21116
-fn defaultTargetDetectM3() ?std.Target.Query {
-    const builtin = @import("builtin");
-    if (builtin.os.tag != .macos) return null;
-    switch (builtin.cpu.arch) {
-        .aarch64, .aarch64_be => {},
-        else => return null,
-    }
-    var cpu_family: std.c.CPUFAMILY = undefined;
-    var len: usize = @sizeOf(std.c.CPUFAMILY);
-    std.posix.sysctlbynameZ("hw.cpufamily", &cpu_family, &len, null, 0) catch unreachable;
-
-    // Detects M4 as M3 to get around missing C flag translations when passing the target to dependencies.
-    // https://github.com/Homebrew/brew/blob/64edbe6b7905c47b113c1af9cb1a2009ed57a5c7/Library/Homebrew/extend/os/mac/hardware/cpu.rb#L106
-    const model: *const std.Target.Cpu.Model = switch (@intFromEnum(cpu_family)) {
-        else => return null,
-        0x2876f5b5 => &std.Target.aarch64.cpu.apple_a17, // ARM_COLL
-        0xfa33415e => &std.Target.aarch64.cpu.apple_m3, // ARM_IBIZA
-        0x5f4dea93 => &std.Target.aarch64.cpu.apple_m3, // ARM_LOBOS
-        0x72015832 => &std.Target.aarch64.cpu.apple_m3, // ARM_PALMA
-        0x6f5129ac => &std.Target.aarch64.cpu.apple_m3, // ARM_DONAN (M4)
-        0x17d5b93a => &std.Target.aarch64.cpu.apple_m3, // ARM_BRAVA (M4)
-    };
-
-    return .{
-        .cpu_arch = builtin.cpu.arch,
-        .cpu_model = .{ .explicit = model },
-    };
-}
-
 const ssh = struct {
     /// SSH into the host and call `zig targets` to determine the compilation
     /// target for that machine.
@@ -464,7 +436,7 @@ const ssh = struct {
         const exe = b.addExecutable(.{
             .name = "send-file",
             .root_source_file = b.path("scripts/send-file.zig"),
-            .target = b.host,
+            .target = b.graph.host,
             .link_libc = true,
         });
 

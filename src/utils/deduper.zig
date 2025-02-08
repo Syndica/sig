@@ -21,7 +21,7 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
 
         pub fn init(
             allocator: std.mem.Allocator,
-            rand: std.rand.Random,
+            rand: std.Random,
             num_bits: u64,
         ) !Deduper(n_hashers, T) {
             const size: usize = @intCast((num_bits + 63) / 64);
@@ -45,7 +45,7 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
         /// Resets the deduper if the false positive rate is too high or the reset cycle has elapsed.
         pub fn maybeReset(
             self: *Deduper(n_hashers, T),
-            rand: std.rand.Random,
+            rand: std.Random,
             false_positive_rate: f64,
             reset_cycle: Duration,
         ) bool {
@@ -110,7 +110,7 @@ fn testGetCapacity(comptime K: usize, num_bits: u64, false_positive_rate: f64) u
 /// Checks that the deduper with a specific number of bits and false positive rate
 /// has the correct capacity.
 fn testDedupCapacity(num_bits: u64, false_positive_rate: f64, capacity: u64) !void {
-    var xoshiro = std.rand.DefaultPrng.init(0);
+    var xoshiro = std.Random.DefaultPrng.init(0);
     const rng = xoshiro.random();
 
     try std.testing.expectEqual(

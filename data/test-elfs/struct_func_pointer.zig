@@ -1,9 +1,9 @@
 const PubkeyLutEntry = extern struct {
-    fp: *const fn (u8) callconv(.C) u8,
+    fp: *const fn (u8) callconv(.c) u8,
     key: u64,
 };
 
-fn f1(a: u8) callconv(.C) u8 {
+fn f1(a: u8) callconv(.c) u8 {
     return a + 1;
 }
 

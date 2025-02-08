@@ -114,7 +114,7 @@ pub const InstructionInfo = struct {
 
 test "deserializeInstruction: invalid instruction data" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const DummyInstruction = struct { data: []const u8 };
 
