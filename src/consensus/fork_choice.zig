@@ -48,16 +48,16 @@ pub const ForkWeight = u64;
 pub const ForkInfo = struct {
     logger: ScopedLogger(@typeName(ForkInfo)),
     // Amount of stake that has voted for exactly this slot
-    stake_voted_at: ForkWeight,
+    stake_for_slot: ForkWeight,
     // Amount of stake that has voted for this slot and the subtree
     // rooted at this slot
-    stake_voted_subtree: ForkWeight,
+    stake_for_subtree: ForkWeight,
     // Tree height for the subtree rooted at this slot
     height: usize,
     // Best slot in the subtree rooted at this slot, does not
     // have to be a direct child in `children`. This is the slot whose subtree
     // is the heaviest.
-    best_slot: SlotAndHash,
+    heaviest_subtree_slot: SlotAndHash,
     // Deepest slot in the subtree rooted at this slot. This is the slot
     // with the greatest tree height. This metric does not discriminate invalid
     // forks, unlike `best_slot`
@@ -261,11 +261,11 @@ pub const HeaviestSubtreeForkChoice = struct {
             // Insert new entry
             const new_fork_info = ForkInfo{
                 .logger = self.logger.withScope(@typeName(ForkInfo)),
-                .stake_voted_at = 0,
-                .stake_voted_subtree = 0,
+                .stake_for_slot = 0,
+                .stake_for_subtree = 0,
                 .height = 1,
                 // The `best_slot` and `deepest_slot` of a leaf is itself
-                .best_slot = slot_hash_key,
+                .heaviest_subtree_slot = slot_hash_key,
                 .deepest_slot = slot_hash_key,
                 .children = SortedMap(SlotAndHash, void).init(self.allocator),
                 .parent = maybe_parent,
@@ -309,17 +309,17 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     pub fn bestOverallSlot(self: *const HeaviestSubtreeForkChoice) SlotAndHash {
-        return self.bestSlot(self.tree_root) orelse {
+        return self.heaviestSlot(self.tree_root) orelse {
             @panic("Root must exist in tree");
         };
     }
 
-    pub fn bestSlot(
+    pub fn heaviestSlot(
         self: *const HeaviestSubtreeForkChoice,
         slot_hash_key: SlotAndHash,
     ) ?SlotAndHash {
         if (self.fork_infos.get(slot_hash_key)) |fork_info| {
-            return fork_info.best_slot;
+            return fork_info.heaviest_subtree_slot;
         }
         return null;
     }
@@ -340,22 +340,22 @@ pub const HeaviestSubtreeForkChoice = struct {
         };
     }
 
-    pub fn stakeVotedAt(
+    pub fn stakeForSlot(
         self: *HeaviestSubtreeForkChoice,
         key: *const SlotAndHash,
     ) ?u64 {
         if (self.fork_infos.get(key.*)) |fork_info| {
-            return fork_info.stake_voted_at;
+            return fork_info.stake_for_slot;
         }
         return null;
     }
 
-    pub fn stakeVotedSubtree(
+    pub fn stakeForSubtree(
         self: *const HeaviestSubtreeForkChoice,
         key: *const SlotAndHash,
     ) ?u64 {
         if (self.fork_infos.get(key.*)) |fork_info| {
-            return fork_info.stake_voted_subtree;
+            return fork_info.stake_for_subtree;
         }
         return null;
     }
@@ -559,7 +559,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     ) !void {
         // Returns an error as parent must exist in self.fork_infos after its child leaf was created
         const parent_best_slot_hash_key =
-            self.bestSlot(parent_slot_hash_key.*) orelse return error.MissingParent;
+            self.heaviestSlot(parent_slot_hash_key.*) orelse return error.MissingParent;
         // If this new leaf is the direct parent's best child, then propagate it up the tree
         if (try self.isBestChild(slot_hash_key)) {
             var maybe_ancestor: ?SlotAndHash = parent_slot_hash_key.*;
@@ -570,8 +570,10 @@ pub const HeaviestSubtreeForkChoice = struct {
                 // Saftey: maybe_ancestor cannot be null due to the if check above.
                 if (self.fork_infos.getPtr(maybe_ancestor.?)) |ancestor_fork_info| {
                     // Do the update to the new best slot.
-                    if (ancestor_fork_info.*.best_slot.equals(parent_best_slot_hash_key)) {
-                        ancestor_fork_info.*.best_slot = slot_hash_key.*;
+                    if (ancestor_fork_info.*.heaviest_subtree_slot.equals(
+                        parent_best_slot_hash_key,
+                    )) {
+                        ancestor_fork_info.*.heaviest_subtree_slot = slot_hash_key.*;
                         // Walk up the tree.
                         maybe_ancestor = ancestor_fork_info.parent;
                     } else {
@@ -614,7 +616,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         maybe_best_child: *const SlotAndHash,
     ) !bool {
         const maybe_best_child_weight =
-            self.stakeVotedSubtree(maybe_best_child) orelse return false;
+            self.stakeForSubtree(maybe_best_child) orelse return false;
         const maybe_parent = self.getParent(maybe_best_child);
 
         // If there's no parent, this must be the root
@@ -627,7 +629,7 @@ pub const HeaviestSubtreeForkChoice = struct {
 
         for (children.keys()) |child| {
             // child must exist in `self.fork_infos`
-            const child_weight = self.stakeVotedSubtree(&child) orelse return error.MissingChild;
+            const child_weight = self.stakeForSubtree(&child) orelse return error.MissingChild;
 
             // Don't count children currently marked as invalid
             // child must exist in tree
@@ -656,7 +658,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     /// - If `deepest_child` has no parent, it is the root and deepest by default.
     fn isDeepestChild(self: *HeaviestSubtreeForkChoice, deepest_child: *const SlotAndHash) bool {
         const maybe_deepest_child_weight =
-            self.stakeVotedSubtree(deepest_child) orelse return false;
+            self.stakeForSubtree(deepest_child) orelse return false;
         const maybe_deepest_child_height = self.getHeight(deepest_child) orelse return false;
         const maybe_parent = self.getParent(deepest_child);
 
@@ -671,7 +673,7 @@ pub const HeaviestSubtreeForkChoice = struct {
 
         for (children.keys()) |child| {
             const child_height = self.getHeight(&child) orelse return false;
-            const child_weight = self.stakeVotedSubtree(&child) orelse return false;
+            const child_weight = self.stakeForSubtree(&child) orelse return false;
 
             const height_cmp = std.math.order(child_height, maybe_deepest_child_height);
             const weight_cmp = std.math.order(child_weight, maybe_deepest_child_weight);
@@ -909,7 +911,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     /// Aggregates stake and height information for the subtree rooted at `slot_hash_key`.
     /// Updates the fork info with the aggregated values.
     fn aggregateSlot(self: *HeaviestSubtreeForkChoice, slot_hash_key: SlotAndHash) void {
-        var stake_voted_subtree: u64 = 0;
+        var stake_for_subtree: u64 = 0;
         var deepest_child_height: u64 = 0;
         var best_slot_hash_key: SlotAndHash = slot_hash_key;
         var deepest_slot_hash_key: SlotAndHash = slot_hash_key;
@@ -917,11 +919,11 @@ pub const HeaviestSubtreeForkChoice = struct {
 
         // Get the fork info for the given slot_hash_key
         if (self.fork_infos.getPtr(slot_hash_key)) |fork_info| {
-            stake_voted_subtree = fork_info.stake_voted_at;
+            stake_for_subtree = fork_info.stake_for_slot;
 
-            var best_child_stake_voted_subtree: u64 = 0;
+            var best_child_stake_for_subtree: u64 = 0;
             var best_child_slot_key: SlotAndHash = slot_hash_key;
-            var deepest_child_stake_voted_subtree: u64 = 0;
+            var deepest_child_stake_for_subtree: u64 = 0;
             var deepest_child_slot_key: SlotAndHash = slot_hash_key;
 
             // Iterate over the children of the current fork
@@ -930,42 +932,42 @@ pub const HeaviestSubtreeForkChoice = struct {
                     std.debug.panic("Child must exist in fork_info map", .{});
                 };
 
-                const child_stake_voted_subtree = child_fork_info.stake_voted_subtree;
+                const child_stake_for_subtree = child_fork_info.stake_for_subtree;
                 const child_height = child_fork_info.height;
                 is_duplicate_confirmed = is_duplicate_confirmed or
                     child_fork_info.is_duplicate_confirmed;
 
                 // Add the child's stake to the subtree stake
-                stake_voted_subtree += child_stake_voted_subtree;
+                stake_for_subtree += child_stake_for_subtree;
 
                 // Update the best child if the child is a candidate and meets the conditions
                 if (child_fork_info.isCandidate() and
                     (best_child_slot_key.equals(slot_hash_key) or
-                    child_stake_voted_subtree > best_child_stake_voted_subtree or
-                    (child_stake_voted_subtree == best_child_stake_voted_subtree and
+                    child_stake_for_subtree > best_child_stake_for_subtree or
+                    (child_stake_for_subtree == best_child_stake_for_subtree and
                     child_key.order(best_child_slot_key) == .lt)))
                 {
-                    best_child_stake_voted_subtree = child_stake_voted_subtree;
+                    best_child_stake_for_subtree = child_stake_for_subtree;
                     best_child_slot_key = child_key;
-                    best_slot_hash_key = child_fork_info.best_slot;
+                    best_slot_hash_key = child_fork_info.heaviest_subtree_slot;
                 }
 
                 // Update the deepest child based on height, stake, and slot key
                 const is_first_child = deepest_child_slot_key.equals(slot_hash_key);
                 const is_deeper_child = child_height > deepest_child_height;
                 const is_heavier_child =
-                    child_stake_voted_subtree > deepest_child_stake_voted_subtree;
+                    child_stake_for_subtree > deepest_child_stake_for_subtree;
                 const is_earlier_child = child_key.order(deepest_child_slot_key) == .lt;
 
                 if (is_first_child or
                     is_deeper_child or
                     (child_height == deepest_child_height and is_heavier_child) or
                     (child_height == deepest_child_height and
-                    child_stake_voted_subtree == deepest_child_stake_voted_subtree and
+                    child_stake_for_subtree == deepest_child_stake_for_subtree and
                     is_earlier_child))
                 {
                     deepest_child_height = child_height;
-                    deepest_child_stake_voted_subtree = child_stake_voted_subtree;
+                    deepest_child_stake_for_subtree = child_stake_for_subtree;
                     deepest_child_slot_key = child_key;
                     deepest_slot_hash_key = child_fork_info.deepest_slot;
                 }
@@ -985,9 +987,9 @@ pub const HeaviestSubtreeForkChoice = struct {
             fork_info.setDuplicateConfirmed();
         }
 
-        fork_info.stake_voted_subtree = stake_voted_subtree;
+        fork_info.stake_for_subtree = stake_for_subtree;
         fork_info.height = deepest_child_height + 1;
-        fork_info.best_slot = best_slot_hash_key;
+        fork_info.heaviest_subtree_slot = best_slot_hash_key;
         fork_info.deepest_slot = deepest_slot_hash_key;
     }
 
@@ -1000,8 +1002,8 @@ pub const HeaviestSubtreeForkChoice = struct {
         // Try to get a mutable reference to the fork info
         if (self.fork_infos.getPtr(slot_hash_key.*)) |fork_info| {
             // Add the stake to the fork's voted stake and subtree stake
-            fork_info.stake_voted_at += stake;
-            fork_info.stake_voted_subtree += stake;
+            fork_info.stake_for_slot += stake;
+            fork_info.stake_for_subtree += stake;
         }
     }
 
@@ -1014,22 +1016,22 @@ pub const HeaviestSubtreeForkChoice = struct {
         // Try to get a mutable reference to the fork info
         if (self.fork_infos.getPtr(slot_hash_key.*)) |fork_info| {
             // Substract the stake to the fork's voted stake and subtree stake
-            fork_info.stake_voted_at -= stake;
-            fork_info.stake_voted_subtree -= stake;
+            fork_info.stake_for_slot -= stake;
+            fork_info.stake_for_subtree -= stake;
         }
     }
 
     fn setStakeVotedAt(
         self: *HeaviestSubtreeForkChoice,
         slot_hash_key: *const SlotAndHash,
-        stake_voted_at: u64,
+        stake_for_slot: u64,
     ) void {
         if (!builtin.is_test) {
             @panic("setStakeVotedAt should only be called in test mode");
         }
 
         if (self.fork_infos.getPtr(slot_hash_key.*)) |fork_info| {
-            fork_info.stake_voted_at = stake_voted_at;
+            fork_info.stake_for_slot = stake_for_slot;
         }
     }
 
@@ -1306,26 +1308,26 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
 
     // No weights are present, weights should be zero
     try std.testing.expectEqual(
-        fc.stakeVotedAt(&.{ .slot = 1, .hash = Hash.ZEROES }),
+        fc.stakeForSlot(&.{ .slot = 1, .hash = Hash.ZEROES }),
         0,
     );
 
     try std.testing.expectEqual(
-        fc.stakeVotedSubtree(&.{ .slot = 1, .hash = Hash.ZEROES }),
+        fc.stakeForSubtree(&.{ .slot = 1, .hash = Hash.ZEROES }),
         0,
     );
 
     // The best leaf when weights are equal should prioritize the lower leaf
     try std.testing.expectEqual(
-        fc.bestSlot(.{ .slot = 1, .hash = Hash.ZEROES }),
+        fc.heaviestSlot(.{ .slot = 1, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
     );
     try std.testing.expectEqual(
-        fc.bestSlot(.{ .slot = 2, .hash = Hash.ZEROES }),
+        fc.heaviestSlot(.{ .slot = 2, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
     );
     try std.testing.expectEqual(
-        fc.bestSlot(.{ .slot = 3, .hash = Hash.ZEROES }),
+        fc.heaviestSlot(.{ .slot = 3, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
     );
     // The deepest leaf only tiebreaks by slot # when tree heights are equal
@@ -1406,45 +1408,45 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
             0;
 
         try std.testing.expectEqual(
-            fc.stakeVotedAt(&.{ .slot = slot, .hash = Hash.ZEROES }),
+            fc.stakeForSlot(&.{ .slot = slot, .hash = Hash.ZEROES }),
             expected_stake,
         );
     }
 
-    // Verify `stake_voted_subtree` for common fork
+    // Verify `stake_for_subtree` for common fork
     for ([_]u64{ 0, 1 }) |slot| {
-        // Subtree stake is sum of the `stake_voted_at` across
+        // Subtree stake is sum of the `stake_for_slot` across
         // all slots in the subtree
         try std.testing.expectEqual(
-            fc.stakeVotedSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
+            fc.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
             total_stake,
         );
     }
 
     {
-        // Verify `stake_voted_subtree` for fork 1
+        // Verify `stake_for_subtree` for fork 1
         var total_expected_stake: u64 = 0;
         for ([_]u64{ 4, 2 }) |slot| {
-            total_expected_stake += fc.stakeVotedAt(
+            total_expected_stake += fc.stakeForSlot(
                 &.{ .slot = slot, .hash = Hash.ZEROES },
             ).?;
             try std.testing.expectEqual(
-                fc.stakeVotedSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
+                fc.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
                 total_expected_stake,
             );
         }
     }
 
     {
-        // Verify `stake_voted_subtree` for fork 2
+        // Verify `stake_for_subtree` for fork 2
         var total_expected_stake: u64 = 0;
         for ([_]u64{ 6, 5, 3 }) |slot| {
-            total_expected_stake += fc.stakeVotedAt(
+            total_expected_stake += fc.stakeForSlot(
                 &.{ .slot = slot, .hash = Hash.ZEROES },
             ).?;
 
             try std.testing.expectEqual(
-                fc.stakeVotedSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
+                fc.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
                 total_expected_stake,
             );
         }
