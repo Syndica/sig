@@ -22,7 +22,7 @@ pub const SlotAndHash = struct {
         }
     }
 
-    pub fn equals(a: *const SlotAndHash, b: *const SlotAndHash) bool {
+    pub fn equals(a: SlotAndHash, b: SlotAndHash) bool {
         return order(a, b) == .eq;
     }
 };

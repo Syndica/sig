@@ -570,7 +570,7 @@ pub const HeaviestSubtreeForkChoice = struct {
                 // Saftey: maybe_ancestor cannot be null due to the if check above.
                 if (self.fork_infos.getPtr(maybe_ancestor.?)) |ancestor_fork_info| {
                     // Do the update to the new best slot.
-                    if (ancestor_fork_info.*.best_slot.order(parent_best_slot_hash_key) == .eq) {
+                    if (ancestor_fork_info.*.best_slot.equals(parent_best_slot_hash_key)) {
                         ancestor_fork_info.*.best_slot = slot_hash_key.*;
                         // Walk up the tree.
                         maybe_ancestor = ancestor_fork_info.parent;
@@ -750,7 +750,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         var reachable_set = SortedMap(SlotAndHash, void).init(self.allocator);
 
         while (pending_keys.popOrNull()) |current_key| {
-            if (current_key.order(root2.*) == .eq) {
+            if (current_key.equals(root2.*)) {
                 continue;
             }
 
@@ -940,7 +940,7 @@ pub const HeaviestSubtreeForkChoice = struct {
 
                 // Update the best child if the child is a candidate and meets the conditions
                 if (child_fork_info.isCandidate() and
-                    (best_child_slot_key.order(slot_hash_key) == .eq or
+                    (best_child_slot_key.equals(slot_hash_key) or
                     child_stake_voted_subtree > best_child_stake_voted_subtree or
                     (child_stake_voted_subtree == best_child_stake_voted_subtree and
                     child_key.order(best_child_slot_key) == .lt)))
@@ -951,7 +951,7 @@ pub const HeaviestSubtreeForkChoice = struct {
                 }
 
                 // Update the deepest child based on height, stake, and slot key
-                const is_first_child = deepest_child_slot_key.order(slot_hash_key) == .eq;
+                const is_first_child = deepest_child_slot_key.equals(slot_hash_key);
                 const is_deeper_child = child_height > deepest_child_height;
                 const is_heavier_child =
                     child_stake_voted_subtree > deepest_child_stake_voted_subtree;
@@ -1123,9 +1123,9 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         );
 
         try std.testing.expect(
-            (slotAndHashes[0].order(.{ .slot = 3, .hash = Hash.ZEROES }) == .eq and
-                slotAndHashes[1].order(.{ .slot = 5, .hash = Hash.ZEROES }) == .eq and
-                slotAndHashes[2].order(.{ .slot = 6, .hash = Hash.ZEROES }) == .eq),
+            (slotAndHashes[0].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
+                slotAndHashes[1].equals(.{ .slot = 5, .hash = Hash.ZEROES }) and
+                slotAndHashes[2].equals(.{ .slot = 6, .hash = Hash.ZEROES })),
         );
     }
 
@@ -1146,9 +1146,9 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         );
 
         try std.testing.expect(
-            (slotAndHashes[0].order(.{ .slot = 1, .hash = Hash.ZEROES }) == .eq and
-                slotAndHashes[1].order(.{ .slot = 2, .hash = Hash.ZEROES }) == .eq and
-                slotAndHashes[2].order(.{ .slot = 4, .hash = Hash.ZEROES }) == .eq),
+            (slotAndHashes[0].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
+                slotAndHashes[1].equals(.{ .slot = 2, .hash = Hash.ZEROES }) and
+                slotAndHashes[2].equals(.{ .slot = 4, .hash = Hash.ZEROES })),
         );
     }
 
@@ -1169,12 +1169,12 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         );
 
         try std.testing.expect(
-            (slotAndHashes[0].order(.{ .slot = 0, .hash = Hash.ZEROES }) == .eq and
-                slotAndHashes[1].order(.{ .slot = 1, .hash = Hash.ZEROES }) == .eq and
-                slotAndHashes[2].order(.{ .slot = 2, .hash = Hash.ZEROES }) == .eq and
-                slotAndHashes[3].order(.{ .slot = 3, .hash = Hash.ZEROES }) == .eq and
-                slotAndHashes[4].order(.{ .slot = 4, .hash = Hash.ZEROES }) == .eq and
-                slotAndHashes[5].order(.{ .slot = 5, .hash = Hash.ZEROES }) == .eq),
+            (slotAndHashes[0].equals(.{ .slot = 0, .hash = Hash.ZEROES }) and
+                slotAndHashes[1].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
+                slotAndHashes[2].equals(.{ .slot = 2, .hash = Hash.ZEROES }) and
+                slotAndHashes[3].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
+                slotAndHashes[4].equals(.{ .slot = 4, .hash = Hash.ZEROES }) and
+                slotAndHashes[5].equals(.{ .slot = 5, .hash = Hash.ZEROES })),
         );
     }
 
@@ -1209,10 +1209,10 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
         }
 
         try std.testing.expect(
-            (ancestors[0].order(.{ .slot = 5, .hash = Hash.ZEROES }) == .eq and
-                ancestors[1].order(.{ .slot = 3, .hash = Hash.ZEROES }) == .eq and
-                ancestors[2].order(.{ .slot = 1, .hash = Hash.ZEROES }) == .eq and
-                ancestors[3].order(.{ .slot = 0, .hash = Hash.ZEROES }) == .eq),
+            (ancestors[0].equals(.{ .slot = 5, .hash = Hash.ZEROES }) and
+                ancestors[1].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
+                ancestors[2].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
+                ancestors[3].equals(.{ .slot = 0, .hash = Hash.ZEROES })),
         );
     }
     {
@@ -1229,9 +1229,9 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
         }
 
         try std.testing.expect(
-            (ancestors[0].order(.{ .slot = 2, .hash = Hash.ZEROES }) == .eq and
-                ancestors[1].order(.{ .slot = 1, .hash = Hash.ZEROES }) == .eq and
-                ancestors[2].order(.{ .slot = 0, .hash = Hash.ZEROES }) == .eq),
+            (ancestors[0].equals(.{ .slot = 2, .hash = Hash.ZEROES }) and
+                ancestors[1].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
+                ancestors[2].equals(.{ .slot = 0, .hash = Hash.ZEROES })),
         );
     }
     {
@@ -1248,7 +1248,7 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
         }
 
         try std.testing.expect(
-            (ancestors[0].order(.{ .slot = 0, .hash = Hash.ZEROES }) == .eq),
+            (ancestors[0].equals(.{ .slot = 0, .hash = Hash.ZEROES })),
         );
     }
     {
@@ -1271,7 +1271,7 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
         }
 
         try std.testing.expect(
-            (ancestors[0].order(.{ .slot = 2, .hash = Hash.ZEROES }) == .eq),
+            (ancestors[0].equals(.{ .slot = 2, .hash = Hash.ZEROES })),
         );
     }
 }
@@ -1528,7 +1528,7 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
         const children = children_.keys();
 
         try std.testing.expect(
-            (children[0].slot == child.slot and children[0].hash.order(&child.hash) == .eq),
+            (children[0].slot == child.slot and children[0].hash.eql(child.hash)),
         );
     }
 
