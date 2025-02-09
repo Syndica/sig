@@ -31,6 +31,7 @@ const UpdateOperation = union(enum) {
 const SlotAndHashLabel = struct {
     slot_hash_key: SlotAndHash,
     label: UpdateLabel,
+
     pub fn order(a: SlotAndHashLabel, b: SlotAndHashLabel) std.math.Order {
         return a.slot_hash_key.order(b.slot_hash_key);
     }
