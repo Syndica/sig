@@ -13,9 +13,114 @@ pub const Transaction = struct {
     /// Signatures
     signatures: []Signature,
 
-    /// The message version, either legacy or v0.
+    /// The version, either legacy or v0.
     version: TransactionVersion,
 
+    /// The signable data of a transaction
+    msg: TransactionMessage,
+
+    /// MAX_BYTES is the maximum size of a transaction.
+    pub const MAX_BYTES: u32 = 1232;
+
+    /// MAX_SIGNATURES is the maximum number of signatures that can be applied to a transaction.
+    pub const MAX_SIGNATURES: u8 = 127;
+
+    /// MAX_ACCOUNTS is the maximum number of accounts that can be loaded by a transaction.
+    pub const MAX_ACCOUNTS: u16 = 128;
+
+    /// MAX_INSTRUCTIONS is the maximum number of instructions that can be executed by a transaction.
+    pub const MAX_INSTRUCTIONS: u8 = 64;
+
+    /// MAX_ADDRESS_LOOKUP_TABLES is the maximum number of address lookup tables that can be used by a transaction.
+    pub const MAX_ADDRESS_LOOKUP_TABLES: u16 = 127;
+
+    /// VERSION_PREFIX is used to differentiate between legacy and versioned transactions. If the first byte after the
+    /// signatures has its high bit set, then the transaction is versioned and the remaining bits represent the version.
+    /// Otherwise, the transaction is legacy and the first byte after the signatures is the first byte of the message.
+    pub const VERSION_PREFIX: u8 = 0x80;
+
+    pub const @"!bincode-config": sig.bincode.FieldConfig(Transaction) = .{
+        .deserializer = deserialize,
+        .serializer = serialize,
+    };
+
+    pub const EMPTY = Transaction{
+        .signatures = &.{},
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 0,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{},
+            .recent_blockhash = .{ .data = [_]u8{0x00} ** Hash.SIZE },
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
+    };
+
+    pub fn deinit(self: Transaction, allocator: std.mem.Allocator) void {
+        sig.bincode.free(allocator, self);
+    }
+
+    pub fn clone(self: Transaction, allocator: std.mem.Allocator) !Transaction {
+        const signatures = try allocator.dupe(Signature, self.signatures);
+        errdefer allocator.free(signatures);
+        return .{
+            .signatures = signatures,
+            .version = self.version,
+            .msg = try self.msg.clone(allocator),
+        };
+    }
+
+    pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
+        try leb.writeULEB128(writer, @as(u16, @truncate(data.signatures.len)));
+        for (data.signatures) |sgn| try writer.writeAll(&sgn.data);
+        try data.version.serialize(writer);
+        try data.msg.serialize(writer, data.version);
+    }
+
+    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) !Transaction {
+        const signatures = try allocator.alloc(Signature, try leb.readULEB128(u16, reader));
+        for (signatures) |*sgn| sgn.* = .{ .data = try reader.readBytesNoEof(Signature.SIZE) };
+        var peekable = sig.utils.io.peekableReader(reader);
+        const version = try TransactionVersion.deserialize(&peekable);
+        return .{
+            .signatures = signatures,
+            .version = version,
+            .msg = try TransactionMessage.deserialize(allocator, peekable.reader(), version),
+        };
+    }
+
+    pub fn validate(self: Transaction) !void {
+        try self.msg.validate();
+    }
+};
+
+pub const TransactionVersion = enum(u8) {
+    /// Legacy transaction without address lookups.
+    legacy = 0xFF,
+    /// Transaction with address lookups.
+    v0 = 0x00,
+
+    pub fn serialize(self: TransactionVersion, writer: anytype) !void {
+        if (self != .legacy)
+            try writer.writeByte(Transaction.VERSION_PREFIX | @intFromEnum(self));
+    }
+
+    pub fn deserialize(peekable: anytype) !TransactionVersion {
+        if (try peekable.peekByte() & Transaction.VERSION_PREFIX == 0)
+            return TransactionVersion.legacy;
+
+        const version = try peekable.reader().readByte();
+        return switch (version & ~Transaction.VERSION_PREFIX) {
+            0 => .v0,
+            127 => error.OffChain,
+            else => error.InvalidVersion,
+        };
+    }
+};
+
+pub const TransactionMessage = struct {
     /// The number of signatures required for this transaction to be considered
     /// valid. The signers of those signatures must match the first
     /// `signature_count` of `account_keys`.
@@ -49,72 +154,25 @@ pub const Transaction = struct {
     /// `AddressLookup`'s are used to load account addresses from lookup tables.
     address_lookups: []const TransactionAddressLookup = &.{},
 
-    /// MAX_BYTES is the maximum size of a transaction.
-    pub const MAX_BYTES: u32 = 1232;
-
-    /// MAX_SIGNATURES is the maximum number of signatures that can be applied to a transaction.
-    pub const MAX_SIGNATURES: u8 = 127;
-
-    /// MAX_ACCOUNTS is the maximum number of accounts that can be loaded by a transaction.
-    pub const MAX_ACCOUNTS: u16 = 128;
-
-    /// MAX_INSTRUCTIONS is the maximum number of instructions that can be executed by a transaction.
-    pub const MAX_INSTRUCTIONS: u8 = 64;
-
-    /// MAX_ADDRESS_LOOKUP_TABLES is the maximum number of address lookup tables that can be used by a transaction.
-    pub const MAX_ADDRESS_LOOKUP_TABLES: u16 = 127;
-
-    pub const @"!bincode-config": sig.bincode.FieldConfig(Transaction) = .{
-        .deserializer = deserialize,
-        .serializer = serialize,
-    };
-
-    pub const EMPTY = Transaction{
-        .signatures = &.{},
-        .version = .legacy,
-        .signature_count = 0,
-        .readonly_signed_count = 0,
-        .readonly_unsigned_count = 0,
-        .account_keys = &.{},
-        .recent_blockhash = .{ .data = [_]u8{0x00} ** Hash.SIZE },
-        .instructions = &.{},
-        .address_lookups = &.{},
-    };
-
-    pub fn deinit(self: Transaction, allocator: std.mem.Allocator) void {
-        allocator.free(self.signatures);
-        allocator.free(self.account_keys);
-        for (self.instructions) |instr| instr.deinit(allocator);
-        allocator.free(self.instructions);
-        for (self.address_lookups) |alt| alt.deinit(allocator);
-        allocator.free(self.address_lookups);
+    pub fn deinit(self: TransactionMessage, allocator: std.mem.Allocator) void {
+        sig.bincode.free(allocator, self);
     }
 
-    pub fn clone(self: Transaction, allocator: std.mem.Allocator) !Transaction {
-        const signatures = try allocator.dupe(Signature, self.signatures);
-        errdefer allocator.free(signatures);
+    pub fn clone(self: TransactionMessage, allocator: std.mem.Allocator) !TransactionMessage {
+        const account_keys = try allocator.dupe(Pubkey, self.account_keys);
+        errdefer sig.bincode.free(allocator, account_keys);
 
         var instructions = try allocator.alloc(TransactionInstruction, self.instructions.len);
-        errdefer {
-            for (instructions) |instr| instr.deinit(allocator);
-            allocator.free(instructions);
-        }
+        errdefer sig.bincode.free(allocator, instructions);
         for (self.instructions, 0..) |instr, i|
             instructions[i] = try instr.clone(allocator);
 
         const address_lookups = try allocator.alloc(TransactionAddressLookup, self.address_lookups.len);
-        errdefer {
-            for (address_lookups) |alt| alt.deinit(allocator);
-            allocator.free(address_lookups);
-        }
+        errdefer sig.bincode.free(allocator, address_lookups);
         for (address_lookups, 0..) |*alt, i|
             alt.* = try self.address_lookups[i].clone(allocator);
 
-        const account_keys = try allocator.dupe(Pubkey, self.account_keys);
-
         return .{
-            .signatures = signatures,
-            .version = self.version,
             .signature_count = self.signature_count,
             .readonly_signed_count = self.readonly_signed_count,
             .readonly_unsigned_count = self.readonly_unsigned_count,
@@ -125,7 +183,60 @@ pub const Transaction = struct {
         };
     }
 
-    pub fn validate(self: Transaction) !void {
+    pub fn serialize(self: TransactionMessage, writer: anytype, version: TransactionVersion) !void {
+        try writer.writeByte(self.signature_count);
+        try writer.writeByte(self.readonly_signed_count);
+        try writer.writeByte(self.readonly_unsigned_count);
+
+        // WARN: Truncate okay if transaction is valid
+        try leb.writeULEB128(writer, @as(u16, @truncate(self.account_keys.len)));
+        for (self.account_keys) |id| try writer.writeAll(&id.data);
+
+        try writer.writeAll(&self.recent_blockhash.data);
+
+        // WARN: Truncate okay if transaction is valid
+        try leb.writeULEB128(writer, @as(u16, @truncate(self.instructions.len)));
+        for (self.instructions) |instr| try sig.bincode.write(writer, instr, .{});
+
+        // WARN: Truncate okay if transaction is valid
+        if (version != TransactionVersion.legacy) {
+            try leb.writeULEB128(writer, @as(u16, @truncate(self.address_lookups.len)));
+            for (self.address_lookups) |alt| try sig.bincode.write(writer, alt, .{});
+        }
+    }
+
+    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, version: TransactionVersion) !TransactionMessage {
+        const signature_count = try reader.readByte();
+        const readonly_signed_count = try reader.readByte();
+        const readonly_unsigned_count = try reader.readByte();
+
+        const account_keys = try allocator.alloc(Pubkey, try leb.readULEB128(u16, reader));
+        errdefer sig.bincode.free(allocator, account_keys);
+        for (account_keys) |*id| id.* = .{ .data = try reader.readBytesNoEof(Pubkey.SIZE) };
+
+        const recent_blockhash: Hash = .{ .data = try reader.readBytesNoEof(Hash.SIZE) };
+
+        const instructions = try allocator.alloc(TransactionInstruction, try leb.readULEB128(u16, reader));
+        errdefer sig.bincode.free(allocator, instructions);
+        for (instructions) |*instr| instr.* = try sig.bincode.read(allocator, TransactionInstruction, reader, .{});
+
+        const address_lookups_len = if (version == .legacy) 0 else try leb.readULEB128(u16, reader);
+        const address_lookups = try allocator.alloc(TransactionAddressLookup, address_lookups_len);
+        errdefer sig.bincode.free(allocator, address_lookups);
+        for (address_lookups) |*alt| alt.* = try sig.bincode.read(allocator, TransactionAddressLookup, reader, .{});
+
+        return .{
+            .signature_count = signature_count,
+            .readonly_signed_count = readonly_signed_count,
+            .readonly_unsigned_count = readonly_unsigned_count,
+            .account_keys = account_keys,
+            .recent_blockhash = recent_blockhash,
+            .instructions = instructions,
+            .address_lookups = address_lookups,
+        };
+    }
+
+    pub fn validate(self: TransactionMessage) !void {
         // number of accounts should match spec in header. signed and unsigned should not overlap.
         if (self.signature_count +| self.readonly_unsigned_count > self.account_keys.len)
             return error.NotEnoughAccounts;
@@ -148,115 +259,6 @@ pub const Transaction = struct {
             }
         }
     }
-
-    /// Write a signable component of **valid** transaction to a slice of bytes.
-    pub fn writeSignableToSlice(self: Transaction, slice: []u8) ![]u8 {
-        var fbs = std.io.fixedBufferStream(slice);
-        try serialize(&fbs.writer(), self, .{});
-        return fbs.getWritten();
-    }
-
-    /// Serialize the signed component of a **valid** transaction.
-    pub fn serializeSignable(self: Transaction, writer: anytype) !void {
-        try writer.writeByte(self.signature_count);
-        try writer.writeByte(self.readonly_signed_count);
-        try writer.writeByte(self.readonly_unsigned_count);
-
-        // WARN: Truncate okay if transaction is valid
-        try leb.writeULEB128(writer, @as(u16, @truncate(self.account_keys.len)));
-        for (self.account_keys) |id| try writer.writeAll(&id.data);
-
-        try writer.writeAll(&self.recent_blockhash.data);
-
-        // WARN: Truncate okay if transaction is valid
-        try leb.writeULEB128(writer, @as(u16, @truncate(self.instructions.len)));
-        for (self.instructions) |instr| try sig.bincode.write(writer, instr, .{});
-
-        // WARN: Truncate okay if transaction is valid
-        if (self.version != TransactionVersion.legacy) {
-            try leb.writeULEB128(writer, @as(u16, @truncate(self.address_lookups.len)));
-            for (self.address_lookups) |alt| try sig.bincode.write(writer, alt, .{});
-        }
-    }
-};
-
-/// Serialize a **valid** transaction to a slice of bytes.
-pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
-    // WARN: Truncate okay if transaction is valid
-    try writer.writeByte(@truncate(data.signatures.len));
-    for (data.signatures) |sgn| try writer.writeAll(&sgn.data);
-
-    switch (data.version) {
-        TransactionVersion.legacy => {},
-        TransactionVersion.v0 => try writer.writeByte(0x80),
-    }
-
-    try data.serializeSignable(writer);
-}
-
-pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) !Transaction {
-    const signatures = try allocator.alloc(Signature, try reader.readByte());
-    errdefer allocator.free(signatures);
-    for (signatures) |*sgn| sgn.* = .{ .data = try reader.readBytesNoEof(Signature.SIZE) };
-
-    // The next byte is either the version or the signature count,
-    // If the first bit is set, then the remaining bits denote the version number.
-    // Otherwise it is the signature count.
-    const version_or_signature_count = try reader.readByte();
-    const version = if (version_or_signature_count & 0x80 == 0x80)
-        if (version_or_signature_count == 0x80)
-            TransactionVersion.v0
-        else
-            return error.InvalidVersion
-    else
-        TransactionVersion.legacy;
-
-    const signature_count = if (version == TransactionVersion.legacy) version_or_signature_count else try reader.readByte();
-    const readonly_signed_count = try reader.readByte();
-    const readonly_unsigned_count = try reader.readByte();
-
-    const account_keys = try allocator.alloc(Pubkey, try leb.readULEB128(u16, reader));
-    errdefer allocator.free(account_keys);
-    for (account_keys) |*id| id.* = .{ .data = try reader.readBytesNoEof(Pubkey.SIZE) };
-
-    const recent_blockhash: Hash = .{ .data = try reader.readBytesNoEof(Hash.SIZE) };
-
-    const instructions = try allocator.alloc(TransactionInstruction, try leb.readULEB128(u16, reader));
-
-    errdefer {
-        for (instructions) |instr| instr.deinit(allocator);
-        allocator.free(instructions);
-    }
-    for (instructions) |*instr| instr.* = try sig.bincode.read(allocator, TransactionInstruction, reader, .{});
-
-    const maybe_address_lookups = if (version == TransactionVersion.v0) blk: {
-        const alts = try allocator.alloc(TransactionAddressLookup, try leb.readULEB128(u16, reader));
-        errdefer {
-            for (alts) |alt| alt.deinit(allocator);
-            allocator.free(alts);
-        }
-        for (alts) |*alt| alt.* = try sig.bincode.read(allocator, TransactionAddressLookup, reader, .{});
-        break :blk alts;
-    } else null;
-
-    return .{
-        .signatures = signatures,
-        .version = version,
-        .signature_count = signature_count,
-        .readonly_signed_count = readonly_signed_count,
-        .readonly_unsigned_count = readonly_unsigned_count,
-        .account_keys = account_keys,
-        .recent_blockhash = recent_blockhash,
-        .instructions = instructions,
-        .address_lookups = maybe_address_lookups orelse &.{},
-    };
-}
-
-pub const TransactionVersion = enum(u8) {
-    /// legacy transaction without address lookups.
-    legacy = 0xFF,
-    /// Transaction with address lookups.
-    v0 = 0x00,
 };
 
 pub const TransactionInstruction = struct {
@@ -271,6 +273,10 @@ pub const TransactionInstruction = struct {
     pub const @"!bincode-config:account_indexes" = shortVecConfig([]const u8);
     pub const @"!bincode-config:data" = shortVecConfig([]const u8);
 
+    pub fn deinit(self: TransactionInstruction, allocator: std.mem.Allocator) void {
+        sig.bincode.free(allocator, self);
+    }
+
     pub fn clone(self: *const TransactionInstruction, allocator: std.mem.Allocator) !TransactionInstruction {
         const account_indexes = try allocator.dupe(u8, self.account_indexes);
         errdefer allocator.free(account_indexes);
@@ -279,11 +285,6 @@ pub const TransactionInstruction = struct {
             .account_indexes = account_indexes,
             .data = try allocator.dupe(u8, self.data),
         };
-    }
-
-    pub fn deinit(self: TransactionInstruction, allocator: std.mem.Allocator) void {
-        allocator.free(self.account_indexes);
-        allocator.free(self.data);
     }
 };
 
@@ -298,6 +299,10 @@ pub const TransactionAddressLookup = struct {
     pub const @"!bincode-config:writable_indexes" = shortVecConfig([]const u8);
     pub const @"!bincode-config:readonly_indexes" = shortVecConfig([]const u8);
 
+    pub fn deinit(self: TransactionAddressLookup, allocator: std.mem.Allocator) void {
+        sig.bincode.free(allocator, self);
+    }
+
     pub fn clone(self: *const TransactionAddressLookup, allocator: std.mem.Allocator) !TransactionAddressLookup {
         const writable_indexes = try allocator.dupe(u8, self.writable_indexes);
         errdefer allocator.free(writable_indexes);
@@ -307,24 +312,21 @@ pub const TransactionAddressLookup = struct {
             .readonly_indexes = try allocator.dupe(u8, self.readonly_indexes),
         };
     }
-
-    pub fn deinit(self: TransactionAddressLookup, allocator: std.mem.Allocator) void {
-        allocator.free(self.writable_indexes);
-        allocator.free(self.readonly_indexes);
-    }
 };
 
 test "sanitize succeeds minimal valid transaction" {
     const transaction = Transaction{
         .signatures = &.{},
         .version = .legacy,
-        .signature_count = 1,
-        .readonly_signed_count = 0,
-        .readonly_unsigned_count = 0,
-        .account_keys = &.{Pubkey.ZEROES},
-        .recent_blockhash = Hash.ZEROES,
-        .instructions = &.{},
-        .address_lookups = &.{},
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
     };
     try std.testing.expectEqual({}, transaction.validate());
 }
@@ -337,13 +339,15 @@ test "sanitize fails missing signers" {
     const transaction = Transaction{
         .signatures = &.{},
         .version = .legacy,
-        .signature_count = 2,
-        .readonly_signed_count = 0,
-        .readonly_unsigned_count = 0,
-        .account_keys = &.{Pubkey.ZEROES},
-        .recent_blockhash = Hash.ZEROES,
-        .instructions = &.{},
-        .address_lookups = &.{},
+        .msg = .{
+            .signature_count = 2,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
     };
     try std.testing.expectEqual(error.NotEnoughAccounts, transaction.validate());
 }
@@ -352,13 +356,15 @@ test "sanitize fails missing unsigned" {
     const transaction = Transaction{
         .signatures = &.{},
         .version = .legacy,
-        .signature_count = 1,
-        .readonly_signed_count = 0,
-        .readonly_unsigned_count = 1,
-        .account_keys = &.{Pubkey.ZEROES},
-        .recent_blockhash = Hash.ZEROES,
-        .instructions = &.{},
-        .address_lookups = &.{},
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 1,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
     };
     try std.testing.expectEqual(error.NotEnoughAccounts, transaction.validate());
 }
@@ -367,13 +373,15 @@ test "sanitize fails no writable signed" {
     const transaction = Transaction{
         .signatures = &.{},
         .version = .legacy,
-        .signature_count = 1,
-        .readonly_signed_count = 1,
-        .readonly_unsigned_count = 0,
-        .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
-        .recent_blockhash = Hash.ZEROES,
-        .instructions = &.{},
-        .address_lookups = &.{},
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 1,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
     };
     try std.testing.expectEqual(error.MissingWritableFeePayer, transaction.validate());
 }
@@ -382,17 +390,19 @@ test "sanitize fails missing program id" {
     const transaction = Transaction{
         .signatures = &.{},
         .version = .legacy,
-        .signature_count = 1,
-        .readonly_signed_count = 0,
-        .readonly_unsigned_count = 0,
-        .account_keys = &.{Pubkey.ZEROES},
-        .recent_blockhash = Hash.ZEROES,
-        .instructions = &.{.{
-            .program_index = 1,
-            .account_indexes = &.{},
-            .data = &.{},
-        }},
-        .address_lookups = &.{},
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{.{
+                .program_index = 1,
+                .account_indexes = &.{},
+                .data = &.{},
+            }},
+            .address_lookups = &.{},
+        },
     };
     try std.testing.expectEqual(error.ProgramIdAccountMissing, transaction.validate());
 }
@@ -401,17 +411,19 @@ test "sanitize fails if program id has index 0" {
     const transaction = Transaction{
         .signatures = &.{},
         .version = .legacy,
-        .signature_count = 1,
-        .readonly_signed_count = 0,
-        .readonly_unsigned_count = 0,
-        .account_keys = &.{Pubkey.ZEROES},
-        .recent_blockhash = Hash.ZEROES,
-        .instructions = &.{.{
-            .program_index = 0,
-            .account_indexes = &.{},
-            .data = &.{},
-        }},
-        .address_lookups = &.{},
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{.{
+                .program_index = 0,
+                .account_indexes = &.{},
+                .data = &.{},
+            }},
+            .address_lookups = &.{},
+        },
     };
     try std.testing.expectEqual(error.ProgramIdCannotBePayer, transaction.validate());
 }
@@ -420,17 +432,19 @@ test "satinize fails account index out of bounds" {
     const transaction = Transaction{
         .signatures = &.{},
         .version = .legacy,
-        .signature_count = 1,
-        .readonly_signed_count = 0,
-        .readonly_unsigned_count = 1,
-        .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
-        .recent_blockhash = Hash.ZEROES,
-        .instructions = &.{.{
-            .program_index = 1,
-            .account_indexes = &.{2},
-            .data = &.{},
-        }},
-        .address_lookups = &.{},
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 1,
+            .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{.{
+                .program_index = 1,
+                .account_indexes = &.{2},
+                .data = &.{},
+            }},
+            .address_lookups = &.{},
+        },
     };
     try std.testing.expectEqual(error.AccountIndexOutOfBounds, transaction.validate());
 }
@@ -459,21 +473,23 @@ pub const transaction_legacy_example = struct {
     const as_struct = Transaction{
         .signatures = &signatures,
         .version = .legacy,
-        .signature_count = 1,
-        .readonly_signed_count = 0,
-        .readonly_unsigned_count = 1,
-        .account_keys = &.{
-            Pubkey.parseBase58String("4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS") catch unreachable,
-            Pubkey.parseBase58String("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi") catch unreachable,
-            Pubkey.parseBase58String("11111111111111111111111111111111") catch unreachable,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 1,
+            .account_keys = &.{
+                Pubkey.parseBase58String("4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS") catch unreachable,
+                Pubkey.parseBase58String("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi") catch unreachable,
+                Pubkey.parseBase58String("11111111111111111111111111111111") catch unreachable,
+            },
+            .recent_blockhash = Hash.parseBase58String("8RBsoeyoRwajj86MZfZE6gMDJQVYGYcdSfx1zxqxNHbr") catch unreachable,
+            .instructions = &.{.{
+                .program_index = 2,
+                .account_indexes = &.{ 0, 1 },
+                .data = &.{ 2, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0 },
+            }},
+            .address_lookups = &.{},
         },
-        .recent_blockhash = Hash.parseBase58String("8RBsoeyoRwajj86MZfZE6gMDJQVYGYcdSfx1zxqxNHbr") catch unreachable,
-        .instructions = &.{.{
-            .program_index = 2,
-            .account_indexes = &.{ 0, 1 },
-            .data = &.{ 2, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0 },
-        }},
-        .address_lookups = &.{},
     };
 
     const as_bytes = [_]u8{
@@ -506,27 +522,29 @@ pub const transaction_v0_example = struct {
     pub const as_struct: Transaction = .{
         .signatures = signatures[0..],
         .version = .v0,
-        .signature_count = 39,
-        .readonly_signed_count = 12,
-        .readonly_unsigned_count = 102,
-        .account_keys = &.{
-            Pubkey.parseBase58String("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE") catch unreachable,
-            Pubkey.parseBase58String("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4") catch unreachable,
-        },
-        .recent_blockhash = Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW") catch unreachable,
-        .instructions = &.{.{
-            .program_index = 100,
-            .account_indexes = &.{ 1, 3 },
-            .data = &.{
-                104, 232, 42,  254, 46, 48, 104, 89,  101, 211, 253, 161, 65, 155, 204, 89,
-                126, 187, 180, 191, 60, 59, 88,  119, 106, 20,  194, 80,  11, 200, 76,  0,
+        .msg = .{
+            .signature_count = 39,
+            .readonly_signed_count = 12,
+            .readonly_unsigned_count = 102,
+            .account_keys = &.{
+                Pubkey.parseBase58String("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE") catch unreachable,
+                Pubkey.parseBase58String("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4") catch unreachable,
             },
-        }},
-        .address_lookups = &.{.{
-            .table_address = Pubkey.parseBase58String("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD") catch unreachable,
-            .writable_indexes = &.{ 1, 3, 5, 7, 90 },
-            .readonly_indexes = &.{},
-        }},
+            .recent_blockhash = Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW") catch unreachable,
+            .instructions = &.{.{
+                .program_index = 100,
+                .account_indexes = &.{ 1, 3 },
+                .data = &.{
+                    104, 232, 42,  254, 46, 48, 104, 89,  101, 211, 253, 161, 65, 155, 204, 89,
+                    126, 187, 180, 191, 60, 59, 88,  119, 106, 20,  194, 80,  11, 200, 76,  0,
+                },
+            }},
+            .address_lookups = &.{.{
+                .table_address = Pubkey.parseBase58String("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD") catch unreachable,
+                .writable_indexes = &.{ 1, 3, 5, 7, 90 },
+                .readonly_indexes = &.{},
+            }},
+        },
     };
 
     pub const as_bytes = [_]u8{
