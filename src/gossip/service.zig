@@ -104,15 +104,12 @@ const GOSSIP_PRNG_SEED = 19;
 /// The flow of data goes as follows:
 ///
 /// `SocketThread.initReceiver` ->
-///         - reads from the gossip socket
-///         - puts the new packet onto `packet_incoming_channel`
+///         - reads packet from the gossip socket
+///         - calls `verifyPacket` with packet
 ///         - repeat until exit
 ///
-/// `verifyPackets` ->
-///         - receives from `packet_incoming_channel`
-///         - starts queuing new parallel tasks with the new packets
-///         - as a task verifies the incoming packet, it sends it into `verified_incoming_channel`
-///         - repeat until exit *and* `packet_incoming_channel` is empty
+/// `verifyPacket` ->
+///         - verifies a packet and sends it into `verified_incoming_channel`
 ///
 /// `processMessages` ->
 ///         - receives from `verified_incoming_channel`
@@ -154,7 +151,6 @@ pub const GossipService = struct {
     outgoing_socket_thread: ?*SocketThread = null,
 
     /// communication between threads
-    packet_incoming_channel: *Channel(Packet),
     packet_outgoing_channel: *Channel(Packet),
     verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
 
@@ -227,9 +223,6 @@ pub const GossipService = struct {
         const gossip_logger = logger.withScope(LOG_SCOPE);
 
         // setup channels for communication between threads
-        var packet_incoming_channel = try Channel(Packet).create(allocator);
-        errdefer packet_incoming_channel.destroy();
-
         var packet_outgoing_channel = try Channel(Packet).create(allocator);
         errdefer packet_outgoing_channel.destroy();
 
@@ -302,7 +295,6 @@ pub const GossipService = struct {
             .my_pubkey = my_pubkey,
             .my_shred_version = Atomic(u16).init(my_shred_version),
             .gossip_socket = gossip_socket,
-            .packet_incoming_channel = packet_incoming_channel,
             .packet_outgoing_channel = packet_outgoing_channel,
             .verified_incoming_channel = verified_incoming_channel,
             .gossip_table_rw = RwMux(GossipTable).init(gossip_table),
@@ -342,14 +334,11 @@ pub const GossipService = struct {
         self.service_manager.deinit();
 
         // Wait for threads to shutdown if any
-        if (self.incoming_socket_thread) |thread| thread.join();
-        if (self.outgoing_socket_thread) |thread| thread.join();
+        if (self.incoming_socket_thread) |socket_thread| socket_thread.join();
+        if (self.outgoing_socket_thread) |socket_thread| socket_thread.join();
 
         // assert the channels are empty in order to make sure no data was lost.
         // everything should be cleaned up when the thread-pool joins.
-        std.debug.assert(self.packet_incoming_channel.isEmpty());
-        self.packet_incoming_channel.destroy();
-
         std.debug.assert(self.packet_outgoing_channel.isEmpty());
         self.packet_outgoing_channel.destroy();
 
@@ -420,12 +409,6 @@ pub const GossipService = struct {
         );
         exit_condition.ordered.exit_index += 1;
 
-        try self.service_manager.spawn("[gossip] verifyPackets", verifyPackets, .{
-            self,
-            exit_condition,
-        });
-        exit_condition.ordered.exit_index += 1;
-
         try self.service_manager.spawn("[gossip] processMessages", processMessages, .{
             self,
             GOSSIP_PRNG_SEED,
@@ -464,109 +447,15 @@ pub const GossipService = struct {
 
     fn onIncomingPacket(receiver: *SocketThread.Receiver, packet: *const Packet) void {
         const self: *Self = @alignCast(@fieldParentPtr("incoming_socket_receiver", receiver));
-        self.packet_incoming_channel.send(packet.*) catch |e| {
-            self.logger.err().logf("failed to send packet incoming: {}", .{e});
-            return;
-        };
-    }
-
-    pub fn verifyPackets(self: *Self, exit: ExitCondition) !void {
-        defer {
-            while (self.packet_incoming_channel.tryReceive()) |_| {}
-            exit.afterExit();
-            self.logger.debug().log("verifyPackets loop closed");
-        }
-
-        while (true) {
-            self.packet_incoming_channel.waitToReceive(exit) catch break;
-            while (self.packet_incoming_channel.tryReceive()) |packet| {
-                self.metrics.gossip_packets_received_total.inc();
-                self.verifyPacket(packet);
-            }
-        }
-    }
-
-    fn _verifyPackets(self: *Self, exit: ExitCondition) !void {
-        (struct {
-            const Ctx = @This();
-
-            gossip: *Self,
-            exit_condition: ExitCondition,
-            wg: std.Thread.WaitGroup = .{},
-            workers: [VERIFY_PACKET_PARALLEL_TASKS]Worker = undefined,
-            send_hook: Channel(Packet).SendHook = .{ .after_send = afterSend },
-
-            fn run(gossip: *Self, exit_condition: ExitCondition) void {
-                defer {
-                    while (gossip.packet_incoming_channel.tryReceive()) |_| {}
-                    exit_condition.afterExit();
-                    gossip.logger.debug().log("verifyPackets loop closed");
-                }
-
-                var ctx = Ctx{ .gossip = gossip, .exit_condition = exit_condition };
-                for (&ctx.workers) |*worker| worker.* = .{ .ctx = &ctx };
-                defer ctx.wg.wait();
-
-                gossip.packet_incoming_channel.send_hook.store(&ctx.send_hook, .release);
-                defer gossip.packet_incoming_channel.send_hook.store(null, .release);
-
-                ctx.notify();
-                while (exit_condition.shouldRun()) std.time.sleep(1 * std.time.ns_per_s);
-            }
-
-            fn afterSend(hook: *Channel(Packet).SendHook, channel: *Channel(Packet)) void {
-                const ctx: *Ctx = @alignCast(@fieldParentPtr("send_hook", hook));
-                std.debug.assert(channel == ctx.gossip.packet_incoming_channel);
-                ctx.notify();
-            }
-
-            fn notify(ctx: *Ctx) void {
-                var batch = ThreadPool.Batch{};
-                defer ctx.gossip.thread_pool.schedule(batch);
-
-                const num_wake = @min(ctx.workers.len, ctx.gossip.packet_incoming_channel.len());
-                for (ctx.workers[0..num_wake]) |*worker| {
-                    if (worker.trySchedule()) {
-                        worker.task = .{ .callback = Worker.onSchedule };
-                        batch.push(ThreadPool.Batch.from(&worker.task));
-                        ctx.wg.start();
-                    }
-                }
-            }
-
-            const Worker = struct {
-                ctx: *Ctx,
-                task: ThreadPool.Task = undefined,
-                is_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-                fn trySchedule(worker: *Worker) bool {
-                    if (worker.ctx.gossip.packet_incoming_channel.isEmpty()) return false;
-                    if (worker.is_running.swap(true, .release)) return false;
-                    return true;
-                }
-
-                fn onSchedule(task: *ThreadPool.Task) void {
-                    const worker: *Worker = @alignCast(@fieldParentPtr("task", task));
-                    defer worker.ctx.wg.finish();
-
-                    std.debug.assert(worker.is_running.load(.acquire));
-                    while (worker.ctx.exit_condition.shouldRun()) {
-                        while (worker.ctx.gossip.packet_incoming_channel.tryReceive()) |packet| {
-                            worker.ctx.gossip.metrics.gossip_packets_received_total.inc();
-                            worker.ctx.gossip.verifyPacket(packet);
-                        }
-                        std.debug.assert(worker.is_running.swap(false, .acq_rel));
-                        if (!worker.trySchedule()) break;
-                    }
-                }
-            };
-        }).run(self, exit);
+        self.verifyPacket(packet.*);
     }
 
     /// main logic for deserializing Packets into GossipMessage messages
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
     fn verifyPacket(self: *Self, packet: Packet) void {
+        self.metrics.gossip_packets_received_total.inc();
+
         var message = bincode.readFromSlice(
             self.gossip_data_allocator,
             GossipMessage,
@@ -1046,8 +935,7 @@ pub const GossipService = struct {
         self.metrics.table_n_values.set(n_entries);
         self.metrics.table_n_pubkeys.set(n_pubkeys);
 
-        const incoming_channel_length = self.packet_incoming_channel.len();
-        self.metrics.incoming_channel_length.set(incoming_channel_length);
+        self.metrics.incoming_channel_length.set(0);
 
         const outgoing_channel_length = self.packet_outgoing_channel.len();
         self.metrics.outgoing_channel_length.set(outgoing_channel_length);
@@ -3061,22 +2949,12 @@ test "test packet verification" {
         .noop,
     );
     defer {
+        gossip_service.shutdown();
         gossip_service.deinit();
         allocator.destroy(gossip_service);
     }
 
-    var packet_channel = gossip_service.packet_incoming_channel;
     var verified_channel = gossip_service.verified_incoming_channel;
-
-    const packet_verifier_handle = try Thread.spawn(
-        .{},
-        GossipService.verifyPackets,
-        .{ gossip_service, .{ .unordered = gossip_service.service_manager.exit } },
-    );
-    defer {
-        gossip_service.shutdown();
-        packet_verifier_handle.join();
-    }
 
     var prng = std.rand.DefaultPrng.init(91);
     var data = GossipData.randomFromIndex(prng.random(), 0);
@@ -3098,7 +2976,7 @@ test "test packet verification" {
     const out = try bincode.writeToSlice(buf[0..], message, bincode.Params{});
     const packet = Packet.init(from, buf, out.len);
     for (0..3) |_| {
-        try packet_channel.send(packet);
+        gossip_service.verifyPacket(packet);
     }
 
     // send one which fails sanitization
@@ -3111,7 +2989,7 @@ test "test packet verification" {
     var buf_v2 = [_]u8{0} ** PACKET_DATA_SIZE;
     const out_v2 = try bincode.writeToSlice(buf_v2[0..], message_v2, bincode.Params{});
     const packet_v2 = Packet.init(from, buf_v2, out_v2.len);
-    try packet_channel.send(packet_v2);
+    gossip_service.verifyPacket(packet_v2);
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
@@ -3123,7 +3001,7 @@ test "test packet verification" {
     var buf2 = [_]u8{0} ** PACKET_DATA_SIZE;
     const out2 = try bincode.writeToSlice(buf2[0..], message2, bincode.Params{});
     const packet2 = Packet.init(from, buf2, out2.len);
-    try packet_channel.send(packet2);
+    gossip_service.verifyPacket(packet2);
 
     // send it with a SignedGossipData which hash a slice
     {
@@ -3149,7 +3027,7 @@ test "test packet verification" {
         var buf3 = [_]u8{0} ** PACKET_DATA_SIZE;
         const out3 = try bincode.writeToSlice(buf3[0..], message3, bincode.Params{});
         const packet3 = Packet.init(from, buf3, out3.len);
-        try packet_channel.send(packet3);
+        gossip_service.verifyPacket(packet3);
     }
 
     var msg_count: usize = 0;
@@ -3378,8 +3256,6 @@ pub const BenchmarkGossipServiceGeneral = struct {
             allocator.destroy(gossip_service);
         }
 
-        const outgoing_channel = gossip_service.packet_incoming_channel;
-
         // generate messages
         var prng = std.rand.DefaultPrng.init(19);
         const random = prng.random();
@@ -3390,7 +3266,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         for (0..bench_args.message_counts.n_ping) |_| {
             // send a ping message
             const packet = try fuzz_service.randomPingPacket(random, &keypair, endpoint);
-            try outgoing_channel.send(packet);
+            gossip_service.verifyPacket(packet);
         }
 
         for (0..bench_args.message_counts.n_push_message) |_| {
@@ -3404,7 +3280,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             defer packets.deinit();
 
             msg_sent += packets.items.len;
-            for (packets.items) |packet| try outgoing_channel.send(packet);
+            for (packets.items) |packet| gossip_service.verifyPacket(packet);
         }
 
         for (0..bench_args.message_counts.n_pull_response) |_| {
@@ -3418,7 +3294,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             defer packets.deinit();
 
             msg_sent += packets.items.len;
-            for (packets.items) |packet| try outgoing_channel.send(packet);
+            for (packets.items) |packet| gossip_service.verifyPacket(packet);
         }
 
         const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
@@ -3521,8 +3397,6 @@ pub const BenchmarkGossipServicePullRequests = struct {
             }
         }
 
-        const outgoing_channel = gossip_service.packet_incoming_channel;
-
         // generate messages
         for (0..bench_args.n_pull_requests) |_| {
             const packet = try fuzz_service.randomPullRequestWithContactInfo(
@@ -3532,7 +3406,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
                 signed_contact_info_recv,
             );
 
-            try outgoing_channel.send(packet);
+            gossip_service.verifyPacket(packet);
         }
 
         const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
