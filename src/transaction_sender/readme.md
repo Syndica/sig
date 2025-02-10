@@ -1,8 +1,12 @@
-# Transaction Sender (Gulf Stream)
+# Transaction Sender
 
-<!-- **Milestone**: Validator is able to forward transactions to other validators TPU port for processing (according to leader schedule) -->
+The transaction sender is used for sending transactions from the edge of the network to a leader validator
+to be included in the next block. This is also referred to as solana's "gulf stream".
 
-- Gulfstream can be thought of as Solana's mechanism for moving transactions from the edge of the network into the transaction processing unit of a leader validator.
+The main code can be found in `/src/transaction_sender/`.
+
+---
+
 - Validators make use of a leader schedule identify upcoming leaders and forward transactions to their TPU port using the quic protocol.
 - The TPU info for leaders is discovered over gossip.
 

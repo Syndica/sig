@@ -1,6 +1,11 @@
-# Geyesr
+# Geyser
 
-the main code is in `lib.zig` and contains a few key structs:
+Geyser is a tool to stream accounts from a validator. Currently
+its only used to stream accounts from a snapshot while loading/valdiating a snapshot.
+
+The main code is located in `/src/geyser/`.
+
+`lib.zig` and contains a few key structs:
 - `GeyserWriter`: used to write new accounts
 - `GeyserReader`: used to read new accounts
 
