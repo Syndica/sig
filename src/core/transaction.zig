@@ -314,6 +314,36 @@ pub const TransactionAddressLookup = struct {
     }
 };
 
+test "clone transaction" {
+    const allocator = std.testing.allocator;
+    const transaction = Transaction{
+        .signatures = &.{},
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
+    };
+
+    const clone = try transaction.clone(allocator);
+    defer clone.deinit(allocator);
+
+    try std.testing.expectEqual(transaction.signatures.len, clone.signatures.len);
+    try std.testing.expectEqual(transaction.version, clone.version);
+    try std.testing.expectEqual(transaction.msg.signature_count, clone.msg.signature_count);
+    try std.testing.expectEqual(transaction.msg.readonly_signed_count, clone.msg.readonly_signed_count);
+    try std.testing.expectEqual(transaction.msg.readonly_unsigned_count, clone.msg.readonly_unsigned_count);
+    try std.testing.expectEqual(transaction.msg.account_keys.len, clone.msg.account_keys.len);
+    try std.testing.expectEqual(transaction.msg.recent_blockhash, clone.msg.recent_blockhash);
+    try std.testing.expectEqual(transaction.msg.instructions.len, clone.msg.instructions.len);
+    try std.testing.expectEqual(transaction.msg.address_lookups.len, clone.msg.address_lookups.len);
+}
+
 test "sanitize succeeds minimal valid transaction" {
     const transaction = Transaction{
         .signatures = &.{},
