@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 
 const ScopedLogger = sig.trace.ScopedLogger;
+const Duration = sig.time.Duration;
 
 const AutoHashMap = std.AutoHashMap;
 const Instant = sig.time.Instant;
@@ -12,7 +13,7 @@ const SortedMap = sig.utils.collections.SortedMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const Slot = sig.core.Slot;
 
-const MAX_ROOT_PRINT_SECONDS: u64 = 60 * 60; // 1 hour
+const MAX_ROOT_PRINT_SECONDS: Duration = Duration.fromSecs(60 * 60);
 
 const UpdateLabel = enum {
     Aggregate,
@@ -240,7 +241,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         maybe_parent: ?SlotAndHash,
     ) !void {
         errdefer self.deinit();
-        if (self.last_root_time.elapsed().asSecs() > MAX_ROOT_PRINT_SECONDS) {
+        if (self.last_root_time.elapsed().gt(MAX_ROOT_PRINT_SECONDS)) {
             // TODO implement self.print_state();
         }
 
