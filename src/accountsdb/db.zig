@@ -3350,6 +3350,7 @@ test "testWriteSnapshot" {
     );
 }
 
+/// Unpacks the snapshots from `sig.TEST_DATA_DIR`.
 pub fn findAndUnpackTestSnapshots(
     n_threads: usize,
     /// The directory into which the snapshots are unpacked.

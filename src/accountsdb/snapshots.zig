@@ -2215,7 +2215,7 @@ pub const FullSnapshotFileInfo = struct {
     slot: Slot,
     hash: Hash,
 
-    const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("snapshot-{[slot]d}-{[hash]s}.tar.zst");
+    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("snapshot-{[slot]d}-{[hash]s}.tar.zst");
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .slot = std.math.maxInt(Slot),
@@ -2341,7 +2341,7 @@ pub const IncrementalSnapshotFileInfo = struct {
         };
     }
 
-    const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst");
+    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst");
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .base_slot = std.math.maxInt(Slot),
@@ -2486,15 +2486,16 @@ pub const SnapshotFiles = struct {
     full: FullSnapshotFileInfo,
     incremental_info: ?SlotAndHash,
 
-    pub fn incremental(snapshot_files: SnapshotFiles) ?IncrementalSnapshotFileInfo {
-        const inc_info = snapshot_files.incremental_info orelse return null;
+    pub fn incremental(self: SnapshotFiles) ?IncrementalSnapshotFileInfo {
+        const inc_info = self.incremental_info orelse return null;
         return .{
-            .base_slot = snapshot_files.full.slot,
+            .base_slot = self.full.slot,
             .slot = inc_info.slot,
             .hash = inc_info.hash,
         };
     }
 
+    /// Asserts that `if (maybe_incremental_info) |inc| inc.base_slot == full_info.slot`.
     pub fn fromFileInfos(
         full_info: FullSnapshotFileInfo,
         maybe_incremental_info: ?IncrementalSnapshotFileInfo,
