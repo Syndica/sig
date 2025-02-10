@@ -1,8 +1,8 @@
-## Ledger Documentation
+# Ledger
 
 The ledger is the datastore component of Sig. Not to be confused with the AccountDB, which stores the current state of accounts, the ledger stores all block-related data. This is why it is also referred to as the Blockstore.
 
-The ledger stores various types of block related data, with one of the most crucial being Shreds. 
+The ledger stores various types of block related data, with one of the most crucial being Shreds.
 
 All data types stored by the ledger are defined in [`schema.zig`](./schema.zig).
 
@@ -17,11 +17,11 @@ Currently, two database backends are implemented:
 
 The interface that defines the structure of a database backend can be found in [`database.zig`](./database.zig).
 
-Both the RocksDB and HashMap implementations satisfy this interface. 
+Both the RocksDB and HashMap implementations satisfy this interface.
 
 A utility function, `assertIsDatabase`, defined in [`database.zig`](./database.zig) is used to verify that any implementation adheres to the interface.
 
-RocksDB has the concept of column families, a mechanism for logically partitioning the database. 
+RocksDB has the concept of column families, a mechanism for logically partitioning the database.
 
 You can read more about column families [here](https://github.com/facebook/rocksdb/wiki/column-families).
 
@@ -55,15 +55,15 @@ For more information on Shreds, see the spec [here](https://github.com/solana-fo
 
 ### Shred Network
 
-The Shred Network is responsible for gathering and storing shreds from the network. While it is not a direct 
-part of the ledger, the ledger plays a crucial role in supporting its operations. As such, the Shred Network 
+The Shred Network is responsible for gathering and storing shreds from the network. While it is not a direct
+part of the ledger, the ledger plays a crucial role in supporting its operations. As such, the Shred Network
 is implemented in its own module, ie: [`shred_network`](../shred_network), separate from the ledger module.
 
-A core part of the Shred Network is the `ShredNetwork` which collects shreds received via the Shred Network 
+A core part of the Shred Network is the `ShredNetwork` which collects shreds received via the Shred Network
 and persist in ledger.
 
-Understanding how the ShredNetwork interacts with components from the ledger can help sheds light on key elements of the 
-ledger’s architecture. 
+Understanding how the ShredNetwork interacts with components from the ledger can help sheds light on key elements of the
+ledger’s architecture.
 
 The following diagram illustrates the dependencies between the ShredNetwork and related components of the ledger:
 
@@ -75,7 +75,7 @@ graph TD
     D --> E[BlockstoreReader]
 ```
 
-![ShredNetwork Component](./imgs/shred_network_component.png)
+![ShredNetwork Component](/docs/docusaurus/static/img/shred_network_component.png)
 
 - The **ShredNetwork** utilizes:
   - The **ShredInserter** to insert shreds received from the network via Gossip.
@@ -93,10 +93,10 @@ The ShredNetwork can be run standalone without running the full node.
 zig-out/bin/sig shred-network --leader-schedule <path_to_leader_schedule> --network <network> --test-repair-for-slot <slot>
 ```
 
-Note: Running standalone requires manually needing to set to slot to repeatedly send repair requests for shreds from, via the `test-repair-for-slot` flag and 
+Note: Running standalone requires manually needing to set to slot to repeatedly send repair requests for shreds from, via the `test-repair-for-slot` flag and
 provide the leader schedule which is normally derived from the AccountDB if the full node is ran.
 
-Note: The leader schedule can be retrieved via the `getLeaderShedule` RPC call and is expected 
+Note: The leader schedule can be retrieved via the `getLeaderShedule` RPC call and is expected
 to be in the format generated from calling `./target/debug/solana leader-schedule --url <rpc-endpoint>` in Agave, ie:
 
 ```
@@ -125,7 +125,7 @@ For example, it is used to recreate the Entries, as seen in the `getSlotEntriesI
 
 The **Reader** and **Writer** serve as wrappers around the ledger's backing database, providing a simplified interface for reading and writing data.
 
-This abstraction allows interaction with the database without the need to directly engage with the underlying storage API. 
+This abstraction allows interaction with the database without the need to directly engage with the underlying storage API.
 
 It also facilitates the handling of domain-specific data, enabling operations beyond the standard data structures defined by the column families.
 

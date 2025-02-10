@@ -40,4 +40,8 @@ for name, path in doc_files:
     new_path = os.path.join(code_docs_path, name + ".md")
     with open(path, "r") as f:
         with open(new_path, "w") as nf:
-            nf.write(f.read())
+            # fix image paths for docusaurus
+            for line in f:
+                if "/docs/docusaurus/static/img" in line:
+                    line = line.replace("/docs/docusaurus/static/img", "/img")
+                nf.write(line)

@@ -2,22 +2,23 @@
 
 <!-- **Milestone**: Validator is able to forward transactions to other validators TPU port for processing (according to leader schedule) -->
 
-- Gulfstream can be thought of as Solana's mechanism for moving transactions from the edge of the network into the transaction processing unit of a leader validator. 
-- Validators make use of a leader schedule identify upcoming leaders and forward transactions to their TPU port using the quic protocol. 
+- Gulfstream can be thought of as Solana's mechanism for moving transactions from the edge of the network into the transaction processing unit of a leader validator.
+- Validators make use of a leader schedule identify upcoming leaders and forward transactions to their TPU port using the quic protocol.
 - The TPU info for leaders is discovered over gossip.
 
-<br>
+---
 
 - The transaction sender module implements the forwarding of transactions to leader validators in sig.
-- The transaction sender receives transaction information from a channel, sends the transactions to the leader TPU addresses and then adds the transactions to a pool where they are retried until they are either expired, failed, or rooted. 
+- The transaction sender receives transaction information from a channel, sends the transactions to the leader TPU addresses and then adds the transactions to a pool where they are retried until they are either expired, failed, or rooted.
 
-<br>
+---
 
 - Since sig does not currently have consensus or proof of stake implemented, we rely on rpc calls to get the current slot and check the status of pending transactions.
 
+---
 
 <p>
-<img alt="Transaction Sender Service Diagram" src="imgs/transaction-sender-service.png" style="width: 800px; margin: auto;">
+<img alt="Transaction Sender Service Diagram" src="/docs/docusaurus/static/img/transaction-sender-service.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 
 ## Receive Transactions Thread (service.zig)
@@ -33,7 +34,7 @@
 4. Retries transactions which are still valid but not rooted
 
 ## TransactionInfo (transaction_info.zig)
-- Wrapper around a serialised transaction which includes additional metadata required to send and retry the transaction 
+- Wrapper around a serialised transaction which includes additional metadata required to send and retry the transaction
     - `retries`: number of times the transaction as been retried
     - `max_retries`: maximum number of times the transaction can be retried
     - `last_sent_time`: last time the transaction was sent
@@ -53,7 +54,7 @@
     1. Gets the current slot via rpc call to **getSlot**
     2. Check that the slot is within the current epoch and leader schedule, otherwise update epoch info and leader schedule
     3. For each of the next `n` leaders in the leader schedule, attempt to load their tpu address from the cache
-    4. If the number of leaders which had cached addresses is less than floor(n/2), then perform a cache update 
+    4. If the number of leaders which had cached addresses is less than floor(n/2), then perform a cache update
     5. Return leader addresses
 
 ## Mock Transfer Generator (mock_transfer_generator.zig)

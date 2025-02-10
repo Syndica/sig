@@ -1,4 +1,4 @@
-# accounts-db docs
+# AccountsDB
 
 main code is in `src/accounts-db/`
 
@@ -174,7 +174,7 @@ to support disk-based account references, we created a general purpose
 disk allocator which creates memory from mmap-ing files stored on disk.
 
 ```zig
-// files are created using `data/test-data/bin_{i}` format where `i` is
+// files are created using `data/test-data/bin_(i)` format where `i` is
 // incremented by one for each new allocation.
 var dma_dir = try std.fs.cwd().makeOpenPath("data/test-data");
 defer dma_dir.close();
@@ -250,8 +250,8 @@ when downloading,
 [https://github.com/Syndica/sig/blob/fd10bad14cd32f99b7f698118305960a4d26da49/src/gossip/data.zig#L908](https://github.com/Syndica/sig/blob/fd10bad14cd32f99b7f698118305960a4d26da49/src/gossip/data.zig#L908)
 
 then for each of these valid peers, we construct the url of the snapshot:
-- full: snapshot-{slot}-{hash}.tar.zstd
-- incremental: incremental-snapshot-{base_slot}-{slot}-{hash}.tar.zstd
+- full: snapshot-(slot)-(hash).tar.zstd
+- incremental: incremental-snapshot-(base_slot)-(slot)-(hash).tar.zstd
 
 and then start the download - we periodically check the download speed and make sure its fast enough, or we try another peer
 
@@ -291,7 +291,7 @@ for example, one thread will merge shards[0..10] another will merge shards[10..2
 this approach generates the index with zero locks
 
 <div align="center">
-<img src="/docs/docusaurus/static/img/2024-03-21-09-15-08.png" width="520" height="340">
+<img src="/docs/docusaurus/static/img/2024-03-21-09-15-08.png" width="520" height="340"></img>
 </div>
 
 ### geyser during load
@@ -328,8 +328,8 @@ after validating accounts-db data, we also validate a few key structs:
 *note:* at the time of writing, this functionality is in its infancy.
 
 The core logic for generating a snapshot lives in `accounts_db.db.writeSnapshotTarWithFields`; the principle entrypoint is `AccountsDB.writeSnapshotTar`.
-The procedure consists of writing the version file, the status cache (`snapshots/status_cache`) file, the snapshot manifest (`snapshots/{SLOT}/{SLOT}`),
-and the account files (`accounts/{SLOT}.{FILE_ID}`). This is all written to a stream in the TAR archive format.
+The procedure consists of writing the version file, the status cache (`snapshots/status_cache`) file, the snapshot manifest (`snapshots/(slot)/(slot)`),
+and the account files (`accounts/(slot).(file_id)`). This is all written to a stream in the TAR archive format.
 
 The snapshot manifest file content is comprised of the bincoded (bincode-encoded) data structure `Manifest`, which is an aggregate of:
 * implicit state: data derived from the current state of AccountsDB, like the file map for all the account which exist at that snapshot, or which have

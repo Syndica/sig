@@ -1,22 +1,24 @@
+# Geyesr
+
 the main code is in `lib.zig` and contains a few key structs:
-- `GeyserWriter`: used to write new accounts 
-- `GeyserReader`: used to read new accounts 
+- `GeyserWriter`: used to write new accounts
+- `GeyserReader`: used to read new accounts
 
 both use linux pipes to stream data. this involves
-opening a file-based pipe using the `mkfifo` syscall which is then 
-written to like any other file. the key method used to setup 
+opening a file-based pipe using the `mkfifo` syscall which is then
+written to like any other file. the key method used to setup
 the pipes is `openPipe` in `src/geyser/core.zig`.
 
 ## cli commands
 
-while running, grafana stats will be available. the main binary code is in 
+while running, grafana stats will be available. the main binary code is in
 `src/geyser/main.zig`
 
-### benchmarking 
+### benchmarking
 
-we also have benchmarking to measure the throughput of geyser. you can run it using 
+we also have benchmarking to measure the throughput of geyser. you can run it using
 
-```bash 
+```bash
 zig build -Doptimize=ReleaseSafe
 ./zig-out/bin/benchmark geyser
 ```
@@ -33,7 +35,7 @@ you can also benchmark an dummy reader
 
 ### dump a snapshot to csv
 
-after downloading a snapshots, you can dump the accounts to a csv using the 
+after downloading a snapshots, you can dump the accounts to a csv using the
 csv geyser command, for example:
 
 ```bash
@@ -52,19 +54,19 @@ csv geyser command, for example:
 
 currently, data is serialized and written through the pipe using `bincode`
 
-data is organized to be written as `[size, serialized_data]` 
+data is organized to be written as `[size, serialized_data]`
 
 where `size` is the full length of the `serialized_data`
 
-this allows for more efficient buffered reads where you can read the first 8 bytes in 
-the pipe, cast to a u64, allocate a buffer of that size and then read the rest of 
+this allows for more efficient buffered reads where you can read the first 8 bytes in
+the pipe, cast to a u64, allocate a buffer of that size and then read the rest of
 the data associated with that payload.
 
 the key struct used is `AccountPayload` which uses a versioned system to support different payload types (`VersionedAccountPayload`) while also being backwards compatibility.
 
 ### GeyserWriter
 
-![](imgs/2024-08-07-17-27-36.png)
+![](/docs/docusaurus/static/img/2024-08-07-17-27-36.png)
 
 #### IO Thread
 
@@ -73,12 +75,12 @@ to spawn this thread, use the `spawnIOLoop` method.
 
 it loops, draining the channel for payloads with type (`[]u8`) and then writes the bufs to the pipe and then frees the payload using the `RecycleFBA`
 
-#### RecycleFBA 
+#### RecycleFBA
 
 one of the most common operations when streaming accounts is to allocate a buffer to serialize
 the `AccountPayload` into and then free the buffer after the bytes have been written to the pipe.
 
-to write accounts out fast, we preallocate a slice of memory which we re-use for serialization throughout the 
+to write accounts out fast, we preallocate a slice of memory which we re-use for serialization throughout the
 geyser's lifetime. This logic is encapsulated in the `RecycleFBA` struct.
 
 the `RecycleFBA` struct uses a fixed buffer allocation strategy but, for each allocation that occurs, it tracks the buffer and whether it is occupied or free.
@@ -90,14 +92,14 @@ records: std.ArrayList(struct { is_free: bool, buf: []u8 }),
 
 when requesting a new slice of memory from the recycle allocator, it will check for a record
 which is free and the buf is large enough. If there is no record that fits these conditions
-then it will allocate a new slice using the fixed buffer allocator and track it in the 
+then it will allocate a new slice using the fixed buffer allocator and track it in the
 records field.
 
 when free is called, we find the buffer in the records and set the record's `is_free = true`.
 
-#### usage 
+#### usage
 
-```zig 
+```zig
 // setup writer
 var stream_writer = try GeyserWriter.init(
     allocator,
@@ -122,11 +124,11 @@ try stream_writer.writePayloadToPipe(v_payload);
 
 ### GeyserReader
 
-the reader has two main buffers: 
+the reader has two main buffers:
 - `io_buf` : which is used to read from the pipe into this buf
-- `bincode_buf` : which is used for bincode allocations 
+- `bincode_buf` : which is used for bincode allocations
 
-for example, pseudocode would be: 
+for example, pseudocode would be:
 ```
 read(pipe_fd, &io_buf)
 
@@ -150,10 +152,10 @@ we use a few metrics to understand how fast data is being written/read:
 
 we also have metrics to understand what could be causing slow reads/writes (specific stalls/no-op conditions):
 
-- 'Reader Stalls': How many times the reader has tried to read a payload but was unable to because 
+- 'Reader Stalls': How many times the reader has tried to read a payload but was unable to because
 the pipe was empty
 - 'Writer Stalls': How many times the writer has tried to write a payload but was unable to because
-either 
+either
     - the pipe was full ('pipe_full')
     - ther recycle_fba doesnt have any memory available to write the bincode bytes ('no_memory_available')
 
