@@ -17,22 +17,19 @@
 .DS_Store
 .vscode/
 
-# Dependencies
-docs/node_modules
-
-# Production
-docs/build
-
-# Generated files
-docs/.docusaurus
-docs/.cache-loader
-
-# Misc
-docs/.env.local
-docs/.env.development.local
-docs/.env.test.local
-docs/.env.production.local
-
-docs/npm-debug.log*
-docs/yarn-debug.log*
-docs/yarn-error.log*
+# docs
+# dependencies
+docs/docusaurus/node_modules
+# production
+docs/docusaurus/build
+# generated files
+docs/docusaurus/.docusaurus
+docs/docusaurus/.cache-loader
+# misc
+docs/docusaurus/.env.local
+docs/docusaurus/.env.development.local
+docs/docusaurus/.env.test.local
+docs/docusaurus/.env.production.local
+docs/docusaurus/npm-debug.log*
+docs/docusaurus/yarn-debug.log*
+docs/docusaurus/yarn-error.log*
