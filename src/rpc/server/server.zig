@@ -119,6 +119,7 @@ pub fn serve(
 }
 
 test serveSpawn {
+    if (sig.build_options.no_network_tests) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
