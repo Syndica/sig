@@ -1,6 +1,8 @@
 # AccountsDB
 
-main code is in `src/accounts-db/`
+AccountsDB is a database which stores all the accounts on the solana blockchain.
+
+The main code is located in `/src/accountsdb/`.
 
 the main files include:
 - `db.zig`: includes the main database struct `AccountsDB`

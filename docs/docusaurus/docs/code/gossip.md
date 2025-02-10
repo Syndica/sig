@@ -1,10 +1,12 @@
 # Gossip
 
-This post will describe how Solana's gossip protocol works in-depth, as well as implementation details of Sig's gossip.
+Solana's gossip protocol allows validators to share information about the state of the network.
+
+The main code is located in `/src/gossip/`.
 
 For an introduction to Solana's gossip protocol, check out the technical sections of our [Sig announcement blog post](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/).
 
-Checkout the full associated blog post here: [https://blog.syndica.io/sig-engineering-1-gossip-protocol/](https://blog.syndica.io/sig-engineering-1-gossip-protocol/).
+Checkout the full engineering blog post here: [https://blog.syndica.io/sig-engineering-1-gossip-protocol/](https://blog.syndica.io/sig-engineering-1-gossip-protocol/).
 
 ## Repository File Outline
 

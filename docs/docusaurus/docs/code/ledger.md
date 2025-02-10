@@ -1,6 +1,8 @@
 # Ledger
 
-The ledger is the datastore component of Sig. Not to be confused with the AccountDB, which stores the current state of accounts, the ledger stores all block-related data. This is why it is also referred to as the Blockstore.
+The ledger is a database which stores all block-related data (also referred to as the Blockstore).
+
+The main code is located in `/src/ledger/`.
 
 The ledger stores various types of block related data, with one of the most crucial being Shreds.
 
