@@ -394,17 +394,29 @@ pub const ForkChoice = struct {
         var remove_set = try self.subtreeDiff(&self.tree_root, new_root);
         defer remove_set.deinit();
 
+        var remove_set_fork_infos = AutoHashMap(SlotAndHash, ForkInfo).init(self.allocator);
+        defer remove_set_fork_infos.deinit();
+
         for (remove_set.keys()) |node_key| {
-            // "Slots reachable from old root must exist in tree"
-            // So okay to panic if that is not the case.
-            const fork_info = self.fork_infos.getPtr(node_key).?;
-            fork_info.children.deinit();
-            _ = self.fork_infos.remove(node_key);
+            const fork_info = self.fork_infos.getPtr(node_key) orelse
+                return error.MissingForkInfo;
+            try remove_set_fork_infos.put(node_key, fork_info.*);
         }
 
-        // Root to be made new root should already exist in fork infos.
-        // Okay to panic if that is not the case.
-        const root_fork_info = self.fork_infos.getPtr(new_root.*).?;
+        // Root to be made the new root should already exist in fork choice.
+        const root_fork_info = self.fork_infos.getPtr(new_root.*) orelse
+            return error.MissingForkInfo;
+
+        // At this point, both the subtree to be removed and new root
+        // are confirmed to be in the fork choice.
+
+        var iterator = remove_set_fork_infos.iterator();
+        while (iterator.next()) |entry| {
+            const key = entry.key_ptr;
+            const fork_info = entry.value_ptr;
+            fork_info.children.deinit();
+            _ = self.fork_infos.remove(key.*);
+        }
 
         root_fork_info.parent = null;
         self.tree_root = new_root.*;
