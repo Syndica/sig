@@ -33,18 +33,24 @@ pub const Elf = struct {
         shdrs: []align(1) const elf.Elf64_Shdr,
         phdrs: []align(1) const elf.Elf64_Phdr,
 
-        fn parse(bytes: []const u8) Headers {
+        fn parse(bytes: []const u8) !Headers {
             const header: elf.Elf64_Ehdr = @bitCast(bytes[0..@sizeOf(elf.Elf64_Ehdr)].*);
 
             const shoff = header.e_shoff;
             const shnum = header.e_shnum;
             const shsize = shnum * @sizeOf(elf.Elf64_Shdr);
-            const shdrs = std.mem.bytesAsSlice(elf.Elf64_Shdr, bytes[shoff..][0..shsize]);
+            const shdrs = std.mem.bytesAsSlice(
+                elf.Elf64_Shdr,
+                try safeSlice(bytes, shoff, shsize),
+            );
 
             const phoff = header.e_phoff;
             const phnum = header.e_phnum;
             const phsize = phnum * @sizeOf(elf.Elf64_Phdr);
-            const phdrs = std.mem.bytesAsSlice(elf.Elf64_Phdr, bytes[phoff..][0..phsize]);
+            const phdrs = std.mem.bytesAsSlice(
+                elf.Elf64_Phdr,
+                try safeSlice(bytes, phoff, phsize),
+            );
 
             return .{
                 .bytes = bytes,
@@ -342,7 +348,7 @@ pub const Elf = struct {
         loader: *BuiltinProgram,
         config: Config,
     ) !Elf {
-        const headers = Headers.parse(bytes);
+        const headers = try Headers.parse(bytes);
         const data = try Data.parse(headers);
 
         const text_section = data.getShdrByName(headers, ".text") orelse
@@ -372,6 +378,7 @@ pub const Elf = struct {
 
         _ = try self.function_registry.registerHashedLegacy(
             allocator,
+            !sbpf_version.enableStaticSyscalls(),
             "entrypoint",
             entry_pc,
         );
@@ -477,7 +484,11 @@ pub const Elf = struct {
         const text_section = self.headers.shdrs[text_section_index];
 
         // fixup PC-relative call instructions
-        const text_bytes: []u8 = self.bytes[text_section.sh_offset..][0..text_section.sh_size];
+        const text_bytes: []u8 = try safeSlice(
+            self.bytes,
+            text_section.sh_offset,
+            text_section.sh_size,
+        );
         const instructions = self.getInstructions();
         for (instructions, 0..) |inst, i| {
             if (inst.opcode == .call_imm and
@@ -489,13 +500,14 @@ pub const Elf = struct {
                     return error.RelativeJumpOutOfBounds;
                 const key = try self.function_registry.registerHashedLegacy(
                     allocator,
+                    !version.enableStaticSyscalls(),
                     &.{},
                     @intCast(target_pc),
                 );
                 // offset into the instruction where the immediate is stored
                 const offset = (i *| 8) +| 4;
                 const slice = text_bytes[offset..][0..4];
-                std.mem.writeInt(u32, slice, key, .little);
+                std.mem.writeInt(u32, slice, @intCast(key), .little);
             }
         }
 
@@ -564,14 +576,14 @@ pub const Elf = struct {
                         // the target is a lddw instruction which takes up two instruction slots
 
                         const va_low = val: {
-                            const imm_slice = self.bytes[imm_offset..][0..4];
-                            break :val std.mem.readInt(u32, imm_slice, .little);
+                            const imm_slice = try safeSlice(self.bytes, imm_offset, 4);
+                            break :val std.mem.readInt(u32, imm_slice[0..4], .little);
                         };
 
                         const va_high = val: {
                             const imm_high_offset = r_offset +| 12;
-                            const imm_slice = self.bytes[imm_high_offset..][0..4];
-                            break :val std.mem.readInt(u32, imm_slice, .little);
+                            const imm_slice = try safeSlice(self.bytes, imm_high_offset, 4);
+                            break :val std.mem.readInt(u32, imm_slice[0..4], .little);
                         };
 
                         var ref_addr = (@as(u64, va_high) << 32) | va_low;
@@ -582,14 +594,24 @@ pub const Elf = struct {
                         }
 
                         {
-                            const imm_slice = self.bytes[imm_offset..][0..4];
-                            std.mem.writeInt(u32, imm_slice, @truncate(ref_addr), .little);
+                            const imm_slice = try safeSlice(self.bytes, imm_offset, 4);
+                            std.mem.writeInt(
+                                u32,
+                                imm_slice[0..4],
+                                @truncate(ref_addr),
+                                .little,
+                            );
                         }
 
                         {
                             const imm_high_offset = r_offset +| 12;
-                            const imm_slice = self.bytes[imm_high_offset..][0..4];
-                            std.mem.writeInt(u32, imm_slice, @intCast(ref_addr >> 32), .little);
+                            const imm_slice = try safeSlice(self.bytes, imm_high_offset, 4);
+                            std.mem.writeInt(
+                                u32,
+                                imm_slice[0..4],
+                                @intCast(ref_addr >> 32),
+                                .little,
+                            );
                         }
                     } else {
                         const address: u64 = switch (version) {
@@ -632,11 +654,12 @@ pub const Elf = struct {
                         const target_pc = (symbol.st_value -| text_section.sh_addr) / 8;
                         const key = try self.function_registry.registerHashedLegacy(
                             allocator,
+                            !version.enableStaticSyscalls(),
                             symbol_name,
                             @intCast(target_pc),
                         );
                         const slice = try safeSlice(self.bytes, imm_offset, 4);
-                        std.mem.writeInt(u32, slice[0..4], key, .little);
+                        std.mem.writeInt(u32, slice[0..4], @intCast(key), .little);
                     } else {
                         const hash = sbpf.hashSymbolName(symbol_name);
                         if (config.reject_broken_elfs and

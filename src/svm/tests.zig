@@ -12,6 +12,7 @@ const BuiltinProgram = lib.BuiltinProgram;
 const Config = lib.Config;
 const Region = memory.Region;
 const MemoryMap = memory.MemoryMap;
+const OpCode = sbpf.Instruction.OpCode;
 const expectEqual = std.testing.expectEqual;
 
 fn testAsm(config: Config, source: []const u8, expected: anytype) !void {
@@ -134,6 +135,32 @@ test "alu32 logic" {
         \\  exit
     , 0x11);
 }
+
+test "alu32 arithmetic" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov32 r0, 0
+        \\  mov32 r1, 1
+        \\  mov32 r2, 2
+        \\  mov32 r3, 3
+        \\  mov32 r4, 4
+        \\  mov32 r5, 5
+        \\  mov32 r6, 6
+        \\  mov32 r7, 7
+        \\  mov32 r8, 8
+        \\  mov32 r9, 9
+        \\  sub32 r0, 13
+        \\  sub32 r0, r1
+        \\  add32 r0, 23
+        \\  add32 r0, r7
+        \\  lmul32 r0, 7
+        \\  lmul32 r0, r3
+        \\  udiv32 r0, 2
+        \\  udiv32 r0, r4
+        \\  exit
+    , 110);
+}
+
 test "alu64 logic" {
     try testAsm(.{},
         \\entrypoint:
@@ -328,7 +355,7 @@ test "sub32 imm" {
         \\  mov32 r0, 3
         \\  sub32 r0, 1
         \\  exit
-    , 2);
+    , 0xFFFFFFFFFFFFFFFE);
 }
 
 test "sub32 reg" {
@@ -347,7 +374,7 @@ test "sub64 imm" {
         \\  mov r0, 3
         \\  sub r0, 1
         \\  exit
-    , 2);
+    , 0xFFFFFFFFFFFFFFFE);
 }
 
 test "sub64 imm negative" {
@@ -356,7 +383,7 @@ test "sub64 imm negative" {
         \\  mov r0, 3
         \\  sub r0, -1
         \\  exit
-    , 4);
+    , 0xFFFFFFFFFFFFFFFC);
 }
 
 test "sub64 reg" {
@@ -1628,6 +1655,274 @@ test "jslt reg" {
     );
 }
 
+test "lmul loop" {
+    try testAsm(
+        .{},
+        \\entrypoint:
+        \\  mov r0, 0x7
+        \\  add r1, 0xa
+        \\  lsh r1, 0x20
+        \\  rsh r1, 0x20
+        \\  jeq r1, 0x0, +4
+        \\  mov r0, 0x7
+        \\  lmul r0, 0x7
+        \\  add r1, -1
+        \\  jne r1, 0x0, -3
+        \\  exit
+    ,
+        0x75db9c97,
+    );
+}
+
+test "lmul128" {
+    try testAsmWithMemory(.{},
+        \\entrypoint:
+        \\  mov r0, r1
+        \\  mov r2, 30
+        \\  mov r3, 0
+        \\  mov r4, 20
+        \\  mov r5, 0
+        \\  lmul64 r3, r4
+        \\  lmul64 r5, r2
+        \\  add64 r5, r3
+        \\  mov64 r0, r2
+        \\  rsh64 r0, 0x20
+        \\  mov64 r3, r4
+        \\  rsh64 r3, 0x20
+        \\  mov64 r6, r3
+        \\  lmul64 r6, r0
+        \\  add64 r5, r6
+        \\  lsh64 r4, 0x20
+        \\  rsh64 r4, 0x20
+        \\  mov64 r6, r4
+        \\  lmul64 r6, r0
+        \\  lsh64 r2, 0x20
+        \\  rsh64 r2, 0x20
+        \\  lmul64 r4, r2
+        \\  mov64 r0, r4
+        \\  rsh64 r0, 0x20
+        \\  add64 r0, r6
+        \\  mov64 r6, r0
+        \\  rsh64 r6, 0x20
+        \\  add64 r5, r6
+        \\  lmul64 r3, r2
+        \\  lsh64 r0, 0x20
+        \\  rsh64 r0, 0x20
+        \\  add64 r0, r3
+        \\  mov64 r2, r0
+        \\  rsh64 r2, 0x20
+        \\  add64 r5, r2
+        \\  stxdw [r1+0x8], r5
+        \\  lsh64 r0, 0x20
+        \\  lsh64 r4, 0x20
+        \\  rsh64 r4, 0x20
+        \\  or64 r0, r4
+        \\  stxdw [r1+0x0], r0
+        \\  exit
+    , &(.{0} ** 16), 600);
+}
+
+test "prime" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov r1, 67
+        \\  mov r0, 0x1
+        \\  mov r2, 0x2
+        \\  jgt r1, 0x2, +4
+        \\  ja +10
+        \\  add r2, 0x1
+        \\  mov r0, 0x1
+        \\  jge r2, r1, +7
+        \\  mov r3, r1
+        \\  udiv r3, r2
+        \\  lmul r3, r2
+        \\  mov r4, r1
+        \\  sub r4, r3
+        \\  mov r0, 0x0
+        \\  jne r4, 0x0, -10
+        \\  exit
+    , 1);
+}
+
+test "subnet" {
+    try testAsmWithMemory(.{},
+        \\entrypoint:
+        \\  mov r2, 0xe
+        \\  ldxh r3, [r1+12]
+        \\  jne r3, 0x81, +2
+        \\  mov r2, 0x12
+        \\  ldxh r3, [r1+16]
+        \\  and r3, 0xffff
+        \\  jne r3, 0x8, +5
+        \\  add r1, r2
+        \\  mov r0, 0x1
+        \\  ldxw r1, [r1+16]
+        \\  and r1, 0xffffff
+        \\  jeq r1, 0x1a8c0, +1
+        \\  mov r0, 0x0
+        \\  exit
+    , &.{
+        0x00, 0x00, 0xc0, 0x9f, 0xa0, 0x97, 0x00, 0xa0, 0xcc, 0x3b,
+        0xbf, 0xfa, 0x08, 0x00, 0x45, 0x10, 0x00, 0x3c, 0x46, 0x3c,
+        0x40, 0x00, 0x40, 0x06, 0x73, 0x1c, 0xc0, 0xa8, 0x01, 0x02,
+        0xc0, 0xa8, 0x01, 0x01, 0x06, 0x0e, 0x00, 0x17, 0x99, 0xc5,
+        0xa0, 0xec, 0x00, 0x00, 0x00, 0x00, 0xa0, 0x02, 0x7d, 0x78,
+        0xe0, 0xa3, 0x00, 0x00, 0x02, 0x04, 0x05, 0xb4, 0x04, 0x02,
+        0x08, 0x0a, 0x00, 0x9c, 0x27, 0x24, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x03, 0x03, 0x00,
+    }, 0x1);
+}
+
+test "pqr divide by zero" {
+    const allocator = std.testing.allocator;
+    var program: [24]u8 = .{0} ** 24;
+    program[0] = @intFromEnum(OpCode.mov32_imm);
+    program[16] = @intFromEnum(OpCode.exit);
+
+    inline for (.{
+        OpCode.udiv32_reg,
+        OpCode.udiv64_reg,
+        OpCode.urem32_reg,
+        OpCode.urem64_reg,
+        OpCode.sdiv32_reg,
+        OpCode.sdiv64_reg,
+        OpCode.srem32_reg,
+        OpCode.srem64_reg,
+    }) |opcode| {
+        program[8] = @intFromEnum(opcode);
+
+        const config: Config = .{};
+
+        var registry: lib.Registry(u64) = .{};
+        defer registry.deinit(allocator);
+
+        var executable = try Executable.fromTextBytes(
+            allocator,
+            &program,
+            .v2,
+            &registry,
+            config,
+        );
+
+        var loader: BuiltinProgram = .{};
+        const map = try MemoryMap.init(&.{}, .v2);
+
+        var vm = try Vm.init(allocator, &executable, map, &loader, 0);
+        defer vm.deinit();
+
+        try expectEqual(error.DivisionByZero, vm.run());
+    }
+}
+
+test "pqr" {
+    const allocator = std.testing.allocator;
+    var program: [48]u8 = .{0} ** 48;
+    // mov64 r0, X
+    program[0] = @intFromEnum(OpCode.mov64_imm);
+    // hor64 r0, X
+    program[8] = @intFromEnum(OpCode.hor64_imm);
+
+    // mov64 r1, X
+    program[16] = @intFromEnum(OpCode.mov64_imm);
+    program[17] = 1; // dst = r1
+    // hor64 r1, X
+    program[24] = @intFromEnum(OpCode.hor64_imm);
+    program[25] = 1; // dst = r1
+
+    // set the instruction we're testing to use r1 as the src
+    program[33] = 16; // src = r1
+    program[40] = @intFromEnum(OpCode.exit);
+
+    const max_int = std.math.maxInt(u64);
+    inline for (
+        [_]struct { OpCode, u64, u64, u64 }{
+            .{ OpCode.udiv32_reg, 13, 4, 3 },
+            .{ OpCode.uhmul64_reg, 13, 4, 0 },
+            .{ OpCode.udiv32_reg, 13, 4, 3 },
+            .{ OpCode.udiv64_reg, 13, 4, 3 },
+            .{ OpCode.urem32_reg, 13, 4, 1 },
+            .{ OpCode.urem64_reg, 13, 4, 1 },
+            .{ OpCode.uhmul64_reg, 13, max_int, 12 },
+            .{ OpCode.udiv32_reg, 13, max_int, 0 },
+            .{ OpCode.udiv64_reg, 13, max_int, 0 },
+            .{ OpCode.urem32_reg, 13, max_int, 13 },
+            .{ OpCode.urem64_reg, 13, max_int, 13 },
+            .{ OpCode.uhmul64_reg, max_int, 4, 3 },
+            .{ OpCode.udiv32_reg, max_int, 4, std.math.maxInt(u32) / 4 },
+            .{ OpCode.udiv64_reg, max_int, 4, max_int / 4 },
+            .{ OpCode.urem32_reg, max_int, 4, 3 },
+            .{ OpCode.urem64_reg, max_int, 4, 3 },
+            .{ OpCode.uhmul64_reg, max_int, max_int, max_int - 1 },
+            .{ OpCode.udiv32_reg, max_int, max_int, 1 },
+            .{ OpCode.udiv64_reg, max_int, max_int, 1 },
+            .{ OpCode.urem32_reg, max_int, max_int, 0 },
+            .{ OpCode.urem64_reg, max_int, max_int, 0 },
+
+            .{ OpCode.lmul32_reg, 13, 4, 52 },
+            .{ OpCode.lmul64_reg, 13, 4, 52 },
+            .{ OpCode.shmul64_reg, 13, 4, 0 },
+            .{ OpCode.sdiv32_reg, 13, 4, 3 },
+            .{ OpCode.sdiv64_reg, 13, 4, 3 },
+            .{ OpCode.srem32_reg, 13, 4, 1 },
+            .{ OpCode.srem64_reg, 13, 4, 1 },
+
+            .{ OpCode.lmul32_reg, 13, ~@as(u64, 3), ~@as(u64, 51) },
+            .{ OpCode.lmul64_reg, 13, ~@as(u64, 3), ~@as(u64, 51) },
+            .{ OpCode.shmul64_reg, 13, ~@as(u64, 3), ~@as(u64, 0) },
+            .{ OpCode.sdiv32_reg, 13, ~@as(u64, 3), ~@as(u64, 2) },
+            .{ OpCode.sdiv64_reg, 13, ~@as(u64, 3), ~@as(u64, 2) },
+            .{ OpCode.srem32_reg, 13, ~@as(u64, 3), 1 },
+            .{ OpCode.srem64_reg, 13, ~@as(u64, 3), 1 },
+
+            .{ OpCode.lmul32_reg, ~@as(u64, 12), 4, ~@as(u64, 51) },
+            .{ OpCode.lmul64_reg, ~@as(u64, 12), 4, ~@as(u64, 51) },
+            .{ OpCode.shmul64_reg, ~@as(u64, 12), 4, ~@as(u64, 0) },
+            .{ OpCode.sdiv32_reg, ~@as(u64, 12), 4, ~@as(u64, 2) },
+            .{ OpCode.sdiv64_reg, ~@as(u64, 12), 4, ~@as(u64, 2) },
+            .{ OpCode.srem32_reg, ~@as(u64, 12), 4, ~@as(u64, 0) },
+            .{ OpCode.srem64_reg, ~@as(u64, 12), 4, ~@as(u64, 0) },
+
+            .{ OpCode.lmul32_reg, ~@as(u64, 12), ~@as(u64, 3), 52 },
+            .{ OpCode.lmul64_reg, ~@as(u64, 12), ~@as(u64, 3), 52 },
+            .{ OpCode.shmul64_reg, ~@as(u64, 12), ~@as(u64, 3), 0 },
+            .{ OpCode.sdiv32_reg, ~@as(u64, 12), ~@as(u64, 3), 3 },
+            .{ OpCode.sdiv64_reg, ~@as(u64, 12), ~@as(u64, 3), 3 },
+            .{ OpCode.srem32_reg, ~@as(u64, 12), ~@as(u64, 3), ~@as(u64, 0) },
+            .{ OpCode.srem64_reg, ~@as(u64, 12), ~@as(u64, 3), ~@as(u64, 0) },
+        },
+    ) |entry| {
+        const opc, const dst, const src, const expected = entry;
+        std.mem.writeInt(u32, program[4..][0..4], @truncate(dst), .little);
+        std.mem.writeInt(u32, program[12..][0..4], @truncate(dst >> 32), .little);
+        std.mem.writeInt(u32, program[20..][0..4], @truncate(src), .little);
+        std.mem.writeInt(u32, program[28..][0..4], @truncate(src >> 32), .little);
+        std.mem.writeInt(u32, program[36..][0..4], @truncate(src), .little);
+        program[32] = @intFromEnum(opc);
+
+        const config: Config = .{};
+
+        var registry: lib.Registry(u64) = .{};
+        defer registry.deinit(allocator);
+
+        var executable = try Executable.fromTextBytes(
+            allocator,
+            &program,
+            .v2,
+            &registry,
+            config,
+        );
+
+        var loader: BuiltinProgram = .{};
+        const map = try MemoryMap.init(&.{}, .v2);
+
+        var vm = try Vm.init(allocator, &executable, map, &loader, 0);
+        defer vm.deinit();
+
+        const unsigned_expected: u64 = expected;
+        try expectEqual(unsigned_expected, try vm.run());
+    }
+}
+
 test "stack1" {
     try testAsm(
         .{},
@@ -1778,11 +2073,7 @@ test "dynamic frame pointer" {
     , memory.STACK_START + config.stackSize());
 }
 
-fn testElf(
-    config: Config,
-    path: []const u8,
-    expected: anytype,
-) !void {
+fn testElf(config: Config, path: []const u8, expected: anytype) !void {
     return testElfWithSyscalls(config, path, &.{}, expected);
 }
 
@@ -1925,25 +2216,25 @@ test "struct func pointer" {
 test "data section" {
     // [ 6] .data             PROGBITS        0000000000000250 000250 000004 00  WA  0   0  4
     try expectEqual(
+        error.WritableSectionsNotSupported,
         testElfWithSyscalls(
             .{},
             sig.ELF_DATA_DIR ++ "data_section.so",
             &.{},
             0,
         ),
-        error.WritableSectionsNotSupported,
     );
 }
 
 test "bss section" {
     // [ 6] .bss              NOBITS          0000000000000250 000250 000004 00  WA  0   0  4
     try expectEqual(
+        error.WritableSectionsNotSupported,
         testElfWithSyscalls(
             .{},
             sig.ELF_DATA_DIR ++ "bss_section.so",
             &.{},
             0,
         ),
-        error.WritableSectionsNotSupported,
     );
 }
