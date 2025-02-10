@@ -708,6 +708,7 @@ pub const ForkChoice = struct {
     }
 
     // TODO: Change this to return an iterator.
+    // https://github.com/Syndica/sig/issues/556
     fn getChildren(
         self: *const ForkChoice,
         slot_hash_key: *const SlotAndHash,
