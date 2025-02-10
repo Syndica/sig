@@ -58,6 +58,36 @@ pub const Executable = struct {
         return Assembler.parse(allocator, source, config);
     }
 
+    pub fn fromTextBytes(
+        allocator: std.mem.Allocator,
+        source: []const u8,
+        version: sbpf.SBPFVersion,
+        registry: *Registry(u64),
+        config: Config,
+    ) !Executable {
+        const entry_pc = if (registry.lookupName("entrypoint")) |entry_pc|
+            entry_pc.value
+        else
+            try registry.registerHashedLegacy(
+                allocator,
+                !version.enableStaticSyscalls(),
+                "entrypoint",
+                0,
+            );
+
+        return .{
+            .instructions = std.mem.bytesAsSlice(sbpf.Instruction, source),
+            .bytes = source,
+            .version = version,
+            .config = config,
+            .function_registry = registry.*,
+            .entry_pc = entry_pc,
+            .ro_section = .{ .borrowed = .{ .offset = 0, .start = 0, .end = 0 } },
+            .from_elf = false,
+            .text_vaddr = memory.PROGRAM_START,
+        };
+    }
+
     /// When the executable comes from the assembler, we need to guarantee that the
     /// instructions are aligned to `sbpf.Instruction` rather than 1 like they would be
     /// if we created the executable from the Elf file. The GPA requires allocations and
@@ -173,7 +203,7 @@ pub const Assembler = struct {
                                 .dst = operands[0].register,
                                 .src = .r0,
                                 .off = 0,
-                                .imm = @bitCast(@as(i32, @intCast(operands[1].integer))),
+                                .imm = @truncate(@as(u64, @bitCast(operands[1].integer))),
                             } else .{
                                 .opcode = @enumFromInt(bind.opc | sbpf.Instruction.x),
                                 .dst = operands[0].register,
@@ -332,7 +362,12 @@ pub const Assembler = struct {
         const entry_pc = if (function_registry.lookupName("entrypoint")) |entry|
             entry.value
         else pc: {
-            _ = try function_registry.registerHashedLegacy(allocator, "entrypoint", 0);
+            _ = try function_registry.registerHashedLegacy(
+                allocator,
+                !config.minimum_version.enableStaticSyscalls(),
+                "entrypoint",
+                0,
+            );
             break :pc 0;
         };
 
@@ -424,7 +459,7 @@ pub const Assembler = struct {
 
 pub fn Registry(T: type) type {
     return struct {
-        map: std.AutoHashMapUnmanaged(u32, Entry) = .{},
+        map: std.AutoHashMapUnmanaged(u64, Entry) = .{},
 
         const Entry = struct {
             name: []const u8,
@@ -436,7 +471,7 @@ pub fn Registry(T: type) type {
         fn register(
             self: *Self,
             allocator: std.mem.Allocator,
-            key: u32,
+            key: u64,
             name: []const u8,
             value: T,
         ) !void {
@@ -455,7 +490,7 @@ pub fn Registry(T: type) type {
             allocator: std.mem.Allocator,
             name: []const u8,
             value: T,
-        ) !u32 {
+        ) !u64 {
             const key = sbpf.hashSymbolName(name);
             try self.register(allocator, key, name, value);
             return key;
@@ -464,18 +499,20 @@ pub fn Registry(T: type) type {
         pub fn registerHashedLegacy(
             self: *Self,
             allocator: std.mem.Allocator,
+            hash_symbol_name: bool,
             name: []const u8,
             value: T,
-        ) !u32 {
+        ) !u64 {
             const hash = if (std.mem.eql(u8, name, "entrypoint"))
                 sbpf.hashSymbolName(name)
             else
                 sbpf.hashSymbolName(&std.mem.toBytes(value));
-            try self.register(allocator, hash, &.{}, value);
-            return hash;
+            const key: u64 = if (hash_symbol_name) hash else value;
+            try self.register(allocator, key, &.{}, value);
+            return key;
         }
 
-        pub fn lookupKey(self: *const Self, key: u32) ?Entry {
+        pub fn lookupKey(self: *const Self, key: u64) ?Entry {
             return self.map.get(key);
         }
 

@@ -142,9 +142,16 @@ pub const Vm = struct {
                 const rhs: u64 = if (opcode.is64()) rhs_large else @as(u32, @truncate(rhs_large));
 
                 var result: u64 = switch (@intFromEnum(opcode) & 0xF0) {
+                    Instruction.sub => switch (opcode) {
+                        .sub64_imm, .sub32_imm => if (version.swapSubRegImmOperands())
+                            rhs -% lhs
+                        else
+                            lhs -% rhs,
+                        .sub64_reg, .sub32_reg => lhs -% rhs,
+                        else => unreachable,
+                    },
                     // zig fmt: off
                     Instruction.add    => lhs +% rhs,
-                    Instruction.sub    => lhs -% rhs,
                     Instruction.div    => try std.math.divTrunc(u64, lhs, rhs),
                     Instruction.xor    => lhs ^ rhs,
                     Instruction.@"or"  => lhs | rhs,
@@ -191,6 +198,106 @@ pub const Vm = struct {
                     else => {},
                 }
 
+                registers.set(inst.dst, result);
+            },
+
+            .lmul32_reg,
+            .lmul32_imm,
+            .udiv32_reg,
+            .udiv32_imm,
+            .urem32_reg,
+            .urem32_imm,
+            .sdiv32_reg,
+            .sdiv32_imm,
+            .srem32_reg,
+            .srem32_imm,
+            => {
+                if (!version.enablePqr()) return error.UnknownInstruction;
+                const lhs_large = registers.get(inst.dst);
+                const rhs_large = if (opcode.isReg()) registers.get(inst.src) else inst.imm;
+
+                const opc = @intFromEnum(opcode) & 0b11100000;
+                const extended: u64 = switch (opc) {
+                    Instruction.lmul,
+                    Instruction.sdiv,
+                    Instruction.srem,
+                    => result: {
+                        const lhs: i32 = @truncate(@as(i64, @bitCast(lhs_large)));
+                        const rhs: i32 = @truncate(@as(i64, @bitCast(rhs_large)));
+                        const result = switch (opc) {
+                            Instruction.lmul => lhs *% rhs,
+                            Instruction.sdiv => try std.math.divTrunc(i32, lhs, rhs),
+                            Instruction.srem => try rem(i32, lhs, rhs),
+                            else => unreachable,
+                        };
+                        break :result @bitCast(@as(i64, result));
+                    },
+                    Instruction.urem,
+                    Instruction.udiv,
+                    => result: {
+                        const lhs: u32 = @truncate(lhs_large);
+                        const rhs: u32 = @truncate(rhs_large);
+                        break :result switch (opc) {
+                            Instruction.urem => try std.math.rem(u32, lhs, rhs),
+                            Instruction.udiv => try std.math.divTrunc(u32, lhs, rhs),
+                            else => unreachable,
+                        };
+                    },
+                    else => unreachable,
+                };
+
+                registers.set(inst.dst, extended);
+            },
+
+            .lmul64_reg,
+            .lmul64_imm,
+            .uhmul64_reg,
+            .uhmul64_imm,
+            .shmul64_reg,
+            .shmul64_imm,
+            .udiv64_reg,
+            .udiv64_imm,
+            .urem64_reg,
+            .urem64_imm,
+            .sdiv64_reg,
+            .sdiv64_imm,
+            .srem64_reg,
+            .srem64_imm,
+            => {
+                if (!version.enablePqr()) return error.UnknownInstruction;
+                const lhs = registers.get(inst.dst);
+                const rhs = if (opcode.isReg()) registers.get(inst.src) else inst.imm;
+
+                const opc = @intFromEnum(opcode) & 0b11100000;
+                const result: u64 = switch (opc) {
+                    Instruction.lmul => lhs *% rhs,
+                    Instruction.udiv => try std.math.divTrunc(u64, lhs, rhs),
+                    Instruction.urem => try std.math.rem(u64, lhs, rhs),
+                    Instruction.sdiv => result: {
+                        const result = try std.math.divTrunc(i64, @bitCast(lhs), @bitCast(rhs));
+                        break :result @bitCast(result);
+                    },
+                    Instruction.uhmul => result: {
+                        const result = @as(u128, lhs) *% @as(u128, rhs);
+                        break :result @truncate(result >> 64);
+                    },
+                    Instruction.shmul,
+                    Instruction.srem,
+                    => result: {
+                        const signed_lhs: i64 = @bitCast(lhs);
+                        const signed_rhs: i64 = @bitCast(rhs);
+                        const result: i64 = switch (opc) {
+                            Instruction.shmul => value: {
+                                const result = @as(i128, signed_lhs) *% @as(i128, signed_rhs);
+                                break :value @truncate(result >> 64);
+                            },
+                            Instruction.srem => try rem(i64, signed_lhs, signed_rhs),
+                            else => unreachable,
+                        };
+                        break :result @bitCast(result);
+                    },
+                    else => unreachable,
+                };
                 registers.set(inst.dst, result);
             },
 
@@ -421,5 +528,11 @@ pub const Vm = struct {
         const signed: i32 = @bitCast(value);
         const extended: i64 = signed;
         return @bitCast(extended);
+    }
+
+    pub fn rem(comptime T: type, numerator: T, denominator: T) !T {
+        @setRuntimeSafety(false);
+        if (denominator == 0) return error.DivisionByZero;
+        return @rem(numerator, denominator);
     }
 };
