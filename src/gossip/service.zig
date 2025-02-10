@@ -471,6 +471,22 @@ pub const GossipService = struct {
     }
 
     pub fn verifyPackets(self: *Self, exit: ExitCondition) !void {
+        defer {
+            while (self.packet_incoming_channel.tryReceive()) |_| {}
+            exit.afterExit();
+            self.logger.debug().log("verifyPackets loop closed");
+        }
+
+        while (true) {
+            self.packet_incoming_channel.waitToReceive(exit) catch break;
+            while (self.packet_incoming_channel.tryReceive()) |packet| {
+                self.metrics.gossip_packets_received_total.inc();
+                self.verifyPacket(packet);
+            }
+        }
+    }
+
+    fn _verifyPackets(self: *Self, exit: ExitCondition) !void {
         (struct {
             const Ctx = @This();
 
@@ -536,6 +552,7 @@ pub const GossipService = struct {
                     std.debug.assert(worker.is_running.load(.acquire));
                     while (worker.ctx.exit_condition.shouldRun()) {
                         while (worker.ctx.gossip.packet_incoming_channel.tryReceive()) |packet| {
+                            worker.ctx.gossip.metrics.gossip_packets_received_total.inc();
                             worker.ctx.gossip.verifyPacket(packet);
                         }
                         std.debug.assert(worker.is_running.swap(false, .acq_rel));
