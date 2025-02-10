@@ -407,8 +407,9 @@ pub const ForkChoice = struct {
             _ = self.fork_infos.remove(node_key);
         }
 
-        const root_fork_info = self
-            .fork_infos.getPtr(new_root.*) orelse return error.NewRootNotFound;
+        // Root to be made new root should already exist in fork infos.
+        // Okay to panic if that is not the case.
+        const root_fork_info = self.fork_infos.getPtr(new_root.*).?;
 
         root_fork_info.parent = null;
         self.tree_root = new_root.*;
