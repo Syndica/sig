@@ -6,6 +6,8 @@ const server = @import("server.zig");
 const requests = server.requests;
 const connection = server.connection;
 
+const LOGGER_SCOPE = "rpc.server.basic";
+
 pub const AcceptAndServeConnectionError =
     AcceptHandledError ||
     SetSocketSyncError ||
@@ -17,6 +19,8 @@ pub const AcceptAndServeConnectionError =
     std.fs.File.ReadError;
 
 pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
+    const logger = server_ctx.logger.withScope(LOGGER_SCOPE);
+
     const conn = acceptHandled(
         server_ctx.tcp,
         .blocking,
@@ -36,13 +40,13 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
     var request = try http_server.receiveHead();
 
     const conn_address = request.server.connection.address;
-    server_ctx.logger.info().logf("Responding to request from {}: {} {s}", .{
+    logger.info().logf("Responding to request from {}: {} {s}", .{
         conn_address, requests.methodFmt(request.head.method), request.head.target,
     });
 
     switch (request.head.method) {
         .HEAD, .GET => switch (requests.getRequestTargetResolve(
-            server_ctx.logger,
+            logger.unscoped(),
             request.head.target,
             server_ctx.latest_snapshot_gen_info,
         )) {
@@ -96,7 +100,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
             .unrecognized => {},
         },
         .POST => {
-            server_ctx.logger.err().logf("{} tried to invoke our RPC", .{conn_address});
+            logger.err().logf("{} tried to invoke our RPC", .{conn_address});
             return try request.respond("RPCs are not yet implemented", .{
                 .status = .service_unavailable,
                 .keep_alive = false,
@@ -105,7 +109,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
         else => {},
     }
 
-    server_ctx.logger.err().logf(
+    logger.err().logf(
         "{} made an unrecognized request '{} {s}'",
         .{ conn_address, requests.methodFmt(request.head.method), request.head.target },
     );

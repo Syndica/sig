@@ -18,8 +18,7 @@ const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo
 /// The minimum buffer read size.
 pub const MIN_READ_BUFFER_SIZE = 4096;
 
-pub const LOGGER_SCOPE = "rpc.server";
-pub const ScopedLogger = sig.trace.log.ScopedLogger(LOGGER_SCOPE);
+const LOGGER_SCOPE = "rpc.server";
 
 /// The work pool is a tagged union, representing one of various possible backends.
 /// It acts merely as a reference to a specific backend's state, or a tag for stateless
@@ -32,7 +31,7 @@ pub const WorkPool = union(enum) {
 /// The basic state required for the server to operate.
 pub const Context = struct {
     allocator: std.mem.Allocator,
-    logger: ScopedLogger,
+    logger: sig.trace.log.ScopedLogger(LOGGER_SCOPE),
     snapshot_dir: std.fs.Dir,
     latest_snapshot_gen_info: *sig.sync.RwMux(?SnapshotGenerationInfo),
 

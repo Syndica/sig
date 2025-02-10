@@ -4,7 +4,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const server = @import("server.zig");
 
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
@@ -15,6 +14,8 @@ const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapsho
 /// but all together they may be allowed to be larger than this,
 /// depending on the request.
 pub const MAX_REQUEST_BODY_SIZE: usize = 50 * 1024; // 50 KiB
+
+const LOGGER_SCOPE = "rpc.server.requests";
 
 /// All of the relevant information from a request head parsed into a narrow
 /// format that is comprised of bounded data and can be copied by value.
@@ -94,10 +95,12 @@ pub const GetRequestTargetResolved = union(enum) {
 
 /// Resolve a `GET` request target.
 pub fn getRequestTargetResolve(
-    logger: server.ScopedLogger,
+    unscoped_logger: sig.trace.Logger,
     target: []const u8,
     latest_snapshot_gen_info_rw: *sig.sync.RwMux(?SnapshotGenerationInfo),
 ) GetRequestTargetResolved {
+    const logger = unscoped_logger.withScope(LOGGER_SCOPE);
+
     if (!std.mem.startsWith(u8, target, "/")) return .unrecognized;
     const path = target[1..];
 

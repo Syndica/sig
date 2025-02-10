@@ -8,6 +8,8 @@ const connection = server.connection;
 
 const IoUring = std.os.linux.IoUring;
 
+const LOGGER_SCOPE = "rpc.server.linux_io_uring";
+
 pub const LinuxIoUring = struct {
     io_uring: IoUring,
 
@@ -102,6 +104,8 @@ fn consumeOurCqe(
     server_ctx: *server.Context,
     cqe: OurCqe,
 ) ConsumeOurCqeError!void {
+    const logger = server_ctx.logger.withScope(LOGGER_SCOPE);
+
     const entry = cqe.user_data;
     errdefer entry.deinit(server_ctx.allocator);
 
@@ -146,7 +150,7 @@ fn consumeOurCqe(
     };
     errdefer server_ctx.wait_group.finish();
 
-    const addr_err_logger = server_ctx.logger.err().field(
+    const addr_err_logger = logger.err().field(
         "address",
         // if we fail to getSockName, just print the error in place of the address;
         getSocketName(entry_data.stream.handle),
@@ -205,7 +209,7 @@ fn consumeOurCqe(
             const head_info: HeadInfo = head_info: {
                 const head_bytes = entry_data.buffer[0..head.end];
                 const std_head = std.http.Server.Request.Head.parse(head_bytes) catch |err| {
-                    server_ctx.logger.err().logf("Head parse error: {s}", .{@errorName(err)});
+                    logger.err().logf("Head parse error: {s}", .{@errorName(err)});
                     entry.deinit(server_ctx.allocator);
                     return;
                 };
@@ -215,7 +219,7 @@ fn consumeOurCqe(
                 break :head_info HeadInfo.parseFromStdHead(std_head) catch |err| {
                     switch (err) {
                         error.RequestTargetTooLong => {
-                            server_ctx.logger.err().logf("Request target was too long: '{}'", .{
+                            logger.err().logf("Request target was too long: '{}'", .{
                                 std.zig.fmtEscapes(std_head.target),
                             });
                         },
@@ -244,7 +248,7 @@ fn consumeOurCqe(
             } };
             const body = &entry_data.state.recv_body;
             handleRecvBody(liou, server_ctx, entry, body) catch |err| {
-                server_ctx.logger.err().logf("{s}", .{@errorName(err)});
+                logger.err().logf("{s}", .{@errorName(err)});
                 entry.deinit(server_ctx.allocator);
             };
             return;
@@ -267,7 +271,7 @@ fn consumeOurCqe(
             const recv_len: usize = @intCast(cqe.res);
             body.content_end += recv_len;
             handleRecvBody(liou, server_ctx, entry, body) catch |err| {
-                server_ctx.logger.err().logf("{s}", .{@errorName(err)});
+                logger.err().logf("{s}", .{@errorName(err)});
                 entry.deinit(server_ctx.allocator);
             };
             return;
@@ -399,12 +403,14 @@ fn handleRecvBody(
     entry: Entry,
     body: *EntryState.RecvBody,
 ) HandleRecvBodyError!void {
+    const logger = server_ctx.logger.withScope(LOGGER_SCOPE);
+
     const entry_data = entry.ptr.?;
     std.debug.assert(body == &entry_data.state.recv_body);
 
     if (!body.head_info.method.requestHasBody()) {
         if (body.head_info.content_len) |content_len| {
-            server_ctx.logger.err().logf(
+            logger.err().logf(
                 "{} request isn't expected to have a body, but got Content-Length: {d}",
                 .{ requests.methodFmt(body.head_info.method), content_len },
             );
@@ -425,7 +431,7 @@ fn handleRecvBody(
         },
 
         inline .HEAD, .GET => |method| switch (requests.getRequestTargetResolve(
-            server_ctx.logger,
+            logger.unscoped(),
             body.head_info.target.constSlice(),
             server_ctx.latest_snapshot_gen_info,
         )) {
