@@ -42,7 +42,7 @@ const UpdateOperations = SortedMap(
 
 pub const ForkWeight = u64;
 
-/// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/fork_choice.rs#L92)
+/// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
 pub const ForkInfo = struct {
     logger: ScopedLogger(@typeName(ForkInfo)),
     // Amount of stake that has voted for exactly this slot
@@ -135,7 +135,7 @@ pub const ForkInfo = struct {
     }
 };
 
-/// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/fork_choice.rs#L187)
+/// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L187)
 pub const ForkChoice = struct {
     allocator: std.mem.Allocator,
     logger: ScopedLogger(@typeName(ForkChoice)),
