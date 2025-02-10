@@ -66,6 +66,9 @@ pub const ForkInfo = struct {
     // itself is a duplicate, this is set to the slot itself.
     latest_invalid_ancestor: ?Slot,
     // Set to true if this slot or a child node was duplicate confirmed.
+    // Indicates whether this slot have been confirmed as the valid fork in the presence of duplicate slots.
+    // It means that the network has reached consensus that this fork is the valid one,
+    // and all competing forks for the same slot are invalid.
     is_duplicate_confirmed: bool,
 
     fn deinit(self: *ForkInfo) void {
