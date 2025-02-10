@@ -45,7 +45,7 @@ const UpdateOperations = SortedMap(
 
 pub const ForkWeight = u64;
 
-/// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
+/// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/fork_choice.rs#L92)
 pub const ForkInfo = struct {
     logger: ScopedLogger(@typeName(ForkInfo)),
     // Amount of stake that has voted for exactly this slot
@@ -138,10 +138,10 @@ pub const ForkInfo = struct {
     }
 };
 
-/// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L187)
-pub const HeaviestSubtreeForkChoice = struct {
+/// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/fork_choice.rs#L187)
+pub const ForkChoice = struct {
     allocator: std.mem.Allocator,
-    logger: ScopedLogger(@typeName(HeaviestSubtreeForkChoice)),
+    logger: ScopedLogger(@typeName(ForkChoice)),
     fork_infos: AutoHashMap(SlotAndHash, ForkInfo),
     latest_votes: AutoHashMap(Pubkey, SlotAndHash),
     tree_root: SlotAndHash,
@@ -151,10 +151,10 @@ pub const HeaviestSubtreeForkChoice = struct {
         allocator: std.mem.Allocator,
         logger: sig.trace.Logger,
         tree_root: SlotAndHash,
-    ) !HeaviestSubtreeForkChoice {
-        var self = HeaviestSubtreeForkChoice{
+    ) !ForkChoice {
+        var self = ForkChoice{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(HeaviestSubtreeForkChoice)),
+            .logger = logger.withScope(@typeName(ForkChoice)),
             .fork_infos = AutoHashMap(SlotAndHash, ForkInfo).init(allocator),
             .latest_votes = AutoHashMap(Pubkey, SlotAndHash).init(allocator),
             .tree_root = tree_root,
@@ -168,32 +168,32 @@ pub const HeaviestSubtreeForkChoice = struct {
     pub fn initForTest(
         allocator: std.mem.Allocator,
         forks: []const TreeNode,
-    ) !HeaviestSubtreeForkChoice {
+    ) !ForkChoice {
         if (!builtin.is_test) {
             @panic("initForTest should only be called in test mode");
         }
 
         const root = forks[0][1].?;
-        var heaviest_subtree_fork_choice = try HeaviestSubtreeForkChoice.init(
+        var fork_choice = try ForkChoice.init(
             allocator,
             .noop,
             root,
         );
-        errdefer heaviest_subtree_fork_choice.deinit();
+        errdefer fork_choice.deinit();
 
         for (forks) |fork_tuple| {
             const slot_hash = fork_tuple[0];
-            if (heaviest_subtree_fork_choice.fork_infos.contains(slot_hash)) {
+            if (fork_choice.fork_infos.contains(slot_hash)) {
                 continue;
             }
             const parent_slot_hash = fork_tuple[1];
-            try heaviest_subtree_fork_choice.addNewLeafSlot(slot_hash, parent_slot_hash);
+            try fork_choice.addNewLeafSlot(slot_hash, parent_slot_hash);
         }
 
-        return heaviest_subtree_fork_choice;
+        return fork_choice;
     }
 
-    pub fn deinit(self: *HeaviestSubtreeForkChoice) void {
+    pub fn deinit(self: *ForkChoice) void {
         var it = self.fork_infos.iterator();
         while (it.next()) |fork_info| {
             fork_info.value_ptr.deinit();
@@ -236,7 +236,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     /// Leaf (D)   Leaf (E)
     /// ```
     pub fn addNewLeafSlot(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         slot_hash_key: SlotAndHash,
         maybe_parent: ?SlotAndHash,
     ) !void {
@@ -295,12 +295,12 @@ pub const HeaviestSubtreeForkChoice = struct {
         self.last_root_time = Instant.now();
     }
 
-    pub fn containsBlock(self: *const HeaviestSubtreeForkChoice, key: *const SlotAndHash) bool {
+    pub fn containsBlock(self: *const ForkChoice, key: *const SlotAndHash) bool {
         return self.fork_infos.contains(key.*);
     }
 
     pub fn latestInvalidAncestor(
-        self: *const HeaviestSubtreeForkChoice,
+        self: *const ForkChoice,
         slot_hash_key: SlotAndHash,
     ) ?Slot {
         if (self.fork_infos.get(slot_hash_key)) |fork_info| {
@@ -309,14 +309,14 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
-    pub fn bestOverallSlot(self: *const HeaviestSubtreeForkChoice) SlotAndHash {
+    pub fn bestOverallSlot(self: *const ForkChoice) SlotAndHash {
         return self.heaviestSlot(self.tree_root) orelse {
             @panic("Root must exist in tree");
         };
     }
 
     pub fn heaviestSlot(
-        self: *const HeaviestSubtreeForkChoice,
+        self: *const ForkChoice,
         slot_hash_key: SlotAndHash,
     ) ?SlotAndHash {
         if (self.fork_infos.get(slot_hash_key)) |fork_info| {
@@ -326,7 +326,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     pub fn deepestSlot(
-        self: *const HeaviestSubtreeForkChoice,
+        self: *const ForkChoice,
         slot_hash_key: *const SlotAndHash,
     ) ?SlotAndHash {
         if (self.fork_infos.get(slot_hash_key.*)) |fork_info| {
@@ -335,14 +335,14 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
-    pub fn deepestOverallSlot(self: *const HeaviestSubtreeForkChoice) SlotAndHash {
+    pub fn deepestOverallSlot(self: *const ForkChoice) SlotAndHash {
         return self.deepestSlot(&self.tree_root) orelse {
             @panic("Root must exist in tree");
         };
     }
 
     pub fn stakeForSlot(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         key: *const SlotAndHash,
     ) ?u64 {
         if (self.fork_infos.get(key.*)) |fork_info| {
@@ -352,7 +352,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     pub fn stakeForSubtree(
-        self: *const HeaviestSubtreeForkChoice,
+        self: *const ForkChoice,
         key: *const SlotAndHash,
     ) ?u64 {
         if (self.fork_infos.get(key.*)) |fork_info| {
@@ -361,7 +361,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         return null;
     }
 
-    pub fn getHeight(self: *const HeaviestSubtreeForkChoice, key: *const SlotAndHash) ?usize {
+    pub fn getHeight(self: *const ForkChoice, key: *const SlotAndHash) ?usize {
         if (self.fork_infos.get(key.*)) |fork_info| {
             return fork_info.height;
         }
@@ -394,7 +394,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     /// ```
     ///
     /// - Nodes `{ A, C }` are **removed**.
-    pub fn setTreeRoot(self: *HeaviestSubtreeForkChoice, new_root: *const SlotAndHash) !void {
+    pub fn setTreeRoot(self: *ForkChoice, new_root: *const SlotAndHash) !void {
         // Remove everything reachable from old root but not new root
         var remove_set = try self.subtreeDiff(&self.tree_root, new_root);
         defer remove_set.deinit();
@@ -417,7 +417,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     pub fn isDuplicateConfirmed(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         slot_hash_key: *const SlotAndHash,
     ) ?bool {
         if (self.fork_infos.get(slot_hash_key.*)) |fork_info| {
@@ -427,7 +427,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     pub fn markForkValidCandidate(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         valid_slot_hash_key: *const SlotAndHash,
     ) !std.ArrayList(SlotAndHash) {
         var newly_duplicate_confirmed_ancestors = std.ArrayList(SlotAndHash).init(self.allocator);
@@ -467,7 +467,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     pub fn markForkInvalidCandidate(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         invalid_slot_hash_key: *const SlotAndHash,
     ) !void {
         // Get mutable reference to fork info
@@ -554,7 +554,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     ///         (D: depth=1)  <- New deepest slot
     ///
     fn propagateNewLeaf(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         slot_hash_key: *const SlotAndHash,
         parent_slot_hash_key: *const SlotAndHash,
     ) !void {
@@ -613,7 +613,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     /// Returns true if the given `maybe_best_child` is the heaviest among the children
     /// of the parent. Breaks ties by slot # (lower is heavier).
     fn isBestChild(
-        self: *const HeaviestSubtreeForkChoice,
+        self: *const ForkChoice,
         maybe_best_child: *const SlotAndHash,
     ) !bool {
         const maybe_best_child_weight =
@@ -657,7 +657,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     ///   3. The same height & stake but a higher slot number.
     ///
     /// - If `deepest_child` has no parent, it is the root and deepest by default.
-    fn isDeepestChild(self: *HeaviestSubtreeForkChoice, deepest_child: *const SlotAndHash) bool {
+    fn isDeepestChild(self: *ForkChoice, deepest_child: *const SlotAndHash) bool {
         const maybe_deepest_child_weight =
             self.stakeForSubtree(deepest_child) orelse return false;
         const maybe_deepest_child_height = self.getHeight(deepest_child) orelse return false;
@@ -698,7 +698,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     fn getParent(
-        self: *const HeaviestSubtreeForkChoice,
+        self: *const ForkChoice,
         slot_hash_key: *const SlotAndHash,
     ) ?SlotAndHash {
         if (self.fork_infos.get(slot_hash_key.*)) |fork_info| {
@@ -709,7 +709,7 @@ pub const HeaviestSubtreeForkChoice = struct {
 
     // TODO: Change this to return an iterator.
     fn getChildren(
-        self: *const HeaviestSubtreeForkChoice,
+        self: *const ForkChoice,
         slot_hash_key: *const SlotAndHash,
     ) ?SortedMap(SlotAndHash, void) {
         const fork_info = self.fork_infos.get(slot_hash_key.*) orelse return null;
@@ -717,7 +717,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     fn isCandidate(
-        self: *const HeaviestSubtreeForkChoice,
+        self: *const ForkChoice,
         slot_hash_key: *const SlotAndHash,
     ) ?bool {
         const fork_info = self.fork_infos.get(slot_hash_key.*) orelse return null;
@@ -738,7 +738,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     ///
     /// subtreeDiff (root1, root2) = {A, C, F}
     fn subtreeDiff(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         root1: *const SlotAndHash,
         root2: *const SlotAndHash,
     ) !SortedMap(SlotAndHash, void) {
@@ -768,7 +768,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     fn doInsertAggregateOperation(
-        _: *HeaviestSubtreeForkChoice,
+        _: *ForkChoice,
         update_operations: *UpdateOperations,
         modify_fork_validity: ?UpdateOperation,
         slot_hash_key: SlotAndHash,
@@ -811,7 +811,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     fn processUpdateOperations(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         update_operations_: UpdateOperations,
     ) void {
         // Iterate through the update operations from greatest to smallest slot
@@ -842,7 +842,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     fn insertAggregateOperations(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         update_operations: *UpdateOperations,
         slot_hash_key: SlotAndHash,
     ) !void {
@@ -854,7 +854,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     fn doInsertAggregateOperationsAcrossAncestors(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         update_operations: *UpdateOperations,
         modify_fork_validity: ?UpdateOperation,
         slot_hash_key: SlotAndHash,
@@ -878,7 +878,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     /// valid. Note we don't need the hash for `valid_slot` because slot number uniquely
     /// identifies a node on a single fork.
     fn markForkValid(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         fork_to_modify_key: *const SlotAndHash,
         valid_slot: Slot,
     ) void {
@@ -898,7 +898,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     /// invalid. Note we don't need the hash for `invalid_slot` because slot number uniquely
     /// identifies a node on a single fork.
     fn markForkInvalid(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         fork_to_modify_key: SlotAndHash,
         invalid_slot: Slot,
     ) void {
@@ -911,7 +911,7 @@ pub const HeaviestSubtreeForkChoice = struct {
 
     /// Aggregates stake and height information for the subtree rooted at `slot_hash_key`.
     /// Updates the fork info with the aggregated values.
-    fn aggregateSlot(self: *HeaviestSubtreeForkChoice, slot_hash_key: SlotAndHash) void {
+    fn aggregateSlot(self: *ForkChoice, slot_hash_key: SlotAndHash) void {
         var stake_for_subtree: u64 = 0;
         var deepest_child_height: u64 = 0;
         var best_slot_hash_key: SlotAndHash = slot_hash_key;
@@ -1015,7 +1015,7 @@ pub const HeaviestSubtreeForkChoice = struct {
 
     /// Adds `stake` to the stake voted at and stake voted subtree for the fork identified by `slot_hash_key`.
     fn addSlotStake(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         slot_hash_key: *const SlotAndHash,
         stake: u64,
     ) void {
@@ -1029,7 +1029,7 @@ pub const HeaviestSubtreeForkChoice = struct {
 
     /// Subtracts `stake` from the stake voted at and stake voted subtree for the fork identified by `slot_hash_key`.
     fn subtractSlotStake(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         slot_hash_key: *const SlotAndHash,
         stake: u64,
     ) void {
@@ -1042,7 +1042,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     fn setStakeVotedAt(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         slot_hash_key: *const SlotAndHash,
         stake_for_slot: u64,
     ) void {
@@ -1056,7 +1056,7 @@ pub const HeaviestSubtreeForkChoice = struct {
     }
 
     fn ancestorIterator(
-        self: *HeaviestSubtreeForkChoice,
+        self: *ForkChoice,
         start_slot_hash_key: SlotAndHash,
     ) AncestorIterator {
         return AncestorIterator{
@@ -1092,12 +1092,12 @@ const AncestorIterator = struct {
 const test_allocator = std.testing.allocator;
 
 test "HeaviestSubtreeForkChoice.subtreeDiff" {
-    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
-    defer fc.deinit();
+    var fork_choice = try ForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
 
     // Diff of same root is empty, no matter root, intermediate node, or leaf
     {
-        var diff = try fc.subtreeDiff(
+        var diff = try fork_choice.subtreeDiff(
             &.{ .slot = 0, .hash = Hash.ZEROES },
             &.{ .slot = 0, .hash = Hash.ZEROES },
         );
@@ -1108,7 +1108,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
     }
 
     {
-        var diff = try fc.subtreeDiff(
+        var diff = try fork_choice.subtreeDiff(
             &.{ .slot = 5, .hash = Hash.ZEROES },
             &.{ .slot = 5, .hash = Hash.ZEROES },
         );
@@ -1118,7 +1118,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         );
     }
     {
-        var diff = try fc.subtreeDiff(
+        var diff = try fork_choice.subtreeDiff(
             &.{ .slot = 6, .hash = Hash.ZEROES },
             &.{ .slot = 6, .hash = Hash.ZEROES },
         );
@@ -1131,7 +1131,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
     // The set reachable from slot 3, excluding subtree 1, is just everything
     // in slot 3 since subtree 1 is an ancestor
     {
-        var diff = try fc.subtreeDiff(
+        var diff = try fork_choice.subtreeDiff(
             &.{ .slot = 3, .hash = Hash.ZEROES },
             &.{ .slot = 1, .hash = Hash.ZEROES },
         );
@@ -1154,7 +1154,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
     // The set reachable from slot 1, excluding subtree 3, is just 1 and
     // the subtree at 2
     {
-        var diff = try fc.subtreeDiff(
+        var diff = try fork_choice.subtreeDiff(
             &.{ .slot = 1, .hash = Hash.ZEROES },
             &.{ .slot = 3, .hash = Hash.ZEROES },
         );
@@ -1177,7 +1177,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
     // The set reachable from slot 1, excluding leaf 6, is just everything
     // except leaf 6
     {
-        var diff = try fc.subtreeDiff(
+        var diff = try fork_choice.subtreeDiff(
             &.{ .slot = 0, .hash = Hash.ZEROES },
             &.{ .slot = 6, .hash = Hash.ZEROES },
         );
@@ -1202,10 +1202,10 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
 
     {
         // Set root at 1
-        try fc.setTreeRoot(&.{ .slot = 1, .hash = Hash.ZEROES });
+        try fork_choice.setTreeRoot(&.{ .slot = 1, .hash = Hash.ZEROES });
         // Zero no longer exists, set reachable from 0 is empty
         try std.testing.expect(
-            (try fc.subtreeDiff(
+            (try fork_choice.subtreeDiff(
                 &.{ .slot = 0, .hash = Hash.ZEROES },
                 &.{ .slot = 6, .hash = Hash.ZEROES },
             )).count() == 0,
@@ -1214,11 +1214,11 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
 }
 
 test "HeaviestSubtreeForkChoice.ancestorIterator" {
-    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
-    defer fc.deinit();
+    var fork_choice = try ForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
 
     {
-        var iterator = fc.ancestorIterator(SlotAndHash{ .slot = 6, .hash = Hash.ZEROES });
+        var iterator = fork_choice.ancestorIterator(SlotAndHash{ .slot = 6, .hash = Hash.ZEROES });
         var ancestors: [4]SlotAndHash = undefined;
         var index: usize = 0;
 
@@ -1238,7 +1238,7 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
         );
     }
     {
-        var iterator = fc.ancestorIterator(SlotAndHash{ .slot = 4, .hash = Hash.ZEROES });
+        var iterator = fork_choice.ancestorIterator(SlotAndHash{ .slot = 4, .hash = Hash.ZEROES });
         var ancestors: [3]SlotAndHash = undefined;
         var index: usize = 0;
 
@@ -1257,7 +1257,7 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
         );
     }
     {
-        var iterator = fc.ancestorIterator(SlotAndHash{ .slot = 1, .hash = Hash.ZEROES });
+        var iterator = fork_choice.ancestorIterator(SlotAndHash{ .slot = 1, .hash = Hash.ZEROES });
         var ancestors: [1]SlotAndHash = undefined;
         var index: usize = 0;
 
@@ -1274,13 +1274,13 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
         );
     }
     {
-        var iterator = fc.ancestorIterator(SlotAndHash{ .slot = 0, .hash = Hash.ZEROES });
+        var iterator = fork_choice.ancestorIterator(SlotAndHash{ .slot = 0, .hash = Hash.ZEROES });
         try std.testing.expect(iterator.next() == null);
     }
     {
         // Set a root, everything but slots 2, 4 should be removed
-        try fc.setTreeRoot(&.{ .slot = 2, .hash = Hash.ZEROES });
-        var iterator = fc.ancestorIterator(SlotAndHash{ .slot = 4, .hash = Hash.ZEROES });
+        try fork_choice.setTreeRoot(&.{ .slot = 2, .hash = Hash.ZEROES });
+        var iterator = fork_choice.ancestorIterator(SlotAndHash{ .slot = 4, .hash = Hash.ZEROES });
         var ancestors: [1]SlotAndHash = undefined;
         var index: usize = 0;
 
@@ -1299,68 +1299,68 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
 }
 
 test "HeaviestSubtreeForkChoice.setTreeRoot" {
-    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
-    defer fc.deinit();
+    var fork_choice = try ForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
     // Set root to 1, should only purge 0
     const root1 = SlotAndHash{ .slot = 1, .hash = Hash.ZEROES };
-    _ = try fc.setTreeRoot(&root1);
+    _ = try fork_choice.setTreeRoot(&root1);
     for (0..6) |i| {
         const slot_hash = SlotAndHash{ .slot = @intCast(i), .hash = Hash.ZEROES };
         const exists = i != 0;
-        try std.testing.expectEqual(exists, fc.fork_infos.contains(slot_hash));
+        try std.testing.expectEqual(exists, fork_choice.fork_infos.contains(slot_hash));
     }
 }
 
 test "HeaviestSubtreeForkChoice.bestOverallSlot" {
-    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
-    defer fc.deinit();
+    var fork_choice = try ForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
     try std.testing.expectEqual(
-        fc.bestOverallSlot(),
+        fork_choice.bestOverallSlot(),
         SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
     );
 }
 
 test "HeaviestSubtreeForkChoice.aggregateSlot" {
-    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, fork_tuples[0..]);
-    defer fc.deinit();
+    var fork_choice = try ForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
 
-    fc.aggregateSlot(.{ .slot = 1, .hash = Hash.ZEROES });
+    fork_choice.aggregateSlot(.{ .slot = 1, .hash = Hash.ZEROES });
 
     // No weights are present, weights should be zero
     try std.testing.expectEqual(
-        fc.stakeForSlot(&.{ .slot = 1, .hash = Hash.ZEROES }),
+        fork_choice.stakeForSlot(&.{ .slot = 1, .hash = Hash.ZEROES }),
         0,
     );
 
     try std.testing.expectEqual(
-        fc.stakeForSubtree(&.{ .slot = 1, .hash = Hash.ZEROES }),
+        fork_choice.stakeForSubtree(&.{ .slot = 1, .hash = Hash.ZEROES }),
         0,
     );
 
     // The best leaf when weights are equal should prioritize the lower leaf
     try std.testing.expectEqual(
-        fc.heaviestSlot(.{ .slot = 1, .hash = Hash.ZEROES }),
+        fork_choice.heaviestSlot(.{ .slot = 1, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
     );
     try std.testing.expectEqual(
-        fc.heaviestSlot(.{ .slot = 2, .hash = Hash.ZEROES }),
+        fork_choice.heaviestSlot(.{ .slot = 2, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
     );
     try std.testing.expectEqual(
-        fc.heaviestSlot(.{ .slot = 3, .hash = Hash.ZEROES }),
+        fork_choice.heaviestSlot(.{ .slot = 3, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
     );
     // The deepest leaf only tiebreaks by slot # when tree heights are equal
     try std.testing.expectEqual(
-        fc.deepestSlot(&.{ .slot = 1, .hash = Hash.ZEROES }),
+        fork_choice.deepestSlot(&.{ .slot = 1, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
     );
     try std.testing.expectEqual(
-        fc.deepestSlot(&.{ .slot = 2, .hash = Hash.ZEROES }),
+        fork_choice.deepestSlot(&.{ .slot = 2, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
     );
     try std.testing.expectEqual(
-        fc.deepestSlot(&.{ .slot = 3, .hash = Hash.ZEROES }),
+        fork_choice.deepestSlot(&.{ .slot = 3, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
     );
 
@@ -1380,7 +1380,7 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
 
     var it = staked_voted_slots.keyIterator();
     while (it.next()) |slot| {
-        fc.setStakeVotedAt(
+        fork_choice.setStakeVotedAt(
             &.{ .slot = slot.*, .hash = Hash.ZEROES },
             slot.*,
         );
@@ -1392,32 +1392,36 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
 
     try slots_to_aggregate.append(SlotAndHash{ .slot = 6, .hash = Hash.ZEROES });
 
-    var ancestors_of_6 = fc.ancestorIterator(SlotAndHash{ .slot = 6, .hash = Hash.ZEROES });
+    var ancestors_of_6 = fork_choice.ancestorIterator(
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+    );
     while (ancestors_of_6.next()) |item| {
         try slots_to_aggregate.append(item);
     }
 
     try slots_to_aggregate.append(SlotAndHash{ .slot = 4, .hash = Hash.ZEROES });
 
-    var ancestors_of_4 = fc.ancestorIterator(SlotAndHash{ .slot = 4, .hash = Hash.ZEROES });
+    var ancestors_of_4 = fork_choice.ancestorIterator(
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+    );
     while (ancestors_of_4.next()) |item| {
         try slots_to_aggregate.append(item);
     }
 
     for (slots_to_aggregate.items) |slot_hash| {
-        fc.aggregateSlot(slot_hash);
+        fork_choice.aggregateSlot(slot_hash);
     }
 
     // The best path is now 0 -> 1 -> 3 -> 5 -> 6, so leaf 6
     // should be the best choice
     // It is still the deepest choice
     try std.testing.expectEqual(
-        fc.bestOverallSlot(),
+        fork_choice.bestOverallSlot(),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
     );
 
     try std.testing.expectEqual(
-        fc.deepestOverallSlot(),
+        fork_choice.deepestOverallSlot(),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
     );
 
@@ -1428,7 +1432,7 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
             0;
 
         try std.testing.expectEqual(
-            fc.stakeForSlot(&.{ .slot = slot, .hash = Hash.ZEROES }),
+            fork_choice.stakeForSlot(&.{ .slot = slot, .hash = Hash.ZEROES }),
             expected_stake,
         );
     }
@@ -1438,7 +1442,7 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
         // Subtree stake is sum of the `stake_for_slot` across
         // all slots in the subtree
         try std.testing.expectEqual(
-            fc.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
+            fork_choice.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
             total_stake,
         );
     }
@@ -1447,11 +1451,11 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
         // Verify `stake_for_subtree` for fork 1
         var total_expected_stake: u64 = 0;
         for ([_]u64{ 4, 2 }) |slot| {
-            total_expected_stake += fc.stakeForSlot(
+            total_expected_stake += fork_choice.stakeForSlot(
                 &.{ .slot = slot, .hash = Hash.ZEROES },
             ).?;
             try std.testing.expectEqual(
-                fc.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
+                fork_choice.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
                 total_expected_stake,
             );
         }
@@ -1461,12 +1465,12 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
         // Verify `stake_for_subtree` for fork 2
         var total_expected_stake: u64 = 0;
         for ([_]u64{ 6, 5, 3 }) |slot| {
-            total_expected_stake += fc.stakeForSlot(
+            total_expected_stake += fork_choice.stakeForSlot(
                 &.{ .slot = slot, .hash = Hash.ZEROES },
             ).?;
 
             try std.testing.expectEqual(
-                fc.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
+                fork_choice.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
                 total_expected_stake,
             );
         }
@@ -1493,21 +1497,21 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
             SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
         },
     };
-    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, tree[0..]);
-    defer fc.deinit();
+    var fork_choice = try ForkChoice.initForTest(test_allocator, tree[0..]);
+    defer fork_choice.deinit();
 
     try std.testing.expect(
-        try fc.isBestChild(&.{ .slot = 0, .hash = Hash.ZEROES }),
+        try fork_choice.isBestChild(&.{ .slot = 0, .hash = Hash.ZEROES }),
     );
     try std.testing.expect(
-        try fc.isBestChild(&.{ .slot = 4, .hash = Hash.ZEROES }),
+        try fork_choice.isBestChild(&.{ .slot = 4, .hash = Hash.ZEROES }),
     );
     // 9 is better than 10
     try std.testing.expect(
-        try fc.isBestChild(&.{ .slot = 9, .hash = Hash.ZEROES }),
+        try fork_choice.isBestChild(&.{ .slot = 9, .hash = Hash.ZEROES }),
     );
     try std.testing.expect(
-        !(try fc.isBestChild(&.{ .slot = 10, .hash = Hash.ZEROES })),
+        !(try fork_choice.isBestChild(&.{ .slot = 10, .hash = Hash.ZEROES })),
     );
     // Add new leaf 8, which is better than 9, as both have weight 0
     //           slot 0
@@ -1515,15 +1519,18 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
     //            slot 4
     //         /    \    \
     //   slot 10   lot 9  slot 10
-    try fc.addNewLeafSlot(.{ .slot = 8, .hash = Hash.ZEROES }, .{ .slot = 4, .hash = Hash.ZEROES });
-    try std.testing.expect(
-        try fc.isBestChild(&.{ .slot = 8, .hash = Hash.ZEROES }),
+    try fork_choice.addNewLeafSlot(
+        .{ .slot = 8, .hash = Hash.ZEROES },
+        .{ .slot = 4, .hash = Hash.ZEROES },
     );
     try std.testing.expect(
-        !(try fc.isBestChild(&.{ .slot = 9, .hash = Hash.ZEROES })),
+        try fork_choice.isBestChild(&.{ .slot = 8, .hash = Hash.ZEROES }),
     );
     try std.testing.expect(
-        !(try fc.isBestChild(&.{ .slot = 10, .hash = Hash.ZEROES })),
+        !(try fork_choice.isBestChild(&.{ .slot = 9, .hash = Hash.ZEROES })),
+    );
+    try std.testing.expect(
+        !(try fork_choice.isBestChild(&.{ .slot = 10, .hash = Hash.ZEROES })),
     );
     // TODO complete test when vote related functions are implemented
 }
@@ -1532,21 +1539,21 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
     const duplicate_fork = try setupDuplicateForks();
-    defer test_allocator.destroy(duplicate_fork.heaviest_subtree_fork_choice);
+    defer test_allocator.destroy(duplicate_fork.fork_choice);
     defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
     defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
     defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
 
-    var fc = duplicate_fork.heaviest_subtree_fork_choice;
-    defer fc.deinit();
+    var fork_choice = duplicate_fork.fork_choice;
+    defer fork_choice.deinit();
     const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
     const duplicate_leaves_descended_from_5 = duplicate_fork.duplicate_leaves_descended_from_5;
     // Add a child to one of the duplicates
     const duplicate_parent = duplicate_leaves_descended_from_4[0];
     const child = SlotAndHash{ .slot = 11, .hash = Hash.initRandom(random) };
-    try fc.addNewLeafSlot(child, duplicate_parent);
+    try fork_choice.addNewLeafSlot(child, duplicate_parent);
     {
-        var children_ = fc.getChildren(&duplicate_parent).?;
+        var children_ = fork_choice.getChildren(&duplicate_parent).?;
         const children = children_.keys();
 
         try std.testing.expect(
@@ -1555,26 +1562,26 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
     }
 
     try std.testing.expectEqual(
-        fc.bestOverallSlot(),
+        fork_choice.bestOverallSlot(),
         child,
     );
 
     // All the other duplicates should have no children
     for (duplicate_leaves_descended_from_5) |duplicate_leaf| {
         try std.testing.expectEqual(
-            fc.getChildren(&duplicate_leaf).?.count(),
+            fork_choice.getChildren(&duplicate_leaf).?.count(),
             0,
         );
     }
     try std.testing.expectEqual(
-        fc.getChildren(&duplicate_leaves_descended_from_4[1]).?.count(),
+        fork_choice.getChildren(&duplicate_leaves_descended_from_4[1]).?.count(),
         0,
     );
 
     // Re-adding same duplicate slot should not overwrite existing one
-    try fc.addNewLeafSlot(duplicate_parent, .{ .slot = 4, .hash = Hash.ZEROES });
+    try fork_choice.addNewLeafSlot(duplicate_parent, .{ .slot = 4, .hash = Hash.ZEROES });
     {
-        var children_ = fc.getChildren(&duplicate_parent).?;
+        var children_ = fork_choice.getChildren(&duplicate_parent).?;
         const children = children_.keys();
 
         try std.testing.expect(
@@ -1582,79 +1589,79 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
         );
     }
     try std.testing.expectEqual(
-        fc.bestOverallSlot(),
+        fork_choice.bestOverallSlot(),
         child,
     );
 }
 
 test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
-    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, linear_fork_tuples[0..]);
-    defer fc.deinit();
+    var fork_choice = try ForkChoice.initForTest(test_allocator, linear_fork_tuples[0..]);
+    defer fork_choice.deinit();
     const duplicate_confirmed_slot: Slot = 1;
     const duplicate_confirmed_key: Hash = Hash.ZEROES;
-    const candidates = try fc.markForkValidCandidate(&.{
+    const candidates = try fork_choice.markForkValidCandidate(&.{
         .slot = duplicate_confirmed_slot,
         .hash = duplicate_confirmed_key,
     });
     defer candidates.deinit();
 
     {
-        var it = fc.fork_infos.keyIterator();
+        var it = fork_choice.fork_infos.keyIterator();
 
         while (it.next()) |slot_hash_key| {
             const slot = slot_hash_key.slot;
             if (slot <= duplicate_confirmed_slot) {
-                try std.testing.expect(fc.isDuplicateConfirmed(slot_hash_key).?);
+                try std.testing.expect(fork_choice.isDuplicateConfirmed(slot_hash_key).?);
             } else {
-                try std.testing.expect(!fc.isDuplicateConfirmed(slot_hash_key).?);
+                try std.testing.expect(!fork_choice.isDuplicateConfirmed(slot_hash_key).?);
             }
-            try std.testing.expect(fc.latestInvalidAncestor(slot_hash_key.*) == null);
+            try std.testing.expect(fork_choice.latestInvalidAncestor(slot_hash_key.*) == null);
         }
     }
 
     // Mark a later descendant invalid
     const invalid_descendant_slot = 5;
     const invalid_descendant_key: Hash = Hash.ZEROES;
-    try fc.markForkInvalidCandidate(&.{
+    try fork_choice.markForkInvalidCandidate(&.{
         .slot = invalid_descendant_slot,
         .hash = invalid_descendant_key,
     });
 
     {
-        var it = fc.fork_infos.keyIterator();
+        var it = fork_choice.fork_infos.keyIterator();
         while (it.next()) |slot_hash_key| {
             const slot = slot_hash_key.slot;
             if (slot <= duplicate_confirmed_slot) {
                 // All ancestors of the duplicate confirmed slot should:
                 // 1) Be duplicate confirmed
                 // 2) Have no invalid ancestors
-                try std.testing.expect(fc.isDuplicateConfirmed(slot_hash_key).?);
-                try std.testing.expect(fc.latestInvalidAncestor(slot_hash_key.*) == null);
+                try std.testing.expect(fork_choice.isDuplicateConfirmed(slot_hash_key).?);
+                try std.testing.expect(fork_choice.latestInvalidAncestor(slot_hash_key.*) == null);
             } else if (slot >= invalid_descendant_slot) {
                 // Anything descended from the invalid slot should:
                 // 1) Not be duplicate confirmed
                 // 2) Should have an invalid ancestor == `invalid_descendant_slot`
-                try std.testing.expect(!fc.isDuplicateConfirmed(slot_hash_key).?);
+                try std.testing.expect(!fork_choice.isDuplicateConfirmed(slot_hash_key).?);
                 try std.testing.expect(
-                    fc.latestInvalidAncestor(slot_hash_key.*).? == invalid_descendant_slot,
+                    fork_choice.latestInvalidAncestor(slot_hash_key.*).? == invalid_descendant_slot,
                 );
             } else {
                 // Anything in between the duplicate confirmed slot and the invalid slot should:
                 // 1) Not be duplicate confirmed
                 // 2) Should not have an invalid ancestor
-                try std.testing.expect(!fc.isDuplicateConfirmed(slot_hash_key).?);
-                try std.testing.expect(fc.latestInvalidAncestor(slot_hash_key.*) == null);
+                try std.testing.expect(!fork_choice.isDuplicateConfirmed(slot_hash_key).?);
+                try std.testing.expect(fork_choice.latestInvalidAncestor(slot_hash_key.*) == null);
             }
         }
     }
 }
 
 test "HeaviestSubtreeForkChoice.markForkValidandidate_mark_valid_then_ancestor_invalid" {
-    var fc = try HeaviestSubtreeForkChoice.initForTest(test_allocator, linear_fork_tuples[0..]);
-    defer fc.deinit();
+    var fork_choice = try ForkChoice.initForTest(test_allocator, linear_fork_tuples[0..]);
+    defer fork_choice.deinit();
     const duplicate_confirmed_slot: Slot = 4;
     const duplicate_confirmed_key: Hash = Hash.ZEROES;
-    const candidates = try fc.markForkValidCandidate(&.{
+    const candidates = try fork_choice.markForkValidCandidate(&.{
         .slot = duplicate_confirmed_slot,
         .hash = duplicate_confirmed_key,
     });
@@ -1664,7 +1671,7 @@ test "HeaviestSubtreeForkChoice.markForkValidandidate_mark_valid_then_ancestor_i
     // was duplicate confirmed by its descendant 4 already
     try std.testing.expectError(
         error.DuplicateConfirmedCannotBeMarkedInvalid,
-        fc.markForkInvalidCandidate(&.{
+        fork_choice.markForkInvalidCandidate(&.{
             .slot = 3,
             .hash = Hash.ZEROES,
         }),
@@ -1769,7 +1776,7 @@ fn compareSlotHashKey(_: void, a: SlotAndHash, b: SlotAndHash) bool {
 }
 
 pub fn setupDuplicateForks() !struct {
-    heaviest_subtree_fork_choice: *HeaviestSubtreeForkChoice,
+    fork_choice: *ForkChoice,
     duplicate_leaves_descended_from_4: []SlotAndHash,
     duplicate_leaves_descended_from_5: []SlotAndHash,
     duplicate_leaves_descended_from_6: []SlotAndHash,
@@ -1789,10 +1796,10 @@ pub fn setupDuplicateForks() !struct {
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
     // Build fork structure
-    var heaviest_subtree_fork_choice = try test_allocator.create(HeaviestSubtreeForkChoice);
-    errdefer test_allocator.destroy(heaviest_subtree_fork_choice);
+    var fork_choice = try test_allocator.create(ForkChoice);
+    errdefer test_allocator.destroy(fork_choice);
 
-    heaviest_subtree_fork_choice.* = try HeaviestSubtreeForkChoice.initForTest(
+    fork_choice.* = try ForkChoice.initForTest(
         test_allocator,
         fork_tuples[0..],
     );
@@ -1835,26 +1842,26 @@ pub fn setupDuplicateForks() !struct {
 
     // Add duplicate leaves to the fork structure
     for (duplicate_leaves_descended_from_4.items) |duplicate_leaf| {
-        try heaviest_subtree_fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
+        try fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
             .slot = 4,
             .hash = Hash.ZEROES,
         });
     }
     for (duplicate_leaves_descended_from_5.items) |duplicate_leaf| {
-        try heaviest_subtree_fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
+        try fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
             .slot = 5,
             .hash = Hash.ZEROES,
         });
     }
     for (duplicate_leaves_descended_from_6.items) |duplicate_leaf| {
-        try heaviest_subtree_fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
+        try fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
             .slot = 6,
             .hash = Hash.ZEROES,
         });
     }
 
     // Verify children of slot 4
-    var dup_children_4 = heaviest_subtree_fork_choice.getChildren(&.{
+    var dup_children_4 = fork_choice.getChildren(&.{
         .slot = 4,
         .hash = Hash.ZEROES,
     }).?;
@@ -1866,7 +1873,7 @@ pub fn setupDuplicateForks() !struct {
     // ));
 
     // Verify children of slot 5
-    var dup_children_5 = heaviest_subtree_fork_choice.getChildren(&.{
+    var dup_children_5 = fork_choice.getChildren(&.{
         .slot = 5,
         .hash = Hash.ZEROES,
     }).?;
@@ -1876,7 +1883,7 @@ pub fn setupDuplicateForks() !struct {
     // );
 
     // Verify children of slot 6
-    var dup_children_6 = heaviest_subtree_fork_choice.getChildren(&.{
+    var dup_children_6 = fork_choice.getChildren(&.{
         .slot = 6,
         .hash = Hash.ZEROES,
     }).?;
@@ -1886,7 +1893,7 @@ pub fn setupDuplicateForks() !struct {
     // );
 
     return .{
-        .heaviest_subtree_fork_choice = heaviest_subtree_fork_choice,
+        .fork_choice = fork_choice,
         .duplicate_leaves_descended_from_4 = try duplicate_leaves_descended_from_4.toOwnedSlice(),
         .duplicate_leaves_descended_from_5 = try duplicate_leaves_descended_from_5.toOwnedSlice(),
         .duplicate_leaves_descended_from_6 = try duplicate_leaves_descended_from_6.toOwnedSlice(),
