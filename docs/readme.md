@@ -1,4 +1,4 @@
-# sig docs!
+# docs
 
 docs are hosted and served by docusaurus in `/src/docs/docusaurus/`.
 
@@ -12,7 +12,7 @@ we use `generate.py` to copy the document stored in the `src` folder to the
 `generate.py` to copy the files to the `docusaurus/` folder. changes made in the
 `docusaurus/` folder will be overwritten.
 
-## Usage
+## usage
 
 to generate the docs, run:
 
