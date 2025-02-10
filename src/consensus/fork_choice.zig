@@ -401,10 +401,9 @@ pub const ForkChoice = struct {
 
         for (remove_set.keys()) |node_key| {
             // "Slots reachable from old root must exist in tree"
-            // TODO: Revisit. Panic if key is not found?.
-            if (self.fork_infos.getPtr(node_key)) |fork_info| {
-                fork_info.children.deinit();
-            }
+            // So okay to panic if that is not the case.
+            const fork_info = self.fork_infos.getPtr(node_key).?;
+            fork_info.children.deinit();
             _ = self.fork_infos.remove(node_key);
         }
 
