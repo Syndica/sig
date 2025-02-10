@@ -394,13 +394,10 @@ pub const ForkChoice = struct {
         var remove_set = try self.subtreeDiff(&self.tree_root, new_root);
         defer remove_set.deinit();
 
-        var remove_set_fork_infos = AutoHashMap(SlotAndHash, ForkInfo).init(self.allocator);
-        defer remove_set_fork_infos.deinit();
-
         for (remove_set.keys()) |node_key| {
-            const fork_info = self.fork_infos.getPtr(node_key) orelse
+            if (!self.fork_infos.contains(node_key)) {
                 return error.MissingForkInfo;
-            try remove_set_fork_infos.put(node_key, fork_info.*);
+            }
         }
 
         // Root to be made the new root should already exist in fork choice.
@@ -410,12 +407,11 @@ pub const ForkChoice = struct {
         // At this point, both the subtree to be removed and new root
         // are confirmed to be in the fork choice.
 
-        var iterator = remove_set_fork_infos.iterator();
-        while (iterator.next()) |entry| {
-            const key = entry.key_ptr;
-            const fork_info = entry.value_ptr;
+        for (remove_set.keys()) |node_key| {
+            // SAFETY: Previous contains check ensures this won't panic.
+            const fork_info = self.fork_infos.getPtr(node_key).?;
             fork_info.children.deinit();
-            _ = self.fork_infos.remove(key.*);
+            _ = self.fork_infos.remove(node_key);
         }
 
         root_fork_info.parent = null;
