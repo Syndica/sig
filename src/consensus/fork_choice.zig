@@ -431,7 +431,7 @@ pub const ForkChoice = struct {
         valid_slot_hash_key: *const SlotAndHash,
     ) !std.ArrayList(SlotAndHash) {
         var newly_duplicate_confirmed_ancestors = std.ArrayList(SlotAndHash).init(self.allocator);
-        // TODO: Revisit safety of this.
+        // The valid slot must exist in the tree already if we are marking it as valid.
         if (!self.isDuplicateConfirmed(valid_slot_hash_key).?) {
             try newly_duplicate_confirmed_ancestors.append(valid_slot_hash_key.*);
         }
