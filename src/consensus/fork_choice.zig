@@ -452,7 +452,7 @@ pub const ForkChoice = struct {
         defer children_hash_keys.deinit();
 
         for (children_hash_keys.keys()) |child_hash_key| {
-            _ = try self.doInsertAggregateOperation(
+            _ = try doInsertAggregateOperation(
                 &update_operations,
                 UpdateOperation{ .MarkValid = valid_slot_hash_key.slot },
                 child_hash_key,
@@ -488,7 +488,7 @@ pub const ForkChoice = struct {
             defer children_hash_keys.deinit();
 
             for (children_hash_keys.keys()) |child_hash_key| {
-                _ = try self.doInsertAggregateOperation(
+                _ = try doInsertAggregateOperation(
                     &update_operations,
                     UpdateOperation{ .MarkInvalid = invalid_slot_hash_key.slot },
                     child_hash_key,
@@ -767,49 +767,6 @@ pub const ForkChoice = struct {
         return reachable_set;
     }
 
-    fn doInsertAggregateOperation(
-        _: *ForkChoice,
-        update_operations: *UpdateOperations,
-        modify_fork_validity: ?UpdateOperation,
-        slot_hash_key: SlotAndHash,
-    ) !bool {
-        const aggregate_label = SlotAndHashLabel{
-            .slot_hash_key = slot_hash_key,
-            .label = .Aggregate,
-        };
-
-        if (update_operations.contains(aggregate_label)) {
-            return false;
-        }
-
-        if (modify_fork_validity) |mark_fork_validity| {
-            switch (mark_fork_validity) {
-                .MarkValid => |slot| {
-                    _ = try update_operations.put(
-                        SlotAndHashLabel{
-                            .slot_hash_key = slot_hash_key,
-                            .label = .MarkValid,
-                        },
-                        UpdateOperation{ .MarkValid = slot },
-                    );
-                },
-                .MarkInvalid => |slot| {
-                    _ = try update_operations.put(
-                        SlotAndHashLabel{
-                            .slot_hash_key = slot_hash_key,
-                            .label = .MarkInvalid,
-                        },
-                        UpdateOperation{ .MarkInvalid = slot },
-                    );
-                },
-                else => {},
-            }
-        }
-
-        _ = try update_operations.put(aggregate_label, .Aggregate);
-        return true;
-    }
-
     fn processUpdateOperations(
         self: *ForkChoice,
         update_operations_: UpdateOperations,
@@ -861,7 +818,7 @@ pub const ForkChoice = struct {
     ) !void {
         var parent_iter = self.ancestorIterator(slot_hash_key);
         while (parent_iter.next()) |parent_slot_hash_key| {
-            if (!try self.doInsertAggregateOperation(
+            if (!try doInsertAggregateOperation(
                 update_operations,
                 modify_fork_validity,
                 parent_slot_hash_key,
@@ -1089,6 +1046,47 @@ const AncestorIterator = struct {
     }
 };
 
+fn doInsertAggregateOperation(
+    update_operations: *UpdateOperations,
+    modify_fork_validity: ?UpdateOperation,
+    slot_hash_key: SlotAndHash,
+) !bool {
+    const aggregate_label = SlotAndHashLabel{
+        .slot_hash_key = slot_hash_key,
+        .label = .Aggregate,
+    };
+
+    if (update_operations.contains(aggregate_label)) {
+        return false;
+    }
+
+    if (modify_fork_validity) |mark_fork_validity| {
+        switch (mark_fork_validity) {
+            .MarkValid => |slot| {
+                _ = try update_operations.put(
+                    SlotAndHashLabel{
+                        .slot_hash_key = slot_hash_key,
+                        .label = .MarkValid,
+                    },
+                    UpdateOperation{ .MarkValid = slot },
+                );
+            },
+            .MarkInvalid => |slot| {
+                _ = try update_operations.put(
+                    SlotAndHashLabel{
+                        .slot_hash_key = slot_hash_key,
+                        .label = .MarkInvalid,
+                    },
+                    UpdateOperation{ .MarkInvalid = slot },
+                );
+            },
+            else => {},
+        }
+    }
+
+    _ = try update_operations.put(aggregate_label, .Aggregate);
+    return true;
+}
 const test_allocator = std.testing.allocator;
 
 test "HeaviestSubtreeForkChoice.subtreeDiff" {
