@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 
 const ScopedLogger = sig.trace.ScopedLogger;
-const Duration = sig.time.Duration;
 
 const AutoHashMap = std.AutoHashMap;
 const Instant = sig.time.Instant;
@@ -12,8 +11,6 @@ const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const Slot = sig.core.Slot;
-
-const MAX_ROOT_PRINT_SECONDS: Duration = Duration.fromSecs(60 * 60);
 
 const UpdateLabel = enum {
     Aggregate,
@@ -241,9 +238,7 @@ pub const ForkChoice = struct {
         maybe_parent: ?SlotAndHash,
     ) !void {
         errdefer self.deinit();
-        if (self.last_root_time.elapsed().gt(MAX_ROOT_PRINT_SECONDS)) {
-            // TODO implement self.print_state();
-        }
+        // TODO implement self.print_state();
 
         if (self.fork_infos.contains(slot_hash_key)) {
             // Comment from Agave: Can potentially happen if we repair the same version of the duplicate slot, after
