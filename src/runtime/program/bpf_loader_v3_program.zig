@@ -5,14 +5,11 @@ const Pubkey = sig.core.Pubkey;
 
 pub const execute = @import("bpf_loader_program_execute.zig").bpfLoaderProgramExecute;
 
-pub fn id() Pubkey {
-    return sig.runtime.ids.BPF_LOADER_V3_PROGRAM_ID;
-}
+pub const ID =
+    Pubkey.parseBase58String("BPFLoaderUpgradeab1e11111111111111111111111") catch unreachable;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L57
-pub fn computeUnits() u64 {
-    return 2_370;
-}
+pub const COMPUTE_UNITS = 2_370;
 
 // https://github.com/anza-xyz/agave/blob/5fb000f27e476add032e08a1de9e89310b0eab4b/sdk/program/src/bpf_loader_upgradeable.rs#L29
 pub const BpfLoaderV3ProgramState = union(enum) {

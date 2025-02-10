@@ -24,16 +24,16 @@ pub fn bpfLoaderProgramExecute(
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L408
     if (ids.NATIVE_LOADER_ID.equals(&program_account.getOwner())) {
         program_account.release();
-        if (bpf_loader_v1_program.id().equals(&ic.program_id)) {
-            try ic.tc.consumeCompute(bpf_loader_v1_program.computeUnits());
+        if (bpf_loader_v1_program.ID.equals(&ic.program_id)) {
+            try ic.tc.consumeCompute(bpf_loader_v1_program.COMPUTE_UNITS);
             try ic.tc.log("Deprecated loader is no longer supported", .{});
             return InstructionError.UnsupportedProgramId;
-        } else if (bpf_loader_v2_program.id().equals(&ic.program_id)) {
-            try ic.tc.consumeCompute(bpf_loader_v2_program.computeUnits());
+        } else if (bpf_loader_v2_program.ID.equals(&ic.program_id)) {
+            try ic.tc.consumeCompute(bpf_loader_v2_program.COMPUTE_UNITS);
             try ic.tc.log("BPF loader management instructions are no longer supported", .{});
             return InstructionError.UnsupportedProgramId;
-        } else if (bpf_loader_v3_program.id().equals(&ic.program_id)) {
-            try ic.tc.consumeCompute(bpf_loader_v3_program.computeUnits());
+        } else if (bpf_loader_v3_program.ID.equals(&ic.program_id)) {
+            try ic.tc.consumeCompute(bpf_loader_v3_program.COMPUTE_UNITS);
             return executeBpfLoaderV3ProgramInstruction(allocator, ic);
         } else {
             return InstructionError.IncorrectProgramId;
@@ -202,30 +202,30 @@ test "executeInitializeBuffer" {
                 .{
                     .pubkey = buffer_account_key,
                     .data = initial_buffer_account_data,
-                    .owner = bpf_loader_v3_program.id(),
+                    .owner = bpf_loader_v3_program.ID,
                 },
                 .{
                     .pubkey = buffer_authority_key,
                 },
                 .{
-                    .pubkey = bpf_loader_v3_program.id(),
+                    .pubkey = bpf_loader_v3_program.ID,
                     .owner = ids.NATIVE_LOADER_ID,
                 },
             },
-            .compute_meter = bpf_loader_v3_program.computeUnits(),
+            .compute_meter = bpf_loader_v3_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{
                     .pubkey = buffer_account_key,
                     .data = final_buffer_account_data,
-                    .owner = bpf_loader_v3_program.id(),
+                    .owner = bpf_loader_v3_program.ID,
                 },
                 .{
                     .pubkey = buffer_authority_key,
                 },
                 .{
-                    .pubkey = bpf_loader_v3_program.id(),
+                    .pubkey = bpf_loader_v3_program.ID,
                     .owner = ids.NATIVE_LOADER_ID,
                 },
             },
