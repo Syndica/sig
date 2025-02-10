@@ -5,7 +5,7 @@ const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/clock/src/lib.rs#L184
-pub const Clock = struct {
+pub const Clock = extern struct {
     /// The current `Slot`.
     slot: Slot,
     /// The timestamp of the first `Slot` in this `Epoch`.
@@ -26,7 +26,6 @@ pub const Clock = struct {
     /// [oracle]: https://docs.solanalabs.com/implemented-proposals/validator-timestamp-oracle
     unix_timestamp: i64,
 
-    pub fn id() Pubkey {
-        return sig.runtime.ids.SYSVAR_CLOCK_ID;
-    }
+    pub const ID =
+        Pubkey.parseBase58String("SysvarC1ock11111111111111111111111111111111") catch unreachable;
 };
