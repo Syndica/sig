@@ -74,7 +74,7 @@ pub const ForkInfo = struct {
         self.children.deinit();
     }
 
-    /// Returns if the fork rooted at this node is included in fork choice
+    /// Returns true if the fork rooted at this node is included in fork choice
     fn isCandidate(self: *const ForkInfo) bool {
         return self.latest_invalid_ancestor == null;
     }
@@ -93,15 +93,15 @@ pub const ForkInfo = struct {
         newly_valid_ancestor: Slot,
     ) void {
         // Check if there is a latest invalid ancestor
-        if (self.latest_invalid_ancestor) |invalid_ancestor| {
+        if (self.latest_invalid_ancestor) |latest_invalid_ancestor| {
             // If the latest invalid ancestor is less than or equal to the newly valid ancestor,
             // clear the latest invalid ancestor
-            if (invalid_ancestor <= newly_valid_ancestor) {
+            if (latest_invalid_ancestor <= newly_valid_ancestor) {
                 self.logger.info().logf(
                     \\ Fork choice for {} clearing latest invalid ancestor  
                     \\ {} because {} was duplicate confirmed
                 ,
-                    .{ my_key, invalid_ancestor, newly_valid_ancestor },
+                    .{ my_key, latest_invalid_ancestor, newly_valid_ancestor },
                 );
                 self.latest_invalid_ancestor = null;
             }
@@ -936,6 +936,25 @@ pub const HeaviestSubtreeForkChoice = struct {
                 const child_height = child_fork_info.height;
                 is_duplicate_confirmed = is_duplicate_confirmed or
                     child_fork_info.is_duplicate_confirmed;
+
+                // Child forks that are not candidates still contribute to the weight
+                // of the subtree rooted at `slot_hash_key`. For instance:
+                //
+                //     Build fork structure:
+                //           slot 0
+                //             |
+                //           slot 1
+                //           /    \
+                //     slot 2     |
+                //         |     slot 3 (34%)
+                // slot 4 (66%)
+
+                //     If slot 4 is a duplicate slot, so no longer qualifies as a candidate until
+                //     the slot is confirmed, the weight of votes on slot 4 should still count towards
+                //     slot 2, otherwise we might pick slot 3 as the heaviest fork to build blocks on
+                //     instead of slot 2.
+
+                // See comment above for why this check is outside of the `is_candidate` check.
 
                 // Add the child's stake to the subtree stake
                 stake_for_subtree += child_stake_for_subtree;
