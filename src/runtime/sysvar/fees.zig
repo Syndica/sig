@@ -10,7 +10,6 @@ pub const Fees = struct {
         lamports_per_signature: u64,
     };
 
-    pub fn id() Pubkey {
-        return sig.runtime.ids.SYSVAR_FEES_ID;
-    }
+    pub const ID =
+        Pubkey.parseBase58String("SysvarFees111111111111111111111111111111111") catch unreachable;
 };

@@ -116,7 +116,7 @@ pub const InstructionContext = struct {
     ) InstructionError!T {
         if (index >= self.accounts.len) return InstructionError.NotEnoughAccountKeys;
         const actual = self.accounts[index].pubkey;
-        if (!T.id().equals(&actual)) return InstructionError.InvalidArgument;
+        if (!T.ID.equals(&actual)) return InstructionError.InvalidArgument;
         return if (self.tc.sysvar_cache.get(T)) |value|
             value
         else

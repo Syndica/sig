@@ -70,7 +70,7 @@ pub fn createInstructionContext(
 ) !InstructionContext {
     const program_index = blk: {
         for (tc.accounts, 0..) |account, index|
-            if (account.pubkey.equals(&program.id()))
+            if (account.pubkey.equals(&program.ID))
                 break :blk index;
         return error.CoulfNotFindProgramAccount;
     };
@@ -89,7 +89,7 @@ pub fn createInstructionContext(
 
     return .{
         .tc = tc,
-        .program_id = program.id(),
+        .program_id = program.ID,
         .program_index = @truncate(program_index),
         .instruction = try bincode.writeAlloc(allocator, instruction, .{}),
         .accounts = try accounts.toOwnedSlice(),

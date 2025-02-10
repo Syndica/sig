@@ -29,9 +29,8 @@ pub const Rent = struct {
     /// distributed to validators.
     burn_percent: u8,
 
-    pub fn id() Pubkey {
-        return sig.runtime.ids.SYSVAR_RENT_ID;
-    }
+    pub const ID =
+        Pubkey.parseBase58String("SysvarRent111111111111111111111111111111111") catch unreachable;
 
     pub fn default() Rent {
         return .{

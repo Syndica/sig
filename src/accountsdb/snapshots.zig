@@ -21,7 +21,7 @@ const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
 const Inflation = sig.accounts_db.genesis_config.Inflation;
 const Rent = sig.accounts_db.genesis_config.Rent;
 const UnixTimestamp = sig.accounts_db.genesis_config.UnixTimestamp;
-const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
 
 const Logger = sig.trace.Logger;
 
@@ -2188,7 +2188,7 @@ pub const StatusCache = struct {
             return error.SlotHistoryMismatch;
         }
         for (slots_seen.keys()) |slot| {
-            if (slot_history.check(slot) != .Found) {
+            if (slot_history.check(slot) != .found) {
                 return error.SlotNotFoundInHistory;
             }
         }
@@ -2196,7 +2196,7 @@ pub const StatusCache = struct {
         var slots_checked: u32 = 0;
         var slot = slot_history.newest();
         while (slot >= slot_history.oldest() and slots_checked != MAX_CACHE_ENTRIES) {
-            if (slot_history.check(slot) == .Found) {
+            if (slot_history.check(slot) == .found) {
                 slots_checked += 1;
                 if (!slots_seen.contains(slot)) {
                     return error.SlotNotFoundInStatusCache;

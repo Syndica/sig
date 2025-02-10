@@ -10,6 +10,9 @@ pub const RecentBlockhashes = struct {
     /// entry holds the most recent blockhash.
     entries: []const Entry,
 
+    pub const ID =
+        Pubkey.parseBase58String("SysvarRecentB1ockHashes11111111111111111111") catch unreachable;
+
     pub const Entry = struct {
         blockhash: Hash,
         fee_calculator: Fees.FeeCalculator,
@@ -17,9 +20,5 @@ pub const RecentBlockhashes = struct {
 
     pub fn isEmpty(self: RecentBlockhashes) bool {
         return self.entries.len == 0;
-    }
-
-    pub fn id() Pubkey {
-        return sig.runtime.ids.SYSVAR_RECENT_BLOCKHASHES_ID;
     }
 };

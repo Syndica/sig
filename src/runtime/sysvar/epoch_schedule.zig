@@ -1,5 +1,7 @@
 const sig = @import("../../sig.zig");
 
+const Pubkey = sig.core.Pubkey;
+
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/epoch-schedule/src/lib.rs#L56
 pub const EpochSchedule = struct {
     /// The maximum number of slots in each epoch.
@@ -21,4 +23,7 @@ pub const EpochSchedule = struct {
     ///
     /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
     first_normal_slot: u64,
+
+    pub const ID =
+        Pubkey.parseBase58String("SysvarEpochSchedu1e111111111111111111111111") catch unreachable;
 };

@@ -24,7 +24,7 @@ pub fn systemProgramExecute(
 ) InstructionError!void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
-    try ic.tc.consumeCompute(system_program.computeUnits());
+    try ic.tc.consumeCompute(system_program.COMPUTE_UNITS);
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L304-L308
@@ -374,7 +374,7 @@ fn executeUpgradeNonceAccount(
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
-    if (!account.getOwner().equals(&system_program.id()))
+    if (!account.getOwner().equals(&system_program.ID))
         return InstructionError.InvalidAccountOwner;
 
     if (!account.isWritable()) return InstructionError.InvalidArgument;
@@ -405,7 +405,7 @@ fn allocate(
         return InstructionError.MissingRequiredSignature;
     }
 
-    if (account.getData().len > 0 or !account.getOwner().equals(&system_program.id())) {
+    if (account.getData().len > 0 or !account.getOwner().equals(&system_program.ID)) {
         try ic.tc.log("Allocate: account {} already in use", .{account.getPubkey()});
         ic.tc.maybe_custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
@@ -790,7 +790,7 @@ test "executeCreateAccount" {
             .create_account = .{
                 .lamports = 1_000_000,
                 .space = 0,
-                .owner = system_program.id(),
+                .owner = system_program.ID,
             },
         },
         &.{
@@ -809,7 +809,7 @@ test "executeCreateAccount" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = account_1_key },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
             .compute_meter = 150,
         },
@@ -819,10 +819,10 @@ test "executeCreateAccount" {
                 .{
                     .pubkey = account_1_key,
                     .lamports = 1_000_000,
-                    .owner = system_program.id(),
+                    .owner = system_program.ID,
                     .data = &.{},
                 },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
         },
     );
@@ -855,14 +855,14 @@ test "executeAssign" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .owner = new_owner },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
         },
     );
@@ -901,15 +901,15 @@ test "executeTransfer" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = account_1_key, .lamports = 0 },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{ .pubkey = account_1_key, .lamports = 1_000_000 },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
         },
     );
@@ -925,7 +925,7 @@ test "executeCreateAccountWithSeed" {
     const seed = &[_]u8{0x10} ** 32;
 
     const account_0_key = Pubkey.initRandom(prng.random());
-    const account_1_key = try pubkey_utils.createWithSeed(base, seed, system_program.id());
+    const account_1_key = try pubkey_utils.createWithSeed(base, seed, system_program.ID);
 
     try expectProgramExecuteResult(
         std.testing.allocator,
@@ -936,7 +936,7 @@ test "executeCreateAccountWithSeed" {
                 .seed = seed,
                 .lamports = 1_000_000,
                 .space = 0,
-                .owner = system_program.id(),
+                .owner = system_program.ID,
             },
         },
         &.{
@@ -961,16 +961,16 @@ test "executeCreateAccountWithSeed" {
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = account_1_key },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
-                .{ .pubkey = account_1_key, .lamports = 1_000_000, .owner = system_program.id() },
+                .{ .pubkey = account_1_key, .lamports = 1_000_000, .owner = system_program.ID },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
         },
     );
@@ -1050,11 +1050,11 @@ test "executeAdvanceNonceAccount" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .data = nonce_state_bytes },
-                .{ .pubkey = RecentBlockhashes.id() },
+                .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
             .sysvar_cache = .{
@@ -1064,9 +1064,9 @@ test "executeAdvanceNonceAccount" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .data = final_nonce_state_bytes },
-                .{ .pubkey = RecentBlockhashes.id() },
+                .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
@@ -1148,12 +1148,12 @@ test "executeWithdrawNonceAccount" {
                     .data = nonce_state_bytes,
                 },
                 .{ .pubkey = account_1_key },
-                .{ .pubkey = RecentBlockhashes.id() },
-                .{ .pubkey = Rent.id() },
+                .{ .pubkey = RecentBlockhashes.ID },
+                .{ .pubkey = Rent.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .maybe_recent_blockhashes = recent_blockhashes,
                 .maybe_rent = rent,
@@ -1167,10 +1167,10 @@ test "executeWithdrawNonceAccount" {
                     .data = nonce_state_bytes,
                 },
                 .{ .pubkey = account_1_key, .lamports = withdraw_lamports },
-                .{ .pubkey = RecentBlockhashes.id() },
-                .{ .pubkey = Rent.id() },
+                .{ .pubkey = RecentBlockhashes.ID },
+                .{ .pubkey = Rent.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
             .sysvar_cache = .{
                 .maybe_recent_blockhashes = recent_blockhashes,
@@ -1254,11 +1254,11 @@ test "executeInitializeNonceAccount" {
                     .lamports = rent.minimumBalance(final_nonce_state_bytes.len),
                     .data = nonce_state_bytes,
                 },
-                .{ .pubkey = RecentBlockhashes.id() },
-                .{ .pubkey = Rent.id() },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = RecentBlockhashes.ID },
+                .{ .pubkey = Rent.ID },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
             .sysvar_cache = .{
@@ -1273,9 +1273,9 @@ test "executeInitializeNonceAccount" {
                     .lamports = rent.minimumBalance(final_nonce_state_bytes.len),
                     .data = final_nonce_state_bytes,
                 },
-                .{ .pubkey = RecentBlockhashes.id() },
-                .{ .pubkey = Rent.id() },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = RecentBlockhashes.ID },
+                .{ .pubkey = Rent.ID },
+                .{ .pubkey = system_program.ID },
             },
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
@@ -1342,15 +1342,15 @@ test "executeAuthorizeNonceAccount" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .data = nonce_state_bytes },
                 .{ .pubkey = initial_nonce_authority },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .data = final_nonce_state_bytes },
                 .{ .pubkey = initial_nonce_authority },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
         },
     );
@@ -1384,14 +1384,14 @@ test "executeAllocate" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .data = &[_]u8{0} ** allocation_size },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
             .accounts_resize_delta = allocation_size,
         },
@@ -1408,7 +1408,7 @@ test "executeAllocateWithSeed" {
     const seed = &[_]u8{0x10} ** 32;
     const allocation_size = 1024;
 
-    const account_0_key = try pubkey_utils.createWithSeed(base, seed, system_program.id());
+    const account_0_key = try pubkey_utils.createWithSeed(base, seed, system_program.ID);
 
     try expectProgramExecuteResult(
         std.testing.allocator,
@@ -1418,7 +1418,7 @@ test "executeAllocateWithSeed" {
                 .base = base,
                 .seed = seed,
                 .space = allocation_size,
-                .owner = system_program.id(),
+                .owner = system_program.ID,
             },
         },
         &.{
@@ -1437,15 +1437,15 @@ test "executeAllocateWithSeed" {
             .accounts = &.{
                 .{ .pubkey = account_0_key },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .data = &[_]u8{0} ** 1024 },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
             .accounts_resize_delta = allocation_size,
         },
@@ -1490,15 +1490,15 @@ test "executeAssignWithSeed" {
             .accounts = &.{
                 .{ .pubkey = account_0_key },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .owner = owner },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
         },
     );
@@ -1549,16 +1549,16 @@ test "executeTransferWithSeed" {
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = base },
                 .{ .pubkey = account_2_key, .lamports = 0 },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{ .pubkey = base },
                 .{ .pubkey = account_2_key, .lamports = 1_000_000 },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
         },
     );
@@ -1615,14 +1615,14 @@ test "executeUpgradeNonceAccount" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .data = nonce_state_bytes },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
-            .compute_meter = system_program.computeUnits(),
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .data = final_nonce_state_bytes },
-                .{ .pubkey = system_program.id() },
+                .{ .pubkey = system_program.ID },
             },
         },
     );

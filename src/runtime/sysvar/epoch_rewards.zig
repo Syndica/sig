@@ -1,6 +1,7 @@
 const sig = @import("../../sig.zig");
 
 const Hash = sig.core.Hash;
+const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/epoch-rewards/src/lib.rs#L26
 pub const EpochRewards = struct {
@@ -32,4 +33,7 @@ pub const EpochRewards = struct {
     /// Whether the rewards period (including calculation and distribution) is
     /// active
     active: bool,
+
+    pub const ID =
+        Pubkey.parseBase58String("SysvarEpochRewards1111111111111111111111111") catch unreachable;
 };
