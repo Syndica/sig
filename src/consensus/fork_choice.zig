@@ -151,7 +151,7 @@ pub const HeaviestSubtreeForkChoice = struct {
         logger: sig.trace.Logger,
         tree_root: SlotAndHash,
     ) !HeaviestSubtreeForkChoice {
-        var heaviest_subtree_fork_choice = HeaviestSubtreeForkChoice{
+        var self = HeaviestSubtreeForkChoice{
             .allocator = allocator,
             .logger = logger.withScope(@typeName(HeaviestSubtreeForkChoice)),
             .fork_infos = AutoHashMap(SlotAndHash, ForkInfo).init(allocator),
@@ -160,8 +160,8 @@ pub const HeaviestSubtreeForkChoice = struct {
             .last_root_time = Instant.now(),
         };
 
-        _ = try heaviest_subtree_fork_choice.addNewLeafSlot(tree_root, null);
-        return heaviest_subtree_fork_choice;
+        _ = try self.addNewLeafSlot(tree_root, null);
+        return self;
     }
 
     pub fn initForTest(
