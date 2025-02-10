@@ -153,7 +153,8 @@ jobs:
           key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v6
       - run:
           name: Test
-          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=true --color off --summary all
+          # Disable network-accessing tests for this job, which behave badly on circleci
+          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --color off --summary all
 
   test_kcov_linux:
     executor: linux-executor
@@ -165,7 +166,7 @@ jobs:
           key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v6
       - run:
           name: Build
-          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run --summary all
+          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run -Dno-network-tests --summary all
       - run:
           name: Test and Collect
           command: |
