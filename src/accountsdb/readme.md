@@ -31,7 +31,7 @@ the main files include:
 
 --force-new-snapshot-download                                    force download of new snapshot (usually to get a more up-to-date snapshot)
 
--t, --trusted_validator <Trusted Validator>                          public key of a validator whose snapshot hash is trusted to be downloaded
+-t, --trusted-validator <Trusted Validator>                          public key of a validator whose snapshot hash is trusted to be downloaded
 ```
 
 Additional context on specific cli flags is given throughout these docs.
@@ -46,7 +46,7 @@ zig-out/bin/sig snapshot-download \
     --entrypoint 34.83.231.102:8001 \
     --entrypoint 145.40.67.83:8001 \
     # pubkeys of validators whos snapshot hashes you trust
-    --trusted_validator x19btgySsrjuo25CJCj7oE7DREwezDhnx7pZkj2v69N
+    --trusted-validator x19btgySsrjuo25CJCj7oE7DREwezDhnx7pZkj2v69N
     # minimum MB/s speed when downloading snapshot
     --min-snapshot-download-speed 50 \
 ```
