@@ -22,7 +22,7 @@ The main code can be found in `/src/transaction_sender/`.
 ---
 
 <p>
-<img alt="Transaction Sender Service Diagram" src="/docs/docusaurus/static/img/transaction-sender-service.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Transaction Sender Service Diagram" src="/img/transaction-sender-service.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 
 ## Receive Transactions Thread (service.zig)

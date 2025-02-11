@@ -71,7 +71,7 @@ the key struct used is `AccountPayload` which uses a versioned system to support
 
 ### GeyserWriter
 
-![](/docs/docusaurus/static/img/2024-08-07-17-27-36.png)
+![](/img/2024-08-07-17-27-36.png)
 
 #### IO Thread
 

@@ -77,7 +77,7 @@ graph TD
     D --> E[BlockstoreReader]
 ```
 
-![ShredNetwork Component](/docs/docusaurus/static/img/shred_network_component.png)
+![ShredNetwork Component](/img/shred_network_component.png)
 
 - The **ShredNetwork** utilizes:
   - The **ShredInserter** to insert shreds received from the network via Gossip.
