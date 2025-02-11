@@ -23,12 +23,19 @@ pub fn main() !void {
 
     var input_path: ?[]const u8 = null;
     var assemble: bool = false;
+    var version: sbpf.Version = .v3;
 
     var args = try std.process.argsWithAllocator(allocator);
     _ = args.next();
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "-a")) {
             assemble = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-v")) {
+            const version_string = args.next() orelse fail("provide SBPF version", .{});
+            version = std.meta.stringToEnum(sbpf.Version, version_string) orelse
+                fail("invalid SBPF version", .{});
             continue;
         }
 
@@ -68,9 +75,7 @@ pub fn main() !void {
         );
     }
 
-    const config: Config = .{
-        .minimum_version = if (assemble) .v3 else .v0,
-    };
+    const config: Config = .{ .minimum_version = version };
     var executable = if (assemble)
         try Executable.fromAsm(allocator, bytes, config)
     else exec: {
