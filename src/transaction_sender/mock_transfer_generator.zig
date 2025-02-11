@@ -417,16 +417,18 @@ pub const MockTransferService = struct {
         const transaction = sig.core.Transaction{
             .signatures = signatures,
             .version = .legacy,
-            .signature_count = @intCast(signatures.len),
-            .readonly_signed_count = 0,
-            .readonly_unsigned_count = 1,
-            .account_keys = addresses,
-            .recent_blockhash = recent_blockhash,
-            .instructions = instructions,
+            .msg = .{
+                .signature_count = @intCast(signatures.len),
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 1,
+                .account_keys = addresses,
+                .recent_blockhash = recent_blockhash,
+                .instructions = instructions,
+            },
         };
 
-        var buffer = [_]u8{0} ** sig.core.Transaction.MAX_BYTES;
-        const signable = try transaction.writeSignableToSlice(&buffer);
+        const buffer = [_]u8{0} ** sig.core.Transaction.MAX_BYTES;
+        const signable = &buffer; //try transaction.msgwriteSignableToSlice(&buffer);
         var noise: [KeyPair.seed_length]u8 = undefined;
         random.bytes(noise[0..]);
         transaction.signatures[0] = .{ .data = (try from_keypair.sign(signable, noise)).toBytes() };
