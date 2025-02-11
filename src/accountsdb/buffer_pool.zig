@@ -81,7 +81,7 @@ const FileIdFileOffset = packed struct(u64) {
 };
 
 const IoUringError = err: {
-    var Error = error{};
+    var Error = error{ NotOpenForReading, InputOutput, IsDir };
     const fns = &.{ IoUring.read, IoUring.submit_and_wait, IoUring.copy_cqes, IoUring.init };
     for (fns) |func| {
         Error = Error || @typeInfo(
@@ -303,10 +303,14 @@ pub const BufferPool = struct {
                 var cqe_buf: [IO_URING_ENTRIES]std.os.linux.io_uring_cqe = undefined;
                 const n_cqes_copied = try threadlocal_io_uring.copy_cqes(&cqe_buf, 0);
                 for (cqe_buf[0..n_cqes_copied]) |cqe| {
-                    if (cqe.err() != .SUCCESS) std.debug.panic(
-                        "Read failed, cqe: {}, err: {}, i: {}, file: {}",
-                        .{ cqe, cqe.err(), i, file },
-                    );
+                    switch (cqe.err()) {
+                        .SUCCESS => {},
+                        .BADF => return error.NotOpenForReading, // Can be a race condition.
+                        .IO => return error.InputOutput,
+                        .ISDIR => return error.IsDir,
+                        else => |err| return std.posix.unexpectedErrno(err),
+                    }
+
                     const bytes_read: FrameOffset = @intCast(cqe.res);
                     std.debug.assert(bytes_read > 0);
                 }
@@ -1152,6 +1156,13 @@ test "BufferPool indicesRequired" {
 test "BufferPool init deinit" {
     const allocator = std.testing.allocator;
 
+    const initDeinit = struct {
+        fn f(alloc: std.mem.Allocator, n_frames: u32) !void {
+            var bp = try BufferPool.init(alloc, n_frames);
+            defer bp.deinit(alloc);
+        }
+    }.f;
+
     for (
         &[_]u32{
             2,     3,     4,     8,
@@ -1164,6 +1175,12 @@ test "BufferPool init deinit" {
         errdefer std.debug.print("failed on case(i={}): {}", .{ i, frame_count });
         var bp = try BufferPool.init(allocator, frame_count);
         bp.deinit(allocator);
+
+        try std.testing.checkAllAllocationFailures(
+            std.testing.allocator,
+            initDeinit,
+            .{frame_count},
+        );
     }
 }
 
@@ -1498,4 +1515,21 @@ test "AccountDataHandle bincode" {
             deserialised_from_handle.owned_allocation,
         );
     }
+}
+
+test "BufferPool failed read" {
+    var bp = try BufferPool.init(std.testing.allocator, 1024);
+    defer bp.deinit(std.testing.allocator);
+
+    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+
+    const read = try bp.read(std.testing.allocator, file, FileId.fromInt(0), 0, 1000);
+    read.deinit(std.testing.allocator);
+
+    const read2 = bp.read(std.testing.failing_allocator, file, FileId.fromInt(0), 10_000, 11_000);
+    try std.testing.expectError(error.OutOfMemory, read2);
+
+    file.close(); // close early => fail the read
+    const read3 = bp.read(std.testing.allocator, file, FileId.fromInt(0), 20_000, 31_000);
+    try std.testing.expectError(error.NotOpenForReading, read3);
 }
