@@ -201,7 +201,7 @@ fn executeAdvanceNonceAccount(
     const recent_blockhashes = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
     if (recent_blockhashes.isEmpty()) {
         try ic.tc.log("Advance nonce account: recent blockhash list is empty", .{});
-        ic.tc.maybe_custom_error = @intFromError(SystemProgramError.NonceNoRecentBlockhashes);
+        ic.tc.custom_error = @intFromError(SystemProgramError.NonceNoRecentBlockhashes);
         return InstructionError.Custom;
     }
 
@@ -237,7 +237,7 @@ fn executeInitializeNonceAccount(
     const recent_blockhashes = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
     if (recent_blockhashes.isEmpty()) {
         try ic.tc.log("Initialize nonce account: recent blockhash list is empty", .{});
-        ic.tc.maybe_custom_error = @intFromError(SystemProgramError.NonceNoRecentBlockhashes);
+        ic.tc.custom_error = @intFromError(SystemProgramError.NonceNoRecentBlockhashes);
         return InstructionError.Custom;
     }
 
@@ -407,7 +407,7 @@ fn allocate(
 
     if (account.getData().len > 0 or !account.getOwner().equals(&system_program.ID)) {
         try ic.tc.log("Allocate: account {} already in use", .{account.getPubkey()});
-        ic.tc.maybe_custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
+        ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
     }
 
@@ -416,7 +416,7 @@ fn allocate(
             "Allocate: requested {}, max allowed {}",
             .{ space, system_program.MAX_PERMITTED_DATA_LENGTH },
         );
-        ic.tc.maybe_custom_error = @intFromError(SystemProgramError.InvalidAccountDataLength);
+        ic.tc.custom_error = @intFromError(SystemProgramError.InvalidAccountDataLength);
         return InstructionError.Custom;
     }
 
@@ -457,7 +457,7 @@ fn createAccount(
 
         if (account.getLamports() > 0) {
             try ic.tc.log("Create Account: account {} already in use", .{account.getPubkey()});
-            ic.tc.maybe_custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
+            ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
             return InstructionError.Custom;
         }
 
@@ -517,7 +517,7 @@ fn transferVerified(
                 "Transfer: insufficient lamports {}, need {}",
                 .{ account.getLamports(), lamports },
             );
-            ic.tc.maybe_custom_error =
+            ic.tc.custom_error =
                 @intFromError(SystemProgramError.ResultWithNegativeLamports);
             return InstructionError.Custom;
         }
@@ -567,7 +567,7 @@ fn advanceNonceAccount(
 
             if (data.durable_nonce.eql(next_durable_nonce)) {
                 try ic.tc.log("Advance nonce account: nonce can only advance once per slot", .{});
-                ic.tc.maybe_custom_error =
+                ic.tc.custom_error =
                     @intFromError(SystemProgramError.NonceBlockhashNotExpired);
                 return InstructionError.Custom;
             }
@@ -625,7 +625,7 @@ fn withdrawNonceAccount(
                             "Withdraw nonce account: nonce can only advance once per slot",
                             .{},
                         );
-                        ic.tc.maybe_custom_error =
+                        ic.tc.custom_error =
                             @intFromError(SystemProgramError.NonceBlockhashNotExpired);
                         return InstructionError.Custom;
                     }
@@ -764,12 +764,12 @@ fn checkSeedAddress(
     comptime log_err_fmt: []const u8,
 ) !void {
     const created = pubkey_utils.createWithSeed(base, seed, owner) catch |err| {
-        ic.tc.maybe_custom_error = @intFromError(err);
+        ic.tc.custom_error = @intFromError(err);
         return InstructionError.Custom;
     };
     if (!expected.equals(&created)) {
         try ic.tc.log(log_err_fmt, .{ expected, created });
-        ic.tc.maybe_custom_error = @intFromError(SystemProgramError.AddressWithSeedMismatch);
+        ic.tc.custom_error = @intFromError(SystemProgramError.AddressWithSeedMismatch);
         return InstructionError.Custom;
     }
 }
@@ -1058,7 +1058,7 @@ test "executeAdvanceNonceAccount" {
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
             .sysvar_cache = .{
-                .maybe_recent_blockhashes = recent_blockhashes,
+                .recent_blockhashes = recent_blockhashes,
             },
         },
         .{
@@ -1071,7 +1071,7 @@ test "executeAdvanceNonceAccount" {
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
             .sysvar_cache = .{
-                .maybe_recent_blockhashes = recent_blockhashes,
+                .recent_blockhashes = recent_blockhashes,
             },
         },
     );
@@ -1155,8 +1155,8 @@ test "executeWithdrawNonceAccount" {
             },
             .compute_meter = system_program.COMPUTE_UNITS,
             .sysvar_cache = .{
-                .maybe_recent_blockhashes = recent_blockhashes,
-                .maybe_rent = rent,
+                .recent_blockhashes = recent_blockhashes,
+                .rent = rent,
             },
         },
         .{
@@ -1173,8 +1173,8 @@ test "executeWithdrawNonceAccount" {
                 .{ .pubkey = system_program.ID },
             },
             .sysvar_cache = .{
-                .maybe_recent_blockhashes = recent_blockhashes,
-                .maybe_rent = rent,
+                .recent_blockhashes = recent_blockhashes,
+                .rent = rent,
             },
         },
     );
@@ -1262,8 +1262,8 @@ test "executeInitializeNonceAccount" {
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
             .sysvar_cache = .{
-                .maybe_recent_blockhashes = recent_blockhashes,
-                .maybe_rent = rent,
+                .recent_blockhashes = recent_blockhashes,
+                .rent = rent,
             },
         },
         .{
@@ -1280,8 +1280,8 @@ test "executeInitializeNonceAccount" {
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
             .sysvar_cache = .{
-                .maybe_recent_blockhashes = recent_blockhashes,
-                .maybe_rent = rent,
+                .recent_blockhashes = recent_blockhashes,
+                .rent = rent,
             },
         },
     );
