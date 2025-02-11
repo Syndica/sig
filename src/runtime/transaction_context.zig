@@ -110,7 +110,7 @@ pub const TransactionAccount = struct {
     pub fn writeWithLock(
         self: *TransactionAccount,
     ) error{AccountBorrowFailed}!struct { *AccountSharedData, WLockGuard } {
-        if (self.write_ref) return InstructionError.AccountBorrowFailed;
+        if (self.write_ref or self.read_refs > 0) return InstructionError.AccountBorrowFailed;
         self.write_ref = true;
         return .{ &self.account, .{ .write_ref = &self.write_ref } };
     }
