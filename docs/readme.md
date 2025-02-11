@@ -20,7 +20,17 @@ to generate the docs, run:
 python generate.py
 ```
 
-## markdown formatting
+*note:* you need to run this command from the docs/ directory.
+
+to check to see if all changes are up to date, run:
+
+```bash
+python check.py
+```
+
+*note:* this command is run during the CI/CD pipeline to ensure that the docs are up to date.
+
+## docs formatting
 
 to ensure that the markdown is formatted correctly, we use the following
 conventions:
