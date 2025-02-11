@@ -241,6 +241,7 @@ workflows:
   check_linux:
     jobs:
       - check_style
+      - check_docs
       - setup_zig:
           name: setup_zig_linux
           target: "linux-x86_64"
