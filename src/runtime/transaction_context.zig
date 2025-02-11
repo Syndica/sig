@@ -34,10 +34,10 @@ pub const TransactionContext = struct {
 
     /// If an error other than an InstructionError occurs during execution its value will
     /// be set here and InstructionError.custom will be returned
-    maybe_custom_error: ?u32,
+    custom_error: ?u32,
 
     /// Optional log collector
-    maybe_log_collector: ?LogCollector,
+    log_collector: ?LogCollector,
 
     // TODO: the following feilds should live above the transaction level, however, they are
     // defined here temporarily for convenience.
@@ -62,9 +62,9 @@ pub const TransactionContext = struct {
         comptime fmt: []const u8,
         args: anytype,
     ) error{Custom}!void {
-        if (self.maybe_log_collector) |*log_collector|
-            log_collector.log(fmt, args) catch |err| {
-                self.maybe_custom_error = @intFromError(err);
+        if (self.log_collector) |*lc|
+            lc.log(fmt, args) catch |err| {
+                self.custom_error = @intFromError(err);
                 return InstructionError.Custom;
             };
     }

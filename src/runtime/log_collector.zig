@@ -8,15 +8,15 @@ pub const LogCollector = struct {
     allocator: std.mem.Allocator,
     messages: std.ArrayListUnmanaged([]const u8),
     bytes_written: usize,
-    maybe_bytes_limit: ?usize,
+    bytes_limit: ?usize,
     bytes_limit_reached: bool,
 
-    pub fn init(allocator: std.mem.Allocator, maybe_bytes_limit: ?usize) LogCollector {
+    pub fn init(allocator: std.mem.Allocator, bytes_limit: ?usize) LogCollector {
         return .{
             .allocator = allocator,
             .messages = .{},
             .bytes_written = 0,
-            .maybe_bytes_limit = maybe_bytes_limit,
+            .bytes_limit = bytes_limit,
             .bytes_limit_reached = false,
         };
     }
@@ -45,9 +45,9 @@ pub const LogCollector = struct {
 
         const message = try std.fmt.allocPrint(self.allocator, fmt, args);
 
-        if (self.maybe_bytes_limit) |bytes_limit| {
+        if (self.bytes_limit) |bl| {
             const bytes_written = self.bytes_written +| message.len;
-            if (bytes_written >= bytes_limit and !self.bytes_limit_reached) {
+            if (bytes_written >= bl and !self.bytes_limit_reached) {
                 self.allocator.free(message);
                 self.bytes_limit_reached = true;
                 try self.messages.append(

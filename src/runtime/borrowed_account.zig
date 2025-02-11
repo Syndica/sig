@@ -150,7 +150,7 @@ pub const BorrowedAccount = struct {
         tc.accounts_resize_delta +|= @intCast(length -| self.getData().len);
         self.account.resize(allocator, length) catch |err| {
             // TODO: confirm if this is the correct approach
-            tc.maybe_custom_error = @intFromError(err);
+            tc.custom_error = @intFromError(err);
             return InstructionError.Custom;
         };
     }
