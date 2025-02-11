@@ -27,8 +27,8 @@ const TransactionContextParams = struct {
     accounts: []const TransactionAccountParams,
     accounts_resize_delta: i64 = 0,
     compute_meter: u64 = 0,
-    maybe_custom_error: ?u32 = null,
-    maybe_log_collector: ?LogCollector = null,
+    custom_error: ?u32 = null,
+    log_collector: ?LogCollector = null,
     sysvar_cache: SysvarCache = .{},
     lamports_per_signature: u64 = 0,
     last_blockhash: Hash = Hash.ZEROES,
@@ -52,8 +52,8 @@ pub fn createTransactionContext(
         .accounts = try accounts.toOwnedSlice(),
         .accounts_resize_delta = params.accounts_resize_delta,
         .compute_meter = params.compute_meter,
-        .maybe_custom_error = params.maybe_custom_error,
-        .maybe_log_collector = params.maybe_log_collector,
+        .custom_error = params.custom_error,
+        .log_collector = params.log_collector,
         .sysvar_cache = params.sysvar_cache,
         .lamports_per_signature = params.lamports_per_signature,
         .last_blockhash = params.last_blockhash,
@@ -188,7 +188,7 @@ pub fn expectTransactionContextEqual(
     if (expected.compute_meter != actual.compute_meter)
         return error.ComputeMeterMismatch;
 
-    if (expected.maybe_custom_error != actual.maybe_custom_error)
+    if (expected.custom_error != actual.custom_error)
         return error.MaybeCustomErrorMismatch;
 
     // TODO: implement eqls for LogCollector
