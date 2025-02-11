@@ -1,14 +1,25 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-// zig stdlib does not define the msghdr{_const} for macos.
-pub const msghdr_const = extern struct {
-    name: ?*const std.posix.sockaddr,
-    namelen: std.posix.socklen_t,
-    iov: [*]const std.posix.iovec_const,
-    iovlen: usize,
-    control: ?*const anyopaque,
-    controllen: usize,
-    flags: i32,
+// Zig 0.13 does not define the msghdr{_const} for macos.
+pub const msghdr_const = switch (builtin.os.tag) {
+    .macos => extern struct {
+        /// optional address
+        name: ?*const std.posix.sockaddr,
+        /// size of address
+        namelen: std.posix.socklen_t,
+        /// scatter/gather array
+        iov: [*]const std.posix.iovec_const,
+        /// # elements in iov
+        iovlen: i32,
+        /// ancillary data
+        control: ?*const anyopaque,
+        /// ancillary data buffer len
+        controllen: std.posix.socklen_t,
+        /// flags on received message
+        flags: i32,
+    },
+    else => std.posix.msghdr_const,
 };
 
 extern "c" fn sendmsg(sockfd: std.posix.fd_t, msg: *const msghdr_const, flags: u32) isize;

@@ -20,10 +20,12 @@ pub fn build(b: *Build) void {
         \\Don't install any of the binaries implied by the specified steps, only run them.
         \\Use in conjunction with 'no-run' to avoid running as well.
     ) orelse false;
+    const no_network_tests = b.option(bool, "no-network-tests", "Do not run any tests that depend on the network.") orelse false;
 
     // Build options
     const build_options = b.addOptions();
     build_options.addOption(BlockstoreDB, "blockstore_db", blockstore_db);
+    build_options.addOption(bool, "no_network_tests", no_network_tests);
 
     // CLI build steps
     const install_step = b.getInstallStep();

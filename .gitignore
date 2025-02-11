@@ -8,6 +8,7 @@
 /data/fuzz-data
 /gossip-dumps
 /kcov-output
+/kcov-merged
 /results
 /validator
 /logs
@@ -15,3 +16,5 @@
 # desktop app config
 .DS_Store
 .vscode/
+
+# docs

@@ -65,7 +65,7 @@ pub fn main() !void {
         // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
     }
 
-    var shred_version_option = cli.Option{
+    var shred_version_option: cli.Option = .{
         .long_name = "shred-version",
         .help = "The shred version for the network",
         .value_ref = cli.mkRef(&current_config.shred_version),
@@ -73,18 +73,17 @@ pub fn main() !void {
         .value_name = "Shred Version",
     };
 
-    var gossip_host_option = cli.Option{
+    var gossip_host_option: cli.Option = .{
         .long_name = "gossip-host",
         .help =
-        \\IPv4 address for the validator to advertise in gossip
-        \\ - default: get from --entrypoint, fallback to 127.0.0.1"
+        \\IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1
         ,
         .value_ref = cli.mkRef(&current_config.gossip.host),
         .required = false,
         .value_name = "Gossip Host",
     };
 
-    var gossip_port_option = cli.Option{
+    var gossip_port_option: cli.Option = .{
         .long_name = "gossip-port",
         .help = "The port to run gossip listener - default: 8001",
         .short_alias = 'p',
@@ -93,7 +92,7 @@ pub fn main() !void {
         .value_name = "Gossip Port",
     };
 
-    var repair_port_option = cli.Option{
+    var repair_port_option: cli.Option = .{
         .long_name = "repair-port",
         .help = "The port to run shred repair listener - default: 8002",
         .value_ref = cli.mkRef(&current_config.shred_network.repair_port),
@@ -101,7 +100,7 @@ pub fn main() !void {
         .value_name = "Repair Port",
     };
 
-    var turbine_recv_port_option = cli.Option{
+    var turbine_recv_port_option: cli.Option = .{
         .long_name = "turbine-port",
         .help = "The port to run turbine shred listener (aka TVU port) - default: 8003",
         .value_ref = cli.mkRef(&current_config.shred_network.turbine_recv_port),
@@ -109,7 +108,7 @@ pub fn main() !void {
         .value_name = "Turbine Port",
     };
 
-    var turbine_num_retransmit_threads = cli.Option{
+    var turbine_num_retransmit_threads_option: cli.Option = .{
         .long_name = "num-retransmit-threads",
         .help = "The number of retransmit threads to use for the turbine service" ++
             " - default: cpu count",
@@ -119,7 +118,7 @@ pub fn main() !void {
     };
 
     // TODO: Remove when no longer needed
-    var turbine_overwrite_stake_for_testing = cli.Option{
+    var turbine_overwrite_stake_for_testing_option: cli.Option = .{
         .long_name = "overwrite-stake-for-testing",
         .help = "Overwrite the stake for testing purposes",
         .value_ref = cli.mkRef(&current_config.turbine.overwrite_stake_for_testing),
@@ -127,7 +126,7 @@ pub fn main() !void {
         .value_name = "Overwrite stake for testing",
     };
 
-    var leader_schedule_option = cli.Option{
+    var leader_schedule_option: cli.Option = .{
         .long_name = "leader-schedule",
         .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
         .value_ref = cli.mkRef(&current_config.leader_schedule_path),
@@ -135,7 +134,7 @@ pub fn main() !void {
         .value_name = "Leader schedule source",
     };
 
-    var max_shreds_option = cli.Option{
+    var max_shreds_option: cli.Option = .{
         .long_name = "max-shreds",
         .help = "Max number of shreds to store in the blockstore",
         .value_ref = cli.mkRef(&current_config.leader_schedule_path),
@@ -143,7 +142,7 @@ pub fn main() !void {
         .value_name = "max shreds",
     };
 
-    var test_repair_option = cli.Option{
+    var test_repair_option: cli.Option = .{
         .long_name = "test-repair-for-slot",
         .help = "Set a slot here to repeatedly send repair requests for shreds from this slot." ++
             " This is only intended for use during short-lived tests of the repair service." ++
@@ -153,7 +152,7 @@ pub fn main() !void {
         .value_name = "slot number",
     };
 
-    var retransmit_option = cli.Option{
+    var retransmit_option: cli.Option = .{
         .long_name = "no-retransmit",
         .help = "Shreds will be received and stored but not retransmitted",
         .value_ref = cli.mkRef(&current_config.shred_network.no_retransmit),
@@ -161,7 +160,7 @@ pub fn main() !void {
         .value_name = "Disable Shred Retransmission",
     };
 
-    var dump_shred_tracker = cli.Option{
+    var dump_shred_tracker_option: cli.Option = .{
         .long_name = "dump-shred-tracker",
         .help = "Create shred-tracker.txt to visually represent the currently tracked slots.",
         .value_ref = cli.mkRef(&current_config.shred_network.dump_shred_tracker),
@@ -169,7 +168,7 @@ pub fn main() !void {
         .value_name = "Dump Shred Tracker",
     };
 
-    var gossip_entrypoints_option = cli.Option{
+    var gossip_entrypoints_option: cli.Option = .{
         .long_name = "entrypoint",
         .help = "gossip address of the entrypoint validators",
         .short_alias = 'e',
@@ -178,7 +177,7 @@ pub fn main() !void {
         .value_name = "Entrypoints",
     };
 
-    var network_option = cli.Option{
+    var network_option: cli.Option = .{
         .long_name = "network",
         .help = "cluster to connect to - adds gossip entrypoints, sets default genesis file path",
         .short_alias = 'n',
@@ -187,8 +186,8 @@ pub fn main() !void {
         .value_name = "Network for Entrypoints",
     };
 
-    var trusted_validators_option = cli.Option{
-        .long_name = "trusted_validator",
+    var trusted_validators_option: cli.Option = .{
+        .long_name = "trusted-validator",
         .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
         .short_alias = 't',
         .value_ref = cli.mkRef(&current_config.gossip.trusted_validators),
@@ -196,7 +195,7 @@ pub fn main() !void {
         .value_name = "Trusted Validator",
     };
 
-    var gossip_spy_node_option = cli.Option{
+    var gossip_spy_node_option: cli.Option = .{
         .long_name = "spy-node",
         .help = "run as a gossip spy node (minimize outgoing packets)",
         .value_ref = cli.mkRef(&current_config.gossip.spy_node),
@@ -204,7 +203,7 @@ pub fn main() !void {
         .value_name = "Spy Node",
     };
 
-    var gossip_dump_option = cli.Option{
+    var gossip_dump_option: cli.Option = .{
         .long_name = "dump-gossip",
         .help = "periodically dump gossip table to csv files and logs",
         .value_ref = cli.mkRef(&current_config.gossip.dump),
@@ -212,7 +211,7 @@ pub fn main() !void {
         .value_name = "Gossip Table Dump",
     };
 
-    var log_level_option = cli.Option{
+    var log_level_option: cli.Option = .{
         .long_name = "log-level",
         .help = "The amount of detail to log (default = debug)",
         .short_alias = 'l',
@@ -221,7 +220,7 @@ pub fn main() !void {
         .value_name = "err|warn|info|debug",
     };
 
-    var metrics_port_option = cli.Option{
+    var metrics_port_option: cli.Option = .{
         .long_name = "metrics-port",
         .help = "port to expose prometheus metrics via http - default: 12345",
         .short_alias = 'm',
@@ -231,7 +230,7 @@ pub fn main() !void {
     };
 
     // accounts-db options
-    var n_threads_snapshot_load_option = cli.Option{
+    var n_threads_snapshot_load_option: cli.Option = .{
         .long_name = "n-threads-snapshot-load",
         .help = "number of threads used to initialize the account index: - default: ncpus",
         .short_alias = 't',
@@ -240,7 +239,7 @@ pub fn main() !void {
         .value_name = "n_threads_snapshot_load",
     };
 
-    var n_threads_snapshot_unpack_option = cli.Option{
+    var n_threads_snapshot_unpack_option: cli.Option = .{
         .long_name = "n-threads-snapshot-unpack",
         .help = "number of threads to unpack snapshots (from .tar.zst) - default: ncpus * 2",
         .short_alias = 'u',
@@ -249,7 +248,7 @@ pub fn main() !void {
         .value_name = "n_threads_snapshot_unpack",
     };
 
-    var force_unpack_snapshot_option = cli.Option{
+    var force_unpack_snapshot_option: cli.Option = .{
         .long_name = "force-unpack-snapshot",
         .help = "unpacks a snapshot (even if it exists)",
         .short_alias = 'f',
@@ -258,7 +257,7 @@ pub fn main() !void {
         .value_name = "force_unpack_snapshot",
     };
 
-    var use_disk_index_option = cli.Option{
+    var use_disk_index_option: cli.Option = .{
         .long_name = "use-disk-index",
         .help = "use disk-memory for the account index",
         .value_ref = cli.mkRef(&current_config.accounts_db.use_disk_index),
@@ -266,7 +265,7 @@ pub fn main() !void {
         .value_name = "use_disk_index",
     };
 
-    var force_new_snapshot_download_option = cli.Option{
+    var force_new_snapshot_download_option: cli.Option = .{
         .long_name = "force-new-snapshot-download",
         .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
         .value_ref = cli.mkRef(&current_config.accounts_db.force_new_snapshot_download),
@@ -274,7 +273,7 @@ pub fn main() !void {
         .value_name = "force_new_snapshot_download",
     };
 
-    var snapshot_dir_option = cli.Option{
+    var snapshot_dir_option: cli.Option = .{
         .long_name = "snapshot-dir",
         .help = "path to snapshot directory" ++
             " (where snapshots are downloaded and/or unpacked to/from)" ++
@@ -285,7 +284,7 @@ pub fn main() !void {
         .value_name = "snapshot_dir",
     };
 
-    var snapshot_metadata_only = cli.Option{
+    var snapshot_metadata_only_option: cli.Option = .{
         .long_name = "snapshot-metadata-only",
         .help = "load only the snapshot metadata",
         .value_ref = cli.mkRef(&current_config.accounts_db.snapshot_metadata_only),
@@ -293,7 +292,7 @@ pub fn main() !void {
         .value_name = "snapshot_metadata_only",
     };
 
-    var genesis_file_path = cli.Option{
+    var genesis_file_path_option: cli.Option = .{
         .long_name = "genesis-file-path",
         .help = "path to the genesis file." ++
             " defaults to 'data/genesis-files/<network>_genesis.bin' if --network option is set",
@@ -303,7 +302,7 @@ pub fn main() !void {
         .value_name = "genesis_file_path",
     };
 
-    var min_snapshot_download_speed_mb_option = cli.Option{
+    var min_snapshot_download_speed_mb_option: cli.Option = .{
         .long_name = "min-snapshot-download-speed",
         .help = "minimum download speed of full snapshots in megabytes per second" ++
             " - default: 20MB/s",
@@ -312,7 +311,7 @@ pub fn main() !void {
         .value_name = "min_snapshot_download_speed_mb",
     };
 
-    var number_of_index_shards_option = cli.Option{
+    var number_of_index_shards_option: cli.Option = .{
         .long_name = "number-of-index-bins",
         .help = "number of shards for the account index's pubkey_ref_map",
         .value_ref = cli.mkRef(&current_config.accounts_db.number_of_index_shards),
@@ -320,7 +319,7 @@ pub fn main() !void {
         .value_name = "number_of_index_shards",
     };
 
-    var accounts_per_file_estimate = cli.Option{
+    var accounts_per_file_estimate_option: cli.Option = .{
         .long_name = "accounts-per-file-estimate",
         .short_alias = 'a',
         .help = "number of accounts to estimate inside of account files (used for pre-allocation)",
@@ -329,7 +328,7 @@ pub fn main() !void {
         .value_name = "accounts_per_file_estimate",
     };
 
-    var fastload_option = cli.Option{
+    var fastload_option: cli.Option = .{
         .long_name = "fastload",
         .help = "fastload the accounts db",
         .value_ref = cli.mkRef(&current_config.accounts_db.fastload),
@@ -337,7 +336,7 @@ pub fn main() !void {
         .value_name = "fastload",
     };
 
-    var save_index_option = cli.Option{
+    var save_index_option: cli.Option = .{
         .long_name = "save-index",
         .help = "save the account index to disk",
         .value_ref = cli.mkRef(&current_config.accounts_db.save_index),
@@ -346,7 +345,7 @@ pub fn main() !void {
     };
 
     // geyser options
-    var enable_geyser_option = cli.Option{
+    var enable_geyser_option: cli.Option = .{
         .long_name = "enable-geyser",
         .help = "enable geyser",
         .value_ref = cli.mkRef(&current_config.geyser.enable),
@@ -354,7 +353,7 @@ pub fn main() !void {
         .value_name = "enable_geyser",
     };
 
-    var geyser_pipe_path_option = cli.Option{
+    var geyser_pipe_path_option: cli.Option = .{
         .long_name = "geyser-pipe-path",
         .help = "path to the geyser pipe",
         .value_ref = cli.mkRef(&current_config.geyser.pipe_path),
@@ -362,7 +361,7 @@ pub fn main() !void {
         .value_name = "geyser_pipe_path",
     };
 
-    var geyser_writer_fba_bytes_option = cli.Option{
+    var geyser_writer_fba_bytes_option: cli.Option = .{
         .long_name = "geyser-writer-fba-bytes",
         .help = "number of bytes to allocate for the geyser writer",
         .value_ref = cli.mkRef(&current_config.geyser.writer_fba_bytes),
@@ -371,7 +370,7 @@ pub fn main() !void {
     };
 
     // test-transaction sender options
-    var n_transactions_option = cli.Option{
+    var n_transactions_option: cli.Option = .{
         .long_name = "n-transactions",
         .short_alias = 't',
         .help = "number of transactions to send",
@@ -380,13 +379,43 @@ pub fn main() !void {
         .value_name = "n_transactions",
     };
 
-    var n_lamports_per_tx_option = cli.Option{
+    var n_lamports_per_tx_option: cli.Option = .{
         .long_name = "n-lamports-per-tx",
         .short_alias = 'l',
         .help = "number of lamports to send per transaction",
         .value_ref = cli.mkRef(&current_config.test_transaction_sender.n_lamports_per_transaction),
         .required = false,
         .value_name = "n_lamports_per_tx",
+    };
+
+    const gossip_options_base = [_]*cli.Option{
+        &gossip_host_option,
+        &gossip_port_option,
+        &gossip_entrypoints_option,
+        &network_option,
+    };
+    const gossip_options_node = [_]*cli.Option{
+        &gossip_spy_node_option,
+        &gossip_dump_option,
+    };
+
+    const accounts_db_options_base = [_]*cli.Option{
+        &snapshot_dir_option,
+        &use_disk_index_option,
+        &n_threads_snapshot_load_option,
+        &n_threads_snapshot_unpack_option,
+        &force_unpack_snapshot_option,
+        &number_of_index_shards_option,
+        &genesis_file_path_option,
+        &accounts_per_file_estimate_option,
+    };
+    const accounts_db_options_download = [_]*cli.Option{
+        &min_snapshot_download_speed_mb_option,
+        &trusted_validators_option,
+    };
+    const accounts_db_options_index = [_]*cli.Option{
+        &fastload_option,
+        &save_index_option,
     };
 
     const app = cli.App{
@@ -428,15 +457,9 @@ pub fn main() !void {
                             \\Start Solana gossip client on specified port.
                             ,
                         },
-                        .options = &.{
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &gossip_spy_node_option,
-                            &gossip_dump_option,
-                            &network_option,
-                            &shred_version_option,
-                        },
+                        .options = &[_]*cli.Option{&shred_version_option} ++
+                            gossip_options_base ++
+                            gossip_options_node,
                         .target = .{
                             .action = .{
                                 .exec = gossip,
@@ -452,14 +475,9 @@ pub fn main() !void {
                             \\Start a full Solana validator client.
                             ,
                         },
-                        .options = &.{
-                            &shred_version_option,
-                            // gossip
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &gossip_spy_node_option,
-                            &gossip_dump_option,
+                        .options = &[_]*cli.Option{&shred_version_option} ++
+                            gossip_options_base ++
+                            gossip_options_node ++ .{
                             // repair
                             &turbine_recv_port_option,
                             &repair_port_option,
@@ -467,28 +485,18 @@ pub fn main() !void {
                             // blockstore cleanup service
                             &max_shreds_option,
                             // turbine
-                            &turbine_num_retransmit_threads,
-                            // accounts-db
-                            &snapshot_dir_option,
-                            &use_disk_index_option,
-                            &n_threads_snapshot_load_option,
-                            &n_threads_snapshot_unpack_option,
-                            &force_unpack_snapshot_option,
-                            &min_snapshot_download_speed_mb_option,
-                            &force_new_snapshot_download_option,
-                            &trusted_validators_option,
-                            &number_of_index_shards_option,
-                            &genesis_file_path,
-                            &accounts_per_file_estimate,
-                            &fastload_option,
-                            &save_index_option,
+                            &turbine_num_retransmit_threads_option,
+                        } ++
+                            accounts_db_options_base ++
+                            accounts_db_options_download ++
+                            .{&force_new_snapshot_download_option} ++
+                            accounts_db_options_index ++ .{
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
                             &geyser_writer_fba_bytes_option,
                             // general
                             &leader_schedule_option,
-                            &network_option,
                         },
                         .target = .{
                             .action = .{
@@ -514,28 +522,22 @@ pub fn main() !void {
                             \\ for testnet or another `-u` for mainnet/devnet.
                             ,
                         },
-                        .options = &.{
-                            &shred_version_option,
-                            // gossip
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &gossip_spy_node_option,
-                            &gossip_dump_option,
+                        .options = &[_]*cli.Option{&shred_version_option} ++
+                            gossip_options_base ++
+                            gossip_options_node ++ .{
                             // shred_network
                             &turbine_recv_port_option,
                             &repair_port_option,
                             &test_repair_option,
-                            &dump_shred_tracker,
-                            &turbine_num_retransmit_threads,
-                            &turbine_overwrite_stake_for_testing,
+                            &dump_shred_tracker_option,
+                            &turbine_num_retransmit_threads_option,
+                            &turbine_overwrite_stake_for_testing_option,
                             &retransmit_option,
                             // blockstore cleanup service
                             &max_shreds_option,
                             // general
                             &leader_schedule_option,
-                            &network_option,
-                            &snapshot_metadata_only,
+                            &snapshot_metadata_only_option,
                         },
                         .target = .{
                             .action = .{
@@ -552,19 +554,13 @@ pub fn main() !void {
                             \\starts a gossip client and downloads a snapshot from peers
                             ,
                         },
-                        .options = &.{
+                        .options = &[_]*cli.Option{
                             &shred_version_option,
                             // where to download the snapshot
                             &snapshot_dir_option,
-                            // download options
-                            &trusted_validators_option,
-                            &min_snapshot_download_speed_mb_option,
-                            // gossip options
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &network_option,
-                        },
+                        } ++
+                            accounts_db_options_download ++
+                            gossip_options_base,
                         .target = .{
                             .action = .{
                                 .exec = downloadSnapshot,
@@ -579,17 +575,9 @@ pub fn main() !void {
                             \\Loads and validates a snapshot (doesnt download a snapshot).
                             ,
                         },
-                        .options = &.{
-                            &snapshot_dir_option,
-                            &use_disk_index_option,
-                            &n_threads_snapshot_load_option,
-                            &n_threads_snapshot_unpack_option,
-                            &force_unpack_snapshot_option,
-                            &number_of_index_shards_option,
-                            &genesis_file_path,
-                            &accounts_per_file_estimate,
-                            &fastload_option,
-                            &save_index_option,
+                        .options = &[_]*cli.Option{} ++
+                            accounts_db_options_base ++
+                            accounts_db_options_index ++ .{
                             &network_option,
                             // geyser
                             &enable_geyser_option,
@@ -612,7 +600,7 @@ pub fn main() !void {
                         },
                         .options = &.{
                             &snapshot_dir_option,
-                            &genesis_file_path,
+                            &genesis_file_path_option,
                         },
                         .target = .{
                             .action = .{
@@ -629,7 +617,7 @@ pub fn main() !void {
                             \\ Loads and prints a manifest file
                             ,
                         },
-                        .options = &.{
+                        .options = &[_]*cli.Option{
                             &snapshot_dir_option,
                         },
                         .target = .{
@@ -652,30 +640,15 @@ pub fn main() !void {
                             \\- exits
                             ,
                         },
-                        .options = &.{
+                        .options = &[_]*cli.Option{
                             &shred_version_option,
-                            // gossip
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &gossip_spy_node_option,
-                            &gossip_dump_option,
-                            // accounts-db
-                            &snapshot_dir_option,
-                            &use_disk_index_option,
-                            &n_threads_snapshot_load_option,
-                            &n_threads_snapshot_unpack_option,
-                            &force_unpack_snapshot_option,
-                            &min_snapshot_download_speed_mb_option,
-                            &force_new_snapshot_download_option,
-                            &trusted_validators_option,
-                            &number_of_index_shards_option,
-                            &genesis_file_path,
-                            &accounts_per_file_estimate,
-                            // general
                             &leader_schedule_option,
-                            &network_option,
-                        },
+                        } ++
+                            gossip_options_base ++
+                            gossip_options_node ++
+                            accounts_db_options_base ++
+                            accounts_db_options_download ++
+                            .{&force_new_snapshot_download_option},
                         .target = .{
                             .action = .{
                                 .exec = printLeaderSchedule,
@@ -692,21 +665,15 @@ pub fn main() !void {
                             \\transfer transactions between to hard coded testnet accounts.
                             ,
                         },
-                        .options = &.{
+                        .options = &[_]*cli.Option{
                             &shred_version_option,
-                            // gossip
-                            &network_option,
-                            &gossip_host_option,
-                            &gossip_port_option,
-                            &gossip_entrypoints_option,
-                            &gossip_spy_node_option,
-                            &gossip_dump_option,
-                            &network_option,
-                            &genesis_file_path,
+                            &genesis_file_path_option,
                             // command specific
                             &n_transactions_option,
                             &n_lamports_per_tx_option,
-                        },
+                        } ++
+                            gossip_options_base ++
+                            gossip_options_node,
                         .target = .{
                             .action = .{
                                 .exec = testTransactionSenderService,

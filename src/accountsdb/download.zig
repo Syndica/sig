@@ -621,7 +621,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
 
 test "accounts_db.download: test remove untrusted peers" {
     const allocator = std.testing.allocator;
-    var table = try GossipTable.init(allocator);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     var prng = std.rand.DefaultPrng.init(0);
@@ -697,7 +697,7 @@ test "accounts_db.download: test remove untrusted peers" {
 
 test "accounts_db.download: test finding peers" {
     const allocator = std.testing.allocator;
-    var table = try GossipTable.init(allocator);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     var prng = std.rand.DefaultPrng.init(0);
