@@ -451,6 +451,7 @@ pub const Vm = struct {
                     .{ inst.src == .r0, inst.src != .r0 }
                 else
                     .{ true, true };
+
                 if (external) {
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
                         resolved = true;
