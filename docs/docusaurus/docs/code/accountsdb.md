@@ -61,7 +61,7 @@ snapshots contain the full state of the blockchain (including all accounts) at a
 
 the typical snapshot layout is as follows:
 
-![](/docs/docusaurus/static/img/2024-04-24-19-06-08.png)
+![](/img/2024-04-24-19-06-08.png)
 
 when starting up, we use `SnapshotFiles.find` with the snapshot directory string
 to find the highest metadata file existing. if it doesnt exist, then a new
@@ -72,7 +72,7 @@ snapshot is downloaded.
 A snapshot contains multiple account files which contains all the account data for a specific slot.
 Each file is organized as a list of accounts as bytes.
 
-![](/docs/docusaurus/static/img/2024-04-24-14-46-38.png)
+![](/img/2024-04-24-14-46-38.png)
 
 ## startup
 
@@ -158,7 +158,7 @@ The account index shards pubkeys across multiple shards where each pubkey is ass
 This allows for parallel read/write access to the database (locking only
 a single shard for each lookup vs the entire struct).
 
-![](/docs/docusaurus/static/img/2024-04-24-15-10-09.png)
+![](/img/2024-04-24-15-10-09.png)
 
 due to the large amount of accounts on solana, storing all account references
 in ram would be very expensive - which is why we also support storing account
@@ -293,7 +293,7 @@ for example, one thread will merge shards[0..10] another will merge shards[10..2
 this approach generates the index with zero locks
 
 <div align="center">
-<img src="/docs/docusaurus/static/img/2024-03-21-09-15-08.png" width="520" height="340"></img>
+<img src="/img/2024-03-21-09-15-08.png" width="520" height="340"></img>
 </div>
 
 ### geyser during load

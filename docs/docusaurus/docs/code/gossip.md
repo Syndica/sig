@@ -55,44 +55,44 @@ The gossip service runs three main threads:
 and two auxillary threads for reading and writing to the gossip socket.
 
 <p>
-<img alt="Gossip Service Diagram" src="/docs/docusaurus/static/img/gossip-service.png" style={{width: "800px", margin: "auto"}}></img>
+<img alt="Gossip Service Diagram" src="/img/gossip-service.png" style={{width: "800px", margin: "auto"}}></img>
 </p>
 
 ### Verify Messages
 The verify messages thread verifies all incoming packets and forwards valid gossip messages to the process messages thread.
 <p>
-<img alt="Gossip Service Diagram" src="/docs/docusaurus/static/img/gossip-service-verify-packets.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Gossip Service Diagram" src="/img/gossip-service-verify-packets.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 
 ### Process Messages
 The process messages thread handles all verified incoming gossip messages.
 <p>
-<img alt="Process Messages Diagram" src="/docs/docusaurus/static/img/gossip-service-process-messages.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Process Messages Diagram" src="/img/gossip-service-process-messages.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 
 <summary>Handle Ping Messages</summary>
 <p>
-<img alt="Handle Ping Messages Diagram" src="/docs/docusaurus/static/img/gossip-service-handle-ping-messages.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Handle Ping Messages Diagram" src="/img/gossip-service-handle-ping-messages.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 <summary>Handle Pong Messages</summary>
 <p>
-<img alt="Handle Pong Messages Diagram" src="/docs/docusaurus/static/img/gossip-service-handle-pong-messages.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Handle Pong Messages Diagram" src="/img/gossip-service-handle-pong-messages.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 <summary>Handle Pull Requests</summary>
 <p>
-<img alt="Handle Pull Requests Diagram" src="/docs/docusaurus/static/img/gossip-service-handle-pull-requests.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Handle Pull Requests Diagram" src="/img/gossip-service-handle-pull-requests.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 <summary>Handle Pull Responses</summary>
 <p>
-<img alt="Handle Pull Responses Diagram" src="/docs/docusaurus/static/img/gossip-service-handle-pull-responses.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Handle Pull Responses Diagram" src="/img/gossip-service-handle-pull-responses.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 <summary>Handle Push Messages</summary>
 <p>
-<img alt="Handle Push Messages Diagram" src="/docs/docusaurus/static/img/gossip-service-handle-push-messages.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Handle Push Messages Diagram" src="/img/gossip-service-handle-push-messages.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 <summary>Handle Prune Messages</summary>
 <p>
-<img alt="Handle Prune Messages Diagram" src="/docs/docusaurus/static/img/gossip-service-handle-prune-messages.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Handle Prune Messages Diagram" src="/img/gossip-service-handle-prune-messages.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 
 ### Build Messages
@@ -100,14 +100,14 @@ The build messages thread uses the internal gossip service state to achieve two 
 - build pull requests to obtain missing data from peers
 - build push messages to inform peers of our current state
 <p>
-<img alt="Build Messages Diagram" src="/docs/docusaurus/static/img/gossip-service-build-messages.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Build Messages Diagram" src="/img/gossip-service-build-messages.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 
 <summary>Build Pull Requests</summary>
 <p>
-<img alt="Build Pull Requests" src="/docs/docusaurus/static/img/gossip-service-build-pull-requests.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Build Pull Requests" src="/img/gossip-service-build-pull-requests.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
 <summary>Build Push Messages</summary>
 <p>
-<img alt="Build Push Messages" src="/docs/docusaurus/static/img/gossip-service-build-push-messages.png" style={{width: "600px", margin: "auto"}}></img>
+<img alt="Build Push Messages" src="/img/gossip-service-build-push-messages.png" style={{width: "600px", margin: "auto"}}></img>
 </p>
