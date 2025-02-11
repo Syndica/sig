@@ -660,7 +660,7 @@ pub const GossipTable = struct {
         }
 
         // free memory while versioned_value still points to the correct data
-        versioned_value.value.data.deinit(self.allocator);
+        versioned_value.value.data.deinit(self.gossip_data_allocator);
 
         // remove from store
         // this operation replaces the data pointed to by versioned_value to
