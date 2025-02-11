@@ -1,0 +1,10 @@
+{
+  "position": 5,
+  "label": "Research",
+  "collapsible": true,
+  "collapsed": true,
+  "className": "red",
+  "customProps": {
+    "description": "Research results"
+  }
+}
