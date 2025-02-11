@@ -20,7 +20,7 @@ pub const Elf = struct {
     headers: Headers,
     data: Data,
     entry_pc: u64,
-    version: sbpf.SBPFVersion,
+    version: sbpf.Version,
     function_registry: Registry(u64),
     ro_section: Executable.Section,
     config: Config,
@@ -356,10 +356,18 @@ pub const Elf = struct {
         const offset = headers.header.e_entry -| text_section.sh_addr;
         const entry_pc = try std.math.divExact(u64, offset, 8);
 
-        const sbpf_version: sbpf.SBPFVersion = if (headers.header.e_flags == sbpf.EF_SBPF_V2)
-            .v2
-        else
-            .v1;
+        const sbpf_version: sbpf.Version = if (config.minimum_version == .v0)
+            if (headers.header.e_flags == sbpf.EF_SBPF_v1)
+                .v1
+            else
+                .v0
+        else switch (headers.header.e_flags) {
+            0 => .v0,
+            1 => .v1,
+            2 => .v2,
+            3 => .v3,
+            else => @enumFromInt(headers.header.e_flags),
+        };
 
         if (@intFromEnum(sbpf_version) < @intFromEnum(config.minimum_version))
             return error.VersionUnsupported;
@@ -539,7 +547,7 @@ pub const Elf = struct {
                     const in_text_section = self.inRangeOfShdr(
                         text_section_index,
                         r_offset,
-                    ) or version == .v1;
+                    ) or version == .v0;
                     const imm_offset = if (in_text_section) r_offset +| 4 else r_offset;
 
                     const addr_slice = try safeSlice(self.bytes, imm_offset, 4);
@@ -551,7 +559,7 @@ pub const Elf = struct {
                         addr +|= memory.PROGRAM_START;
                     }
 
-                    if (in_text_section or version == .v1) {
+                    if (in_text_section or version == .v0) {
                         {
                             const imm_low_offset = imm_offset;
                             const imm_slice = try safeSlice(self.bytes, imm_low_offset, 4);
@@ -615,7 +623,7 @@ pub const Elf = struct {
                         }
                     } else {
                         const address: u64 = switch (version) {
-                            .v1 => addr: {
+                            .v0 => addr: {
                                 const addr_slice = try safeSlice(self.bytes, imm_offset, 4);
                                 const address = std.mem.readInt(u32, addr_slice[0..4], .little);
                                 break :addr memory.PROGRAM_START +| address;
