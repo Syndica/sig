@@ -168,7 +168,7 @@ pub const Vm = struct {
                         break :value @bitCast(@as(i64, lhs_signed *% rhs_signed));
                     },
                     Instruction.neg => value: {
-                        if (!version.enableNegation()) return error.UnknownInstruction;
+                        if (version.disableNegation()) return error.UnknownInstruction;
                         const signed: i64 = @bitCast(lhs);
                         const negated: u64 = @bitCast(-signed);
                         break :value if (opcode.is64()) negated else @as(u32, @truncate(negated));
@@ -184,7 +184,7 @@ pub const Vm = struct {
                             break :value shifted;
                         }
                     },
-                    Instruction.hor => if (!version.enableLDDW()) value: {
+                    Instruction.hor => if (version.disableLDDW()) value: {
                         break :value lhs_large | @as(u64, inst.imm) << 32;
                     } else return error.UnknownInstruction,
                     else => unreachable,
@@ -471,15 +471,20 @@ pub const Vm = struct {
                 }
             },
             .call_reg => {
+                const src: sbpf.Instruction.Register = if (version.callRegUsesSrcReg())
+                    inst.src
+                else
+                    @enumFromInt(inst.imm);
+                const target_pc = registers.get(src);
+
                 try self.pushCallFrame();
 
-                const target_pc = registers.get(@enumFromInt(inst.imm));
                 next_pc = (target_pc -% self.vm_addr) / 8;
             },
 
             // other instructions
             .ld_dw_imm => {
-                if (!version.enableLDDW()) return error.UnknownInstruction;
+                if (version.disableLDDW()) return error.UnknownInstruction;
                 const value: u64 = (@as(u64, instructions[next_pc].imm) << 32) | inst.imm;
                 registers.set(inst.dst, value);
                 next_pc += 1;
@@ -520,7 +525,7 @@ pub const Vm = struct {
         }
     }
 
-    /// Performs a i64 sign-extension. This is commonly needed in SBPV1.
+    /// Performs a i64 sign-extension. This is commonly needed in SBPv0.
     ///
     /// NOTE: only use this inside of the VM impl!
     fn extend(input: anytype) u64 {

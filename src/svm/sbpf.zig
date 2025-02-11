@@ -3,7 +3,7 @@ const std = @import("std");
 const memory = @import("memory.zig");
 const assert = std.debug.assert;
 
-pub const EF_SBPF_V2: u32 = 0x20;
+pub const EF_SBPF_v1: u32 = 0x20;
 
 /// Solana BPF Elf Machine
 pub const EM_SBPF: std.elf.Elf64_Half = 263;
@@ -14,47 +14,73 @@ pub const EI_OSABI: u8 = 7;
 
 pub const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-pub const SBPFVersion = enum {
-    // v0,
+pub const Version = enum(u32) {
+    /// The "legacy" format
+    v0,
+    /// SIMD-0166
     v1,
+    /// SIMD-0174, SIMD-0173
     v2,
-    // v3,
-    // reserved,
+    /// SIMD-0178, SIMD-0179, SIMD-0189
+    v3,
+    /// support other versions as well!
+    _,
 
-    pub fn enableDynamicStackFrames(version: SBPFVersion) bool {
-        return version != .v1;
+    /// Enable SIMD-0166: SBPF dynamic stack frames
+    pub fn enableDynamicStackFrames(version: Version) bool {
+        return version.gte(.v1);
     }
 
-    pub fn enableElfVaddr(version: SBPFVersion) bool {
-        return version != .v1;
+    /// Enable SIMD-0174: SBPF arithmetics improvements
+    pub fn enablePqr(version: Version) bool {
+        return version.gte(.v2);
+    }
+    /// ... SIMD-0174
+    pub fn swapSubRegImmOperands(version: Version) bool {
+        return version.gte(.v2);
+    }
+    /// ... SIMD-0174
+    pub fn disableNegation(version: Version) bool {
+        return version.gte(.v2);
     }
 
-    pub fn enableLDDW(version: SBPFVersion) bool {
-        return version == .v1;
+    /// Enable SIMD-0173: SBPF instruction encoding improvements
+    pub fn callRegUsesSrcReg(version: Version) bool {
+        return version.gte(.v2);
+    }
+    /// ... SIMD-0173
+    pub fn disableLDDW(version: Version) bool {
+        return version.gte(.v2);
+    }
+    /// ... SIMD-0173
+    pub fn enableLe(version: Version) bool {
+        return version == .v0;
     }
 
-    pub fn enableStaticSyscalls(version: SBPFVersion) bool {
-        return version != .v1;
+    /// Enable SIMD-0178: SBPF Static Syscalls
+    ///
+    /// Enable SIMD-0179: SBPF stricter verification constraints
+    pub fn enableStaticSyscalls(version: Version) bool {
+        return version.gte(.v3);
+    }
+    /// Enable SIMD-0189: SBPF stricter ELF headers
+    pub fn enableLowerBytecodeVaddr(version: Version) bool {
+        return version.gte(.v3);
     }
 
-    pub fn enableNegation(version: SBPFVersion) bool {
-        return version == .v1;
+    /// Ensure that rodata sections don't exceed their maximum allowed size and
+    /// overlap with the stack
+    pub fn rejectRodataStackOverlap(version: Version) bool {
+        return version != .v0;
     }
 
-    pub fn enableLe(version: SBPFVersion) bool {
-        return version == .v1;
+    /// Allow sh_addr != sh_offset in elf sections.
+    pub fn enableElfVaddr(version: Version) bool {
+        return version != .v0;
     }
 
-    pub fn rejectRodataStackOverlap(version: SBPFVersion) bool {
-        return version != .v1;
-    }
-
-    pub fn enablePqr(version: SBPFVersion) bool {
-        return version != .v1;
-    }
-
-    pub fn swapSubRegImmOperands(version: SBPFVersion) bool {
-        return version != .v1;
+    fn gte(version: Version, other: Version) bool {
+        return @intFromEnum(version) >= @intFromEnum(other);
     }
 };
 
