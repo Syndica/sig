@@ -62,9 +62,9 @@ pub const ForkInfo = struct {
     deepest_slot: SlotAndHash,
     parent: ?SlotAndHash,
     children: SortedMap(SlotAndHash, void),
-    // The latest ancestor of this node that has been marked invalid. If the slot
-    // itself is a duplicate, this is set to the slot itself.
-    latest_invalid_ancestor: ?Slot,
+    // The latest ancestor of this node that has been marked invalid by being a duplicate.
+    // If the slot itself is a duplicate, this is set to the slot itself.
+    latest_duplicate_ancestor: ?Slot,
     // Set to true if this slot or a child node was duplicate confirmed.
     // Indicates whether this slot have been confirmed as the valid fork in the presence of duplicate slots.
     // It means that the network has reached consensus that this fork is the valid one,
@@ -77,12 +77,12 @@ pub const ForkInfo = struct {
 
     /// Returns true if the fork rooted at this node is included in fork choice
     fn isCandidate(self: *const ForkInfo) bool {
-        return self.latest_invalid_ancestor == null;
+        return self.latest_duplicate_ancestor == null;
     }
 
     fn setDuplicateConfirmed(self: *ForkInfo) void {
         self.is_duplicate_confirmed = true;
-        self.latest_invalid_ancestor = null;
+        self.latest_duplicate_ancestor = null;
     }
 
     /// Updates the fork info with a newly valid ancestor.
@@ -91,20 +91,20 @@ pub const ForkInfo = struct {
     fn updateWithNewlyValidAncestor(
         self: *ForkInfo,
         my_key: *const SlotAndHash,
-        newly_valid_ancestor: Slot,
+        newly_duplicate_ancestor: Slot,
     ) void {
-        // Check if there is a latest invalid ancestor
-        if (self.latest_invalid_ancestor) |latest_invalid_ancestor| {
+        // Check if there is a latest invalid (duplicate) ancestor
+        if (self.latest_duplicate_ancestor) |latest_duplicate_ancestor| {
             // If the latest invalid ancestor is less than or equal to the newly valid ancestor,
             // clear the latest invalid ancestor
-            if (latest_invalid_ancestor <= newly_valid_ancestor) {
+            if (latest_duplicate_ancestor <= newly_duplicate_ancestor) {
                 self.logger.info().logf(
                     \\ Fork choice for {} clearing latest invalid ancestor  
                     \\ {} because {} was duplicate confirmed
                 ,
-                    .{ my_key, latest_invalid_ancestor, newly_valid_ancestor },
+                    .{ my_key, latest_duplicate_ancestor, newly_duplicate_ancestor },
                 );
-                self.latest_invalid_ancestor = null;
+                self.latest_duplicate_ancestor = null;
             }
         }
     }
@@ -116,24 +116,24 @@ pub const ForkInfo = struct {
     fn updateWithNewlyInvalidAncestor(
         self: *ForkInfo,
         my_key: *const SlotAndHash,
-        newly_invalid_ancestor: Slot,
+        newly_duplicate_ancestor: Slot,
     ) void {
         // Should not be marking a duplicate confirmed slot as invalid
         std.debug.assert(!self.is_duplicate_confirmed);
 
-        // Check if the newly invalid ancestor is greater than the current latest invalid ancestor
-        const should_update = if (self.latest_invalid_ancestor) |invalid_ancestor|
-            newly_invalid_ancestor > invalid_ancestor
+        // Check if the newly invalid (duplicate) ancestor is greater than the current latest duplicate ancestor
+        const should_update = if (self.latest_duplicate_ancestor) |duplicate_ancestor|
+            newly_duplicate_ancestor > duplicate_ancestor
         else
             true;
 
-        // If the condition is met, update the latest invalid ancestor
+        // If the condition is met, update the latest duplicate ancestor
         if (should_update) {
             self.logger.info().logf(
-                "Fork choice for {} setting latest invalid ancestor from {?} to {}",
-                .{ my_key, self.latest_invalid_ancestor, newly_invalid_ancestor },
+                "Fork choice for {} setting latest duplicate ancestor from {?} to {}",
+                .{ my_key, self.latest_duplicate_ancestor, newly_duplicate_ancestor },
             );
-            self.latest_invalid_ancestor = newly_invalid_ancestor;
+            self.latest_duplicate_ancestor = newly_duplicate_ancestor;
         }
     }
 };
@@ -250,8 +250,8 @@ pub const ForkChoice = struct {
             return;
         }
 
-        const parent_latest_invalid_ancestor =
-            if (maybe_parent) |p| self.latestInvalidAncestor(p) else null;
+        const parent_latest_duplicate_ancestor =
+            if (maybe_parent) |p| self.latestDuplicateAncestor(p) else null;
 
         if (self.fork_infos.getPtr(slot_hash_key)) |fork_info| {
             // Set the parent of the existing entry with the newly provided parent.
@@ -268,7 +268,7 @@ pub const ForkChoice = struct {
                 .deepest_slot = slot_hash_key,
                 .children = SortedMap(SlotAndHash, void).init(self.allocator),
                 .parent = maybe_parent,
-                .latest_invalid_ancestor = parent_latest_invalid_ancestor,
+                .latest_duplicate_ancestor = parent_latest_duplicate_ancestor,
                 // If the parent is none, then this is the root, which implies this must
                 // have reached the duplicate confirmed threshold
                 .is_duplicate_confirmed = (maybe_parent == null),
@@ -297,12 +297,12 @@ pub const ForkChoice = struct {
         return self.fork_infos.contains(key.*);
     }
 
-    pub fn latestInvalidAncestor(
+    pub fn latestDuplicateAncestor(
         self: *const ForkChoice,
         slot_hash_key: SlotAndHash,
     ) ?Slot {
         if (self.fork_infos.get(slot_hash_key)) |fork_info| {
-            return fork_info.latest_invalid_ancestor;
+            return fork_info.latest_duplicate_ancestor;
         }
         return null;
     }
@@ -1619,7 +1619,7 @@ test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
             } else {
                 try std.testing.expect(!fork_choice.isDuplicateConfirmed(slot_hash_key).?);
             }
-            try std.testing.expect(fork_choice.latestInvalidAncestor(slot_hash_key.*) == null);
+            try std.testing.expect(fork_choice.latestDuplicateAncestor(slot_hash_key.*) == null);
         }
     }
 
@@ -1640,21 +1640,26 @@ test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
                 // 1) Be duplicate confirmed
                 // 2) Have no invalid ancestors
                 try std.testing.expect(fork_choice.isDuplicateConfirmed(slot_hash_key).?);
-                try std.testing.expect(fork_choice.latestInvalidAncestor(slot_hash_key.*) == null);
+                try std.testing.expect(
+                    fork_choice.latestDuplicateAncestor(slot_hash_key.*) == null,
+                );
             } else if (slot >= invalid_descendant_slot) {
                 // Anything descended from the invalid slot should:
                 // 1) Not be duplicate confirmed
                 // 2) Should have an invalid ancestor == `invalid_descendant_slot`
                 try std.testing.expect(!fork_choice.isDuplicateConfirmed(slot_hash_key).?);
                 try std.testing.expect(
-                    fork_choice.latestInvalidAncestor(slot_hash_key.*).? == invalid_descendant_slot,
+                    fork_choice
+                        .latestDuplicateAncestor(slot_hash_key.*).? == invalid_descendant_slot,
                 );
             } else {
                 // Anything in between the duplicate confirmed slot and the invalid slot should:
                 // 1) Not be duplicate confirmed
                 // 2) Should not have an invalid ancestor
                 try std.testing.expect(!fork_choice.isDuplicateConfirmed(slot_hash_key).?);
-                try std.testing.expect(fork_choice.latestInvalidAncestor(slot_hash_key.*) == null);
+                try std.testing.expect(
+                    fork_choice.latestDuplicateAncestor(slot_hash_key.*) == null,
+                );
             }
         }
     }
