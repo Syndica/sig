@@ -105,10 +105,11 @@ const GOSSIP_PRNG_SEED = 19;
 ///
 /// `SocketThread.initReceiver` ->
 ///         - reads packet from the gossip socket
-///         - calls `verifyPacket` with packet
+///         - calls `onIncomingPacket` with packet
 ///         - repeat until exit
 ///
-/// `verifyPacket` ->
+/// `onIncomingPacket` ->
+///         - spawns a thread pool task which calls `verifyPacket`
 ///         - verifies a packet and sends it into `verified_incoming_channel`
 ///
 /// `processMessages` ->
@@ -147,10 +148,11 @@ pub const GossipService = struct {
     /// Piping data between the gossip_socket and the channels.
     /// Set to null until start() is called as they represent threads.
     incoming_socket_thread: ?*SocketThread = null,
-    incoming_socket_receiver: SocketThread.Receiver = .{ .on_packet = onIncomingPacket },
+    incoming_socket_receiver: SocketThread.Receiver = .{ .on_packet = onReceivePacket },
     outgoing_socket_thread: ?*SocketThread = null,
 
     /// communication between threads
+    packet_verify_wg: std.Thread.WaitGroup = .{},
     packet_outgoing_channel: *Channel(Packet),
     verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
 
@@ -409,6 +411,12 @@ pub const GossipService = struct {
         );
         exit_condition.ordered.exit_index += 1;
 
+        try self.service_manager.spawn("[gossip] verifyPackets", verifyPackets, .{
+            self,
+            exit_condition,
+        });
+        exit_condition.ordered.exit_index += 1;
+
         try self.service_manager.spawn("[gossip] processMessages", processMessages, .{
             self,
             GOSSIP_PRNG_SEED,
@@ -445,17 +453,53 @@ pub const GossipService = struct {
         }
     }
 
-    fn onIncomingPacket(receiver: *SocketThread.Receiver, packet: *const Packet) void {
+    fn verifyPackets(self: *Self, exit: ExitCondition) !void {
+        defer {
+            self.packet_verify_wg.wait();
+            exit.afterExit();
+            self.logger.debug().log("verifyPackets loop finished");
+        }
+
+        while (exit.shouldRun()) {
+            std.time.sleep(1 * std.time.ns_per_s);
+        }
+    }
+
+    fn onReceivePacket(receiver: *SocketThread.Receiver, packet: *const Packet) void {
         const self: *Self = @alignCast(@fieldParentPtr("incoming_socket_receiver", receiver));
-        self.verifyPacket(packet.*);
+        self.onIncomingPacket(packet.*);
+    }
+
+    pub fn onIncomingPacket(self: *Self, packet: Packet) void {
+        self.metrics.gossip_packets_received_total.inc();
+
+        const entry = self.allocator.create(struct {
+            task: ThreadPool.Task = .{ .callback = callback },
+            gossip: *Self,
+            packet_: Packet,
+
+            fn callback(task: *ThreadPool.Task) void {
+                const entry: *@This() = @alignCast(@fieldParentPtr("task", task));
+                entry.gossip.verifyPacket(entry.packet_);
+
+                const wg = &entry.gossip.packet_verify_wg;
+                entry.gossip.allocator.destroy(entry);
+                wg.finish();
+            }
+        }) catch {
+            self.logger.err().log("failed to allocate verifyPacket entry");
+            return;
+        };
+
+        self.packet_verify_wg.start();
+        entry.* = .{ .gossip = self, .packet_ = packet };
+        self.thread_pool.schedule(ThreadPool.Batch.from(&entry.task));
     }
 
     /// main logic for deserializing Packets into GossipMessage messages
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
     fn verifyPacket(self: *Self, packet: Packet) void {
-        self.metrics.gossip_packets_received_total.inc();
-
         var message = bincode.readFromSlice(
             self.gossip_data_allocator,
             GossipMessage,
@@ -2949,12 +2993,21 @@ test "test packet verification" {
         .noop,
     );
     defer {
-        gossip_service.shutdown();
         gossip_service.deinit();
         allocator.destroy(gossip_service);
     }
 
     var verified_channel = gossip_service.verified_incoming_channel;
+
+    const packet_verifier_handle = try Thread.spawn(
+        .{},
+        GossipService.verifyPackets,
+        .{ gossip_service, .{ .unordered = gossip_service.service_manager.exit } },
+    );
+    defer {
+        gossip_service.shutdown();
+        packet_verifier_handle.join();
+    }
 
     var prng = std.rand.DefaultPrng.init(91);
     var data = GossipData.randomFromIndex(prng.random(), 0);
@@ -2976,7 +3029,7 @@ test "test packet verification" {
     const out = try bincode.writeToSlice(buf[0..], message, bincode.Params{});
     const packet = Packet.init(from, buf, out.len);
     for (0..3) |_| {
-        gossip_service.verifyPacket(packet);
+        gossip_service.onIncomingPacket(packet);
     }
 
     // send one which fails sanitization
@@ -2989,7 +3042,7 @@ test "test packet verification" {
     var buf_v2 = [_]u8{0} ** PACKET_DATA_SIZE;
     const out_v2 = try bincode.writeToSlice(buf_v2[0..], message_v2, bincode.Params{});
     const packet_v2 = Packet.init(from, buf_v2, out_v2.len);
-    gossip_service.verifyPacket(packet_v2);
+    gossip_service.onIncomingPacket(packet_v2);
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
@@ -3001,7 +3054,7 @@ test "test packet verification" {
     var buf2 = [_]u8{0} ** PACKET_DATA_SIZE;
     const out2 = try bincode.writeToSlice(buf2[0..], message2, bincode.Params{});
     const packet2 = Packet.init(from, buf2, out2.len);
-    gossip_service.verifyPacket(packet2);
+    gossip_service.onIncomingPacket(packet2);
 
     // send it with a SignedGossipData which hash a slice
     {
@@ -3027,7 +3080,7 @@ test "test packet verification" {
         var buf3 = [_]u8{0} ** PACKET_DATA_SIZE;
         const out3 = try bincode.writeToSlice(buf3[0..], message3, bincode.Params{});
         const packet3 = Packet.init(from, buf3, out3.len);
-        gossip_service.verifyPacket(packet3);
+        gossip_service.onIncomingPacket(packet3);
     }
 
     var msg_count: usize = 0;
@@ -3266,7 +3319,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         for (0..bench_args.message_counts.n_ping) |_| {
             // send a ping message
             const packet = try fuzz_service.randomPingPacket(random, &keypair, endpoint);
-            gossip_service.verifyPacket(packet);
+            gossip_service.onIncomingPacket(packet);
         }
 
         for (0..bench_args.message_counts.n_push_message) |_| {
@@ -3280,7 +3333,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             defer packets.deinit();
 
             msg_sent += packets.items.len;
-            for (packets.items) |packet| gossip_service.verifyPacket(packet);
+            for (packets.items) |packet| gossip_service.onIncomingPacket(packet);
         }
 
         for (0..bench_args.message_counts.n_pull_response) |_| {
@@ -3294,7 +3347,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             defer packets.deinit();
 
             msg_sent += packets.items.len;
-            for (packets.items) |packet| gossip_service.verifyPacket(packet);
+            for (packets.items) |packet| gossip_service.onIncomingPacket(packet);
         }
 
         const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
@@ -3406,7 +3459,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
                 signed_contact_info_recv,
             );
 
-            gossip_service.verifyPacket(packet);
+            gossip_service.onIncomingPacket(packet);
         }
 
         const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
