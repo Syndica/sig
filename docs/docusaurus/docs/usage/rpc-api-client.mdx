@@ -12,7 +12,9 @@ From a string:
 const Pubkey = @import("sig").core.Pubkey;
 
 fn main() !void {
-    const pubkey = try Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa");
+
+    const pubkey = try Pubkey.parseBase58String("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa");
+
 }
 ```
 
@@ -89,7 +91,7 @@ pub fn main() !void {
     var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    const pubkey = try Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa");
+    const pubkey = try Pubkey.parseBase58String("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa");
 
     var resp = try client.getAccountInfo(pubkey, .{ .encoding = .Base64 });
     defer resp.deinit();
@@ -128,7 +130,7 @@ const Pubkey = sig.core.Pubkey;
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    const pubkey = try Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa");
+    const pubkey = try Pubkey.parseBase58String("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa");
 
     var resp = try client.getBalance(pubkey);
     defer resp.deinit();
@@ -958,10 +960,10 @@ pub fn main() !void {
     defer client.deinit();
 
     var accounts = [2]Pubkey{
-        try Pubkey.fromString(
+        try Pubkey.parseBase58String(
             "6dmNQ5jwLeLk5REvio1JcMshcbvkYMwy26sJ8pbkvStu",
         ) ,
-        try Pubkey.fromString(
+        try Pubkey.parseBase58String(
             "BGsqMegLpV6n6Ve146sSX2dTjUMj3M92HnU8BbNRMhF2",
         ),
     };
@@ -1280,10 +1282,10 @@ pub fn main() !void {
     defer client.deinit();
 
     var accounts2 = [2]Pubkey{
-        try Pubkey.fromString(
+        try Pubkey.parseBase58String(
             "4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa",
         ),
-        try Pubkey.fromString(
+        try Pubkey.parseBase58String(
             "BGsqMegLpV6n6Ve146sSX2dTjUMj3M92HnU8BbNRMhF2",
         ),
     };
@@ -1344,7 +1346,7 @@ pub fn main() !void {
 
     var filters = [1]Filter{.{ .memcmp = .{ .offset = 0, .bytes = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" } }};
     var resp = try client.getProgramAccounts(
-        try Pubkey.fromString("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+        try Pubkey.parseBase58String("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
         .{ .filters = &filters },
     );
     defer resp.deinit();
@@ -1480,7 +1482,7 @@ pub fn main() !void {
     var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var resp = try client.getSignaturesForAddress(try Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa"), .{ .limit = 10 });
+    var resp = try client.getSignaturesForAddress(try Pubkey.parseBase58String("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa"), .{ .limit = 10 });
     defer resp.deinit();
 
     if (resp.err()) |err| {
@@ -1670,7 +1672,7 @@ pub fn main() !void {
     var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var resp = try client.getStakeActivation(try Pubkey.fromString(
+    var resp = try client.getStakeActivation(try Pubkey.parseBase58String(
         "CWrKSEDYhj6VHGocZowq2BUncKESqD7rdLTSrsoasTjU",
     ), .{});
     defer resp.deinit();
@@ -1817,7 +1819,7 @@ pub fn main() !void {
     var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var pubkey = try Pubkey.fromString(
+    var pubkey = try Pubkey.parseBase58String(
         "6A5NHCj1yF6urc9wZNe6Bcjj4LVszQNj5DwAWG97yzMu",
     );
     var resp = try client.getTokenAccountBalance(pubkey, .{});
@@ -1876,10 +1878,10 @@ pub fn main() !void {
     var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var programPubkey = try Pubkey.fromString(
+    var programPubkey = try Pubkey.parseBase58String(
         "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
     );
-    var pubkey = try Pubkey.fromString(
+    var pubkey = try Pubkey.parseBase58String(
         "CTz5UMLQm2SRWHzQnU62Pi4yJqbNGjgRBHqqp6oDHfF7",
     );
     var resp = try client.getTokenAccountsByDelegate(pubkey, .{ .programId = programPubkey }, .{});
@@ -1938,10 +1940,10 @@ pub fn main() !void {
     var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var mintPubkey = try Pubkey.fromString(
+    var mintPubkey = try Pubkey.parseBase58String(
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     );
-    var pubkey = try Pubkey.fromString(
+    var pubkey = try Pubkey.parseBase58String(
         "CTz5UMLQm2SRWHzQnU62Pi4yJqbNGjgRBHqqp6oDHfF7",
     );
     var resp = try client.getTokenAccountsByOwner(pubkey, .{ .mint = mintPubkey }, .{});
@@ -1992,7 +1994,7 @@ pub fn main() !void {
     var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var mintPubkey = try Pubkey.fromString(
+    var mintPubkey = try Pubkey.parseBase58String(
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     );
     var resp = try client.getTokenLargestAccounts(mintPubkey, .{});
@@ -2043,7 +2045,7 @@ pub fn main() !void {
     var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var mintPubkey = try Pubkey.fromString(
+    var mintPubkey = try Pubkey.parseBase58String(
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     );
     var resp = try client.getTokenSupply(mintPubkey, .{});
@@ -2237,7 +2239,7 @@ pub fn main() !void {
     var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var votePubkey = try Pubkey.fromString(
+    var votePubkey = try Pubkey.parseBase58String(
         "CertusDeBmqN8ZawdkxK5kFGMwBXdudvWHYwtNgNhvLu",
     );
     var resp = try client.getVoteAccounts(.{ .votePubkey = votePubkey });
@@ -2376,7 +2378,7 @@ pub fn main() !void {
     var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var pubkey = try Pubkey.fromString(
+    var pubkey = try Pubkey.parseBase58String(
         "Bvg7GuhqwNmV2JVyeZjhAcTPFqPktfmq25VBaZipozda",
     );
     var resp = try client.requestAirdrop(pubkey, 10000, .{});

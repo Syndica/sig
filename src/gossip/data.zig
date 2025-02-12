@@ -593,7 +593,7 @@ pub const Vote = struct {
 
     pub fn sanitize(self: *const Vote) !void {
         try sanitizeWallclock(self.wallclock);
-        try self.transaction.sanitize();
+        try self.transaction.validate();
     }
 };
 

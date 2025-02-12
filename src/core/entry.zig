@@ -1,40 +1,45 @@
 pub const std = @import("std");
 pub const sig = @import("../sig.zig");
-pub const core = @import("lib.zig");
+
+const Hash = sig.core.hash.Hash;
+const Transaction = sig.core.transaction.Transaction;
 
 pub const Entry = struct {
     /// The number of hashes since the previous Entry ID.
     num_hashes: u64,
 
     /// The SHA-256 hash `num_hashes` after the previous Entry ID.
-    hash: core.Hash,
+    hash: Hash,
 
     /// An unordered list of transactions that were observed before the Entry ID was
     /// generated. They may have been observed before a previous Entry ID but were
     /// pushed back into this list to ensure deterministic interpretation of the ledger.
-    transactions: std.ArrayListUnmanaged(core.VersionedTransaction),
+    transactions: std.ArrayListUnmanaged(Transaction),
 
     pub fn isTick(self: Entry) bool {
         return self.transactions.items.len == 0;
     }
 
     pub fn deinit(self: Entry, allocator: std.mem.Allocator) void {
-        for (self.transactions.items) |tx| {
-            tx.deinit(allocator);
-        }
+        for (self.transactions.items) |tx| tx.deinit(allocator);
         allocator.free(self.transactions.allocatedSlice());
     }
 };
 
 test "Entry serialization and deserialization" {
     const entry = test_entry.as_struct;
-    try sig.bincode.testRoundTrip(entry, &test_entry.bincode_serialized_bytes);
+    try sig.bincode.testRoundTrip(entry, &test_entry.as_bytes);
 }
 
 pub const test_entry = struct {
+    var txns = [_]Transaction{
+        sig.core.transaction.transaction_v0_example.as_struct,
+        sig.core.transaction.transaction_v0_example.as_struct,
+    };
+
     pub const as_struct = Entry{
         .num_hashes = 149218308,
-        .hash = core.Hash
+        .hash = sig.core.Hash
             .parseBase58String("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd") catch unreachable,
         .transactions = .{
             .items = txns[0..2],
@@ -42,12 +47,7 @@ pub const test_entry = struct {
         },
     };
 
-    var txns = [_]core.VersionedTransaction{
-        core.transaction.test_v0_transaction.as_struct,
-        core.transaction.test_v0_transaction.as_struct,
-    };
-
-    pub const bincode_serialized_bytes = [_]u8{
+    pub const as_bytes = [_]u8{
         4,   228, 228, 8,   0,   0,   0,   0,   224, 199, 210, 235, 148, 143, 98,  241, 248, 45,
         140, 115, 214, 164, 132, 17,  95,  89,  221, 166, 5,   158, 5,   121, 181, 80,  48,  103,
         173, 21,  40,  70,  2,   0,   0,   0,   0,   0,   0,   0,   2,   81,  7,   106, 50,  99,
