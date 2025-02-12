@@ -191,59 +191,59 @@ test "alu64 logic" {
 }
 
 test "mul32 imm" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 3
         \\  mul32 r0, 4
-        \\  return
+        \\  exit
     , 12);
 }
 
 test "mul32 reg" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 3
         \\  mov r1, 4
         \\  mul32 r0, r1
-        \\  return
+        \\  exit
     , 12);
 }
 
 test "mul32 overflow" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mov r1, 4
         \\  mul32 r0, r1
-        \\  return
+        \\  exit
     , 4);
 }
 
 test "mul64 imm" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mul r0, 4
-        \\  return
+        \\  exit
     , 0x100000004);
 }
 
 test "mul64 reg" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mov r1, 4
         \\  mul r0, r1
-        \\  return
+        \\  exit
     , 0x100000004);
 }
 
 test "mul32 negative" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, -1
         \\  mul32 r0, 4
-        \\  return
+        \\  exit
     , 0xFFFFFFFFFFFFFFFC);
 }
 
@@ -277,43 +277,43 @@ test "div32 small" {
 }
 
 test "div64 imm" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0xc
         \\  lsh r0, 32
         \\  div r0, 4
-        \\  return
+        \\  exit
     , 0x300000000);
 }
 
 test "div64 reg" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0xc
         \\  lsh r0, 32
         \\  mov r1, 4
         \\  div r0, r1
-        \\  return
+        \\  exit
     , 0x300000000);
 }
 
 test "div division by zero" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
         \\  div r0, r1
-        \\  return
+        \\  exit
     , error.DivisionByZero);
 }
 
 test "div32 division by zero" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
         \\  div32 r0, r1
-        \\  return
+        \\  exit
     , error.DivisionByZero);
 }
 
@@ -336,17 +336,32 @@ test "neg64" {
 }
 
 test "neg invalid on v3" {
-    try testAsm(.{},
-        \\entrypoint:
-        \\  neg32 r0
-        \\  return
-    , error.UnknownInstruction);
+    try expectEqual(
+        error.UnknownInstruction,
+        testAsm(.{},
+            \\entrypoint:
+            \\  neg32 r0
+            \\  return
+        , 0),
+    );
 
-    try testAsm(.{},
-        \\entrypoint:
-        \\  neg64 r0
-        \\  return
-    , error.UnknownInstruction);
+    try expectEqual(
+        error.UnknownInstruction,
+        testAsm(.{},
+            \\entrypoint:
+            \\  neg64 r0
+            \\  return
+        , 0),
+    );
+
+    try expectEqual(
+        error.UnknownInstruction,
+        testAsm(.{},
+            \\entrypoint:
+            \\  neg r0
+            \\  return
+        , 0),
+    );
 }
 
 test "sub32 imm" {
@@ -537,11 +552,14 @@ test "lddw logic" {
 }
 
 test "lddw invalid on v3" {
-    try testAsm(.{},
-        \\entrypoint:
-        \\  lddw r0, 0x1122334455667788
-        \\  return
-    , error.UnknownInstruction);
+    try expectEqual(
+        error.UnknownInstruction,
+        testAsm(.{},
+            \\entrypoint:
+            \\  lddw r0, 0x1122334455667788
+            \\  return
+        , 0),
+    );
 }
 
 test "le16" {
@@ -605,20 +623,28 @@ test "le64" {
 }
 
 test "le invalid on v3" {
-    try testAsm(.{},
-        \\  le16 r0
-        \\  return
-    , error.UnknownInstruction);
+    try expectEqual(
+        error.UnknownInstruction,
+        testAsm(.{},
+            \\  le16 r0
+            \\  return
+        , 0),
+    );
+    try expectEqual(
+        error.UnknownInstruction,
+        testAsm(.{},
+            \\  le32 r0
+            \\  return
+        , 0),
+    );
 
-    try testAsm(.{},
-        \\  le32 r0
-        \\  return
-    , error.UnknownInstruction);
-
-    try testAsm(.{},
-        \\  le64 r0
-        \\  return
-    , error.UnknownInstruction);
+    try expectEqual(
+        error.UnknownInstruction,
+        testAsm(.{},
+            \\  le64 r0
+            \\  return
+        , 0),
+    );
 }
 
 test "be16" {

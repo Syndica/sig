@@ -185,6 +185,7 @@ pub const Assembler = struct {
         defer labels.deinit(allocator);
 
         var function_registry: Registry(u64) = .{};
+        errdefer function_registry.deinit(allocator);
 
         try labels.put(allocator, "entrypoint", 0);
         var inst_ptr: u32 = 0;
@@ -219,6 +220,10 @@ pub const Assembler = struct {
                 .instruction => |inst| {
                     const name = inst.name;
                     const operands = inst.operands;
+
+                    if (sbpf.Instruction.disallowed.get(name)) |since| {
+                        if (version.gte(since)) return error.UnknownInstruction;
+                    }
 
                     const bind = sbpf.Instruction.map.get(name) orelse
                         std.debug.panic("invalid instruction: {s}", .{name});
@@ -291,21 +296,30 @@ pub const Assembler = struct {
                             .imm = @truncate(@as(u64, @bitCast(operands[1].integer))),
                         },
                         .load_reg => .{
-                            .opcode = @enumFromInt(bind.opc),
+                            .opcode = if (version.moveMemoryInstructionClasses())
+                                @enumFromInt(bind.secondary)
+                            else
+                                @enumFromInt(bind.opc),
                             .dst = operands[0].register,
                             .src = operands[1].memory.base,
                             .off = operands[1].memory.offset,
                             .imm = 0,
                         },
                         .store_reg => .{
-                            .opcode = @enumFromInt(bind.opc),
+                            .opcode = if (version.moveMemoryInstructionClasses())
+                                @enumFromInt(bind.secondary)
+                            else
+                                @enumFromInt(bind.opc),
                             .dst = operands[0].memory.base,
                             .src = operands[1].register,
                             .off = operands[0].memory.offset,
                             .imm = 0,
                         },
                         .store_imm => .{
-                            .opcode = @enumFromInt(bind.opc),
+                            .opcode = if (version.moveMemoryInstructionClasses())
+                                @enumFromInt(bind.secondary)
+                            else
+                                @enumFromInt(bind.opc),
                             .dst = operands[0].memory.base,
                             .src = .r0,
                             .off = operands[0].memory.offset,

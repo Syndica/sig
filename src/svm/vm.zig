@@ -81,13 +81,78 @@ pub const Vm = struct {
 
         if (version.moveMemoryInstructionClasses()) {
             switch (opcode) {
+                // reserved opcodes
+                .mul32_imm,
+                .mod32_imm,
+                .div32_imm,
+                => return error.UnknownInstruction,
+
+                inline
+                // LD_1B_REG
+                .mul32_reg,
                 // LD_2B_REG
+                .div32_reg,
+                // LD_4B_REG
+                .ld_4b_reg,
+                // LD_8B_REG
                 .mod32_reg,
-                => {
+                => |tag| {
+                    const T = switch (tag) {
+                        .mul32_reg => u8,
+                        .div32_reg => u16,
+                        .ld_4b_reg => u32,
+                        .mod32_reg => u64,
+                        else => unreachable,
+                    };
                     const base_address: i64 = @bitCast(registers.get(inst.src));
                     const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
-                    registers.set(inst.dst, try self.load(u64, vm_addr));
+                    registers.set(inst.dst, try self.load(T, vm_addr));
                 },
+
+                inline
+                // ST_1B_IMM
+                .mul64_imm,
+                // ST_2B_IMM
+                .div64_imm,
+                // ST_4B_IMM
+                .neg64,
+                // ST_8B_IMM
+                .mod64_imm,
+                => |tag| {
+                    const T = switch (tag) {
+                        .mul64_imm => u8,
+                        .div64_imm => u16,
+                        .neg64 => u32,
+                        .mod64_imm => u64,
+                        else => unreachable,
+                    };
+                    const base_address: i64 = @bitCast(registers.get(inst.dst));
+                    const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
+                    try self.store(T, vm_addr, @truncate(@as(u64, inst.imm)));
+                },
+
+                inline
+                // ST_1B_REG
+                .mul64_reg,
+                // ST_2B_REG
+                .div64_reg,
+                // ST_4B_REG
+                .st_4b_reg,
+                // ST_8B_REG
+                .mod64_reg,
+                => |tag| {
+                    const T = switch (tag) {
+                        .mul64_reg => u8,
+                        .div64_reg => u16,
+                        .st_4b_reg => u32,
+                        .mod64_reg => u64,
+                        else => unreachable,
+                    };
+                    const base_address: i64 = @bitCast(registers.get(inst.dst));
+                    const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
+                    try self.store(T, vm_addr, @truncate(registers.get(inst.src)));
+                },
+
                 else => {},
             }
         }
@@ -146,6 +211,18 @@ pub const Vm = struct {
             .rsh32_reg,
             .rsh32_imm,
             => cont: {
+                if (version.moveMemoryInstructionClasses()) {
+                    // instructions handled above
+                    switch (@intFromEnum(opcode) & 0xF0) {
+                        Instruction.mod,
+                        Instruction.neg,
+                        Instruction.mul,
+                        Instruction.div,
+                        => break :cont,
+                        else => {},
+                    }
+                }
+
                 const lhs_large = registers.get(inst.dst);
                 const rhs_large = if (opcode.isReg())
                     registers.get(inst.src)
@@ -172,12 +249,8 @@ pub const Vm = struct {
                     Instruction.lsh    => lhs << @truncate(rhs),
                     Instruction.rsh    => lhs >> @truncate(rhs),
                     Instruction.mov    => rhs,
+                    Instruction.mod => try std.math.mod(u64, lhs, rhs),
                     // zig fmt: on
-                    Instruction.mod => value: {
-                        // this case is handled above
-                        if (version.moveMemoryInstructionClasses()) break :cont;
-                        break :value try std.math.mod(u64, lhs, rhs);
-                    },
                     Instruction.mul => value: {
                         if (opcode.is64()) break :value lhs *% rhs;
                         const lhs_signed: i32 = @bitCast(@as(u32, @truncate(lhs)));
@@ -523,6 +596,12 @@ pub const Vm = struct {
                 registers.set(inst.dst, value);
                 next_pc += 1;
             },
+
+            // handled above
+            .ld_4b_reg,
+            .st_4b_reg,
+            => if (!version.moveMemoryInstructionClasses()) return error.UnknownInstruction,
+
             else => return error.UnknownInstruction,
         }
 
