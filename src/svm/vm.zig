@@ -566,7 +566,11 @@ pub const Vm = struct {
                 }
 
                 if (internal and !resolved) {
-                    if (self.executable.function_registry.lookupKey(inst.imm)) |entry| {
+                    const target_pc: i64 = if (version.enableStaticSyscalls())
+                        @as(i64, @intCast(pc)) +| @as(i32, @bitCast(inst.imm)) +| 1
+                    else
+                        inst.imm;
+                    if (self.executable.function_registry.lookupKey(@bitCast(target_pc))) |entry| {
                         resolved = true;
                         try self.pushCallFrame();
                         next_pc = entry.value;

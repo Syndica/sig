@@ -181,7 +181,7 @@ pub const Assembler = struct {
             allocator.free(statements);
         }
 
-        var labels: std.StringHashMapUnmanaged(u64) = .{};
+        var labels: std.StringHashMapUnmanaged(u32) = .{};
         defer labels.deinit(allocator);
 
         var function_registry: Registry(u64) = .{};
@@ -281,13 +281,16 @@ pub const Assembler = struct {
                                 };
                             }
                         },
-                        .jump_unconditional => .{
-                            .opcode = @enumFromInt(bind.opc),
-                            .dst = .r0,
-                            .src = .r0,
-                            .off = @intCast(operands[0].integer),
-                            .imm = 0,
-                        },
+                        .jump_unconditional => if (operands[0] == .label)
+                            @panic("TODO: jump_unconditional label")
+                        else
+                            .{
+                                .opcode = @enumFromInt(bind.opc),
+                                .dst = .r0,
+                                .src = .r0,
+                                .off = @intCast(operands[0].integer),
+                                .imm = 0,
+                            },
                         .load_dw_imm => .{
                             .opcode = .ld_dw_imm,
                             .dst = operands[0].register,
@@ -336,17 +339,24 @@ pub const Assembler = struct {
                             const is_label = operands[0] == .label;
                             if (is_label) {
                                 const label = operands[0].label;
-                                const target_pc = labels.get(label) orelse
+                                var target_pc: i64 = labels.get(label) orelse
                                     std.debug.panic("label not found: {s}", .{label});
+                                if (version.enableStaticSyscalls()) {
+                                    target_pc = target_pc - inst_ptr - 1;
+                                }
                                 break :inst .{
                                     .opcode = @enumFromInt(bind.opc),
                                     .dst = .r0,
                                     .src = .r1,
                                     .off = 0,
-                                    .imm = @intCast(target_pc),
+                                    .imm = @bitCast(@as(i32, @intCast(target_pc))),
                                 };
                             } else {
                                 const offset = operands[0].integer;
+                                const instr_imm = if (version.enableStaticSyscalls())
+                                    offset
+                                else
+                                    offset + inst_ptr + 1;
                                 const target_pc: u32 = @intCast(offset + inst_ptr + 1);
                                 const label = try std.fmt.allocPrint(
                                     allocator,
@@ -365,7 +375,7 @@ pub const Assembler = struct {
                                     .dst = .r0,
                                     .src = .r1,
                                     .off = 0,
-                                    .imm = target_pc,
+                                    .imm = @intCast(instr_imm),
                                 };
                             }
                         },
