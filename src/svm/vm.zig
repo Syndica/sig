@@ -503,19 +503,19 @@ pub const Vm = struct {
 
                 const predicate: bool = switch (opcode) {
                     // zig fmt: off
-                .ja => true,
-                .jeq_imm,  .jeq_reg  => lhs == rhs,
-                .jne_imm,  .jne_reg  => lhs != rhs,
-                .jge_imm,  .jge_reg  => lhs >= rhs,
-                .jgt_imm,  .jgt_reg  => lhs >  rhs,
-                .jle_imm,  .jle_reg  => lhs <= rhs,
-                .jlt_imm,  .jlt_reg  => lhs <  rhs,
-                .jset_imm, .jset_reg => lhs &  rhs != 0,
-                .jsge_imm, .jsge_reg => lhs_signed >= rhs_signed,
-                .jsgt_imm, .jsgt_reg => lhs_signed >  rhs_signed,
-                .jsle_imm, .jsle_reg => lhs_signed <= rhs_signed,
-                .jslt_imm, .jslt_reg => lhs_signed <  rhs_signed,
-                // zig fmt: on
+                    .ja => true,
+                    .jeq_imm,  .jeq_reg  => lhs == rhs,
+                    .jne_imm,  .jne_reg  => lhs != rhs,
+                    .jge_imm,  .jge_reg  => lhs >= rhs,
+                    .jgt_imm,  .jgt_reg  => lhs >  rhs,
+                    .jle_imm,  .jle_reg  => lhs <= rhs,
+                    .jlt_imm,  .jlt_reg  => lhs <  rhs,
+                    .jset_imm, .jset_reg => lhs &  rhs != 0,
+                    .jsge_imm, .jsge_reg => lhs_signed >= rhs_signed,
+                    .jsgt_imm, .jsgt_reg => lhs_signed >  rhs_signed,
+                    .jsle_imm, .jsle_reg => lhs_signed <= rhs_signed,
+                    .jslt_imm, .jslt_reg => lhs_signed <  rhs_signed,
+                    // zig fmt: on
                     else => unreachable,
                 };
                 if (predicate) next_pc = target_pc;
