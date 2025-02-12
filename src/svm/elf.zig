@@ -38,7 +38,7 @@ pub const Elf = struct {
 
             const shoff = header.e_shoff;
             const shnum = header.e_shnum;
-            const shsize = shnum * @sizeOf(elf.Elf64_Shdr);
+            const shsize = try std.math.mul(u64, shnum, @sizeOf(elf.Elf64_Shdr));
             const shdrs = std.mem.bytesAsSlice(
                 elf.Elf64_Shdr,
                 try safeSlice(bytes, shoff, shsize),
@@ -359,11 +359,6 @@ pub const Elf = struct {
         const headers = try Headers.parse(bytes);
         const data = try Data.parse(headers);
 
-        const text_section = data.getShdrByName(headers, ".text") orelse
-            return error.NoTextSection;
-        const offset = headers.header.e_entry -| text_section.sh_addr;
-        const entry_pc = try std.math.divExact(u64, offset, 8);
-
         const sbpf_version: sbpf.Version = if (config.minimum_version == .v0)
             if (headers.header.e_flags == sbpf.EF_SBPF_v1)
                 .v1
@@ -386,10 +381,8 @@ pub const Elf = struct {
                 bytes,
                 headers,
                 data,
-                entry_pc,
                 sbpf_version,
                 config,
-                loader,
             );
         } else {
             return try parseLenient(
@@ -397,7 +390,6 @@ pub const Elf = struct {
                 bytes,
                 headers,
                 data,
-                entry_pc,
                 sbpf_version,
                 config,
                 loader,
@@ -410,10 +402,8 @@ pub const Elf = struct {
         bytes: []u8,
         headers: Headers,
         data: Data,
-        entry_pc: u64,
         sbpf_version: sbpf.Version,
         config: Config,
-        loader: *BuiltinProgram,
     ) !Elf {
         const maybe_strtab: ?u32 = if (config.enable_symbol_and_section_labels) blk: {
             for (headers.shdrs, 0..) |shdr, i| {
@@ -426,8 +416,7 @@ pub const Elf = struct {
             break :blk null;
         } else null;
 
-        _ = loader;
-
+        const bytecode_hdr = headers.phdrs[0];
         const rodata_hdr = headers.phdrs[1];
         const ro_section: Executable.Section = .{ .borrowed = .{
             .offset = rodata_hdr.p_vaddr,
@@ -435,6 +424,11 @@ pub const Elf = struct {
             .end = rodata_hdr.p_offset + rodata_hdr.p_filesz,
         } };
 
+        const entry_pc = try std.math.divFloor(
+            u64,
+            headers.header.e_entry -| bytecode_hdr.p_vaddr,
+            8,
+        );
         var self: Elf = .{
             .bytes = bytes,
             .headers = headers,
@@ -447,7 +441,6 @@ pub const Elf = struct {
         };
         errdefer self.deinit(allocator);
 
-        const bytecode_hdr = headers.phdrs[0];
         const dynsym_table = std.mem.bytesAsSlice(elf.Elf64_Sym, try headers.phdrSlice(4));
         var expected_symbol_address = bytecode_hdr.p_vaddr;
         for (dynsym_table) |symbol| {
@@ -460,7 +453,12 @@ pub const Elf = struct {
                 try headers.getStringInShdr(maybe_strtab.?, symbol.st_name)
             else
                 &.{};
-            const target_pc = try std.math.divFloor(u64, symbol.st_value -| expected_symbol_address, 8);
+
+            const target_pc = try std.math.divFloor(
+                u64,
+                symbol.st_value -| bytecode_hdr.p_vaddr,
+                8,
+            );
             try self.function_registry.register(allocator, target_pc, name, target_pc);
             expected_symbol_address = symbol.st_value +| symbol.st_size;
         }
@@ -472,6 +470,9 @@ pub const Elf = struct {
         {
             return error.InvalidFileHeader;
         }
+        if (self.function_registry.lookupKey(self.entry_pc) == null) {
+            return error.InvalidFileHeader;
+        }
 
         return self;
     }
@@ -481,11 +482,15 @@ pub const Elf = struct {
         bytes: []u8,
         headers: Headers,
         data: Data,
-        entry_pc: u64,
         sbpf_version: sbpf.Version,
         config: Config,
         loader: *BuiltinProgram,
     ) !Elf {
+        const text_section = data.getShdrByName(headers, ".text") orelse
+            return error.NoTextSection;
+        const offset = headers.header.e_entry -| text_section.sh_addr;
+        const entry_pc = try std.math.divExact(u64, offset, 8);
+
         var self: Elf = .{
             .bytes = bytes,
             .headers = headers,

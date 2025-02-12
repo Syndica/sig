@@ -52,6 +52,9 @@ pub const Version = enum(u32) {
     pub fn disableLDDW(version: Version) bool {
         return version.gte(.v2);
     }
+    pub fn moveMemoryInstructionClasses(version: Version) bool {
+        return version.gte(.v2);
+    }
     /// ... SIMD-0173
     pub fn enableLe(version: Version) bool {
         return version == .v0;

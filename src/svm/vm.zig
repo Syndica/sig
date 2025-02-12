@@ -79,6 +79,19 @@ pub const Vm = struct {
         const inst = instructions[pc];
         const opcode = inst.opcode;
 
+        if (version.moveMemoryInstructionClasses()) {
+            switch (opcode) {
+                // LD_2B_REG
+                .mod32_reg,
+                => {
+                    const base_address: i64 = @bitCast(registers.get(inst.src));
+                    const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
+                    registers.set(inst.dst, try self.load(u64, vm_addr));
+                },
+                else => {},
+            }
+        }
+
         switch (opcode) {
             // alu operations
             .add64_reg,
@@ -132,7 +145,7 @@ pub const Vm = struct {
             .rsh64_imm,
             .rsh32_reg,
             .rsh32_imm,
-            => {
+            => cont: {
                 const lhs_large = registers.get(inst.dst);
                 const rhs_large = if (opcode.isReg())
                     registers.get(inst.src)
@@ -156,11 +169,15 @@ pub const Vm = struct {
                     Instruction.xor    => lhs ^ rhs,
                     Instruction.@"or"  => lhs | rhs,
                     Instruction.@"and" => lhs & rhs,
-                    Instruction.mod    => try std.math.mod(u64, lhs, rhs),
                     Instruction.lsh    => lhs << @truncate(rhs),
                     Instruction.rsh    => lhs >> @truncate(rhs),
                     Instruction.mov    => rhs,
                     // zig fmt: on
+                    Instruction.mod => value: {
+                        // this case is handled above
+                        if (version.moveMemoryInstructionClasses()) break :cont;
+                        break :value try std.math.mod(u64, lhs, rhs);
+                    },
                     Instruction.mul => value: {
                         if (opcode.is64()) break :value lhs *% rhs;
                         const lhs_signed: i32 = @bitCast(@as(u32, @truncate(lhs)));
@@ -466,14 +483,6 @@ pub const Vm = struct {
                     .{ inst.src == .r0, inst.src != .r0 }
                 else
                     .{ true, true };
-
-                // std.debug.print("external: {}\n", .{external});
-                // var iter = self.loader.functions.map.iterator();
-                // while (iter.next()) |entry| {
-                //     std.debug.print("entry: {x}\n", .{entry.key_ptr.*});
-                // }
-
-                // std.debug.print("imm: {x}\n", .{inst.imm});
 
                 if (external) {
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {

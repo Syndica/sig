@@ -397,13 +397,13 @@ test "sub64 reg" {
 }
 
 test "mod32" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 5748
         \\  mod32 r0, 92
         \\  mov32 r1, 13
         \\  mod32 r0, r1
-        \\  return
+        \\  exit
     , 0x5);
 }
 
@@ -417,7 +417,7 @@ test "mod32 overflow" {
 }
 
 test "mod32 all" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, -1316649930
         \\  lsh r0, 32
@@ -427,27 +427,27 @@ test "mod32 all" {
         \\  or r1, 0x3cbef7f3
         \\  mod r0, r1
         \\  mod r0, 0x658f1778
-        \\  return
+        \\  exit
     , 0x30ba5a04);
 }
 
 test "mod64 divide by zero" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
         \\  mod r0, r1
-        \\  return
+        \\  exit
     , error.DivisionByZero);
 }
 
 test "mod32 divide by zero" {
-    try testAsm(.{},
+    try testAsm(.{ .minimum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
         \\  mod32 r0, r1
-        \\  return
+        \\  exit
     , error.DivisionByZero);
 }
 
@@ -2212,10 +2212,10 @@ test "load elf rodata" {
 
 test "syscall reloc 64_32" {
     try testElfWithSyscalls(
-        .{},
-        sig.ELF_DATA_DIR ++ "syscall_reloc_64_32.so",
+        .{ .minimum_version = .v0 },
+        sig.ELF_DATA_DIR ++ "syscall_reloc_64_32_sbpfv0.so",
         &.{.{ .name = "log", .builtin_fn = syscalls.log }},
-        error.UnresolvedFunction,
+        0,
     );
 }
 
@@ -2232,6 +2232,15 @@ test "struct func pointer" {
     try testElfWithSyscalls(
         .{},
         sig.ELF_DATA_DIR ++ "struct_func_pointer.so",
+        &.{},
+        0x0102030405060708,
+    );
+}
+
+test "struct func pointer sbpfv0" {
+    try testElfWithSyscalls(
+        .{ .minimum_version = .v0 },
+        sig.ELF_DATA_DIR ++ "struct_func_pointer_sbpfv0.so",
         &.{},
         0x0102030405060708,
     );

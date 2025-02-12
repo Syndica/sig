@@ -39,5 +39,9 @@
             .url = "git+https://github.com/Syndica/base58-zig#e6337e7eb3dc7ca77cad4c3b2fe4a34357bd50ea",
             .hash = "122092353c0b494c2a4968c10a527dc90d6e89eaac48637fda1a0af3efd948bf4ee3",
         },
+        .poseidon = .{
+            .url = "git+https://github.com/Rexicon226/zig-poseidon#82e41845bfc689192359639fef5bb89c452388b2",
+            .hash = "12208f0d8388111308c919d73c24e9a595c3f2b5f83edf2cebf10598f8439fe33843",
+        },
     },
 }

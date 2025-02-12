@@ -59,13 +59,16 @@ pub fn main() !void {
     defer loader.deinit(allocator);
 
     inline for (.{
-        .{ "sol_log_", syscalls.log },
-        .{ "sol_log_64_", syscalls.log64 },
-        .{ "sol_log_pubkey", syscalls.logPubkey },
-        .{ "sol_log_compute_units_", syscalls.logComputeUnits },
-        .{ "sol_memset_", syscalls.memset },
-        .{ "sol_memcpy_", syscalls.memcpy },
-        .{ "abort", syscalls.abort },
+        // .{ "log", syscalls.log },
+        // .{ "sol_log_64_", syscalls.log64 },
+        // .{ "sol_log_pubkey", syscalls.logPubkey },
+        // .{ "sol_log_compute_units_", syscalls.logComputeUnits },
+        // .{ "sol_memset_", syscalls.memset },
+        // .{ "sol_memcpy_", syscalls.memcpy },
+        // .{ "sol_memcmp_", syscalls.memcmp },
+        // .{ "sol_poseidon", syscalls.poseidon },
+        // .{ "sol_panic_", syscalls.panic },
+        // .{ "abort", syscalls.abort },
     }) |entry| {
         const name, const function = entry;
         _ = try loader.functions.registerHashed(

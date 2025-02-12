@@ -14,8 +14,17 @@ CC_V3="${CC} ${C_FLAGS_V3}"
 LD_V0="${LD_FLAGS} --script data/test-elfs/elf_sbpfv0.ld"
 LD_V3="${LD_FLAGS} -Bsymbolic --script data/test-elfs/elf.ld"
 
-V0_FILES=(reloc_64_64 reloc_64_relative reloc_64_relative_data rodata_section bss_section data_section)
-EXCLUDE_V3=(bss_section data_section)
+V0_FILES=(reloc_64_64 
+          reloc_64_relative 
+          reloc_64_relative_data 
+          rodata_section 
+          bss_section 
+          data_section 
+          syscall_reloc_64_32
+          struct_func_pointer)
+          
+EXCLUDE_V3=(bss_section data_section 
+            syscall_reloc_64_32)
 
 for ZIG_FILE in data/test-elfs/*.zig; do
     BASE_NAME=$(basename "$ZIG_FILE" .zig)
