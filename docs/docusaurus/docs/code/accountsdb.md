@@ -114,14 +114,16 @@ For a random seed, ommit the seed argument. For infinite fuzzing, omit the numbe
 
 # Benchmarking
 
-We also have two benchmarks for the database:
+We also have a few benchmarks for the database:
 - read/write benchmarks: this benchmarks the read/write speed for accounts
 (can use the `accounts_db_readwrite` flag for the benchmarking binary)
 - load and validate from a snapshot: this benchmarks the speed of loading and validating a snapshot
 (can use the `accounts_db_snapshot` flag for the benchmarking binary with the `-e` flag)
+- swissmap benchmarks: benchmarks the swissmap hashmap implementation against stdlib hashmap
+(can use the `swissmap` flag for the benchmarking binary)
 
-The benchmarking code can be found in `BenchmarkAccountsDB` and `BenchmarkAccountsDBSnapshotLoad`
-respectively.
+The benchmarking code can be found in the structs `BenchmarkAccountsDB`, `BenchmarkAccountsDBSnapshotLoad`,
+and `BenchmarkSwissMap` respectively.
 
 # Architecture
 
@@ -199,9 +201,9 @@ pub const AccountIndex = struct {
 }
 ```
 
-### Background Threads
+# Background Threads
 
-we also run background threads in the `runManagerLoop` method which does the following:
+We also run background threads in the `runManagerLoop` method which does the following:
 1) flush the cache to account files in `flushSlot`
 2) clean account files in `cleanAccountFiles`
 3) shrink account files in `shrinkAccountFiles`
@@ -210,33 +212,33 @@ we also run background threads in the `runManagerLoop` method which does the fol
 
 #### Shrink/Delete Account Files
 
-since acquiring a write-lock on `file_map_fd_rw` is very expensive (ensuring no account-files
+Since acquiring a write-lock on `file_map_fd_rw` is very expensive (ensuring no account-files
 can have read-access), we ensure its only write-locked during deletion in `deleteAccountFiles` and
 contains the minimal amount of logic.
 
-we also limit how often the method is called by requiring a minimum number of account files to delete
+We also limit how often the method is called by requiring a minimum number of account files to delete
 per call (defined by `DELETE_ACCOUNT_FILES_MIN`).
 
-#### snapshot creation
+#### Snapshot Creation
 
-we creat both full snapshots and incremental snapshots every N roots (defined in `ManagerLoopConfig`).
-- full snapshots: `makeFullSnapshotGenerationPackage`
-- incremental snapshots: `makeIncrementalSnapshotGenerationPackage`
+Full and incremental snapshots are created every N roots (defined in `ManagerLoopConfig`).
+- full snapshots use `makeFullSnapshotGenerationPackage`
+- incremental snapshots use `makeIncrementalSnapshotGenerationPackage`
 
-the general usage is to create a snapshot package which implements a write method that can
-be used to write a tar-archive of the snapshot (using the method `writeSnapshotTarWithFields`). the
+The general usage is to create a snapshot package which implements a write method that can
+be used to write a tar-archive of the snapshot (using the method `writeSnapshotTarWithFields`). The
 package collects all the account files which should be included in the snapshot and also computes
 the accounts-hash and total number of lamports to populate the manifest with.
 
-in the loop, we create the package and then write the tar-archive into a zstd compression library
+In the loop, we create the package and then write the tar-archive into a zstd compression library
 (`zstd.writerCtx`) which itself pipes into a file on disk.
 
 After the writing has been complete the internal accounts-db state is updated using `commitFullSnapshotInfo` and `commitIncrementalSnapshotInfo` which tracks the new snapshot
 created and either deletes or ignores older snapshots (which arent needed anymore).
 
-# methods
+# Snapshots
 
-## downloading a snapshot
+## Downloading Snapshots
 
 all the code can be found in `src/accountsdb/download.zig` : `downloadSnapshotsFromGossip`
 
@@ -267,55 +269,16 @@ then for each of these valid peers, we construct the url of the snapshot:
 
 and then start the download - we periodically check the download speed and make sure its fast enough, or we try another peer
 
-## decompressing a snapshot
+## Decompressing Snapshots
 
-snapshots are downloaded as `.tar.zstd` and we decompress them using `parallelUnpackZstdTarBall`
+Snapshots are downloaded as `.tar.zstd` and we decompress them using `parallelUnpackZstdTarBall`
 
 we use a zstd library C bindings to create a decompressed stream which we then
 feed the results to untar the archive to files on disk. the unarchiving
 happens in parallel using `n-threads-snapshot-unpack`. since there is
 a large amount of I/O, the default value is 2x the number of CPUs on the machine.
 
-## loading from a snapshot
-
-loading from a snapshot begins in `accounts_db.loadFromSnapshot` is a very
-expensive operation.
-
-the steps include:
-- reads and load all the account files based on the snapshot manifest's file map
-- validates + indexes every account in each file (in parallel)
-- combines the results across the threads (also in parallel)
-
-to achieve this in parallel we split processing the account files
-across multiple threads (part1 of the diagram below) - this means each thread:
-- reads and mmaps every account file
-- creates and populates an `ArrayList(AccountRef)` with every account it
-parses from the account files
-- populates their own sharded index by sharding the pubkeys and populating
-the hashmap with the `*AccountRef`s
-
-the result is N threads (`--n-threads-snapshot-load` decides the value for N) each with their own account index, which we now need
-to comsharde. to combine indexes we merge index shards in parallel across threads.
-
-for example, one thread will merge shards[0..10] another will merge shards[10..20],
-... etc for all the shards across all the threads.
-
-this approach generates the index with zero locks
-
-<div align="center">
-<img src="/img/2024-03-21-09-15-08.png" width="520" height="340"></img>
-</div>
-
-### geyser during load
-
-when loading and verifying account files in `loadAndVerifyAccountsFiles`, we also stream the
-accounts out to geyser (more docs in `src/geyser/readme.md`).
-
-for each account file, we track the associated Accounts and pubkey in the `GeyserTmpStorage` during
-indexing and then we push them to the pipe and reset the storage.
-
-
-## validating a snapshot
+## Validating Snapshots
 
 *note:* this will likely change with future improvements to the solana protocol account hashing
 
@@ -326,52 +289,11 @@ we take the following approach:
 - account hashes are collected in parallel across shards using `getHashesFromIndexMultiThread` - similar to how the index is generated
 - each thread will have a slice of hashes, the root hash is computed against this nested slices using `NestedHashTree`
 
-note: pubkeys are also sorted so results are consistent
+*note:* pubkeys are also sorted so results are consistent
 
-## validating other metadata
+### Validating Other Data
 
 after validating accounts-db data, we also validate a few key structs:
 - `GenesisConfig` : this data is validated in against the bank in `Bank.validateBankFields(bank.bank_fields, &genesis_config);`
 - `Bank` : contains `bank_fields` which is in the snapshot metadata (not used right now)
 - `StatusCache / SlotHistory Sysvar` : additional validation performed in `status_cache.validate`
-
-## generating a snapshot
-
-*note:* at the time of writing, this functionality is in its infancy.
-
-The core logic for generating a snapshot lives in `accounts_db.db.writeSnapshotTarWithFields`; the principle entrypoint is `AccountsDB.writeSnapshotTar`.
-The procedure consists of writing the version file, the status cache (`snapshots/status_cache`) file, the snapshot manifest (`snapshots/(slot)/(slot)`),
-and the account files (`accounts/(slot).(file_id)`). This is all written to a stream in the TAR archive format.
-
-The snapshot manifest file content is comprised of the bincoded (bincode-encoded) data structure `Manifest`, which is an aggregate of:
-* implicit state: data derived from the current state of AccountsDB, like the file map for all the account which exist at that snapshot, or which have
-  changed relative to a full snapshot in an incremental one
-* configuration state: data that is used to communicate details about the snapshot, like the full slot to which an incremental snapshot is relative.
-
-For full snapshots, we write all account files present in AccountsDB which are rooted - as in, less than or equal to the latest rooted slot.
-
-## read/write benchmarks
-`BenchArgs` contains all the configuration of a benchmark (comments describe each parameter)
-- found at the bottom of `db.zig`
-
-writing accounts uses `putAccountSlice` which takes a slice of accounts
-and `putAccountFile` which takes an account file
-reading accounts uses `accounts_db.getAccount(pubkey);`.
-
-## swissmap benchmarks
-- found at the bottom of `index.zig`
-- run using `zig build -Doptimize=ReleaseSafe benchmark -- swissmap`
-
-```
-Benchmark                        Iterations    Min(ns)    Max(ns)   Variance   Mean(ns)
----------------------------------------------------------------------------------------
-        WRITE: 814.917us (2.00x faster than std)
-        READ: 2.706ms (0.78x faster than std)
-swissmapBenchmark(100k accounts)          1     814917     814917          0     814917
-        WRITE: 7.715ms (1.46x faster than std)
-        READ: 23.055ms (0.77x faster than std)
-swissmapBenchmark(500k accounts)          1    7715875    7715875          0    7715875
-        WRITE: 17.163ms (1.44x faster than std)
-        READ: 50.975ms (0.70x faster than std)
-swissmapBenchmark(1m accounts)            1   17163500   17163500          0   17163500
-```
