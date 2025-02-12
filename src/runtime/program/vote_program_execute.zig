@@ -93,132 +93,16 @@ pub const VoteState = struct {
         };
     }
 
+    pub fn isUninitialized(self: VoteState) bool {
+        return self.authorized_voters.len == 0;
+    }
+
     /// Upper limit on the size of the Vote State
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub fn sizeOf() usize {
         return 3762;
     }
 };
-
-pub const VoteState0_23_5 = struct {
-    /// the node that votes in this account
-    node_pubkey: Pubkey,
-
-    /// the signer for vote transactions
-    authorized_voter: Pubkey,
-    /// when the authorized voter was set/initialized
-    authorized_voter_epoch: Epoch,
-
-    // /// history of prior authorized voters and the epoch ranges for which
-    // ///  they were set
-    // TODO
-    // prior_voters: CircBuf<(Pubkey, Epoch, Epoch, Slot)>,
-
-    /// the signer for withdrawals
-    authorized_withdrawer: Pubkey,
-    /// percentage (0-100) that represents what part of a rewards
-    ///  payout should be given to this VoteAccount
-    commission: u8,
-
-    // TODO this should be a double ended queue.
-    votes: std.ArrayList(LandedVote),
-
-    root_slot: ?Slot,
-
-    /// history of how many credits earned by the end of each epoch
-    ///  each tuple is (Epoch, credits, prev_credits)
-    epoch_credits: std.ArrayList(struct { Epoch, u64, u64 }),
-
-    /// most recent timestamp submitted with a vote
-    last_timestamp: BlockTimestamp,
-};
-
-pub const VoteState1_14_11 = struct {
-    /// the node that votes in this account
-    node_pubkey: Pubkey,
-
-    /// the signer for withdrawals
-    authorized_withdrawer: Pubkey,
-    /// percentage (0-100) that represents what part of a rewards
-    ///  payout should be given to this VoteAccount
-    commission: u8,
-
-    votes: std.ArrayList(LandedVote),
-
-    // This usually the last Lockout which was popped from self.votes.
-    // However, it can be arbitrary slot, when being used inside Tower
-    root_slot: ?Slot,
-
-    /// the signer for vote transactions
-    authorized_voters: AuthorizedVoters,
-
-    /// history of prior authorized voters and the epochs for which
-    /// they were set, the bottom end of the range is inclusive,
-    /// the top of the range is exclusive
-    /// TODO
-    // prior_voters: CircBuf<(Pubkey, Epoch, Epoch)>,
-
-    /// history of how many credits earned by the end of each epoch
-    ///  each tuple is (Epoch, credits, prev_credits)
-    epoch_credits: std.ArrayList(struct { Epoch, u64, u64 }),
-
-    /// most recent timestamp submitted with a vote
-    last_timestamp: BlockTimestamp,
-
-    /// Upper limit on the size of the Vote State
-    /// when votes.len() is MAX_LOCKOUT_HISTORY.
-    pub fn sizeOf() usize {
-        return 3731;
-    }
-};
-
-pub const VoteStateVersions = union(enum) {
-    V0_23_5: *VoteState0_23_5,
-    V1_14_11: *VoteState1_14_11,
-    Current: *VoteState,
-
-    pub fn voteStateSizeOf(is_current: bool) usize {
-        return if (is_current) VoteState.sizeOf() else VoteState1_14_11.sizeOf();
-    }
-
-    pub fn isUninitialized(self: VoteStateVersions) bool {
-        return switch (self) {
-            .V0_23_5 => |vote_state| vote_state.authorized_voter == Pubkey.ZEROES,
-            .V1_14_11 => |vote_state| vote_state.authorized_voters.len == 0,
-            .Current => |vote_state| vote_state.authorized_voters.len == 0,
-        };
-    }
-};
-
-/// Updates the vote account state with a new VoteState instance. This is required temporarily during the
-/// upgrade of vote account state from V1_14_11 to Current.
-/// TODO is this temporary requirement still valid?
-fn setVoteAccountState(
-    voteAccount: *BorrowedAccount,
-    voteState: VoteState,
-) !void {
-    // TODO is this still needed?
-    // const requiredSize = VoteStateVersions.voteStateSizeOf(true);
-
-    // // If the account is not large enough to store the vote state, attempt a realloc to make it large enough.
-    // // The realloc can only proceed if the vote account has balance sufficient for rent exemption at the new size.
-    // if (voteAccount.getData().len < requiredSize) {
-    //     const isRentExempt = voteAccount.isRentExemptAtDataLength(requiredSize);
-    //     const resizeSuccess = voteAccount.setDataLength(requiredSize) catch false;
-
-    //     if (!isRentExempt or !resizeSuccess) {
-    //         // Account cannot be resized to the size of a vote state as it will not be rent exempt, or failed to be
-    //         // resized for other reasons. So store the V1_14_11 version.
-    //         const v1_14_11_state = VoteState1_14_11.from(voteState);
-    //         const versionedState = VoteStateVersions{ .v1_14_11 = &v1_14_11_state };
-    //         return voteAccount.setState(&versionedState);
-    //     }
-    // }
-
-    // Vote account is large enough to store the newest version of vote state
-    const currentState = VoteStateVersions.newCurrent(voteState);
-    return voteAccount.setState(&currentState);
-}
 
 /// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
 pub fn voteProgramExecute(
@@ -292,12 +176,11 @@ fn intializeAccount(
         return InstructionError.InsufficientFundsForRent;
     }
 
-    if (account.getData().len != VoteStateVersions.voteStateSizeOf(true)) {
+    if (account.getData().len != VoteState.sizeOf()) {
         return InstructionError.InvalidAccountData;
     }
 
-    // TODO/Question how is this a state within account?
-    const versioned = try account.getState(allocator, VoteStateVersions);
+    const versioned = try account.getState(allocator, VoteState);
 
     if (!versioned.is_uninitialized()) {
         return (InstructionError.AccountAlreadyInitialized);
@@ -309,7 +192,7 @@ fn intializeAccount(
         return InstructionError.MissingRequiredSignature;
     }
 
-    _ = try setVoteAccountState(account, VoteState.init(
+    account.setState(VoteState.init(
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
