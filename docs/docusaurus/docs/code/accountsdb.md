@@ -20,7 +20,7 @@ Other files include:
 - `buffer_pool.zig`: buffer pool for reading from account files
 - `swiss_map.zig`: high-performance swissmap hashmap implementation
 
-# Usage
+## Usage
 
 The main entrypoint is the `AccountsDB` struct (from `cmd.zig`):
 
@@ -99,77 +99,6 @@ const data_versioned: sig.geyser.core.VersionedAccountPayload = .{
 try geyser_writer.writePayloadToPipe(data_versioned);
 ```
 
-# Fuzzing
-
-We also use fuzzing to ensure the database is robust. The fuzzer can be found
-in `fuzz.zig` and is run with the following command on the `fuzz` binary:
-
-```bash
-zig build -Dno-run fuzz
-
-fuzz accountsdb <seed> <number_of_actions>
-```
-
-For a random seed, ommit the seed argument. For infinite fuzzing, omit the number of actions.
-
-# Benchmarking
-
-We also have a few benchmarks for the database:
-- read/write benchmarks: this benchmarks the read/write speed for accounts
-(can use the `accounts_db_readwrite` flag for the benchmarking binary)
-- load and validate from a snapshot: this benchmarks the speed of loading and validating a snapshot
-(can use the `accounts_db_snapshot` flag for the benchmarking binary with the `-e` flag)
-- swissmap benchmarks: benchmarks the swissmap hashmap implementation against stdlib hashmap
-(can use the `swissmap` flag for the benchmarking binary)
-
-The benchmarking code can be found in the structs `BenchmarkAccountsDB`, `BenchmarkAccountsDBSnapshotLoad`,
-and `BenchmarkSwissMap` respectively.
-
-# Architecture
-
-While the blog post contains a more detailed explanation of the architecture, we'll also list
-some more implementation details here.
-
-## Account File Map
-
-To understand how we made the DB thread-safe, theres three scenarios to consider:
-- adding new account files (flushing)
-- reading account files (snapshot generation, account queries)
-- removing account files (shrinking and purging)
-
-The two main fields include `file_map_fd_rw` and `file_map_rw` which protect account files.
-
-The reason for each of the scenarios is as follows:
-
-### Creating New Account Files
-
-Adding an account file should never invalidate the
-account files observed by another thread. The file-map should be
-write-locked so any map resizing (if theres not enough space) doesnt
-invalidate other threads values.
-
-### Reading Account Files
-
-All reading threads must first acquire a read (shared) lock on the `file_map_fd_rw`,
-before acquiring a lock on the file map, and reading an account file - to ensure
-account files will not be closed while being read.
-
-After doing so, the `file_map_rw` may be unlocked, without
-releasing the file_map_fd_rw, allowing other threads to modify the file_map,
-whilst preventing any files being closed until all reading threads have finished their work.
-
-### Removing Account Files
-
-A thread which wants to delete/close an account files must first
-acquire a write (exclusive) lock on `file_map_fd_rw`, before acquiring
-a write-lock on the file map to access the account_file and close/delete/remove it.
-
-*Note:* Holding a write lock on `file_map_fd_rw` is very expensive, so we only acquire
-a write-lock inside `deleteAccountFiles` which has a minimal amount of logic.
-
-*Note:* no method modifieds/mutates account files after they have been
-flushed. They are 'shrunk' with deletion + creating a smaller file, or fully purged
-with deletion. This allows us to *not* use a lock per-account-file.
 
 ## Account Index
 
@@ -201,7 +130,79 @@ pub const AccountIndex = struct {
 }
 ```
 
-# Background Threads
+## Fuzzing
+
+We also use fuzzing to ensure the database is robust. The fuzzer can be found
+in `fuzz.zig` and is run with the following command on the `fuzz` binary:
+
+```bash
+zig build -Dno-run fuzz
+
+fuzz accountsdb <seed> <number_of_actions>
+```
+
+For a random seed, ommit the seed argument. For infinite fuzzing, omit the number of actions.
+
+## Benchmarking
+
+We also have a few benchmarks for the database:
+- read/write benchmarks: this benchmarks the read/write speed for accounts
+(can use the `accounts_db_readwrite` flag for the benchmarking binary)
+- load and validate from a snapshot: this benchmarks the speed of loading and validating a snapshot
+(can use the `accounts_db_snapshot` flag for the benchmarking binary with the `-e` flag)
+- swissmap benchmarks: benchmarks the swissmap hashmap implementation against stdlib hashmap
+(can use the `swissmap` flag for the benchmarking binary)
+
+The benchmarking code can be found in the structs `BenchmarkAccountsDB`, `BenchmarkAccountsDBSnapshotLoad`,
+and `BenchmarkSwissMap` respectively.
+
+## Architecture Notes
+
+While the blog post contains a more detailed explanation of the architecture, we'll also list
+some more implementation details here.
+
+## Account File Thread-Saftey
+
+To understand how we made the DB thread-safe, theres three scenarios to consider:
+- adding new account files (flushing)
+- reading account files (snapshot generation, account queries)
+- removing account files (shrinking and purging)
+
+The two main fields include `file_map_fd_rw` and `file_map_rw` which protect account files.
+
+The reason for each of the scenarios is as follows:
+
+### Creating Account Files
+
+Adding an account file should never invalidate the
+account files observed by another thread. The file-map should be
+write-locked so any map resizing (if theres not enough space) doesnt
+invalidate other threads values.
+
+### Reading Account Files
+
+All reading threads must first acquire a read (shared) lock on the `file_map_fd_rw`,
+before acquiring a lock on the file map, and reading an account file - to ensure
+account files will not be closed while being read.
+
+After doing so, the `file_map_rw` may be unlocked, without
+releasing the file_map_fd_rw, allowing other threads to modify the file_map,
+whilst preventing any files being closed until all reading threads have finished their work.
+
+### Removing Account Files
+
+A thread which wants to delete/close an account files must first
+acquire a write (exclusive) lock on `file_map_fd_rw`, before acquiring
+a write-lock on the file map to access the account_file and close/delete/remove it.
+
+*Note:* Holding a write lock on `file_map_fd_rw` is very expensive, so we only acquire
+a write-lock inside `deleteAccountFiles` which has a minimal amount of logic.
+
+*Note:* no method modifieds/mutates account files after they have been
+flushed. They are 'shrunk' with deletion + creating a smaller file, or fully purged
+with deletion. This allows us to *not* use a lock per-account-file.
+
+## Background Threads
 
 We also run background threads in the `runManagerLoop` method which does the following:
 1) flush the cache to account files in `flushSlot`
@@ -236,9 +237,9 @@ In the loop, we create the package and then write the tar-archive into a zstd co
 After the writing has been complete the internal accounts-db state is updated using `commitFullSnapshotInfo` and `commitIncrementalSnapshotInfo` which tracks the new snapshot
 created and either deletes or ignores older snapshots (which arent needed anymore).
 
-# Snapshots
+## Snapshots
 
-## Downloading Snapshots
+### Downloading Snapshots
 
 all the code can be found in `src/accountsdb/download.zig` : `downloadSnapshotsFromGossip`
 
@@ -269,7 +270,7 @@ then for each of these valid peers, we construct the url of the snapshot:
 
 and then start the download - we periodically check the download speed and make sure its fast enough, or we try another peer
 
-## Decompressing Snapshots
+### Decompressing Snapshots
 
 Snapshots are downloaded as `.tar.zstd` and we decompress them using `parallelUnpackZstdTarBall`
 
@@ -278,7 +279,7 @@ feed the results to untar the archive to files on disk. the unarchiving
 happens in parallel using `n-threads-snapshot-unpack`. since there is
 a large amount of I/O, the default value is 2x the number of CPUs on the machine.
 
-## Validating Snapshots
+### Validating Snapshots
 
 *note:* this will likely change with future improvements to the solana protocol account hashing
 
