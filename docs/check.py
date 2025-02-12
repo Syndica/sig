@@ -15,9 +15,7 @@ if __name__ == "__main__":
     ]
 
     code_path = os.path.join(args.src_dir, "docs/docusaurus/docs/code")
-    for name, src_path in g.get_markdown_files(args.src_dir, exclude_dirs):
-        docs_path = os.path.join(code_path, name + ".md")
-
+    for src_path, docs_path in g.get_markdown_files(args.src_dir, exclude_dirs, code_path):
         # check to see if the files are the same !
         with open(src_path, "r") as src_f:
             with open(docs_path, "r") as docs_f:
@@ -38,3 +36,5 @@ if __name__ == "__main__":
                             print("Docs:", docs_lines[i])
                             break
                     exit(1)
+
+    print("Docs folder is up to date!")

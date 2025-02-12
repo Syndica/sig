@@ -5,7 +5,8 @@ import os
 # e.g., [("accountsdb", "src/accountsdb/readme.md")]
 def get_markdown_files(
     src_path: str,
-    exclude_dirs: list[str]
+    exclude_dirs: list[str],
+    code_docs_path: str,
 ):
     # iterate over all files in sig repo
     doc_files = []
@@ -27,9 +28,12 @@ def get_markdown_files(
                     # this is the root readme.md -- we dont include
                     # it in the docs for now
                     continue
+
                 doc_files.append([
-                    dir_name,
-                    os.path.join(root, file)
+                    # src/ path
+                    os.path.join(root, file),
+                    # docs/ path
+                    os.path.join(code_docs_path, dir_name + ".md"),
                 ])
 
     return doc_files
@@ -47,13 +51,12 @@ if __name__ == "__main__":
         src_path + "data", # this should only include data
     ]
 
-    for name, path in get_markdown_files(src_path, exclude_dirs):
+    for src_path, docs_path in get_markdown_files(src_path, exclude_dirs, code_docs_path):
         # copy the file to the docs/code directory
-        new_path = os.path.join(code_docs_path, name + ".md")
-        with open(path, "r") as f:
-            with open(new_path, "w") as nf:
+        with open(src_path, "r") as f:
+            with open(docs_path, "w") as docs_file:
                 # fix image paths for docusaurus
                 for line in f:
                     if "/docs/docusaurus/static/img" in line:
                         line = line.replace("/docs/docusaurus/static/img", "/img")
-                    nf.write(line)
+                    docs_file.write(line)
