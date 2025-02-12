@@ -1,4 +1,3 @@
-const build_options = @import("build-options");
 const std = @import("std");
 const sig = @import("../sig.zig");
 const ledger = @import("lib.zig");
@@ -461,7 +460,7 @@ test "findSlotsToClean" {
     }
     // When implementation is rocksdb, we need to flush memtable to disk to be able to assert.
     // We do that by deiniting the current db, which triggers the flushing.
-    if (build_options.blockstore_db == .rocksdb) {
+    if (sig.build_options.blockstore_db == .rocksdb) {
         db.deinit();
         db = try TestDB.reuseBlockstore(@src());
         reader.db = db;
