@@ -75,7 +75,10 @@ pub fn main() !void {
         );
     }
 
-    const config: Config = .{ .minimum_version = version };
+    const config: Config = .{
+        .minimum_version = version,
+        .enable_symbol_and_section_labels = true,
+    };
     var executable = if (assemble)
         try Executable.fromAsm(allocator, bytes, config)
     else exec: {

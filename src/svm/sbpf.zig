@@ -58,12 +58,15 @@ pub const Version = enum(u32) {
     }
 
     /// Enable SIMD-0178: SBPF Static Syscalls
-    ///
     /// Enable SIMD-0179: SBPF stricter verification constraints
     pub fn enableStaticSyscalls(version: Version) bool {
         return version.gte(.v3);
     }
     /// Enable SIMD-0189: SBPF stricter ELF headers
+    pub fn enableStricterElfHeaders(version: Version) bool {
+        return version.gte(.v3);
+    }
+    /// ... SIMD-0189
     pub fn enableLowerBytecodeVaddr(version: Version) bool {
         return version.gte(.v3);
     }
@@ -343,6 +346,7 @@ pub const Instruction = packed struct(u64) {
 
         /// bpf opcode: `exit` /// `return r0`. /// valid only until sbpfv3
         exit = jmp | exit_code,
+        @"return" = jmp | x | exit_code,
         _,
 
         pub fn isReg(opcode: OpCode) bool {
@@ -514,6 +518,7 @@ pub const Instruction = packed struct(u64) {
         .{ "le64", .{ .inst = .{.endian = 64 }, .opc = alu32 | k | end } },
 
         .{ "exit"  , .{ .inst = .no_operand,       .opc = jmp | exit_code } },
+        .{ "return", .{ .inst = .no_operand,       .opc = jmp | x | exit_code } },
         .{ "lddw"  , .{ .inst = .load_dw_imm,      .opc = ld  | imm | dw  } },
         .{ "call"  , .{ .inst = .call_imm,         .opc = jmp | call      } },
         .{ "callx" , .{ .inst = .call_reg,         .opc = jmp | call | x  } },

@@ -109,7 +109,7 @@ pub const Region = struct {
 
         const host_slice = try self.getSlice(state);
         const begin_offset = vm_addr -| self.vm_addr_start;
-        if (begin_offset + len <= host_slice.len) {
+        if (try std.math.add(u64, begin_offset, len) <= host_slice.len) {
             return host_slice[begin_offset..][0..len];
         }
 

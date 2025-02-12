@@ -74,6 +74,13 @@ pub const Elf = struct {
             return try safeSlice(self.bytes, p_offset, p_filesz);
         }
 
+        fn getStringInShdr(self: Headers, shdr: u32, off: u32) ![:0]const u8 {
+            const strtab = try self.shdrSlice(shdr);
+            assert(off < strtab.len);
+            const ptr: [*:0]const u8 = @ptrCast(strtab.ptr + off);
+            return std.mem.sliceTo(ptr, 0);
+        }
+
         fn getPhdrIndexByType(self: Headers, p_type: elf.Elf64_Word) ?u32 {
             for (self.phdrs, 0..) |phdr, i| {
                 if (phdr.p_type == p_type) return @intCast(i);
@@ -186,9 +193,9 @@ pub const Elf = struct {
             self: Data,
             headers: Headers,
             config: Config,
+            version: sbpf.Version,
             allocator: std.mem.Allocator,
         ) !Executable.Section {
-            const version = config.minimum_version;
             const ro_names: []const []const u8 = &.{
                 ".text",
                 ".rodata",
@@ -281,7 +288,7 @@ pub const Elf = struct {
 
                 if (lowest_addr >= memory.PROGRAM_START) {
                     break :ro .{ .borrowed = .{
-                        .offset = lowest_addr -| memory.PROGRAM_START,
+                        .offset = lowest_addr,
                         .start = start,
                         .end = end,
                     } };
@@ -290,7 +297,7 @@ pub const Elf = struct {
                         return error.ValueOutOfBounds;
                     }
                     break :ro .{ .borrowed = .{
-                        .offset = lowest_addr,
+                        .offset = lowest_addr +| memory.PROGRAM_START,
                         .start = start,
                         .end = end,
                     } };
@@ -316,6 +323,7 @@ pub const Elf = struct {
                 }
                 break :ro .{ .owned = .{ .offset = lowest_addr, .data = ro_section } };
             };
+
             return ro_section;
         }
 
@@ -326,7 +334,7 @@ pub const Elf = struct {
             return std.mem.sliceTo(ptr, 0);
         }
 
-        pub fn getShdrIndexByName(self: Data, headers: Headers, name: []const u8) ?u32 {
+        fn getShdrIndexByName(self: Data, headers: Headers, name: []const u8) ?u32 {
             for (headers.shdrs, 0..) |shdr, i| {
                 const shdr_name = self.getString(shdr.sh_name);
                 if (std.mem.eql(u8, shdr_name, name)) {
@@ -366,11 +374,66 @@ pub const Elf = struct {
             1 => .v1,
             2 => .v2,
             3 => .v3,
-            else => @enumFromInt(headers.header.e_flags),
+            else => return error.VersionUnsupported,
         };
 
         if (@intFromEnum(sbpf_version) < @intFromEnum(config.minimum_version))
             return error.VersionUnsupported;
+
+        if (sbpf_version.enableStricterElfHeaders()) {
+            return try parseStrict(
+                allocator,
+                bytes,
+                headers,
+                data,
+                entry_pc,
+                sbpf_version,
+                config,
+                loader,
+            );
+        } else {
+            return try parseLenient(
+                allocator,
+                bytes,
+                headers,
+                data,
+                entry_pc,
+                sbpf_version,
+                config,
+                loader,
+            );
+        }
+    }
+
+    fn parseStrict(
+        allocator: std.mem.Allocator,
+        bytes: []u8,
+        headers: Headers,
+        data: Data,
+        entry_pc: u64,
+        sbpf_version: sbpf.Version,
+        config: Config,
+        loader: *BuiltinProgram,
+    ) !Elf {
+        const maybe_strtab: ?u32 = if (config.enable_symbol_and_section_labels) blk: {
+            for (headers.shdrs, 0..) |shdr, i| {
+                const name = data.getString(shdr.sh_name);
+                if (std.mem.eql(u8, name, ".dynstr")) {
+                    if (shdr.sh_type != elf.SHT_STRTAB) return error.InvalidStringTable;
+                    break :blk @intCast(i);
+                }
+            }
+            break :blk null;
+        } else null;
+
+        _ = loader;
+
+        const rodata_hdr = headers.phdrs[1];
+        const ro_section: Executable.Section = .{ .borrowed = .{
+            .offset = rodata_hdr.p_vaddr,
+            .start = rodata_hdr.p_offset,
+            .end = rodata_hdr.p_offset + rodata_hdr.p_filesz,
+        } };
 
         var self: Elf = .{
             .bytes = bytes,
@@ -380,7 +443,58 @@ pub const Elf = struct {
             .version = sbpf_version,
             .function_registry = .{},
             .config = config,
-            .ro_section = try data.parseRoSections(headers, config, allocator),
+            .ro_section = ro_section,
+        };
+        errdefer self.deinit(allocator);
+
+        const bytecode_hdr = headers.phdrs[0];
+        const dynsym_table = std.mem.bytesAsSlice(elf.Elf64_Sym, try headers.phdrSlice(4));
+        var expected_symbol_address = bytecode_hdr.p_vaddr;
+        for (dynsym_table) |symbol| {
+            if (symbol.st_info & elf.STT_FUNC == 0) continue;
+            if (symbol.st_value != expected_symbol_address) return error.OutOfBounds;
+            if (symbol.st_size == 0 or symbol.st_size % 8 != 0) return error.InvalidSize;
+            if (!inRangeOfPhdrVm(bytecode_hdr, symbol.st_value)) return error.OutOfBounds;
+
+            const name = if (config.enable_symbol_and_section_labels)
+                try headers.getStringInShdr(maybe_strtab.?, symbol.st_name)
+            else
+                &.{};
+            const target_pc = try std.math.divFloor(u64, symbol.st_value -| expected_symbol_address, 8);
+            try self.function_registry.register(allocator, target_pc, name, target_pc);
+            expected_symbol_address = symbol.st_value +| symbol.st_size;
+        }
+        if (expected_symbol_address != bytecode_hdr.p_vaddr +| bytecode_hdr.p_memsz) {
+            return error.OutOfBounds;
+        }
+        if (!inRangeOfPhdrVm(bytecode_hdr, headers.header.e_entry) or
+            headers.header.e_entry % 8 != 0)
+        {
+            return error.InvalidFileHeader;
+        }
+
+        return self;
+    }
+
+    fn parseLenient(
+        allocator: std.mem.Allocator,
+        bytes: []u8,
+        headers: Headers,
+        data: Data,
+        entry_pc: u64,
+        sbpf_version: sbpf.Version,
+        config: Config,
+        loader: *BuiltinProgram,
+    ) !Elf {
+        var self: Elf = .{
+            .bytes = bytes,
+            .headers = headers,
+            .data = data,
+            .entry_pc = entry_pc,
+            .version = sbpf_version,
+            .function_registry = .{},
+            .config = config,
+            .ro_section = try data.parseRoSections(headers, config, sbpf_version, allocator),
         };
         errdefer self.deinit(allocator);
 
@@ -475,7 +589,7 @@ pub const Elf = struct {
         if (text_section_slice.len % @sizeOf(sbpf.Instruction) != 0)
             return error.InvalidTextSectionLength;
 
-        if (self.config.minimum_version.enableElfVaddr()) {
+        if (self.version.enableElfVaddr()) {
             if (self.config.optimize_rodata != true) return error.UnsupportedSBPFVersion;
         }
     }

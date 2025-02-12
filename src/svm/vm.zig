@@ -432,18 +432,33 @@ pub const Vm = struct {
             },
 
             // calling
-            .exit => {
-                if (self.depth == 0) {
-                    return false;
+            .exit,
+            .@"return",
+            => {
+                if (opcode == .exit and version.enableStaticSyscalls()) {
+                    // SBPFv3 SYSCALL instruction
+                    if (self.loader.functions.lookupKey(inst.imm)) |entry| {
+                        try entry.value(self);
+                    } else {
+                        @panic("TODO: detect invalid syscall in verifier");
+                    }
+                } else {
+                    if (opcode == .@"return" and !version.enableStaticSyscalls()) {
+                        return error.UnknownInstruction;
+                    }
+
+                    if (self.depth == 0) {
+                        return false;
+                    }
+                    self.depth -= 1;
+                    const frame = self.call_frames.pop();
+                    self.registers.set(.r10, frame.fp);
+                    @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
+                    if (!version.enableDynamicStackFrames()) {
+                        registers.getPtr(.r10).* -= self.executable.config.stack_frame_size;
+                    }
+                    next_pc = frame.return_pc;
                 }
-                self.depth -= 1;
-                const frame = self.call_frames.pop();
-                self.registers.set(.r10, frame.fp);
-                @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
-                if (!version.enableDynamicStackFrames()) {
-                    registers.getPtr(.r10).* -= self.executable.config.stack_frame_size;
-                }
-                next_pc = frame.return_pc;
             },
             .call_imm => {
                 var resolved = false;
@@ -452,6 +467,14 @@ pub const Vm = struct {
                 else
                     .{ true, true };
 
+                // std.debug.print("external: {}\n", .{external});
+                // var iter = self.loader.functions.map.iterator();
+                // while (iter.next()) |entry| {
+                //     std.debug.print("entry: {x}\n", .{entry.key_ptr.*});
+                // }
+
+                // std.debug.print("imm: {x}\n", .{inst.imm});
+
                 if (external) {
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
                         resolved = true;
@@ -459,6 +482,7 @@ pub const Vm = struct {
                         try builtin_fn(self);
                     }
                 }
+
                 if (internal and !resolved) {
                     if (self.executable.function_registry.lookupKey(inst.imm)) |entry| {
                         resolved = true;

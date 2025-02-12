@@ -4,34 +4,27 @@ CC="../toolchain/llvm/bin/clang"
 LD="../toolchain/llvm/bin/ld.lld"
 ZIG="zig"
 
-
-LD_FLAGS="-z notext -shared --Bdynamic --script data/test-elfs/elf.ld"
-C_BASE_FLAGS="-target sbf-solana-solana \
-    -fno-builtin \
-    -fPIC -fno-unwind-tables \
-    -fomit-frame-pointer -fno-exceptions \
-    -fno-asynchronous-unwind-tables \
-    -std=c23 \
-    -O2 \
-    -Werror \
-    -Wno-override-module"
-C_FLAGS="${C_BASE_FLAGS} -mcpu=generic"
-C_FLAGS_V1="${C_BASE_FLAGS} -mcpu=sbfv2"
+LD_FLAGS="${LD} -z notext -shared --Bdynamic -entry entrypoint"
+C_FLAGS="-Werror -target sbf -O2 -fno-builtin -fPIC -Wno-override-module"
+C_FLAGS_V3="${C_FLAGS} -mcpu=v3"
 
 CC_V0="${CC} ${C_FLAGS}"
-CC_V1="${CC} ${C_FLAGS_V1}"
+CC_V3="${CC} ${C_FLAGS_V3}"
 
-LD_V0="${LD} ${LD_FLAGS}"
-LD_V1="${LD_V0} --section-start=.text=0x100000000"
+LD_V0="${LD_FLAGS} --script data/test-elfs/elf_sbpfv0.ld"
+LD_V3="${LD_FLAGS} -Bsymbolic --script data/test-elfs/elf.ld"
 
-V0_FILES=(reloc_64_64 reloc_64_relative reloc_64_relative_data rodata_section)
+V0_FILES=(reloc_64_64 reloc_64_relative reloc_64_relative_data rodata_section bss_section data_section)
+EXCLUDE_V3=(bss_section data_section)
 
 for ZIG_FILE in data/test-elfs/*.zig; do
     BASE_NAME=$(basename "$ZIG_FILE" .zig)
     
-    $ZIG build-obj "$ZIG_FILE" -OReleaseSmall -fstrip -fno-emit-bin -femit-llvm-bc="data/test-elfs/${BASE_NAME}.bc"
-    $CC_V1 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}.o"
-    $LD_V1 "data/test-elfs/${BASE_NAME}.o" -o "data/test-elfs/${BASE_NAME}.so"
+    $ZIG build-obj "$ZIG_FILE" -target bpfel-freestanding -OReleaseSmall -fstrip -fno-emit-bin -femit-llvm-bc="data/test-elfs/${BASE_NAME}.bc"
+    if [[ ! " ${EXCLUDE_V3[@]} " =~ " ${BASE_NAME} " ]]; then
+        $CC_V3 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}.o"
+        $LD_V3 "data/test-elfs/${BASE_NAME}.o" -o "data/test-elfs/${BASE_NAME}.so"
+    fi
     
     if [[ " ${V0_FILES[@]} " =~ " ${BASE_NAME} " ]]; then
         $CC_V0 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}_sbpfv0.o"

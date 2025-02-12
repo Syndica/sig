@@ -1,8 +1,10 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 const builtin = @import("builtin");
-const Vm = @import("vm.zig").Vm;
+const sig = @import("../sig.zig");
+const lib = @import("lib.zig");
 
+const testElfWithSyscalls = @import("tests.zig").testElfWithSyscalls;
+const Vm = lib.Vm;
 const Pubkey = sig.core.Pubkey;
 
 pub const Syscall = struct {
@@ -16,22 +18,16 @@ pub const Error = error{
     SyscallAbort,
     AccessViolation,
     VirtualAccessTooLong,
+    Overflow,
 };
 
 // logging
-pub fn printString(vm: *Vm) Error!void {
-    const vm_addr = vm.registers.get(.r1);
-    const len = vm.registers.get(.r2);
-    const host_addr = try vm.memory_map.vmap(.constant, vm_addr, len);
-    const string = std.mem.sliceTo(host_addr, 0);
-    if (!builtin.is_test) std.debug.print("{s}", .{string});
-}
-
 pub fn log(vm: *Vm) Error!void {
     const vm_addr = vm.registers.get(.r1);
     const len = vm.registers.get(.r2);
     const host_addr = try vm.memory_map.vmap(.constant, vm_addr, len);
-    std.debug.print("log: {s}\n", .{host_addr});
+    const string = std.mem.sliceTo(host_addr, 0);
+    if (!builtin.is_test) std.debug.print("{x}", .{string});
 }
 
 pub fn log64(vm: *Vm) Error!void {

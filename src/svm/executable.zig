@@ -41,6 +41,13 @@ pub const Executable = struct {
 
     /// Takes ownership of the `Elf`.
     pub fn fromElf(elf: Elf) !Executable {
+        const text_section_addr = elf.getShdrByName(".text").?.sh_addr;
+        const text_vaddr = if (elf.version.enableElfVaddr() and
+            text_section_addr >= memory.PROGRAM_START)
+            text_section_addr
+        else
+            text_section_addr +| memory.PROGRAM_START;
+
         return .{
             .bytes = elf.bytes,
             .ro_section = elf.ro_section,
@@ -48,7 +55,7 @@ pub const Executable = struct {
             .version = elf.version,
             .entry_pc = elf.entry_pc,
             .from_elf = true,
-            .text_vaddr = elf.getShdrByName(".text").?.sh_addr +| memory.PROGRAM_START,
+            .text_vaddr = text_vaddr,
             .function_registry = elf.function_registry,
             .config = elf.config,
         };
@@ -95,7 +102,11 @@ pub const Executable = struct {
             .config = config,
             .function_registry = registry.*,
             .entry_pc = entry_pc,
-            .ro_section = .{ .borrowed = .{ .offset = 0, .start = 0, .end = 0 } },
+            .ro_section = .{ .borrowed = .{
+                .offset = memory.PROGRAM_START,
+                .start = 0,
+                .end = source.len,
+            } },
             .from_elf = false,
             .text_vaddr = if (version.enableLowerBytecodeVaddr())
                 memory.BYTECODE_START
@@ -123,7 +134,7 @@ pub const Executable = struct {
             .owned => |o| .{ o.offset, o.data },
             .borrowed => |b| .{ b.offset, self.bytes[b.start..b.end] },
         };
-        return memory.Region.init(.constant, ro_data, memory.PROGRAM_START +| offset);
+        return memory.Region.init(.constant, ro_data, offset);
     }
 };
 
@@ -472,7 +483,7 @@ pub fn Registry(T: type) type {
         const Self = @This();
 
         /// Duplicates `name` to free later.
-        fn register(
+        pub fn register(
             self: *Self,
             allocator: std.mem.Allocator,
             key: u64,
@@ -550,6 +561,7 @@ pub const BuiltinProgram = struct {
 pub const Config = struct {
     optimize_rodata: bool = true,
     reject_broken_elfs: bool = false,
+    enable_symbol_and_section_labels: bool = false,
     minimum_version: sbpf.Version = .v3,
     stack_frame_size: u64 = 4096,
     max_call_depth: u64 = 64,
