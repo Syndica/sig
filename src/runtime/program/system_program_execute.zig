@@ -140,7 +140,7 @@ fn executeAssign(
         ic,
         &account,
         owner,
-        account.getPubkey(),
+        account.pubkey,
     );
 }
 
@@ -278,7 +278,7 @@ fn executeAllocate(
     try ic.checkNumberOfAccounts(1);
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
-    try allocate(allocator, ic, &account, space, account.getPubkey());
+    try allocate(allocator, ic, &account, space, account.pubkey);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L506-L523
@@ -295,7 +295,7 @@ fn executeAllocateWithSeed(
     defer account.release();
     try checkSeedAddress(
         ic,
-        account.getPubkey(),
+        account.pubkey,
         base,
         owner,
         seed,
@@ -317,7 +317,7 @@ fn executeAssignWithSeed(
     defer account.release();
     try checkSeedAddress(
         ic,
-        account.getPubkey(),
+        account.pubkey,
         base,
         owner,
         seed,
@@ -401,12 +401,12 @@ fn allocate(
     authority: Pubkey,
 ) InstructionError!void {
     if (!ic.isPubkeySigner(authority)) {
-        try ic.tc.log("Allocate: 'base' account {} must sign", .{account.getPubkey()});
+        try ic.tc.log("Allocate: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
     if (account.getData().len > 0 or !account.getOwner().equals(&system_program.ID)) {
-        try ic.tc.log("Allocate: account {} already in use", .{account.getPubkey()});
+        try ic.tc.log("Allocate: account {} already in use", .{account.pubkey});
         ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
     }
@@ -433,7 +433,7 @@ fn assign(
     if (account.getOwner().equals(&owner)) return;
 
     if (!ic.isPubkeySigner(authority)) {
-        try ic.tc.log("Assign: 'base' account {} must sign", .{account.getPubkey()});
+        try ic.tc.log("Assign: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -456,7 +456,7 @@ fn createAccount(
         defer account.release();
 
         if (account.getLamports() > 0) {
-            try ic.tc.log("Create Account: account {} already in use", .{account.getPubkey()});
+            try ic.tc.log("Create Account: account {} already in use", .{account.pubkey});
             ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
             return InstructionError.Custom;
         }
@@ -540,7 +540,7 @@ fn advanceNonceAccount(
     if (!account.isWritable()) {
         try ic.tc.log(
             "Advance nonce account: Account {} must be writeable",
-            .{account.getPubkey()},
+            .{account.pubkey},
         );
         return InstructionError.InvalidArgument;
     }
@@ -550,7 +550,7 @@ fn advanceNonceAccount(
         .unintialized => {
             try ic.tc.log(
                 "Advance nonce account: Account {} state is invalid",
-                .{account.getPubkey()},
+                .{account.pubkey},
             );
             return InstructionError.InvalidAccountData;
         },
@@ -600,7 +600,7 @@ fn withdrawNonceAccount(
         if (!from_account.isWritable()) {
             try ic.tc.log(
                 "Withdraw nonce account: Account {} must be writeable",
-                .{from_account.getPubkey()},
+                .{from_account.pubkey},
             );
             return InstructionError.InvalidArgument;
         }
@@ -615,7 +615,7 @@ fn withdrawNonceAccount(
                     });
                     return InstructionError.InsufficientFunds;
                 }
-                break :blk from_account.getPubkey();
+                break :blk from_account.pubkey;
             },
             .initialized => |data| blk: {
                 if (lamports == from_account.getLamports()) {
@@ -675,7 +675,7 @@ fn initializeNonceAccount(
     if (!account.isWritable()) {
         try ic.tc.log(
             "Initialize nonce account: Account {} must be writeable",
-            .{account.getPubkey()},
+            .{account.pubkey},
         );
         return InstructionError.InvalidArgument;
     }
@@ -702,7 +702,7 @@ fn initializeNonceAccount(
         .initialized => |_| {
             try ic.tc.log(
                 "Initialize nonce account: Account {} state is invalid",
-                .{account.getPubkey()},
+                .{account.pubkey},
             );
             return InstructionError.InvalidAccountData;
         },
@@ -719,7 +719,7 @@ pub fn authorizeNonceAccount(
     if (!account.isWritable()) {
         try ic.tc.log(
             "Authorize nonce account: Account {} must be writeable",
-            .{account.getPubkey()},
+            .{account.pubkey},
         );
         return InstructionError.InvalidArgument;
     }
@@ -730,7 +730,7 @@ pub fn authorizeNonceAccount(
         .unintialized => {
             try ic.tc.log(
                 "Authorize nonce account: Account {} state is invalid",
-                .{account.getPubkey()},
+                .{account.pubkey},
             );
             return InstructionError.InvalidAccountData;
         },

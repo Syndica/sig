@@ -36,7 +36,7 @@ pub const BorrowedAccount = struct {
         is_writable: bool,
     },
 
-    pub fn release(self: *BorrowedAccount) void {
+    pub fn release(self: BorrowedAccount) void {
         self.account_write_guard.release();
     }
 
@@ -52,8 +52,27 @@ pub const BorrowedAccount = struct {
         return self.account.data;
     }
 
+    pub fn getDataMutable(self: BorrowedAccount) []u8 {
+        // TODO: Add checks and permalinks
+        return self.account.data;
+    }
+
     pub fn isExecutable(self: BorrowedAccount) bool {
         return self.account.executable;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L1055
+    pub fn isExecutableInternal(self: BorrowedAccount) bool {
+        // !self
+        //     .transaction_context
+        //     .remove_accounts_executable_flag_checks
+        //     && self.account.executable()
+        return self.account.executable;
+    }
+
+    pub fn setExecutable(self: *BorrowedAccount, executable: bool) InstructionError!void {
+        // TODO: Add checks and permalinks
+        self.account.executable = executable;
     }
 
     pub fn getOwner(self: BorrowedAccount) Pubkey {
@@ -162,6 +181,15 @@ pub const BorrowedAccount = struct {
         if (self.isExecutable()) return InstructionError.ModifiedProgramId;
         if (!self.account.isZeroed()) return InstructionError.ModifiedProgramId;
         self.account.owner = pubkey;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L825
+    pub fn setLamports(self: *BorrowedAccount, lamports: u64) InstructionError!void {
+        if (!self.isOwnedByCurrentProgram() and lamports < self.getLamports())
+            return InstructionError.ExternalAccountLamportSpend;
+        if (!self.isWritable()) return InstructionError.ReadonlyLamportChange;
+        if (self.isExecutableInternal()) return InstructionError.ExecutableLamportChange;
+        self.account.lamports = lamports;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L800
