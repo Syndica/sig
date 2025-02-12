@@ -3,7 +3,7 @@ const std = @import("std");
 const memory = @import("memory.zig");
 const assert = std.debug.assert;
 
-pub const EF_SBPF_V2: u32 = 0x20;
+pub const EF_SBPF_v1: u32 = 0x20;
 
 /// Solana BPF Elf Machine
 pub const EM_SBPF: std.elf.Elf64_Half = 263;
@@ -14,39 +14,73 @@ pub const EI_OSABI: u8 = 7;
 
 pub const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-pub const SBPFVersion = enum {
-    // v0,
+pub const Version = enum(u32) {
+    /// The "legacy" format
+    v0,
+    /// SIMD-0166
     v1,
+    /// SIMD-0174, SIMD-0173
     v2,
-    // v3,
-    // reserved,
+    /// SIMD-0178, SIMD-0179, SIMD-0189
+    v3,
+    /// support other versions as well!
+    _,
 
-    pub fn enableDynamicStackFrames(version: SBPFVersion) bool {
-        return version != .v1;
+    /// Enable SIMD-0166: SBPF dynamic stack frames
+    pub fn enableDynamicStackFrames(version: Version) bool {
+        return version.gte(.v1);
     }
 
-    pub fn enableElfVaddr(version: SBPFVersion) bool {
-        return version != .v1;
+    /// Enable SIMD-0174: SBPF arithmetics improvements
+    pub fn enablePqr(version: Version) bool {
+        return version.gte(.v2);
+    }
+    /// ... SIMD-0174
+    pub fn swapSubRegImmOperands(version: Version) bool {
+        return version.gte(.v2);
+    }
+    /// ... SIMD-0174
+    pub fn disableNegation(version: Version) bool {
+        return version.gte(.v2);
     }
 
-    pub fn enableLDDW(version: SBPFVersion) bool {
-        return version == .v1;
+    /// Enable SIMD-0173: SBPF instruction encoding improvements
+    pub fn callRegUsesSrcReg(version: Version) bool {
+        return version.gte(.v2);
+    }
+    /// ... SIMD-0173
+    pub fn disableLDDW(version: Version) bool {
+        return version.gte(.v2);
+    }
+    /// ... SIMD-0173
+    pub fn enableLe(version: Version) bool {
+        return version == .v0;
     }
 
-    pub fn enableStaticSyscalls(version: SBPFVersion) bool {
-        return version != .v1;
+    /// Enable SIMD-0178: SBPF Static Syscalls
+    ///
+    /// Enable SIMD-0179: SBPF stricter verification constraints
+    pub fn enableStaticSyscalls(version: Version) bool {
+        return version.gte(.v3);
+    }
+    /// Enable SIMD-0189: SBPF stricter ELF headers
+    pub fn enableLowerBytecodeVaddr(version: Version) bool {
+        return version.gte(.v3);
     }
 
-    pub fn enableNegation(version: SBPFVersion) bool {
-        return version == .v1;
+    /// Ensure that rodata sections don't exceed their maximum allowed size and
+    /// overlap with the stack
+    pub fn rejectRodataStackOverlap(version: Version) bool {
+        return version != .v0;
     }
 
-    pub fn enableLe(version: SBPFVersion) bool {
-        return version == .v1;
+    /// Allow sh_addr != sh_offset in elf sections.
+    pub fn enableElfVaddr(version: Version) bool {
+        return version != .v0;
     }
 
-    pub fn rejectRodataStackOverlap(version: SBPFVersion) bool {
-        return version != .v1;
+    fn gte(version: Version, other: Version) bool {
+        return @intFromEnum(version) >= @intFromEnum(other);
     }
 };
 
@@ -205,6 +239,56 @@ pub const Instruction = packed struct(u64) {
         /// bpf opcode: `hor64 dst, imm` /// `dst |= imm << 32`.
         hor64_imm = alu64 | k | hor,
 
+        /// bpf opcode: `lmul32 dst, imm` /// `dst *= (dst * imm) as u32`.
+        lmul32_imm = pqr | k | lmul,
+        /// bpf opcode: `lmul32 dst, src` /// `dst *= (dst * src) as u32`.
+        lmul32_reg = pqr | x | lmul,
+        /// bpf opcode: `udiv32 dst, imm` /// `dst /= imm`.
+        udiv32_imm = pqr | k | udiv,
+        /// bpf opcode: `udiv32 dst, src` /// `dst /= src`.
+        udiv32_reg = pqr | x | udiv,
+        /// bpf opcode: `urem32 dst, imm` /// `dst %= imm`.
+        urem32_imm = pqr | k | urem,
+        /// bpf opcode: `urem32 dst, src` /// `dst %= src`.
+        urem32_reg = pqr | x | urem,
+        /// bpf opcode: `sdiv32 dst, imm` /// `dst /= imm`.
+        sdiv32_imm = pqr | k | sdiv,
+        /// bpf opcode: `sdiv32 dst, src` /// `dst /= src`.
+        sdiv32_reg = pqr | x | sdiv,
+        /// bpf opcode: `srem32 dst, imm` /// `dst %= imm`.
+        srem32_imm = pqr | k | srem,
+        /// bpf opcode: `srem32 dst, src` /// `dst %= src`.
+        srem32_reg = pqr | x | srem,
+
+        /// bpf opcode: `lmul64 dst, imm` /// `dst = (dst * imm) as u64`.
+        lmul64_imm = pqr | b | k | lmul,
+        /// bpf opcode: `lmul64 dst, src` /// `dst = (dst * src) as u64`.
+        lmul64_reg = pqr | b | x | lmul,
+        /// bpf opcode: `uhmul64 dst, imm` /// `dst = (dst * imm) >> 64`.
+        uhmul64_imm = pqr | b | k | uhmul,
+        /// bpf opcode: `uhmul64 dst, src` /// `dst = (dst * src) >> 64`.
+        uhmul64_reg = pqr | b | x | uhmul,
+        /// bpf opcode: `udiv64 dst, imm` /// `dst /= imm`.
+        udiv64_imm = pqr | b | k | udiv,
+        /// bpf opcode: `udiv64 dst, src` /// `dst /= src`.
+        udiv64_reg = pqr | b | x | udiv,
+        /// bpf opcode: `urem64 dst, imm` /// `dst %= imm`.
+        urem64_imm = pqr | b | k | urem,
+        /// bpf opcode: `urem64 dst, src` /// `dst %= src`.
+        urem64_reg = pqr | b | x | urem,
+        /// bpf opcode: `shmul64 dst, imm` /// `dst = (dst * imm) >> 64`.
+        shmul64_imm = pqr | b | k | shmul,
+        /// bpf opcode: `shmul64 dst, src` /// `dst = (dst * src) >> 64`.
+        shmul64_reg = pqr | b | x | shmul,
+        /// bpf opcode: `sdiv64 dst, imm` /// `dst /= imm`.
+        sdiv64_imm = pqr | b | k | sdiv,
+        /// bpf opcode: `sdiv64 dst, src` /// `dst /= src`.
+        sdiv64_reg = pqr | b | x | sdiv,
+        /// bpf opcode: `srem64 dst, imm` /// `dst %= imm`.
+        srem64_imm = pqr | b | k | srem,
+        /// bpf opcode: `srem64 dst, src` /// `dst %= src`.
+        srem64_reg = pqr | b | x | srem,
+
         /// bpf opcode: `ja +off` /// `pc += off`.
         ja = jmp | 0x0,
         /// bpf opcode: `jeq dst, imm, +off` /// `pc += off if dst == imm`.
@@ -310,58 +394,86 @@ pub const Instruction = packed struct(u64) {
 
     pub const map = std.StaticStringMap(Entry).initComptime(&.{
         // zig fmt: off
-        .{ "mov"  , .{ .inst = .alu_binary, .opc = mov | alu64 } }, 
-        .{ "mov64", .{ .inst = .alu_binary, .opc = mov | alu64 } },
+        .{ "mov"  , .{ .inst = .alu_binary, .opc = mov | alu64  } }, 
+        .{ "mov64", .{ .inst = .alu_binary, .opc = mov | alu64  } },
         .{ "mov32", .{ .inst = .alu_binary, .opc = mov | alu32  } },
         
-        .{ "add"  , .{ .inst = .alu_binary, .opc = add | alu64 } },
-        .{ "add64", .{ .inst = .alu_binary, .opc = add | alu64 } },
+        .{ "add"  , .{ .inst = .alu_binary, .opc = add | alu64  } },
+        .{ "add64", .{ .inst = .alu_binary, .opc = add | alu64  } },
         .{ "add32", .{ .inst = .alu_binary, .opc = add | alu32  } },
 
-        .{ "mul"  , .{ .inst = .alu_binary, .opc = mul | alu64 } },
-        .{ "mul64", .{ .inst = .alu_binary, .opc = mul | alu64 } },
+        .{ "mul"  , .{ .inst = .alu_binary, .opc = mul | alu64  } },
+        .{ "mul64", .{ .inst = .alu_binary, .opc = mul | alu64  } },
         .{ "mul32", .{ .inst = .alu_binary, .opc = mul | alu32  } },
 
-        .{ "sub"  , .{ .inst = .alu_binary, .opc = sub | alu64 } },
-        .{ "sub64", .{ .inst = .alu_binary, .opc = sub | alu64 } },
+        .{ "sub"  , .{ .inst = .alu_binary, .opc = sub | alu64  } },
+        .{ "sub64", .{ .inst = .alu_binary, .opc = sub | alu64  } },
         .{ "sub32", .{ .inst = .alu_binary, .opc = sub | alu32  } },
 
-        .{ "div"  , .{ .inst = .alu_binary, .opc = div | alu64 } },
-        .{ "div64", .{ .inst = .alu_binary, .opc = div | alu64 } },
+        .{ "div"  , .{ .inst = .alu_binary, .opc = div | alu64  } },
+        .{ "div64", .{ .inst = .alu_binary, .opc = div | alu64  } },
         .{ "div32", .{ .inst = .alu_binary, .opc = div | alu32  } },
         
-        .{ "xor"  , .{ .inst = .alu_binary, .opc = xor | alu64 } },
-        .{ "xor64", .{ .inst = .alu_binary, .opc = xor | alu64 } },
+        .{ "xor"  , .{ .inst = .alu_binary, .opc = xor | alu64  } },
+        .{ "xor64", .{ .inst = .alu_binary, .opc = xor | alu64  } },
         .{ "xor32", .{ .inst = .alu_binary, .opc = xor | alu32  } },
 
-        .{ "or"  , .{ .inst = .alu_binary, .opc = @"or" | alu64 } },
-        .{ "or64", .{ .inst = .alu_binary, .opc = @"or" | alu64 } },
+        .{ "or"  , .{ .inst = .alu_binary, .opc = @"or" | alu64  } },
+        .{ "or64", .{ .inst = .alu_binary, .opc = @"or" | alu64  } },
         .{ "or32", .{ .inst = .alu_binary, .opc = @"or" | alu32  } },
 
-        .{ "and"  , .{ .inst = .alu_binary, .opc = @"and" | alu64 } },
-        .{ "and64", .{ .inst = .alu_binary, .opc = @"and" | alu64 } },
+        .{ "and"  , .{ .inst = .alu_binary, .opc = @"and" | alu64  } },
+        .{ "and64", .{ .inst = .alu_binary, .opc = @"and" | alu64  } },
         .{ "and32", .{ .inst = .alu_binary, .opc = @"and" | alu32  } },
 
-        .{ "mod"  , .{ .inst = .alu_binary, .opc = mod | alu64 } },
-        .{ "mod64", .{ .inst = .alu_binary, .opc = mod | alu64 } },
+        .{ "mod"  , .{ .inst = .alu_binary, .opc = mod | alu64  } },
+        .{ "mod64", .{ .inst = .alu_binary, .opc = mod | alu64  } },
         .{ "mod32", .{ .inst = .alu_binary, .opc = mod | alu32  } },
 
-        .{ "arsh"  , .{ .inst = .alu_binary, .opc = arsh | alu64 } },
-        .{ "arsh64", .{ .inst = .alu_binary, .opc = arsh | alu64 } },
+        .{ "arsh"  , .{ .inst = .alu_binary, .opc = arsh | alu64  } },
+        .{ "arsh64", .{ .inst = .alu_binary, .opc = arsh | alu64  } },
         .{ "arsh32", .{ .inst = .alu_binary, .opc = arsh | alu32  } },
 
         .{ "lsh"  , .{ .inst = .alu_binary, .opc = lsh | alu64 } },
         .{ "lsh64", .{ .inst = .alu_binary, .opc = lsh | alu64 } },
-        .{ "lsh32", .{ .inst = .alu_binary, .opc = lsh | alu32  } },
+        .{ "lsh32", .{ .inst = .alu_binary, .opc = lsh | alu32 } },
 
         .{ "rsh"  , .{ .inst = .alu_binary, .opc = rsh | alu64 } },
         .{ "rsh64", .{ .inst = .alu_binary, .opc = rsh | alu64 } },
-        .{ "rsh32", .{ .inst = .alu_binary, .opc = rsh | alu32  } },
+        .{ "rsh32", .{ .inst = .alu_binary, .opc = rsh | alu32 } },
 
         .{ "hor64", .{ .inst = .alu_binary, .opc = hor | alu64 } },
+
+        .{ "lmul"  , .{ .inst = .alu_binary, .opc = pqr | lmul | b } },
+        .{ "lmul64", .{ .inst = .alu_binary, .opc = pqr | lmul | b } },
+        .{ "lmul32", .{ .inst = .alu_binary, .opc = pqr | lmul     } },
+
+        .{ "uhmul"  , .{ .inst = .alu_binary, .opc = pqr | uhmul | b } },
+        .{ "uhmul64", .{ .inst = .alu_binary, .opc = pqr | uhmul | b } },
+        .{ "uhmul32", .{ .inst = .alu_binary, .opc = pqr | uhmul     } },
+
+        .{ "shmul"  , .{ .inst = .alu_binary, .opc = pqr | shmul | b } },
+        .{ "shmul64", .{ .inst = .alu_binary, .opc = pqr | shmul | b } },
+        .{ "shmul32", .{ .inst = .alu_binary, .opc = pqr | shmul     } },
+
+        .{ "udiv"  , .{ .inst = .alu_binary, .opc = pqr | udiv | b } },
+        .{ "udiv64", .{ .inst = .alu_binary, .opc = pqr | udiv | b } },
+        .{ "udiv32", .{ .inst = .alu_binary, .opc = pqr | udiv     } },
+
+        .{ "urem"  , .{ .inst = .alu_binary, .opc = pqr | urem | b } },
+        .{ "urem64", .{ .inst = .alu_binary, .opc = pqr | urem | b } },
+        .{ "urem32", .{ .inst = .alu_binary, .opc = pqr | urem     } },
+
+        .{ "sdiv"  , .{ .inst = .alu_binary, .opc = pqr | sdiv | b } },
+        .{ "sdiv64", .{ .inst = .alu_binary, .opc = pqr | sdiv | b } },
+        .{ "sdiv32", .{ .inst = .alu_binary, .opc = pqr | sdiv     } },
+
+        .{ "srem"  , .{ .inst = .alu_binary, .opc = pqr | srem | b } },
+        .{ "srem64", .{ .inst = .alu_binary, .opc = pqr | srem | b } },
+        .{ "srem32", .{ .inst = .alu_binary, .opc = pqr | srem     } },
         
-        .{ "neg"  , .{ .inst = .alu_unary,  .opc = neg | alu64 } },
-        .{ "neg64", .{ .inst = .alu_unary,  .opc = neg | alu64 } },
+        .{ "neg"  , .{ .inst = .alu_unary,  .opc = neg | alu64  } },
+        .{ "neg64", .{ .inst = .alu_unary,  .opc = neg | alu64  } },
         .{ "neg32", .{ .inst = .alu_unary,  .opc = neg | alu32  } },
 
         .{ "ja"   , .{ .inst = .jump_unconditional, .opc = ja | jmp } },
@@ -519,6 +631,21 @@ pub const Instruction = packed struct(u64) {
     /// alu/alu64 operation code: high or
     pub const hor: u8 = 0xf0;
 
+    /// pqr operation code: unsigned high multiplication.
+    pub const uhmul: u8 = 0x20;
+    /// pqr operation code: unsigned division quotient.
+    pub const udiv: u8 = 0x40;
+    /// pqr operation code: unsigned division remainder.
+    pub const urem: u8 = 0x60;
+    /// pqr operation code: low multiplication.
+    pub const lmul: u8 = 0x80;
+    /// pqr operation code: signed high multiplication.
+    pub const shmul: u8 = 0xa0;
+    /// pqr operation code: signed division quotient.
+    pub const sdiv: u8 = 0xc0;
+    /// pqr operation code: signed division remainder.
+    pub const srem: u8 = 0xe0;
+
     pub const Register = enum(u4) {
         /// Return Value
         r0,
@@ -530,7 +657,7 @@ pub const Instruction = packed struct(u64) {
         r3,
         /// Argument 3
         r4,
-        /// Argument 4  @"or" stack-spill ptr
+        /// Argument 4 or stack-spill ptr
         r5,
         /// Call-preserved
         r6,

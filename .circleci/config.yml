@@ -26,7 +26,7 @@ jobs:
       - run:
           name: Download Zig
           command: |
-            apt update && apt install -y wget unzip xz-utils 
+            apt update && apt install -y wget unzip xz-utils
             wget https://ziglang.org/download/0.13.0/zig-<< parameters.target >>-0.13.0.tar.xz
             tar xf zig-<< parameters.target >>-0.13.0.tar.xz
             mkdir -p workspace
@@ -34,8 +34,8 @@ jobs:
       - persist_to_workspace:
           root: workspace
           paths:
-            - '*'
-          
+            - "*"
+
   lint:
     executor: linux-executor
     steps:
@@ -45,7 +45,7 @@ jobs:
       - run:
           name: Lint
           command: workspace/zig/zig fmt --check src/ build.zig
-  
+
   check_style:
     executor: python-executor
     steps:
@@ -56,7 +56,18 @@ jobs:
       - run:
           name: Check style
           command: python scripts/style.py --check src
-  
+
+  check_docs:
+    executor: python-executor
+    steps:
+      - checkout
+      - run:
+          name: Install dependencies
+          command: pip install --upgrade pip
+      - run:
+          name: Check docs
+          command: python docs/check.py ./
+
   build_linux:
     executor: linux-executor
     steps:
@@ -128,7 +139,7 @@ jobs:
           paths:
             - .zig-cache
             - ~/.cache/zig
-  
+
   build_and_test_hashmap:
     executor: linux-executor
     steps:
@@ -153,7 +164,8 @@ jobs:
           key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v6
       - run:
           name: Test
-          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=true --color off --summary all
+          # Disable network-accessing tests for this job, which behave badly on circleci
+          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --color off --summary all
 
   test_kcov_linux:
     executor: linux-executor
@@ -165,7 +177,7 @@ jobs:
           key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v6
       - run:
           name: Build
-          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run --summary all
+          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run -Dno-network-tests --summary all
       - run:
           name: Test and Collect
           command: |
@@ -185,7 +197,7 @@ jobs:
       - run:
           name: Run Gossip
           command: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
-    
+
   gossip_service_fuzz:
     executor: linux-executor
     steps:
@@ -195,7 +207,7 @@ jobs:
       - run:
           name: Run Gossip Service Fuzzer
           command: workspace/zig-out-release/bin/fuzz gossip_service 19 10000
-  
+
   gossip_table_fuzz:
     executor: linux-executor
     steps:
@@ -205,7 +217,7 @@ jobs:
       - run:
           name: Run Gossip Service Fuzzer
           command: workspace/zig-out-release/bin/fuzz gossip_table 19 100000
-    
+
   allocators_fuzz:
     executor: linux-executor
     steps:
@@ -226,16 +238,16 @@ jobs:
           name: Run Gossip Service Fuzzer
           command: workspace/zig-out-release/bin/fuzz ledger 19 10000
 
-
 workflows:
   check_linux:
     jobs:
       - check_style
+      - check_docs
       - setup_zig:
           name: setup_zig_linux
           target: "linux-x86_64"
       - lint:
-          requires: 
+          requires:
             - setup_zig_linux
       - build_linux_release:
           requires:
@@ -276,4 +288,3 @@ workflows:
       - build_and_test_macos:
           requires:
             - setup_zig_macos
-      

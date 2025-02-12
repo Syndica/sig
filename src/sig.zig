@@ -21,6 +21,7 @@ pub const trace = @import("trace/lib.zig");
 pub const transaction_sender = @import("transaction_sender/lib.zig");
 pub const utils = @import("utils/lib.zig");
 pub const version = @import("version/version.zig");
+pub const build_options = @import("build-options");
 
 pub const VALIDATOR_DIR = "validator/";
 /// subdirectory of {VALIDATOR_DIR} which contains the accounts database
