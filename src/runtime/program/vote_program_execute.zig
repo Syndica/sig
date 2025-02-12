@@ -142,7 +142,7 @@ fn executeIntializeAccount(
     defer account.release();
     const rent = try ic.getSysvarWithAccountCheck(Rent, InitializeAccountIndex.RentSysvar);
     const clock = try ic.getSysvarWithAccountCheck(Clock, InitializeAccountIndex.ClockSysvar);
-    const autority = ic.accounts[1].pubkey;
+    const authority = ic.accounts[1].pubkey;
 
     try intializeAccount(
         allocator,
@@ -154,7 +154,7 @@ fn executeIntializeAccount(
         &account,
         rent,
         clock,
-        autority,
+        authority,
     );
 }
 
