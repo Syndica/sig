@@ -132,9 +132,10 @@ pub fn build(b: *Build) void {
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
-        .sanitize_thread = enable_tsan,
         .filters = filters orelse &.{},
+        .sanitize_thread = enable_tsan,
     });
+    b.installArtifact(unit_tests_exe);
     test_step.dependOn(&unit_tests_exe.step);
     install_step.dependOn(&unit_tests_exe.step);
 
@@ -210,7 +211,13 @@ pub fn build(b: *Build) void {
     benchmark_exe.linkLibC();
     benchmark_exe.root_module.addOptions("build-options", build_options);
 
-    benchmark_exe.root_module.addImport("xev", xev_mod);
+    // make sure pyroscope's got enough info to profile
+    benchmark_exe.build_id = .fast;
+    benchmark_exe.root_module.omit_frame_pointer = false;
+    benchmark_exe.root_module.strip = false;
+
+    b.installArtifact(benchmark_exe);
+
     benchmark_exe.root_module.addImport("base58", base58_mod);
     benchmark_exe.root_module.addImport("zig-network", zig_network_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);

@@ -280,7 +280,7 @@ pub const VoteAccount = struct {
         vote_account: VoteAccount,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!VoteAccount {
-        const account = try vote_account.account.clone(allocator);
+        const account = try vote_account.account.cloneOwned(allocator);
         errdefer account.deinit(allocator);
         return .{
             .account = account,
@@ -297,10 +297,12 @@ pub const VoteAccount = struct {
             .resize = .assert,
             .free = .assert,
         });
-        const vote_state = bincode.readFromSlice(
+
+        var data_iter = self.account.data.iterator();
+        const vote_state = bincode.read(
             assert_alloc,
             VoteState,
-            self.account.data,
+            data_iter.reader(),
             .{},
         );
         self.vote_state = vote_state;
