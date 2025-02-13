@@ -161,7 +161,7 @@ pub const ForkChoice = struct {
             .last_root_time = Instant.now(),
         };
 
-        _ = try self.addNewLeafSlot(tree_root, null);
+        try self.addNewLeafSlot(tree_root, null);
         return self;
     }
 
@@ -274,7 +274,7 @@ pub const ForkChoice = struct {
                 .is_duplicate_confirmed = (maybe_parent == null),
             };
 
-            _ = try self.fork_infos.put(slot_hash_key, new_fork_info);
+            try self.fork_infos.put(slot_hash_key, new_fork_info);
         }
 
         // If no parent is given then we are done.
@@ -1069,7 +1069,7 @@ fn doInsertAggregateOperation(
     if (modify_fork_validity) |mark_fork_validity| {
         switch (mark_fork_validity) {
             .MarkValid => |slot| {
-                _ = try update_operations.put(
+                try update_operations.put(
                     SlotAndHashLabel{
                         .slot_hash_key = slot_hash_key,
                         .label = .MarkValid,
@@ -1078,7 +1078,7 @@ fn doInsertAggregateOperation(
                 );
             },
             .MarkInvalid => |slot| {
-                _ = try update_operations.put(
+                try update_operations.put(
                     SlotAndHashLabel{
                         .slot_hash_key = slot_hash_key,
                         .label = .MarkInvalid,
@@ -1090,7 +1090,7 @@ fn doInsertAggregateOperation(
         }
     }
 
-    _ = try update_operations.put(aggregate_label, .Aggregate);
+    try update_operations.put(aggregate_label, .Aggregate);
     return true;
 }
 const test_allocator = std.testing.allocator;
@@ -1307,7 +1307,7 @@ test "HeaviestSubtreeForkChoice.setTreeRoot" {
     defer fork_choice.deinit();
     // Set root to 1, should only purge 0
     const root1 = SlotAndHash{ .slot = 1, .hash = Hash.ZEROES };
-    _ = try fork_choice.setTreeRoot(&root1);
+    try fork_choice.setTreeRoot(&root1);
     for (0..6) |i| {
         const slot_hash = SlotAndHash{ .slot = @intCast(i), .hash = Hash.ZEROES };
         const exists = i != 0;
