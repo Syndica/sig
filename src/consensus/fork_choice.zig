@@ -767,11 +767,8 @@ pub const ForkChoice = struct {
         // Sort the map to ensure keys are in order
 
         var update_operations = update_operations_;
-        const items_result = update_operations.items();
 
-        // Access the fields of the returned struct
-        const keys = items_result.@"0";
-        const values = items_result.@"1";
+        const keys, const values = update_operations.items();
 
         // Iterate through the update operations from greatest to smallest slot
         var i: usize = keys.len;
