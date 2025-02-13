@@ -546,7 +546,7 @@ fn advanceNonceAccount(
     }
 
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
-    switch (versioned_nonce.deserializeFromAccountData()) {
+    switch (versioned_nonce.getState()) {
         .unintialized => {
             try ic.tc.log(
                 "Advance nonce account: Account {} state is invalid",
@@ -606,7 +606,7 @@ fn withdrawNonceAccount(
         }
 
         const versioned_nonce = try from_account.deserializeFromAccountData(allocator, nonce.Versions);
-        const authority = switch (versioned_nonce.deserializeFromAccountData()) {
+        const authority = switch (versioned_nonce.getState()) {
             .unintialized => blk: {
                 if (lamports > from_account.getLamports()) {
                     try ic.tc.log("Withdraw nonce account: insufficient lamports {}, need {}", .{
@@ -681,7 +681,7 @@ fn initializeNonceAccount(
     }
 
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
-    switch (versioned_nonce.deserializeFromAccountData()) {
+    switch (versioned_nonce.getState()) {
         .unintialized => {
             const min_balance = rent.minimumBalance(account.getData().len);
             if (min_balance > account.getLamports()) {
@@ -726,7 +726,7 @@ pub fn authorizeNonceAccount(
 
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
 
-    const nonce_data = switch (versioned_nonce.deserializeFromAccountData()) {
+    const nonce_data = switch (versioned_nonce.getState()) {
         .unintialized => {
             try ic.tc.log(
                 "Authorize nonce account: Account {} state is invalid",
