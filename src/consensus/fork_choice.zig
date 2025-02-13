@@ -1059,9 +1059,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
             &.{ .slot = 0, .hash = Hash.ZEROES },
         );
         defer diff.deinit();
-        try std.testing.expect(
-            diff.count() == 0,
-        );
+        try std.testing.expectEqual(0, diff.count());
     }
 
     {
@@ -1070,9 +1068,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
             &.{ .slot = 5, .hash = Hash.ZEROES },
         );
         defer diff.deinit();
-        try std.testing.expect(
-            diff.count() == 0,
-        );
+        try std.testing.expectEqual(0, diff.count());
     }
     {
         var diff = try fork_choice.subtreeDiff(
@@ -1080,9 +1076,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
             &.{ .slot = 6, .hash = Hash.ZEROES },
         );
         defer diff.deinit();
-        try std.testing.expect(
-            diff.count() == 0,
-        );
+        try std.testing.expectEqual(0, diff.count());
     }
 
     // The set reachable from slot 3, excluding subtree 1, is just everything
@@ -1097,9 +1091,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         const items = diff.items();
         const slot_and_hashes = items[0];
 
-        try std.testing.expect(
-            slot_and_hashes.len == 3,
-        );
+        try std.testing.expectEqual(3, slot_and_hashes.len);
 
         try std.testing.expect(
             (slot_and_hashes[0].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
@@ -1120,9 +1112,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         const items = diff.items();
         const slot_and_hashes = items[0]; // Access the keys slice
 
-        try std.testing.expect(
-            slot_and_hashes.len == 3,
-        );
+        try std.testing.expectEqual(3, slot_and_hashes.len);
 
         try std.testing.expect(
             (slot_and_hashes[0].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
@@ -1143,9 +1133,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         const items = diff.items();
         const slot_and_hashes = items[0]; // Access the keys slice
 
-        try std.testing.expect(
-            slot_and_hashes.len == 6,
-        );
+        try std.testing.expectEqual(6, slot_and_hashes.len);
 
         try std.testing.expect(
             (slot_and_hashes[0].equals(.{ .slot = 0, .hash = Hash.ZEROES }) and
@@ -1232,7 +1220,7 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
     }
     {
         var iterator = fork_choice.ancestorIterator(SlotAndHash{ .slot = 0, .hash = Hash.ZEROES });
-        try std.testing.expect(iterator.next() == null);
+        try std.testing.expectEqual(null, iterator.next());
     }
     {
         // Set a root, everything but slots 2, 4 should be removed
@@ -1593,25 +1581,27 @@ test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
                 // 1) Be duplicate confirmed
                 // 2) Have no invalid ancestors
                 try std.testing.expect(fork_choice.isDuplicateConfirmed(slot_hash_key).?);
-                try std.testing.expect(
-                    fork_choice.latestDuplicateAncestor(slot_hash_key.*) == null,
+                try std.testing.expectEqual(
+                    null,
+                    fork_choice.latestDuplicateAncestor(slot_hash_key.*),
                 );
             } else if (slot >= invalid_descendant_slot) {
                 // Anything descended from the invalid slot should:
                 // 1) Not be duplicate confirmed
                 // 2) Should have an invalid ancestor == `invalid_descendant_slot`
                 try std.testing.expect(!fork_choice.isDuplicateConfirmed(slot_hash_key).?);
-                try std.testing.expect(
-                    fork_choice
-                        .latestDuplicateAncestor(slot_hash_key.*).? == invalid_descendant_slot,
+                try std.testing.expectEqual(
+                    invalid_descendant_slot,
+                    fork_choice.latestDuplicateAncestor(slot_hash_key.*).?,
                 );
             } else {
                 // Anything in between the duplicate confirmed slot and the invalid slot should:
                 // 1) Not be duplicate confirmed
                 // 2) Should not have an invalid ancestor
                 try std.testing.expect(!fork_choice.isDuplicateConfirmed(slot_hash_key).?);
-                try std.testing.expect(
-                    fork_choice.latestDuplicateAncestor(slot_hash_key.*) == null,
+                try std.testing.expectEqual(
+                    null,
+                    fork_choice.latestDuplicateAncestor(slot_hash_key.*),
                 );
             }
         }
