@@ -1,8 +1,12 @@
 # Metrics
 
-Metrics include prometheus, grafana, loki, and alloy.
+We also support metric dashboards for all the validator components to gain
+insight into the health of the validator as it runs. This includes
+using applications like grafana, prometheus, loki, and alloy to monitor.
 
 The main folder is in `src/metrics/`.
+
+We use a docker compose setup to run all the services in one command.
 
 ## Setup
 

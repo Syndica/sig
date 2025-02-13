@@ -6,8 +6,11 @@ import os
 def get_markdown_files(
     src_path: str,
     exclude_dirs: list[str],
-    code_docs_path: str,
+    # the path to the docusaurus docs directory
+    docs_dir_path: str,
 ):
+    code_dir_path = os.path.join(docs_dir_path, "code")
+
     # iterate over all files in sig repo
     doc_files = []
     for root, dirs, files in os.walk(src_path):
@@ -24,16 +27,20 @@ def get_markdown_files(
         for file in files:
             if file.endswith(".md"):
                 dir_name = os.path.basename(root)
-                if dir_name == "":
+                if dir_name == "" or dir_name == "." or dir_name == "..":
                     # this is the root readme.md -- we dont include
                     # it in the docs for now
                     continue
+
+                docs_path = os.path.join(code_dir_path, dir_name + ".md")
+                if dir_name == "metrics" :
+                    docs_path = os.path.join(docs_dir_path, "usage/metrics.md")
 
                 doc_files.append([
                     # src/ path
                     os.path.join(root, file),
                     # docs/ path
-                    os.path.join(code_docs_path, dir_name + ".md"),
+                    docs_path
                 ])
 
     return doc_files
@@ -43,7 +50,7 @@ if __name__ == "__main__":
     # point to the source sig/ repo
     # (should be run from the docs/ directory)
     src_path = "../"
-    code_docs_path = "docusaurus/docs/code"
+    code_docs_path = "docusaurus/docs"
 
     # dirs which not to search
     exclude_dirs = [

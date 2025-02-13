@@ -10,12 +10,12 @@ if __name__ == "__main__":
     args = arg_parser.parse_args()
 
     exclude_dirs = [
-        args.src_dir + "docs", # dont search yourself
-        args.src_dir + "data", # this should only include data
+        os.path.join(args.src_dir, "docs"), # dont search yourself
+        os.path.join(args.src_dir, "data"), # this should only include data
     ]
 
-    code_path = os.path.join(args.src_dir, "docs/docusaurus/docs/code")
-    for src_path, docs_path in g.get_markdown_files(args.src_dir, exclude_dirs, code_path):
+    doc_dir_path = os.path.join(args.src_dir, "docs/docusaurus/docs")
+    for src_path, docs_path in g.get_markdown_files(args.src_dir, exclude_dirs, doc_dir_path):
         # check to see if the files are the same !
         with open(src_path, "r") as src_f:
             with open(docs_path, "r") as docs_f:
