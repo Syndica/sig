@@ -3759,7 +3759,10 @@ test "load clock sysvar" {
         .leader_schedule_epoch = 1,
         .unix_timestamp = 1733350255,
     };
-    try std.testing.expectEqual(expected_clock, try accounts_db.getTypeFromAccount(allocator, sysvar.Clock, &sysvar.Clock.ID));
+    try std.testing.expectEqual(
+        expected_clock,
+        try accounts_db.getTypeFromAccount(allocator, sysvar.Clock, &sysvar.Clock.ID),
+    );
 }
 
 test "load other sysvars" {
@@ -3779,9 +3782,9 @@ test "load other sysvars" {
     }
 
     const SlotAndHash = sig.core.hash.SlotAndHash;
-    _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvar.EpochSchedule, &sysvar.EpochSchedule.ID);
-    _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvar.Rent, &sysvar.Rent.ID);
-    _ = try accounts_db.getTypeFromAccount(panic_allocator, SlotAndHash, &sysvar.SlotHashes.ID);
+    _ = try accounts_db.getTypeFromAccount(allocator, sysvar.EpochSchedule, &sysvar.EpochSchedule.ID);
+    _ = try accounts_db.getTypeFromAccount(allocator, sysvar.Rent, &sysvar.Rent.ID);
+    _ = try accounts_db.getTypeFromAccount(allocator, SlotAndHash, &sysvar.SlotHashes.ID);
 
     const stake_history = try accounts_db.getTypeFromAccount(allocator, sysvar.StakeHistory, &sysvar.StakeHistory.ID);
     defer sig.bincode.free(allocator, stake_history);
@@ -3790,8 +3793,8 @@ test "load other sysvars" {
     defer sig.bincode.free(allocator, slot_history);
 
     // // not always included in local snapshot
-    // _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.LastRestartSlot, &sysvars.LastRestartSlot.ID);
-    // _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.EpochRewards, &sysvars.EpochRewards.ID);
+    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.LastRestartSlot, &sysvars.LastRestartSlot.ID);
+    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.EpochRewards, &sysvars.EpochRewards.ID);
 }
 
 test "flushing slots works" {
