@@ -37,17 +37,16 @@ pub const BpfLoaderV3ProgramState = union(enum) {
         // account's data.
     },
 
-    pub const UNINITIALIZED_SIZE: usize = 4;
-    pub const BUFFER_METADATA_SIZE: usize = 37;
-    pub const PROGRAM_SIZE: usize = 36;
-    pub const PROGRAM_DATA_METADATA_SIZE: usize = 45;
+    pub fn sizeOfBufferMetadata() usize {
+        return 37;
+    }
 
     pub fn serializedSize(self: BpfLoaderV3ProgramState) !usize {
         return switch (self) {
-            .uninitialized => UNINITIALIZED_SIZE,
-            .buffer => BUFFER_METADATA_SIZE,
-            .program => PROGRAM_SIZE,
-            .program_data => PROGRAM_DATA_METADATA_SIZE,
+            .uninitialized => 4,
+            .buffer => 37,
+            .program => 36,
+            .program_data => 45,
         };
     }
 };
