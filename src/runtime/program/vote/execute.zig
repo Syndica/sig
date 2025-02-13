@@ -1,8 +1,7 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const vote_program_instruction = sig.runtime.program.vote_program_instruction;
-const InitializeAccountIndex = sig.runtime.program.vote_program_instruction.InitializeAccountIndex;
+const vote_program = sig.runtime.program.vote_program;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -16,7 +15,7 @@ const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 
-const VoteProgramInstruction = vote_program_instruction.VoteProgramInstruction;
+const VoteProgramInstruction = vote_program.Instruction;
 
 pub const AuthorizedVoters = struct {
     authorized_voters: std.AutoArrayHashMap(Epoch, Pubkey),
@@ -111,7 +110,7 @@ pub fn voteProgramExecute(
 ) InstructionError!void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/vote/src/vote_processor.rs#L55C40-L55C45
-    try ic.tc.consumeCompute(vote_program_instruction.COMPUTE_UNITS);
+    try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
 
     const instruction = try ic.deserializeInstruction(allocator, VoteProgramInstruction);
     defer sig.bincode.free(allocator, instruction);
@@ -138,10 +137,18 @@ fn executeIntializeAccount(
     commission: u8,
 ) !void {
     try ic.checkNumberOfAccounts(2);
-    const account = try ic.borrowInstructionAccount(InitializeAccountIndex.Account);
+    const account = try ic.borrowInstructionAccount(
+        VoteProgramInstruction.InitializeAccountIndex.Account,
+    );
     defer account.release();
-    const rent = try ic.getSysvarWithAccountCheck(Rent, InitializeAccountIndex.RentSysvar);
-    const clock = try ic.getSysvarWithAccountCheck(Clock, InitializeAccountIndex.ClockSysvar);
+    const rent = try ic.getSysvarWithAccountCheck(
+        Rent,
+        VoteProgramInstruction.InitializeAccountInde.RentSysvar,
+    );
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        VoteProgramInstruction.InitializeAccountInde.ClockSysvar,
+    );
     const authority = ic.accounts[1].pubkey;
 
     try intializeAccount(
