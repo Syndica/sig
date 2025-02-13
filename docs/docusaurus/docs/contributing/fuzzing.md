@@ -1,24 +1,28 @@
-# fuzzing documentation
+---
+sidebar_position: 7
+title: Fuzzing
+---
+# Fuzzing
 
 supported components:
 - gossip
 - accountsdb
 
 main code paths:
-- `fuzz.zig` <- main entrypoint
+- `fuzz.zig` &lt;- main entrypoint
 - `gossip/fuzz_table.zig`
 - `gossip/fuzz_service.zig`
 - `accountsdb/fuzz.zig`
-- `scripts/` <- kcov + fuzz bash scripts
+- `scripts/`  &lt;- kcov + fuzz bash scripts
 
 kcov will give you coverage information on what was and was not fuzzed
 - [https://github.com/SimonKagstrom/kcov](https://github.com/SimonKagstrom/kcov)
 
 *note:* view the full script for helpful install instructions
 
-![](imgs/2024-07-10-09-39-25.png)
+![](/img/2024-07-10-09-39-25.png)
 
-![](imgs/2024-07-10-09-39-57.png)
+![](/img/2024-07-10-09-39-57.png)
 
 ## gossip
 

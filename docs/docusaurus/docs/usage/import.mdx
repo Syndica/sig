@@ -1,0 +1,74 @@
+---
+sidebar_position: 2
+title: Import Sig
+---
+
+Sig can be included as a dependency in your Zig project using `build.zig.zon` file (available for Zig >= 0.11). 
+
+See the [API documentation](./rpc-api-client) to learn more about how to use Sig as a library.
+
+#### Installing Sig in your Zig project:
+
+1. Declare Sig as a dependency in `build.zig.zon`:
+
+   ```diff
+   .{
+       .name = "my-project",
+       .version = "1.0.0",
+       .dependencies = .{
+   +       .sig = .{
+   +           .url = "https://github.com/syndica/sig/archive/<COMMIT>.tar.gz",
+   +       },
+       },
+   }
+   ```
+
+2. Expose Sig as a module in `build.zig`:
+
+   ```diff
+   const std = @import("std");
+
+   pub fn build(b: *std.Build) void {
+       const target = b.standardTargetOptions(.{});
+       const optimize = b.standardOptimizeOption(.{});
+
+   +   const opts = .{ .target = target, .optimize = optimize };
+   +   const sig_module = b.dependency("sig", opts).module("sig");
+
+       const exe = b.addExecutable(.{
+           .name = "test",
+           .root_source_file = .{ .path = "src/main.zig" },
+           .target = target,
+           .optimize = optimize,
+       });
+   +   exe.addModule("sig", sig_module);
+       exe.install();
+
+       ...
+   }
+   ```
+
+3. Obtain Sig's package hash:
+
+   ```
+   $ zig build
+   my-project/build.zig.zon:6:20: error: url field is missing corresponding hash field
+           .url = "https://github.com/syndica/sig/archive/<COMMIT>.tar.gz",
+                  ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   note: expected .hash = "<HASH>",
+   ```
+
+4. Update `build.zig.zon` with the hash value:
+
+   ```diff
+   .{
+       .name = "my-project",
+       .version = "1.0.0",
+       .dependencies = .{
+           .sig = .{
+               .url = "https://github.com/syndica/sig/archive/<COMMIT>.tar.gz",
+   +           .hash = "<HASH>",
+           },
+       },
+   }
+   ```

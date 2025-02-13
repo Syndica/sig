@@ -15,27 +15,27 @@ C_BASE_FLAGS="-target sbf-solana-solana \
     -O2 \
     -Werror \
     -Wno-override-module"
-C_FLAGS="${C_BASE_FLAGS} -mcpu=v1"
-C_FLAGS_V2="${C_BASE_FLAGS} -mcpu=sbfv2"
+C_FLAGS="${C_BASE_FLAGS} -mcpu=generic"
+C_FLAGS_V1="${C_BASE_FLAGS} -mcpu=sbfv2"
 
-CC_V1="${CC} ${C_FLAGS}"
-CC_V2="${CC} ${C_FLAGS_V2}"
+CC_V0="${CC} ${C_FLAGS}"
+CC_V1="${CC} ${C_FLAGS_V1}"
 
-LD_V1="${LD} ${LD_FLAGS}"
-LD_V2="${LD_V1} --section-start=.text=0x100000000"
+LD_V0="${LD} ${LD_FLAGS}"
+LD_V1="${LD_V0} --section-start=.text=0x100000000"
 
-V1_FILES=(reloc_64_64 reloc_64_relative reloc_64_relative_data rodata_section)
+V0_FILES=(reloc_64_64 reloc_64_relative reloc_64_relative_data rodata_section)
 
 for ZIG_FILE in data/test-elfs/*.zig; do
     BASE_NAME=$(basename "$ZIG_FILE" .zig)
     
     $ZIG build-obj "$ZIG_FILE" -OReleaseSmall -fstrip -fno-emit-bin -femit-llvm-bc="data/test-elfs/${BASE_NAME}.bc"
-    $CC_V2 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}.o"
-    $LD_V2 "data/test-elfs/${BASE_NAME}.o" -o "data/test-elfs/${BASE_NAME}.so"
+    $CC_V1 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}.o"
+    $LD_V1 "data/test-elfs/${BASE_NAME}.o" -o "data/test-elfs/${BASE_NAME}.so"
     
-    if [[ " ${V1_FILES[@]} " =~ " ${BASE_NAME} " ]]; then
-        $CC_V1 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}_sbpfv1.o"
-        $LD_V1 "data/test-elfs/${BASE_NAME}_sbpfv1.o" -o "data/test-elfs/${BASE_NAME}_sbpfv1.so"
+    if [[ " ${V0_FILES[@]} " =~ " ${BASE_NAME} " ]]; then
+        $CC_V0 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}_sbpfv0.o"
+        $LD_V0 "data/test-elfs/${BASE_NAME}_sbpfv0.o" -o "data/test-elfs/${BASE_NAME}_sbpfv0.so"
     fi
 done
 

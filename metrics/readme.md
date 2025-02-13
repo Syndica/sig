@@ -1,4 +1,7 @@
-original src: https://github.com/docker/awesome-compose/tree/master/prometheus-grafana
+# Metrics
+
+Metrics include prometheus, grafana, loki, and alloy. The docker-compose setup
+is found in `src/metrics/docker-compose.yml`.
 
 ## Setup
 

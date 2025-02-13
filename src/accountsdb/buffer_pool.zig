@@ -2,14 +2,23 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 
+const IoUring = std.os.linux.IoUring;
+const Atomic = std.atomic.Value;
+
 const FileId = sig.accounts_db.accounts_file.FileId;
+const bincode = sig.bincode;
 
 /// arbitrarily chosen, I believe >95% of accounts will be <= 512 bytes
-const FRAME_SIZE = 512;
+pub const FRAME_SIZE = 512;
+pub const Frame = [FRAME_SIZE]u8;
+
 const INVALID_FRAME = std.math.maxInt(FrameIndex);
-const Frame = [FRAME_SIZE]u8;
-/// we can get away with a 32-bit index
-const FrameIndex = u32;
+const LINUX_IO_MODE: LinuxIoMode = .Blocking;
+// TODO: ideally we should be able to select this with a cli flag. (#509)
+const USE_IO_URING = builtin.os.tag == .linux and LINUX_IO_MODE == .IoUring;
+const IO_URING_ENTRIES = 128;
+
+const FrameIndex = u31;
 const FileOffset = u32;
 const FrameOffset = u10; // 0..=FRAME_SIZE
 
@@ -19,26 +28,68 @@ comptime {
     _ = offset;
 }
 
+const FrameRef = packed struct(u32) {
+    index: FrameIndex,
+    found_in_cache: bool,
+
+    const INIT = FrameRef{
+        .index = INVALID_FRAME,
+        .found_in_cache = false,
+    };
+};
+
 const LinuxIoMode = enum {
     Blocking,
     IoUring,
 };
-const linux_io_mode: LinuxIoMode = .IoUring;
 
-const use_io_uring = builtin.os.tag == .linux and linux_io_mode == .IoUring;
+fn ioUring() !*IoUring {
+    // We use one io_uring instance per-thread internally for fast thread-safe usage.
 
-const FileIdFileOffset = packed struct(u64) {
-    const INVALID: FileIdFileOffset = .{
-        .file_id = FileId.fromInt(std.math.maxInt(FileId.Int)),
-        // disambiguate from 0xAAAA / will trigger asserts as it's not even.
-        .file_offset = 0xBAAD,
+    // From https://github.com/axboe/liburing/wiki/io_uring-and-networking-in-2023:
+    // > Not sharing a ring between threads is the recommended way to use rings in general, as it
+    // > avoids any unnecessary synchronization. Available since 6.1.
+
+    const threadlocals = struct {
+        threadlocal var io_uring: ?IoUring = null;
     };
 
+    _ = threadlocals.io_uring orelse {
+        threadlocals.io_uring = try IoUring.init(
+            IO_URING_ENTRIES,
+            // Causes an error if we try to init with more entries than the kernel supports - it
+            // would be bad if the kernel gave us fewer than we expect to have.
+            std.os.linux.IORING_SETUP_CLAMP,
+        );
+    };
+
+    return &(threadlocals.io_uring.?);
+}
+
+const FileIdFileOffset = packed struct(u64) {
     file_id: FileId,
 
     /// offset in the file from which the frame begin
     /// always a multiple of FRAME_SIZE
     file_offset: FileOffset,
+
+    const INVALID: FileIdFileOffset = .{
+        .file_id = FileId.fromInt(std.math.maxInt(FileId.Int)),
+        // disambiguate from 0xAAAA / will trigger asserts as it's not even.
+        .file_offset = 0xBAAD,
+    };
+};
+
+const IoUringError = err: {
+    var Error = error{ NotOpenForReading, InputOutput, IsDir };
+    const fns = &.{ IoUring.read, IoUring.submit_and_wait, IoUring.copy_cqes, IoUring.init };
+    for (fns) |func| {
+        Error = Error || @typeInfo(
+            @typeInfo(@TypeOf(func)).Fn.return_type.?,
+        ).ErrorUnion.error_set;
+    }
+
+    break :err Error;
 };
 
 /// Used for obtaining cached reads.
@@ -53,208 +104,84 @@ const FileIdFileOffset = packed struct(u64) {
 /// A frame dies when its index is evicted from HierarchicalFifo (inside of
 /// evictUnusedFrame).
 pub const BufferPool = struct {
-    pub const FrameMap = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
-
-    /// indices of all free frames
-    /// free frames have a refcount of 0 *and* have been evicted
-    free_list: AtomicStack(FrameIndex),
-
-    /// uniquely identifies a frame
-    /// for finding your wanted index
-    /// TODO: a concurrent hashmap would be more appropriate
-    frame_map_rw: sig.sync.RwMux(FrameMap),
-
     frames: []Frame,
-    frames_metadata: FramesMetadata,
+    frame_manager: FrameManager,
 
-    /// used for eviction to free less popular (rc=0) frames first
-    eviction_lfu: HierarchicalFIFO,
-
-    /// NOTE: we might want this to be a threadlocal for best performance? I don't think this field is threadsafe
-    io_uring: if (use_io_uring) std.os.linux.IoUring else void,
+    pub const ReadBlockingError = FrameManager.GetError || std.posix.PReadError;
+    pub const ReadIoUringError = FrameManager.GetError || IoUringError;
+    pub const ReadError = if (USE_IO_URING) ReadIoUringError else ReadBlockingError;
 
     pub fn init(
-        init_allocator: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         num_frames: u32,
     ) !BufferPool {
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
-        const frames = try init_allocator.alignedAlloc(Frame, std.mem.page_size, num_frames);
-        errdefer init_allocator.free(frames);
+        // Alignment of frames is good for read performance (and necessary if we want to use O_DIRECT.)
+        const frames = try allocator.alignedAlloc(Frame, std.mem.page_size, num_frames);
+        errdefer allocator.free(frames);
 
-        var frames_metadata = try FramesMetadata.init(init_allocator, num_frames);
-        errdefer frames_metadata.deinit(init_allocator);
-
-        var free_list = try AtomicStack(FrameIndex).init(init_allocator, num_frames);
-        errdefer free_list.deinit(init_allocator);
-        for (0..num_frames) |i| free_list.appendAssumeCapacity(@intCast(i));
-
-        var io_uring = if (use_io_uring) blk: {
-            // NOTE: this is pretty much a guess, maybe worth tweaking?
-            // think this is a bit on the high end, libxev uses 256
-            const io_uring_entries = 4096;
-
-            break :blk try std.os.linux.IoUring.init(
-                io_uring_entries,
-                0,
-            );
-        } else {};
-        errdefer if (use_io_uring) io_uring.deinit();
-
-        var frame_map: FrameMap = .{};
-        try frame_map.ensureTotalCapacity(init_allocator, num_frames);
-        errdefer frame_map.deinit(init_allocator);
-
-        const frame_map_rw = sig.sync.RwMux(FrameMap).init(frame_map);
+        var frame_manager = try FrameManager.init(allocator, num_frames);
+        errdefer frame_manager.deinit(allocator);
 
         return .{
             .frames = frames,
-            .frames_metadata = frames_metadata,
-            .free_list = free_list,
-            .frame_map_rw = frame_map_rw,
-            .eviction_lfu = try HierarchicalFIFO.init(init_allocator, num_frames / 10, num_frames),
-            .io_uring = io_uring,
+            .frame_manager = frame_manager,
         };
     }
 
-    pub fn deinit(self: *BufferPool, init_allocator: std.mem.Allocator) void {
-        init_allocator.free(self.frames);
-        self.frames_metadata.deinit(init_allocator);
-        if (use_io_uring) self.io_uring.deinit();
-        self.free_list.deinit(init_allocator);
-        self.eviction_lfu.deinit(init_allocator);
-        const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
-        frame_map.deinit(init_allocator);
-        frame_map_lg.unlock();
-    }
-
-    pub fn computeNumberofFrameIndices(
-        /// inclusive
-        file_offset_start: FileOffset,
-        /// exclusive
-        file_offset_end: FileOffset,
-    ) error{InvalidArgument}!u32 {
-        if (file_offset_start > file_offset_end) return error.InvalidArgument;
-        if (file_offset_start == file_offset_end) return 0;
-
-        const starting_frame = file_offset_start / FRAME_SIZE;
-        const ending_frame = (file_offset_end - 1) / FRAME_SIZE;
-
-        return ending_frame - starting_frame + 1;
-    }
-
-    /// allocates the required amount of indices, sets them all to
-    /// INVALID_FRAME, overwriting with a valid frame where one is found.
-    /// INVALID_FRAME indicates that there is no frame in the BufferPool for the
-    /// given file_id and range.
-    fn computeFrameIndices(
+    pub fn deinit(
         self: *BufferPool,
-        file_id: FileId,
         allocator: std.mem.Allocator,
+    ) void {
+        allocator.free(self.frames);
+        self.frame_manager.deinit(allocator);
+    }
+
+    fn readBlocking(
+        self: *BufferPool,
+        /// used for temp allocations, and the returned .indices slice
+        allocator: std.mem.Allocator,
+        file: std.fs.File,
+        file_id: FileId,
         /// inclusive
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) error{ InvalidArgument, OffsetsOutOfBounds, OutOfMemory }![]FrameIndex {
-        const n_indices = try computeNumberofFrameIndices(file_offset_start, file_offset_end);
+    ) ReadBlockingError!AccountDataHandle {
+        const frame_refs = try self.frame_manager.getAllIndices(
+            allocator,
+            file_id,
+            file_offset_start,
+            file_offset_end,
+        );
+        errdefer allocator.free(frame_refs);
+        errdefer self.frame_manager.getAllIndicesRollback(frame_refs);
 
-        if (n_indices > self.frames.len) return error.OffsetsOutOfBounds;
+        // read into frames without valid data
+        for (frame_refs, 0..) |*frame_ref, i| {
+            const contains_valid_data = self.frame_manager
+                .contains_valid_data[frame_ref.index].load(.acquire);
+            if (contains_valid_data) continue;
 
-        const frame_indices = try allocator.alloc(FrameIndex, n_indices);
-        for (frame_indices) |*f_idx| f_idx.* = INVALID_FRAME;
+            const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
+                (file_offset_start - file_offset_start % FRAME_SIZE));
+            std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
 
-        // lookup frame mappings
-        for (0.., frame_indices) |i, *f_idx| {
-            const file_offset: FileOffset = @intCast(
-                (i * FRAME_SIZE) + (file_offset_start - file_offset_start % FRAME_SIZE),
+            const bytes_read = try file.preadAll(
+                &self.frames[frame_ref.index],
+                frame_aligned_file_offset,
             );
-
-            const key: FileIdFileOffset = .{
-                .file_id = file_id,
-                .file_offset = file_offset,
-            };
-
-            const maybe_frame_idx = blk: {
-                const frame_map, var frame_map_lg = self.frame_map_rw.readWithLock();
-                defer frame_map_lg.unlock();
-                break :blk frame_map.get(key);
-            };
-
-            if (maybe_frame_idx) |frame_idx| f_idx.* = frame_idx;
+            std.debug.assert(bytes_read <= FRAME_SIZE);
+            self.frame_manager.contains_valid_data[frame_ref.index].store(true, .seq_cst);
         }
 
-        return frame_indices;
-    }
-
-    /// On a "new" frame (i.e. freshly read into), set all of its associated metadata
-    /// TODO: atomics
-    fn overwriteDeadFrameInfo(
-        self: *BufferPool,
-        f_idx: FrameIndex,
-        file_id: FileId,
-        frame_aligned_file_offset: FileOffset,
-        size: FrameOffset,
-    ) error{CannotOverwriteAliveInfo}!void {
-        try self.overwriteDeadFrameInfoNoSize(f_idx, file_id, frame_aligned_file_offset);
-        self.frames_metadata.size[f_idx] = size;
-    }
-
-    /// Useful if you don't currently know the size.
-    /// make sure to set the size later (!)
-    /// TODO: atomics
-    fn overwriteDeadFrameInfoNoSize(
-        self: *BufferPool,
-        f_idx: FrameIndex,
-        file_id: FileId,
-        frame_aligned_file_offset: FileOffset,
-    ) error{CannotOverwriteAliveInfo}!void {
-        std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
-
-        if (self.frames_metadata.rc[f_idx].isAlive()) {
-            // not-found indices should always have 0 active readers
-            return error.CannotOverwriteAliveInfo;
-        }
-
-        self.frames_metadata.freq[f_idx] = 0;
-        self.frames_metadata.in_queue[f_idx] = .none;
-        self.frames_metadata.rc[f_idx].reset();
-
-        self.frames_metadata.key[f_idx] = .{
-            .file_id = file_id,
-            .file_offset = frame_aligned_file_offset,
-        };
-
-        const key: FileIdFileOffset = .{
-            .file_id = file_id,
-            .file_offset = frame_aligned_file_offset,
-        };
-
-        {
-            const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
-            defer frame_map_lg.unlock();
-            frame_map.putAssumeCapacityNoClobber(key, f_idx);
-        }
-    }
-
-    /// Frames with an associated rc of 0 are up for eviction, and which frames
-    /// are evicted first is up to the LFU.
-    fn evictUnusedFrame(self: *BufferPool) error{CannotResetAlive}!void {
-        const evicted = self.eviction_lfu.evict(self.frames_metadata);
-        self.free_list.appendAssumeCapacity(evicted);
-
-        const did_remove = blk: {
-            const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
-            defer frame_map_lg.unlock();
-            break :blk frame_map.remove(self.frames_metadata.key[evicted]);
-        };
-        if (!did_remove) {
-            std.debug.panic(
-                "evicted a frame that did not exist in frame_map, frame: {}\n",
-                .{evicted},
-            );
-        }
-        @memset(&self.frames[evicted], 0xAA);
-        try self.frames_metadata.resetFrame(evicted);
+        return AccountDataHandle.initBufferPoolRead(
+            self,
+            frame_refs,
+            @intCast(file_offset_start % FRAME_SIZE),
+            @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
+        );
     }
 
     pub fn read(
@@ -267,9 +194,9 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) !CachedRead {
-        return if (use_io_uring)
-            self.readIoUringSubmitAndWait(
+    ) ReadError!AccountDataHandle {
+        const handle = try if (USE_IO_URING)
+            self.readIoUring(
                 allocator,
                 file,
                 file_id,
@@ -284,9 +211,26 @@ pub const BufferPool = struct {
                 file_offset_start,
                 file_offset_end,
             );
+
+        return handle;
     }
 
-    fn readIoUringSubmitAndWait(
+    pub fn computeNumberOfFrameIndices(
+        /// inclusive
+        file_offset_start: FileOffset,
+        /// exclusive
+        file_offset_end: FileOffset,
+    ) error{InvalidArgument}!u32 {
+        if (file_offset_start > file_offset_end) return error.InvalidArgument;
+        if (file_offset_start == file_offset_end) return 0;
+
+        const starting_frame = file_offset_start / FRAME_SIZE;
+        const ending_frame = (file_offset_end - 1) / FRAME_SIZE;
+
+        return ending_frame - starting_frame + 1;
+    }
+
+    fn readIoUring(
         self: *BufferPool,
         /// used for temp allocations, and the returned .indices slice
         allocator: std.mem.Allocator,
@@ -296,247 +240,306 @@ pub const BufferPool = struct {
         file_offset_start: FileOffset,
         /// exclusive
         file_offset_end: FileOffset,
-    ) !CachedRead {
-        if (!use_io_uring) @compileError("io_uring disabled");
+    ) ReadIoUringError!AccountDataHandle {
+        if (!USE_IO_URING) @compileError("io_uring disabled");
+        const threadlocal_io_uring = try ioUring();
 
-        const frame_indices = try self.computeFrameIndices(
-            file_id,
+        const frame_refs = try self.frame_manager.getAllIndices(
             allocator,
+            file_id,
             file_offset_start,
             file_offset_end,
         );
-        errdefer allocator.free(frame_indices);
+        errdefer allocator.free(frame_refs);
+        errdefer self.frame_manager.getAllIndicesRollback(frame_refs);
 
-        // update found frames in the LFU (we don't want to evict these in the next loop)
-        var n_invalid_indices: u32 = 0;
-        for (frame_indices) |f_idx| {
-            if (f_idx == INVALID_FRAME) {
-                n_invalid_indices += 1;
-                continue;
-            }
-            try self.eviction_lfu.insert(self.frames_metadata, f_idx);
-            if (!self.frames_metadata.rc[f_idx].acquire()) {
-                // frame has no handles, but memory is still valid
-                self.frames_metadata.rc[f_idx].reset();
-            }
-        }
+        // read into frames without valid data
+        var i: u32 = 0;
+        var n_read: u32 = 0;
+        while (i < frame_refs.len or n_read < frame_refs.len) {
+            var queue_full = false;
 
-        // fill in invalid frames with file data, replacing invalid frames with
-        // fresh ones.
-        for (0.., frame_indices) |i, *f_idx| {
-            if (f_idx.* != INVALID_FRAME) continue;
-            // INVALID_FRAME => not found, read fresh and populate
+            if (i < frame_refs.len) {
+                const frame_ref = &frame_refs[i];
 
-            const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
-                (file_offset_start - file_offset_start % FRAME_SIZE));
-            std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
-
-            f_idx.* = blk: while (true) {
-                if (self.free_list.popOrNull()) |free_idx| {
-                    break :blk free_idx;
-                } else {
-                    try self.evictUnusedFrame();
+                const contains_valid_data = self.frame_manager.contains_valid_data[
+                    frame_ref.index
+                ].load(.acquire);
+                if (contains_valid_data) {
+                    n_read += 1;
+                    i += 1;
+                    continue;
                 }
-            };
 
-            _ = try self.io_uring.read(
-                f_idx.*,
-                file.handle,
-                .{ .buffer = &self.frames[f_idx.*] },
-                frame_aligned_file_offset,
-            );
-            try self.overwriteDeadFrameInfoNoSize(f_idx.*, file_id, frame_aligned_file_offset);
-            try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
-        }
+                const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
+                    (file_offset_start - file_offset_start % FRAME_SIZE));
+                std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
 
-        // Wait for our file reads to complete, filling the read length into the metadata as we go.
-        // (This read length will almost always be FRAME_SIZE, however it will likely be less than
-        // that at the end of the file)
-        if (n_invalid_indices > 0) {
-            const n_submitted = try self.io_uring.submit_and_wait(n_invalid_indices);
-            std.debug.assert(n_submitted == n_invalid_indices); // did smthng else submit an event?
+                _ = threadlocal_io_uring.read(
+                    frame_ref.index,
+                    file.handle,
+                    .{ .buffer = &self.frames[frame_ref.index] },
+                    frame_aligned_file_offset,
+                ) catch |err| switch (err) {
+                    error.SubmissionQueueFull => {
+                        queue_full = true;
+                    },
+                    else => return err,
+                };
 
-            // would be nice to get rid of this alloc
-            const cqes = try allocator.alloc(std.os.linux.io_uring_cqe, n_submitted);
-            defer allocator.free(cqes);
-
-            // check our completions in order to set the frame's size;
-            // we need to wait for completion to get the bytes read
-            const cqe_count = try self.io_uring.copy_cqes(cqes, n_submitted);
-            std.debug.assert(cqe_count == n_submitted); // why did we not receive them all?
-            for (0.., cqes) |i, cqe| {
-                if (cqe.err() != .SUCCESS) {
-                    std.debug.panic("cqe err: {}, i: {}", .{ cqe, i });
+                if (!queue_full) {
+                    i += 1;
+                    continue;
                 }
-                const f_idx = cqe.user_data;
-                const bytes_read: FrameOffset = @intCast(cqe.res);
-                std.debug.assert(bytes_read <= FRAME_SIZE);
+            }
 
-                // TODO: atomics
-                self.frames_metadata.size[f_idx] = bytes_read;
+            if (queue_full or i >= frame_refs.len) {
+                // Submit without blocking
+                const n_submitted = try threadlocal_io_uring.submit();
+                std.debug.assert(n_submitted <= IO_URING_ENTRIES);
+                if (queue_full) std.debug.assert(n_submitted == IO_URING_ENTRIES);
+
+                // Read whatever is still available
+                var cqe_buf: [IO_URING_ENTRIES]std.os.linux.io_uring_cqe = undefined;
+                const n_cqes_copied = try threadlocal_io_uring.copy_cqes(&cqe_buf, 0);
+                for (cqe_buf[0..n_cqes_copied]) |cqe| {
+                    switch (cqe.err()) {
+                        .SUCCESS => {},
+                        .BADF => return error.NotOpenForReading, // Can be a race condition.
+                        .IO => return error.InputOutput,
+                        .ISDIR => return error.IsDir,
+                        else => |err| return std.posix.unexpectedErrno(err),
+                    }
+
+                    const bytes_read: FrameOffset = @intCast(cqe.res);
+                    std.debug.assert(bytes_read > 0);
+                }
+
+                for (frame_refs[n_read..][0..n_cqes_copied]) |*frame_ref| {
+                    self.frame_manager.contains_valid_data[frame_ref.index].store(true, .seq_cst);
+                }
+                n_read += n_cqes_copied;
             }
         }
 
-        return CachedRead{
-            .buffer_pool = self,
-            .frame_indices = frame_indices,
-            .first_frame_start_offset = @intCast(file_offset_start % FRAME_SIZE),
-            .last_frame_end_offset = @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
-        };
-    }
-
-    fn readBlocking(
-        self: *BufferPool,
-        /// used for temp allocations, and the returned .indices slice
-        allocator: std.mem.Allocator,
-        file: std.fs.File,
-        file_id: FileId,
-        /// inclusive
-        file_offset_start: FileOffset,
-        /// exclusive
-        file_offset_end: FileOffset,
-    ) (error{
-        InvalidArgument,
-        OutOfMemory,
-        InvalidKey,
-        CannotResetAlive,
-        CannotOverwriteAliveInfo,
-        OffsetsOutOfBounds,
-    } || std.posix.PReadError)!CachedRead {
-        const frame_indices = try self.computeFrameIndices(
-            file_id,
-            allocator,
-            file_offset_start,
-            file_offset_end,
+        return AccountDataHandle.initBufferPoolRead(
+            self,
+            frame_refs,
+            @intCast(file_offset_start % FRAME_SIZE),
+            @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
         );
-        errdefer allocator.free(frame_indices);
-
-        // update found frames in the LFU (we don't want to evict these in the next loop)
-        for (frame_indices) |f_idx| {
-            if (f_idx == INVALID_FRAME) continue;
-            try self.eviction_lfu.insert(self.frames_metadata, f_idx);
-            if (!self.frames_metadata.rc[f_idx].acquire()) {
-                // frame has no handles, but memory is still valid
-                self.frames_metadata.rc[f_idx].reset();
-            }
-        }
-
-        // fill in invalid frames with file data, replacing invalid frames with
-        // fresh ones.
-        for (0.., frame_indices) |i, *f_idx| {
-            if (f_idx.* != INVALID_FRAME) continue;
-            // INVALID_FRAME => not found, read fresh and populate
-
-            const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
-                (file_offset_start - file_offset_start % FRAME_SIZE));
-            std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
-
-            f_idx.* = blk: while (true) {
-                if (self.free_list.popOrNull()) |free_idx| {
-                    break :blk free_idx;
-                } else {
-                    try self.evictUnusedFrame();
-                }
-            };
-
-            const bytes_read = try file.pread(&self.frames[f_idx.*], frame_aligned_file_offset);
-            try self.overwriteDeadFrameInfo(
-                f_idx.*,
-                file_id,
-                frame_aligned_file_offset,
-                @intCast(bytes_read),
-            );
-            try self.eviction_lfu.insert(self.frames_metadata, f_idx.*);
-        }
-
-        return CachedRead{
-            .buffer_pool = self,
-            .frame_indices = frame_indices,
-            .first_frame_start_offset = @intCast(file_offset_start % FRAME_SIZE),
-            .last_frame_end_offset = @intCast(((file_offset_end - 1) % FRAME_SIZE) + 1),
-        };
     }
 };
 
-/// TODO: atomics on all index accesses
-pub const FramesMetadata = struct {
-    pub const InQueue = enum(u2) { none, small, main, ghost };
+/// Keeps track of all of the data and lifetimes associated with frames.
+pub const FrameManager = struct {
+    /// Uniquely identifies a frame from its file_id and offset.
+    /// Used for looking up valid frames.
+    frame_map_rw: sig.sync.RwMux(Map),
 
-    /// ref count for the frame. For frames that are currently being used elsewhere.
-    rc: []sig.sync.ReferenceCounter,
+    /// Evicts unused frames for reuse.
+    eviction_lfu: sig.sync.RwMux(HierarchicalFIFO),
 
-    /// effectively the inverse of BufferPool.FrameMap, used in order to
-    /// evict keys by their value
-    key: []FileIdFileOffset,
+    /// Per-frame refcounts. Used to track what frames still have handles associated with them.
+    frame_ref_counts: []Atomic(u32),
 
-    /// frequency for the S3_FIFO
-    /// Yes, really, only 0, 1, 2, 3.
-    freq: []u2,
+    contains_valid_data: []std.atomic.Value(bool),
 
-    /// which S3_FIFO queue this frame exists in
-    in_queue: []InQueue,
+    pub const Map = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
 
-    /// 0..=512
-    size: []FrameOffset,
+    const GetError = error{ InvalidArgument, OffsetsOutOfBounds, OutOfMemory };
 
-    fn init(allocator: std.mem.Allocator, num_frames: usize) !FramesMetadata {
-        const rc = try allocator.alignedAlloc(
-            sig.sync.ReferenceCounter,
-            std.mem.page_size,
+    pub fn init(allocator: std.mem.Allocator, num_frames: u32) error{OutOfMemory}!FrameManager {
+        std.debug.assert(num_frames > 0);
+
+        var frame_map: Map = .{};
+        try frame_map.ensureTotalCapacity(allocator, num_frames * 2);
+        errdefer frame_map.deinit(allocator);
+
+        var eviction_lfu = HierarchicalFIFO.init(
+            allocator,
+            @max(num_frames / 10, 1),
             num_frames,
-        );
-        errdefer allocator.free(rc);
-        @memset(rc, .{ .state = .{ .raw = 0 } });
+        ) catch |err| switch (err) {
+            error.InvalidArgument => unreachable,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        errdefer eviction_lfu.deinit(allocator);
 
-        const key = try allocator.alignedAlloc(FileIdFileOffset, std.mem.page_size, num_frames);
-        errdefer allocator.free(key);
-        @memset(key, .{ .file_id = FileId.fromInt(0), .file_offset = 0 });
+        for (0..num_frames) |i| {
+            const f_idx: FrameIndex = @intCast(i);
+            // initially populate so that we can start evicting
+            eviction_lfu.insert(f_idx);
 
-        const freq = try allocator.alignedAlloc(u2, std.mem.page_size, num_frames);
-        errdefer allocator.free(freq);
-        @memset(freq, 0);
+            const bad_key = FileIdFileOffset{
+                .file_id = FileId.fromInt(std.math.maxInt(u32)),
+                .file_offset = f_idx * 2 + 1, // always odd => always invalid
+            };
 
-        const in_queue = try allocator.alignedAlloc(InQueue, std.mem.page_size, num_frames);
-        errdefer allocator.free(in_queue);
-        @memset(in_queue, .none);
+            frame_map.putAssumeCapacityNoClobber(bad_key, f_idx);
+            eviction_lfu.key[f_idx] = bad_key;
+        }
 
-        const size = try allocator.alignedAlloc(FrameOffset, std.mem.page_size, num_frames);
-        errdefer allocator.free(size);
-        @memset(size, 0);
+        const frame_ref_counts = try allocator.alloc(Atomic(u32), num_frames);
+        errdefer allocator.free(frame_ref_counts);
+        @memset(frame_ref_counts, .{ .raw = 0 });
+
+        const contains_valid_data = try allocator.alloc(std.atomic.Value(bool), num_frames);
+        errdefer allocator.free(contains_valid_data);
+        @memset(contains_valid_data, std.atomic.Value(bool).init(false));
 
         return .{
-            .rc = rc,
-            .key = key,
-            .freq = freq,
-            .in_queue = in_queue,
-            .size = size,
+            .frame_map_rw = sig.sync.RwMux(Map).init(frame_map),
+            .eviction_lfu = sig.sync.RwMux(HierarchicalFIFO).init(eviction_lfu),
+            .frame_ref_counts = frame_ref_counts,
+            .contains_valid_data = contains_valid_data,
         };
     }
 
-    fn deinit(self: *FramesMetadata, allocator: std.mem.Allocator) void {
-        // NOTE: this check itself is racy, but should never happen
-        for (self.rc) |*rc| {
-            if (rc.isAlive()) {
-                @panic("BufferPool deinitialised with alive handles");
+    pub fn deinit(self: *FrameManager, allocator: std.mem.Allocator) void {
+        const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+        eviction_lfu.deinit(allocator);
+        eviction_lfu_lg.unlock();
+
+        const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
+        frame_map.deinit(allocator);
+        frame_map_lg.unlock();
+
+        for (self.frame_ref_counts, 0..) |*frame_ref_count, i| {
+            if (frame_ref_count.load(.seq_cst) > 0) {
+                std.debug.panicExtra(
+                    null,
+                    @returnAddress(),
+                    "BufferPool deinitialised with alive handle: {}\n",
+                    .{i},
+                );
             }
         }
-        allocator.free(self.rc);
-        allocator.free(self.key);
-        allocator.free(self.freq);
-        allocator.free(self.in_queue);
-        allocator.free(self.size);
-        self.* = undefined;
+        allocator.free(self.frame_ref_counts);
+        allocator.free(self.contains_valid_data);
     }
 
-    // to be called on the eviction of a frame
-    // should never be called on a frame with rc>0
-    // TODO: this should *all* be atomic (!)
-    fn resetFrame(self: FramesMetadata, index: FrameIndex) error{CannotResetAlive}!void {
-        if (self.rc[index].isAlive()) return error.CannotResetAlive;
-        self.freq[index] = 0;
-        self.in_queue[index] = .none;
-        self.size[index] = 0;
-        self.key[index] = FileIdFileOffset.INVALID;
+    fn numFrames(self: *const FrameManager) u32 {
+        return @intCast(self.frame_ref_counts.len);
+    }
+
+    fn getAllIndices(
+        self: *FrameManager,
+        allocator: std.mem.Allocator,
+        file_id: FileId,
+        file_offset_start: FileOffset,
+        file_offset_end: FileOffset,
+    ) GetError![]FrameRef {
+        const n_indices = try BufferPool.computeNumberOfFrameIndices(
+            file_offset_start,
+            file_offset_end,
+        );
+        if (n_indices > self.numFrames()) return error.OffsetsOutOfBounds;
+
+        const frame_refs = try allocator.alloc(FrameRef, n_indices);
+        @memset(frame_refs, FrameRef.INIT);
+
+        if (n_indices == 0) return &.{};
+
+        errdefer comptime unreachable; // We don't error after this point
+
+        // lookup frame mappings
+        var n_hits: u32 = 0;
+        {
+            const frame_map, var frame_map_lg = self.frame_map_rw.readWithLock();
+            defer frame_map_lg.unlock();
+
+            for (frame_refs, 0..) |*frame_ref, i| {
+                const file_offset: FileOffset = @intCast(
+                    (i * FRAME_SIZE) + (file_offset_start - file_offset_start % FRAME_SIZE),
+                );
+
+                const key: FileIdFileOffset = .{
+                    .file_id = file_id,
+                    .file_offset = file_offset,
+                };
+
+                const cache_hit_f_idx = frame_map.get(key) orelse continue;
+                n_hits += 1;
+                frame_ref.found_in_cache = true;
+                frame_ref.index = cache_hit_f_idx;
+                _ = self.frame_ref_counts[frame_ref.index].fetchAdd(1, .seq_cst);
+            }
+        }
+
+        if (n_hits < frame_refs.len) {
+            const frame_map, var frame_map_lg = self.frame_map_rw.writeWithLock();
+            defer frame_map_lg.unlock();
+
+            const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+            defer eviction_lfu_lg.unlock();
+
+            for (frame_refs, 0..) |*frame_ref, i| {
+                if (frame_ref.found_in_cache) {
+                    std.debug.assert(frame_ref.index != INVALID_FRAME);
+                    continue;
+                }
+                std.debug.assert(frame_ref.index == INVALID_FRAME); // missed frame with valid idx?
+
+                const file_offset: FileOffset = @intCast(
+                    (i * FRAME_SIZE) + (file_offset_start - file_offset_start % FRAME_SIZE),
+                );
+
+                const key: FileIdFileOffset = .{
+                    .file_id = file_id,
+                    .file_offset = file_offset,
+                };
+
+                // Couldve been added between readLock() and us. If so, just ref it.
+                // If not, upsert to value-index that we'll get from eviction below.
+                const entry = frame_map.getOrPutAssumeCapacity(key);
+                if (entry.found_existing) {
+                    frame_ref.index = entry.value_ptr.*;
+                    _ = self.frame_ref_counts[frame_ref.index].fetchAdd(1, .seq_cst);
+                    continue;
+                }
+
+                const evicted_f_idx = eviction_lfu.evict(self.frame_ref_counts);
+
+                const evicted_key = eviction_lfu.key[evicted_f_idx];
+
+                frame_ref.index = evicted_f_idx;
+                self.frame_ref_counts[frame_ref.index].store(1, .seq_cst);
+                self.contains_valid_data[frame_ref.index].store(false, .seq_cst);
+
+                eviction_lfu.insert(frame_ref.index);
+
+                entry.value_ptr.* = frame_ref.index;
+                eviction_lfu.key[frame_ref.index] = key;
+
+                std.debug.assert(!std.meta.eql(evicted_key, key)); // inserted key we just evicted
+
+                const removed = frame_map.remove(evicted_key);
+                std.debug.assert(removed); // evicted key was not in map
+            }
+        }
+
+        for (frame_refs) |frame_ref| std.debug.assert(frame_ref.index != INVALID_FRAME);
+
+        return frame_refs;
+    }
+
+    /// To be called on read failure. This should be extremely rare.
+    fn getAllIndicesRollback(self: *FrameManager, frame_refs: []FrameRef) void {
+        @setCold(true);
+
+        // rollback rcs
+        for (frame_refs) |f_ref| _ = self.frame_ref_counts[f_ref.index].fetchSub(1, .seq_cst);
+
+        // re-insert evicted indices
+        {
+            const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
+            defer eviction_lfu_lg.unlock();
+
+            for (frame_refs) |f_ref| {
+                if (f_ref.found_in_cache == false) eviction_lfu.insert(f_ref.index);
+            }
+        }
     }
 };
 
@@ -556,12 +559,24 @@ pub const FramesMetadata = struct {
 ///    eviction when no free frames can be made available is illegal behaviour.
 pub const HierarchicalFIFO = struct {
     pub const Key = FrameIndex;
-    pub const Metadata = FramesMetadata;
-    pub const Fifo = std.fifo.LinearFifo(FrameIndex, .Slice); // TODO: atomics
+    pub const Fifo = std.fifo.LinearFifo(FrameIndex, .Slice);
+
+    pub const InQueue = enum(u8) { none, small, main, ghost }; // u8 required for extern usage
 
     small: Fifo,
     main: Fifo, // probably-alive items
     ghost: Fifo, // probably-dead items
+
+    /// Effectively the inverse of FrameManager.Map, used in order to remove Map entries by their
+    /// value when their key is evicted.
+    key: []FileIdFileOffset,
+
+    /// Frequency for the HierarchicalFIFO entries.
+    /// Yes, really, only 0, 1, 2, 3.
+    freq: []u2,
+
+    /// Which queue each frame exists in.
+    in_queue: []InQueue,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -579,10 +594,25 @@ pub const HierarchicalFIFO = struct {
         const ghost_buf = try allocator.alloc(FrameIndex, num_frames);
         errdefer allocator.free(ghost_buf);
 
+        const key = try allocator.alloc(FileIdFileOffset, num_frames);
+        errdefer allocator.free(key);
+        @memset(key, .{ .file_id = FileId.fromInt(0), .file_offset = 0 });
+
+        const freq = try allocator.alloc(u2, num_frames);
+        errdefer allocator.free(freq);
+        @memset(freq, 0);
+
+        const in_queue = try allocator.alloc(InQueue, num_frames);
+        errdefer allocator.free(in_queue);
+        @memset(in_queue, .none);
+
         return .{
             .small = Fifo.init(small_buf),
             .main = Fifo.init(main_buf),
             .ghost = Fifo.init(ghost_buf),
+            .key = key,
+            .freq = freq,
+            .in_queue = in_queue,
         };
     }
 
@@ -590,6 +620,11 @@ pub const HierarchicalFIFO = struct {
         allocator.free(self.small.buf);
         allocator.free(self.main.buf);
         allocator.free(self.ghost.buf);
+
+        allocator.free(self.key);
+        allocator.free(self.freq);
+        allocator.free(self.in_queue);
+
         self.* = undefined;
     }
 
@@ -597,39 +632,33 @@ pub const HierarchicalFIFO = struct {
         return @intCast(self.main.buf.len);
     }
 
-    pub fn insert(
-        self: *HierarchicalFIFO,
-        metadata: Metadata,
-        key: Key,
-    ) error{InvalidKey}!void {
-        if (key == INVALID_FRAME) return error.InvalidKey;
-
-        switch (metadata.in_queue[key]) {
+    pub fn insert(self: *HierarchicalFIFO, key: Key) void {
+        switch (self.in_queue[key]) {
             .main, .small => {
-                metadata.freq[key] +|= 1;
+                self.freq[key] +|= 1;
             },
             .ghost => {
-                std.debug.assert(metadata.freq[key] == 0);
-                metadata.freq[key] = 1;
+                std.debug.assert(self.freq[key] == 0);
+                self.freq[key] = 1;
                 // Add key to main too - important to note that the key *still*
                 // exists within ghost, but from now on we'll ignore that entry.
                 self.main.writeItemAssumeCapacity(key);
-                metadata.in_queue[key] = .main;
+                self.in_queue[key] = .main;
             },
             .none => {
                 if (self.small.writableLength() == 0) {
                     const popped_small = self.small.readItem().?;
 
-                    if (metadata.freq[popped_small] == 0) {
+                    if (self.freq[popped_small] == 0) {
                         self.ghost.writeItemAssumeCapacity(popped_small);
-                        metadata.in_queue[popped_small] = .ghost;
+                        self.in_queue[popped_small] = .ghost;
                     } else {
                         self.main.writeItemAssumeCapacity(popped_small);
-                        metadata.in_queue[popped_small] = .main;
+                        self.in_queue[popped_small] = .main;
                     }
                 }
                 self.small.writeItemAssumeCapacity(key);
-                metadata.in_queue[key] = .small;
+                self.in_queue[key] = .small;
             },
         }
     }
@@ -638,24 +667,24 @@ pub const HierarchicalFIFO = struct {
     /// This does not return an optional, as the caller *requires* a key to be
     /// evicted. Not being able to return a key means illegal internal state in
     /// the BufferPool.
-    pub fn evict(self: *HierarchicalFIFO, metadata: Metadata) Key {
+    pub fn evict(self: *HierarchicalFIFO, frame_ref_counts: []const Atomic(u32)) Key {
         var alive_eviction_attempts: usize = 0;
 
         const dead_key: Key = while (true) {
             var maybe_evicted: ?Key = null;
 
-            if (maybe_evicted == null) maybe_evicted = self.evictGhost(metadata);
+            if (maybe_evicted == null) maybe_evicted = self.evictGhost();
 
             // if we keep failing to evict a dead key, start alternating between
             // evicting from main and small. This saves us from the rare case
             // that every key in main is alive. In normal conditions, main
             // should be evicted from first.
             if (alive_eviction_attempts < 10 or alive_eviction_attempts % 2 == 0) {
-                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(metadata, .main);
-                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(metadata, .small);
+                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(.main);
+                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(.small);
             } else {
-                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(metadata, .small);
-                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(metadata, .main);
+                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(.small);
+                if (maybe_evicted == null) maybe_evicted = self.evictSmallOrMain(.main);
             }
 
             // NOTE: This panic is effectively unreachable - an empty cache
@@ -666,25 +695,25 @@ pub const HierarchicalFIFO = struct {
                 @panic("unable to evict: cache empty"); // see above comment
 
             // alive evicted keys are reinserted, we try again
-            if (metadata.rc[evicted].isAlive()) {
-                metadata.freq[evicted] = 1;
+            if (frame_ref_counts[evicted].load(.seq_cst) > 0) {
+                self.freq[evicted] = 1;
                 self.main.writeItemAssumeCapacity(evicted);
-                metadata.in_queue[evicted] = .main;
+                self.in_queue[evicted] = .main;
                 alive_eviction_attempts += 1;
                 continue;
             }
 
             // key is definitely dead
-            metadata.in_queue[evicted] = .none;
+            self.in_queue[evicted] = .none;
             break evicted;
         };
 
         return dead_key;
     }
 
-    fn evictGhost(self: *HierarchicalFIFO, metadata: Metadata) ?Key {
+    fn evictGhost(self: *HierarchicalFIFO) ?Key {
         const evicted: ?Key = while (self.ghost.readItem()) |ghost_key| {
-            switch (metadata.in_queue[ghost_key]) {
+            switch (self.in_queue[ghost_key]) {
                 .ghost => {
                     break ghost_key;
                 },
@@ -707,7 +736,6 @@ pub const HierarchicalFIFO = struct {
 
     fn evictSmallOrMain(
         self: *HierarchicalFIFO,
-        metadata: Metadata,
         comptime target_queue: enum { small, main },
     ) ?Key {
         const queue = switch (target_queue) {
@@ -717,14 +745,14 @@ pub const HierarchicalFIFO = struct {
 
         const evicted: ?Key = while (queue.readItem()) |popped_key| {
             switch (target_queue) {
-                .small => if (metadata.in_queue[popped_key] != .small) unreachable,
-                .main => if (metadata.in_queue[popped_key] != .main) unreachable,
+                .small => if (self.in_queue[popped_key] != .small) unreachable,
+                .main => if (self.in_queue[popped_key] != .main) unreachable,
             }
 
-            if (metadata.freq[popped_key] == 0) {
+            if (self.freq[popped_key] == 0) {
                 break popped_key;
             } else {
-                metadata.freq[popped_key] -|= 1;
+                self.freq[popped_key] -= 1;
                 queue.writeItemAssumeCapacity(popped_key);
             }
         } else null;
@@ -735,190 +763,370 @@ pub const HierarchicalFIFO = struct {
 
 /// slice-like datatype
 /// view over one or more buffers owned by the BufferPool
-pub const CachedRead = struct {
-    buffer_pool: *BufferPool,
-    frame_indices: []const FrameIndex,
-    /// inclusive, the offset into the first frame
-    first_frame_start_offset: FrameOffset,
-    /// exclusive, the offset into the last frame
-    last_frame_end_offset: FrameOffset,
+pub const AccountDataHandle = union(enum) {
+    /// Data owned by BufferPool, returned by .read() - do not construct this yourself (!)
+    buffer_pool_read: BufferPoolRead,
+
+    /// Data allocated elsewhere, not owned or created by BufferPool. BufferPool will deallocate.
+    owned_allocation: []const u8,
+    /// Data allocated elsewhere, not owned or created by BufferPool.
+    unowned_allocation: []const u8,
+    /// Data owned by parent AccountDataHandle
+    sub_read: SubRead,
+    /// Used in place of a read, in callsites where it is not actually needed. Provides .len().
+    empty: Empty,
+
+    const BufferPoolRead = struct {
+        buffer_pool: *BufferPool,
+        frame_refs: []FrameRef,
+        /// inclusive, the offset into the first frame
+        first_frame_start_offset: FrameOffset,
+        /// exclusive, the offset into the last frame
+        last_frame_end_offset: FrameOffset,
+    };
+
+    const SubRead = packed struct(u128) {
+        parent: *const AccountDataHandle,
+        // offset into the parent's read
+        start: u32,
+        end: u32,
+    };
+
+    const Empty = struct {
+        len: u32,
+    };
+
+    pub const @"!bincode-config" = bincode.FieldConfig(AccountDataHandle){
+        .deserializer = bincodeDeserialize,
+        .serializer = bincodeSerialize,
+        .free = bincodeFree,
+    };
+
+    /// Only called by the BufferPool
+    fn initBufferPoolRead(
+        buffer_pool: *BufferPool,
+        frame_refs: []FrameRef,
+        first_frame_start_offset: FrameOffset,
+        last_frame_end_offset: FrameOffset,
+    ) AccountDataHandle {
+        return .{
+            .buffer_pool_read = .{
+                .buffer_pool = buffer_pool,
+                .frame_refs = frame_refs,
+                .first_frame_start_offset = first_frame_start_offset,
+                .last_frame_end_offset = last_frame_end_offset,
+            },
+        };
+    }
+
+    /// External to the BufferPool, data will be freed upon .deinit
+    pub fn initAllocatedOwned(data: []const u8) AccountDataHandle {
+        return AccountDataHandle{ .owned_allocation = data };
+    }
+
+    /// External to the BufferPool
+    pub fn initAllocated(data: []const u8) AccountDataHandle {
+        return AccountDataHandle{ .unowned_allocation = data };
+    }
+
+    pub fn initEmpty(length: u32) AccountDataHandle {
+        return .{ .empty = .{ .len = length } };
+    }
+
+    pub fn deinit(self: AccountDataHandle, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .buffer_pool_read => |*buffer_pool_read| {
+                for (buffer_pool_read.frame_refs) |frame_ref| {
+                    std.debug.assert(frame_ref.index != INVALID_FRAME);
+                    const prev_rc = buffer_pool_read.buffer_pool.frame_manager.frame_ref_counts[
+                        frame_ref.index
+                    ].fetchSub(1, .seq_cst);
+                    std.debug.assert(prev_rc != 0); // deinit of dead frame
+                }
+
+                allocator.free(buffer_pool_read.frame_refs);
+            },
+            .owned_allocation => |owned_allocation| {
+                allocator.free(owned_allocation);
+            },
+            .sub_read,
+            .unowned_allocation,
+            .empty,
+            => {},
+        }
+    }
+
+    pub fn iterator(self: *const AccountDataHandle) Iterator {
+        return .{ .read_handle = self, .start = 0, .end = self.len() };
+    }
+
+    /// Copies all data into specified buffer. Buf.len === self.len()
+    pub fn readAll(self: AccountDataHandle, buf: []u8) void {
+        std.debug.assert(buf.len == self.len());
+        self.read(0, buf);
+    }
+
+    pub fn readAllAllocate(self: AccountDataHandle, allocator: std.mem.Allocator) ![]u8 {
+        return self.readAllocate(allocator, 0, self.len());
+    }
+
+    /// Copies data into specified buffer.
+    pub fn read(
+        self: *const AccountDataHandle,
+        start: FileOffset,
+        buf: []u8,
+    ) void {
+        const end: FileOffset = @intCast(start + buf.len);
+
+        switch (self.*) {
+            .owned_allocation, .unowned_allocation => |data| return @memcpy(buf, data[start..end]),
+            .sub_read => |*sb| return sb.parent.read(sb.start + start, buf),
+            .empty => unreachable,
+            .buffer_pool_read => {},
+        }
+
+        var bytes_copied: u32 = 0;
+        var iter = self.iteratorRanged(start, end);
+        while (iter.nextFrame()) |frame_slice| {
+            const copy_len = @min(frame_slice.len, buf.len - bytes_copied);
+            @memcpy(
+                buf[bytes_copied..][0..copy_len],
+                frame_slice[0..copy_len],
+            );
+            bytes_copied += @intCast(copy_len);
+        }
+    }
+
+    pub fn readAllocate(
+        self: AccountDataHandle,
+        allocator: std.mem.Allocator,
+        start: FileOffset,
+        end: FileOffset,
+    ) ![]u8 {
+        const buf = try allocator.alloc(u8, end - start);
+        self.read(start, buf);
+        return buf;
+    }
+
+    pub fn len(self: AccountDataHandle) u32 {
+        return switch (self) {
+            .sub_read => |sr| sr.end - sr.start,
+            .buffer_pool_read => |buffer_pool_read| {
+                if (buffer_pool_read.frame_refs.len == 0) return 0;
+                return (@as(u32, @intCast(buffer_pool_read.frame_refs.len)) - 1) *
+                    FRAME_SIZE +
+                    buffer_pool_read.last_frame_end_offset -
+                    buffer_pool_read.first_frame_start_offset;
+            },
+            .empty => |empty| empty.len,
+            .owned_allocation, .unowned_allocation => |data| @intCast(data.len),
+        };
+    }
+
+    pub fn iteratorRanged(
+        self: *const AccountDataHandle,
+        start: FileOffset,
+        end: FileOffset,
+    ) Iterator {
+        std.debug.assert(self.len() >= end);
+        std.debug.assert(end >= start);
+
+        return .{ .read_handle = self, .start = start, .end = end };
+    }
+
+    pub fn dupeAllocatedOwned(
+        self: AccountDataHandle,
+        allocator: std.mem.Allocator,
+    ) !AccountDataHandle {
+        const data_copy = try self.readAllAllocate(allocator);
+        return initAllocatedOwned(data_copy);
+    }
+
+    pub fn duplicateBufferPoolRead(
+        self: AccountDataHandle,
+        allocator: std.mem.Allocator,
+    ) !AccountDataHandle {
+        switch (self) {
+            .buffer_pool_read => |*buffer_pool_read| {
+                const refs = try allocator.dupe(FrameRef, buffer_pool_read.frame_refs);
+                for (refs) |ref| {
+                    const prev_rc = buffer_pool_read.buffer_pool.frame_manager.frame_ref_counts[
+                        ref.index
+                    ].fetchAdd(1, .seq_cst);
+                    std.debug.assert(prev_rc > 0); // duplicated AccountDataHandle with dead frame
+                }
+                return AccountDataHandle.initBufferPoolRead(
+                    buffer_pool_read.buffer_pool,
+                    refs,
+                    buffer_pool_read.first_frame_start_offset,
+                    buffer_pool_read.last_frame_end_offset,
+                );
+            },
+            else => unreachable, // duplicateBufferPoolRead called with handle not from BufferPool.
+        }
+    }
+
+    pub fn slice(self: *const AccountDataHandle, start: usize, end: usize) AccountDataHandle {
+        return .{ .sub_read = .{
+            .end = end,
+            .start = start,
+            .self = self,
+        } };
+    }
+
+    /// testing purposes only
+    pub fn expectEqual(expected: AccountDataHandle, actual: AccountDataHandle) !void {
+        if (!builtin.is_test)
+            @compileError("AccountDataHandle.expectEqual is for testing purposes only");
+        const expected_buf = try expected.readAllocate(std.testing.allocator, 0, expected.len());
+        defer std.testing.allocator.free(expected_buf);
+        const actual_buf = try actual.readAllocate(std.testing.allocator, 0, actual.len());
+        defer std.testing.allocator.free(actual_buf);
+        try std.testing.expectEqualSlices(u8, expected_buf, actual_buf);
+    }
+
+    pub fn eql(h1: AccountDataHandle, h2: AccountDataHandle) bool {
+        if (std.meta.eql(h1, h2)) return true;
+        if (h1.len() != h2.len()) return false;
+
+        var h1_iter = h1.iterator();
+        var h2_iter = h2.iterator();
+
+        while (h1_iter.nextByte()) |h1_byte| {
+            const h2_byte = h2_iter.nextByte().?;
+            if (h1_byte != h2_byte) return false;
+        }
+
+        return true;
+    }
+
+    pub fn eqlSlice(self: AccountDataHandle, data: []const u8) bool {
+        if (self.len() != data.len) return false;
+
+        var iter = self.iterator();
+        var i: u32 = 0;
+        while (iter.nextFrame()) |frame_slice| : (i += @intCast(frame_slice.len)) {
+            if (!std.mem.eql(u8, frame_slice, data[i..frame_slice.len])) return false;
+        }
+
+        return true;
+    }
 
     pub const Iterator = struct {
-        cached_read: *const CachedRead,
-        bytes_read: u32 = 0,
+        read_handle: *const AccountDataHandle,
+        bytes_read: FileOffset = 0,
+        start: FileOffset,
+        end: FileOffset,
 
-        const Reader = std.io.GenericReader(*Iterator, error{}, readBytes);
-
-        pub fn next(self: *Iterator) ?u8 {
-            if (self.bytes_read == self.cached_read.len()) {
-                return null;
-            }
-            defer self.bytes_read += 1;
-            return self.cached_read.readByte(self.bytes_read);
-        }
-
-        pub fn reset(self: *Iterator) void {
-            self.bytes_read = 0;
-        }
-
-        pub fn readBytes(self: *Iterator, buffer: []u8) error{}!usize {
-            var i: u32 = 0;
-            while (i < buffer.len) : (i += 1) {
-                buffer[i] = self.next() orelse break;
-            }
-            return i;
-        }
+        pub const Reader = std.io.GenericReader(*Iterator, error{}, Iterator.readBytes);
 
         pub fn reader(self: *Iterator) Reader {
             return .{ .context = self };
         }
+
+        pub fn len(self: Iterator) FileOffset {
+            return self.end - self.start;
+        }
+
+        pub fn bytesRemaining(self: Iterator) FileOffset {
+            return self.len() - self.bytes_read;
+        }
+
+        pub fn readBytes(self: *Iterator, buffer: []u8) error{}!usize {
+            if (self.bytes_read == self.end) return 0;
+
+            const read_len = @min(self.bytesRemaining(), buffer.len);
+
+            self.read_handle.read(self.start + self.bytes_read, buffer[0..read_len]);
+            self.bytes_read += @intCast(read_len);
+            return read_len;
+        }
+
+        pub fn nextByte(self: *Iterator) ?u8 {
+            var buf: u8 = undefined;
+            const buf_len = self.readBytes((&buf)[0..1]) catch unreachable;
+            if (buf_len > 1) unreachable;
+            if (buf_len == 0) return null;
+            return buf;
+        }
+
+        /// Does not copy, reads buffers of up to FRAME_SIZE at a time.
+        pub fn nextFrame(self: *Iterator) ?[]const u8 {
+            if (self.bytesRemaining() == 0) return null;
+
+            const first_frame_offset: FrameIndex = switch (self.read_handle.*) {
+                .buffer_pool_read => |*buffer_pool_read| buffer_pool_read.first_frame_start_offset,
+                else => 0,
+            };
+
+            // an index we can use with the bufferpool directly
+            const read_offset: FileOffset = self.start + first_frame_offset + self.bytes_read;
+
+            const frame_buf = switch (self.read_handle.*) {
+                .buffer_pool_read => |*buffer_pool_read| buf: {
+                    const current_frame: FrameIndex = @intCast(read_offset / FRAME_SIZE);
+
+                    const frame_start: FrameOffset = @intCast(read_offset % FRAME_SIZE);
+                    const frame_end: FrameOffset = if (current_frame ==
+                        buffer_pool_read.frame_refs.len - 1)
+                        buffer_pool_read.last_frame_end_offset
+                    else
+                        FRAME_SIZE;
+
+                    const end_idx = @min(frame_end, frame_start + self.bytesRemaining());
+
+                    const buf = buffer_pool_read.buffer_pool.frames[
+                        buffer_pool_read.frame_refs[current_frame].index
+                    ][frame_start..end_idx];
+
+                    break :buf buf;
+                },
+                .owned_allocation, .unowned_allocation => |external| buf: {
+                    const end_idx = @min(
+                        read_offset + FRAME_SIZE,
+                        read_offset + self.bytesRemaining(),
+                    );
+                    break :buf external[read_offset..end_idx];
+                },
+                .empty => unreachable,
+                .sub_read => @panic("unimplemented"),
+            };
+
+            if (frame_buf.len == 0) unreachable; // guarded against by the bytes_read check
+            if (self.bytes_read > self.len()) unreachable; // we've gone too far
+
+            self.bytes_read += @intCast(frame_buf.len);
+            return frame_buf;
+        }
     };
 
-    pub fn readByte(self: CachedRead, index: usize) u8 {
-        std.debug.assert(self.frame_indices.len != 0);
-        std.debug.assert(index < self.len());
-        const offset = index + self.first_frame_start_offset;
-        std.debug.assert(offset >= self.first_frame_start_offset);
+    fn bincodeSerialize(
+        writer: anytype,
+        read_handle: anytype,
+        params: bincode.Params,
+    ) anyerror!void {
+        // we want to serialise it as if it's a slice
+        try bincode.write(writer, @as(u64, read_handle.len()), params);
 
-        return self.buffer_pool.frames[
-            self.frame_indices[offset / FRAME_SIZE]
-        ][offset % FRAME_SIZE];
-    }
-
-    /// Copies entire read into specified buffer. Must be correct length.
-    pub fn readAll(
-        self: CachedRead,
-        buf: []u8,
-    ) error{InvalidArgument}!void {
-        if (buf.len != self.len()) return error.InvalidArgument;
-        var bytes_copied: usize = 0;
-
-        for (0.., self.frame_indices) |i, f_idx| {
-            const is_first_frame: u2 = @intFromBool(i == 0);
-            const is_last_frame: u2 = @intFromBool(i == self.frame_indices.len - 1);
-
-            switch (is_first_frame << 1 | is_last_frame) {
-                0b00 => { // !first, !last (middle frame)
-                    const read_len = FRAME_SIZE;
-                    @memcpy(
-                        buf[bytes_copied..][0..read_len],
-                        &self.buffer_pool.frames[f_idx],
-                    );
-                    bytes_copied += read_len;
-                },
-                0b10 => { // first, !last (first frame)
-                    std.debug.assert(i == 0);
-                    const read_len = FRAME_SIZE - self.first_frame_start_offset;
-                    @memcpy(
-                        buf[0..read_len],
-                        self.buffer_pool.frames[f_idx][self.first_frame_start_offset..],
-                    );
-                    bytes_copied += read_len;
-                },
-                0b01 => { // !first, last (last frame)
-                    const read_len = self.last_frame_end_offset;
-                    @memcpy(
-                        buf[bytes_copied..][0..read_len],
-                        self.buffer_pool.frames[f_idx][0..read_len],
-                    );
-                    bytes_copied += read_len;
-                    std.debug.assert(bytes_copied == self.len());
-                },
-                0b11 => { // first, last (only frame)
-                    std.debug.assert(self.frame_indices.len == 1);
-                    const readable_len = self.len();
-                    @memcpy(
-                        buf[0..readable_len],
-                        self.buffer_pool.frames[
-                            f_idx
-                        ][self.first_frame_start_offset..self.last_frame_end_offset],
-                    );
-                    bytes_copied += self.len();
-                },
-            }
+        var iter = read_handle.iterator();
+        while (iter.nextFrame()) |frame| {
+            try writer.writeAll(frame);
         }
     }
 
-    pub fn iterator(self: *const CachedRead) Iterator {
-        return .{ .cached_read = self };
+    fn bincodeDeserialize(
+        alloc: std.mem.Allocator,
+        reader: anytype,
+        params: bincode.Params,
+    ) anyerror!AccountDataHandle {
+        const data = try bincode.read(alloc, []u8, reader, params);
+        return AccountDataHandle.initAllocatedOwned(data);
     }
 
-    pub fn len(self: CachedRead) u32 {
-        if (self.frame_indices.len == 0) return 0;
-        return (@as(u32, @intCast(self.frame_indices.len)) - 1) *
-            FRAME_SIZE + self.last_frame_end_offset - self.first_frame_start_offset;
-    }
-
-    pub fn deinit(self: CachedRead, allocator: std.mem.Allocator) void {
-        for (self.frame_indices) |frame_index| {
-            std.debug.assert(frame_index != INVALID_FRAME);
-
-            if (self.buffer_pool.frames_metadata.rc[frame_index].release()) {
-                // notably, the frame remains in memory, and its hashmap entry
-                // remains valid.
-            }
-        }
-        allocator.free(self.frame_indices);
+    fn bincodeFree(allocator: std.mem.Allocator, read_handle: anytype) void {
+        read_handle.deinit(allocator);
     }
 };
-
-/// Used for atomic appends + pops; No guarantees for elements.
-/// Methods follow that of ArrayListUnmanaged
-pub fn AtomicStack(T: type) type {
-    return struct {
-        const Self = @This();
-
-        buf: [*]T,
-        len: std.atomic.Value(usize),
-        cap: usize, // fixed
-
-        fn init(allocator: std.mem.Allocator, cap: usize) !Self {
-            const buf = try allocator.alloc(T, cap);
-            return .{
-                .buf = buf.ptr,
-                .len = .{ .raw = 0 },
-                .cap = cap,
-            };
-        }
-
-        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            allocator.free(self.buf[0..self.cap]);
-            self.* = undefined;
-        }
-
-        // add new item to the end of buf, incrementing self.len atomically
-        fn appendAssumeCapacity(self: *Self, item: T) void {
-            const prev_len = self.len.load(.acquire);
-            std.debug.assert(prev_len < self.cap);
-            self.buf[prev_len] = item;
-            _ = self.len.fetchAdd(1, .release);
-        }
-
-        // return item at end of buf, decrementing self.len atomically
-        fn popOrNull(self: *Self) ?T {
-            const prev_len = self.len.fetchSub(1, .acquire);
-            if (prev_len == 0) {
-                _ = self.len.fetchAdd(1, .release);
-                return null;
-            }
-            return self.buf[prev_len - 1];
-        }
-    };
-}
-
-test AtomicStack {
-    const allocator = std.testing.allocator;
-    var stack = try AtomicStack(usize).init(allocator, 100);
-    defer stack.deinit(allocator);
-
-    for (0..100) |i| stack.appendAssumeCapacity(i);
-
-    var i: usize = 100;
-    while (i > 0) {
-        i -= 1;
-        try std.testing.expectEqual(i, stack.popOrNull());
-    }
-}
 
 test "BufferPool indicesRequired" {
     const TestCase = struct {
@@ -936,11 +1144,11 @@ test "BufferPool indicesRequired" {
         .{ .start = F_SIZE, .end = F_SIZE * 2, .expected = 1 },
     };
 
-    for (0.., cases) |i, case| {
+    for (cases, 0..) |case, i| {
         errdefer std.debug.print("failed on case(i={}): {}", .{ i, case });
         try std.testing.expectEqual(
             case.expected,
-            BufferPool.computeNumberofFrameIndices(case.start, case.end),
+            BufferPool.computeNumberOfFrameIndices(case.start, case.end),
         );
     }
 }
@@ -948,15 +1156,31 @@ test "BufferPool indicesRequired" {
 test "BufferPool init deinit" {
     const allocator = std.testing.allocator;
 
-    for (0.., &[_]u32{
-        2,     3,     4,     8,
-        16,    32,    256,   4096,
-        16384, 16385, 24576, 32767,
-        32768, 49152, 65535, 65536,
-    }) |i, frame_count| {
+    const initDeinit = struct {
+        fn f(alloc: std.mem.Allocator, n_frames: u32) !void {
+            var bp = try BufferPool.init(alloc, n_frames);
+            defer bp.deinit(alloc);
+        }
+    }.f;
+
+    for (
+        &[_]u32{
+            2,     3,     4,     8,
+            16,    32,    256,   4096,
+            16384, 16385, 24576, 32767,
+            32768, 49152, 65535, 65536,
+        },
+        0..,
+    ) |frame_count, i| {
         errdefer std.debug.print("failed on case(i={}): {}", .{ i, frame_count });
         var bp = try BufferPool.init(allocator, frame_count);
         bp.deinit(allocator);
+
+        try std.testing.checkAllAllocationFailures(
+            std.testing.allocator,
+            initDeinit,
+            .{frame_count},
+        );
     }
 }
 
@@ -975,7 +1199,7 @@ test "BufferPool readBlocking" {
 }
 
 test "BufferPool readIoUringSubmitAndWait" {
-    if (!use_io_uring) return error.SkipZigTest;
+    if (!USE_IO_URING) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
 
@@ -986,7 +1210,7 @@ test "BufferPool readIoUringSubmitAndWait" {
     var bp = try BufferPool.init(allocator, 2048); // 2048 frames = 1MiB
     defer bp.deinit(allocator);
 
-    var read = try bp.readIoUringSubmitAndWait(allocator, file, file_id, 0, 1000);
+    var read = try bp.readIoUring(allocator, file, file_id, 0, 1000);
     defer read.deinit(allocator);
 }
 
@@ -997,7 +1221,7 @@ test "BufferPool basic usage" {
     defer file.close();
     const file_id = FileId.fromInt(1);
 
-    var bp = try BufferPool.init(allocator, 2048); // 2048 frames = 1MiB
+    var bp = try BufferPool.init(allocator, 2048); // 2048 frames = 1MiB @ FRAME_SIZE=512
     defer bp.deinit(allocator);
 
     var fba_buf: [4096]u8 = undefined;
@@ -1006,8 +1230,12 @@ test "BufferPool basic usage" {
     const read = try bp.read(fba.allocator(), file, file_id, 0, 1000);
     defer read.deinit(fba.allocator());
 
-    try std.testing.expectEqual(2, read.frame_indices.len);
-    for (read.frame_indices) |f_idx| try std.testing.expect(f_idx != INVALID_FRAME);
+    try std.testing.expectEqual(
+        try std.math.divCeil(usize, 1000, FRAME_SIZE),
+        read.buffer_pool_read.frame_refs.len,
+    );
+    for (read.buffer_pool_read.frame_refs) |frame_ref|
+        try std.testing.expect(frame_ref.index != INVALID_FRAME);
 
     {
         var iter1 = read.iterator();
@@ -1021,7 +1249,7 @@ test "BufferPool basic usage" {
         defer fba.allocator().free(iter_data);
 
         var bytes_read: usize = 0;
-        while (iter2.next()) |byte| : (bytes_read += 1) {
+        while (iter2.nextByte()) |byte| : (bytes_read += 1) {
             iter_data[bytes_read] = byte;
         }
         try std.testing.expectEqual(1000, bytes_read);
@@ -1044,9 +1272,12 @@ test "BufferPool allocation sizes" {
     // except for the s3_fifo queues, which are split to be ~90% and ~10% of that
     // length.
     var total_requested_bytes = gpa.total_requested_bytes;
-    total_requested_bytes -= bp.eviction_lfu.ghost.buf.len * @sizeOf(FrameIndex);
-    total_requested_bytes -= bp.eviction_lfu.main.buf.len * @sizeOf(FrameIndex);
-    total_requested_bytes -= bp.eviction_lfu.small.buf.len * @sizeOf(FrameIndex);
+    total_requested_bytes -= bp.frame_manager.eviction_lfu.readField("ghost").buf.len *
+        @sizeOf(FrameIndex);
+    total_requested_bytes -= bp.frame_manager.eviction_lfu.readField("main").buf.len *
+        @sizeOf(FrameIndex);
+    total_requested_bytes -= bp.frame_manager.eviction_lfu.readField("small").buf.len *
+        @sizeOf(FrameIndex);
     total_requested_bytes -= @sizeOf(usize) * 3; // hashmap header
 
     try std.testing.expect(total_requested_bytes % frame_count == 0);
@@ -1055,7 +1286,7 @@ test "BufferPool allocation sizes" {
     // As of writing, all metadata (excluding eviction_lfu, including frame_map)
     // is 50 bytes or ~9% of memory usage at a frame size of 512, or 50MB for a
     // million frames.
-    try std.testing.expect((total_requested_bytes / frame_count) - 512 <= 64);
+    try std.testing.expect((total_requested_bytes / frame_count) - FRAME_SIZE <= 80);
 }
 
 test "BufferPool filesize > frame_size * num_frames" {
@@ -1080,14 +1311,6 @@ test "BufferPool filesize > frame_size * num_frames" {
     // file_size > total buffers size => we evict as we go
     var offset: u32 = 0;
     while (offset < file_size) : (offset += FRAME_SIZE) {
-        // when we've already filled every frame, we evict as we go
-        // => free list should be empty
-        if (offset >= FRAME_SIZE * num_frames) {
-            try std.testing.expectEqual(0, bp.free_list.len.raw);
-        } else {
-            try std.testing.expect(bp.free_list.len.raw > 0);
-        }
-
         const read_frame = try bp.read(
             allocator,
             file,
@@ -1096,17 +1319,15 @@ test "BufferPool filesize > frame_size * num_frames" {
             offset + FRAME_SIZE,
         );
 
-        try std.testing.expectEqual(1, read_frame.frame_indices.len);
+        try std.testing.expectEqual(1, read_frame.buffer_pool_read.frame_refs.len);
 
-        const frame: []const u8 = bp.frames[
-            read_frame.frame_indices[0]
-        ][0..bp.frames_metadata.size[
-            read_frame.frame_indices[0]
-        ]];
+        const frame: []const u8 = &bp.frames[
+            read_frame.buffer_pool_read.frame_refs[0].index
+        ];
 
         var frame2: [FRAME_SIZE]u8 = undefined;
         const bytes_read = try file.preadAll(&frame2, offset);
-        try std.testing.expectEqualSlices(u8, frame2[0..bytes_read], frame);
+        try std.testing.expectEqualSlices(u8, frame2[0..bytes_read], frame[0..bytes_read]);
         read_frame.deinit(allocator);
     }
 }
@@ -1141,7 +1362,12 @@ test "BufferPool random read" {
             @min(file_size, range_start + num_frames * FRAME_SIZE),
         );
 
-        if (try BufferPool.computeNumberofFrameIndices(range_start, range_end) > num_frames) {
+        errdefer std.debug.print(
+            "failed on case(reads={}): file[{}..{}]\n",
+            .{ reads, range_start, range_end },
+        );
+
+        if (try BufferPool.computeNumberOfFrameIndices(range_start, range_end) > num_frames) {
             continue;
         }
 
@@ -1149,7 +1375,7 @@ test "BufferPool random read" {
         defer read.deinit(gpa.allocator());
 
         // check for equality with other impl
-        if (use_io_uring) {
+        if (USE_IO_URING) {
             var read2 = try bp.readBlocking(
                 gpa.allocator(),
                 file,
@@ -1159,22 +1385,44 @@ test "BufferPool random read" {
             );
             defer read2.deinit(gpa.allocator());
 
-            try std.testing.expect(
-                read.first_frame_start_offset == read2.first_frame_start_offset,
+            try std.testing.expectEqual(
+                read.buffer_pool_read.first_frame_start_offset,
+                read2.buffer_pool_read.first_frame_start_offset,
             );
-            try std.testing.expect(read.last_frame_end_offset == read2.last_frame_end_offset);
-            try std.testing.expectEqualSlices(u32, read.frame_indices, read2.frame_indices);
+            try std.testing.expectEqual(
+                read.buffer_pool_read.last_frame_end_offset,
+                read2.buffer_pool_read.last_frame_end_offset,
+            );
+
+            try std.testing.expectEqual(
+                read.buffer_pool_read.frame_refs.len,
+                read2.buffer_pool_read.frame_refs.len,
+            );
+
+            for (
+                read.buffer_pool_read.frame_refs,
+                read2.buffer_pool_read.frame_refs,
+            ) |read_frameref, read2_frameref| {
+                try std.testing.expectEqual(read_frameref.index, read2_frameref.index);
+            }
         }
 
-        var total_bytes_read: u32 = 0;
-        for (read.frame_indices) |f_idx| total_bytes_read += bp.frames_metadata.size[f_idx];
+        errdefer std.debug.print("failed with read: {}\n", .{read});
+
         const read_data_bp_iter = try allocator.alloc(u8, read.len());
         defer allocator.free(read_data_bp_iter);
         {
-            var i: u32 = 0;
             var iter = read.iterator();
-            while (iter.next()) |b| : (i += 1) read_data_bp_iter[i] = b;
-            if (i != read.len()) unreachable;
+            var start_offset: u32 = 0;
+            while (iter.nextFrame()) |frame_slice| {
+                @memcpy(
+                    read_data_bp_iter[start_offset..][0..frame_slice.len],
+                    frame_slice,
+                );
+                start_offset += @intCast(frame_slice.len);
+            }
+
+            try std.testing.expectEqual(read.len(), iter.bytes_read);
         }
 
         var iter = read.iterator();
@@ -1186,7 +1434,7 @@ test "BufferPool random read" {
 
         const read_data_bp_readall = try allocator.alloc(u8, read.len());
         defer allocator.free(read_data_bp_readall);
-        try read.readAll(read_data_bp_readall);
+        read.readAll(read_data_bp_readall);
 
         const read_data_expected = try allocator.alloc(u8, range_end - range_start);
         defer allocator.free(read_data_expected);
@@ -1204,4 +1452,84 @@ test "BufferPool random read" {
         try std.testing.expectEqualSlices(u8, read_data_expected, read_data_bp_readall);
         try std.testing.expectEqual(preaded_bytes, read_data_bp_readall.len);
     }
+}
+
+test "AccountDataHandle bincode" {
+    const allocator = std.testing.allocator;
+
+    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    defer file.close();
+    const file_id = FileId.fromInt(1);
+
+    const num_frames = 400;
+
+    var bp = try BufferPool.init(allocator, num_frames);
+    defer bp.deinit(allocator);
+
+    const file_size: u32 = @intCast((try file.stat()).size);
+
+    const read = try bp.read(allocator, file, file_id, 0, file_size);
+    defer read.deinit(allocator);
+
+    const read_data = try read.readAllAllocate(allocator);
+    defer allocator.free(read_data);
+
+    {
+        var serialised_from_slice = std.ArrayList(u8).init(allocator);
+        defer serialised_from_slice.deinit();
+
+        try bincode.write(serialised_from_slice.writer(), read_data, .{});
+
+        const deserialised_from_slice = try bincode.readFromSlice(
+            allocator,
+            AccountDataHandle,
+            serialised_from_slice.items,
+            .{},
+        );
+        defer deserialised_from_slice.deinit(allocator);
+
+        try std.testing.expectEqualSlices(
+            u8,
+            read_data,
+            deserialised_from_slice.owned_allocation,
+        );
+    }
+
+    {
+        var serialised_from_handle = std.ArrayList(u8).init(allocator);
+        defer serialised_from_handle.deinit();
+
+        try bincode.write(serialised_from_handle.writer(), read, .{});
+
+        const deserialised_from_handle = try bincode.readFromSlice(
+            allocator,
+            AccountDataHandle,
+            serialised_from_handle.items,
+            .{},
+        );
+        defer deserialised_from_handle.deinit(allocator);
+
+        try std.testing.expectEqualSlices(
+            u8,
+            read_data,
+            deserialised_from_handle.owned_allocation,
+        );
+    }
+}
+
+test "BufferPool failed read" {
+    var bp = try BufferPool.init(std.testing.allocator, 1024);
+    defer bp.deinit(std.testing.allocator);
+
+    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+
+    const read = try bp.read(std.testing.allocator, file, FileId.fromInt(0), 0, 1000);
+    read.deinit(std.testing.allocator);
+
+    const read2 = bp.read(std.testing.failing_allocator, file, FileId.fromInt(0), 10_000, 11_000);
+    try std.testing.expectError(error.OutOfMemory, read2);
+
+    file.close(); // close early => fail the read
+    const read3 = bp.read(std.testing.allocator, file, FileId.fromInt(0), 20_000, 31_000);
+    try std.testing.expectError(error.NotOpenForReading, read3);
 }

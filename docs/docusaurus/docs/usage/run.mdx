@@ -1,0 +1,88 @@
+---
+sidebar_position: 1
+title: Run Sig
+---
+
+Run Sig with `zig` or execute the binary you already built:
+
+```bash
+zig build run -- --help
+```
+
+```bash
+./zig-out/bin/sig --help
+```
+
+These commands will be abbreviated as `sig` throughout the rest of this document.
+
+### Validator
+
+Startup the validator with the following command: 
+
+```bash 
+sig validator
+```
+
+### Identity
+
+Sig stores its private key in `~/.sig/identity.key`. On its first run, Sig will automatically generate a key if no key exists. To see the public key, use the `identity` subcommand.
+
+```bash
+sig identity
+```
+
+### Gossip
+
+To run Sig as a Solana gossip client, use the `gossip` subcommand. Specify entrypoints to connect to a cluster. Optionally use `-p` to specify a custom listening port (default is 8001). For more info about gossip, see the [readme](https://github.com/Syndica/sig/tree/main/src/gossip#readme).
+
+```bash
+sig gossip -p <PORT> --entrypoint <IP>:<PORT>
+```
+
+The following IP addresses were resolved from domains found at https://docs.solana.com/clusters.
+
+#### mainnet
+
+```bash
+sig gossip \
+    --entrypoint entrypoint.mainnet-beta.solana.com:8001 \
+    --entrypoint entrypoint2.mainnet-beta.solana.com:8001 \
+    --entrypoint entrypoint3.mainnet-beta.solana.com:8001 \
+    --entrypoint entrypoint4.mainnet-beta.solana.com:8001 \
+    --entrypoint entrypoint5.mainnet-beta.solana.com:8001
+```
+
+#### devnet
+
+```bash
+sig gossip \
+    --entrypoint entrypoint.devnet.solana.com:8001 \
+    --entrypoint entrypoint2.devnet.solana.com:8001 \
+    --entrypoint entrypoint3.devnet.solana.com:8001 \
+    --entrypoint entrypoint4.devnet.solana.com:8001 \
+    --entrypoint entrypoint5.devnet.solana.com:8001
+```
+
+#### testnet
+
+```bash
+sig gossip \
+    --entrypoint entrypoint.testnet.solana.com:8001 \
+    --entrypoint entrypoint2.testnet.solana.com:8001 \
+    --entrypoint entrypoint3.testnet.solana.com:8001
+```
+
+### Download a snapshot
+
+```bash
+sig download_snapshot \
+    # where to save snapshot
+    -s test_data/tmp \
+    # gossip peers to join network from
+    --entrypoint 34.83.231.102:8001 \
+    --entrypoint 145.40.67.83:8001 \
+    # pubkeys of validators whos snapshot hashes you trust
+    --trusted-validator x19btgySsrjuo25CJCj7oE7DREwezDhnx7pZkj2v69Nk
+    # minimum MB/s speed when downloading snapshot
+    --min-snapshot-download-speed 50 \
+```

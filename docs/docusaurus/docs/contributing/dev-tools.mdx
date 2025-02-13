@@ -1,0 +1,47 @@
+---
+sidebar_position: 5
+title: Developer Tools
+---
+
+### Test
+
+Run all tests.
+
+```bash
+zig build test
+```
+
+Include `--summary all` with any test command to see a summary of the test results.
+
+Include a filter to limit which tests are run. Sig tests include their module name. For example, you can run all tests in `gossip.table` like this:
+
+```bash
+zig build test --summary all -- gossip.table
+```
+
+### Benchmark
+
+Run all benchmarks.
+
+```bash
+zig build benchmark
+```
+
+Run a benchmark group: socket_utils, gossip, or sync.
+
+```bash
+zig build benchmark -- gossip
+```
+
+### Fuzzing
+
+Fuzz the gossip protocol.
+
+```bash
+# in one terminal, start a gossip node
+./zig-out/bin/sig gossip
+
+# in another terminal, fuzz the gossip node
+# zig build fuzz -- <entrypoint> <seed> <num_messages>
+./zig-out/bin/fuzz 127.0.0.1:8001 19 50000
+```

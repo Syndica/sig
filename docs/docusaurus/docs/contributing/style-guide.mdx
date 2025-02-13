@@ -1,12 +1,7 @@
-# Contributing to Sig
-Thank you for considering contributing to Syndica's Sig project! We appreciate your interest and support in helping us make this project better.
-By participating in this project, you are joining a community of developers and contributors working together to create value for the Solana ecosystem.
-Before you start contributing, please take a moment to read and understand this Contributing Guidelines document. It will help you get started and ensure a smooth collaboration process.
-
-## Dev Environment Setup
-See the [readme](../readme.md#-setup).
-
-## Style Guide
+---
+sidebar_position: 3
+title: Style Guide
+---
 
 ### Identifiers
 To the extent that it is reasonable, we defer to the conventions established by the [Zig Style Guide](https://ziglang.org/documentation/master/#Style-Guide).
@@ -18,7 +13,7 @@ This includes constants which are intended to initialize an instance of a user t
 #### Leading Underscores & Private Fields
 Usage of leading underscores in identifiers, i.e (`_foo` or `__bar`) is discouraged unless it's in the correct contex.
 Valid usages of such an identifier would be for a psuedo-private field, which is unrecommened for users to touch.
-For private fields, there should be a docstring attached explaining that it's a private field. Before creating a private 
+For private fields, there should be a docstring attached explaining that it's a private field. Before creating a private
 field, it should be considered whether it needs to be a field in the first place. There should be few usages of them.
 
 #### Interfaces & Interface State
@@ -40,7 +35,7 @@ Container types should be declared with the following ordering:
 - All other functions, keeping the most relevant for the reader at the top
 
 #### Method Parameters
-The first parameter of a method should be named `self`. The type should be the name of the struct. 
+The first parameter of a method should be named `self`. The type should be the name of the struct.
 For example:
 
 ```zig
@@ -53,13 +48,13 @@ const MyStruct = struct {
 };
 ```
 
-If the type name is not available (for example in anonymous structs), define `const Self = @This()` 
+If the type name is not available (for example in anonymous structs), define `const Self = @This()`
 and use that as the type.
 
 ### Files as Structs
 We prohibit usage of files as instantiable struct types in the codebase.
 
-### Imports 
+### Imports
 
 #### Sig Dependencies
 By convention, all internal dependencies should be defined as aliases of fully qualified paths from the root module.
@@ -109,30 +104,38 @@ const Packet = sig.net.Packet;
 ```
 
 ### Optional Values
-Optional values should be prepended with `maybe_`. For example:
+- Optional values should be prepended with `maybe_` and unwrapping should follow the `if (maybe_x) |x| {}` format
+- For example:
+
 ```zig
 fn do_something(maybe_foo: ?Foo) void {
     if (maybe_foo) |foo| {
         // do something with foo here
-  }
+    }
 }
 ```
 
 ### Function Signatures
-- if passing an `Allocator` as a parameter, it should be the first parameter of the function, or the second if the function is intended as a method of the enclosing type.
-- if the number of possible errors which a function can return is reasonably small (eg, can only fail on memory allocations), then the error types should be explicit (eg, `error{ OutOfMemory }`) instead of inferring the error set.
-- if a parameter is not modified, then it should be `const` (eg, `fn get(*const Self)`)
+- If passing an `Allocator` as a parameter, it should be the first parameter of the function
+- If the number of possible errors which a function can return is reasonably small, then the error types should be
+explicit instead of using `anyerror` and the `!` operator
+    - For example, if the function can only fail on memory allocations, then the error should be `error{ OutOfMemory }`
+- If a parameter is not modified, then it should be `const` (eg, `fn get(*const Self)`)
 
 ### Slices
-- when converting an array from a slice, the syntax `&buf` should be used instead of `buf[0..]`
+- When converting an array from a slice, the syntax `&buf` should be used instead of `buf[0..]`
 
 ### Writing Tests
-- when writing tests the naming convention is: `test "{path to file}: {test name}"`
-  - for example, in `src/gossip/data.zig` a test is defined as `test "gossip.data: test label() and id() methods"`
+- When writing tests the naming convention is: `test "{path to file}: {test name}"`
+  - For example, in `src/gossip/data.zig` a test is defined as `test "gossip.data: test label() and id() methods"`
 
 ### Linting
-- run `zig fmt src/` in the top-level directory to run the zig linter
 
+- Run `zig fmt ./` in the top-level directory to run the zig linter
+
+### Removing Unused Imports
+
+- Run `python remove_unused.py src/` from the top-level directory to remove unused imports
 
 ### Metrics
 It's common for a single context to deal with multiple prometheus metrics. In that case, it may be useful to group them together in their own struct. Any metrics structs following this pattern must end their names with the word `Metrics`. If practical, `Registry.initStruct` or `Registry.initFields` is recommended for the struct's initialization.

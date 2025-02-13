@@ -1,9 +1,15 @@
 const std = @import("std");
 const sbpf = @import("sbpf.zig");
 
+/// Virtual address of the bytecode region (in SBPFv3)
+pub const BYTECODE_START: u64 = 0x000000000;
+/// Virtual address of the readonly data region (also contains the bytecode until SBPFv3)
 pub const PROGRAM_START: u64 = 0x100000000;
+/// Virtual address of the stack region
 pub const STACK_START: u64 = 0x200000000;
+/// Virtual address of the heap region
 pub const HEAP_START: u64 = 0x300000000;
+/// Virtual address of the input region
 pub const INPUT_START: u64 = 0x400000000;
 const VIRTUAL_ADDRESS_BITS = 32;
 
@@ -11,7 +17,7 @@ pub const MemoryMap = union(enum) {
     aligned: AlignedMemoryMap,
     // TODO: unaligned memory map?
 
-    pub fn init(regions: []const Region, version: sbpf.SBPFVersion) !MemoryMap {
+    pub fn init(regions: []const Region, version: sbpf.Version) !MemoryMap {
         return .{ .aligned = try AlignedMemoryMap.init(regions, version) };
     }
 
@@ -113,9 +119,9 @@ pub const Region = struct {
 
 const AlignedMemoryMap = struct {
     regions: []const Region,
-    version: sbpf.SBPFVersion,
+    version: sbpf.Version,
 
-    fn init(regions: []const Region, version: sbpf.SBPFVersion) !AlignedMemoryMap {
+    fn init(regions: []const Region, version: sbpf.Version) !AlignedMemoryMap {
         for (regions, 1..) |reg, index| {
             if (reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS != index) {
                 return error.InvalidMemoryRegion;
@@ -162,7 +168,7 @@ test "aligned vmap" {
     const m = try MemoryMap.init(&.{
         Region.init(.mutable, &program_mem, PROGRAM_START),
         Region.init(.constant, &stack_mem, STACK_START),
-    }, .v1);
+    }, .v0);
 
     try expectEqual(
         program_mem[0..1],
@@ -198,7 +204,7 @@ test "aligned region" {
     const m = try MemoryMap.init(&.{
         Region.init(.mutable, &program_mem, PROGRAM_START),
         Region.init(.constant, &stack_mem, STACK_START),
-    }, .v1);
+    }, .v0);
 
     try expectError(
         error.AccessNotMapped,
@@ -244,6 +250,6 @@ test "invalid memory region" {
         MemoryMap.init(&.{
             Region.init(.constant, &stack_mem, STACK_START),
             Region.init(.mutable, &program_mem, PROGRAM_START),
-        }, .v1),
+        }, .v0),
     );
 }

@@ -1,0 +1,10 @@
+{
+  "position": 3,
+  "label": "Code",
+  "collapsible": true,
+  "collapsed": true,
+  "className": "red",
+  "customProps": {
+    "description": "A break down of the code in Sig"
+  }
+}

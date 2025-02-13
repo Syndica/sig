@@ -1,0 +1,14 @@
+---
+sidebar_position: 2
+title: Road Map
+---
+
+Since the validator is a large project, we broke it down into individual core components:
+
+- `Gossip`: the entry point of the network where nodes discover other nodes, share metadata about what ports are open, etc.
+- `AccountsDB`: an optimized database to represent the state of the blockchain at a specific slot, including the state of all the accounts.
+- `Runtime` (Solana Virtual Machine): an execution environment that updates on-chain accounts by processing transactions with on-chain programs.
+- `Consensus`: a consensus protocol (TowerBFT) that manages votes and forks to know the head of the chain.
+- `RPC`: responsible for serving on-chain data to other clients using remote-procedure calls including account balances, transaction statuses, and more.
+- `Proof-of-History`: a proof of the passage of time using a verifiable delay function at the heart of consensus.
+- `Block Packing`: find the optimal transaction ordering to pack into a block based on specific read/write locks and priority fees

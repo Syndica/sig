@@ -69,7 +69,7 @@ pub fn main() !void {
     }
 
     const config: Config = .{
-        .minimum_version = if (assemble) .v2 else .v1,
+        .minimum_version = if (assemble) .v3 else .v0,
     };
     var executable = if (assemble)
         try Executable.fromAsm(allocator, bytes, config)
