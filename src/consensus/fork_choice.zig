@@ -165,34 +165,6 @@ pub const ForkChoice = struct {
         return self;
     }
 
-    pub fn initForTest(
-        allocator: std.mem.Allocator,
-        forks: []const TreeNode,
-    ) !ForkChoice {
-        if (!builtin.is_test) {
-            @panic("initForTest should only be called in test mode");
-        }
-
-        const root = forks[0][1].?;
-        var fork_choice = try ForkChoice.init(
-            allocator,
-            .noop,
-            root,
-        );
-        errdefer fork_choice.deinit();
-
-        for (forks) |fork_tuple| {
-            const slot_hash = fork_tuple[0];
-            if (fork_choice.fork_infos.contains(slot_hash)) {
-                continue;
-            }
-            const parent_slot_hash = fork_tuple[1];
-            try fork_choice.addNewLeafSlot(slot_hash, parent_slot_hash);
-        }
-
-        return fork_choice;
-    }
-
     pub fn deinit(self: *ForkChoice) void {
         var it = self.fork_infos.iterator();
         while (it.next()) |fork_info| {
@@ -1077,7 +1049,7 @@ fn doInsertAggregateOperation(
 const test_allocator = std.testing.allocator;
 
 test "HeaviestSubtreeForkChoice.subtreeDiff" {
-    var fork_choice = try ForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
     // Diff of same root is empty, no matter root, intermediate node, or leaf
@@ -1199,7 +1171,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
 }
 
 test "HeaviestSubtreeForkChoice.ancestorIterator" {
-    var fork_choice = try ForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
     {
@@ -1284,7 +1256,7 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
 }
 
 test "HeaviestSubtreeForkChoice.setTreeRoot" {
-    var fork_choice = try ForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
     // Set root to 1, should only purge 0
     const root1 = SlotAndHash{ .slot = 1, .hash = Hash.ZEROES };
@@ -1297,7 +1269,7 @@ test "HeaviestSubtreeForkChoice.setTreeRoot" {
 }
 
 test "HeaviestSubtreeForkChoice.bestOverallSlot" {
-    var fork_choice = try ForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
     try std.testing.expectEqual(
         fork_choice.bestOverallSlot(),
@@ -1306,7 +1278,7 @@ test "HeaviestSubtreeForkChoice.bestOverallSlot" {
 }
 
 test "HeaviestSubtreeForkChoice.aggregateSlot" {
-    var fork_choice = try ForkChoice.initForTest(test_allocator, fork_tuples[0..]);
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
     fork_choice.aggregateSlot(.{ .slot = 1, .hash = Hash.ZEROES });
@@ -1482,7 +1454,7 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
             SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
         },
     };
-    var fork_choice = try ForkChoice.initForTest(test_allocator, tree[0..]);
+    var fork_choice = try forkChoiceForTest(test_allocator, tree[0..]);
     defer fork_choice.deinit();
 
     try std.testing.expect(
@@ -1580,7 +1552,7 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
 }
 
 test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
-    var fork_choice = try ForkChoice.initForTest(test_allocator, linear_fork_tuples[0..]);
+    var fork_choice = try forkChoiceForTest(test_allocator, linear_fork_tuples[0..]);
     defer fork_choice.deinit();
     const duplicate_confirmed_slot: Slot = 1;
     const duplicate_confirmed_key: Hash = Hash.ZEROES;
@@ -1647,7 +1619,7 @@ test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
 }
 
 test "HeaviestSubtreeForkChoice.markForkValidandidate_mark_valid_then_ancestor_invalid" {
-    var fork_choice = try ForkChoice.initForTest(test_allocator, linear_fork_tuples[0..]);
+    var fork_choice = try forkChoiceForTest(test_allocator, linear_fork_tuples[0..]);
     defer fork_choice.deinit();
     const duplicate_confirmed_slot: Slot = 4;
     const duplicate_confirmed_key: Hash = Hash.ZEROES;
@@ -1666,6 +1638,34 @@ test "HeaviestSubtreeForkChoice.markForkValidandidate_mark_valid_then_ancestor_i
             .hash = Hash.ZEROES,
         }),
     );
+}
+
+pub fn forkChoiceForTest(
+    allocator: std.mem.Allocator,
+    forks: []const TreeNode,
+) !ForkChoice {
+    if (!builtin.is_test) {
+        @panic("initForTest should only be called in test mode");
+    }
+
+    const root = forks[0][1].?;
+    var fork_choice = try ForkChoice.init(
+        allocator,
+        .noop,
+        root,
+    );
+    errdefer fork_choice.deinit();
+
+    for (forks) |fork_tuple| {
+        const slot_hash = fork_tuple[0];
+        if (fork_choice.fork_infos.contains(slot_hash)) {
+            continue;
+        }
+        const parent_slot_hash = fork_tuple[1];
+        try fork_choice.addNewLeafSlot(slot_hash, parent_slot_hash);
+    }
+
+    return fork_choice;
 }
 
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
@@ -1789,7 +1789,7 @@ pub fn setupDuplicateForks() !struct {
     var fork_choice = try test_allocator.create(ForkChoice);
     errdefer test_allocator.destroy(fork_choice);
 
-    fork_choice.* = try ForkChoice.initForTest(
+    fork_choice.* = try forkChoiceForTest(
         test_allocator,
         fork_tuples[0..],
     );
