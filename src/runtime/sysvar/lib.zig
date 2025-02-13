@@ -1,4 +1,8 @@
 const sig = @import("../../sig.zig");
+const Pubkey = sig.core.Pubkey;
+
+pub const OWNER_ID =
+    Pubkey.parseBase58String("Sysvar1111111111111111111111111111111111111") catch unreachable;
 
 pub const Clock = @import("clock.zig").Clock;
 pub const EpochRewards = @import("epoch_rewards.zig").EpochRewards;

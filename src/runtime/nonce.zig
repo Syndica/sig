@@ -14,7 +14,7 @@ pub const Versions = union(enum) {
     legacy: State,
     current: State,
 
-    pub fn getState(self: Versions) State {
+    pub fn deserializeFromAccountData(self: Versions) State {
         switch (self) {
             .legacy => |state| return state,
             .current => |state| return state,
@@ -22,7 +22,7 @@ pub const Versions = union(enum) {
     }
 
     pub fn serializedSize(self: Versions) !usize {
-        return switch (self.getState()) {
+        return switch (self.deserializeFromAccountData()) {
             .unintialized => 8,
             .initialized => |_| 80,
         };
@@ -57,18 +57,8 @@ pub const Data = struct {
             .fee_calculator = .{ .lamports_per_signature = lamports_per_signature },
         };
     }
-
-    pub fn getDurableNonce(self: Data) Hash {
-        return self.durable_nonce;
-    }
-
-    pub fn getLamportsPerSignature(self: Data) u64 {
-        return self.fee_calculator.lamports_per_signature;
-    }
 };
 
 pub fn createDurableNonce(blockhash: Hash) Hash {
-    return .{
-        .data = sig.runtime.tmp_utils.hashv(&.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data }),
-    };
+    return sig.runtime.tmp_utils.hashv(&.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data });
 }

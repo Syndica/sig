@@ -27,4 +27,4 @@ pub const AccountSharedData = @import("account_shared_data.zig").AccountSharedDa
 pub const MAX_INSTRUCTION_ACCOUNTS: usize = 256;
 
 /// TODO: Why do I need to define this here for the tests to run?
-pub const system_program_execute = @import("program/system_program_execute.zig");
+pub const system_program_execute = @import("program/system_program/execute.zig");

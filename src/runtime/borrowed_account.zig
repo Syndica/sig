@@ -22,6 +22,15 @@ pub const MAX_INSTRUCTION_TRACE_LENGTH: usize = 100;
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/compute-budget/src/compute_budget.rs#L11-L12
 pub const MAX_INSTRUCTION_STACK_DEPTH: usize = 5;
 
+/// `BorrowedAccount` represents an account which has been 'borrowed' from the `TransactionContext`
+/// It provides methods for accessing and modifying account state with the required checks.
+///
+/// The `borrow_context` holds the context under which the account was borrowed:
+///    - `program_id: Pubkey`: the program which borrowed the account
+///    - `is_writable: bool`: whether the account is writable within the program instruction which borrowed the account
+///
+/// TODO: add remaining methods as required by the runtime
+///
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L706
 pub const BorrowedAccount = struct {
     /// The public key of the account
@@ -38,10 +47,6 @@ pub const BorrowedAccount = struct {
 
     pub fn release(self: *BorrowedAccount) void {
         self.account_write_guard.release();
-    }
-
-    pub fn getPubkey(self: BorrowedAccount) Pubkey {
-        return self.pubkey;
     }
 
     pub fn getLamports(self: BorrowedAccount) u64 {
@@ -109,7 +114,7 @@ pub const BorrowedAccount = struct {
 
     /// Deserialize the account data into a type `T`.
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L968
-    pub fn getState(
+    pub fn deserializeFromAccountData(
         self: BorrowedAccount,
         allocator: std.mem.Allocator,
         comptime T: type,
@@ -120,7 +125,7 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
-    pub fn setState(
+    pub fn serializeIntoAccountData(
         self: *BorrowedAccount,
         state: anytype,
     ) InstructionError!void {
@@ -142,13 +147,15 @@ pub const BorrowedAccount = struct {
         self: *BorrowedAccount,
         allocator: std.mem.Allocator,
         tc: *TransactionContext,
-        length: usize,
+        new_length: usize,
     ) InstructionError!void {
-        try self.checkCanSetDataLength(tc, length);
+        try self.checkCanSetDataLength(tc, new_length);
         try self.checkDataIsMutable();
-        if (self.getData().len == length) return;
-        tc.accounts_resize_delta +|= @intCast(length -| self.getData().len);
-        self.account.resize(allocator, length) catch |err| {
+        if (self.getData().len == new_length) return;
+        const old_length_signed: i64 = @intCast(self.getData().len);
+        const new_length_signed: i64 = @intCast(new_length);
+        tc.accounts_resize_delta +|= new_length_signed -| old_length_signed;
+        self.account.resize(allocator, new_length) catch |err| {
             // TODO: confirm if this is the correct approach
             tc.custom_error = @intFromError(err);
             return InstructionError.Custom;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../../sig.zig");
+const sig = @import("../../../sig.zig");
 
 const nonce = sig.runtime.nonce;
 const pubkey_utils = sig.runtime.pubkey_utils;
@@ -11,14 +11,14 @@ const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 
-const SystemProgramInstruction = system_program.SystemProgramInstruction;
-const SystemProgramError = system_program.SystemProgramError;
+const SystemProgramInstruction = system_program.Instruction;
+const SystemProgramError = system_program.Error;
 
 const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
-pub fn systemProgramExecute(
+pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) InstructionError!void {
@@ -140,7 +140,7 @@ fn executeAssign(
         ic,
         &account,
         owner,
-        account.getPubkey(),
+        account.pubkey,
     );
 }
 
@@ -278,7 +278,7 @@ fn executeAllocate(
     try ic.checkNumberOfAccounts(1);
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
-    try allocate(allocator, ic, &account, space, account.getPubkey());
+    try allocate(allocator, ic, &account, space, account.pubkey);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L506-L523
@@ -295,7 +295,7 @@ fn executeAllocateWithSeed(
     defer account.release();
     try checkSeedAddress(
         ic,
-        account.getPubkey(),
+        account.pubkey,
         base,
         owner,
         seed,
@@ -317,7 +317,7 @@ fn executeAssignWithSeed(
     defer account.release();
     try checkSeedAddress(
         ic,
-        account.getPubkey(),
+        account.pubkey,
         base,
         owner,
         seed,
@@ -379,13 +379,13 @@ fn executeUpgradeNonceAccount(
 
     if (!account.isWritable()) return InstructionError.InvalidArgument;
 
-    const versioned_nonce = try account.getState(allocator, nonce.Versions);
+    const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
     switch (versioned_nonce) {
         .legacy => |state| {
             if (state == nonce.State.initialized) {
                 var data = state.initialized;
-                data.durable_nonce = nonce.createDurableNonce(data.getDurableNonce());
-                try account.setState(nonce.Versions{ .current = state });
+                data.durable_nonce = nonce.createDurableNonce(data.durable_nonce);
+                try account.serializeIntoAccountData(nonce.Versions{ .current = state });
             }
         },
         .current => |_| return InstructionError.InvalidArgument,
@@ -401,12 +401,12 @@ fn allocate(
     authority: Pubkey,
 ) InstructionError!void {
     if (!ic.isPubkeySigner(authority)) {
-        try ic.tc.log("Allocate: 'base' account {} must sign", .{account.getPubkey()});
+        try ic.tc.log("Allocate: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
     if (account.getData().len > 0 or !account.getOwner().equals(&system_program.ID)) {
-        try ic.tc.log("Allocate: account {} already in use", .{account.getPubkey()});
+        try ic.tc.log("Allocate: account {} already in use", .{account.pubkey});
         ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
     }
@@ -433,7 +433,7 @@ fn assign(
     if (account.getOwner().equals(&owner)) return;
 
     if (!ic.isPubkeySigner(authority)) {
-        try ic.tc.log("Assign: 'base' account {} must sign", .{account.getPubkey()});
+        try ic.tc.log("Assign: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -456,7 +456,7 @@ fn createAccount(
         defer account.release();
 
         if (account.getLamports() > 0) {
-            try ic.tc.log("Create Account: account {} already in use", .{account.getPubkey()});
+            try ic.tc.log("Create Account: account {} already in use", .{account.pubkey});
             ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
             return InstructionError.Custom;
         }
@@ -540,17 +540,17 @@ fn advanceNonceAccount(
     if (!account.isWritable()) {
         try ic.tc.log(
             "Advance nonce account: Account {} must be writeable",
-            .{account.getPubkey()},
+            .{account.pubkey},
         );
         return InstructionError.InvalidArgument;
     }
 
-    const versioned_nonce = try account.getState(allocator, nonce.Versions);
-    switch (versioned_nonce.getState()) {
+    const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
+    switch (versioned_nonce.deserializeFromAccountData()) {
         .unintialized => {
             try ic.tc.log(
                 "Advance nonce account: Account {} state is invalid",
-                .{account.getPubkey()},
+                .{account.pubkey},
             );
             return InstructionError.InvalidAccountData;
         },
@@ -572,7 +572,7 @@ fn advanceNonceAccount(
                 return InstructionError.Custom;
             }
 
-            try account.setState(
+            try account.serializeIntoAccountData(
                 nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
                     data.authority,
                     next_durable_nonce,
@@ -600,13 +600,13 @@ fn withdrawNonceAccount(
         if (!from_account.isWritable()) {
             try ic.tc.log(
                 "Withdraw nonce account: Account {} must be writeable",
-                .{from_account.getPubkey()},
+                .{from_account.pubkey},
             );
             return InstructionError.InvalidArgument;
         }
 
-        const versioned_nonce = try from_account.getState(allocator, nonce.Versions);
-        const authority = switch (versioned_nonce.getState()) {
+        const versioned_nonce = try from_account.deserializeFromAccountData(allocator, nonce.Versions);
+        const authority = switch (versioned_nonce.deserializeFromAccountData()) {
             .unintialized => blk: {
                 if (lamports > from_account.getLamports()) {
                     try ic.tc.log("Withdraw nonce account: insufficient lamports {}, need {}", .{
@@ -615,7 +615,7 @@ fn withdrawNonceAccount(
                     });
                     return InstructionError.InsufficientFunds;
                 }
-                break :blk from_account.getPubkey();
+                break :blk from_account.pubkey;
             },
             .initialized => |data| blk: {
                 if (lamports == from_account.getLamports()) {
@@ -629,7 +629,7 @@ fn withdrawNonceAccount(
                             @intFromError(SystemProgramError.NonceBlockhashNotExpired);
                         return InstructionError.Custom;
                     }
-                    try from_account.setState(
+                    try from_account.serializeIntoAccountData(
                         nonce.Versions{ .current = nonce.State.unintialized },
                     );
                 } else {
@@ -675,13 +675,13 @@ fn initializeNonceAccount(
     if (!account.isWritable()) {
         try ic.tc.log(
             "Initialize nonce account: Account {} must be writeable",
-            .{account.getPubkey()},
+            .{account.pubkey},
         );
         return InstructionError.InvalidArgument;
     }
 
-    const versioned_nonce = try account.getState(allocator, nonce.Versions);
-    switch (versioned_nonce.getState()) {
+    const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
+    switch (versioned_nonce.deserializeFromAccountData()) {
         .unintialized => {
             const min_balance = rent.minimumBalance(account.getData().len);
             if (min_balance > account.getLamports()) {
@@ -691,7 +691,7 @@ fn initializeNonceAccount(
                 });
                 return InstructionError.InsufficientFunds;
             }
-            try account.setState(nonce.Versions{
+            try account.serializeIntoAccountData(nonce.Versions{
                 .current = nonce.State{ .initialized = nonce.Data.init(
                     authority,
                     nonce.createDurableNonce(ic.tc.last_blockhash),
@@ -702,7 +702,7 @@ fn initializeNonceAccount(
         .initialized => |_| {
             try ic.tc.log(
                 "Initialize nonce account: Account {} state is invalid",
-                .{account.getPubkey()},
+                .{account.pubkey},
             );
             return InstructionError.InvalidAccountData;
         },
@@ -719,18 +719,18 @@ pub fn authorizeNonceAccount(
     if (!account.isWritable()) {
         try ic.tc.log(
             "Authorize nonce account: Account {} must be writeable",
-            .{account.getPubkey()},
+            .{account.pubkey},
         );
         return InstructionError.InvalidArgument;
     }
 
-    const versioned_nonce = try account.getState(allocator, nonce.Versions);
+    const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
 
-    const nonce_data = switch (versioned_nonce.getState()) {
+    const nonce_data = switch (versioned_nonce.deserializeFromAccountData()) {
         .unintialized => {
             try ic.tc.log(
                 "Authorize nonce account: Account {} state is invalid",
-                .{account.getPubkey()},
+                .{account.pubkey},
             );
             return InstructionError.InvalidAccountData;
         },
@@ -749,8 +749,8 @@ pub fn authorizeNonceAccount(
     ) };
 
     switch (versioned_nonce) {
-        .legacy => try account.setState(nonce.Versions{ .legacy = nonce_state }),
-        .current => try account.setState(nonce.Versions{ .current = nonce_state }),
+        .legacy => try account.serializeIntoAccountData(nonce.Versions{ .legacy = nonce_state }),
+        .current => try account.serializeIntoAccountData(nonce.Versions{ .current = nonce_state }),
     }
 }
 
@@ -794,16 +794,8 @@ test "executeCreateAccount" {
             },
         },
         &.{
-            .{
-                .is_signer = true,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-            .{
-                .is_signer = true,
-                .is_writable = true,
-                .index_in_transaction = 1,
-            },
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 1 },
         },
         .{
             .accounts = &.{
@@ -846,11 +838,7 @@ test "executeAssign" {
             },
         },
         &.{
-            .{
-                .is_signer = true,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
         },
         .{
             .accounts = &.{
@@ -886,16 +874,8 @@ test "executeTransfer" {
             },
         },
         &.{
-            .{
-                .is_signer = true,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 1,
-            },
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
         },
         .{
             .accounts = &.{
@@ -940,21 +920,9 @@ test "executeCreateAccountWithSeed" {
             },
         },
         &.{
-            .{
-                .is_signer = true,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 1,
-            },
-            .{
-                .is_signer = true,
-                .is_writable = false,
-                .index_in_transaction = 2,
-            },
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
         },
         .{
             .accounts = &.{
@@ -1031,21 +999,9 @@ test "executeAdvanceNonceAccount" {
             .advance_nonce_account = {},
         },
         &.{
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-            .{
-                .is_signer = false,
-                .is_writable = false,
-                .index_in_transaction = 1,
-            },
-            .{
-                .is_signer = true,
-                .is_writable = false,
-                .index_in_transaction = 2,
-            },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
         },
         .{
             .accounts = &.{
@@ -1114,31 +1070,11 @@ test "executeWithdrawNonceAccount" {
             .withdraw_nonce_account = 1_000,
         },
         &.{
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 1,
-            },
-            .{
-                .is_signer = false,
-                .is_writable = false,
-                .index_in_transaction = 2,
-            },
-            .{
-                .is_signer = false,
-                .is_writable = false,
-                .index_in_transaction = 3,
-            },
-            .{
-                .is_signer = true,
-                .is_writable = false,
-                .index_in_transaction = 4,
-            },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 4 },
         },
         .{
             .accounts = &.{
@@ -1231,21 +1167,9 @@ test "executeInitializeNonceAccount" {
             .initialize_nonce_account = nonce_authority,
         },
         &.{
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-            .{
-                .is_signer = false,
-                .is_writable = false,
-                .index_in_transaction = 1,
-            },
-            .{
-                .is_signer = false,
-                .is_writable = false,
-                .index_in_transaction = 2,
-            },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
         },
         .{
             .accounts = &.{
@@ -1327,16 +1251,8 @@ test "executeAuthorizeNonceAccount" {
             .authorize_nonce_account = final_nonce_authority,
         },
         &.{
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-            .{
-                .is_signer = true,
-                .is_writable = false,
-                .index_in_transaction = 1,
-            },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
         },
         .{
             .accounts = &.{
@@ -1375,11 +1291,7 @@ test "executeAllocate" {
             },
         },
         &.{
-            .{
-                .is_signer = true,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
         },
         .{
             .accounts = &.{
@@ -1422,16 +1334,8 @@ test "executeAllocateWithSeed" {
             },
         },
         &.{
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-            .{
-                .is_signer = true,
-                .is_writable = false,
-                .index_in_transaction = 1,
-            },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
         },
         .{
             .accounts = &.{
@@ -1475,16 +1379,8 @@ test "executeAssignWithSeed" {
             },
         },
         &.{
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-            .{
-                .is_signer = true,
-                .is_writable = false,
-                .index_in_transaction = 1,
-            },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
         },
         .{
             .accounts = &.{
@@ -1528,21 +1424,9 @@ test "executeTransferWithSeed" {
             },
         },
         &.{
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
-            .{
-                .is_signer = true,
-                .is_writable = false,
-                .index_in_transaction = 1,
-            },
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 2,
-            },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 2 },
         },
         .{
             .accounts = &.{
@@ -1606,11 +1490,7 @@ test "executeUpgradeNonceAccount" {
             .upgrade_nonce_account = {},
         },
         &.{
-            .{
-                .is_signer = false,
-                .is_writable = true,
-                .index_in_transaction = 0,
-            },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
         },
         .{
             .accounts = &.{
