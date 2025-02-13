@@ -96,12 +96,15 @@ fn ed25519Verify(ic: *const InstructionContext) PrecompileProgramError!void {
     }
     if (n_signatures == 0) return error.InvalidInstructionDataSize;
 
-    const expected_data_size = n_signatures * ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE + ED25519_SIGNATURE_OFFSETS_START;
+    const expected_data_size = ED25519_SIGNATURE_OFFSETS_START +
+        n_signatures * ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
     if (data.len < expected_data_size) return error.InvalidInstructionDataSize;
 
     // firedancer seems to assume natural alignment in this loop? Need to prove it to myself.
     for (0..n_signatures) |i| {
-        const offset = ED25519_SIGNATURE_OFFSETS_START + i * ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
+        const offset = ED25519_SIGNATURE_OFFSETS_START +
+            i * ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
+
         const sig_offsets: *const Ed25519SignatureOffsets = @ptrCast(data.ptr + offset);
 
         const signature = try getInstructionValue(
