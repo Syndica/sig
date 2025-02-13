@@ -1,59 +1,71 @@
 # Metrics
 
-Metrics include prometheus, grafana, loki, and alloy. The docker-compose setup
-is found in `src/metrics/docker-compose.yml`.
+Metrics include prometheus, grafana, loki, and alloy.
+
+The main folder is in `src/metrics/`.
 
 ## Setup
 
-requirements:
-
-- `docker compose`
-  - [https://docs.docker.com/engine/install/ubuntu/](https://docs.docker.com/engine/install/ubuntu/)
+- install `docker compose`
 - macos or linux (windows untested/unsupported)
 
 ## Running
 
-mac: `docker compose up -d`
-linux: `docker compose up -d`
-
-- grafana will be accessable on `localhost:3000`
-  - note: `username: admin password: grafana`
-- prometheus will be accessable on `localhost:9090`
-- sig metrics will be published to localhost:12345 (if you change this on the sig cli, you will
-  need to also modify the prometheus `target` to point to the different port).
-- To enable profiling, optionally supply SIG_PID `e.g. SIG_PID=$(pgrep sig) docker compose up -d`
+- change directory into `src/metrics/`
+- `docker compose up -d`
 
 ## Shutting down
 
-mac: `docker compose down`
-linux: `docker compose down`
+- change directory into `src/metrics/`
+- `docker compose down`
+
+## Info
+
+- Grafana will be accessable on `localhost:3000`
+  - note: `username: admin` and `password: grafana`
+- Prometheus will be accessable on `localhost:9090`
+- Sig metrics will be published to `localhost:12345` (which are scraped by prometheus)
+
+*Note:* To enable profiling, optionally supply SIG_PID `e.g. SIG_PID=$(pgrep sig) docker compose up -d`
+
+*Note:* If you modify the sig metrics port through the cli, you will
+need to also modify the prometheus `target` to point to the different port.
 
 ## Project Structure
 
 ```
 .
 ├── docker-compose.yml
-├── alloy -- this scrapes logs/ and pushes to loki
-├── loki -- log database
-├── grafana
+├── alloy/ -- this scrapes logs/ and pushes to loki
+├── loki/ -- log database
+├── grafana/
 │   └── dashboards/ -- this is where the sig dashboard lives (will need to copy .json export of dashboard from running container and push through git for any dashboard changes)
 │   └── datasources/ -- this points to prometheus docker
-├── prometheus
+├── prometheus/
 │   └── prometheus.yml
 └── README.md
 ```
 
 ## Run with logs
 
+To collect logs of the running sig client (which can then be viewed in
+Grafana), run the following command:
+
 `./zig-out/bin/sig gossip -n testnet 2>&1 | tee -a logs/sig.log`
+
+This will pipe the logs to `logs/sig.log` and also display them in the terminal.
 
 ## Setting up Alerts
 
-Set the slack webhook url env variable in a `/metrics/.env` file.
+We also support alerts through grafana when running with logs (ie, send a
+slack message on each error message). To enable this, set the slack
+webhook url env variable in a `metrics/.env` file:
 
 ```
 SLACK_WEBHOOK_URL=hooks.slack.com/services/AAA/BBB/CCC
 ```
+
+This env variable is then propogated to the grafana container.
 
 ## Expected result
 

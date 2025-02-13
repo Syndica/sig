@@ -8,39 +8,87 @@ For an introduction to Solana's gossip protocol, check out the technical section
 
 Checkout the full engineering blog post here: [https://blog.syndica.io/sig-engineering-1-gossip-protocol/](https://blog.syndica.io/sig-engineering-1-gossip-protocol/).
 
-## Repository File Outline
-
-- `service.zig`: main logic for reading, processing, and sending gossip messages
+The main struct files include:
+- `service.zig`: reading, processing, and sending gossip messages
 - `table.zig`: where gossip data is stored
-- `data.zig`: various gossip data structure definitions
+- `data.zig`: various gossip data definitions
 - `pull_request.zig`: logic for sending pull *requests*
 - `pull_response.zig`: logic for sending pull *responses* (/handling incoming pull requests)
-- `gossip_shards.zig`: datastructure which stores gossip data hashes for quick lookup - used in `gossip_table` and constructing pull responses
+- `gossip_shards.zig`: datastructure which stores gossip data hashes for quick lookup (used in `gossip_table` and constructing pull responses)
 - `active_set.zig`: logic for deriving a list of peers to send push messages to
 - `ping_pong.zig`: logic for sending ping/pong messages as a heartbeat check
 
-A gossip spy is, in essence, software written to do two things: store data and send/receive requests.
+Other files include:
+- `fuzz_service.zig`: a fuzzing client for testing the gossip service
+- `fuzz_table.zig`: a fuzzing client for testing the gossip table
+
+## Usage
+
+Simple usage of the gossip service is as follows:
+
+```zig
+const service = try GossipService.create(
+    // general allocator
+    std.heap.page_allocator,
+    // allocator specifically for gossip values
+    std.heap.page_allocator,
+    // information about the current node to share with the network (via gossip)
+    contact_info,
+    // keypair for signing messages
+    my_keypair,
+    // entrypoints to discover peers
+    entrypoints,
+    // logger
+    logger,
+);
+
+// start the gossip service (ie, spin up the threads
+// to process and generate messages)
+try service.start(.{
+    .spy_node = false,
+    .dump = false,
+});
+```
+
+*Note:* a `spy_node` is a node that listens to gossip messages but does not send any.
+This is useful for debugging and monitoring the network.
+
+*Note:* `dump` is a flag to print out the gossip table to a file every 10 seconds
+(see `dump_service.zig` for more).
+
+*Note:* for an easy to use example, see `initGossipFromCluster` in `helpers.zig`.
 
 ## Benchmarks
 
-benchmarks are located at the bottom of `service.zig`.
+Benchmarks are located at the bottom of `service.zig`:
+- `BenchmarkGossipServiceGeneral`: benchmarks ping, push, and pull response
+messages
+- `BenchmarkGossipServicePullRequest`: benchmarks pull request messages (which require
+a bit more work to construct)
 
-to run the benchmarks:
-- build sig in `ReleaseSafe` (ie, `zig build -Doptimize=ReleaseSafe`)
-- run `./zig-out/bin/benchmark gossip`
-
-this includes processing times for pings, push messages, pull responses, and
-pull requests.
+You can run both benchmarks using: `./zig-out/bin/benchmark gossip`.
 
 ## Fuzzing
 
-the fuzzing client is located in `fuzz.zig`.
+We support two fuzzing options:
+- `fuzz_service.zig`: fuzzing the gossip service
+- `fuzz_table.zig`: afuzzing the gossip table
 
-to run the client
-- start a sig gossip in a terminal (ie, listening on `8001`)
-- build the fuzz client in `ReleaseSafe` (ie, `zig build -Doptimize=ReleaseSafe`)
-- run the fuzz client pointing to sig with some seed and some number of random messages
-to send: `./zig-out/bin/fuzz <entrypoint> <seed> <num_messages>` (eg, `./zig-out/bin/fuzz 127.0.0.1:8001 19 100000`)
+### Fuzzing the Service
+
+```bash
+zig build -Dno-run fuzz
+
+fuzz gossip_service <seed> <number_of_actions>
+```
+
+### Fuzzing the Table
+
+```bash
+zig build -Dno-run fuzz
+
+fuzz gossip_table <seed> <number_of_actions>
+```
 
 ## Architecture
 
