@@ -594,8 +594,10 @@ pub const Elf = struct {
         if (text_section_slice.len % @sizeOf(sbpf.Instruction) != 0)
             return error.InvalidTextSectionLength;
 
-        if (self.version.enableElfVaddr()) {
-            if (self.config.optimize_rodata != true) return error.UnsupportedSBPFVersion;
+        if (self.version.enableElfVaddr() and
+            self.config.optimize_rodata != true)
+        {
+            return error.UnsupportedSBPFVersion;
         }
     }
 
