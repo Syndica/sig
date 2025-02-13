@@ -4,6 +4,11 @@ const sig = @import("../sig.zig");
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 
+/// `AccountSharedData` holds account information with a shared reference to the account data field
+/// `AccountSharedData`'s are loaded from `accounts_db` during the transaction loading phase
+///
+/// TODO: move to `accounts_db`?
+///
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/account.rs#L118
 pub const AccountSharedData = struct {
     /// lamports in the account

@@ -41,6 +41,7 @@ pub const TransactionContext = struct {
 
     // TODO: the following feilds should live above the transaction level, however, they are
     // defined here temporarily for convenience.
+    // https://github.com/orgs/Syndica/projects/2/views/14?filterQuery=+-status%3A%22%E2%9C%85+Done%22++-no%3Astatus+&pane=issue&itemId=97691745
     sysvar_cache: SysvarCache,
     lamports_per_signature: u64,
     last_blockhash: Hash,

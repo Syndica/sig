@@ -1,27 +1,9 @@
-const std = @import("std");
-const sig = @import("../../sig.zig");
+const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 
-/// Re-export instruction execute method in the system_program namespace
-pub const execute = @import("system_program_execute.zig").systemProgramExecute;
-
-/// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L64
-pub const NONCE_STATE_SIZE: u64 = 80;
-
-/// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/lib.rs#L18
-pub const MAX_PERMITTED_DATA_LENGTH: u64 = 10 * 1024 * 1024;
-
-/// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/lib.rs#L26
-pub const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION: i64 = 2 * 10 * 1024 * 1024;
-
-pub const ID =
-    Pubkey.parseBase58String("11111111111111111111111111111111") catch unreachable;
-
-pub const COMPUTE_UNITS = 150;
-
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L80
-pub const SystemProgramInstruction = union(enum) {
+pub const Instruction = union(enum) {
     /// Create a new account
     ///
     /// # Account references
@@ -193,26 +175,4 @@ pub const SystemProgramInstruction = union(enum) {
     /// # Account references
     ///   0. `[WRITE]` Nonce account
     upgrade_nonce_account,
-};
-
-/// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/error.rs#L12
-pub const SystemProgramError = error{
-    /// An account with the same address already exists.
-    AccountAlreadyInUse,
-    /// Account does not have enough SOL to perform the operation.
-    ResultWithNegativeLamports,
-    /// Cannot assign account to this program id.
-    InvalidProgramId,
-    /// Cannot allocate account data of this length.
-    InvalidAccountDataLength,
-    /// Length of requested seed is too long.
-    MaxSeedLengthExceeded,
-    /// Provided address does not match addressed derived from seed.
-    AddressWithSeedMismatch,
-    /// Advancing stored nonce requires a populated RecentBlockhashes sysvar.
-    NonceNoRecentBlockhashes,
-    /// Stored nonce is still in recent_blockhashes.
-    NonceBlockhashNotExpired,
-    /// Specified nonce does not match stored nonce.
-    NonceUnexpectedBlockhashValue,
 };

@@ -1,3 +1,8 @@
+// This file exists for convenience and to provide access to IDs that do not
+// have an appropriate place to live yet. It is not intended to be a permanent
+
+// TODO: move IDs to programs as they are implemented, or to a more appropriate location for non-program IDs
+
 const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
@@ -5,8 +10,6 @@ const Pubkey = sig.core.Pubkey;
 pub const NATIVE_LOADER_ID =
     Pubkey.parseBase58String("NativeLoader1111111111111111111111111111111") catch unreachable;
 
-pub const SYSVAR_OWNER_ID =
-    Pubkey.parseBase58String("Sysvar1111111111111111111111111111111111111") catch unreachable;
 pub const SYSVAR_INSTRUCTIONS_ID =
     Pubkey.parseBase58String("Sysvar1nstructions1111111111111111111111111") catch unreachable;
 

@@ -8,7 +8,10 @@ const FeeCalculator = sig.runtime.sysvar.Fees.FeeCalculator;
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/current.rs#L10-L11
 const DURABLE_NONCE_HASH_PREFIX = "DURABLE_NONCE";
 
-/// Current variants have durable nonce and blockhash domains separated.
+/// Current variants have durable nonce and blockhash domains separated.\
+///
+/// Must support `bincode` and `serializedSize` methods for writing to the account data.\
+///
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/mod.rs#L12
 pub const Versions = union(enum) {
     legacy: State,
@@ -57,18 +60,8 @@ pub const Data = struct {
             .fee_calculator = .{ .lamports_per_signature = lamports_per_signature },
         };
     }
-
-    pub fn getDurableNonce(self: Data) Hash {
-        return self.durable_nonce;
-    }
-
-    pub fn getLamportsPerSignature(self: Data) u64 {
-        return self.fee_calculator.lamports_per_signature;
-    }
 };
 
 pub fn createDurableNonce(blockhash: Hash) Hash {
-    return .{
-        .data = sig.runtime.tmp_utils.hashv(&.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data }),
-    };
+    return sig.runtime.tmp_utils.hashv(&.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data });
 }
