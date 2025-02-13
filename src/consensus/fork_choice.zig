@@ -1093,10 +1093,17 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
 
         try std.testing.expectEqual(3, slot_and_hashes.len);
 
-        try std.testing.expect(
-            (slot_and_hashes[0].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
-                slot_and_hashes[1].equals(.{ .slot = 5, .hash = Hash.ZEROES }) and
-                slot_and_hashes[2].equals(.{ .slot = 6, .hash = Hash.ZEROES })),
+        try std.testing.expectEqual(
+            slot_and_hashes[0],
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            slot_and_hashes[1],
+            SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            slot_and_hashes[2],
+            SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
         );
     }
 
@@ -1114,10 +1121,17 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
 
         try std.testing.expectEqual(3, slot_and_hashes.len);
 
-        try std.testing.expect(
-            (slot_and_hashes[0].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
-                slot_and_hashes[1].equals(.{ .slot = 2, .hash = Hash.ZEROES }) and
-                slot_and_hashes[2].equals(.{ .slot = 4, .hash = Hash.ZEROES })),
+        try std.testing.expectEqual(
+            slot_and_hashes[0],
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            slot_and_hashes[1],
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            slot_and_hashes[2],
+            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
         );
     }
 
@@ -1135,13 +1149,29 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
 
         try std.testing.expectEqual(6, slot_and_hashes.len);
 
-        try std.testing.expect(
-            (slot_and_hashes[0].equals(.{ .slot = 0, .hash = Hash.ZEROES }) and
-                slot_and_hashes[1].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
-                slot_and_hashes[2].equals(.{ .slot = 2, .hash = Hash.ZEROES }) and
-                slot_and_hashes[3].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
-                slot_and_hashes[4].equals(.{ .slot = 4, .hash = Hash.ZEROES }) and
-                slot_and_hashes[5].equals(.{ .slot = 5, .hash = Hash.ZEROES })),
+        try std.testing.expectEqual(
+            slot_and_hashes[0],
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            slot_and_hashes[1],
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            slot_and_hashes[2],
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            slot_and_hashes[3],
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            slot_and_hashes[4],
+            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            slot_and_hashes[5],
+            SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
         );
     }
 
@@ -1501,9 +1531,8 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
         var children_ = fork_choice.getChildren(&duplicate_parent).?;
         const children = children_.keys();
 
-        try std.testing.expect(
-            (children[0].slot == child.slot and children[0].hash.eql(child.hash)),
-        );
+        try std.testing.expectEqual(children[0].slot, child.slot);
+        try std.testing.expectEqual(children[0].hash, child.hash);
     }
 
     try std.testing.expectEqual(
@@ -1529,14 +1558,11 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
         var children_ = fork_choice.getChildren(&duplicate_parent).?;
         const children = children_.keys();
 
-        try std.testing.expect(
-            (children[0].slot == child.slot and children[0].hash.order(&child.hash) == .eq),
-        );
+        try std.testing.expectEqual(children[0].slot, child.slot);
+        try std.testing.expectEqual(children[0].hash, child.hash);
     }
-    try std.testing.expectEqual(
-        fork_choice.bestOverallSlot(),
-        child,
-    );
+
+    try std.testing.expectEqual(fork_choice.bestOverallSlot(), child);
 }
 
 test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
