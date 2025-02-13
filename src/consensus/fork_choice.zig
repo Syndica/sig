@@ -1179,11 +1179,12 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         // Set root at 1
         try fork_choice.setTreeRoot(&.{ .slot = 1, .hash = Hash.ZEROES });
         // Zero no longer exists, set reachable from 0 is empty
-        try std.testing.expect(
+        try std.testing.expectEqual(
+            0,
             (try fork_choice.subtreeDiff(
                 &.{ .slot = 0, .hash = Hash.ZEROES },
                 &.{ .slot = 6, .hash = Hash.ZEROES },
-            )).count() == 0,
+            )).count(),
         );
     }
 }
@@ -1205,11 +1206,21 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
             index += 1;
         }
 
-        try std.testing.expect(
-            (ancestors[0].equals(.{ .slot = 5, .hash = Hash.ZEROES }) and
-                ancestors[1].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
-                ancestors[2].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
-                ancestors[3].equals(.{ .slot = 0, .hash = Hash.ZEROES })),
+        try std.testing.expectEqual(
+            ancestors[0],
+            SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            ancestors[1],
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            ancestors[2],
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            ancestors[3],
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
         );
     }
     {
@@ -1225,10 +1236,17 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
             index += 1;
         }
 
-        try std.testing.expect(
-            (ancestors[0].equals(.{ .slot = 2, .hash = Hash.ZEROES }) and
-                ancestors[1].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
-                ancestors[2].equals(.{ .slot = 0, .hash = Hash.ZEROES })),
+        try std.testing.expectEqual(
+            ancestors[0],
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            ancestors[1],
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        );
+        try std.testing.expectEqual(
+            ancestors[2],
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
         );
     }
     {
@@ -1244,8 +1262,9 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
             index += 1;
         }
 
-        try std.testing.expect(
-            (ancestors[0].equals(.{ .slot = 0, .hash = Hash.ZEROES })),
+        try std.testing.expectEqual(
+            ancestors[0],
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
         );
     }
     {
@@ -1267,8 +1286,9 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
             index += 1;
         }
 
-        try std.testing.expect(
-            (ancestors[0].equals(.{ .slot = 2, .hash = Hash.ZEROES })),
+        try std.testing.expectEqual(
+            ancestors[0],
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
         );
     }
 }
