@@ -514,21 +514,21 @@ pub const ForkChoice = struct {
     /// ```
     ///          -- Root (A, Best = B) --
     ///            /         |          \
-    ///     (B, Best=B)  (C, Best=F)  (D, Best=D)
+    ///     (B, Best=B)  (C, Best=G)  (D, Best=D)
     ///                    /     \
-    ///             (D, Best=F)  (E, Best=E)
+    ///             (E, Best=G)  (F, Best=F)
     ///                /    \
-    ///       (F, Best=F)  (G, Best=G)
+    ///       (G, Best=G)  (H, Best=H)
     ///
-    /// Adding a new leaf (H) as a child of (D) which update the best slot of D (and C) to (H)
+    /// Adding a new leaf (I) as a child of (E) which update the best slot of E (and C) to (I)
     ///
     ///          -- Root (A, Best = B) --
     ///            /         |          \
-    ///     (B, Best=B)  (C, Best=H*)  (D, Best=D)
+    ///     (B, Best=B)  (C, Best=I*)  (D, Best=D)
     ///                    /     \
-    ///             (D, Best=H*)  (E, Best=E)
+    ///             (E, Best=I*)  (F, Best=F)
     ///              /     |    \
-    ///   (F, Best=F) (H, Best=H) (G, Best=G)
+    ///   (G, Best=G) (I, Best=I) (H, Best=H)
     ///
     /// ```
     ///
