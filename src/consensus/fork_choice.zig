@@ -569,12 +569,9 @@ pub const ForkChoice = struct {
         // If this new leaf is the direct parent's best child, then propagate it up the tree
         if (try self.isBestChild(slot_hash_key)) {
             var maybe_ancestor: ?SlotAndHash = parent_slot_hash_key.*;
-            while (true) {
-                if (maybe_ancestor == null) {
-                    break;
-                }
+            while (maybe_ancestor) |ancestor| {
                 // Saftey: maybe_ancestor cannot be null due to the if check above.
-                if (self.fork_infos.getPtr(maybe_ancestor.?)) |ancestor_fork_info| {
+                if (self.fork_infos.getPtr(ancestor)) |ancestor_fork_info| {
                     // Do the update to the new best slot.
                     if (ancestor_fork_info.*.heaviest_subtree_slot.equals(
                         parent_best_slot_hash_key,
@@ -595,14 +592,11 @@ pub const ForkChoice = struct {
         var maybe_ancestor: ?SlotAndHash = parent_slot_hash_key.*;
         var current_child = slot_hash_key.*;
         var current_height: usize = 1;
-        while (true) {
-            if (maybe_ancestor == null) {
-                break;
-            }
+        while (maybe_ancestor) |ancestor| {
             if (!self.isDeepestChild(&current_child)) {
                 break;
             }
-            if (self.fork_infos.getPtr(maybe_ancestor.?)) |ancestor_fork_info| {
+            if (self.fork_infos.getPtr(ancestor)) |ancestor_fork_info| {
                 ancestor_fork_info.deepest_slot = slot_hash_key.*;
                 ancestor_fork_info.height = current_height + 1;
                 current_child = maybe_ancestor.?;
