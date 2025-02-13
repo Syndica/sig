@@ -620,11 +620,7 @@ pub const ForkChoice = struct {
         const maybe_parent = self.getParent(maybe_best_child);
 
         // If there's no parent, this must be the root
-        if (maybe_parent == null) {
-            return true;
-        }
-        // Saftety: maybe_parent cannot be null due to the if check above.
-        const parent = maybe_parent.?;
+        const parent = maybe_parent orelse return true;
         var children = self.getChildren(&parent) orelse return false;
 
         for (children.keys()) |child| {
@@ -663,11 +659,7 @@ pub const ForkChoice = struct {
         const maybe_parent = self.getParent(deepest_child);
 
         // If there's no parent, this must be the root
-        if (maybe_parent == null) {
-            return true;
-        }
-        // Saftety: maybe_parent cannot be null due to the if check above.
-        const parent = maybe_parent.?;
+        const parent = maybe_parent orelse return true;
         // Get the other chidren of the parent. i.e. siblings of the deepest_child.
         var children = self.getChildren(&parent) orelse return false;
 
