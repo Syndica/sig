@@ -36,7 +36,7 @@ fn testAsmWithMemory(
     defer allocator.free(stack_memory);
 
     const m = try MemoryMap.init(&.{
-        Region.init(.constant, &.{}, memory.PROGRAM_START),
+        Region.init(.constant, &.{}, memory.RODATA_START),
         Region.init(.mutable, stack_memory, memory.STACK_START),
         Region.init(.constant, &.{}, memory.HEAP_START),
         Region.init(.mutable, mutable, memory.INPUT_START),
@@ -101,7 +101,7 @@ test "add32" {
 }
 
 test "add64" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x300000fff
         \\  add r0, -1
@@ -191,7 +191,7 @@ test "alu64 logic" {
 }
 
 test "mul32 imm" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 3
         \\  mul32 r0, 4
@@ -200,7 +200,7 @@ test "mul32 imm" {
 }
 
 test "mul32 reg" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 3
         \\  mov r1, 4
@@ -210,7 +210,7 @@ test "mul32 reg" {
 }
 
 test "mul32 overflow" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mov r1, 4
@@ -220,7 +220,7 @@ test "mul32 overflow" {
 }
 
 test "mul64 imm" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mul r0, 4
@@ -229,7 +229,7 @@ test "mul64 imm" {
 }
 
 test "mul64 reg" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0x40000001
         \\  mov r1, 4
@@ -239,7 +239,7 @@ test "mul64 reg" {
 }
 
 test "mul32 negative" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, -1
         \\  mul32 r0, 4
@@ -248,7 +248,7 @@ test "mul32 negative" {
 }
 
 test "div32 imm" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x10000000c
         \\  div32 r0, 4
@@ -257,7 +257,7 @@ test "div32 imm" {
 }
 
 test "div32 reg" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 12
         \\  lddw r1, 0x100000004
@@ -267,7 +267,7 @@ test "div32 reg" {
 }
 
 test "div32 small" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x10000000c
         \\  mov r1, 4
@@ -277,7 +277,7 @@ test "div32 small" {
 }
 
 test "div64 imm" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0xc
         \\  lsh r0, 32
@@ -287,7 +287,7 @@ test "div64 imm" {
 }
 
 test "div64 reg" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0xc
         \\  lsh r0, 32
@@ -298,7 +298,7 @@ test "div64 reg" {
 }
 
 test "div division by zero" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
@@ -308,7 +308,7 @@ test "div division by zero" {
 }
 
 test "div32 division by zero" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
@@ -318,7 +318,7 @@ test "div32 division by zero" {
 }
 
 test "neg32" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 2
         \\  neg32 r0
@@ -327,7 +327,7 @@ test "neg32" {
 }
 
 test "neg64" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 2
         \\  neg r0
@@ -412,7 +412,7 @@ test "sub64 reg" {
 }
 
 test "mod32" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 5748
         \\  mod32 r0, 92
@@ -423,7 +423,7 @@ test "mod32" {
 }
 
 test "mod32 overflow" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x100000003
         \\  mod32 r0, 3
@@ -432,7 +432,7 @@ test "mod32 overflow" {
 }
 
 test "mod32 all" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, -1316649930
         \\  lsh r0, 32
@@ -447,7 +447,7 @@ test "mod32 all" {
 }
 
 test "mod64 divide by zero" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
@@ -457,7 +457,7 @@ test "mod64 divide by zero" {
 }
 
 test "mod32 divide by zero" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov32 r0, 1
         \\  mov32 r1, 0
@@ -520,7 +520,7 @@ test "hor64" {
 }
 
 test "lddw" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x1122334455667788
         \\  exit
@@ -528,7 +528,7 @@ test "lddw" {
 }
 
 test "lddw bottom" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  lddw r0, 0x0000000080000000
         \\  exit
@@ -536,7 +536,7 @@ test "lddw bottom" {
 }
 
 test "lddw logic" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov r0, 0
         \\  mov r1, 0
@@ -564,7 +564,7 @@ test "lddw invalid on v3" {
 
 test "le16" {
     try testAsmWithMemory(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         \\  ldxh r0, [r1]
         \\  le16 r0
         \\  exit
@@ -576,7 +576,7 @@ test "le16" {
 
 test "le16 high" {
     try testAsmWithMemory(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         \\  ldxdw r0, [r1]
         \\  le16 r0
         \\  exit
@@ -588,7 +588,7 @@ test "le16 high" {
 
 test "le32" {
     try testAsmWithMemory(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         \\  ldxw r0, [r1]
         \\  le32 r0
         \\  exit
@@ -600,7 +600,7 @@ test "le32" {
 
 test "le32 high" {
     try testAsmWithMemory(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         \\  ldxdw r0, [r1]
         \\  le32 r0
         \\  exit
@@ -612,7 +612,7 @@ test "le32 high" {
 
 test "le64" {
     try testAsmWithMemory(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         \\  ldxdw r0, [r1]
         \\  le64 r0
         \\  exit
@@ -1889,7 +1889,7 @@ test "pqr" {
         std.mem.writeInt(u32, program[36..][0..4], @truncate(src), .little);
         program[32] = @intFromEnum(opc);
 
-        const config: Config = .{ .minimum_version = .v2 };
+        const config: Config = .{ .maximum_version = .v2 };
 
         var registry: lib.Registry(u64) = .{};
         defer registry.deinit(allocator);
@@ -1930,7 +1930,7 @@ test "pqr divide by zero" {
     }) |opcode| {
         program[8] = @intFromEnum(opcode);
 
-        const config: Config = .{ .minimum_version = .v2 };
+        const config: Config = .{ .maximum_version = .v2 };
 
         var registry: lib.Registry(u64) = .{};
         defer registry.deinit(allocator);
@@ -2015,7 +2015,7 @@ test "call depth out of bounds" {
 }
 
 test "callx imm" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov64 r0, 0x0
         \\  mov64 r8, 0x1
@@ -2030,7 +2030,7 @@ test "callx imm" {
 }
 
 test "callx out of bounds low" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  mov64 r0, 0x3
         \\  callx r0
@@ -2082,7 +2082,7 @@ test "call bpf 2 bpf" {
 }
 
 test "fixed stack out of bounds" {
-    try testAsm(.{ .minimum_version = .v0 },
+    try testAsm(.{ .maximum_version = .v0 },
         \\entrypoint:
         \\  stb [r10-0x4000], 0
         \\  exit
@@ -2178,9 +2178,9 @@ test "BPF_64_64 sbpfv0" {
     // [ 1] .text             PROGBITS        0000000000000120 000120 000018 00  AX  0   0  8
     // prints the address of the first byte in the .text section
     try testElf(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "reloc_64_64_sbpfv0.so",
-        memory.PROGRAM_START + 0x120,
+        memory.RODATA_START + 0x120,
     );
 }
 
@@ -2197,9 +2197,9 @@ test "BPF_64_RELATIVE data sbpv0" {
     // 4: 0000000000000140     8 OBJECT  LOCAL  DEFAULT     3 reloc_64_relative_data.DATA
     // 0000000000000140  0000000000000008 R_BPF_64_RELATIVE
     try testElf(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "reloc_64_relative_data_sbpfv0.so",
-        memory.PROGRAM_START + 0x140,
+        memory.RODATA_START + 0x140,
     );
 }
 
@@ -2208,21 +2208,21 @@ test "BPF_64_RELATIVE data" {
     try testElf(
         .{},
         sig.ELF_DATA_DIR ++ "reloc_64_relative_data.so",
-        memory.PROGRAM_START + 0x8,
+        memory.RODATA_START + 0x8,
     );
 }
 
 test "BPF_64_RELATIVE sbpv0" {
     try testElf(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "reloc_64_relative_sbpfv0.so",
-        memory.PROGRAM_START + 0x138,
+        memory.RODATA_START + 0x138,
     );
 }
 
 test "load elf rodata sbpfv0" {
     try testElf(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "rodata_section_sbpfv0.so",
         42,
     );
@@ -2238,7 +2238,7 @@ test "load elf rodata" {
 
 test "syscall reloc 64_32" {
     try testElfWithSyscalls(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "syscall_reloc_64_32_sbpfv0.so",
         &.{.{ .name = "log", .builtin_fn = syscalls.log }},
         0,
@@ -2265,7 +2265,7 @@ test "struct func pointer" {
 
 test "struct func pointer sbpfv0" {
     try testElfWithSyscalls(
-        .{ .minimum_version = .v0 },
+        .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "struct_func_pointer_sbpfv0.so",
         &.{},
         0x0102030405060708,
@@ -2277,7 +2277,7 @@ test "data section" {
     try expectEqual(
         error.WritableSectionsNotSupported,
         testElfWithSyscalls(
-            .{ .minimum_version = .v0 },
+            .{ .maximum_version = .v0 },
             sig.ELF_DATA_DIR ++ "data_section_sbpfv0.so",
             &.{},
             0,
@@ -2290,7 +2290,7 @@ test "bss section" {
     try expectEqual(
         error.WritableSectionsNotSupported,
         testElfWithSyscalls(
-            .{ .minimum_version = .v0 },
+            .{ .maximum_version = .v0 },
             sig.ELF_DATA_DIR ++ "bss_section_sbpfv0.so",
             &.{},
             0,

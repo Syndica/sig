@@ -79,7 +79,7 @@ pub fn main() !void {
     }
 
     const config: Config = .{
-        .minimum_version = version,
+        .maximum_version = version,
         .enable_symbol_and_section_labels = true,
     };
     var executable = if (assemble)

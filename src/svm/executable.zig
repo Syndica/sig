@@ -43,10 +43,10 @@ pub const Executable = struct {
     pub fn fromElf(elf: Elf) !Executable {
         const text_section_addr = elf.getShdrByName(".text").?.sh_addr;
         const text_vaddr = if (elf.version.enableElfVaddr() and
-            text_section_addr >= memory.PROGRAM_START)
+            text_section_addr >= memory.RODATA_START)
             text_section_addr
         else
-            text_section_addr +| memory.PROGRAM_START;
+            text_section_addr +| memory.RODATA_START;
 
         return .{
             .bytes = elf.bytes,
@@ -81,7 +81,7 @@ pub const Executable = struct {
         registry: *Registry(u64),
         config: Config,
     ) !Executable {
-        const version = config.minimum_version;
+        const version = config.maximum_version;
 
         const entry_pc = if (registry.lookupName("entrypoint")) |entry_pc|
             entry_pc.value
@@ -103,7 +103,7 @@ pub const Executable = struct {
             .function_registry = registry.*,
             .entry_pc = entry_pc,
             .ro_section = .{ .borrowed = .{
-                .offset = memory.PROGRAM_START,
+                .offset = memory.RODATA_START,
                 .start = 0,
                 .end = source.len,
             } },
@@ -111,7 +111,7 @@ pub const Executable = struct {
             .text_vaddr = if (version.enableLowerBytecodeVaddr())
                 memory.BYTECODE_START
             else
-                memory.PROGRAM_START,
+                memory.RODATA_START,
         };
     }
 
@@ -168,7 +168,7 @@ pub const Assembler = struct {
         source: []const u8,
         config: Config,
     ) !struct { Registry(u64), []const sbpf.Instruction } {
-        const version = config.minimum_version;
+        const version = config.maximum_version;
         var assembler: Assembler = .{ .source = source };
         const statements = try assembler.tokenize(allocator);
         defer {
@@ -586,7 +586,8 @@ pub const Config = struct {
     optimize_rodata: bool = true,
     reject_broken_elfs: bool = false,
     enable_symbol_and_section_labels: bool = false,
-    minimum_version: sbpf.Version = .v3,
+    minimum_version: sbpf.Version = .v0,
+    maximum_version: sbpf.Version = .v3,
     stack_frame_size: u64 = 4096,
     max_call_depth: u64 = 64,
 
