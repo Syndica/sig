@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
+const sysvar = sig.runtime.sysvar;
 
 const Epoch = sig.core.Epoch;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -45,7 +46,7 @@ pub const BorrowedAccount = struct {
         is_writable: bool,
     },
 
-    pub fn release(self: *BorrowedAccount) void {
+    pub fn release(self: BorrowedAccount) void {
         self.account_write_guard.release();
     }
 
@@ -57,8 +58,22 @@ pub const BorrowedAccount = struct {
         return self.account.data;
     }
 
+    pub fn getDataMutable(self: BorrowedAccount) InstructionError![]u8 {
+        try self.checkDataIsMutable();
+        return self.account.data;
+    }
+
     pub fn isExecutable(self: BorrowedAccount) bool {
         return self.account.executable;
+    }
+
+    pub fn setExecutable(self: *BorrowedAccount, executable: bool, rent: sysvar.Rent) InstructionError!void {
+        if (!rent.isExempt(self.account.lamports, self.account.data.len))
+            return InstructionError.ExecutableModified;
+        if (!self.isOwnedByCurrentProgram()) return InstructionError.ExecutableModified;
+        if (!self.isWritable()) return InstructionError.ExecutableModified;
+        if (self.isExecutable() and !executable) return InstructionError.ExecutableModified;
+        self.account.executable = executable;
     }
 
     pub fn getOwner(self: BorrowedAccount) Pubkey {
@@ -104,8 +119,9 @@ pub const BorrowedAccount = struct {
         if (length > MAX_PERMITTED_DATA_LENGTH)
             return InstructionError.InvalidRealloc;
 
-        // Safe since length and old_length <= MAX_PERMITTED_DATA_LENGTH
-        const resize_delta: i64 = @intCast(length -| old_length);
+        const length_signed: i64 = @intCast(length);
+        const old_length_signed: i64 = @intCast(old_length);
+        const resize_delta = length_signed -| old_length_signed;
         const new_accounts_resize_delta = etc.accounts_resize_delta +| resize_delta;
 
         if (new_accounts_resize_delta > MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION)
@@ -169,6 +185,15 @@ pub const BorrowedAccount = struct {
         if (self.isExecutable()) return InstructionError.ModifiedProgramId;
         if (!self.account.isZeroed()) return InstructionError.ModifiedProgramId;
         self.account.owner = pubkey;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L825
+    pub fn setLamports(self: *BorrowedAccount, lamports: u64) InstructionError!void {
+        if (!self.isOwnedByCurrentProgram() and lamports < self.getLamports())
+            return InstructionError.ExternalAccountLamportSpend;
+        if (!self.isWritable()) return InstructionError.ReadonlyLamportChange;
+        if (self.isExecutable()) return InstructionError.ExecutableLamportChange;
+        self.account.lamports = lamports;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L800
