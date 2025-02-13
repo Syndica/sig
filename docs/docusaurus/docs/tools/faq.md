@@ -1,16 +1,9 @@
 ---
-sidebar_position: 6
-title: Debugging
+sidebar_position: 10
+title: FAQ Help
 ---
 
-# Debugging
-
-## Using vscode with sig unit tests
-
-move the two files in (`docs/files/`) to the `.vscode` folder in root:
-- `launch.json`
-- `tasks.json`
-add breakpoints and everything should work as normal in vscode
+This file contains general help with problems that may arise during development/building.
 
 ## Open file limits on macOS
 
