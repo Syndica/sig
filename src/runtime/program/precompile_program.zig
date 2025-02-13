@@ -8,8 +8,14 @@ pub const execute = @import("precompile_program_execute.zig").precompileProgramE
 
 pub const COMPUTE_UNITS = 1; // TODO: what is the actual value?
 
-pub const ID =
-    Pubkey.parseBase58String("11111111111111111111111111111111") catch unreachable;
+pub const ID_ED25519_VERIFY =
+    Pubkey.parseBase58String("Ed25519SigVerify111111111111111111111111111") catch unreachable;
+
+pub const ID_SECP256K1 =
+    Pubkey.parseBase58String("KeccakSecp256k11111111111111111111111111111") catch unreachable;
+
+pub const ID_SECP256R1_VERIFY =
+    Pubkey.parseBase58String("Secp256r1SigVerify1111111111111111111111111") catch unreachable;
 
 // parsed internally
 pub const PrecompileProgramInstruction = []const u8;
