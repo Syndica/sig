@@ -466,7 +466,7 @@ pub const ForkChoice = struct {
 
         // Aggregate across all ancestors to find new best slots excluding this fork
         try self.insertAggregateOperations(&update_operations, valid_slot_hash_key.*);
-        self.processUpdateOperations(update_operations);
+        self.processUpdateOperations(&update_operations);
 
         return newly_duplicate_confirmed_ancestors;
     }
@@ -502,7 +502,7 @@ pub const ForkChoice = struct {
 
             // Aggregate across all ancestors to find new best slots excluding this fork
             try self.insertAggregateOperations(&update_operations, invalid_slot_hash_key.*);
-            self.processUpdateOperations(update_operations);
+            self.processUpdateOperations(&update_operations);
         }
     }
 
@@ -761,12 +761,10 @@ pub const ForkChoice = struct {
 
     fn processUpdateOperations(
         self: *ForkChoice,
-        update_operations_: UpdateOperations,
+        update_operations: *UpdateOperations,
     ) void {
         // Iterate through the update operations from greatest to smallest slot
         // Sort the map to ensure keys are in order
-
-        var update_operations = update_operations_;
 
         const keys, const values = update_operations.items();
 
