@@ -11,6 +11,7 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
@@ -30,7 +31,7 @@ pub const TrackedAccount = struct {
     pub fn toAccount(self: *const TrackedAccount, allocator: std.mem.Allocator) !Account {
         return .{
             .lamports = 19,
-            .data = try allocator.dupe(u8, &self.data),
+            .data = AccountDataHandle.initAllocatedOwned(try allocator.dupe(u8, &self.data)),
             .owner = Pubkey.ZEROES,
             .executable = false,
             .rent_epoch = 0,
@@ -218,7 +219,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     try accounts_db.getAccountAndReference(&tracked_account.pubkey);
                 defer account.deinit(allocator);
 
-                if (!std.mem.eql(u8, &tracked_account.data, account.data)) {
+                if (!account.data.eqlSlice(&tracked_account.data)) {
                     std.debug.panic(
                         "found account {} with different data: " ++
                             "tracked: {any} vs found: {any} ({})\n",

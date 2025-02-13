@@ -1,0 +1,50 @@
+/**
+ * Any CSS included here will be global. The classic template
+ * bundles Infima by default. Infima is a CSS framework designed to
+ * work well for content-centric websites.
+ */
+
+/* You can override the default Infima variables here. */
+:root {
+	--ifm-color-primary: #5245e4;
+	--ifm-color-primary-dark: #3a2be0;
+	--ifm-color-primary-darker: #2f20dc;
+	--ifm-color-primary-darkest: #271ab6;
+	--ifm-color-primary-light: #6a5fe8;
+	--ifm-color-primary-lighter: #766cea;
+	--ifm-color-primary-lightest: #9a93ef;
+	--ifm-code-font-size: 95%;
+	--docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+/* For readability concerns, you should choose a lighter palette in dark mode. */
+[data-theme='dark'] {
+	--ifm-color-primary: #a39de0;
+	--ifm-color-primary-dark: #8880d7;
+	--ifm-color-primary-darker: #7a72d2;
+	--ifm-color-primary-darkest: #5146c5;
+	--ifm-color-primary-light: #bebae9;
+	--ifm-color-primary-lighter: #ccc8ee;
+	--ifm-color-primary-lightest: #f5f4fb;
+	--docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+img {
+	border-radius: 12px;
+	filter: drop-shadow(0 10px 8px rgb(0 0 0 / 0.04)) drop-shadow(0 4px 3px rgb(0 0 0 / 0.1));
+	width: auto;
+}
+
+figcaption {
+	color: rgb(136, 153, 168);
+	font-size: 12px;
+	line-height: 18px;
+	text-align: center;
+	padding-top: 12px;
+}
+
+.video-embed {
+	margin: 4rem auto;
+	display: flex;
+	justify-content: center;
+}

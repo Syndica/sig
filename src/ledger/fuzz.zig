@@ -1,6 +1,5 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const build_options = @import("build-options");
 const ledger = @import("lib.zig");
 
 const ColumnFamily = sig.ledger.database.ColumnFamily;
@@ -19,7 +18,7 @@ const cf1 = ColumnFamily{
 
 var executed_actions = std.AutoHashMap(Actions, void).init(allocator);
 
-pub const BlockstoreDB = switch (build_options.blockstore_db) {
+pub const BlockstoreDB = switch (sig.build_options.blockstore_db) {
     .rocksdb => ledger.database.RocksDB(&.{cf1}),
     .hashmap => ledger.database.SharedHashMapDB(&.{cf1}),
 };
@@ -198,7 +197,7 @@ fn dbCount(
     try executed_actions.put(Actions.count, {});
     // TODO Fix why changes are not reflected in count with rocksdb implementation,
     // but it does with hashmap.
-    if (build_options.blockstore_db == .rocksdb) {
+    if (sig.build_options.blockstore_db == .rocksdb) {
         return;
     }
 

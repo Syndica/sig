@@ -1,11 +1,13 @@
-### `core.Pubkey` - API Reference
+---
+sidebar_position: 4
+title: RPC API Client
+---
 
-A struct which holds a Public Key of a Solana account (`[32]u8`).
+### `core.Pubkey`
 
-<br/>
+A struct that holds a Public Key of a Solana account (`[32]u8`).
 
 From a string:
-
 ```zig
 const Pubkey = @import("sig").core.Pubkey;
 
@@ -16,46 +18,24 @@ fn main() !void {
 }
 ```
 
-<br/>
-
 From raw bytes:
-
 ```zig
 const Pubkey = @import("sig").core.Pubkey;
 
 fn main() !void {
-
     // Automatically encodes and caches the string value
     const pubkey = try Pubkey.fromBytes(
         &[32]u8{
             44, 64, 232, 153, 35, 67, 7, 9, 46, 6, 87, 76, 55, 55, 65, 5,
             99, 0, 48, 64, 75, 8, 127, 53, 57, 12, 7, 54, 8, 133, 246, 4,
         },
-        .{},
     );
-
-
-    // Optionally skip encoding if (in the rare scenario) you will never call the string() method, you can
-    // set this option to true and it will not decode & cache the encoded value. This can be helpful in
-    // scenarios where you plan to only use the bytes and want to save on expensive base58 encoding.
-    const pubkey = try Pubkey.fromBytes(
-       &[32]u8{
-            44, 64, 232, 153, 35, 67, 7, 9, 46, 6, 87, 76, 55, 55, 65, 5,
-            99, 0, 48, 64, 75, 8, 127, 53, 57, 12, 7, 54, 8, 133, 246, 4,
-        },
-        .{ .skip_encoding = true },
-    );
-
 }
 ```
 
-<br/>
-
 ### `rpc.Client` - API Reference
 
-<br/>
-
-A struct which allows you to interact with a Solana cluster via JSON RPC. You can instantiate a client like so:
+A struct that allows you to interact with a Solana cluster via JSON RPC. You can instantiate a client like so:
 
 ```zig
 const rpc = @import("sig").rpc;
@@ -76,11 +56,10 @@ fn main() !void {
 }
 ```
 
-<br/>
-<br/>
-
 <details>
-<summary><code>getAccountInfo</code> - Returns all information associated with the account of provided Pubkey</summary>
+<summary>
+    <code>getAccountInfo</code> - Returns all information associated with the account of the provided Pubkey
+    </summary>
 <br/>
 
 **Params:** <code>(address: Pubkey, options: GetAccountInfoOptions)</code>
@@ -129,7 +108,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBalance</code> - Returns the balance of the account of provided Pubkey</summary>
+<summary>
+<code>getBalance</code> - Returns the balance of the account of the provided Pubkey
+</summary>
 <br/>
 
 **Params:** <code>(pubkey: Pubkey)</code>
@@ -166,7 +147,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlockHeight</code> - Returns the current block height of the node</summary>
+<summary>
+<code>getBlockHeight</code> - Returns the current block height of the node
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -203,7 +186,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlock</code> - Returns identity and transaction information about a confirmed block in the ledger</summary>
+<summary>
+<code>getBlock</code> - Returns identity and transaction information about a confirmed block in the ledger
+</summary>
 <br/>
 
 **Params:** <code>(slot: u64, options: GetBlockOptions)</code>
@@ -254,7 +239,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlockProduction</code> - Returns recent block production information from the current or previous epoch.</summary>
+<summary>
+<code>getBlockProduction</code> - Returns recent block production information from the current or previous epoch.
+</summary>
 <br/>
 
 **Params:** <code>(options: GetBlockOptions)</code>
@@ -305,7 +292,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlockCommitment</code> - Returns commitment for particular block</summary>
+<summary>
+<code>getBlockCommitment</code> - Returns commitment for a particular block
+</summary>
 <br/>
 
 **Params:** <code>(slot: u64)</code>
@@ -342,7 +331,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlocks</code> - Returns a list of confirmed blocks between two slots.
+<summary>
+<code>getBlocks
+</code> - Returns a list of confirmed blocks between two slots.
 </summary>
 <br/>
 
@@ -389,7 +380,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlocksWithLimit</code> - Returns a list of confirmed blocks starting at the given slot</summary>
+<summary>
+<code>getBlocksWithLimit</code> - Returns a list of confirmed blocks starting at the given slot
+</summary>
 <br/>
 
 **Params:** <code>(startSlot: u64, limit: ?u64, options: GetBlocksOptions)</code>
@@ -435,7 +428,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlockTime</code> - Returns the estimated production time of a block</summary>
+<summary>
+<code>getBlockTime</code> - Returns the estimated production time of a block
+</summary>
 <br/>
 
 **Params:** <code>(slot: u64)</code>
@@ -472,7 +467,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getClusterNodes</code> - Returns information about all the nodes participating in the cluster</summary>
+<summary>
+<code>getClusterNodes</code> - Returns information about all the nodes participating in the cluster
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -509,7 +506,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getEpochInfo</code> - Returns information about the current epoch</summary>
+<summary>
+<code>getEpochInfo</code> - Returns information about the current epoch
+</summary>
 <br/>
 
 **Params:** <code>(options: GetEpochInfoOptions)</code>
@@ -555,7 +554,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getEpochSchedule</code> - Returns the epoch schedule information from this cluster</summary>
+<summary>
+<code>getEpochSchedule</code> - Returns the epoch schedule information from this cluster
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -592,7 +593,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getFeeForMessage</code> - Get the fee the network will charge for a particular Message</summary>
+<summary>
+<code>getFeeForMessage</code> - Get the fee the network will charge for a particular Message
+</summary>
 <br/>
 
 **Params:** <code>(message: []const u8, options: GetFeeForMessageOptions)</code>
@@ -638,7 +641,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getFirstAvailableBlock</code> - Returns the slot of the lowest confirmed block that has not been purged from the ledger</summary>
+<summary>
+<code>getFirstAvailableBlock</code> - Returns the slot of the lowest confirmed block that has not been purged from the ledger
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -675,7 +680,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getGenesisHash</code> - Returns the genesis hash</summary>
+<summary>
+<code>getGenesisHash</code> - Returns the genesis hash
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -709,7 +716,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getHealth</code> - Returns the current health of the node</summary>
+<summary>
+<code>getHealth</code> - Returns the current health of the node
+</summary>
 <br/>
 
 _NOTE:_ If one or more --known-validator arguments are provided to solana-validator - "ok" is returned when the node has within HEALTH_CHECK_SLOT_DISTANCE slots of the highest known validator, otherwise an error is returned. "ok" is always returned if no known validators are provided.
@@ -748,7 +757,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getHighestSnapshotSlot</code> - Returns the highest slot information that the node has snapshots for</summary>
+<summary>
+<code>getHighestSnapshotSlot</code> - Returns the highest slot information that the node has snapshots for
+</summary>
 <br/>
 
 _NOTE:_ This will find the highest full snapshot slot, and the highest incremental snapshot slot based on the full snapshot slot, if there is one.
@@ -787,7 +798,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getIdentity</code> - Returns the identity pubkey for the current node</summary>
+<summary>
+<code>getIdentity</code> - Returns the identity pubkey for the current node
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -824,7 +837,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getInflationGovernor</code> - Returns the current inflation governor</summary>
+<summary>
+<code>getInflationGovernor</code> - Returns the current inflation governor
+</summary>
 <br/>
 
 **Params:** <code>(options: GetInflationGovernorOptions)</code>
@@ -870,7 +885,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getInflationRate</code> - Returns the specific inflation values for the current epoch</summary>
+<summary>
+<code>getInflationRate</code> - Returns the specific inflation values for the current epoch
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -907,7 +924,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getInflationReward</code> - Returns the inflation / staking reward for a list of addresses for an epoch</summary>
+<summary>
+<code>getInflationReward</code> - Returns the inflation / staking reward for a list of addresses for an epoch
+</summary>
 <br/>
 
 **Params:** <code>(accounts: []Pubkey, options: GetInflationRewardOptions)</code>
@@ -963,7 +982,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getLargestAccounts</code> - Returns the 20 largest accounts, by lamport balance (results may be cached up to two hours)</summary>
+<summary>
+<code>getLargestAccounts</code> - Returns the 20 largest accounts, by lamport balance (results may be cached up to two hours)
+</summary>
 <br/>
 
 **Params:** <code>(options: GetLargestAccountsOptions)</code>
@@ -1010,7 +1031,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getLatestBlockhash</code> - Returns the latest blockhash</summary>
+<summary>
+<code>getLatestBlockhash</code> - Returns the latest blockhash
+</summary>
 <br/>
 .
 
@@ -1058,7 +1081,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getLeaderSchedule</code> - Returns the leader schedule for an epoch</summary>
+<summary>
+<code>getLeaderSchedule</code> - Returns the leader schedule for an epoch
+</summary>
 <br/>
 
 **Params:** <code>(epoch: ?u64, options: GetLeaderScheduleOptions)</code>
@@ -1105,7 +1130,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getMaxRetransmitSlot</code> - Get the max slot seen from retransmit stage</summary>
+<summary>
+<code>getMaxRetransmitSlot</code> - Get the max slot seen from retransmit stage
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -1142,7 +1169,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getMaxShredInsertSlot</code> - Get the max slot seen from after shred insert</summary>
+<summary>
+<code>getMaxShredInsertSlot</code> - Get the max slot seen from after shred insert
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -1179,7 +1208,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getMinimumBalanceForRentExemption</code> - Returns minimum balance required to make account rent exempt</summary>
+<summary>
+<code>getMinimumBalanceForRentExemption</code> - Returns minimum balance required to make account rent exempt
+</summary>
 <br/>
 
 **Params:** <code>(size: usize)</code>
@@ -1216,7 +1247,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getMultipleAccounts</code> - Returns the account information for a list of Pubkeys</summary>
+<summary>
+<code>getMultipleAccounts</code> - Returns the account information for a list of Pubkeys
+</summary>
 <br/>
 
 **Params:** <code>(pubkeys: []Pubkey, options: GetMultipleAccountsOptions)</code>
@@ -1271,7 +1304,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getProgramAccounts</code> - Returns all accounts owned by the provided program Pubkey</summary>
+<summary>
+<code>getProgramAccounts</code> - Returns all accounts owned by the provided program Pubkey
+</summary>
 <br/>
 
 **Params:** <code>(pubkeys: []Pubkey, options: GetMultipleAccountsOptions)</code>
@@ -1328,7 +1363,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getRecentPerformanceSamples</code> - Returns a list of recent performance samples, in reverse slot order</summary>
+<summary>
+<code>getRecentPerformanceSamples</code> - Returns a list of recent performance samples, in reverse slot order
+</summary>
 <br/>
 
 _NOTE:_ Performance samples are taken every 60 seconds and include the number of transactions and slots that occur in a given time window.
@@ -1367,7 +1404,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getRecentPrioritizationFees</code> - Returns a list of prioritization fees from recent blocks</summary>
+<summary>
+<code>getRecentPrioritizationFees</code> - Returns a list of prioritization fees from recent blocks
+</summary>
 <br/>
 
 **Params:** <code>(pubkeys: ?[]Pubkey)</code>
@@ -1404,7 +1443,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getSignaturesForAddress</code> - Returns signatures for confirmed transactions that include the given address in their accountKeys list</summary>
+<summary>
+<code>getSignaturesForAddress</code> - Returns signatures for confirmed transactions that include the given address in their accountKeys list
+</summary>
 <br/>
 
 _NOTE:_ Returns signatures backwards in time from the provided signature or most recent confirmed block.
@@ -1456,7 +1497,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getSignatureStatuses</code> - Returns the statuses of a list of signatures</summary>
+<summary>
+<code>getSignatureStatuses</code> - Returns the statuses of a list of signatures
+</summary>
 <br/>
 
 **Params:** <code>(pubkey: Pubkey, options: GetSignatureStatusesOptions)</code>
@@ -1506,7 +1549,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getSlotLeader</code> - Returns the current slot leader</summary>
+<summary>
+<code>getSlotLeader</code> - Returns the current slot leader
+</summary>
 <br/>
 
 **Params:** <code>(options: GetSlotLeaderOptions)</code>
@@ -1553,7 +1598,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getSlotLeaders</code> - Returns the slot leaders for a given slot range</summary>
+<summary>
+<code>getSlotLeaders</code> - Returns the slot leaders for a given slot range
+</summary>
 <br/>
 
 **Params:** <code>(startSlot: ?u64, limit: ?u64)</code>
@@ -1590,7 +1637,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getStakeActivation</code> - Returns epoch activation information for a stake account</summary>
+<summary>
+<code>getStakeActivation</code> - Returns epoch activation information for a stake account
+</summary>
 <br/>
 
 **Params:** <code>(pubkey: Pubkey, options: GetStakeActivationOptions)</code>
@@ -1640,7 +1689,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getStakeMinimumDelegation</code> - Returns epoch activation information for a stake account</summary>
+<summary>
+<code>getStakeMinimumDelegation</code> - Returns epoch activation information for a stake account
+</summary>
 <br/>
 
 **Params:** <code>(options: GetStakeMinimumDelegationOptions)</code>
@@ -1686,7 +1737,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getSupply</code> - Returns information about the current supply</summary>
+<summary>
+<code>getSupply</code> - Returns information about the current supply
+</summary>
 <br/>
 
 **Params:** <code>(options: GetSupplyOptions)</code>
@@ -1733,7 +1786,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTokenAccountBalance</code> - Returns the token balance of an SPL Token account</summary>
+<summary>
+<code>getTokenAccountBalance</code> - Returns the token balance of an SPL Token account
+</summary>
 <br/>
 
 **Params:** <code>(pubkey: Pubkey, options: GetTokenAccountBalanceOptions)</code>
@@ -1782,7 +1837,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTokenAccountsByDelegate</code> - Returns all SPL Token accounts by approved Delegate</summary>
+<summary>
+<code>getTokenAccountsByDelegate</code> - Returns all SPL Token accounts by approved Delegate
+</summary>
 <br/>
 
 **Params:** <code>(pubkey: Pubkey, mintOrProgramId: MintOrProgramIdParam, options: GetTokenAccountsByDelegateOptions)</code>
@@ -1842,7 +1899,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTokenAccountsByOwner</code> - Returns all SPL Token accounts by token owner</summary>
+<summary>
+<code>getTokenAccountsByOwner</code> - Returns all SPL Token accounts by token owner
+</summary>
 <br/>
 
 **Params:** <code>(pubkey: Pubkey, mintOrProgramId: MintOrProgramIdParam, options: GetTokenAccountsByOwnerOptions)</code>
@@ -1902,7 +1961,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTokenLargestAccounts</code> - Returns the 20 largest accounts of a particular SPL Token type</summary>
+<summary>
+<code>getTokenLargestAccounts</code> - Returns the 20 largest accounts of a particular SPL Token type
+</summary>
 <br/>
 
 **Params:** <code>(pubkey: Pubkey, options: GetTokenLargestAccountsOptions)</code>
@@ -1951,7 +2012,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTokenSupply</code> - Returns the total supply of an SPL Token type</summary>
+<summary>
+<code>getTokenSupply</code> - Returns the total supply of an SPL Token type
+</summary>
 <br/>
 
 **Params:** <code>(pubkey: Pubkey, options: GetTokenSupplyOptions)</code>
@@ -2000,7 +2063,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTransaction</code> - Returns transaction details for a confirmed transaction</summary>
+<summary>
+<code>getTransaction</code> - Returns transaction details for a confirmed transaction
+</summary>
 <br/>
 
 **Params:** <code>(signature: []const u8, options: GetTransactionOptions)</code>
@@ -2050,7 +2115,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTransactionCount</code> - Returns the current Transaction count from the ledger</summary>
+<summary>
+<code>getTransactionCount</code> - Returns the current Transaction count from the ledger
+</summary>
 <br/>
 
 **Params:** <code>(options: GetTransactionOptions)</code>
@@ -2097,7 +2164,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getVersion</code> - Returns the current Solana version running on the node</summary>
+<summary>
+<code>getVersion</code> - Returns the current Solana version running on the node
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -2134,7 +2203,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getVoteAccounts</code> - Returns the account info and associated stake for all the voting accounts in the current bank</summary>
+<summary>
+<code>getVoteAccounts</code> - Returns the account info and associated stake for all the voting accounts in the current bank
+</summary>
 <br/>
 
 **Params:** <code>(options: GetVoteAccountsOptions)</code>
@@ -2186,7 +2257,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>isBlockhashValid</code> - Returns whether a blockhash is still valid or not</summary>
+<summary>
+<code>isBlockhashValid</code> - Returns whether a blockhash is still valid or not
+</summary>
 <br/>
 
 **Params:** <code>(blockhash: []const u8, options: IsBlockhashValidOptions)</code>
@@ -2233,7 +2306,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>minimumLedgerSlot</code> - Returns the lowest slot that the node has information about in its ledger</summary>
+<summary>
+<code>minimumLedgerSlot</code> - Returns the lowest slot that the node has information about in its ledger
+</summary>
 <br/>
 
 **Params:** <code>None</code>
@@ -2270,7 +2345,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>requestAirdrop</code> - Requests an airdrop of lamports to a Pubkey</summary>
+<summary>
+<code>requestAirdrop</code> - Requests an airdrop of lamports to a Pubkey
+</summary>
 <br/>
 
 **Params:** <code>(pubkey: Pubkey, lamports: u64, options: RequestAirdropOptions)</code>
@@ -2319,7 +2396,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>sendTransaction</code> - Submits a signed transaction to the cluster for processing</summary>
+<summary>
+<code>sendTransaction</code> - Submits a signed transaction to the cluster for processing
+</summary>
 <br/>
 
 _NOTE:_
@@ -2374,7 +2453,9 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>simulateTransaction</code> - Simulate sending a transaction</summary>
+<summary>
+<code>simulateTransaction</code> - Simulate sending a transaction
+</summary>
 <br/>
 
 **Params:** <code>(encoded: []const u8, options: SimulateTransactionOptions)</code>
