@@ -8,6 +8,7 @@ const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
+const CircBuf = sig.utils.collections.CircBuf;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -62,8 +63,7 @@ pub const VoteState = struct {
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
     /// the top of the range is exclusive
-    // TODO: Implement analogous ds for CircBuf
-    // prior_voters: CircBuf<(Pubkey, Epoch, Epoch)>,
+    prior_voters: CircBuf(struct { Pubkey, Epoch, Epoch }),
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
