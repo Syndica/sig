@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../../sig.zig");
+const sig = @import("../../../sig.zig");
 
 const vote_program_instruction = sig.runtime.program.vote_program_instruction;
 const InitializeAccountIndex = sig.runtime.program.vote_program_instruction.InitializeAccountIndex;
