@@ -8,13 +8,16 @@ const FeeCalculator = sig.runtime.sysvar.Fees.FeeCalculator;
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/current.rs#L10-L11
 const DURABLE_NONCE_HASH_PREFIX = "DURABLE_NONCE";
 
-/// Current variants have durable nonce and blockhash domains separated.
+/// Current variants have durable nonce and blockhash domains separated.\
+///
+/// Must support `bincode` and `serializedSize` methods for writing to the account data.\
+///
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/mod.rs#L12
 pub const Versions = union(enum) {
     legacy: State,
     current: State,
 
-    pub fn deserializeFromAccountData(self: Versions) State {
+    pub fn getState(self: Versions) State {
         switch (self) {
             .legacy => |state| return state,
             .current => |state| return state,
@@ -22,7 +25,7 @@ pub const Versions = union(enum) {
     }
 
     pub fn serializedSize(self: Versions) !usize {
-        return switch (self.deserializeFromAccountData()) {
+        return switch (self.getState()) {
             .unintialized => 8,
             .initialized => |_| 80,
         };
