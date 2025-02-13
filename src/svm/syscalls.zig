@@ -151,7 +151,8 @@ pub fn panic(vm: *Vm) Error!void {
     // const column = vm.registers.get(.r4);
 
     const message = try vm.memory_map.vmap(.constant, file, len);
-    std.debug.print("panic: {s}\n", .{message});
+    if (!builtin.is_test)
+        std.debug.print("panic: {s}\n", .{message});
     return error.SyscallAbort;
 }
 
@@ -162,7 +163,6 @@ test poseidon {
         &.{
             .{ .name = "sol_poseidon", .builtin_fn = poseidon },
             .{ .name = "log", .builtin_fn = log },
-            .{ .name = "sol_panic_", .builtin_fn = panic },
         },
         0,
     );
