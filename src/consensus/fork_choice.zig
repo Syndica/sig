@@ -1123,16 +1123,16 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         defer diff.deinit();
 
         const items = diff.items();
-        const slotAndHashes = items[0]; // Access the keys slice
+        const slot_and_hashes = items[0];
 
         try std.testing.expect(
-            slotAndHashes.len == 3,
+            slot_and_hashes.len == 3,
         );
 
         try std.testing.expect(
-            (slotAndHashes[0].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
-                slotAndHashes[1].equals(.{ .slot = 5, .hash = Hash.ZEROES }) and
-                slotAndHashes[2].equals(.{ .slot = 6, .hash = Hash.ZEROES })),
+            (slot_and_hashes[0].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
+                slot_and_hashes[1].equals(.{ .slot = 5, .hash = Hash.ZEROES }) and
+                slot_and_hashes[2].equals(.{ .slot = 6, .hash = Hash.ZEROES })),
         );
     }
 
@@ -1146,16 +1146,16 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         defer diff.deinit();
 
         const items = diff.items();
-        const slotAndHashes = items[0]; // Access the keys slice
+        const slot_and_hashes = items[0]; // Access the keys slice
 
         try std.testing.expect(
-            slotAndHashes.len == 3,
+            slot_and_hashes.len == 3,
         );
 
         try std.testing.expect(
-            (slotAndHashes[0].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
-                slotAndHashes[1].equals(.{ .slot = 2, .hash = Hash.ZEROES }) and
-                slotAndHashes[2].equals(.{ .slot = 4, .hash = Hash.ZEROES })),
+            (slot_and_hashes[0].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
+                slot_and_hashes[1].equals(.{ .slot = 2, .hash = Hash.ZEROES }) and
+                slot_and_hashes[2].equals(.{ .slot = 4, .hash = Hash.ZEROES })),
         );
     }
 
@@ -1169,19 +1169,19 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
         defer diff.deinit();
 
         const items = diff.items();
-        const slotAndHashes = items[0]; // Access the keys slice
+        const slot_and_hashes = items[0]; // Access the keys slice
 
         try std.testing.expect(
-            slotAndHashes.len == 6,
+            slot_and_hashes.len == 6,
         );
 
         try std.testing.expect(
-            (slotAndHashes[0].equals(.{ .slot = 0, .hash = Hash.ZEROES }) and
-                slotAndHashes[1].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
-                slotAndHashes[2].equals(.{ .slot = 2, .hash = Hash.ZEROES }) and
-                slotAndHashes[3].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
-                slotAndHashes[4].equals(.{ .slot = 4, .hash = Hash.ZEROES }) and
-                slotAndHashes[5].equals(.{ .slot = 5, .hash = Hash.ZEROES })),
+            (slot_and_hashes[0].equals(.{ .slot = 0, .hash = Hash.ZEROES }) and
+                slot_and_hashes[1].equals(.{ .slot = 1, .hash = Hash.ZEROES }) and
+                slot_and_hashes[2].equals(.{ .slot = 2, .hash = Hash.ZEROES }) and
+                slot_and_hashes[3].equals(.{ .slot = 3, .hash = Hash.ZEROES }) and
+                slot_and_hashes[4].equals(.{ .slot = 4, .hash = Hash.ZEROES }) and
+                slot_and_hashes[5].equals(.{ .slot = 5, .hash = Hash.ZEROES })),
         );
     }
 
