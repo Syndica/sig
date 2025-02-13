@@ -1,9 +1,9 @@
 ---
-sidebar_position: 10
+sidebar_position: 9
 title: FAQ Help
 ---
 
-This file contains general help with problems that may arise during development/building.
+This file contains general help with problems that may arise during building/development.
 
 ## Open file limits on macOS
 

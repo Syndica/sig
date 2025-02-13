@@ -4,6 +4,7 @@ import os
 import generate as g
 
 # checks if the docs folder is up to date with the source readme.md files
+# NOTE: only supports either `python docs/check.py .` OR `python check.py ../`
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("src_dir")
