@@ -1303,40 +1303,40 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
 
     // No weights are present, weights should be zero
     try std.testing.expectEqual(
-        fork_choice.stakeForSlot(&.{ .slot = 1, .hash = Hash.ZEROES }),
         0,
+        fork_choice.stakeForSlot(&.{ .slot = 1, .hash = Hash.ZEROES }),
     );
 
     try std.testing.expectEqual(
-        fork_choice.stakeForSubtree(&.{ .slot = 1, .hash = Hash.ZEROES }),
         0,
+        fork_choice.stakeForSubtree(&.{ .slot = 1, .hash = Hash.ZEROES }),
     );
 
     // The best leaf when weights are equal should prioritize the lower leaf
     try std.testing.expectEqual(
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
         fork_choice.heaviestSlot(.{ .slot = 1, .hash = Hash.ZEROES }),
-        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
     );
     try std.testing.expectEqual(
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
         fork_choice.heaviestSlot(.{ .slot = 2, .hash = Hash.ZEROES }),
-        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
     );
     try std.testing.expectEqual(
-        fork_choice.heaviestSlot(.{ .slot = 3, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+        fork_choice.heaviestSlot(.{ .slot = 3, .hash = Hash.ZEROES }),
     );
     // The deepest leaf only tiebreaks by slot # when tree heights are equal
     try std.testing.expectEqual(
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
         fork_choice.deepestSlot(&.{ .slot = 1, .hash = Hash.ZEROES }),
-        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
     );
     try std.testing.expectEqual(
-        fork_choice.deepestSlot(&.{ .slot = 2, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+        fork_choice.deepestSlot(&.{ .slot = 2, .hash = Hash.ZEROES }),
     );
     try std.testing.expectEqual(
-        fork_choice.deepestSlot(&.{ .slot = 3, .hash = Hash.ZEROES }),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+        fork_choice.deepestSlot(&.{ .slot = 3, .hash = Hash.ZEROES }),
     );
 
     // Update the weights that have voted *exactly* at each slot, the
@@ -1391,13 +1391,13 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
     // should be the best choice
     // It is still the deepest choice
     try std.testing.expectEqual(
-        fork_choice.bestOverallSlot(),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+        fork_choice.bestOverallSlot(),
     );
 
     try std.testing.expectEqual(
-        fork_choice.deepestOverallSlot(),
         SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+        fork_choice.deepestOverallSlot(),
     );
 
     for (0..7) |slot| {
@@ -1407,8 +1407,8 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
             0;
 
         try std.testing.expectEqual(
-            fork_choice.stakeForSlot(&.{ .slot = slot, .hash = Hash.ZEROES }),
             expected_stake,
+            fork_choice.stakeForSlot(&.{ .slot = slot, .hash = Hash.ZEROES }),
         );
     }
 
@@ -1417,8 +1417,8 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
         // Subtree stake is sum of the `stake_for_slot` across
         // all slots in the subtree
         try std.testing.expectEqual(
-            fork_choice.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
             total_stake,
+            fork_choice.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
         );
     }
 
@@ -1430,8 +1430,8 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
                 &.{ .slot = slot, .hash = Hash.ZEROES },
             ).?;
             try std.testing.expectEqual(
-                fork_choice.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
                 total_expected_stake,
+                fork_choice.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
             );
         }
     }
@@ -1445,8 +1445,8 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
             ).?;
 
             try std.testing.expectEqual(
-                fork_choice.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
                 total_expected_stake,
+                fork_choice.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }),
             );
         }
     }
@@ -1531,25 +1531,25 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
         var children_ = fork_choice.getChildren(&duplicate_parent).?;
         const children = children_.keys();
 
-        try std.testing.expectEqual(children[0].slot, child.slot);
-        try std.testing.expectEqual(children[0].hash, child.hash);
+        try std.testing.expectEqual(child.slot, children[0].slot);
+        try std.testing.expectEqual(child.hash, children[0].hash);
     }
 
     try std.testing.expectEqual(
-        fork_choice.bestOverallSlot(),
         child,
+        fork_choice.bestOverallSlot(),
     );
 
     // All the other duplicates should have no children
     for (duplicate_leaves_descended_from_5) |duplicate_leaf| {
         try std.testing.expectEqual(
-            fork_choice.getChildren(&duplicate_leaf).?.count(),
             0,
+            fork_choice.getChildren(&duplicate_leaf).?.count(),
         );
     }
     try std.testing.expectEqual(
-        fork_choice.getChildren(&duplicate_leaves_descended_from_4[1]).?.count(),
         0,
+        fork_choice.getChildren(&duplicate_leaves_descended_from_4[1]).?.count(),
     );
 
     // Re-adding same duplicate slot should not overwrite existing one
@@ -1558,11 +1558,11 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
         var children_ = fork_choice.getChildren(&duplicate_parent).?;
         const children = children_.keys();
 
-        try std.testing.expectEqual(children[0].slot, child.slot);
-        try std.testing.expectEqual(children[0].hash, child.hash);
+        try std.testing.expectEqual(child.slot, children[0].slot);
+        try std.testing.expectEqual(child.hash, children[0].hash);
     }
 
-    try std.testing.expectEqual(fork_choice.bestOverallSlot(), child);
+    try std.testing.expectEqual(child, fork_choice.bestOverallSlot());
 }
 
 test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
