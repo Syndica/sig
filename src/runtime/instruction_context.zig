@@ -16,6 +16,14 @@ pub const InstructionAccountInfo = struct {
     index_in_transaction: u16,
 };
 
+/// `InstructionContext` holds all information required to execute a program instruction; excluding an allocator
+/// it is the only argument passed to the program entrypoint function
+///
+/// Current functionality supports the execution of a single `system_program` instruction
+///
+/// TODO: add features to support new program execution as required
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L502
 pub const InstructionContext = struct {
     /// The transaction context associated with this instruction execution
     tc: *TransactionContext,
@@ -43,7 +51,7 @@ pub const InstructionContext = struct {
 
     /// Replaces Agave's approach to checking if a pubkey is a signer which is to precompute a
     /// hashmap of signers to parse during instruction execution
-    pub fn isPubkeySigner(self: *const InstructionContext, pubkey: anytype) bool {
+    pub fn isPubkeySigner(self: *const InstructionContext, pubkey: Pubkey) bool {
         for (self.accounts) |account|
             if (account.pubkey.equals(&pubkey) and account.is_signer) return true;
         return false;

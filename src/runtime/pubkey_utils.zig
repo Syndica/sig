@@ -32,5 +32,5 @@ pub fn createWithSeed(
     if (std.mem.eql(u8, owner.data[offset..], PDA_MARKER))
         return PubkeyError.IllegalOwner;
 
-    return .{ .data = sig.runtime.tmp_utils.hashv(&.{ &base.data, seed, &owner.data }) };
+    return .{ .data = sig.runtime.tmp_utils.hashv(&.{ &base.data, seed, &owner.data }).data };
 }
