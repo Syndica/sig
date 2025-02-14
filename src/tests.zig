@@ -4,6 +4,7 @@ const sig = @import("sig.zig");
 comptime {
     refAllDeclsRecursive(sig, 2);
     refAllDeclsRecursive(sig.ledger, 2);
+    refAllDeclsRecursive(sig.runtime.program, 2);
 }
 
 /// Like std.testing.refAllDeclsRecursive, except:
