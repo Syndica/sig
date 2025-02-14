@@ -3,8 +3,6 @@ const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 
-pub const COMPUTE_UNITS = 2_100;
-
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
 pub const Instruction = union(enum) {
     /// Indexes into the `accounts` array
