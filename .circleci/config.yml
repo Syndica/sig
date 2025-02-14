@@ -75,7 +75,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v6
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v7
       - run:
           name: Build
           command: |
@@ -83,7 +83,7 @@ jobs:
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
       - save_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v6
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v7
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -99,7 +99,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-release-v3
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-release-v4
       - run:
           name: Build
           command: |
@@ -107,7 +107,7 @@ jobs:
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
       - save_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-release-v3
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-release-v4
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -147,7 +147,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v6
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v7
       - run:
           name: Build and Test
           command: workspace/zig/zig build test -Denable-tsan=true -Dblockstore=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --color off --summary all
@@ -161,7 +161,7 @@ jobs:
       # Restore the cache in order to have access to the files which the DWARF info
       # is referencing when dumping stack traces.
       - restore_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v6
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v7
       - run:
           name: Test
           # Disable network-accessing tests for this job, which behave badly on circleci
@@ -174,7 +174,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v6
+          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v7
       - run:
           name: Build
           command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run -Dno-network-tests --summary all
