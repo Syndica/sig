@@ -22,8 +22,13 @@ pub const Instruction = union(enum) {
     ///   3. `[SIGNER]` New validator identity (node_pubkey)
     initialize_account: struct {
         node_pubkey: Pubkey,
+        /// The vote authority keypair signs vote transactions. Can be the same as the identity account.
         authorized_voter: Pubkey,
+        /// The authorized withdrawer keypair is used to withdraw funds from a vote account,
+        /// including validator rewards. Only this keypair can access the funds.
         authorized_withdrawer: Pubkey,
+        /// Commission is the percentage of network rewards kept by the validator.
+        /// The rest is distributed to delegators based on their stake weight.
         commission: u8,
     },
 };
