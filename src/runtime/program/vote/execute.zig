@@ -8,6 +8,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const CircBuf = sig.utils.collections.CircBuf;
+const MAX_ITEMS = sig.utils.collections.MAX_ITEMS;
 const SortedMap = sig.utils.collections.SortedMap;
 
 const InstructionContext = sig.runtime.InstructionContext;
@@ -19,7 +20,7 @@ const Clock = sig.runtime.sysvar.Clock;
 const VoteProgramInstruction = vote_program.Instruction;
 
 pub const AuthorizedVoters = struct {
-    authorized_voters: std.AutoArrayHashMap(Epoch, Pubkey),
+    authorized_voters: SortedMap(Epoch, Pubkey),
 };
 
 pub const BlockTimestamp = struct {
@@ -40,7 +41,23 @@ pub const LandedVote = struct {
     lockout: Lockout,
 };
 
+pub const PriorVote = struct {
+    /// authorized voter at the time of the vote.
+    key: Pubkey,
+    /// the start epoch of the vote (inlcusive).
+    start: Epoch,
+    /// the end epoch of the vote (exclusive).
+    end: Epoch,
+};
+
+pub const EpochCredit = struct {
+    epoch: Epoch,
+    credits: u64,
+    prev_credits: u64,
+};
+
 pub const VoteState = struct {
+    allocator: std.mem.Allocator,
     /// the node that votes in this account
     node_pubkey: Pubkey,
 
@@ -63,32 +80,39 @@ pub const VoteState = struct {
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
     /// the top of the range is exclusive
-    prior_voters: CircBuf(struct { Pubkey, Epoch, Epoch }),
+    prior_voters: CircBuf(PriorVote, MAX_ITEMS),
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
-    epoch_credits: std.ArrayList(struct { Epoch, u64, u64 }),
+    epoch_credits: std.ArrayList(EpochCredit),
 
     /// most recent timestamp submitted with a vote
     last_timestamp: BlockTimestamp,
 
     pub fn init(
+        allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
         authorized_voter: Pubkey,
         authorized_withdrawer: Pubkey,
         commission: u8,
         clock: Clock,
     ) !VoteState {
-        const authorized_voters = SortedMap(Epoch, Pubkey).init();
+        var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
         defer authorized_voters.deinit();
 
         try authorized_voters.put(clock.epoch, authorized_voter);
 
         return .{
+            .allocator = allocator,
             .node_pubkey = node_pubkey,
             .authorized_voters = AuthorizedVoters{ .authorized_voters = authorized_voters },
             .authorized_withdrawer = authorized_withdrawer,
             .commission = commission,
+            .votes = std.ArrayList(LandedVote).init(allocator),
+            .root_slot = null,
+            .prior_voters = CircBuf(PriorVote, MAX_ITEMS).init(),
+            .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
+            .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };
     }
 
@@ -201,6 +225,7 @@ fn intializeAccount(
     }
 
     vote_account.setState(VoteState.init(
+        allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
@@ -209,4 +234,89 @@ fn intializeAccount(
     ));
 }
 
-test "executeIntializeAccount" {}
+test "executeIntializeAccount" {
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const rent = Rent.default();
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    // Insturction data.
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Account data.
+    const vote_account = Pubkey.initRandom(prng.random());
+    const final_vote_state = VoteState.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    const final_vote_state_bytes = try sig.bincode.writeAlloc(allocator, final_vote_state, .{});
+    defer allocator.free(final_vote_state_bytes);
+
+    try expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .initialize_account = .{
+                .node_pubkey = node_publey,
+                .authorized_voter = authorized_voter,
+                .authorized_withdrawer = authorized_withdrawer,
+                .commission = commission,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = rent.minimumBalance(final_vote_state_bytes.len),
+                    .data = &{},
+                },
+                .{ .pubkey = Rent.ID },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = vote_program.ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = rent.minimumBalance(final_vote_state_bytes.len),
+                    .data = &final_vote_state_bytes,
+                },
+                .{ .pubkey = Rent.ID },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = vote_program.ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+            },
+        },
+    );
+}

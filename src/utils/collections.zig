@@ -601,6 +601,8 @@ pub fn Window(T: type) type {
     };
 }
 
+pub const MAX_ITEMS: usize = 32;
+
 /// `CircBuf` is a fixed-size circular buffer (ring buffer) implementation.
 /// It stores a fixed number of elements of type `I` and overwrites the oldest elements
 /// when the buffer is full.
