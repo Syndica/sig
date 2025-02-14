@@ -258,7 +258,7 @@ test "executeIntializeAccount" {
 
     // Account data.
     const vote_account = Pubkey.initRandom(prng.random());
-    const final_vote_state = VoteState.init(
+    const final_vote_state = try VoteState.init(
         allocator,
         node_publey,
         authorized_voter,
