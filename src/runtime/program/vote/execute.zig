@@ -143,11 +143,11 @@ fn executeIntializeAccount(
     defer account.release();
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
-        VoteProgramInstruction.InitializeAccountInde.RentSysvar,
+        VoteProgramInstruction.InitializeAccountIndex.RentSysvar,
     );
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
-        VoteProgramInstruction.InitializeAccountInde.ClockSysvar,
+        VoteProgramInstruction.InitializeAccountIndex.ClockSysvar,
     );
     const authority = ic.accounts[1].pubkey;
 
