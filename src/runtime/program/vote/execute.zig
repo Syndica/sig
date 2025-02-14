@@ -8,6 +8,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const CircBuf = sig.utils.collections.CircBuf;
+const SortedMap = sig.utils.collections.SortedMap;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -78,8 +79,7 @@ pub const VoteState = struct {
         commission: u8,
         clock: Clock,
     ) !VoteState {
-        // TODO maybe change to unmanaged
-        const authorized_voters = std.AutoArrayHashMap(Epoch, Pubkey).init();
+        const authorized_voters = SortedMap(Epoch, Pubkey).init();
         defer authorized_voters.deinit();
 
         try authorized_voters.put(clock.epoch, authorized_voter);
@@ -127,7 +127,10 @@ pub fn voteProgramExecute(
     };
 }
 
-//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/vote/src/vote_processor.rs#L71
+//// [agave] https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884
+/// Initialize the vote_state for a vote account
+/// Assumes that the account is being init as part of a account creation or balance transfer and
+/// that the transaction must be signed by the staker's keys
 fn executeIntializeAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -136,20 +139,20 @@ fn executeIntializeAccount(
     authorized_withdrawer: Pubkey,
     commission: u8,
 ) !void {
-    try ic.checkNumberOfAccounts(2);
-    const account = try ic.borrowInstructionAccount(
-        VoteProgramInstruction.InitializeAccountIndex.Account,
-    );
-    defer account.release();
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
         VoteProgramInstruction.InitializeAccountIndex.RentSysvar,
     );
+    // TODO maybe bring back the rent check here? That would have the benefit of an early return in case the check fails.
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
         VoteProgramInstruction.InitializeAccountIndex.ClockSysvar,
     );
-    const authority = ic.accounts[1].pubkey;
+
+    const vote_account = try ic.borrowInstructionAccount(
+        VoteProgramInstruction.InitializeAccountIndex.Account,
+    );
+    defer vote_account.release();
 
     try intializeAccount(
         allocator,
@@ -158,10 +161,9 @@ fn executeIntializeAccount(
         authorized_voter,
         authorized_withdrawer,
         commission,
-        &account,
+        &vote_account,
         rent,
         clock,
-        authority,
     );
 }
 
@@ -172,34 +174,33 @@ fn intializeAccount(
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
     commission: u8,
-    account: *BorrowedAccount,
+    vote_account: *BorrowedAccount,
     rent: Rent,
     clock: Clock,
-    authority: Pubkey,
 ) InstructionError!void {
-    const min_balance = rent.minimumBalance(account.getData().len);
+    const min_balance = rent.minimumBalance(vote_account.getData().len);
     // TODO Consider adding this to Rent as is_exempt
-    if (account.getLamports() < min_balance) {
+    if (vote_account.getLamports() < min_balance) {
         return InstructionError.InsufficientFundsForRent;
     }
 
-    if (account.getData().len != VoteState.sizeOf()) {
+    if (vote_account.getData().len != VoteState.sizeOf()) {
         return InstructionError.InvalidAccountData;
     }
 
-    const versioned = try account.getState(allocator, VoteState);
+    const versioned = try vote_account.getState(allocator, VoteState);
 
     if (!versioned.is_uninitialized()) {
         return (InstructionError.AccountAlreadyInitialized);
     }
 
-    // TODO authority is passed in to check, but account.getPubkey() is used in logs
-    if (!ic.isPubkeySigner(authority)) {
-        try ic.tc.log("Assign: 'base' account {} must sign", .{account.getPubkey()});
+    // node must agree to accept this vote account
+    if (!ic.isPubkeySigner(node_pubkey)) {
+        try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
-    account.setState(VoteState.init(
+    vote_account.setState(VoteState.init(
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
