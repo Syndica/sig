@@ -1,11 +1,9 @@
 ---
 sidebar_position: 1
-title: Getting Started
+title: Debugging
 ---
 
-Thank you for considering contributing to Syndica's Sig project! We appreciate your interest and support in helping us make this project better. By participating in this project, you are joining a community of developers and contributors working together to create value for the Solana ecosystem.
-
-## 📋 Setup
+## General Tools
 
 These tools are optional but recommended for a smooth development process.
 
@@ -14,26 +12,27 @@ These tools are optional but recommended for a smooth development process.
 - [Zig Language](https://marketplace.visualstudio.com/items?itemName=ziglang.vscode-zig) VS Code extension
 - [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) VS Code extension
 
-### Visual Studio Code
+## Visual Studio Code
+
+### Setting up Debug Tasks
 
 If you use VS Code, you should install the [Zig Language](https://marketplace.visualstudio.com/items?itemName=ziglang.vscode-zig) extension. It can use your installed versions of Zig and ZLS, or it can download and manage its own internal versions.
 
 You can use [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) to debug Zig code with lldb in VS Code's debugging GUI. If you'd like to automatically build the project before running the debugger, you'll need a `zig build` task.
 
 ```json
-{ ? // See https://go.microsoft.com/fwlink/?LinkId=733558
-    // for the documentation about the tasks.json format
-    "version": "2.0.0", 
-    "tasks": [{ 
-        "label": "zig build", 
-        "type": "shell", 
-        "command": "zig", 
-        "args": ["build", "--summary", "all"], 
-        "options": { "cwd": "${workspaceRoot}" }, 
-        "presentation": { "echo": true, "reveal": "always", "focus": false, "panel": "shared", "showReuseMessage": true, "clear": false }, 
-        "problemMatcher": [], 
-        "group": { "kind": "build", "isDefault": true } 
-    }] 
+{
+    "version": "2.0.0",
+    "tasks": [{
+        "label": "zig build",
+        "type": "shell",
+        "command": "zig",
+        "args": ["build", "--summary", "all"],
+        "options": { "cwd": "${workspaceRoot}" },
+        "presentation": { "echo": true, "reveal": "always", "focus": false, "panel": "shared", "showReuseMessage": true, "clear": false },
+        "problemMatcher": [],
+        "group": { "kind": "build", "isDefault": true }
+    }]
 }
 ```
 
@@ -50,16 +49,8 @@ To run the debugger, you need a run configuration. This launch.json includes an 
       "program": "${workspaceFolder}/zig-out/bin/sig",
       "args": [
         "gossip",
-        "--entrypoint",
-        "entrypoint.mainnet-beta.solana.com:8001",
-        "--entrypoint",
-        "entrypoint2.mainnet-beta.solana.com:8001",
-        "--entrypoint",
-        "entrypoint3.mainnet-beta.solana.com:8001",
-        "--entrypoint",
-        "entrypoint4.mainnet-beta.solana.com:8001",
-        "--entrypoint",
-        "entrypoint5.mainnet-beta.solana.com:8001"
+        "--network",
+        "mainnet"
       ],
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "zig build"

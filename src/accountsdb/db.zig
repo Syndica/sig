@@ -660,6 +660,7 @@ pub const AccountsDB = struct {
                 self.account_index.pubkey_ref_map.shard_calculator,
                 shard_counts,
                 &slot_references,
+                // ! we collect the accounts and pubkeys into geyser storage here
                 geyser_slot_storage,
             ) catch |err| {
                 if (err == ValidateAccountFileError.OutOfReferenceMemory) {

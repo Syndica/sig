@@ -1,13 +1,9 @@
 ---
 sidebar_position: 2
-title: Import Sig
+title: Import
 ---
 
-Sig can be included as a dependency in your Zig project using `build.zig.zon` file (available for Zig >= 0.11). 
-
-See the [API documentation](./rpc-api-client) to learn more about how to use Sig as a library.
-
-#### Installing Sig in your Zig project:
+Sig can be included as a dependency in your Zig project using `build.zig.zon` file.
 
 1. Declare Sig as a dependency in `build.zig.zon`:
 
@@ -72,3 +68,9 @@ See the [API documentation](./rpc-api-client) to learn more about how to use Sig
        },
    }
    ```
+
+5. Import Sig in your project:
+
+    ```zig
+    const sig = @import("sig");
+    ```

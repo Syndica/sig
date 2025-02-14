@@ -4,20 +4,19 @@ import os
 import generate as g
 
 # checks if the docs folder is up to date with the source readme.md files
+# NOTE: only supports either `python docs/check.py .` OR `python check.py ../`
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("src_dir")
     args = arg_parser.parse_args()
 
     exclude_dirs = [
-        args.src_dir + "docs", # dont search yourself
-        args.src_dir + "data", # this should only include data
+        os.path.join(args.src_dir, "docs"), # dont search yourself
+        os.path.join(args.src_dir, "data"), # this should only include data
     ]
 
-    code_path = os.path.join(args.src_dir, "docs/docusaurus/docs/code")
-    for name, src_path in g.get_markdown_files(args.src_dir, exclude_dirs):
-        docs_path = os.path.join(code_path, name + ".md")
-
+    doc_dir_path = os.path.join(args.src_dir, "docs/docusaurus/docs")
+    for src_path, docs_path in g.get_markdown_files(args.src_dir, exclude_dirs, doc_dir_path):
         # check to see if the files are the same !
         with open(src_path, "r") as src_f:
             with open(docs_path, "r") as docs_f:
@@ -38,3 +37,5 @@ if __name__ == "__main__":
                             print("Docs:", docs_lines[i])
                             break
                     exit(1)
+
+    print("Docs folder is up to date!")

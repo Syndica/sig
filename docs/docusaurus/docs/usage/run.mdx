@@ -1,88 +1,112 @@
 ---
 sidebar_position: 1
-title: Run Sig
+title: Run
 ---
 
-Run Sig with `zig` or execute the binary you already built:
-
-```bash
-zig build run -- --help
-```
+To get a full list of commands and options, run the following command:
 
 ```bash
 ./zig-out/bin/sig --help
 ```
 
-These commands will be abbreviated as `sig` throughout the rest of this document.
+The binary located at `./zig-out/bin/sig` will be abbreviated to `sig` in the rest of this document.
 
-### Validator
+## Validator
 
-Startup the validator with the following command: 
+Startup the validator with the following command:
 
-```bash 
+```bash
 sig validator
 ```
 
-### Identity
+*Note:* this command is modified as more validator components are completed.
 
-Sig stores its private key in `~/.sig/identity.key`. On its first run, Sig will automatically generate a key if no key exists. To see the public key, use the `identity` subcommand.
+## Identity
+
+Sig stores its private key in `~/.sig/identity.key`.
+On its first run, Sig will automatically generate a key if no key exists.
+To see the public key, use the `identity` subcommand.
 
 ```bash
 sig identity
 ```
 
-### Gossip
+## Gossip
 
-To run Sig as a Solana gossip client, use the `gossip` subcommand. Specify entrypoints to connect to a cluster. Optionally use `-p` to specify a custom listening port (default is 8001). For more info about gossip, see the [readme](https://github.com/Syndica/sig/tree/main/src/gossip#readme).
+To run Sig as a Solana gossip client, use the `gossip` subcommand.
+- Specify entrypoints to connect to a cluster using `-e` or use pre-defined entrypoints with
+the `-n` option, followed by the network you are connecting to.
+- Optionally use `-p` to specify a custom listening port (default is 8001).
+
+For more info about gossip, see the [readme](https://github.com/Syndica/sig/tree/main/src/gossip#readme).
+
+```bash
+sig gossip -n <NETWORK>
+```
+
+where `<NETWORK>` is either `mainnet`, `devnet`, or `testnet`.
+
+or
 
 ```bash
 sig gossip -p <PORT> --entrypoint <IP>:<PORT>
 ```
 
-The following IP addresses were resolved from domains found at https://docs.solana.com/clusters.
+## AccountsDB
 
-#### mainnet
-
-```bash
-sig gossip \
-    --entrypoint entrypoint.mainnet-beta.solana.com:8001 \
-    --entrypoint entrypoint2.mainnet-beta.solana.com:8001 \
-    --entrypoint entrypoint3.mainnet-beta.solana.com:8001 \
-    --entrypoint entrypoint4.mainnet-beta.solana.com:8001 \
-    --entrypoint entrypoint5.mainnet-beta.solana.com:8001
-```
-
-#### devnet
-
-```bash
-sig gossip \
-    --entrypoint entrypoint.devnet.solana.com:8001 \
-    --entrypoint entrypoint2.devnet.solana.com:8001 \
-    --entrypoint entrypoint3.devnet.solana.com:8001 \
-    --entrypoint entrypoint4.devnet.solana.com:8001 \
-    --entrypoint entrypoint5.devnet.solana.com:8001
-```
-
-#### testnet
-
-```bash
-sig gossip \
-    --entrypoint entrypoint.testnet.solana.com:8001 \
-    --entrypoint entrypoint2.testnet.solana.com:8001 \
-    --entrypoint entrypoint3.testnet.solana.com:8001
-```
+We also support a few accounts-db related commands.
 
 ### Download a snapshot
+
+You can download a snapshot from the network:
 
 ```bash
 sig download_snapshot \
     # where to save snapshot
     -s test_data/tmp \
-    # gossip peers to join network from
-    --entrypoint 34.83.231.102:8001 \
-    --entrypoint 145.40.67.83:8001 \
-    # pubkeys of validators whos snapshot hashes you trust
-    --trusted-validator x19btgySsrjuo25CJCj7oE7DREwezDhnx7pZkj2v69Nk
+    # use default testnet entrypoints for gossip
+    -n testnet \
+    # pubkeys of validators who you trust
+    --trusted-validator 3gxDv5XbkkXUiqKiqt5WbsfGN7i9GHB1xMWBqhg4UDzj \
     # minimum MB/s speed when downloading snapshot
-    --min-snapshot-download-speed 50 \
+    --min-snapshot-download-speed 50
+```
+
+Note: we dont support downloading genesis files, however they can be found
+in `data/genesis-files/` in the repo.
+
+### Validate a snapshot
+
+You can also validate an existing snapshot:
+
+```bash
+sig snapshot-validate \
+    # path to snapshot
+    -s test_data/tmp \
+    # validate against the genesis file for testnet
+    -n testnet \
+    # stream the accounts out of the snapshot (see the geyser readme to know how to read from the stream)
+    --enable-geyser \
+    # save the index generated for faster loads in the future (use --fastload in future runs)
+    --save-index \
+    # preallocate some accounts to increase the speed of the snapshot validation
+    --accounts-per-file-estimate 500
+```
+
+`Note:` if you are running out-of-memory when loading, you can either reduce the preallocations
+using a smaller value for `--accounts-per-file-estimate` or use `--use-disk-index` to use disk memory
+instead of RAM.
+
+`Note:` you can also define a specifc genesis file to validate against using `-g`.
+
+### Collect Shreds
+
+You can also connect to the network and collect shreds:
+
+```bash
+sig shred-network \
+    # collect shreds from testnet
+    -n testnet \
+    # dont re-transmit the shreds in the turbine-tree (only recv)
+    --no-retransmit
 ```

@@ -1560,13 +1560,17 @@ fn loadSnapshot(
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger.unscoped(),
+        // where we read the snapshot from
         .snapshot_dir = snapshot_dir,
         .geyser_writer = options.geyser_writer,
+        // gossip information for propogating snapshot info
         .gossip_view = if (options.gossip_service) |service|
             try AccountsDB.GossipView.fromService(service)
         else
             null,
+        // to use disk or ram for the index
         .index_allocation = if (current_config.accounts_db.use_disk_index) .disk else .ram,
+        // number of shards for the index
         .number_of_index_shards = current_config.accounts_db.number_of_index_shards,
         .lru_size = 10_000,
     });
