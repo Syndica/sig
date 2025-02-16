@@ -135,7 +135,7 @@ pub const VoteState = struct {
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
-pub fn voteProgramExecute(
+pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) InstructionError!void {
