@@ -217,16 +217,16 @@ fn intializeAccount(
     const min_balance = rent.minimumBalance(vote_account.getData().len);
     // TODO Consider adding this to Rent as is_exempt
     if (vote_account.getLamports() < min_balance) {
-        return InstructionError.InsufficientFundsForRent;
+        return InstructionError.InsufficientFunds;
     }
 
     if (vote_account.getData().len != VoteState.sizeOf()) {
         return InstructionError.InvalidAccountData;
     }
 
-    const versioned = try vote_account.getState(allocator, VoteState);
+    const versioned = try vote_account.deserializeFromAccountData(allocator, VoteState);
 
-    if (!versioned.is_uninitialized()) {
+    if (!versioned.isUninitialized()) {
         return (InstructionError.AccountAlreadyInitialized);
     }
 
