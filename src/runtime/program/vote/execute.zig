@@ -52,6 +52,7 @@ pub const EpochCredit = struct {
     prev_credits: u64,
 };
 
+/// Must support `bincode` and `serializedSize` methods for writing to the account data.
 pub const VoteState = struct {
     allocator: std.mem.Allocator,
     /// the node that votes in this account
@@ -114,6 +115,12 @@ pub const VoteState = struct {
         };
     }
 
+    pub fn deinit(self: VoteState) void {
+        self.votes.deinit();
+        self.authorized_voters.deinit();
+        self.epoch_credits.deinit();
+    }
+
     pub fn isUninitialized(self: VoteState) bool {
         return self.authorized_voters.count() == 0;
     }
@@ -122,6 +129,10 @@ pub const VoteState = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub fn sizeOf() usize {
         return 3762;
+    }
+
+    pub fn serializedSize(self: VoteState) !usize {
+        return sig.bincode.sizeOf(self, .{});
     }
 };
 
@@ -222,14 +233,16 @@ fn intializeAccount(
         return InstructionError.MissingRequiredSignature;
     }
 
-    vote_account.setState(VoteState.init(
+    const vote_state = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock,
-    ));
+    );
+    defer vote_state.deinit();
+    try vote_account.serializeIntoAccountData(vote_state);
 }
 
 test "executeIntializeAccount" {
@@ -264,6 +277,8 @@ test "executeIntializeAccount" {
         commission,
         clock,
     );
+    defer final_vote_state.deinit();
+
     const final_vote_state_bytes = try sig.bincode.writeAlloc(allocator, final_vote_state, .{});
     defer allocator.free(final_vote_state_bytes);
 
