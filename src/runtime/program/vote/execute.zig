@@ -300,38 +300,44 @@ test "executeIntializeAccount" {
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
             .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
             .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
-            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 3 },
         },
         .{
             .accounts = &.{
                 .{
                     .pubkey = vote_account,
-                    .lamports = rent.minimumBalance(final_vote_state_bytes.len),
-                    .data = &{},
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = ([_]u8{0} ** 3762)[0..],
                 },
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
+                .{ .pubkey = node_publey },
                 .{ .pubkey = vote_program.ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .rent = rent,
+                .clock = clock,
             },
         },
         .{
             .accounts = &.{
                 .{
                     .pubkey = vote_account,
-                    .lamports = rent.minimumBalance(final_vote_state_bytes.len),
-                    .data = &final_vote_state_bytes,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes,
                 },
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
+                .{ .pubkey = node_publey },
                 .{ .pubkey = vote_program.ID },
             },
-            .compute_meter = vote_program.COMPUTE_UNITS,
+            .compute_meter = 0,
             .sysvar_cache = .{
                 .rent = rent,
+                .clock = clock,
             },
         },
     );
