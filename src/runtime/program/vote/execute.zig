@@ -54,7 +54,6 @@ pub const EpochCredit = struct {
 
 /// Must support `bincode` and `serializedSize` methods for writing to the account data.
 pub const VoteState = struct {
-    allocator: std.mem.Allocator,
     /// the node that votes in this account
     node_pubkey: Pubkey,
 
@@ -102,7 +101,6 @@ pub const VoteState = struct {
         };
 
         return .{
-            .allocator = allocator,
             .node_pubkey = node_pubkey,
             .authorized_voters = authorized_voters,
             .authorized_withdrawer = authorized_withdrawer,
