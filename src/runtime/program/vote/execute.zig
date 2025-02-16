@@ -19,10 +19,6 @@ const Clock = sig.runtime.sysvar.Clock;
 
 const VoteProgramInstruction = vote_program.Instruction;
 
-pub const AuthorizedVoters = struct {
-    authorized_voters: SortedMap(Epoch, Pubkey),
-};
-
 pub const BlockTimestamp = struct {
     slot: Slot,
     timestamp: i64,
@@ -75,7 +71,7 @@ pub const VoteState = struct {
     root_slot: ?Slot,
 
     /// the signer for vote transactions
-    authorized_voters: AuthorizedVoters,
+    authorized_voters: SortedMap(Epoch, Pubkey),
 
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
@@ -98,14 +94,16 @@ pub const VoteState = struct {
         clock: Clock,
     ) !VoteState {
         var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
-        defer authorized_voters.deinit();
+        errdefer authorized_voters.deinit();
 
-        try authorized_voters.put(clock.epoch, authorized_voter);
+        authorized_voters.put(clock.epoch, authorized_voter) catch {
+            return InstructionError.Custom;
+        };
 
         return .{
             .allocator = allocator,
             .node_pubkey = node_pubkey,
-            .authorized_voters = AuthorizedVoters{ .authorized_voters = authorized_voters },
+            .authorized_voters = authorized_voters,
             .authorized_withdrawer = authorized_withdrawer,
             .commission = commission,
             .votes = std.ArrayList(LandedVote).init(allocator),
@@ -117,7 +115,7 @@ pub const VoteState = struct {
     }
 
     pub fn isUninitialized(self: VoteState) bool {
-        return self.authorized_voters.len == 0;
+        return self.authorized_voters.count() == 0;
     }
 
     /// Upper limit on the size of the Vote State
