@@ -171,21 +171,26 @@ fn executeIntializeAccount(
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
     commission: u8,
-) !void {
+) InstructionError!void {
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
-        VoteProgramInstruction.InitializeAccountIndex.RentSysvar,
+        VoteProgramInstruction.InitializeAccountIndex.RentSysvar.index(),
     );
     // TODO maybe bring back the rent check here? That would have the benefit of an early return in case the check fails.
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
-        VoteProgramInstruction.InitializeAccountIndex.ClockSysvar,
+        VoteProgramInstruction.InitializeAccountIndex.ClockSysvar.index(),
     );
 
-    const vote_account = try ic.borrowInstructionAccount(
-        VoteProgramInstruction.InitializeAccountIndex.Account,
+    var vote_account = try ic.borrowInstructionAccount(
+        VoteProgramInstruction.InitializeAccountIndex.Account.index(),
     );
     defer vote_account.release();
+
+    var authority = try ic.borrowInstructionAccount(
+        VoteProgramInstruction.InitializeAccountIndex.Signer.index(),
+    );
+    defer authority.release();
 
     try intializeAccount(
         allocator,

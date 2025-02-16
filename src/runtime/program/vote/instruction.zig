@@ -12,6 +12,10 @@ pub const Instruction = union(enum) {
         RentSysvar = 1,
         ClockSysvar = 2,
         Signer = 3,
+
+        pub fn index(self: InitializeAccountIndex) u8 {
+            return @intFromEnum(self);
+        }
     };
     /// Initialize a vote account
     ///
