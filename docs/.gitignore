@@ -1,0 +1,21 @@
+# dependencies
+docusaurus/node_modules
+
+# production
+docusaurus/build
+
+# generated files
+docusaurus/.docusaurus
+docusaurus/.cache-loader
+
+# misc
+docusaurus/.env.local
+docusaurus/.env.development.local
+docusaurus/.env.test.local
+docusaurus/.env.production.local
+docusaurus/npm-debug.log*
+docusaurus/yarn-debug.log*
+docusaurus/yarn-error.log*
+
+# python scripts
+__pycache__

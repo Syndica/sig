@@ -77,10 +77,12 @@ pub const GossipTable = struct {
 
     // NOTE: this allocator is used to free any memory allocated by the bincode library
     allocator: std.mem.Allocator,
+    // NOTE: this allocator is used to free any gossip data inserted into the table
+    gossip_data_allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) !Self {
+    pub fn init(allocator: std.mem.Allocator, gossip_data_allocator: std.mem.Allocator) !Self {
         return Self{
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
@@ -93,6 +95,7 @@ pub const GossipTable = struct {
             .shards = try GossipTableShards.init(allocator),
             .purged = HashTimeQueue.init(allocator),
             .allocator = allocator,
+            .gossip_data_allocator = gossip_data_allocator,
         };
     }
 
@@ -120,7 +123,7 @@ pub const GossipTable = struct {
 
         var store_iter = self.store.iterator();
         while (store_iter.next()) |entry| {
-            entry.getGossipData().deinit(self.allocator);
+            entry.getGossipData().deinit(self.gossip_data_allocator);
         }
         self.store.deinit(self.allocator);
     }
@@ -659,7 +662,7 @@ pub const GossipTable = struct {
         }
 
         // free memory while gossip_data still points to the correct data
-        gossip_data.deinit(self.allocator);
+        gossip_data.deinit(self.gossip_data_allocator);
 
         // remove from store
         // this operation replaces the data pointed to by gossip_data to
@@ -931,7 +934,7 @@ test "remove old values" {
 
     var prng = std.rand.DefaultPrng.init(91);
 
-    var table = try GossipTable.init(std.testing.allocator);
+    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
 
     for (0..5) |_| {
@@ -960,7 +963,7 @@ test "insert and remove value" {
 
     var prng = std.rand.DefaultPrng.init(91);
 
-    var table = try GossipTable.init(std.testing.allocator);
+    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
 
     const value = SignedGossipData.initSigned(
@@ -978,7 +981,7 @@ test "trim pruned values" {
 
     var prng = std.rand.DefaultPrng.init(91);
 
-    var table = try GossipTable.init(std.testing.allocator);
+    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
 
     const N_VALUES = 10;
@@ -1046,7 +1049,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     };
     var value = SignedGossipData.initSigned(&keypair, data);
 
-    var table = try GossipTable.init(std.testing.allocator);
+    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
 
     // timestamp = 100
@@ -1077,7 +1080,7 @@ test "insert and get" {
     const random = prng.random();
     var value = SignedGossipData.initRandom(random, &keypair);
 
-    var table = try GossipTable.init(std.testing.allocator);
+    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
 
     _ = try table.insert(value, 0);
@@ -1106,7 +1109,7 @@ test "insert and get contact_info" {
         .ContactInfo = ci,
     });
 
-    var table = try GossipTable.init(std.testing.allocator);
+    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
 
     // test insertion

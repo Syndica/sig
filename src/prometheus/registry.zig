@@ -486,6 +486,6 @@ test "prometheus.registry: options" {
     }
 }
 
-test {
+comptime {
     testing.refAllDecls(@This());
 }
