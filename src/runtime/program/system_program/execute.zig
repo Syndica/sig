@@ -374,7 +374,7 @@ fn executeUpgradeNonceAccount(
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
-    if (!account.getOwner().equals(&system_program.ID))
+    if (!account.account.owner.equals(&system_program.ID))
         return InstructionError.InvalidAccountOwner;
 
     if (!account.isWritable()) return InstructionError.InvalidArgument;
@@ -405,7 +405,7 @@ fn allocate(
         return InstructionError.MissingRequiredSignature;
     }
 
-    if (account.getData().len > 0 or !account.getOwner().equals(&system_program.ID)) {
+    if (account.getData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
         try ic.tc.log("Allocate: account {} already in use", .{account.pubkey});
         ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
@@ -430,7 +430,7 @@ fn assign(
     owner: Pubkey,
     authority: Pubkey,
 ) InstructionError!void {
-    if (account.getOwner().equals(&owner)) return;
+    if (account.account.owner.equals(&owner)) return;
 
     if (!ic.isPubkeySigner(authority)) {
         try ic.tc.log("Assign: 'base' account {} must sign", .{account.pubkey});
@@ -455,7 +455,7 @@ fn createAccount(
         var account = try ic.borrowInstructionAccount(to_index);
         defer account.release();
 
-        if (account.getLamports() > 0) {
+        if (account.account.lamports > 0) {
             try ic.tc.log("Create Account: account {} already in use", .{account.pubkey});
             ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
             return InstructionError.Custom;
@@ -512,10 +512,10 @@ fn transferVerified(
             return InstructionError.InvalidArgument;
         }
 
-        if (lamports > account.getLamports()) {
+        if (lamports > account.account.lamports) {
             try ic.tc.log(
                 "Transfer: insufficient lamports {}, need {}",
-                .{ account.getLamports(), lamports },
+                .{ account.account.lamports, lamports },
             );
             ic.tc.custom_error =
                 @intFromError(SystemProgramError.ResultWithNegativeLamports);
@@ -608,9 +608,9 @@ fn withdrawNonceAccount(
         const versioned_nonce = try from_account.deserializeFromAccountData(allocator, nonce.Versions);
         const authority = switch (versioned_nonce.getState()) {
             .unintialized => blk: {
-                if (lamports > from_account.getLamports()) {
+                if (lamports > from_account.account.lamports) {
                     try ic.tc.log("Withdraw nonce account: insufficient lamports {}, need {}", .{
-                        from_account.getLamports(),
+                        from_account.account.lamports,
                         lamports,
                     });
                     return InstructionError.InsufficientFunds;
@@ -618,7 +618,7 @@ fn withdrawNonceAccount(
                 break :blk from_account.pubkey;
             },
             .initialized => |data| blk: {
-                if (lamports == from_account.getLamports()) {
+                if (lamports == from_account.account.lamports) {
                     const durable_nonce = nonce.createDurableNonce(ic.tc.last_blockhash);
                     if (durable_nonce.eql(data.durable_nonce)) {
                         try ic.tc.log(
@@ -636,11 +636,11 @@ fn withdrawNonceAccount(
                     const min_balance = rent.minimumBalance(from_account.getData().len);
                     const amount = std.math.add(u64, lamports, min_balance) catch
                         return InstructionError.InsufficientFunds;
-                    if (amount > from_account.getLamports()) {
+                    if (amount > from_account.account.lamports) {
                         try ic.tc.log(
                             "Withdraw nonce account: insufficient lamports {}, need {}",
                             .{
-                                from_account.getLamports(),
+                                from_account.account.lamports,
                                 amount,
                             },
                         );
@@ -684,9 +684,9 @@ fn initializeNonceAccount(
     switch (versioned_nonce.getState()) {
         .unintialized => {
             const min_balance = rent.minimumBalance(account.getData().len);
-            if (min_balance > account.getLamports()) {
+            if (min_balance > account.account.lamports) {
                 try ic.tc.log("Initialize nonce account: insufficient lamports {}, need {}", .{
-                    account.getLamports(),
+                    account.account.lamports,
                     min_balance,
                 });
                 return InstructionError.InsufficientFunds;
