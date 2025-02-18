@@ -43,7 +43,7 @@ pub const InstructionContext = struct {
     /// Return if the account at a given index is a signer with bounds checking
     pub fn isIndexSigner(
         self: *const InstructionContext,
-        index: anytype,
+        index: u16,
     ) error{NotEnoughAccountKeys}!bool {
         if (index >= self.accounts.len) return InstructionError.NotEnoughAccountKeys;
         return self.accounts[index].is_signer;
