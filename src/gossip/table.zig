@@ -692,7 +692,6 @@ pub const GossipTable = struct {
 
         // replace data with newly swapped value
         const entry = self.store.getEntryByIndex(entry_index);
-        // gossip_data now points to the element which was swapped in and needs updating
         const new_index_cursor = entry.metadata_ptr.cursor_on_insertion;
         const new_index_origin = entry.getGossipData().id();
 
