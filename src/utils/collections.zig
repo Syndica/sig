@@ -64,6 +64,20 @@ pub fn RecyclingList(
     };
 }
 
+/// Efficiently stores a collection of instances of a tagged union.
+/// 
+/// - Uses less memory than an ArrayList (for heterogeneously sized unions)
+/// - Does not preserve insertion order (items are indexed with a struct)
+/// 
+/// This reduces space compared to an ArrayList by storing the union 
+/// fields' inner data types rather than storing the union itself.
+/// Normally when you store the union directly, each instance of that
+/// union uses the amount of memory of the *largest* variant of that
+/// union. With this approach, each instance only uses the amount of
+/// memory needed for that specific variant of the union.
+/// 
+/// This is accomplished by storing a struct of lists, with one list
+/// for each union variant, instead of storing a list of the union.
 pub fn SplitUnionList(TaggedUnion: type) type {
     const Tag = @typeInfo(TaggedUnion).Union.tag_type.?;
 
