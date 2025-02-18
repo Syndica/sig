@@ -125,7 +125,6 @@ pub fn build(b: *Build) !void {
 
     sig_mod.addImport("zig-network", zig_network_mod);
     sig_mod.addImport("base58", base58_mod);
-    sig_mod.addImport("zig-cli", zig_cli_mod);
     sig_mod.addImport("secp256k1", secp256k1_mod);
     sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
@@ -159,7 +158,6 @@ pub fn build(b: *Build) !void {
     sig_exe.root_module.addImport("xev", xev_mod);
     sig_exe.root_module.addImport("base58", base58_mod);
     sig_exe.root_module.addImport("httpz", httpz_mod);
-    sig_exe.root_module.addImport("zig-cli", zig_cli_mod);
     sig_exe.root_module.addImport("zig-network", zig_network_mod);
     sig_exe.root_module.addImport("zstd", zstd_mod);
     sig_exe.root_module.addImport("lsquic", lsquic_mod);

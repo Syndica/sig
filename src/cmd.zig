@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const cli = @import("zig-cli");
+const cli = @import("cli.zig");
 const sig = @import("sig.zig");
 const config = @import("config.zig");
 
@@ -32,25 +32,9 @@ const getWallclockMs = sig.time.getWallclockMs;
 const globalRegistry = sig.prometheus.globalRegistry;
 const servePrometheus = sig.prometheus.servePrometheus;
 
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const gpa_allocator = if (builtin.mode == .Debug)
-    gpa.allocator()
-else
-    std.heap.c_allocator;
-
-var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{
-    .stack_trace_frames = 100,
-}) = .{};
-const gossip_value_gpa_allocator = if (builtin.mode == .Debug)
-    gossip_value_gpa.allocator()
-else
-    std.heap.c_allocator;
-
 /// The identifier for the scoped logger used in this file.
 const LOG_SCOPE = "cmd";
 const ScopedLogger = sig.trace.ScopedLogger(LOG_SCOPE);
-
-var current_config: config.Cmd = .{};
 
 // We set this so that std.log knows not to log .debug level messages
 // which libraries we import will use
@@ -59,676 +43,860 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-pub fn main() !void {
-    defer {
-        // _ = gpa.deinit(); TODO: this causes literally thousands of leaks
-        // _ = gossip_value_gpa.deinit(); // Commented out for no leeks
+fn GpaOrCAllocator(comptime gpa_config: std.heap.GeneralPurposeAllocatorConfig) type {
+    if (builtin.mode == .Debug) {
+        return std.heap.GeneralPurposeAllocator(gpa_config);
     }
 
-    var shred_version_option: cli.Option = .{
-        .long_name = "shred-version",
-        .help = "The shred version for the cluster",
-        .value_ref = cli.mkRef(&current_config.shred_version),
-        .required = false,
-        .value_name = "Shred Version",
+    return struct {
+        fn deinit(_: @This()) void {}
+        inline fn allocator(_: @This()) std.mem.Allocator {
+            return std.heap.c_allocator;
+        }
     };
+}
 
-    var gossip_host_option: cli.Option = .{
-        .long_name = "gossip-host",
-        .help =
-        \\IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1
-        ,
-        .value_ref = cli.mkRef(&current_config.gossip.host),
-        .required = false,
-        .value_name = "Gossip Host",
-    };
+pub fn main() !void {
+    var gpa_state: GpaOrCAllocator(.{}) = .{};
+    // defer _ = gpa_state.deinit();
+    const gpa = gpa_state.allocator();
 
-    var gossip_port_option: cli.Option = .{
-        .long_name = "gossip-port",
-        .help = "The port to run gossip listener - default: 8001",
-        .short_alias = 'p',
-        .value_ref = cli.mkRef(&current_config.gossip.port),
-        .required = false,
-        .value_name = "Gossip Port",
-    };
+    var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
+    // defer _ = gossip_gpa_state.deinit();
+    const gossip_gpa = gossip_gpa_state.allocator();
 
-    var repair_port_option: cli.Option = .{
-        .long_name = "repair-port",
-        .help = "The port to run shred repair listener - default: 8002",
-        .value_ref = cli.mkRef(&current_config.shred_network.repair_port),
-        .required = false,
-        .value_name = "Repair Port",
-    };
+    const argv = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, argv);
 
-    var turbine_recv_port_option: cli.Option = .{
-        .long_name = "turbine-port",
-        .help = "The port to run turbine shred listener (aka TVU port) - default: 8003",
-        .value_ref = cli.mkRef(&current_config.shred_network.turbine_recv_port),
-        .required = false,
-        .value_name = "Turbine Port",
-    };
+    const parser = cli.Parser(Cmd, Cmd.cmd_info);
+    const cmd = try parser.parse(
+        gpa,
+        "sig",
+        std.io.tty.detectConfig(std.io.getStdOut()),
+        std.io.getStdOut().writer(),
+        argv[1..],
+    ) orelse return;
+    defer parser.free(gpa, cmd);
 
-    var turbine_num_retransmit_threads_option: cli.Option = .{
-        .long_name = "num-retransmit-threads",
-        .help = "The number of retransmit threads to use for the turbine service" ++
-            " - default: cpu count",
-        .value_ref = cli.mkRef(&current_config.turbine.num_retransmit_threads),
-        .required = false,
-        .value_name = "Number of turbine retransmit threads",
-    };
+    var current_config: config.Cmd = .{};
+    current_config.log_level = cmd.log_level;
+    current_config.metrics_port = cmd.metrics_port;
 
-    // TODO: Remove when no longer needed
-    var turbine_overwrite_stake_for_testing_option: cli.Option = .{
-        .long_name = "overwrite-stake-for-testing",
-        .help = "Overwrite the stake for testing purposes",
-        .value_ref = cli.mkRef(&current_config.turbine.overwrite_stake_for_testing),
-        .required = false,
-        .value_name = "Overwrite stake for testing",
-    };
+    switch (cmd.subcmd) {
+        .identity => try identity(gpa, current_config),
+        .gossip => |params| {
+            current_config.shred_version = params.shred_version;
+            params.gossip_base.apply(&current_config);
+            params.gossip_node.apply(&current_config);
+            try gossip(gpa, gossip_gpa, current_config);
+        },
+        .validator => |params| {
+            current_config.shred_version = params.shred_version;
+            current_config.leader_schedule_path = params.leader_schedule;
+            params.gossip_base.apply(&current_config);
+            params.gossip_node.apply(&current_config);
+            params.repair.apply(&current_config);
+            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.genesis_file_path = params.genesis_file_path;
+            params.accountsdb_base.apply(&current_config);
+            params.accountsdb_download.apply(&current_config);
+            params.accountsdb_index.apply(&current_config);
+            params.geyser.apply(&current_config);
+            try validator(gpa, gossip_gpa, current_config);
+        },
+        .shred_network => |params| {
+            current_config.shred_version = params.shred_version;
+            current_config.leader_schedule_path = params.leader_schedule;
+            params.gossip_base.apply(&current_config);
+            params.gossip_node.apply(&current_config);
+            params.repair.apply(&current_config);
+            current_config.shred_network.dump_shred_tracker = params.dump_shred_tracker;
+            current_config.turbine.overwrite_stake_for_testing =
+                params.overwrite_stake_for_testing;
+            current_config.shred_network.no_retransmit = params.no_retransmit;
+            current_config.accounts_db.snapshot_metadata_only = params.snapshot_metadata_only;
+            try shredNetwork(gpa, gossip_gpa, current_config);
+        },
+        .snapshot_download => |params| {
+            current_config.shred_version = params.shred_version;
+            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            params.accountsdb_download.apply(&current_config);
+            params.gossip_base.apply(&current_config);
+            try downloadSnapshot(gpa, gossip_gpa, current_config);
+        },
+        .snapshot_validate => |params| {
+            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.genesis_file_path = params.genesis_file_path;
+            params.accountsdb_base.apply(&current_config);
+            params.accountsdb_index.apply(&current_config);
+            current_config.gossip.cluster = params.gossip_network;
+            params.geyser.apply(&current_config);
+            try validateSnapshot(gpa, current_config);
+        },
+        .snapshot_create => |params| {
+            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.genesis_file_path = params.genesis_file_path;
+            try createSnapshot(gpa, current_config);
+        },
+        .print_manifest => |params| {
+            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            try printManifest(gpa, current_config);
+        },
+        .leader_schedule => |params| {
+            current_config.shred_version = params.shred_version;
+            current_config.leader_schedule_path = params.leader_schedule;
+            params.gossip_base.apply(&current_config);
+            params.gossip_node.apply(&current_config);
+            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.genesis_file_path = params.genesis_file_path;
+            params.accountsdb_base.apply(&current_config);
+            params.accountsdb_download.apply(&current_config);
+            try printLeaderSchedule(gpa, current_config);
+        },
+        .test_transaction_sender => |params| {
+            current_config.shred_version = params.shred_version;
+            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.test_transaction_sender.n_transactions = params.n_transactions;
+            current_config.test_transaction_sender.n_lamports_per_transaction =
+                params.n_lamports_per_tx;
+            params.gossip_base.apply(&current_config);
+            params.gossip_node.apply(&current_config);
+            try testTransactionSenderService(gpa, gossip_gpa, current_config);
+        },
+        .mock_rpc_server => |params| {
+            params.gossip_base.apply(&current_config);
+            params.gossip_node.apply(&current_config);
+            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.genesis_file_path = params.genesis_file_path;
+            params.accountsdb_base.apply(&current_config);
+            params.accountsdb_download.apply(&current_config);
+            params.accountsdb_index.apply(&current_config);
+            try mockRpcServer(gpa, current_config);
+        },
+    }
+}
 
-    var leader_schedule_option: cli.Option = .{
-        .long_name = "leader-schedule",
-        .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
-        .value_ref = cli.mkRef(&current_config.leader_schedule_path),
-        .required = false,
-        .value_name = "Leader schedule source",
-    };
+const Cmd = struct {
+    log_level: sig.trace.Level,
+    metrics_port: u16,
+    log_file: ?[]const u8,
+    tee_logs: bool,
+    subcmd: union(enum) {
+        identity,
+        gossip: Gossip,
+        validator: Validator,
+        shred_network: ShredNetwork,
+        snapshot_download: SnapshotDownload,
+        snapshot_validate: SnapshotValidate,
+        snapshot_create: SnapshotCreate,
+        print_manifest: PrintManifest,
+        leader_schedule: LeaderScheduleSubCmd,
+        test_transaction_sender: TestTransactionSender,
+        mock_rpc_server: MockRpcServer,
+    },
 
-    var max_shreds_option: cli.Option = .{
-        .long_name = "max-shreds",
-        .help = "Max number of shreds to store in the blockstore",
-        .value_ref = cli.mkRef(&current_config.leader_schedule_path),
-        .required = false,
-        .value_name = "max shreds",
-    };
-
-    var test_repair_option: cli.Option = .{
-        .long_name = "test-repair-for-slot",
-        .help = "Set a slot here to repeatedly send repair requests for shreds from this slot." ++
-            " This is only intended for use during short-lived tests of the repair service." ++
-            " Do not set this during normal usage.",
-        .value_ref = cli.mkRef(&current_config.shred_network.start_slot),
-        .required = false,
-        .value_name = "slot number",
-    };
-
-    var retransmit_option: cli.Option = .{
-        .long_name = "no-retransmit",
-        .help = "Shreds will be received and stored but not retransmitted",
-        .value_ref = cli.mkRef(&current_config.shred_network.no_retransmit),
-        .required = false,
-        .value_name = "Disable Shred Retransmission",
-    };
-
-    var dump_shred_tracker_option: cli.Option = .{
-        .long_name = "dump-shred-tracker",
-        .help = "Create shred-tracker.txt to visually represent the currently tracked slots.",
-        .value_ref = cli.mkRef(&current_config.shred_network.dump_shred_tracker),
-        .required = false,
-        .value_name = "Dump Shred Tracker",
-    };
-
-    var gossip_entrypoints_option: cli.Option = .{
-        .long_name = "entrypoint",
-        .help = "gossip address of the entrypoint validators",
-        .short_alias = 'e',
-        .value_ref = cli.mkRef(&current_config.gossip.entrypoints),
-        .required = false,
-        .value_name = "Entrypoints",
-    };
-
-    var cluster_option: cli.Option = .{
-        .long_name = "cluster",
-        .help = "cluster to connect to - adds gossip entrypoints, sets default genesis file path",
-        .short_alias = 'c',
-        .value_ref = cli.mkRef(&current_config.gossip.cluster),
-        .required = false,
-        .value_name = "Cluster for Entrypoints",
-    };
-
-    var trusted_validators_option: cli.Option = .{
-        .long_name = "trusted-validator",
-        .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
-        .short_alias = 't',
-        .value_ref = cli.mkRef(&current_config.gossip.trusted_validators),
-        .required = false,
-        .value_name = "Trusted Validator",
-    };
-
-    var gossip_spy_node_option: cli.Option = .{
-        .long_name = "spy-node",
-        .help = "run as a gossip spy node (minimize outgoing packets)",
-        .value_ref = cli.mkRef(&current_config.gossip.spy_node),
-        .required = false,
-        .value_name = "Spy Node",
-    };
-
-    var gossip_dump_option: cli.Option = .{
-        .long_name = "dump-gossip",
-        .help = "periodically dump gossip table to csv files and logs",
-        .value_ref = cli.mkRef(&current_config.gossip.dump),
-        .required = false,
-        .value_name = "Gossip Table Dump",
-    };
-
-    var log_level_option: cli.Option = .{
-        .long_name = "log-level",
-        .help = "The amount of detail to log (default = debug)",
-        .short_alias = 'l',
-        .value_ref = cli.mkRef(&current_config.log_level),
-        .required = false,
-        .value_name = "err|warn|info|debug",
-    };
-
-    var log_file_option = cli.Option{
-        .long_name = "log-file",
-        .help = "Write logs to this file instead of stderr",
-        .value_ref = cli.mkRef(&current_config.log_file),
-        .required = false,
-        .value_name = "Log File",
-    };
-
-    var tee_logs_option = cli.Option{
-        .long_name = "tee-logs",
-        .help = "If --log-file is set, it disables logging to stderr. " ++
-            "Enable this flag to reactivate stderr logging when using --log-file.",
-        .value_ref = cli.mkRef(&current_config.tee_logs),
-        .required = false,
-        .value_name = "Log File",
-    };
-
-    var metrics_port_option = cli.Option{
-        .long_name = "metrics-port",
-        .help = "port to expose prometheus metrics via http - default: 12345",
-        .short_alias = 'm',
-        .value_ref = cli.mkRef(&current_config.metrics_port),
-        .required = false,
-        .value_name = "port_number",
-    };
-
-    // accounts-db options
-    var n_threads_snapshot_load_option: cli.Option = .{
-        .long_name = "n-threads-snapshot-load",
-        .help = "number of threads used to initialize the account index: - default: ncpus",
-        .short_alias = 't',
-        .value_ref = cli.mkRef(&current_config.accounts_db.num_threads_snapshot_load),
-        .required = false,
-        .value_name = "n_threads_snapshot_load",
-    };
-
-    var n_threads_snapshot_unpack_option: cli.Option = .{
-        .long_name = "n-threads-snapshot-unpack",
-        .help = "number of threads to unpack snapshots (from .tar.zst) - default: ncpus * 2",
-        .short_alias = 'u',
-        .value_ref = cli.mkRef(&current_config.accounts_db.num_threads_snapshot_unpack),
-        .required = false,
-        .value_name = "n_threads_snapshot_unpack",
-    };
-
-    var force_unpack_snapshot_option: cli.Option = .{
-        .long_name = "force-unpack-snapshot",
-        .help = "unpacks a snapshot (even if it exists)",
-        .short_alias = 'f',
-        .value_ref = cli.mkRef(&current_config.accounts_db.force_unpack_snapshot),
-        .required = false,
-        .value_name = "force_unpack_snapshot",
-    };
-
-    var use_disk_index_option: cli.Option = .{
-        .long_name = "use-disk-index",
-        .help = "use disk-memory for the account index",
-        .value_ref = cli.mkRef(&current_config.accounts_db.use_disk_index),
-        .required = false,
-        .value_name = "use_disk_index",
-    };
-
-    var force_new_snapshot_download_option: cli.Option = .{
-        .long_name = "force-new-snapshot-download",
-        .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
-        .value_ref = cli.mkRef(&current_config.accounts_db.force_new_snapshot_download),
-        .required = false,
-        .value_name = "force_new_snapshot_download",
-    };
-
-    var snapshot_dir_option: cli.Option = .{
-        .long_name = "snapshot-dir",
-        .help = "path to snapshot directory" ++
-            " (where snapshots are downloaded and/or unpacked to/from)" ++
-            " - default: {VALIDATOR_DIR}/accounts_db",
-        .short_alias = 's',
-        .value_ref = cli.mkRef(&current_config.accounts_db.snapshot_dir),
-        .required = false,
-        .value_name = "snapshot_dir",
-    };
-
-    var snapshot_metadata_only_option: cli.Option = .{
-        .long_name = "snapshot-metadata-only",
-        .help = "load only the snapshot metadata",
-        .value_ref = cli.mkRef(&current_config.accounts_db.snapshot_metadata_only),
-        .required = false,
-        .value_name = "snapshot_metadata_only",
-    };
-
-    var genesis_file_path_option: cli.Option = .{
-        .long_name = "genesis-file-path",
-        .help = "path to the genesis file." ++
-            " defaults to 'data/genesis-files/<cluster>_genesis.bin' if --cluster option is set",
-        .short_alias = 'g',
-        .value_ref = cli.mkRef(&current_config.genesis_file_path),
-        .required = false,
-        .value_name = "genesis_file_path",
-    };
-
-    var min_snapshot_download_speed_mb_option: cli.Option = .{
-        .long_name = "min-snapshot-download-speed",
-        .help = "minimum download speed of full snapshots in megabytes per second" ++
-            " - default: 20MB/s",
-        .value_ref = cli.mkRef(&current_config.accounts_db.min_snapshot_download_speed_mbs),
-        .required = false,
-        .value_name = "min_snapshot_download_speed_mb",
-    };
-
-    var number_of_index_shards_option: cli.Option = .{
-        .long_name = "number-of-index-bins",
-        .help = "number of shards for the account index's pubkey_ref_map",
-        .value_ref = cli.mkRef(&current_config.accounts_db.number_of_index_shards),
-        .required = false,
-        .value_name = "number_of_index_shards",
-    };
-
-    var accounts_per_file_estimate_option: cli.Option = .{
-        .long_name = "accounts-per-file-estimate",
-        .short_alias = 'a',
-        .help = "number of accounts to estimate inside of account files (used for pre-allocation)",
-        .value_ref = cli.mkRef(&current_config.accounts_db.accounts_per_file_estimate),
-        .required = false,
-        .value_name = "accounts_per_file_estimate",
-    };
-
-    var fastload_option: cli.Option = .{
-        .long_name = "fastload",
-        .help = "fastload the accounts db",
-        .value_ref = cli.mkRef(&current_config.accounts_db.fastload),
-        .required = false,
-        .value_name = "fastload",
-    };
-
-    var save_index_option: cli.Option = .{
-        .long_name = "save-index",
-        .help = "save the account index to disk",
-        .value_ref = cli.mkRef(&current_config.accounts_db.save_index),
-        .required = false,
-        .value_name = "save_index",
-    };
-
-    // geyser options
-    var enable_geyser_option: cli.Option = .{
-        .long_name = "enable-geyser",
-        .help = "enable geyser",
-        .value_ref = cli.mkRef(&current_config.geyser.enable),
-        .required = false,
-        .value_name = "enable_geyser",
-    };
-
-    var geyser_pipe_path_option: cli.Option = .{
-        .long_name = "geyser-pipe-path",
-        .help = "path to the geyser pipe",
-        .value_ref = cli.mkRef(&current_config.geyser.pipe_path),
-        .required = false,
-        .value_name = "geyser_pipe_path",
-    };
-
-    var geyser_writer_fba_bytes_option: cli.Option = .{
-        .long_name = "geyser-writer-fba-bytes",
-        .help = "number of bytes to allocate for the geyser writer",
-        .value_ref = cli.mkRef(&current_config.geyser.writer_fba_bytes),
-        .required = false,
-        .value_name = "geyser_writer_fba_bytes",
-    };
-
-    // test-transaction sender options
-    var n_transactions_option: cli.Option = .{
-        .long_name = "n-transactions",
-        .short_alias = 't',
-        .help = "number of transactions to send",
-        .value_ref = cli.mkRef(&current_config.test_transaction_sender.n_transactions),
-        .required = false,
-        .value_name = "n_transactions",
-    };
-
-    var n_lamports_per_tx_option: cli.Option = .{
-        .long_name = "n-lamports-per-tx",
-        .short_alias = 'l',
-        .help = "number of lamports to send per transaction",
-        .value_ref = cli.mkRef(&current_config.test_transaction_sender.n_lamports_per_transaction),
-        .required = false,
-        .value_name = "n_lamports_per_tx",
-    };
-
-    const gossip_options_base = [_]*cli.Option{
-        &gossip_host_option,
-        &gossip_port_option,
-        &gossip_entrypoints_option,
-        &cluster_option,
-    };
-    const gossip_options_node = [_]*cli.Option{
-        &gossip_spy_node_option,
-        &gossip_dump_option,
-    };
-
-    const accounts_db_options_base = [_]*cli.Option{
-        &snapshot_dir_option,
-        &use_disk_index_option,
-        &n_threads_snapshot_load_option,
-        &n_threads_snapshot_unpack_option,
-        &force_unpack_snapshot_option,
-        &number_of_index_shards_option,
-        &genesis_file_path_option,
-        &accounts_per_file_estimate_option,
-    };
-    const accounts_db_options_download = [_]*cli.Option{
-        &min_snapshot_download_speed_mb_option,
-        &trusted_validators_option,
-    };
-    const accounts_db_options_index = [_]*cli.Option{
-        &fastload_option,
-        &save_index_option,
-    };
-
-    const app = cli.App{
-        .version = "0.2.0",
-        .author = "Syndica & Contributors",
-        .command = .{
-            .name = "sig",
-            .description = .{
-                .one_line =
-                \\Sig is a Solana client implementation written in Zig.
-                \\This is still a WIP, PRs welcome.
-                // .detailed = "",
+    const cmd_info: cli.CommandInfo(@This()) = .{
+        .help = .{
+            .short =
+            \\Sig is a Solana client implementation written in Zig.
+            \\This is still a WIP, PRs welcome.
+            ,
+            .long = null,
+        },
+        .sub = .{
+            .subcmd = .{
+                .identity = identity_cmd_info,
+                .gossip = Gossip.cmd_info,
+                .validator = Validator.cmd_info,
+                .shred_network = ShredNetwork.cmd_info,
+                .snapshot_download = SnapshotDownload.cmd_info,
+                .snapshot_validate = SnapshotValidate.cmd_info,
+                .snapshot_create = SnapshotCreate.cmd_info,
+                .print_manifest = PrintManifest.cmd_info,
+                .leader_schedule = LeaderScheduleSubCmd.cmd_info,
+                .test_transaction_sender = TestTransactionSender.cmd_info,
+                .mock_rpc_server = MockRpcServer.cmd_info,
             },
-            .options = &.{
-                &log_level_option,
-                &log_file_option,
-                &tee_logs_option,
-                &metrics_port_option,
+            .log_level = .{
+                .name_override = null,
+                .alias = .l,
+                .default_value = .debug,
+                .config = {},
+                .help = "The amount of detail to log",
             },
-            .target = .{
-                .subcommands = &.{
-                    &cli.Command{
-                        .name = "identity",
-                        .description = .{
-                            .one_line = "Get own identity",
-                            .detailed =
-                            \\Gets own identity (Pubkey) or creates one if doesn't exist.
-                            \\
-                            \\NOTE: Keypair is saved in $HOME/.sig/identity.key.
-                            ,
-                        },
-                        .target = .{
-                            .action = .{
-                                .exec = identity,
-                            },
-                        },
-                    },
-
-                    &cli.Command{
-                        .name = "gossip",
-                        .description = .{
-                            .one_line = "Run gossip client",
-                            .detailed =
-                            \\Start Solana gossip client on specified port.
-                            ,
-                        },
-                        .options = &[_]*cli.Option{&shred_version_option} ++
-                            gossip_options_base ++
-                            gossip_options_node,
-                        .target = .{
-                            .action = .{
-                                .exec = gossip,
-                            },
-                        },
-                    },
-
-                    &cli.Command{
-                        .name = "validator",
-                        .description = .{
-                            .one_line = "Run Solana validator",
-                            .detailed =
-                            \\Start a full Solana validator client.
-                            ,
-                        },
-                        .options = &[_]*cli.Option{&shred_version_option} ++
-                            gossip_options_base ++
-                            gossip_options_node ++ .{
-                            // repair
-                            &turbine_recv_port_option,
-                            &repair_port_option,
-                            &test_repair_option,
-                            // blockstore cleanup service
-                            &max_shreds_option,
-                            // turbine
-                            &turbine_num_retransmit_threads_option,
-                        } ++
-                            accounts_db_options_base ++
-                            accounts_db_options_download ++
-                            .{&force_new_snapshot_download_option} ++
-                            accounts_db_options_index ++ .{
-                            // geyser
-                            &enable_geyser_option,
-                            &geyser_pipe_path_option,
-                            &geyser_writer_fba_bytes_option,
-                            // general
-                            &leader_schedule_option,
-                        },
-                        .target = .{
-                            .action = .{
-                                .exec = validator,
-                            },
-                        },
-                    },
-
-                    &cli.Command{
-                        .name = "shred-network",
-                        .description = .{
-                            .one_line = "Run the shred network to collect and store shreds",
-                            .detailed =
-                            \\ This command runs the shred network without running the full validator
-                            \\ (mainly excluding the accounts-db setup).
-                            \\
-                            \\ NOTE: this means that this command *requires* a leader schedule to be provided
-                            \\ (which would usually be derived from the accountsdb snapshot).
-                            \\
-                            \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well
-                            \\ (which is usually derived from the accountsdb snapshot).
-                            \\ This can be done with `--test-repair-for-slot $(solana slot -u testnet)`
-                            \\ for testnet or another `-u` for mainnet/devnet.
-                            ,
-                        },
-                        .options = &[_]*cli.Option{&shred_version_option} ++
-                            gossip_options_base ++
-                            gossip_options_node ++ .{
-                            // shred_network
-                            &turbine_recv_port_option,
-                            &repair_port_option,
-                            &test_repair_option,
-                            &dump_shred_tracker_option,
-                            &turbine_num_retransmit_threads_option,
-                            &turbine_overwrite_stake_for_testing_option,
-                            &retransmit_option,
-                            // blockstore cleanup service
-                            &max_shreds_option,
-                            // general
-                            &leader_schedule_option,
-                            &snapshot_metadata_only_option,
-                        },
-                        .target = .{
-                            .action = .{
-                                .exec = shredNetwork,
-                            },
-                        },
-                    },
-
-                    &cli.Command{
-                        .name = "snapshot-download",
-                        .description = .{
-                            .one_line = "Downloads a snapshot",
-                            .detailed =
-                            \\starts a gossip client and downloads a snapshot from peers
-                            ,
-                        },
-                        .options = &[_]*cli.Option{
-                            &shred_version_option,
-                            // where to download the snapshot
-                            &snapshot_dir_option,
-                        } ++
-                            accounts_db_options_download ++
-                            gossip_options_base,
-                        .target = .{
-                            .action = .{
-                                .exec = downloadSnapshot,
-                            },
-                        },
-                    },
-                    &cli.Command{
-                        .name = "snapshot-validate",
-                        .description = .{
-                            .one_line = "Validates a snapshot",
-                            .detailed =
-                            \\Loads and validates a snapshot (doesnt download a snapshot).
-                            ,
-                        },
-                        .options = &[_]*cli.Option{} ++
-                            accounts_db_options_base ++
-                            accounts_db_options_index ++ .{
-                            &cluster_option,
-                            // geyser
-                            &enable_geyser_option,
-                            &geyser_pipe_path_option,
-                            &geyser_writer_fba_bytes_option,
-                        },
-                        .target = .{
-                            .action = .{
-                                .exec = validateSnapshot,
-                            },
-                        },
-                    },
-
-                    &cli.Command{
-                        .name = "snapshot-create",
-                        .description = .{
-                            .one_line =
-                            \\Loads from a snapshot and outputs to new snapshot alt_{VALIDATOR_DIR}/
-                            ,
-                        },
-                        .options = &.{
-                            &snapshot_dir_option,
-                            &genesis_file_path_option,
-                        },
-                        .target = .{
-                            .action = .{
-                                .exec = createSnapshot,
-                            },
-                        },
-                    },
-
-                    &cli.Command{
-                        .name = "print-manifest",
-                        .description = .{
-                            .one_line = "Prints a manifest file",
-                            .detailed =
-                            \\ Loads and prints a manifest file
-                            ,
-                        },
-                        .options = &[_]*cli.Option{
-                            &snapshot_dir_option,
-                        },
-                        .target = .{
-                            .action = .{
-                                .exec = printManifest,
-                            },
-                        },
-                    },
-
-                    &cli.Command{
-                        .name = "leader-schedule",
-                        .description = .{
-                            .one_line = "Prints the leader schedule from the snapshot",
-                            .detailed =
-                            \\- Starts gossip
-                            \\- acquires a snapshot if necessary
-                            \\- loads accounts db from the snapshot
-                            \\- calculates the leader schedule from the snaphot
-                            \\- prints the leader schedule in the same format as `solana leader-schedule`
-                            \\- exits
-                            ,
-                        },
-                        .options = &[_]*cli.Option{
-                            &shred_version_option,
-                            &leader_schedule_option,
-                        } ++
-                            gossip_options_base ++
-                            gossip_options_node ++
-                            accounts_db_options_base ++
-                            accounts_db_options_download ++
-                            .{&force_new_snapshot_download_option},
-                        .target = .{
-                            .action = .{
-                                .exec = printLeaderSchedule,
-                            },
-                        },
-                    },
-                    &cli.Command{
-                        .name = "test-transaction-sender",
-                        .description = .{
-                            .one_line = "Test transaction sender service",
-                            .detailed =
-                            \\Simulates a stream of transaction being sent to the transaction sender by
-                            \\running a mock transaction generator thread. For the moment this just sends
-                            \\transfer transactions between to hard coded testnet accounts.
-                            ,
-                        },
-                        .options = &[_]*cli.Option{
-                            &shred_version_option,
-                            &genesis_file_path_option,
-                            // command specific
-                            &n_transactions_option,
-                            &n_lamports_per_tx_option,
-                        } ++
-                            gossip_options_base ++
-                            gossip_options_node,
-                        .target = .{
-                            .action = .{
-                                .exec = testTransactionSenderService,
-                            },
-                        },
-                    },
-                    &cli.Command{
-                        .name = "mock-rpc-server",
-                        .description = .{
-                            .one_line = "Run a mock RPC server.",
-                        },
-                        .options = gossip_options_base ++
-                            gossip_options_node ++
-                            accounts_db_options_base ++
-                            accounts_db_options_download ++
-                            &[_]*cli.Option{&force_new_snapshot_download_option} ++
-                            accounts_db_options_index,
-                        .target = .{
-                            .action = .{
-                                .exec = mockRpcServer,
-                            },
-                        },
-                    },
-                },
+            .metrics_port = .{
+                .name_override = null,
+                .alias = .m,
+                .default_value = 12345,
+                .config = {},
+                .help = "Port to expose prometheus metrics via http",
+            },
+            .log_file = .{
+                .name_override = null,
+                .alias = .none,
+                .default_value = null,
+                .config = .string,
+                .help = "Write logs to this file instead of stderr",
+            },
+            .tee_logs = .{
+                .name_override = null,
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help =
+                \\If --log-file is set, it disables logging to stderr.
+                \\Enable this flag to reactivate stderr logging when using --log-file.
+                ,
             },
         },
     };
-    return cli.run(&app, gpa_allocator);
-}
+
+    const shred_version_option: cli.OptionInfo(?u16) = .{
+        .name_override = "shred-version",
+        .alias = .none,
+        .default_value = null,
+        .config = {},
+        .help = "The shred version for the network",
+    };
+
+    const leader_schedule_option: cli.OptionInfo(?[]const u8) = .{
+        .name_override = "leader-schedule",
+        .alias = .none,
+        .default_value = null,
+        .config = .string,
+        .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
+    };
+
+    const gossip_network_option: cli.OptionInfo(?[]const u8) = .{
+        .name_override = "network",
+        .alias = .n,
+        .default_value = null,
+        .config = .string,
+        .help = "cluster to connect to - adds gossip entrypoints, sets default genesis file path",
+    };
+
+    const snapshot_dir_option: cli.OptionInfo([]const u8) = .{
+        .name_override = "snapshot-dir",
+        .alias = .s,
+        .default_value = sig.VALIDATOR_DIR ++ "accounts_db",
+        .config = .string,
+        .help = "path to snapshot directory" ++
+            " (where snapshots are downloaded and/or unpacked to/from)" ++
+            " - default: {VALIDATOR_DIR}/accounts_db",
+    };
+
+    const genesis_file_path_option: cli.OptionInfo(?[]const u8) = .{
+        .name_override = "genesis-file-path",
+        .alias = .g,
+        .default_value = null,
+        .config = .string,
+        .help = "path to the genesis file." ++
+            " defaults to 'data/genesis-files/<network>_genesis.bin' if --network option is set",
+    };
+
+    const force_new_snapshot_download_option: cli.OptionInfo(bool) = .{
+        .name_override = "force-new-snapshot-download",
+        .alias = .none,
+        .default_value = false,
+        .config = {},
+        .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
+    };
+
+    const GossipOptionsCommon = struct {
+        host: ?[]const u8,
+        port: u16,
+        entrypoints: []const []const u8,
+        network: ?[]const u8,
+
+        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+            .host = .{
+                .name_override = "gossip-host",
+                .alias = .none,
+                .default_value = null,
+                .config = .string,
+                .help = "IPv4 address for the validator to advertise in gossip" ++
+                    " - default: get from --entrypoint, fallback to 127.0.0.1",
+            },
+            .port = .{
+                .name_override = "gossip-port",
+                .alias = .p,
+                .default_value = 8001,
+                .config = {},
+                .help = "The port to run gossip listener",
+            },
+            .entrypoints = .{
+                .name_override = "entrypoint",
+                .alias = .e,
+                .default_value = &.{},
+                .config = .string,
+                .help = "gossip address of the entrypoint validators",
+            },
+            .network = gossip_network_option,
+        };
+
+        fn apply(opts: @This(), cfg: *config.Cmd) void {
+            cfg.gossip.host = opts.host;
+            cfg.gossip.port = opts.port;
+            cfg.gossip.entrypoints = opts.entrypoints;
+            cfg.gossip.cluster = opts.network;
+        }
+    };
+    const GossipOptionsNode = struct {
+        spy_node: bool,
+        dump: bool,
+
+        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+            .spy_node = .{
+                .name_override = "spy-node",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "run as a gossip spy node (minimize outgoing packets)",
+            },
+            .dump = .{
+                .name_override = "dump-gossip",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "periodically dump gossip table to csv files and logs",
+            },
+        };
+
+        fn apply(opts: @This(), cfg: *config.Cmd) void {
+            cfg.gossip.spy_node = opts.spy_node;
+            cfg.gossip.dump = opts.dump;
+        }
+    };
+
+    const AccountsDbOptionsBase = struct {
+        use_disk_index: bool,
+        n_threads_snapshot_load: u32,
+        n_threads_snapshot_unpack: u16,
+        force_unpack_snapshot: bool,
+        number_of_index_shards: u64,
+        accounts_per_file_estimate: u64,
+
+        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+            .use_disk_index = .{
+                .name_override = null,
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "use disk-memory for the account index",
+            },
+            .n_threads_snapshot_load = .{
+                .name_override = null,
+                .alias = .t,
+                .default_value = 0,
+                .config = {},
+                .help = "number of threads used to initialize the account index - default: ncpus",
+            },
+            .n_threads_snapshot_unpack = .{
+                .name_override = null,
+                .alias = .u,
+                .default_value = 0,
+                .config = {},
+                .help = "number of threads to unpack snapshots - default: ncpus * 2",
+            },
+            .force_unpack_snapshot = .{
+                .name_override = null,
+                .alias = .f,
+                .default_value = false,
+                .config = {},
+                .help = "unpacks a snapshot (even if it exists)",
+            },
+            .number_of_index_shards = .{
+                .name_override = null,
+                .alias = .none,
+                .default_value = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
+                .config = {},
+                .help = "number of shards for the account index's pubkey_ref_map",
+            },
+            .accounts_per_file_estimate = .{
+                .name_override = null,
+                .alias = .a,
+                .default_value = sig.accounts_db.db
+                    .getAccountPerFileEstimateFromCluster(.testnet) catch
+                    @compileError("account_per_file_estimate missing for default cluster"),
+                .config = {},
+                .help = "number of accounts to estimate inside of account files" ++
+                    " (used for pre-allocation)",
+            },
+        };
+
+        fn apply(opts: @This(), cfg: *config.Cmd) void {
+            cfg.accounts_db.use_disk_index = opts.use_disk_index;
+            cfg.accounts_db.num_threads_snapshot_load = opts.n_threads_snapshot_load;
+            cfg.accounts_db.num_threads_snapshot_unpack = opts.n_threads_snapshot_unpack;
+            cfg.accounts_db.force_unpack_snapshot = opts.force_unpack_snapshot;
+            cfg.accounts_db.number_of_index_shards = opts.number_of_index_shards;
+            cfg.accounts_db.accounts_per_file_estimate = opts.accounts_per_file_estimate;
+        }
+    };
+    const AccountsDbOptionsDownload = struct {
+        min_snapshot_download_speed_mb: u64,
+        trusted_validators: []const []const u8,
+
+        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+            .min_snapshot_download_speed_mb = .{
+                .name_override = "min-snapshot-download-speed",
+                .alias = .none,
+                .default_value = 20,
+                .config = {},
+                .help = "minimum download speed of full snapshots in megabytes per second" ++
+                    " - default: 20MB/s",
+            },
+            .trusted_validators = .{
+                .name_override = "trusted-validator",
+                .alias = .t,
+                .default_value = &.{},
+                .config = .string,
+                .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
+            },
+        };
+
+        fn apply(opts: @This(), cfg: *config.Cmd) void {
+            cfg.accounts_db.min_snapshot_download_speed_mbs = opts.min_snapshot_download_speed_mb;
+            cfg.gossip.trusted_validators = opts.trusted_validators;
+        }
+    };
+    const AccountsDbOptionsIndex = struct {
+        fastload: bool,
+        save_index: bool,
+
+        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+            .fastload = .{
+                .name_override = null,
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "fastload the accounts db",
+            },
+            .save_index = .{
+                .name_override = null,
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "save the account index to disk",
+            },
+        };
+
+        fn apply(opts: @This(), cfg: *config.Cmd) void {
+            cfg.accounts_db.fastload = opts.fastload;
+            cfg.accounts_db.save_index = opts.save_index;
+        }
+    };
+    const RepairOptionsBase = struct {
+        turbine_port: u16,
+        repair_port: u16,
+        test_repair_for_slot: ?Slot,
+        max_shreds: u64,
+        num_retransmit_threads: ?usize,
+
+        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+            .turbine_port = .{
+                .name_override = null,
+                .alias = .none,
+                .default_value = 8002,
+                .config = {},
+                .help = "The port to run turbine shred listener (aka TVU port)",
+            },
+            .repair_port = .{
+                .name_override = null,
+                .alias = .none,
+                .default_value = 8003,
+                .config = {},
+                .help = "The port to run shred repair listener",
+            },
+            .test_repair_for_slot = .{
+                .name_override = null,
+                .alias = .none,
+                .default_value = null,
+                .config = {},
+                .help =
+                \\Set a slot here to repeatedly send repair requests for shreds from this slot
+                \\This is only intended for use during short-lived tests of the repair service
+                \\Do not set this during normal usage.
+                ,
+            },
+            .num_retransmit_threads = .{
+                .name_override = "num-retransmit-threads",
+                .alias = .none,
+                .default_value = null,
+                .config = {},
+                .help = "The number of retransmit threads to use for the turbine service" ++
+                    " - default: cpu count",
+            },
+            .max_shreds = .{
+                .name_override = "max-shreds",
+                .alias = .none,
+                .default_value = 1_000,
+                .config = {},
+                .help = "Max number of shreds to store in the blockstore",
+            },
+        };
+
+        fn apply(opts: @This(), cfg: *config.Cmd) void {
+            cfg.shred_network.turbine_recv_port = opts.turbine_port;
+            cfg.shred_network.repair_port = opts.repair_port;
+            cfg.shred_network.start_slot = opts.test_repair_for_slot;
+            cfg.turbine.num_retransmit_threads = opts.num_retransmit_threads;
+            cfg.max_shreds = opts.max_shreds;
+        }
+    };
+    const GeyserOptionsBase = struct {
+        enable: bool,
+        pipe_path: []const u8,
+        writer_fba_bytes: usize,
+
+        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+            .enable = .{
+                .name_override = "enable-geyser",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "enable geyser",
+            },
+            .pipe_path = .{
+                .name_override = "geyser-pipe-path",
+                .alias = .none,
+                .default_value = sig.VALIDATOR_DIR ++ "geyser.pipe",
+                .config = .string,
+                .help = "path to the geyser pipe",
+            },
+            .writer_fba_bytes = .{
+                .name_override = "geyser-writer-fba-bytes",
+                .alias = .none,
+                .default_value = 1 << 32, // 4gb
+                .config = {},
+                .help = "number of bytes to allocate for the geyser writer",
+            },
+        };
+
+        fn apply(opts: @This(), cfg: *config.Cmd) void {
+            cfg.geyser.enable = opts.enable;
+            cfg.geyser.pipe_path = opts.pipe_path;
+            cfg.geyser.writer_fba_bytes = opts.writer_fba_bytes;
+        }
+    };
+
+    const identity_cmd_info: cli.CommandInfo(void) = .{
+        .help = .{
+            .short = "Get own identity.",
+            .long =
+            \\Gets own identity (Pubkey) or creates one if doesn't exist.
+            \\
+            \\NOTE: Keypair is saved in $HOME/.sig/identity.key.
+            ,
+        },
+        .sub = .{},
+    };
+
+    const Gossip = struct {
+        shred_version: ?u16,
+        gossip_base: GossipOptionsCommon,
+        gossip_node: GossipOptionsNode,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Run gossip client.",
+                .long = "Start Solana gossip client on specified port.",
+            },
+            .sub = .{
+                .shred_version = shred_version_option,
+                .gossip_base = GossipOptionsCommon.cmd_info,
+                .gossip_node = GossipOptionsNode.cmd_info,
+            },
+        };
+    };
+
+    const Validator = struct {
+        shred_version: ?u16,
+        leader_schedule: ?[]const u8,
+        gossip_base: GossipOptionsCommon,
+        gossip_node: GossipOptionsNode,
+        repair: RepairOptionsBase,
+        snapshot_dir: []const u8,
+        genesis_file_path: ?[]const u8,
+        accountsdb_base: AccountsDbOptionsBase,
+        accountsdb_download: AccountsDbOptionsDownload,
+        force_new_snapshot_download: bool,
+        accountsdb_index: AccountsDbOptionsIndex,
+        geyser: GeyserOptionsBase,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Run Solana validator.",
+                .long = "Start a full Solana validator client.",
+            },
+            .sub = .{
+                .shred_version = shred_version_option,
+                .leader_schedule = leader_schedule_option,
+                .gossip_base = GossipOptionsCommon.cmd_info,
+                .gossip_node = GossipOptionsNode.cmd_info,
+                .repair = RepairOptionsBase.cmd_info,
+                .snapshot_dir = snapshot_dir_option,
+                .genesis_file_path = genesis_file_path_option,
+                .accountsdb_base = AccountsDbOptionsBase.cmd_info,
+                .accountsdb_download = AccountsDbOptionsDownload.cmd_info,
+                .force_new_snapshot_download = force_new_snapshot_download_option,
+                .accountsdb_index = AccountsDbOptionsIndex.cmd_info,
+                .geyser = GeyserOptionsBase.cmd_info,
+            },
+        };
+    };
+
+    const ShredNetwork = struct {
+        shred_version: ?u16,
+        leader_schedule: ?[]const u8,
+        gossip_base: GossipOptionsCommon,
+        gossip_node: GossipOptionsNode,
+        repair: RepairOptionsBase,
+        dump_shred_tracker: bool,
+        /// TODO: Remove when no longer needed
+        overwrite_stake_for_testing: bool,
+        no_retransmit: bool,
+        snapshot_metadata_only: bool,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Run the shred network to collect and store shreds.",
+                .long =
+                \\ This command runs the shred network without running the full validator
+                \\ (mainly excluding the accounts-db setup).
+                \\
+                \\ NOTE: this means that this command *requires* a leader schedule to be provided
+                \\ (which would usually be derived from the accountsdb snapshot).
+                \\
+                \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be
+                \\ given as well (which is usually derived from the accountsdb snapshot).
+                \\ This can be done with `--test-repair-for-slot $(solana slot -u testnet)`
+                \\ for testnet or another `-u` for mainnet/devnet.
+                ,
+            },
+            .sub = .{
+                .shred_version = shred_version_option,
+                .leader_schedule = leader_schedule_option,
+                .gossip_base = GossipOptionsCommon.cmd_info,
+                .gossip_node = GossipOptionsNode.cmd_info,
+                .repair = RepairOptionsBase.cmd_info,
+                .dump_shred_tracker = .{
+                    .name_override = "dump-shred-tracker",
+                    .alias = .none,
+                    .default_value = false,
+                    .config = {},
+                    .help = "Create shred-tracker.txt" ++
+                        " to visually represent the currently tracked slots.",
+                },
+                .overwrite_stake_for_testing = .{
+                    .name_override = null,
+                    .alias = .none,
+                    .default_value = false,
+                    .config = {},
+                    .help = "Overwrite the stake for testing purposes",
+                },
+                .no_retransmit = .{
+                    .name_override = null,
+                    .alias = .none,
+                    .default_value = true,
+                    .config = {},
+                    .help = "Shreds will be received and stored but not retransmitted",
+                },
+                .snapshot_metadata_only = .{
+                    .name_override = null,
+                    .alias = .none,
+                    .default_value = false,
+                    .config = {},
+                    .help = "load only the snapshot metadata",
+                },
+            },
+        };
+    };
+
+    const SnapshotDownload = struct {
+        shred_version: ?u16,
+        snapshot_dir: []const u8,
+        accountsdb_download: AccountsDbOptionsDownload,
+        gossip_base: GossipOptionsCommon,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Downloads a snapshot.",
+                .long = "Starts a gossip client and downloads a snapshot from peers.",
+            },
+            .sub = .{
+                .shred_version = shred_version_option,
+                .snapshot_dir = snapshot_dir_option,
+                .accountsdb_download = AccountsDbOptionsDownload.cmd_info,
+                .gossip_base = GossipOptionsCommon.cmd_info,
+            },
+        };
+    };
+
+    const SnapshotValidate = struct {
+        snapshot_dir: []const u8,
+        genesis_file_path: ?[]const u8,
+        accountsdb_base: AccountsDbOptionsBase,
+        accountsdb_index: AccountsDbOptionsIndex,
+        gossip_network: ?[]const u8,
+        geyser: GeyserOptionsBase,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Validates a snapshot.",
+                .long = "Loads and validates a snapshot (doesnt download a snapshot).",
+            },
+            .sub = .{
+                .snapshot_dir = snapshot_dir_option,
+                .genesis_file_path = genesis_file_path_option,
+                .accountsdb_base = AccountsDbOptionsBase.cmd_info,
+                .accountsdb_index = AccountsDbOptionsIndex.cmd_info,
+                .gossip_network = gossip_network_option,
+                .geyser = GeyserOptionsBase.cmd_info,
+            },
+        };
+    };
+
+    const SnapshotCreate = struct {
+        snapshot_dir: []const u8,
+        genesis_file_path: ?[]const u8,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Loads from a snapshot" ++
+                    " and outputs to new snapshot 'alt_{VALIDATOR_DIR}/'.",
+                .long = null,
+            },
+            .sub = .{
+                .snapshot_dir = snapshot_dir_option,
+                .genesis_file_path = genesis_file_path_option,
+            },
+        };
+    };
+
+    const PrintManifest = struct {
+        snapshot_dir: []const u8,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Prints a manifest file.",
+                .long = "Loads and prints a manifest file.",
+            },
+            .sub = .{
+                .snapshot_dir = snapshot_dir_option,
+            },
+        };
+    };
+
+    const LeaderScheduleSubCmd = struct {
+        shred_version: ?u16,
+        leader_schedule: ?[]const u8,
+        gossip_base: GossipOptionsCommon,
+        gossip_node: GossipOptionsNode,
+        snapshot_dir: []const u8,
+        genesis_file_path: ?[]const u8,
+        accountsdb_base: AccountsDbOptionsBase,
+        accountsdb_download: AccountsDbOptionsDownload,
+        force_new_snapshot_download: bool,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Prints the leader schedule from the snapshot.",
+                .long =
+                \\- Starts gossip
+                \\- acquires a snapshot if necessary
+                \\- loads accounts db from the snapshot
+                \\- calculates the leader schedule from the snaphot
+                \\- prints the leader schedule in the same format as `solana leader-schedule`
+                \\- exits
+                ,
+            },
+            .sub = .{
+                .shred_version = shred_version_option,
+                .leader_schedule = leader_schedule_option,
+                .gossip_base = GossipOptionsCommon.cmd_info,
+                .gossip_node = GossipOptionsNode.cmd_info,
+                .snapshot_dir = snapshot_dir_option,
+                .genesis_file_path = genesis_file_path_option,
+                .accountsdb_base = AccountsDbOptionsBase.cmd_info,
+                .accountsdb_download = AccountsDbOptionsDownload.cmd_info,
+                .force_new_snapshot_download = force_new_snapshot_download_option,
+            },
+        };
+    };
+
+    const TestTransactionSender = struct {
+        shred_version: ?u16,
+        genesis_file_path: ?[]const u8,
+        n_transactions: u64,
+        n_lamports_per_tx: u64,
+        gossip_base: GossipOptionsCommon,
+        gossip_node: GossipOptionsNode,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Test transaction sender service.",
+                .long =
+                \\Simulates a stream of transaction being sent to the transaction sender by
+                \\running a mock transaction generator thread. For the moment this just sends
+                \\transfer transactions between to hard coded testnet accounts.
+                ,
+            },
+            .sub = .{
+                .shred_version = shred_version_option,
+                .genesis_file_path = genesis_file_path_option,
+                .n_transactions = .{
+                    .name_override = "n-transactions",
+                    .alias = .t,
+                    .default_value = 3,
+                    .config = {},
+                    .help = "number of transactions to send",
+                },
+                .n_lamports_per_tx = .{
+                    .name_override = "n-lamports-per-tx",
+                    .alias = .l,
+                    .default_value = 1e7,
+                    .config = {},
+                    .help = "number of lamports to send per transaction",
+                },
+                .gossip_base = GossipOptionsCommon.cmd_info,
+                .gossip_node = GossipOptionsNode.cmd_info,
+            },
+        };
+    };
+
+    const MockRpcServer = struct {
+        gossip_base: GossipOptionsCommon,
+        gossip_node: GossipOptionsNode,
+        snapshot_dir: []const u8,
+        genesis_file_path: ?[]const u8,
+        accountsdb_base: AccountsDbOptionsBase,
+        accountsdb_download: AccountsDbOptionsDownload,
+        force_new_snapshot_download: bool,
+        accountsdb_index: AccountsDbOptionsIndex,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Run a mock RPC server.",
+                .long = null,
+            },
+            .sub = .{
+                .gossip_base = GossipOptionsCommon.cmd_info,
+                .gossip_node = GossipOptionsNode.cmd_info,
+                .snapshot_dir = snapshot_dir_option,
+                .genesis_file_path = genesis_file_path_option,
+                .accountsdb_base = AccountsDbOptionsBase.cmd_info,
+                .accountsdb_download = AccountsDbOptionsDownload.cmd_info,
+                .force_new_snapshot_download = force_new_snapshot_download_option,
+                .accountsdb_index = AccountsDbOptionsIndex.cmd_info,
+            },
+        };
+    };
+};
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
-fn identity() !void {
-    const maybe_file, const logger = try spawnLogger(gpa_allocator, current_config);
+fn identity(gpa_allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+    const maybe_file, const logger = try spawnLogger(gpa_allocator, cfg);
     defer if (maybe_file) |file| file.close();
     defer logger.deinit();
 
@@ -739,14 +907,24 @@ fn identity() !void {
 }
 
 /// entrypoint to run only gossip
-fn gossip() !void {
-    var app_base = try AppBase.init(gpa_allocator, current_config);
+fn gossip(
+    gpa_allocator: std.mem.Allocator,
+    gossip_value_allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+) !void {
+    var app_base = try AppBase.init(gpa_allocator, cfg);
     errdefer {
         app_base.shutdown();
         app_base.deinit();
     }
 
-    const gossip_service = try startGossip(gpa_allocator, &app_base, &.{});
+    const gossip_service = try startGossip(
+        gpa_allocator,
+        gossip_value_allocator,
+        cfg,
+        &app_base,
+        &.{},
+    );
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
@@ -758,22 +936,25 @@ fn gossip() !void {
 }
 
 /// entrypoint to run a full solana validator
-fn validator() !void {
-    const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator, current_config);
+fn validator(
+    allocator: std.mem.Allocator,
+    gossip_value_allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+) !void {
+    var app_base = try AppBase.init(allocator, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
     }
 
-    const repair_port: u16 = current_config.shred_network.repair_port;
-    const turbine_recv_port: u16 = current_config.shred_network.turbine_recv_port;
-    const snapshot_dir_str = current_config.accounts_db.snapshot_dir;
+    const repair_port: u16 = cfg.shred_network.repair_port;
+    const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
+    const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var gossip_service = try startGossip(allocator, &app_base, &.{
+    var gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
@@ -783,13 +964,13 @@ fn validator() !void {
         allocator.destroy(gossip_service);
     }
 
-    const geyser_writer: ?*GeyserWriter = if (!current_config.geyser.enable)
+    const geyser_writer: ?*GeyserWriter = if (!cfg.geyser.enable)
         null
     else
         try createGeyserWriter(
             allocator,
-            current_config.geyser.pipe_path,
-            current_config.geyser.writer_fba_bytes,
+            cfg.geyser.pipe_path,
+            cfg.geyser.writer_fba_bytes,
         );
     defer if (geyser_writer) |geyser| {
         geyser.deinit();
@@ -798,7 +979,7 @@ fn validator() !void {
     };
 
     // snapshot
-    var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
         .gossip_service = gossip_service,
         .geyser_writer = geyser_writer,
         .validate_snapshot = true,
@@ -810,7 +991,7 @@ fn validator() !void {
 
     // leader schedule
     var leader_schedule_cache = LeaderScheduleCache.init(allocator, bank_fields.epoch_schedule);
-    if (try getLeaderScheduleFromCli(allocator)) |leader_schedule| {
+    if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
         try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
     } else {
         const schedule = try bank_fields.leaderSchedule(allocator);
@@ -856,7 +1037,7 @@ fn validator() !void {
         blockstore_reader,
         &blockstore_db,
         lowest_cleanup_slot,
-        current_config.max_shreds,
+        cfg.max_shreds,
         app_base.exit,
     });
     defer cleanup_service_handle.join();
@@ -904,11 +1085,11 @@ fn validator() !void {
         .{ &rpc_epoch_ctx_service, app_base.exit },
     );
 
-    const turbine_config = current_config.turbine;
+    const turbine_config = cfg.turbine;
 
     // shred network
     var shred_network_manager = try sig.shred_network.start(
-        current_config.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
+        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
         .{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
@@ -932,23 +1113,26 @@ fn validator() !void {
     shred_network_manager.join();
 }
 
-fn shredNetwork() !void {
-    const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator, current_config);
+fn shredNetwork(
+    allocator: std.mem.Allocator,
+    gossip_value_allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+) !void {
+    var app_base = try AppBase.init(allocator, cfg);
     defer {
         if (!app_base.closed) app_base.shutdown();
         app_base.deinit();
     }
 
-    const genesis_path = try current_config.genesisFilePath() orelse
+    const genesis_path = try cfg.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
     const genesis_config = try GenesisConfig.init(allocator, genesis_path);
 
     var rpc_client = try sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
 
-    const shred_network_conf = current_config.shred_network.toConfig(
-        current_config.shred_network.start_slot orelse blk: {
+    const shred_network_conf = cfg.shred_network.toConfig(
+        cfg.shred_network.start_slot orelse blk: {
             const response = try rpc_client.getSlot(.{});
             break :blk try response.result();
         },
@@ -958,7 +1142,7 @@ fn shredNetwork() !void {
     const repair_port: u16 = shred_network_conf.repair_port;
     const turbine_recv_port: u16 = shred_network_conf.turbine_recv_port;
 
-    var gossip_service = try startGossip(allocator, &app_base, &.{
+    var gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
@@ -1016,7 +1200,7 @@ fn shredNetwork() !void {
         blockstore_reader,
         &blockstore_db,
         lowest_cleanup_slot,
-        current_config.max_shreds,
+        cfg.max_shreds,
         app_base.exit,
     });
     defer cleanup_service_handle.join();
@@ -1039,8 +1223,8 @@ fn shredNetwork() !void {
         .epoch_context_mgr = &epoch_context_manager,
         .shred_inserter = shred_inserter,
         .my_contact_info = my_contact_info,
-        .n_retransmit_threads = current_config.turbine.num_retransmit_threads,
-        .overwrite_turbine_stake_for_testing = current_config.turbine.overwrite_stake_for_testing,
+        .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
+        .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
     });
     defer shred_network_manager.deinit();
 
@@ -1049,15 +1233,14 @@ fn shredNetwork() !void {
     shred_network_manager.join();
 }
 
-fn printManifest() !void {
-    const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator, current_config);
+fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+    var app_base = try AppBase.init(allocator, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
     }
 
-    const snapshot_dir_str = current_config.accounts_db.snapshot_dir;
+    const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
@@ -1077,19 +1260,18 @@ fn printManifest() !void {
     std.debug.print("full snapshots: {any}\n", .{snapshots.full.bank_fields});
 }
 
-fn createSnapshot() !void {
-    const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator, current_config);
+fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+    var app_base = try AppBase.init(allocator, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
     }
 
-    const snapshot_dir_str = current_config.accounts_db.snapshot_dir;
+    const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
         .gossip_service = null,
         .geyser_writer = null,
         .validate_snapshot = false,
@@ -1127,25 +1309,24 @@ fn createSnapshot() !void {
     });
 }
 
-fn validateSnapshot() !void {
-    const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator, current_config);
+fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+    var app_base = try AppBase.init(allocator, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
     }
 
-    const snapshot_dir_str = current_config.accounts_db.snapshot_dir;
+    const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const geyser_writer: ?*GeyserWriter = if (!current_config.geyser.enable)
+    const geyser_writer: ?*GeyserWriter = if (!cfg.geyser.enable)
         null
     else
         try createGeyserWriter(
             allocator,
-            current_config.geyser.pipe_path,
-            current_config.geyser.writer_fba_bytes,
+            cfg.geyser.pipe_path,
+            cfg.geyser.writer_fba_bytes,
         );
     defer if (geyser_writer) |geyser| {
         geyser.deinit();
@@ -1153,7 +1334,7 @@ fn validateSnapshot() !void {
         allocator.destroy(geyser);
     };
 
-    var loaded_snapshot = try loadSnapshot(allocator, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
         .gossip_service = null,
         .geyser_writer = geyser_writer,
         .validate_snapshot = true,
@@ -1163,18 +1344,19 @@ fn validateSnapshot() !void {
 }
 
 /// entrypoint to print the leader schedule and then exit
-fn printLeaderSchedule() !void {
-    const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator, current_config);
+fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+    var app_base = try AppBase.init(allocator, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
     }
 
-    const start_slot, const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
+    const start_slot, //
+    const leader_schedule //
+    = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
 
-        var loaded_snapshot = loadSnapshot(allocator, app_base.logger.unscoped(), .{
+        var loaded_snapshot = loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
             .gossip_service = null,
             .geyser_writer = null,
             .validate_snapshot = true,
@@ -1203,8 +1385,11 @@ fn printLeaderSchedule() !void {
     try stdout.flush();
 }
 
-fn getLeaderScheduleFromCli(allocator: std.mem.Allocator) !?struct { Slot, LeaderSchedule } {
-    return if (current_config.leader_schedule_path) |path|
+fn getLeaderScheduleFromCli(
+    allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+) !?struct { Slot, LeaderSchedule } {
+    return if (cfg.leader_schedule_path) |path|
         if (std.mem.eql(u8, "--", path))
             try LeaderSchedule.read(allocator, std.io.getStdIn().reader())
         else
@@ -1213,29 +1398,31 @@ fn getLeaderScheduleFromCli(allocator: std.mem.Allocator) !?struct { Slot, Leade
         null;
 }
 
-pub fn testTransactionSenderService() !void {
-    const allocator = gpa_allocator;
-
-    var app_base = try AppBase.init(allocator, current_config);
+fn testTransactionSenderService(
+    allocator: std.mem.Allocator,
+    gossip_value_allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+) !void {
+    var app_base = try AppBase.init(allocator, cfg);
     defer {
         if (!app_base.closed) app_base.shutdown(); // we have this incase an error occurs
         app_base.deinit();
     }
 
     // read genesis (used for leader schedule)
-    const genesis_file_path = try current_config.genesisFilePath() orelse
+    const genesis_file_path = try cfg.genesisFilePath() orelse
         @panic("No genesis file path found: use -g or -n");
     const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
-    const gossip_service = try startGossip(allocator, &app_base, &.{});
+    const gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{});
     defer {
         gossip_service.deinit();
         allocator.destroy(gossip_service);
     }
 
     // define cluster of where to land transactions
-    const rpc_cluster: ClusterType = if (try current_config.gossip.getCluster()) |n| switch (n) {
+    const rpc_cluster: ClusterType = if (try cfg.gossip.getCluster()) |n| switch (n) {
         .mainnet => .MainnetBeta,
         .devnet => .Devnet,
         .testnet => .Testnet,
@@ -1285,8 +1472,8 @@ pub fn testTransactionSenderService() !void {
     );
     // send and confirm mock transactions
     try mock_transfer_service.run(
-        current_config.test_transaction_sender.n_transactions,
-        current_config.test_transaction_sender.n_lamports_per_transaction,
+        cfg.test_transaction_sender.n_transactions,
+        cfg.test_transaction_sender.n_lamports_per_transaction,
     );
 
     gossip_service.shutdown();
@@ -1294,10 +1481,10 @@ pub fn testTransactionSenderService() !void {
     transaction_sender_handle.join();
 }
 
-fn mockRpcServer() !void {
+fn mockRpcServer(gpa_allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const logger: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(current_config.accounts_db.snapshot_dir, .{
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(cfg.accounts_db.snapshot_dir, .{
         .iterate = true,
     });
     defer snapshot_dir.close();
@@ -1383,8 +1570,8 @@ const AppBase = struct {
     exit: *std.atomic.Value(bool),
     closed: bool,
 
-    fn init(allocator: std.mem.Allocator, cmd_config: config.Cmd) !AppBase {
-        const maybe_file, const plain_logger = try spawnLogger(allocator, cmd_config);
+    fn init(allocator: std.mem.Allocator, cfg: config.Cmd) !AppBase {
+        const maybe_file, const plain_logger = try spawnLogger(allocator, cfg);
         errdefer if (maybe_file) |file| file.close();
         const logger = plain_logger.withScope(LOG_SCOPE);
         errdefer logger.deinit();
@@ -1396,29 +1583,28 @@ const AppBase = struct {
         const metrics_registry = globalRegistry();
         const metrics_thread = try sig.utils.service_manager.spawnService( //
             plain_logger, exit, "metrics endpoint", .{}, //
-            servePrometheus, .{ allocator, metrics_registry, cmd_config.metrics_port });
+            servePrometheus, .{ allocator, metrics_registry, cfg.metrics_port });
         errdefer metrics_thread.detach();
 
         const my_keypair = try sig.identity.getOrInit(allocator, logger.unscoped());
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-        const entrypoints = try cmd_config.gossip.getEntrypointAddrs(allocator);
+        const entrypoints = try cfg.gossip.getEntrypointAddrs(allocator);
 
         const echo_data = try getShredAndIPFromEchoServer(logger.unscoped(), entrypoints);
 
-        // zig fmt: off
-        const my_shred_version = cmd_config.shred_version
-            orelse echo_data.shred_version
-            orelse 0;
-        // zig fmt: on
+        const my_shred_version =
+            cfg.shred_version orelse
+            echo_data.shred_version orelse
+            0;
 
-        const config_host = cmd_config.gossip.getHost() catch null;
+        const config_host = cfg.gossip.getHost() catch null;
         const my_ip = config_host orelse echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
 
-        const my_port = cmd_config.gossip.port;
+        const my_port = cfg.gossip.port;
 
         logger.info()
-            .field("metrics_port", cmd_config.metrics_port)
+            .field("metrics_port", cfg.metrics_port)
             .field("identity", my_pubkey)
             .field("entrypoints", entrypoints)
             .field("shred_version", my_shred_version)
@@ -1459,6 +1645,8 @@ const AppBase = struct {
 
 fn startGossip(
     allocator: std.mem.Allocator,
+    gossip_value_allocator: std.mem.Allocator,
+    cfg: config.Cmd,
     app_base: *AppBase,
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
@@ -1481,8 +1669,8 @@ fn startGossip(
     contact_info.shred_version = app_base.shred_version;
 
     const service = try GossipService.create(
-        gpa_allocator,
-        gossip_value_gpa_allocator,
+        allocator,
+        gossip_value_allocator,
         contact_info,
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints,
@@ -1490,8 +1678,8 @@ fn startGossip(
     );
 
     try service.start(.{
-        .spy_node = current_config.gossip.spy_node,
-        .dump = current_config.gossip.dump,
+        .spy_node = cfg.gossip.spy_node,
+        .dump = cfg.gossip.dump,
     });
 
     return service;
@@ -1499,9 +1687,9 @@ fn startGossip(
 
 fn spawnLogger(
     allocator: std.mem.Allocator,
-    cmd_config: config.Cmd,
+    cfg: config.Cmd,
 ) !struct { ?std.fs.File, Logger } {
-    const file, const writer = if (cmd_config.log_file) |path| blk: {
+    const file, const writer = if (cfg.log_file) |path| blk: {
         const file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |e| switch (e) {
             error.FileNotFound => try std.fs.cwd().createFile(path, .{}),
             else => return e,
@@ -1512,9 +1700,9 @@ fn spawnLogger(
 
     var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = cmd_config.log_level,
+        .max_level = cfg.log_level,
         .max_buffer = 1 << 20,
-        .write_stderr = cmd_config.tee_logs or cmd_config.log_file == null,
+        .write_stderr = cfg.tee_logs or cfg.log_file == null,
     }, writer);
 
     return .{ file, std_logger.logger() };
@@ -1552,6 +1740,7 @@ const LoadSnapshotOptions = struct {
 
 fn loadSnapshot(
     allocator: std.mem.Allocator,
+    cfg: config.Cmd,
     unscoped_logger: Logger,
     options: LoadSnapshotOptions,
 ) !LoadedSnapshot {
@@ -1560,10 +1749,10 @@ fn loadSnapshot(
     var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});
     defer validator_dir.close();
 
-    const genesis_file_path = try current_config.genesisFilePath() orelse
+    const genesis_file_path = try cfg.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
 
-    const adb_config = current_config.accounts_db;
+    const adb_config = cfg.accounts_db;
     const snapshot_dir_str = adb_config.snapshot_dir;
 
     const combined_manifest, //
@@ -1598,7 +1787,7 @@ fn loadSnapshot(
     // cli parsing
     const n_threads_snapshot_load: u32 = blk: {
         const cli_n_threads_snapshot_load: u32 =
-            current_config.accounts_db.num_threads_snapshot_load;
+            cfg.accounts_db.num_threads_snapshot_load;
         if (cli_n_threads_snapshot_load == 0) {
             // default value
             break :blk std.math.lossyCast(u32, try std.Thread.getCpuCount());
@@ -1619,9 +1808,9 @@ fn loadSnapshot(
         else
             null,
         // to use disk or ram for the index
-        .index_allocation = if (current_config.accounts_db.use_disk_index) .disk else .ram,
+        .index_allocation = if (cfg.accounts_db.use_disk_index) .disk else .ram,
         // number of shards for the index
-        .number_of_index_shards = current_config.accounts_db.number_of_index_shards,
+        .number_of_index_shards = cfg.accounts_db.number_of_index_shards,
     });
     errdefer accounts_db.deinit();
 
@@ -1633,9 +1822,9 @@ fn loadSnapshot(
             combined_manifest,
             n_threads_snapshot_load,
             options.validate_snapshot,
-            current_config.accounts_db.accounts_per_file_estimate,
-            current_config.accounts_db.fastload,
-            current_config.accounts_db.save_index,
+            cfg.accounts_db.accounts_per_file_estimate,
+            cfg.accounts_db.fastload,
+            cfg.accounts_db.save_index,
         );
     errdefer collapsed_manifest.deinit(allocator);
 
@@ -1699,8 +1888,12 @@ fn loadSnapshot(
 }
 
 /// entrypoint to download snapshot
-fn downloadSnapshot() !void {
-    var app_base = try AppBase.init(gpa_allocator, current_config);
+fn downloadSnapshot(
+    gpa_allocator: std.mem.Allocator,
+    gossip_value_allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+) !void {
+    var app_base = try AppBase.init(gpa_allocator, cfg);
     errdefer {
         app_base.shutdown();
         app_base.deinit();
@@ -1709,18 +1902,24 @@ fn downloadSnapshot() !void {
     if (app_base.entrypoints.len == 0) {
         @panic("cannot download a snapshot with no entrypoints");
     }
-    const gossip_service = try startGossip(gpa_allocator, &app_base, &.{});
+    const gossip_service = try startGossip(
+        gpa_allocator,
+        gossip_value_allocator,
+        cfg,
+        &app_base,
+        &.{},
+    );
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
         gpa_allocator.destroy(gossip_service);
     }
 
-    const trusted_validators = try getTrustedValidators(gpa_allocator);
+    const trusted_validators = try getTrustedValidators(gpa_allocator, cfg);
     defer if (trusted_validators) |*tvs| tvs.deinit();
 
-    const snapshot_dir_str = current_config.accounts_db.snapshot_dir;
-    const min_mb_per_sec = current_config.accounts_db.min_snapshot_download_speed_mbs;
+    const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
+    const min_mb_per_sec = cfg.accounts_db.min_snapshot_download_speed_mbs;
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
@@ -1732,21 +1931,21 @@ fn downloadSnapshot() !void {
         gossip_service,
         snapshot_dir,
         @intCast(min_mb_per_sec),
-        current_config.accounts_db.max_number_of_snapshot_download_attempts,
+        cfg.accounts_db.max_number_of_snapshot_download_attempts,
         null,
     );
     defer full_file.close();
     defer if (maybe_inc_file) |inc_file| inc_file.close();
 }
 
-fn getTrustedValidators(allocator: std.mem.Allocator) !?std.ArrayList(Pubkey) {
+fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.ArrayList(Pubkey) {
     var trusted_validators: ?std.ArrayList(Pubkey) = null;
-    if (current_config.gossip.trusted_validators.len > 0) {
+    if (cfg.gossip.trusted_validators.len > 0) {
         trusted_validators = try std.ArrayList(Pubkey).initCapacity(
             allocator,
-            current_config.gossip.trusted_validators.len,
+            cfg.gossip.trusted_validators.len,
         );
-        for (current_config.gossip.trusted_validators) |trusted_validator_str| {
+        for (cfg.gossip.trusted_validators) |trusted_validator_str| {
             trusted_validators.?.appendAssumeCapacity(
                 try Pubkey.parseBase58String(trusted_validator_str),
             );
