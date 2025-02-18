@@ -109,7 +109,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .gossip_view = null,
         .index_allocation = if (use_disk) .disk else .ram,
         .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
-        .lru_size = 10_000,
     });
     defer accounts_db.deinit();
 
@@ -349,7 +348,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 .gossip_view = null,
                 .index_allocation = accounts_db.account_index.reference_allocator,
                 .number_of_index_shards = accounts_db.number_of_index_shards,
-                .lru_size = accounts_db.lru_size,
             });
             defer alt_accounts_db.deinit();
 

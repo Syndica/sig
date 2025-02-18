@@ -1572,7 +1572,6 @@ fn loadSnapshot(
         .index_allocation = if (current_config.accounts_db.use_disk_index) .disk else .ram,
         // number of shards for the index
         .number_of_index_shards = current_config.accounts_db.number_of_index_shards,
-        .lru_size = 10_000,
     });
     errdefer accounts_db.deinit();
 
