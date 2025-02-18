@@ -4,9 +4,9 @@ const sysvar = sig.runtime.sysvar;
 
 /// `SysvarCache` provides the runtime with access to sysvars during program execution
 ///
-/// TODO:
-///     - Evaluate storing as raw bytes or as object representations
-///     - Why is SlotHistory not included?
+/// TODO:\
+/// - Evaluate storing as raw bytes or as object representations\
+/// - Why is SlotHistory not included?\
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/sysvar_cache.rs#L28
 pub const SysvarCache = struct {
