@@ -125,6 +125,8 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
+    /// `state` must implement member function `pub fn serializedSize(state: T) usize`\
+    /// `state` must support bincode serialization
     pub fn serializeIntoAccountData(
         self: *BorrowedAccount,
         state: anytype,

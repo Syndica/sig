@@ -1057,7 +1057,7 @@ test "executeWithdrawNonceAccount" {
 
     // Create Sysvars
     const recent_blockhashes = RecentBlockhashes{ .entries = &.{} };
-    const rent = Rent.default();
+    const rent = Rent.DEFAULT;
     const rent_minimum_balance = rent.minimumBalance(try nonce_state.serializedSize());
 
     const account_0_key = Pubkey.initRandom(prng.random());
@@ -1156,7 +1156,7 @@ test "executeInitializeNonceAccount" {
             .fee_calculator = .{ .lamports_per_signature = 0 }, // Irrelevant
         }},
     };
-    const rent = Rent.default();
+    const rent = Rent.DEFAULT;
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
