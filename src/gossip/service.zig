@@ -1301,7 +1301,7 @@ pub const GossipService = struct {
         seed: u64,
 
         task: Task,
-        done: Atomic(bool) = Atomic(bool).init(false),
+        wg_done: *std.Thread.WaitGroup,
 
         pub fn deinit(this: *PullRequestTask) void {
             this.output.deinit();
@@ -1309,7 +1309,7 @@ pub const GossipService = struct {
 
         pub fn callback(task: *Task) void {
             var self: *@This() = @fieldParentPtr("task", task);
-            defer self.done.store(true, .release);
+            defer self.wg_done.finish();
 
             const output_limit = self.output_limit.load(.acquire);
             if (output_limit <= 0) {
@@ -1423,12 +1423,15 @@ pub const GossipService = struct {
             const gossip_table, var lock = self.gossip_table_rw.readWithLock();
             defer lock.unlock();
 
+            var batch = Batch{};
+            var wg = std.Thread.WaitGroup{};
             var output_limit = Atomic(i64).init(MAX_NUM_VALUES_PER_PULL_RESPONSE);
 
             for (valid_indexs.items, 0..) |i, task_index| {
                 // create the thread task
                 tasks[task_index] = PullRequestTask{
                     .task = .{ .callback = PullRequestTask.callback },
+                    .wg_done = &wg,
                     .allocator = self.allocator,
                     .my_pubkey = &self.my_pubkey,
                     .gossip_table = gossip_table,
@@ -1439,18 +1442,14 @@ pub const GossipService = struct {
                     .filter = &pull_requests[i].filter,
                 };
 
-                // run it
-                const batch = Batch.from(&tasks[task_index].task);
-                self.thread_pool.schedule(batch);
+                // prepare to run it.
+                wg.start();
+                batch.push(Batch.from(&tasks[task_index].task));
             }
 
-            // wait for them to be done to release the lock
-            for (tasks) |*task| {
-                while (!task.done.load(.acquire)) {
-                    // busy wait
-                    std.atomic.spinLoopHint();
-                }
-            }
+            // Run all tasks and wait for them to complete
+            self.thread_pool.schedule(batch);
+            wg.wait();
         }
 
         for (tasks) |*task| {
