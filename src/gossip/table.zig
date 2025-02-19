@@ -47,7 +47,7 @@ pub fn AutoArrayHashSet(comptime T: type) type {
 ///
 /// Analogous to [Crds](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L68)
 pub const GossipTable = struct {
-    store: GossipMap = .{},
+    store: GossipMap,
 
     // special types tracked with their index
     contact_infos: AutoArrayHashSet(usize),
@@ -84,6 +84,7 @@ pub const GossipTable = struct {
 
     pub fn init(allocator: std.mem.Allocator, gossip_data_allocator: std.mem.Allocator) !Self {
         return Self{
+            .store = .{},
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
