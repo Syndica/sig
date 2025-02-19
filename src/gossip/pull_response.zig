@@ -7,7 +7,6 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.mux.RwMux;
 const GossipTable = sig.gossip.table.GossipTable;
-const GossipData = sig.gossip.data.GossipData;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
 
@@ -47,7 +46,7 @@ pub fn filterSignedGossipDatas(
     errdefer output.deinit();
 
     for (match_indexs.items) |entry_index| {
-        var entry = gossip_table.store.iterator().values[entry_index];
+        var entry = gossip_table.store.getByIndex(entry_index);
 
         // entry is too new
         if (entry.value.wallclock() > caller_wallclock_with_jitter) {
@@ -58,7 +57,7 @@ pub fn filterSignedGossipDatas(
             continue;
         }
         // exclude contact info (? not sure why - labs does it)
-        if (entry.value.data == GossipData.ContactInfo) {
+        if (entry.value.data == .ContactInfo) {
             continue;
         }
 

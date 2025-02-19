@@ -64,6 +64,202 @@ pub fn RecyclingList(
     };
 }
 
+/// Efficiently stores a collection of instances of a tagged union.
+///
+/// - Uses less memory than an ArrayList (for heterogeneously sized unions)
+/// - Does not preserve insertion order (items are indexed with a struct)
+///
+/// This reduces space compared to an ArrayList by storing the union
+/// fields' inner data types rather than storing the union itself.
+/// Normally when you store the union directly, each instance of that
+/// union uses the amount of memory of the *largest* variant of that
+/// union. With this approach, each instance only uses the amount of
+/// memory needed for that specific variant of the union.
+///
+/// This is accomplished by storing a struct of lists, with one list
+/// for each union variant, instead of storing a list of the union.
+pub fn SplitUnionList(TaggedUnion: type) type {
+    const Tag = @typeInfo(TaggedUnion).Union.tag_type.?;
+
+    return struct {
+        lists: sig.utils.types.EnumStruct(Tag, List),
+
+        const Self = @This();
+
+        pub const Index = struct {
+            tag: Tag,
+            index: usize,
+        };
+
+        fn List(tag: Tag) type {
+            return std.ArrayListUnmanaged(FieldType(tag));
+        }
+
+        fn FieldType(tag: Tag) type {
+            inline for (@typeInfo(TaggedUnion).Union.fields) |field| {
+                if (std.mem.eql(u8, field.name, @tagName(tag))) {
+                    return field.type;
+                }
+            }
+        }
+
+        pub fn init() Self {
+            var lists: sig.utils.types.EnumStruct(Tag, List) = undefined;
+            inline for (@typeInfo(Tag).Enum.fields) |f| {
+                @field(lists, f.name) = .{};
+            }
+            return .{ .lists = lists };
+        }
+
+        pub fn deinit(self: *Self, allocator: Allocator) void {
+            inline for (@typeInfo(Tag).Enum.fields) |f| {
+                @field(self.lists, f.name).deinit(allocator);
+            }
+        }
+
+        pub fn append(self: *Self, allocator: Allocator, item: TaggedUnion) Allocator.Error!Index {
+            switch (@as(Tag, item)) {
+                inline else => |tag| {
+                    const list = self.listMut(tag);
+                    const unwrapped_item = @field(item, @tagName(tag));
+                    try list.append(allocator, unwrapped_item);
+                    return .{
+                        .tag = tag,
+                        .index = list.items.len - 1,
+                    };
+                },
+            }
+        }
+
+        pub fn addOne(self: *Self, allocator: Allocator, tag: Tag) Allocator.Error!Entry {
+            switch (tag) {
+                inline else => |comptime_tag| {
+                    const list = self.listMut(comptime_tag);
+                    return .{
+                        .ptr = try list.addOne(allocator),
+                        .index = .{
+                            .tag = tag,
+                            .index = list.items.len - 1,
+                        },
+                    };
+                },
+            }
+        }
+
+        pub const Entry = struct {
+            ptr: *anyopaque,
+            index: Index,
+
+            pub fn read(self: Entry) TaggedUnion {
+                switch (self.index.tag) {
+                    inline else => |tag| {
+                        const ptr: *FieldType(tag) = @ptrCast(@alignCast(self.ptr));
+                        return @unionInit(TaggedUnion, @tagName(tag), ptr.*);
+                    },
+                }
+            }
+
+            pub fn write(self: Entry, item: TaggedUnion) void {
+                switch (self.index.tag) {
+                    inline else => |tag| {
+                        const ptr: *FieldType(tag) = @ptrCast(@alignCast(self.ptr));
+                        ptr.* = @field(item, @tagName(tag)); // implicitly asserts tag is correct
+                    },
+                }
+            }
+        };
+
+        pub fn swapRemove(self: *Self, index: Index) TaggedUnion {
+            switch (index.tag) {
+                inline else => |tag| {
+                    const list = self.listMut(tag);
+                    const item = list.swapRemove(index.index);
+                    return @unionInit(TaggedUnion, @tagName(tag), item);
+                },
+            }
+        }
+
+        /// returns the number of contained items with this tag.
+        pub fn tagLen(self: *const Self, tag: Tag) usize {
+            return switch (tag) {
+                inline else => |comptime_tag| self.listConst(comptime_tag).items.len,
+            };
+        }
+
+        pub fn get(self: *const Self, index: Index) TaggedUnion {
+            return switch (index.tag) {
+                inline else => |comptime_tag| @unionInit(
+                    TaggedUnion,
+                    @tagName(comptime_tag),
+                    self.listConst(comptime_tag).items[index.index],
+                ),
+            };
+        }
+
+        pub fn getEntry(self: *const Self, index: Index) Entry {
+            return switch (index.tag) {
+                inline else => |comptime_tag| .{
+                    .index = index,
+                    .ptr = &self.listConst(comptime_tag).items[index.index],
+                },
+            };
+        }
+
+        pub fn getTypedConst(
+            self: *const Self,
+            comptime tag: Tag,
+            index: Index,
+        ) *const FieldType(tag) {
+            return &self.listConst(tag).items[index.index];
+        }
+
+        pub fn getTypedMut(self: *Self, comptime tag: Tag, index: Index) *FieldType(tag) {
+            return &self.listMut(tag).items[index.index];
+        }
+
+        fn listConst(self: *const Self, comptime tag: Tag) *const List(tag) {
+            return &@field(self.lists, @tagName(tag));
+        }
+
+        fn listMut(self: *Self, comptime tag: Tag) *List(tag) {
+            return &@field(self.lists, @tagName(tag));
+        }
+    };
+}
+
+test "SplitUnionList: addOne, get, and swapRemove" {
+    const allocator = std.testing.allocator;
+    const Union = union(enum) { one: u8, two: u32, three: u64 };
+    var list = SplitUnionList(Union).init();
+    defer list.deinit(allocator);
+    var entry = try list.addOne(allocator, .one);
+    entry.write(.{ .one = 0 });
+    entry = try list.addOne(allocator, .one);
+    entry.write(.{ .one = 1 });
+    entry = try list.addOne(allocator, .one);
+    entry.write(.{ .one = 2 });
+    entry = try list.addOne(allocator, .one);
+    entry.write(.{ .one = 3 });
+    try std.testing.expectEqual(Union{ .one = 0 }, list.get(.{ .tag = .one, .index = 0 }));
+    try std.testing.expectEqual(Union{ .one = 1 }, list.get(.{ .tag = .one, .index = 1 }));
+    try std.testing.expectEqual(Union{ .one = 2 }, list.get(.{ .tag = .one, .index = 2 }));
+    try std.testing.expectEqual(Union{ .one = 3 }, list.get(.{ .tag = .one, .index = 3 }));
+
+    _ = list.swapRemove(.{ .tag = .one, .index = 1 });
+    try std.testing.expectEqual(Union{ .one = 0 }, list.get(.{ .tag = .one, .index = 0 }));
+    try std.testing.expectEqual(Union{ .one = 3 }, list.get(.{ .tag = .one, .index = 1 }));
+    try std.testing.expectEqual(Union{ .one = 2 }, list.get(.{ .tag = .one, .index = 2 }));
+
+    _ = list.swapRemove(.{ .tag = .one, .index = 0 });
+    try std.testing.expectEqual(Union{ .one = 2 }, list.get(.{ .tag = .one, .index = 0 }));
+    try std.testing.expectEqual(Union{ .one = 3 }, list.get(.{ .tag = .one, .index = 1 }));
+
+    _ = list.swapRemove(.{ .tag = .one, .index = 0 });
+    try std.testing.expectEqual(Union{ .one = 3 }, list.get(.{ .tag = .one, .index = 0 }));
+
+    _ = list.swapRemove(.{ .tag = .one, .index = 0 });
+}
+
 /// A set that guarantees the contained items will be sorted whenever
 /// accessed through public methods like `items` and `range`.
 ///
