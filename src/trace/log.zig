@@ -127,13 +127,17 @@ pub const ChannelPrintLogger = struct {
 
     pub fn init(config: Config) !*Self {
         const max_buffer = config.max_buffer orelse return error.MaxBufferNotSet;
+
         const recycle_fba = try config.allocator.create(RecycleFBA(.{}));
+        errdefer config.allocator.destroy(recycle_fba);
         recycle_fba.* = try RecycleFBA(.{}).init(.{
             .records_allocator = config.allocator,
             .bytes_allocator = config.allocator,
         }, max_buffer);
+        errdefer recycle_fba.deinit();
 
         const self = try config.allocator.create(Self);
+        errdefer config.allocator.destroy(self);
         self.* = .{
             .allocator = config.allocator,
             .log_allocator = recycle_fba.allocator(),
@@ -146,11 +150,13 @@ pub const ChannelPrintLogger = struct {
         };
 
         self.handle = try std.Thread.spawn(.{}, run, .{self});
+        errdefer comptime unreachable;
+
         return self;
     }
 
     pub fn deinit(self: *Self) void {
-        if (self.handle) |*handle| {
+        if (self.handle) |handle| {
             std.time.sleep(std.time.ns_per_ms * 5);
             self.exit.store(true, .seq_cst);
             handle.join();

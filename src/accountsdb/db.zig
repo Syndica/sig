@@ -2636,8 +2636,8 @@ pub const AccountsDB = struct {
             };
             const archive_file_name_bounded = archive_info.snapshotArchiveName();
             const archive_file_name = archive_file_name_bounded.constSlice();
-            self.logger.info().logf("Generating full snapshot '{s}' (full path: {s}).", .{
-                archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, archive_file_name),
+            self.logger.info().logf("Generating full snapshot '{s}' (full path: {1s}/{0s}).", .{
+                archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, "."),
             });
             break :blk try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
         };
@@ -2853,9 +2853,13 @@ pub const AccountsDB = struct {
             };
             const archive_file_name_bounded = archive_info.snapshotArchiveName();
             const archive_file_name = archive_file_name_bounded.constSlice();
-            self.logger.info().logf("Generating incremental snapshot '{s}' (full path: {s}).", .{
-                archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, archive_file_name),
-            });
+            self.logger.info().logf(
+                "Generating incremental snapshot '{0s}' (full path: {1s}/{0s}).",
+                .{
+                    archive_file_name,
+                    sig.utils.fmt.tryRealPath(self.snapshot_dir, "."),
+                },
+            );
             break :blk try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
         };
         defer archive_file.close();
