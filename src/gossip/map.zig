@@ -67,8 +67,8 @@ pub const GossipMap = struct {
         const entries = self.key_to_index.entries.slice();
         return .{
             .key_ptr = &entries.items(.key)[index],
-            .gossip_data_entry = self.gossip_data.getEntry(entries.items(.value)[index]),
             .metadata_ptr = &self.metadata.items[index],
+            .gossip_data_entry = self.gossip_data.getEntry(entries.items(.value)[index]),
             .index = index,
         };
     }
@@ -307,7 +307,6 @@ test "repeat add+remove" {
 
     var keys = std.ArrayList(GossipKey).init(std.testing.allocator);
     defer keys.deinit();
-    // var data = std.ArrayList(GossipVersionedData).init(std.testing.allocator);
 
     for (0..20) |_| {
         // add
