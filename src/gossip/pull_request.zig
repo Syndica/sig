@@ -303,8 +303,9 @@ test "building pull filters" {
 
     // assert value is in the filter
     var gossip_values = gossip_table.store.iterator();
-    for (0..num_items) |_| {
-        const versioned_value = gossip_values.next().?.getVersionedData();
+    try std.testing.expectEqual(num_items, gossip_table.store.count());
+    while (gossip_values.next()) |value| {
+        const versioned_value = value.getVersionedData();
         const hash = versioned_value.value_hash;
 
         const index = GossipPullFilterSet.hashIndex(mask_bits, &hash);
