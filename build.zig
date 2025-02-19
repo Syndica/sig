@@ -44,7 +44,7 @@ pub const Config = struct {
             .ssh_workdir = b.option([]const u8, "ssh-workdir", "When using ssh-host, this " ++
                 "configures the working directory where executables will run (default: sig).") orelse
                 "sig",
-            .no_network_tests = b.option(bool, "no-network-tests", "Do not run any tests that " ++ 
+            .no_network_tests = b.option(bool, "no-network-tests", "Do not run any tests that " ++
                 "depend on the network.") orelse false,
         };
 
@@ -422,7 +422,7 @@ const ssh = struct {
         return b.resolveTargetQuery(query);
     }
 
-    /// add a build step to send the artifact to the remote host using scp or rsync
+    /// add a build step to send the artifact to the remote host using send-file.zig
     fn addSendArtifact(
         b: *Build,
         install: *Build.Step.InstallArtifact,
@@ -430,28 +430,18 @@ const ssh = struct {
         remote_dir: []const u8,
     ) !*Build.Step.Run {
         const local_path = b.getInstallPath(install.dest_dir.?, install.dest_sub_path);
-        defer b.allocator.free(remote_dir);
+        const remote_path = b.fmt("{s}/{s}", .{ remote_dir, install.dest_sub_path });
 
-        const remote_uri = b.fmt(
-            "{s}:{s}/{s}",
-            .{ host, remote_dir, install.dest_sub_path },
-        );
-        defer b.allocator.free(remote_uri);
-
-        const mkdir = b.addSystemCommand(&.{ "ssh", host, "mkdir -p", remote_dir });
-        mkdir.step.dependOn(&install.step);
-
-        const which_rsync = try std.process.Child.run(.{
-            .allocator = b.allocator,
-            .argv = &.{ "which", "rsync" },
+        const exe = b.addExecutable(.{
+            .name = "send-file",
+            .root_source_file = b.path("scripts/send-file.zig"),
+            .target = b.host,
         });
-        const send = if (which_rsync.term == .Exited and which_rsync.term.Exited == 0)
-            b.addSystemCommand(&.{ "rsync", "--progress", local_path, remote_uri })
-        else
-            b.addSystemCommand(&.{ "scp", local_path, remote_uri });
-        send.step.dependOn(&mkdir.step);
 
-        return send;
+        const run = b.addRunArtifact(exe);
+        run.addArgs(&.{ local_path, host, remote_path });
+
+        return run;
     }
 
     /// add a build step to run a command on a remote host using ssh.
