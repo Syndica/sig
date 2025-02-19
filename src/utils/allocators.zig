@@ -30,19 +30,21 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
     std.debug.assert(config.min_split_size > 0);
 
     return struct {
-        // records are used to keep track of the memory blocks
-        records: std.ArrayList(Record),
-        // memory holds blocks of memory ([]T) that can be allocated/deallocated
-        memory: std.ArrayList([]T),
-        // allocator used to alloc the memory blocks
+        records_allocator: std.mem.Allocator,
+        /// records are used to keep track of the memory blocks
+        records: std.ArrayListUnmanaged(Record),
+        /// allocator used to alloc the memory blocks
         memory_allocator: std.mem.Allocator,
-        // total number of T elements we have in memory
+        /// memory holds blocks of memory ([]T) that can be allocated/deallocated
+        memory: std.ArrayListUnmanaged([]T),
+        /// total number of T elements we have in memory
         capacity: u64,
-        // the maximum contiguous capacity we have in memory
-        // NOTE: since we support multiple memory slices, this tells us the max single alloc size
+        /// the maximum contiguous capacity we have in memory
+        /// NOTE: since we support multiple memory slices, this tells us the max single alloc size
         max_continguous_capacity: u64,
-        // for thread safety
+        /// for thread safety
         mux: std.Thread.Mutex = .{},
+        const Self = @This();
 
         // NOTE: we use the global_index to support fast loading the state
         pub const Record = struct {
@@ -59,27 +61,21 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                 .default_value = &.{},
             };
         };
-        const Self = @This();
 
         const AllocatorConfig = struct {
-            memory_allocator: std.mem.Allocator,
             records_allocator: std.mem.Allocator,
+            memory_allocator: std.mem.Allocator,
         };
 
         pub fn init(allocator_config: AllocatorConfig) Self {
             return .{
-                .records = std.ArrayList(Record).init(allocator_config.records_allocator),
-                .memory = std.ArrayList([]T).init(allocator_config.records_allocator),
+                .records_allocator = allocator_config.records_allocator,
+                .records = .{},
                 .memory_allocator = allocator_config.memory_allocator,
+                .memory = .{},
                 .capacity = 0,
                 .max_continguous_capacity = 0,
             };
-        }
-
-        pub fn create(allocator_config: AllocatorConfig) !*Self {
-            const self = try allocator_config.records_allocator.create(Self);
-            self.* = Self.init(allocator_config);
-            return self;
         }
 
         pub fn deinit(self: *Self) void {
@@ -89,8 +85,19 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             for (self.memory.items) |block| {
                 self.memory_allocator.free(block);
             }
-            self.memory.deinit();
-            self.records.deinit();
+            self.memory.deinit(self.memory_allocator);
+            self.records.deinit(self.records_allocator);
+        }
+
+        pub fn create(allocator_config: AllocatorConfig) !*Self {
+            const self = try allocator_config.records_allocator.create(Self);
+            self.* = Self.init(allocator_config);
+            return self;
+        }
+
+        pub fn destroy(self: *Self) void {
+            self.deinit();
+            self.records_allocator.destroy(self);
         }
 
         /// append a block of N elements to the manager
@@ -104,8 +111,8 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         pub fn expandCapacityUnsafe(self: *Self, n: u64) std.mem.Allocator.Error!void {
             if (n == 0) return;
 
-            try self.records.ensureUnusedCapacity(1);
-            try self.memory.ensureUnusedCapacity(1);
+            try self.records.ensureUnusedCapacity(self.records_allocator, 1);
+            try self.memory.ensureUnusedCapacity(self.memory_allocator, 1);
 
             const buf = try self.memory_allocator.alloc(T, n);
             // NOTE: we do this here so bincode serialization can work correctly
@@ -273,7 +280,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                 record.len = used_len;
                 // add new unused record to the list
                 // NOTE: errors here are unreachable because if we hit OOM, were left in a bad state
-                self.records.append(.{
+                self.records.append(self.records_allocator, .{
                     .is_free = true,
                     .buf = split_buf,
                     .global_index = record.global_index + used_len,
@@ -993,13 +1000,13 @@ test "recycle buffer: save and load" {
     _ = try sig.bincode.writeToSlice(records_memory, allocator.records.items, .{});
 
     // read from slice to records
-    const records = try sig.bincode.readFromSlice(
+    var records = try sig.bincode.readFromSlice(
         backing_allocator,
         @TypeOf(allocator.records),
         records_memory,
         .{},
     );
-    defer records.deinit();
+    defer records.deinit(backing_allocator);
 
     for (records.items) |*record| {
         record.buf = references[record.global_index..][0..record.len];
