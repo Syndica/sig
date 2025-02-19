@@ -205,11 +205,17 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             num_threads: u32,
             num_tasks: u64,
         ) !Self {
+            var tasks = try std.ArrayList(TaskAdapter).initCapacity(allocator, num_tasks);
+            errdefer tasks.deinit();
+
+            var results = try std.ArrayList(TaskResult).initCapacity(allocator, num_tasks);
+            errdefer results.deinit();
+
             return .{
                 .allocator = allocator,
                 .pool = ThreadPool.init(.{ .max_threads = num_threads }),
-                .tasks = try std.ArrayList(TaskAdapter).initCapacity(allocator, num_tasks),
-                .results = try std.ArrayList(TaskResult).initCapacity(allocator, num_tasks),
+                .tasks = tasks,
+                .results = results,
             };
         }
 
