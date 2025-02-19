@@ -3,6 +3,7 @@
 //! Elf Spec: http://refspecs.linux-foundation.org/LSB_4.1.0/LSB-Core-generic/LSB-Core-generic.html
 
 const std = @import("std");
+const sig = @import("../sig.zig");
 const sbpf = @import("sbpf.zig");
 const memory = @import("memory.zig");
 
@@ -20,7 +21,7 @@ pub const Elf = struct {
     headers: Headers,
     data: Data,
     entry_pc: u64,
-    version: sbpf.SBPFVersion,
+    version: sbpf.Version,
     function_registry: Registry(u64),
     ro_section: Executable.Section,
     config: Config,
@@ -33,18 +34,25 @@ pub const Elf = struct {
         shdrs: []align(1) const elf.Elf64_Shdr,
         phdrs: []align(1) const elf.Elf64_Phdr,
 
-        fn parse(bytes: []const u8) Headers {
+        fn parse(bytes: []const u8) !Headers {
+            if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return error.OutOfBounds;
             const header: elf.Elf64_Ehdr = @bitCast(bytes[0..@sizeOf(elf.Elf64_Ehdr)].*);
 
             const shoff = header.e_shoff;
             const shnum = header.e_shnum;
-            const shsize = shnum * @sizeOf(elf.Elf64_Shdr);
-            const shdrs = std.mem.bytesAsSlice(elf.Elf64_Shdr, bytes[shoff..][0..shsize]);
+            const shsize = try std.math.mul(u64, shnum, @sizeOf(elf.Elf64_Shdr));
+            const shdrs = std.mem.bytesAsSlice(
+                elf.Elf64_Shdr,
+                try safeSlice(bytes, shoff, shsize),
+            );
 
             const phoff = header.e_phoff;
             const phnum = header.e_phnum;
-            const phsize = phnum * @sizeOf(elf.Elf64_Phdr);
-            const phdrs = std.mem.bytesAsSlice(elf.Elf64_Phdr, bytes[phoff..][0..phsize]);
+            const phsize = try std.math.mul(u64, phnum, @sizeOf(elf.Elf64_Phdr));
+            const phdrs = std.mem.bytesAsSlice(
+                elf.Elf64_Phdr,
+                try safeSlice(bytes, phoff, phsize),
+            );
 
             return .{
                 .bytes = bytes,
@@ -55,6 +63,7 @@ pub const Elf = struct {
         }
 
         fn shdrSlice(self: Headers, index: u32) ![]const u8 {
+            if (index >= self.shdrs.len) return error.OutOfBounds;
             const shdr = self.shdrs[index];
             const sh_offset = shdr.sh_offset;
             const sh_size = shdr.sh_size;
@@ -62,10 +71,18 @@ pub const Elf = struct {
         }
 
         fn phdrSlice(self: Headers, index: u32) ![]const u8 {
+            if (index >= self.phdrs.len) return error.OutOfBounds;
             const phdr = self.phdrs[index];
             const p_offset = phdr.p_offset;
             const p_filesz = phdr.p_filesz;
             return try safeSlice(self.bytes, p_offset, p_filesz);
+        }
+
+        fn getStringInShdr(self: Headers, shdr: u32, off: u32) ![:0]const u8 {
+            const strtab = try self.shdrSlice(shdr);
+            assert(off < strtab.len);
+            const ptr: [*:0]const u8 = @ptrCast(strtab.ptr + off);
+            return std.mem.sliceTo(ptr, 0);
         }
 
         fn getPhdrIndexByType(self: Headers, p_type: elf.Elf64_Word) ?u32 {
@@ -180,9 +197,9 @@ pub const Elf = struct {
             self: Data,
             headers: Headers,
             config: Config,
+            version: sbpf.Version,
             allocator: std.mem.Allocator,
         ) !Executable.Section {
-            const version = config.minimum_version;
             const ro_names: []const []const u8 = &.{
                 ".text",
                 ".rodata",
@@ -240,10 +257,10 @@ pub const Elf = struct {
                 }
 
                 var vaddr_end = if (version.enableElfVaddr() and
-                    section_addr >= memory.PROGRAM_START)
+                    section_addr >= memory.RODATA_START)
                     section_addr
                 else
-                    section_addr +| memory.PROGRAM_START;
+                    section_addr +| memory.RODATA_START;
                 if (version.rejectRodataStackOverlap()) {
                     vaddr_end +|= shdr.sh_size;
                 }
@@ -273,9 +290,9 @@ pub const Elf = struct {
                 const start = lowest_addr -| file_offset;
                 const end = highest_addr -| file_offset;
 
-                if (lowest_addr >= memory.PROGRAM_START) {
+                if (lowest_addr >= memory.RODATA_START) {
                     break :ro .{ .borrowed = .{
-                        .offset = lowest_addr -| memory.PROGRAM_START,
+                        .offset = lowest_addr,
                         .start = start,
                         .end = end,
                     } };
@@ -284,7 +301,7 @@ pub const Elf = struct {
                         return error.ValueOutOfBounds;
                     }
                     break :ro .{ .borrowed = .{
-                        .offset = lowest_addr,
+                        .offset = lowest_addr +| memory.RODATA_START,
                         .start = start,
                         .end = end,
                     } };
@@ -310,6 +327,7 @@ pub const Elf = struct {
                 }
                 break :ro .{ .owned = .{ .offset = lowest_addr, .data = ro_section } };
             };
+
             return ro_section;
         }
 
@@ -320,7 +338,7 @@ pub const Elf = struct {
             return std.mem.sliceTo(ptr, 0);
         }
 
-        pub fn getShdrIndexByName(self: Data, headers: Headers, name: []const u8) ?u32 {
+        fn getShdrIndexByName(self: Data, headers: Headers, name: []const u8) ?u32 {
             for (headers.shdrs, 0..) |shdr, i| {
                 const shdr_name = self.getString(shdr.sh_name);
                 if (std.mem.eql(u8, shdr_name, name)) {
@@ -342,21 +360,194 @@ pub const Elf = struct {
         loader: *BuiltinProgram,
         config: Config,
     ) !Elf {
-        const headers = Headers.parse(bytes);
+        const headers = try Headers.parse(bytes);
         const data = try Data.parse(headers);
 
+        const sbpf_version: sbpf.Version = if (config.maximum_version == .v0)
+            if (headers.header.e_flags == sbpf.EF_SBPF_v1)
+                .v1
+            else
+                .v0
+        else switch (headers.header.e_flags) {
+            0 => .v0,
+            1 => .v1,
+            2 => .v2,
+            3 => .v3,
+            else => |v| @enumFromInt(v),
+        };
+
+        if (@intFromEnum(sbpf_version) < @intFromEnum(config.minimum_version) or
+            @intFromEnum(sbpf_version) > @intFromEnum(config.maximum_version))
+        {
+            return error.VersionUnsupported;
+        }
+
+        if (sbpf_version.enableStricterElfHeaders()) {
+            return try parseStrict(
+                allocator,
+                bytes,
+                headers,
+                data,
+                sbpf_version,
+                config,
+            );
+        } else {
+            return try parseLenient(
+                allocator,
+                bytes,
+                headers,
+                data,
+                sbpf_version,
+                config,
+                loader,
+            );
+        }
+    }
+
+    const ElfIdent = extern struct {
+        magic: [4]u8,
+        class: u8,
+        data: u8,
+        version: u8,
+        osabi: u8,
+        abiversion: u8,
+        padding: [7]u8,
+    };
+
+    fn parseStrict(
+        allocator: std.mem.Allocator,
+        bytes: []u8,
+        headers: Headers,
+        data: Data,
+        sbpf_version: sbpf.Version,
+        config: Config,
+    ) !Elf {
+        const header = headers.header;
+
+        const ident: ElfIdent = @bitCast(header.e_ident);
+        if (!std.mem.eql(u8, ident.magic[0..4], elf.MAGIC) or
+            ident.class != elf.ELFCLASS64 or
+            ident.data != elf.ELFDATA2LSB or
+            ident.version != 1 or
+            ident.osabi != sbpf.ELFOSABI_NONE or
+            ident.abiversion != 0x00 or
+            !std.mem.allEqual(u8, &ident.padding, 0) or
+            @intFromEnum(header.e_machine) != sbpf.EM_SBPF or
+            header.e_type != .DYN or
+            header.e_version != 1 or
+            header.e_phoff != @sizeOf(elf.Elf64_Ehdr) or
+            header.e_ehsize != @sizeOf(elf.Elf64_Ehdr) or
+            header.e_phentsize != @sizeOf(elf.Elf64_Phdr) or
+            header.e_phnum < 5 or
+            header.e_shentsize != @sizeOf(elf.Elf64_Shdr) or
+            header.e_shstrndx >= header.e_shnum)
+        {
+            return error.InvalidFileHeader;
+        }
+
+        inline for (
+            .{
+                .{ elf.PT_LOAD, elf.PF_X, memory.BYTECODE_START },
+                .{ elf.PT_LOAD, elf.PF_R, memory.RODATA_START },
+                .{ elf.PT_GNU_STACK, elf.PF_R | elf.PF_W, memory.STACK_START },
+                .{ elf.PT_LOAD, elf.PF_R | elf.PF_W, memory.HEAP_START },
+                .{ elf.PT_NULL, 0, 0xFFFFFFFF00000000 },
+            },
+            headers.phdrs[0..5],
+        ) |entry, phdr| {
+            const p_type, const p_flags, const p_vaddr = entry;
+            const p_filesz = if (p_flags & elf.PF_W != 0) 0 else phdr.p_memsz;
+
+            if (phdr.p_type != p_type or
+                phdr.p_flags != p_flags or
+                phdr.p_offset % 8 != 0 or
+                phdr.p_vaddr != p_vaddr or
+                phdr.p_paddr != p_vaddr or
+                phdr.p_filesz != p_filesz or
+                phdr.p_filesz > bytes.len -| phdr.p_offset or
+                phdr.p_memsz >= memory.RODATA_START // larger than one region
+            ) {
+                return error.InvalidProgramHeader;
+            }
+        }
+
+        const maybe_strtab: ?u32 = if (config.enable_symbol_and_section_labels) blk: {
+            for (headers.shdrs, 0..) |shdr, i| {
+                const name = data.getString(shdr.sh_name);
+                if (std.mem.eql(u8, name, ".dynstr")) {
+                    if (shdr.sh_type != elf.SHT_STRTAB) return error.InvalidStringTable;
+                    break :blk @intCast(i);
+                }
+            }
+            break :blk null;
+        } else null;
+
+        const bytecode_hdr = headers.phdrs[0];
+        const rodata_hdr = headers.phdrs[1];
+        const ro_section: Executable.Section = .{ .borrowed = .{
+            .offset = rodata_hdr.p_vaddr,
+            .start = rodata_hdr.p_offset,
+            .end = rodata_hdr.p_offset + rodata_hdr.p_filesz,
+        } };
+
+        const entry_pc = (header.e_entry -| bytecode_hdr.p_vaddr) / 8;
+        var self: Elf = .{
+            .bytes = bytes,
+            .headers = headers,
+            .data = data,
+            .entry_pc = entry_pc,
+            .version = sbpf_version,
+            .function_registry = .{},
+            .config = config,
+            .ro_section = ro_section,
+        };
+        errdefer self.deinit(allocator);
+
+        const dynsym_table = std.mem.bytesAsSlice(elf.Elf64_Sym, try headers.phdrSlice(4));
+        var expected_symbol_address = bytecode_hdr.p_vaddr;
+        for (dynsym_table) |symbol| {
+            if (symbol.st_info & elf.STT_FUNC == 0) continue;
+            if (symbol.st_value != expected_symbol_address) return error.OutOfBounds;
+            if (symbol.st_size == 0 or symbol.st_size % 8 != 0) return error.InvalidSize;
+            if (!inRangeOfPhdrVm(bytecode_hdr, symbol.st_value)) return error.OutOfBounds;
+
+            const name = if (config.enable_symbol_and_section_labels)
+                try headers.getStringInShdr(maybe_strtab.?, symbol.st_name)
+            else
+                &.{};
+
+            const target_pc = (symbol.st_value -| bytecode_hdr.p_vaddr) / 8;
+            try self.function_registry.register(allocator, target_pc, name, target_pc);
+            expected_symbol_address = symbol.st_value +| symbol.st_size;
+        }
+        if (expected_symbol_address != bytecode_hdr.p_vaddr +| bytecode_hdr.p_memsz) {
+            return error.OutOfBounds;
+        }
+        if (!inRangeOfPhdrVm(bytecode_hdr, header.e_entry) or
+            header.e_entry % 8 != 0)
+        {
+            return error.InvalidFileHeader;
+        }
+        if (self.function_registry.lookupKey(self.entry_pc) == null) {
+            return error.InvalidFileHeader;
+        }
+
+        return self;
+    }
+
+    fn parseLenient(
+        allocator: std.mem.Allocator,
+        bytes: []u8,
+        headers: Headers,
+        data: Data,
+        sbpf_version: sbpf.Version,
+        config: Config,
+        loader: *BuiltinProgram,
+    ) !Elf {
         const text_section = data.getShdrByName(headers, ".text") orelse
             return error.NoTextSection;
         const offset = headers.header.e_entry -| text_section.sh_addr;
         const entry_pc = try std.math.divExact(u64, offset, 8);
-
-        const sbpf_version: sbpf.SBPFVersion = if (headers.header.e_flags == sbpf.EF_SBPF_V2)
-            .v2
-        else
-            .v1;
-
-        if (@intFromEnum(sbpf_version) < @intFromEnum(config.minimum_version))
-            return error.VersionUnsupported;
 
         var self: Elf = .{
             .bytes = bytes,
@@ -366,12 +557,13 @@ pub const Elf = struct {
             .version = sbpf_version,
             .function_registry = .{},
             .config = config,
-            .ro_section = try data.parseRoSections(headers, config, allocator),
+            .ro_section = try data.parseRoSections(headers, config, sbpf_version, allocator),
         };
         errdefer self.deinit(allocator);
 
         _ = try self.function_registry.registerHashedLegacy(
             allocator,
+            !sbpf_version.enableStaticSyscalls(),
             "entrypoint",
             entry_pc,
         );
@@ -460,8 +652,10 @@ pub const Elf = struct {
         if (text_section_slice.len % @sizeOf(sbpf.Instruction) != 0)
             return error.InvalidTextSectionLength;
 
-        if (self.config.minimum_version.enableElfVaddr()) {
-            if (self.config.optimize_rodata != true) return error.UnsupportedSBPFVersion;
+        if (self.version.enableElfVaddr() and
+            self.config.optimize_rodata != true)
+        {
+            return error.UnsupportedSBPFVersion;
         }
     }
 
@@ -477,7 +671,11 @@ pub const Elf = struct {
         const text_section = self.headers.shdrs[text_section_index];
 
         // fixup PC-relative call instructions
-        const text_bytes: []u8 = self.bytes[text_section.sh_offset..][0..text_section.sh_size];
+        const text_bytes: []u8 = try safeSlice(
+            self.bytes,
+            text_section.sh_offset,
+            text_section.sh_size,
+        );
         const instructions = self.getInstructions();
         for (instructions, 0..) |inst, i| {
             if (inst.opcode == .call_imm and
@@ -489,13 +687,14 @@ pub const Elf = struct {
                     return error.RelativeJumpOutOfBounds;
                 const key = try self.function_registry.registerHashedLegacy(
                     allocator,
+                    !version.enableStaticSyscalls(),
                     &.{},
                     @intCast(target_pc),
                 );
                 // offset into the instruction where the immediate is stored
                 const offset = (i *| 8) +| 4;
                 const slice = text_bytes[offset..][0..4];
-                std.mem.writeInt(u32, slice, key, .little);
+                std.mem.writeInt(u32, slice, @intCast(key), .little);
             }
         }
 
@@ -527,7 +726,7 @@ pub const Elf = struct {
                     const in_text_section = self.inRangeOfShdr(
                         text_section_index,
                         r_offset,
-                    ) or version == .v1;
+                    ) or version == .v0;
                     const imm_offset = if (in_text_section) r_offset +| 4 else r_offset;
 
                     const addr_slice = try safeSlice(self.bytes, imm_offset, 4);
@@ -535,11 +734,11 @@ pub const Elf = struct {
                     const symbol = self.data.symbol_table[reloc.r_sym()];
                     var addr = symbol.st_value +| ref_addr;
 
-                    if (addr < memory.PROGRAM_START) {
-                        addr +|= memory.PROGRAM_START;
+                    if (addr < memory.RODATA_START) {
+                        addr +|= memory.RODATA_START;
                     }
 
-                    if (in_text_section or version == .v1) {
+                    if (in_text_section or version == .v0) {
                         {
                             const imm_low_offset = imm_offset;
                             const imm_slice = try safeSlice(self.bytes, imm_low_offset, 4);
@@ -564,39 +763,49 @@ pub const Elf = struct {
                         // the target is a lddw instruction which takes up two instruction slots
 
                         const va_low = val: {
-                            const imm_slice = self.bytes[imm_offset..][0..4];
-                            break :val std.mem.readInt(u32, imm_slice, .little);
+                            const imm_slice = try safeSlice(self.bytes, imm_offset, 4);
+                            break :val std.mem.readInt(u32, imm_slice[0..4], .little);
                         };
 
                         const va_high = val: {
                             const imm_high_offset = r_offset +| 12;
-                            const imm_slice = self.bytes[imm_high_offset..][0..4];
-                            break :val std.mem.readInt(u32, imm_slice, .little);
+                            const imm_slice = try safeSlice(self.bytes, imm_high_offset, 4);
+                            break :val std.mem.readInt(u32, imm_slice[0..4], .little);
                         };
 
                         var ref_addr = (@as(u64, va_high) << 32) | va_low;
                         if (ref_addr == 0) return error.InvalidVirtualAddress;
 
-                        if (ref_addr < memory.PROGRAM_START) {
-                            ref_addr +|= memory.PROGRAM_START;
+                        if (ref_addr < memory.RODATA_START) {
+                            ref_addr +|= memory.RODATA_START;
                         }
 
                         {
-                            const imm_slice = self.bytes[imm_offset..][0..4];
-                            std.mem.writeInt(u32, imm_slice, @truncate(ref_addr), .little);
+                            const imm_slice = try safeSlice(self.bytes, imm_offset, 4);
+                            std.mem.writeInt(
+                                u32,
+                                imm_slice[0..4],
+                                @truncate(ref_addr),
+                                .little,
+                            );
                         }
 
                         {
                             const imm_high_offset = r_offset +| 12;
-                            const imm_slice = self.bytes[imm_high_offset..][0..4];
-                            std.mem.writeInt(u32, imm_slice, @intCast(ref_addr >> 32), .little);
+                            const imm_slice = try safeSlice(self.bytes, imm_high_offset, 4);
+                            std.mem.writeInt(
+                                u32,
+                                imm_slice[0..4],
+                                @intCast(ref_addr >> 32),
+                                .little,
+                            );
                         }
                     } else {
                         const address: u64 = switch (version) {
-                            .v1 => addr: {
+                            .v0 => addr: {
                                 const addr_slice = try safeSlice(self.bytes, imm_offset, 4);
                                 const address = std.mem.readInt(u32, addr_slice[0..4], .little);
-                                break :addr memory.PROGRAM_START +| address;
+                                break :addr memory.RODATA_START +| address;
                             },
                             else => addr: {
                                 const addr_slice = try safeSlice(
@@ -605,8 +814,8 @@ pub const Elf = struct {
                                     @sizeOf(u64),
                                 );
                                 var address = std.mem.readInt(u64, addr_slice[0..8], .little);
-                                if (address < memory.PROGRAM_START) {
-                                    address +|= memory.PROGRAM_START;
+                                if (address < memory.RODATA_START) {
+                                    address +|= memory.RODATA_START;
                                 }
                                 break :addr address;
                             },
@@ -632,11 +841,12 @@ pub const Elf = struct {
                         const target_pc = (symbol.st_value -| text_section.sh_addr) / 8;
                         const key = try self.function_registry.registerHashedLegacy(
                             allocator,
+                            !version.enableStaticSyscalls(),
                             symbol_name,
                             @intCast(target_pc),
                         );
                         const slice = try safeSlice(self.bytes, imm_offset, 4);
-                        std.mem.writeInt(u32, slice[0..4], key, .little);
+                        std.mem.writeInt(u32, slice[0..4], @intCast(key), .little);
                     } else {
                         const hash = sbpf.hashSymbolName(symbol_name);
                         if (config.reject_broken_elfs and
@@ -701,3 +911,113 @@ pub const Elf = struct {
         return base[start..][0..len];
     }
 };
+
+const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
+const expectError = std.testing.expectError;
+
+test "parsing failing allocation" {
+    const S = struct {
+        fn foo(allocator: std.mem.Allocator) !void {
+            const input_file = try std.fs.cwd().openFile(
+                sig.ELF_DATA_DIR ++ "reloc_64_64.so",
+                .{},
+            );
+            const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+            defer allocator.free(bytes);
+
+            var loader: BuiltinProgram = .{};
+            var parsed = try Elf.parse(allocator, bytes, &loader, .{});
+            defer parsed.deinit(allocator);
+        }
+    };
+
+    const allocator = std.testing.allocator;
+    try std.testing.checkAllAllocationFailures(allocator, S.foo, .{});
+}
+
+test "strict header empty" {
+    const allocator = std.testing.allocator;
+    var loader: BuiltinProgram = .{};
+    try expectEqual(
+        error.OutOfBounds,
+        Elf.parse(allocator, &.{}, &loader, .{}),
+    );
+}
+
+test "strict header version" {
+    const allocator = std.testing.allocator;
+    const input_file = try std.fs.cwd().openFile(sig.ELF_DATA_DIR ++ "strict_header.so", .{});
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    // set the e_flags to an invalid SBPF version
+    bytes[0x0030] = 0xFF;
+
+    var loader: BuiltinProgram = .{};
+    try expectEqual(
+        error.VersionUnsupported,
+        Elf.parse(allocator, bytes, &loader, .{}),
+    );
+}
+
+test "strict header functions" {
+    const allocator = std.testing.allocator;
+    const input_file = try std.fs.cwd().openFile(sig.ELF_DATA_DIR ++ "strict_header.so", .{});
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    var loader: BuiltinProgram = .{};
+    var parsed = try Elf.parse(
+        allocator,
+        bytes,
+        &loader,
+        .{ .enable_symbol_and_section_labels = true },
+    );
+    defer parsed.deinit(allocator);
+
+    const entrypoint = parsed.function_registry.lookupKey(0).?;
+    try expect(std.mem.eql(u8, entrypoint.name, "entrypoint"));
+
+    const foo = parsed.function_registry.lookupKey(2).?;
+    try expect(std.mem.eql(u8, foo.name, "strict_header.foo"));
+}
+
+test "strict header corrupt file header" {
+    const allocator = std.testing.allocator;
+    const input_file = try std.fs.cwd().openFile(sig.ELF_DATA_DIR ++ "strict_header.so", .{});
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    const expected_results =
+        .{error.InvalidFileHeader} ** 33 ++
+        .{error.OutOfBounds} ** 15 ++
+        .{error.VersionUnsupported} ** 4 ++
+        .{error.InvalidFileHeader} ** 4 ++
+        .{error.OutOfBounds} ** 2 ++
+        .{error.InvalidFileHeader} ** 2 ++
+        .{error.OutOfBounds} ** 4;
+
+    for (
+        0..@sizeOf(elf.Elf64_Ehdr),
+        @as([]const ?error{
+            InvalidFileHeader,
+            OutOfBounds,
+            VersionUnsupported,
+        }, &expected_results),
+    ) |offset, expected| {
+        const copy = try allocator.dupe(u8, bytes);
+        defer allocator.free(copy);
+        copy[offset] = 0xAF;
+
+        var loader: BuiltinProgram = .{};
+        var result = Elf.parse(allocator, copy, &loader, .{});
+        defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
+
+        if (expected) |err| {
+            try expectError(err, result);
+        } else {
+            try std.testing.expect(!std.meta.isError(result));
+        }
+    }
+}

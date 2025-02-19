@@ -8,7 +8,7 @@ const Vm = @import("vm.zig").Vm;
 pub const Executable = struct {
     bytes: []const u8,
     instructions: []align(1) const sbpf.Instruction,
-    version: sbpf.SBPFVersion,
+    version: sbpf.Version,
     entry_pc: u64,
     from_elf: bool,
     ro_section: Section,
@@ -41,6 +41,13 @@ pub const Executable = struct {
 
     /// Takes ownership of the `Elf`.
     pub fn fromElf(elf: Elf) !Executable {
+        const text_section_addr = elf.getShdrByName(".text").?.sh_addr;
+        const text_vaddr = if (elf.version.enableElfVaddr() and
+            text_section_addr >= memory.RODATA_START)
+            text_section_addr
+        else
+            text_section_addr +| memory.RODATA_START;
+
         return .{
             .bytes = elf.bytes,
             .ro_section = elf.ro_section,
@@ -48,14 +55,64 @@ pub const Executable = struct {
             .version = elf.version,
             .entry_pc = elf.entry_pc,
             .from_elf = true,
-            .text_vaddr = elf.getShdrByName(".text").?.sh_addr +| memory.PROGRAM_START,
+            .text_vaddr = text_vaddr,
             .function_registry = elf.function_registry,
             .config = elf.config,
         };
     }
 
     pub fn fromAsm(allocator: std.mem.Allocator, source: []const u8, config: Config) !Executable {
-        return Assembler.parse(allocator, source, config);
+        var function_registry, const instructions = try Assembler.parse(
+            allocator,
+            source,
+            config,
+        );
+        return fromTextBytes(
+            allocator,
+            std.mem.sliceAsBytes(instructions),
+            &function_registry,
+            config,
+        );
+    }
+
+    pub fn fromTextBytes(
+        allocator: std.mem.Allocator,
+        source: []const u8,
+        registry: *Registry(u64),
+        config: Config,
+    ) !Executable {
+        const version = config.maximum_version;
+
+        const entry_pc = if (registry.lookupName("entrypoint")) |entry_pc|
+            entry_pc.value
+        else pc: {
+            _ = try registry.registerHashedLegacy(
+                allocator,
+                !version.enableStaticSyscalls(),
+                "entrypoint",
+                0,
+            );
+            break :pc 0;
+        };
+
+        return .{
+            .instructions = std.mem.bytesAsSlice(sbpf.Instruction, source),
+            .bytes = source,
+            .version = version,
+            .config = config,
+            .function_registry = registry.*,
+            .entry_pc = entry_pc,
+            .ro_section = .{ .borrowed = .{
+                .offset = memory.RODATA_START,
+                .start = 0,
+                .end = source.len,
+            } },
+            .from_elf = false,
+            .text_vaddr = if (version.enableLowerBytecodeVaddr())
+                memory.BYTECODE_START
+            else
+                memory.RODATA_START,
+        };
     }
 
     /// When the executable comes from the assembler, we need to guarantee that the
@@ -77,7 +134,7 @@ pub const Executable = struct {
             .owned => |o| .{ o.offset, o.data },
             .borrowed => |b| .{ b.offset, self.bytes[b.start..b.end] },
         };
-        return memory.Region.init(.constant, ro_data, memory.PROGRAM_START +| offset);
+        return memory.Region.init(.constant, ro_data, offset);
     }
 };
 
@@ -110,7 +167,8 @@ pub const Assembler = struct {
         allocator: std.mem.Allocator,
         source: []const u8,
         config: Config,
-    ) !Executable {
+    ) !struct { Registry(u64), []const sbpf.Instruction } {
+        const version = config.maximum_version;
         var assembler: Assembler = .{ .source = source };
         const statements = try assembler.tokenize(allocator);
         defer {
@@ -123,10 +181,11 @@ pub const Assembler = struct {
             allocator.free(statements);
         }
 
-        var labels: std.StringHashMapUnmanaged(u64) = .{};
+        var labels: std.StringHashMapUnmanaged(u32) = .{};
         defer labels.deinit(allocator);
 
         var function_registry: Registry(u64) = .{};
+        errdefer function_registry.deinit(allocator);
 
         try labels.put(allocator, "entrypoint", 0);
         var inst_ptr: u32 = 0;
@@ -162,6 +221,10 @@ pub const Assembler = struct {
                     const name = inst.name;
                     const operands = inst.operands;
 
+                    if (sbpf.Instruction.disallowed.get(name)) |since| {
+                        if (version.gte(since)) return error.UnknownInstruction;
+                    }
+
                     const bind = sbpf.Instruction.map.get(name) orelse
                         std.debug.panic("invalid instruction: {s}", .{name});
 
@@ -173,7 +236,7 @@ pub const Assembler = struct {
                                 .dst = operands[0].register,
                                 .src = .r0,
                                 .off = 0,
-                                .imm = @bitCast(@as(i32, @intCast(operands[1].integer))),
+                                .imm = @truncate(@as(u64, @bitCast(operands[1].integer))),
                             } else .{
                                 .opcode = @enumFromInt(bind.opc | sbpf.Instruction.x),
                                 .dst = operands[0].register,
@@ -218,13 +281,16 @@ pub const Assembler = struct {
                                 };
                             }
                         },
-                        .jump_unconditional => .{
-                            .opcode = @enumFromInt(bind.opc),
-                            .dst = .r0,
-                            .src = .r0,
-                            .off = @intCast(operands[0].integer),
-                            .imm = 0,
-                        },
+                        .jump_unconditional => if (operands[0] == .label)
+                            @panic("TODO: jump_unconditional label")
+                        else
+                            .{
+                                .opcode = @enumFromInt(bind.opc),
+                                .dst = .r0,
+                                .src = .r0,
+                                .off = @intCast(operands[0].integer),
+                                .imm = 0,
+                            },
                         .load_dw_imm => .{
                             .opcode = .ld_dw_imm,
                             .dst = operands[0].register,
@@ -233,21 +299,30 @@ pub const Assembler = struct {
                             .imm = @truncate(@as(u64, @bitCast(operands[1].integer))),
                         },
                         .load_reg => .{
-                            .opcode = @enumFromInt(bind.opc),
+                            .opcode = if (version.moveMemoryInstructionClasses())
+                                @enumFromInt(bind.secondary)
+                            else
+                                @enumFromInt(bind.opc),
                             .dst = operands[0].register,
                             .src = operands[1].memory.base,
                             .off = operands[1].memory.offset,
                             .imm = 0,
                         },
                         .store_reg => .{
-                            .opcode = @enumFromInt(bind.opc),
+                            .opcode = if (version.moveMemoryInstructionClasses())
+                                @enumFromInt(bind.secondary)
+                            else
+                                @enumFromInt(bind.opc),
                             .dst = operands[0].memory.base,
                             .src = operands[1].register,
                             .off = operands[0].memory.offset,
                             .imm = 0,
                         },
                         .store_imm => .{
-                            .opcode = @enumFromInt(bind.opc),
+                            .opcode = if (version.moveMemoryInstructionClasses())
+                                @enumFromInt(bind.secondary)
+                            else
+                                @enumFromInt(bind.opc),
                             .dst = operands[0].memory.base,
                             .src = .r0,
                             .off = operands[0].memory.offset,
@@ -264,17 +339,24 @@ pub const Assembler = struct {
                             const is_label = operands[0] == .label;
                             if (is_label) {
                                 const label = operands[0].label;
-                                const target_pc = labels.get(label) orelse
+                                var target_pc: i64 = labels.get(label) orelse
                                     std.debug.panic("label not found: {s}", .{label});
+                                if (version.enableStaticSyscalls()) {
+                                    target_pc = target_pc - inst_ptr - 1;
+                                }
                                 break :inst .{
                                     .opcode = @enumFromInt(bind.opc),
                                     .dst = .r0,
                                     .src = .r1,
                                     .off = 0,
-                                    .imm = @intCast(target_pc),
+                                    .imm = @bitCast(@as(i32, @intCast(target_pc))),
                                 };
                             } else {
                                 const offset = operands[0].integer;
+                                const instr_imm = if (version.enableStaticSyscalls())
+                                    offset
+                                else
+                                    offset + inst_ptr + 1;
                                 const target_pc: u32 = @intCast(offset + inst_ptr + 1);
                                 const label = try std.fmt.allocPrint(
                                     allocator,
@@ -293,11 +375,17 @@ pub const Assembler = struct {
                                     .dst = .r0,
                                     .src = .r1,
                                     .off = 0,
-                                    .imm = target_pc,
+                                    .imm = @intCast(instr_imm),
                                 };
                             }
                         },
-                        .call_reg => .{
+                        .call_reg => if (version.callRegUsesSrcReg()) .{
+                            .opcode = @enumFromInt(bind.opc),
+                            .dst = .r0,
+                            .src = operands[0].register,
+                            .off = 0,
+                            .imm = 0,
+                        } else .{
                             .opcode = @enumFromInt(bind.opc),
                             .dst = .r0,
                             .src = .r0,
@@ -329,23 +417,9 @@ pub const Assembler = struct {
             }
         }
 
-        const entry_pc = if (function_registry.lookupName("entrypoint")) |entry|
-            entry.value
-        else pc: {
-            _ = try function_registry.registerHashedLegacy(allocator, "entrypoint", 0);
-            break :pc 0;
-        };
-
         return .{
-            .bytes = source,
-            .ro_section = .{ .borrowed = .{ .offset = 0, .start = 0, .end = source.len } },
-            .instructions = try instructions.toOwnedSlice(allocator),
-            .version = config.minimum_version,
-            .entry_pc = entry_pc,
-            .from_elf = false,
-            .text_vaddr = memory.PROGRAM_START,
-            .function_registry = function_registry,
-            .config = config,
+            function_registry,
+            try instructions.toOwnedSlice(allocator),
         };
     }
 
@@ -424,7 +498,7 @@ pub const Assembler = struct {
 
 pub fn Registry(T: type) type {
     return struct {
-        map: std.AutoHashMapUnmanaged(u32, Entry) = .{},
+        map: std.AutoHashMapUnmanaged(u64, Entry) = .{},
 
         const Entry = struct {
             name: []const u8,
@@ -433,10 +507,10 @@ pub fn Registry(T: type) type {
         const Self = @This();
 
         /// Duplicates `name` to free later.
-        fn register(
+        pub fn register(
             self: *Self,
             allocator: std.mem.Allocator,
-            key: u32,
+            key: u64,
             name: []const u8,
             value: T,
         ) !void {
@@ -455,7 +529,7 @@ pub fn Registry(T: type) type {
             allocator: std.mem.Allocator,
             name: []const u8,
             value: T,
-        ) !u32 {
+        ) !u64 {
             const key = sbpf.hashSymbolName(name);
             try self.register(allocator, key, name, value);
             return key;
@@ -464,18 +538,20 @@ pub fn Registry(T: type) type {
         pub fn registerHashedLegacy(
             self: *Self,
             allocator: std.mem.Allocator,
+            hash_symbol_name: bool,
             name: []const u8,
             value: T,
-        ) !u32 {
+        ) !u64 {
             const hash = if (std.mem.eql(u8, name, "entrypoint"))
                 sbpf.hashSymbolName(name)
             else
                 sbpf.hashSymbolName(&std.mem.toBytes(value));
-            try self.register(allocator, hash, &.{}, value);
-            return hash;
+            const key: u64 = if (hash_symbol_name) hash else value;
+            try self.register(allocator, key, &.{}, value);
+            return key;
         }
 
-        pub fn lookupKey(self: *const Self, key: u32) ?Entry {
+        pub fn lookupKey(self: *const Self, key: u64) ?Entry {
             return self.map.get(key);
         }
 
@@ -509,7 +585,9 @@ pub const BuiltinProgram = struct {
 pub const Config = struct {
     optimize_rodata: bool = true,
     reject_broken_elfs: bool = false,
-    minimum_version: sbpf.SBPFVersion = .v2,
+    enable_symbol_and_section_labels: bool = false,
+    minimum_version: sbpf.Version = .v0,
+    maximum_version: sbpf.Version = .v3,
     stack_frame_size: u64 = 4096,
     max_call_depth: u64 = 64,
 

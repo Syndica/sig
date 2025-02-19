@@ -14,6 +14,7 @@ pub const Config = struct {
     ssh_host: ?[]const u8,
     ssh_install_dir: []const u8,
     ssh_workdir: []const u8,
+    no_network_tests: bool,
 
     pub fn fromBuild(b: *Build) !Config {
         var self = Config{
@@ -43,6 +44,8 @@ pub const Config = struct {
             .ssh_workdir = b.option([]const u8, "ssh-workdir", "When using ssh-host, this " ++
                 "configures the working directory where executables will run (default: sig).") orelse
                 "sig",
+            .no_network_tests = b.option(bool, "no-network-tests", "Do not run any tests that " ++ 
+                "depend on the network.") orelse false,
         };
 
         if (self.ssh_host) |host| {
@@ -62,6 +65,7 @@ pub fn build(b: *Build) !void {
     // Build options
     const build_options = b.addOptions();
     build_options.addOption(BlockstoreDB, "blockstore_db", config.blockstore_db);
+    build_options.addOption(bool, "no_network_tests", config.no_network_tests);
 
     // CLI build steps
     const install_step = b.getInstallStep();
@@ -85,11 +89,11 @@ pub fn build(b: *Build) !void {
     const zig_cli_dep = b.dependency("zig-cli", dep_opts);
     const zig_cli_mod = zig_cli_dep.module("zig-cli");
 
-    const httpz_dep = b.dependency("httpz", dep_opts);
-    const httpz_mod = httpz_dep.module("httpz");
-
     const zstd_dep = b.dependency("zstd", dep_opts);
     const zstd_mod = zstd_dep.module("zstd");
+
+    const poseidon_dep = b.dependency("poseidon", dep_opts);
+    const poseidon_mod = poseidon_dep.module("poseidon");
 
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
@@ -116,8 +120,9 @@ pub fn build(b: *Build) !void {
     sig_mod.addImport("zig-network", zig_network_mod);
     sig_mod.addImport("base58", base58_mod);
     sig_mod.addImport("zig-cli", zig_cli_mod);
-    sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
+    sig_mod.addImport("poseidon", poseidon_mod);
+
     switch (config.blockstore_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -144,7 +149,6 @@ pub fn build(b: *Build) !void {
 
     sig_exe.root_module.addImport("xev", xev_mod);
     sig_exe.root_module.addImport("base58", base58_mod);
-    sig_exe.root_module.addImport("httpz", httpz_mod);
     sig_exe.root_module.addImport("zig-cli", zig_cli_mod);
     sig_exe.root_module.addImport("zig-network", zig_network_mod);
     sig_exe.root_module.addImport("zstd", zstd_mod);
@@ -165,6 +169,7 @@ pub fn build(b: *Build) !void {
         .sanitize_thread = config.enable_tsan,
         .filters = config.filters orelse &.{},
     });
+    b.installArtifact(unit_tests_exe);
     test_step.dependOn(&unit_tests_exe.step);
     install_step.dependOn(&unit_tests_exe.step);
 
@@ -173,9 +178,9 @@ pub fn build(b: *Build) !void {
 
     unit_tests_exe.root_module.addImport("xev", xev_mod);
     unit_tests_exe.root_module.addImport("base58", base58_mod);
-    unit_tests_exe.root_module.addImport("httpz", httpz_mod);
     unit_tests_exe.root_module.addImport("zig-network", zig_network_mod);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
+    unit_tests_exe.root_module.addImport("poseidon", poseidon_mod);
     switch (config.blockstore_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -199,7 +204,6 @@ pub fn build(b: *Build) !void {
     fuzz_exe.root_module.addImport("xev", xev_mod);
     fuzz_exe.root_module.addImport("base58", base58_mod);
     fuzz_exe.root_module.addImport("zig-network", zig_network_mod);
-    fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
     switch (config.blockstore_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -221,10 +225,15 @@ pub fn build(b: *Build) !void {
     benchmark_exe.linkLibC();
     benchmark_exe.root_module.addOptions("build-options", build_options);
 
-    benchmark_exe.root_module.addImport("xev", xev_mod);
+    // make sure pyroscope's got enough info to profile
+    benchmark_exe.build_id = .fast;
+    benchmark_exe.root_module.omit_frame_pointer = false;
+    benchmark_exe.root_module.strip = false;
+
+    b.installArtifact(benchmark_exe);
+
     benchmark_exe.root_module.addImport("base58", base58_mod);
     benchmark_exe.root_module.addImport("zig-network", zig_network_mod);
-    benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
     switch (config.blockstore_db) {

@@ -22,7 +22,6 @@ const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
 const Timer = sig.time.Timer;
 const Transaction = sig.core.Transaction;
-const VersionedTransaction = sig.core.VersionedTransaction;
 
 // shred
 const Shred = sig.ledger.shred.Shred;
@@ -479,7 +478,7 @@ pub const BlockstoreReader = struct {
             ArrayList(EntrySummary).init(self.allocator);
         errdefer entries.deinit();
 
-        var slot_transactions = ArrayList(VersionedTransaction).init(self.allocator);
+        var slot_transactions = ArrayList(Transaction).init(self.allocator);
         var num_moved_slot_transactions: usize = 0;
         defer {
             for (slot_transactions.items[num_moved_slot_transactions..]) |tx| {
@@ -511,9 +510,9 @@ pub const BlockstoreReader = struct {
             txns_with_statuses.deinit();
         }
         for (slot_transactions.items) |transaction| {
-            transaction.sanitize() catch |err| {
+            transaction.validate() catch |err| {
                 self.logger.warn().logf(
-                    "getCompleteeBlockWithEntries sanitize failed: {any}, slot: {any}, {any}",
+                    "getCompleteeBlockWithEntries validate failed: {any}, slot: {any}, {any}",
                     .{ err, slot, transaction },
                 );
             };
@@ -717,15 +716,15 @@ pub const BlockstoreReader = struct {
         self: *Self,
         slot: Slot,
         signature: Signature,
-    ) !?VersionedTransaction {
+    ) !?Transaction {
         const slot_entries = try self.getSlotEntries(slot, 0);
         // NOTE perf: linear search runs from scratch every time this is called
         for (slot_entries.items) |entry| {
             for (entry.transactions.items) |transaction| {
-                // NOTE perf: redundant calls to sanitize every time this is called
-                if (transaction.sanitize()) |_| {} else |err| {
+                // NOTE perf: redundant calls to validate every time this is called
+                if (transaction.validate()) |_| {} else |err| {
                     self.logger.warn().logf(
-                        "BlockstoreReader.findTransactionInSlot sanitize failed: {any}, slot: {}, {any}",
+                        "BlockstoreReader.findTransactionInSlot validate failed: {any}, slot: {}, {any}",
                         .{ err, slot, transaction },
                     );
                 }
@@ -1185,8 +1184,12 @@ pub const BlockstoreReader = struct {
                 return e;
             };
             defer bytes.deinit();
-            const these_entries = sig.bincode
-                .readFromSlice(allocator, []Entry, bytes.items, .{}) catch |e| {
+            const these_entries = bincode.readFromSlice(
+                allocator,
+                []Entry,
+                bytes.items,
+                .{},
+            ) catch |e| {
                 self.logger.err().logf("failed to deserialize entries from shreds: {}", .{e});
                 return e;
             };
@@ -1427,7 +1430,7 @@ const TransactionWithStatusMeta = union(enum) {
 };
 
 pub const VersionedTransactionWithStatusMeta = struct {
-    transaction: VersionedTransaction,
+    transaction: Transaction,
     meta: TransactionStatusMeta,
 
     pub fn deinit(self: @This(), allocator: Allocator) void {

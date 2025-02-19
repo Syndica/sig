@@ -11,7 +11,7 @@ const Request = sig.rpc.Request;
 const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
 const ScopedLogger = sig.trace.log.ScopedLogger;
-const Transaction = sig.core.transaction.Transaction;
+const Transaction = sig.core.Transaction;
 const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 pub const Client = struct {

@@ -1,9 +1,15 @@
 const std = @import("std");
 const sbpf = @import("sbpf.zig");
 
-pub const PROGRAM_START: u64 = 0x100000000;
+/// Virtual address of the bytecode region (in SBPFv3)
+pub const BYTECODE_START: u64 = 0x000000000;
+/// Virtual address of the readonly data region (also contains the bytecode until SBPFv3)
+pub const RODATA_START: u64 = 0x100000000;
+/// Virtual address of the stack region
 pub const STACK_START: u64 = 0x200000000;
+/// Virtual address of the heap region
 pub const HEAP_START: u64 = 0x300000000;
+/// Virtual address of the input region
 pub const INPUT_START: u64 = 0x400000000;
 const VIRTUAL_ADDRESS_BITS = 32;
 
@@ -11,7 +17,7 @@ pub const MemoryMap = union(enum) {
     aligned: AlignedMemoryMap,
     // TODO: unaligned memory map?
 
-    pub fn init(regions: []const Region, version: sbpf.SBPFVersion) !MemoryMap {
+    pub fn init(regions: []const Region, version: sbpf.Version) !MemoryMap {
         return .{ .aligned = try AlignedMemoryMap.init(regions, version) };
     }
 
@@ -103,7 +109,7 @@ pub const Region = struct {
 
         const host_slice = try self.getSlice(state);
         const begin_offset = vm_addr -| self.vm_addr_start;
-        if (begin_offset + len <= host_slice.len) {
+        if (try std.math.add(u64, begin_offset, len) <= host_slice.len) {
             return host_slice[begin_offset..][0..len];
         }
 
@@ -113,9 +119,9 @@ pub const Region = struct {
 
 const AlignedMemoryMap = struct {
     regions: []const Region,
-    version: sbpf.SBPFVersion,
+    version: sbpf.Version,
 
-    fn init(regions: []const Region, version: sbpf.SBPFVersion) !AlignedMemoryMap {
+    fn init(regions: []const Region, version: sbpf.Version) !AlignedMemoryMap {
         for (regions, 1..) |reg, index| {
             if (reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS != index) {
                 return error.InvalidMemoryRegion;
@@ -160,21 +166,21 @@ test "aligned vmap" {
     var stack_mem: [4]u8 = .{0xDD} ** 4;
 
     const m = try MemoryMap.init(&.{
-        Region.init(.mutable, &program_mem, PROGRAM_START),
+        Region.init(.mutable, &program_mem, RODATA_START),
         Region.init(.constant, &stack_mem, STACK_START),
-    }, .v1);
+    }, .v0);
 
     try expectEqual(
         program_mem[0..1],
-        try m.vmap(.constant, PROGRAM_START, 1),
+        try m.vmap(.constant, RODATA_START, 1),
     );
     try expectEqual(
         program_mem[0..3],
-        try m.vmap(.constant, PROGRAM_START, 3),
+        try m.vmap(.constant, RODATA_START, 3),
     );
     try expectError(
         error.VirtualAccessTooLong,
-        m.vmap(.constant, PROGRAM_START, 5),
+        m.vmap(.constant, RODATA_START, 5),
     );
 
     try expectError(
@@ -196,25 +202,25 @@ test "aligned region" {
     var stack_mem: [4]u8 = .{0xDD} ** 4;
 
     const m = try MemoryMap.init(&.{
-        Region.init(.mutable, &program_mem, PROGRAM_START),
+        Region.init(.mutable, &program_mem, RODATA_START),
         Region.init(.constant, &stack_mem, STACK_START),
-    }, .v1);
+    }, .v0);
 
     try expectError(
         error.AccessNotMapped,
-        m.region(PROGRAM_START - 1),
+        m.region(RODATA_START - 1),
     );
     try expectEqual(
         &program_mem,
-        (try m.region(PROGRAM_START)).getSlice(.constant),
+        (try m.region(RODATA_START)).getSlice(.constant),
     );
     try expectEqual(
         &program_mem,
-        (try m.region(PROGRAM_START + 3)).getSlice(.constant),
+        (try m.region(RODATA_START + 3)).getSlice(.constant),
     );
     try expectError(
         error.AccessNotMapped,
-        m.region(PROGRAM_START + 4),
+        m.region(RODATA_START + 4),
     );
 
     try expectError(
@@ -243,7 +249,7 @@ test "invalid memory region" {
         error.InvalidMemoryRegion,
         MemoryMap.init(&.{
             Region.init(.constant, &stack_mem, STACK_START),
-            Region.init(.mutable, &program_mem, PROGRAM_START),
-        }, .v1),
+            Region.init(.mutable, &program_mem, RODATA_START),
+        }, .v0),
     );
 }

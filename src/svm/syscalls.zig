@@ -1,8 +1,11 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 const builtin = @import("builtin");
-const Vm = @import("vm.zig").Vm;
+const phash = @import("poseidon");
+const sig = @import("../sig.zig");
+const lib = @import("lib.zig");
 
+const testElfWithSyscalls = @import("tests.zig").testElfWithSyscalls;
+const Vm = lib.Vm;
 const Pubkey = sig.core.Pubkey;
 
 pub const Syscall = struct {
@@ -16,22 +19,19 @@ pub const Error = error{
     SyscallAbort,
     AccessViolation,
     VirtualAccessTooLong,
+    Overflow,
+    InvalidLength,
+    NonCanonical,
+    Unexpected,
 };
 
 // logging
-pub fn printString(vm: *Vm) Error!void {
-    const vm_addr = vm.registers.get(.r1);
-    const len = vm.registers.get(.r2);
-    const host_addr = try vm.memory_map.vmap(.constant, vm_addr, len);
-    const string = std.mem.sliceTo(host_addr, 0);
-    if (!builtin.is_test) std.debug.print("{s}", .{string});
-}
-
 pub fn log(vm: *Vm) Error!void {
     const vm_addr = vm.registers.get(.r1);
     const len = vm.registers.get(.r2);
     const host_addr = try vm.memory_map.vmap(.constant, vm_addr, len);
-    std.debug.print("log: {s}\n", .{host_addr});
+    const string = std.mem.sliceTo(host_addr, 0);
+    if (!builtin.is_test) std.debug.print("{d}\n", .{string});
 }
 
 pub fn log64(vm: *Vm) Error!void {
@@ -78,7 +78,92 @@ pub fn memcpy(vm: *Vm) Error!void {
     @memcpy(dst_host, src_host);
 }
 
+pub fn memcmp(vm: *Vm) Error!void {
+    const a_addr = vm.registers.get(.r1);
+    const b_addr = vm.registers.get(.r2);
+    const n = vm.registers.get(.r3);
+    const cmp_result_addr = vm.registers.get(.r4);
+
+    const a = try vm.memory_map.vmap(.constant, a_addr, n);
+    const b = try vm.memory_map.vmap(.constant, b_addr, n);
+    const cmp_result_slice = try vm.memory_map.vmap(
+        .mutable,
+        cmp_result_addr,
+        @sizeOf(u32),
+    );
+    const cmp_result: *align(1) u32 = @ptrCast(cmp_result_slice.ptr);
+
+    const result = std.mem.order(u8, a, b);
+    cmp_result.* = @intFromEnum(result);
+}
+
+// hashing
+const Parameters = enum(u64) {
+    Bn254X5 = 0,
+};
+
+const Slice = extern struct {
+    addr: [*]const u8,
+    len: u64,
+};
+
+pub fn poseidon(vm: *Vm) Error!void {
+    // const parameters: Parameters = @enumFromInt(vm.registers.get(.r1));
+    const endianness: std.builtin.Endian = @enumFromInt(vm.registers.get(.r2));
+    const vals_addr = vm.registers.get(.r3);
+    const vals_len = vm.registers.get(.r4);
+    const result_addr = vm.registers.get(.r5);
+
+    if (vals_len > 12) {
+        return error.InvalidLength;
+    }
+
+    const hash_result = try vm.memory_map.vmap(.mutable, result_addr, 32);
+    const input_bytes = try vm.memory_map.vmap(
+        .constant,
+        vals_addr,
+        vals_len * @sizeOf(Slice),
+    );
+    const inputs = std.mem.bytesAsSlice(Slice, input_bytes);
+
+    var hasher = phash.Hasher.init(endianness);
+    for (inputs) |input| {
+        var slice = try vm.memory_map.vmap(
+            .constant,
+            @intFromPtr(input.addr),
+            input.len,
+        );
+        try hasher.append(slice[0..32]);
+    }
+    const result = try hasher.finish();
+    @memcpy(hash_result, &result);
+}
+
 // special
 pub fn abort(_: *Vm) Error!void {
     return error.SyscallAbort;
+}
+
+pub fn panic(vm: *Vm) Error!void {
+    const file = vm.registers.get(.r1);
+    const len = vm.registers.get(.r2);
+    // const line = vm.registers.get(.r3);
+    // const column = vm.registers.get(.r4);
+
+    const message = try vm.memory_map.vmap(.constant, file, len);
+    if (!builtin.is_test)
+        std.debug.print("panic: {s}\n", .{message});
+    return error.SyscallAbort;
+}
+
+test poseidon {
+    try testElfWithSyscalls(
+        .{},
+        sig.ELF_DATA_DIR ++ "poseidon_test.so",
+        &.{
+            .{ .name = "sol_poseidon", .builtin_fn = poseidon },
+            .{ .name = "log", .builtin_fn = log },
+        },
+        0,
+    );
 }
