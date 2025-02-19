@@ -289,7 +289,7 @@ fn addInstallAndRun(
 ) !void {
     var send_step: ?*Build.Step = null;
 
-    if (config.install or config.ssh_host != null and config.run) {
+    if (config.install or (config.ssh_host != null and config.run)) {
         const install = b.addInstallArtifact(exe, .{});
         step.dependOn(&install.step);
 
