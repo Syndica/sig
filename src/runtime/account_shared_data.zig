@@ -29,10 +29,16 @@ pub const AccountSharedData = struct {
     /// Copy the old data into the new memory
     /// If the new size is less than the old size, truncate the data
     pub fn resize(self: *AccountSharedData, allocator: std.mem.Allocator, new_size: usize) !void {
-        const new_memory = try allocator.alloc(u8, new_size);
-        @memset(new_memory, 0);
-        @memcpy(new_memory.ptr, self.data[0..@min(self.data.len, new_size)]);
-        allocator.free(self.data);
-        self.data = new_memory;
+        if (allocator.resize(self.data, new_size)) {
+            const old_len = self.data.len;
+            self.data.len = new_size;
+            @memset(self.data[@min(old_len, self.data.len)..], 0);
+        } else {
+            const new_memory = try allocator.alloc(u8, new_size);
+            @memset(new_memory, 0);
+            @memcpy(new_memory.ptr, self.data[0..@min(self.data.len, new_size)]);
+            allocator.free(self.data);
+            self.data = new_memory;
+        }
     }
 };
