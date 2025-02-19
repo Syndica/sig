@@ -79,16 +79,16 @@ pub fn ReturnType(comptime FnPtr: type) type {
 
 /// Same as std.EnumFieldStruct, except every field may be a different type
 pub fn EnumStruct(comptime E: type, comptime Data: fn (E) type) type {
-    @setEvalBranchQuota(@typeInfo(E).Enum.fields.len + 5);
+    @setEvalBranchQuota(@typeInfo(E).Enum.fields.len);
     var struct_fields: [@typeInfo(E).Enum.fields.len]std.builtin.Type.StructField = undefined;
     for (&struct_fields, @typeInfo(E).Enum.fields) |*struct_field, enum_field| {
         const T = Data(@field(E, enum_field.name));
         struct_field.* = .{
-            .name = enum_field.name ++ "",
+            .name = enum_field.name,
             .type = T,
             .default_value = null,
             .is_comptime = false,
-            .alignment = if (@sizeOf(T) > 0) @alignOf(T) else 0,
+            .alignment = @alignOf(T),
         };
     }
     return @Type(.{ .Struct = .{
