@@ -3,8 +3,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Build = std.Build;
 
-const allocPrint = std.fmt.allocPrint;
-
 pub fn build(b: *Build) !void {
     defer makeZlsNotInstallAnythingDuringBuildOnSave(b);
 
@@ -287,10 +285,10 @@ fn addInstallAndRun(
         step.dependOn(&install.step);
 
         if (config.ssh_host) |host| {
-            const install_dir = try if (config.ssh_install_dir[0] == '/')
-                b.allocator.dupe(u8, config.ssh_install_dir)
+            const install_dir = if (config.ssh_install_dir[0] == '/')
+                try b.allocator.dupe(u8, config.ssh_install_dir)
             else
-                allocPrint(b.allocator, "{s}/{s}", .{ config.ssh_workdir, config.ssh_install_dir });
+                b.fmt("{s}/{s}", .{ config.ssh_workdir, config.ssh_install_dir });
             defer b.allocator.free(install_dir);
 
             const send = try ssh.addSendArtifact(b, install, host, install_dir);
@@ -304,7 +302,7 @@ fn addInstallAndRun(
     if (config.run) {
         if (config.ssh_host) |host| {
             const exe_path =
-                try allocPrint(b.allocator, "{s}/{s}", .{ config.ssh_install_dir, exe.name });
+                b.fmt("{s}/{s}", .{ config.ssh_install_dir, exe.name });
             defer b.allocator.free(exe_path);
 
             const run = try ssh.addRemoteCommand(b, host, config.ssh_workdir, exe_path);
@@ -425,8 +423,7 @@ const ssh = struct {
         const local_path = b.getInstallPath(install.dest_dir.?, install.dest_sub_path);
         defer b.allocator.free(remote_dir);
 
-        const remote_uri = try allocPrint(
-            b.allocator,
+        const remote_uri = b.fmt(
             "{s}:{s}/{s}",
             .{ host, remote_dir, install.dest_sub_path },
         );
@@ -455,7 +452,7 @@ const ssh = struct {
         workdir: []const u8,
         executable_path: []const u8,
     ) !*Build.Step.Run {
-        const cd_exe = try allocPrint(b.allocator, "cd {s}; {s}", .{ workdir, executable_path });
+        const cd_exe = b.fmt("cd {s}; {s}", .{ workdir, executable_path });
         defer b.allocator.free(cd_exe);
 
         const cmd_size = 4;
