@@ -533,9 +533,9 @@ pub const GossipTable = struct {
                 const metadata = self.map.metadata.items[index];
                 if (metadata.timestamp_on_insertion >= self.minimum_insertion_timestamp) {
                     switch (self.map.tagOfIndex(index)) {
-                        inline .ContactInfo => |tag| return self.map.getTypedPtr(tag, index),
-                        inline .LegacyContactInfo => |tag| {
-                            const legacy_info = self.map.getTypedPtr(tag, index);
+                        .ContactInfo => return self.map.getTypedPtr(.ContactInfo, index),
+                        .LegacyContactInfo => {
+                            const legacy_info = self.map.getTypedPtr(.LegacyContactInfo, index);
                             return self.converted_contact_infos.getPtr(legacy_info.id).?;
                         },
                         else => unreachable,
@@ -846,14 +846,14 @@ pub const GossipTable = struct {
         const contact_indexs = self.contact_infos.keys();
         for (contact_indexs) |index| {
             switch (self.store.tagOfIndex(index)) {
-                inline .ContactInfo => |tag| {
-                    const ci = self.store.getTypedPtr(tag, index);
+                .ContactInfo => {
+                    const ci = self.store.getTypedPtr(.ContactInfo, index);
                     if (ci.getSocket(.gossip)) |addr| {
                         if (addr.eql(&gossip_addr)) return try ci.clone();
                     }
                 },
-                inline .LegacyContactInfo => |tag| {
-                    const lci = self.store.getTypedPtr(tag, index);
+                .LegacyContactInfo => {
+                    const lci = self.store.getTypedPtr(.LegacyContactInfo, index);
                     if (lci.gossip.eql(&gossip_addr)) {
                         return try lci.toContactInfo(self.allocator);
                     }
