@@ -3,6 +3,56 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Build = std.Build;
 
+pub const Config = struct {
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    filters: ?[]const []const u8,
+    enable_tsan: ?bool,
+    blockstore_db: BlockstoreDB,
+    run: bool,
+    install: bool,
+    ssh_host: ?[]const u8,
+    ssh_install_dir: []const u8,
+    ssh_workdir: []const u8,
+
+    pub fn fromBuild(b: *Build) !Config {
+        var self = Config{
+            .target = b.standardTargetOptions(.{
+                .default_target = defaultTargetDetectM3() orelse .{},
+            }),
+            .optimize = b.standardOptimizeOption(.{}),
+            .filters = b.option([]const []const u8, "filter", "List of filters, used for example" ++
+                " to filter unit tests by name. specified as a series like `-Dfilter='filter1' " ++
+                "-Dfilter='filter2'`"),
+            .enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite"),
+            .blockstore_db = b.option(BlockstoreDB, "blockstore", "Blockstore database backend") orelse
+                .rocksdb,
+            .run = !(b.option(bool, "no-run",
+                \\Don't run any of the executables implied by the specified steps, only install them.
+                \\Use in conjunction with 'no-bin' to avoid installation as well.
+            ) orelse false),
+            .install = !(b.option(bool, "no-bin",
+                \\Don't install any of the binaries implied by the specified steps, only run them.
+                \\Use in conjunction with 'no-run' to avoid running as well.
+            ) orelse false),
+            .ssh_host = b.option([]const u8, "ssh-host", "Builds will target this remote host," ++
+                " binaries will be installed there, and executables will run there."),
+            .ssh_install_dir = b.option([]const u8, "ssh-installdir", "When using ssh-host, this" ++
+                " configures the directory to install binaries (relative to ssh-workdir)" ++
+                " (default: zig-out/bin).") orelse "zig-out/bin/",
+            .ssh_workdir = b.option([]const u8, "ssh-workdir", "When using ssh-host, this " ++
+                "configures the working directory where executables will run (default: sig).") orelse
+                "sig",
+        };
+
+        if (self.ssh_host) |host| {
+            self.target = try ssh.getHostTarget(b, host);
+        }
+
+        return self;
+    }
+};
+
 pub fn build(b: *Build) !void {
     defer makeZlsNotInstallAnythingDuringBuildOnSave(b);
 
@@ -219,56 +269,6 @@ pub fn build(b: *Build) !void {
     });
     docs_step.dependOn(&install_sig_docs.step);
 }
-
-pub const Config = struct {
-    target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    filters: ?[]const []const u8,
-    enable_tsan: ?bool,
-    blockstore_db: BlockstoreDB,
-    run: bool,
-    install: bool,
-    ssh_host: ?[]const u8,
-    ssh_install_dir: []const u8,
-    ssh_workdir: []const u8,
-
-    pub fn fromBuild(b: *Build) !Config {
-        var self = Config{
-            .target = b.standardTargetOptions(.{
-                .default_target = defaultTargetDetectM3() orelse .{},
-            }),
-            .optimize = b.standardOptimizeOption(.{}),
-            .filters = b.option([]const []const u8, "filter", "List of filters, used for example" ++
-                " to filter unit tests by name. specified as a series like `-Dfilter='filter1' " ++
-                "-Dfilter='filter2'`"),
-            .enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite"),
-            .blockstore_db = b.option(BlockstoreDB, "blockstore", "Blockstore database backend") orelse
-                .rocksdb,
-            .run = !(b.option(bool, "no-run",
-                \\Don't run any of the executables implied by the specified steps, only install them.
-                \\Use in conjunction with 'no-bin' to avoid installation as well.
-            ) orelse false),
-            .install = !(b.option(bool, "no-bin",
-                \\Don't install any of the binaries implied by the specified steps, only run them.
-                \\Use in conjunction with 'no-run' to avoid running as well.
-            ) orelse false),
-            .ssh_host = b.option([]const u8, "ssh-host", "Builds will target this remote host," ++
-                " binaries will be installed there, and executables will run there."),
-            .ssh_install_dir = b.option([]const u8, "ssh-installdir", "When using ssh-host, this" ++
-                " configures the directory to install binaries (relative to ssh-workdir)" ++
-                " (default: zig-out/bin).") orelse "zig-out/bin/",
-            .ssh_workdir = b.option([]const u8, "ssh-workdir", "When using ssh-host, this " ++
-                "configures the working directory where executables will run (default: sig).") orelse
-                "sig",
-        };
-
-        if (self.ssh_host) |host| {
-            self.target = try ssh.getHostTarget(b, host);
-        }
-
-        return self;
-    }
-};
 
 /// the standard approach for installing and running the executables produced in
 /// this build script.
