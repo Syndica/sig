@@ -605,7 +605,10 @@ fn withdrawNonceAccount(
             return InstructionError.InvalidArgument;
         }
 
-        const versioned_nonce = try from_account.deserializeFromAccountData(allocator, nonce.Versions);
+        const versioned_nonce = try from_account.deserializeFromAccountData(
+            allocator,
+            nonce.Versions,
+        );
         const authority = switch (versioned_nonce.getState()) {
             .unintialized => blk: {
                 if (lamports > from_account.getLamports()) {
