@@ -282,8 +282,8 @@ test "executeIntializeAccount" {
     );
     defer final_vote_state.deinit();
 
-    const final_vote_state_bytes = try sig.bincode.writeAlloc(allocator, final_vote_state, .{});
-    defer allocator.free(final_vote_state_bytes);
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try expectProgramExecuteResult(
         std.testing.allocator,
@@ -327,7 +327,7 @@ test "executeIntializeAccount" {
                     .pubkey = vote_account,
                     .lamports = 27074400,
                     .owner = vote_program.ID,
-                    .data = final_vote_state_bytes,
+                    .data = final_vote_state_bytes[0..],
                 },
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
