@@ -614,13 +614,11 @@ pub fn CircBuf(comptime I: type, comptime Size: usize) type {
 
         const Self = @This();
 
-        pub fn init() Self {
-            return Self{
-                .buf = [_]I{std.mem.zeroes(I)} ** Size,
-                .idx = Size - 1,
-                .is_empty = true,
-            };
-        }
+        pub const DEFAULT = Self{
+            .buf = [_]I{std.mem.zeroes(I)} ** Size,
+            .idx = Size - 1,
+            .is_empty = true,
+        };
 
         pub fn append(self: *Self, item: I) void {
             self.idx = (self.idx + 1) % Size;

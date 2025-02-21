@@ -107,7 +107,7 @@ pub const VoteState = struct {
             .commission = commission,
             .votes = std.ArrayList(LandedVote).init(allocator),
             .root_slot = null,
-            .prior_voters = CircBuf(PriorVote, MAX_ITEMS).init(),
+            .prior_voters = CircBuf(PriorVote, MAX_ITEMS).DEFAULT,
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };
