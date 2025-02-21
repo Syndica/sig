@@ -170,11 +170,17 @@ fn executeIntializeAccount(
     authorized_withdrawer: Pubkey,
     commission: u8,
 ) InstructionError!void {
+    // node must agree to accept this vote account
+    if (!ic.isPubkeySigner(node_pubkey)) {
+        try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
+        return InstructionError.MissingRequiredSignature;
+    }
+
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
         VoteProgramInstruction.InitializeAccountIndex.RentSysvar.index(),
     );
-    // TODO maybe bring back the rent check here? That would have the benefit of an early return in case the check fails.
+
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
         VoteProgramInstruction.InitializeAccountIndex.ClockSysvar.index(),
@@ -185,37 +191,8 @@ fn executeIntializeAccount(
     );
     defer vote_account.release();
 
-    var authority = try ic.borrowInstructionAccount(
-        VoteProgramInstruction.InitializeAccountIndex.Signer.index(),
-    );
-    defer authority.release();
-
-    try intializeAccount(
-        allocator,
-        ic,
-        node_pubkey,
-        authorized_voter,
-        authorized_withdrawer,
-        commission,
-        &vote_account,
-        rent,
-        clock,
-    );
-}
-
-fn intializeAccount(
-    allocator: std.mem.Allocator,
-    ic: *InstructionContext,
-    node_pubkey: Pubkey,
-    authorized_voter: Pubkey,
-    authorized_withdrawer: Pubkey,
-    commission: u8,
-    vote_account: *BorrowedAccount,
-    rent: Rent,
-    clock: Clock,
-) InstructionError!void {
+    // Apply all the checks to the account data.
     const min_balance = rent.minimumBalance(vote_account.getData().len);
-    // TODO Consider adding this to Rent as is_exempt
     if (vote_account.getLamports() < min_balance) {
         return InstructionError.InsufficientFunds;
     }
@@ -230,12 +207,31 @@ fn intializeAccount(
         return (InstructionError.AccountAlreadyInitialized);
     }
 
-    // node must agree to accept this vote account
-    if (!ic.isPubkeySigner(node_pubkey)) {
-        try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
-        return InstructionError.MissingRequiredSignature;
-    }
+    var authority = try ic.borrowInstructionAccount(
+        VoteProgramInstruction.InitializeAccountIndex.Signer.index(),
+    );
+    defer authority.release();
 
+    try intializeAccount(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        &vote_account,
+        clock,
+    );
+}
+
+fn intializeAccount(
+    allocator: std.mem.Allocator,
+    node_pubkey: Pubkey,
+    authorized_voter: Pubkey,
+    authorized_withdrawer: Pubkey,
+    commission: u8,
+    vote_account: *BorrowedAccount,
+    clock: Clock,
+) InstructionError!void {
     const vote_state = try VoteState.init(
         allocator,
         node_pubkey,
