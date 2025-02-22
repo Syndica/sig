@@ -193,7 +193,7 @@ fn executeIntializeAccount(
 
     // Apply all the checks to the account data.
     const min_balance = rent.minimumBalance(vote_account.getData().len);
-    if (vote_account.getLamports() < min_balance) {
+    if (vote_account.account.lamports < min_balance) {
         return InstructionError.InsufficientFunds;
     }
 
@@ -251,7 +251,7 @@ test "executeIntializeAccount" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const rent = Rent.default();
+    const rent = Rent.DEFAULT;
     const clock = Clock{
         .slot = 0,
         .epoch_start_timestamp = 0,
