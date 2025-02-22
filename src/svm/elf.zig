@@ -670,7 +670,17 @@ pub const Elf = struct {
     ) !Elf {
         const header = headers.header;
 
+        const expected_phdrs = .{
+            .{ elf.PT_LOAD, elf.PF_X, memory.BYTECODE_START },
+            .{ elf.PT_LOAD, elf.PF_R, memory.RODATA_START },
+            .{ elf.PT_GNU_STACK, elf.PF_R | elf.PF_W, memory.STACK_START },
+            .{ elf.PT_LOAD, elf.PF_R | elf.PF_W, memory.HEAP_START },
+            .{ elf.PT_NULL, 0, 0xFFFFFFFF00000000 },
+        };
+
         const ident: ElfIdent = @bitCast(header.e_ident);
+        const phdr_table_end = (@sizeOf(elf.Elf64_Phdr) * header.e_phnum) +
+            @sizeOf(elf.Elf64_Ehdr);
         if (!std.mem.eql(u8, ident.magic[0..4], elf.MAGIC) or
             ident.class != elf.ELFCLASS64 or
             ident.data != elf.ELFDATA2LSB or
@@ -684,7 +694,8 @@ pub const Elf = struct {
             header.e_phoff != @sizeOf(elf.Elf64_Ehdr) or
             header.e_ehsize != @sizeOf(elf.Elf64_Ehdr) or
             header.e_phentsize != @sizeOf(elf.Elf64_Phdr) or
-            header.e_phnum < 5 or
+            header.e_phnum < expected_phdrs.len or
+            phdr_table_end >= bytes.len or
             header.e_shentsize != @sizeOf(elf.Elf64_Shdr) or
             header.e_shstrndx >= header.e_shnum)
         {
@@ -692,20 +703,16 @@ pub const Elf = struct {
         }
 
         inline for (
-            .{
-                .{ elf.PT_LOAD, elf.PF_X, memory.BYTECODE_START },
-                .{ elf.PT_LOAD, elf.PF_R, memory.RODATA_START },
-                .{ elf.PT_GNU_STACK, elf.PF_R | elf.PF_W, memory.STACK_START },
-                .{ elf.PT_LOAD, elf.PF_R | elf.PF_W, memory.HEAP_START },
-                .{ elf.PT_NULL, 0, 0xFFFFFFFF00000000 },
-            },
-            headers.phdrs[0..5],
+            expected_phdrs,
+            headers.phdrs[0..expected_phdrs.len],
         ) |entry, phdr| {
             const p_type, const p_flags, const p_vaddr = entry;
             const p_filesz = if (p_flags & elf.PF_W != 0) 0 else phdr.p_memsz;
 
             if (phdr.p_type != p_type or
                 phdr.p_flags != p_flags or
+                phdr.p_offset < phdr_table_end or
+                phdr.p_offset >= bytes.len or
                 phdr.p_offset % 8 != 0 or
                 phdr.p_vaddr != p_vaddr or
                 phdr.p_paddr != p_vaddr or
@@ -1035,7 +1042,11 @@ test "strict header corrupt file header" {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    const expected_results =
+    const expected_results: [@sizeOf(elf.Elf64_Ehdr)]?error{
+        InvalidFileHeader,
+        OutOfBounds,
+        VersionUnsupported,
+    } =
         .{error.InvalidFileHeader} ** 33 ++
         .{error.OutOfBounds} ** 15 ++
         .{error.VersionUnsupported} ** 4 ++
@@ -1046,11 +1057,7 @@ test "strict header corrupt file header" {
 
     for (
         0..@sizeOf(elf.Elf64_Ehdr),
-        @as([]const ?error{
-            InvalidFileHeader,
-            OutOfBounds,
-            VersionUnsupported,
-        }, &expected_results),
+        expected_results,
     ) |offset, expected| {
         const copy = try allocator.dupe(u8, bytes);
         defer allocator.free(copy);
@@ -1064,6 +1071,55 @@ test "strict header corrupt file header" {
             try expectError(err, result);
         } else {
             try std.testing.expect(!std.meta.isError(result));
+        }
+    }
+}
+
+test "strict header corrupt program header" {
+    const allocator = std.testing.allocator;
+    const input_file = try std.fs.cwd().openFile(sig.ELF_DATA_DIR ++ "strict_header.so", .{});
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    const expected_results_readonly =
+        .{error.InvalidProgramHeader} ** 48 ++
+        .{null} ** 8;
+    const expected_results_writable =
+        .{error.InvalidProgramHeader} ** 40 ++
+        .{null} ** 4 ++
+        .{error.InvalidProgramHeader} ** 4 ++
+        .{null} ** 8;
+
+    const expected_results: [5][@sizeOf(elf.Elf64_Phdr)]?error{InvalidProgramHeader} = .{
+        expected_results_readonly,
+        expected_results_readonly,
+        expected_results_writable,
+        expected_results_writable,
+        expected_results_readonly,
+    };
+
+    for (expected_results, 0..) |expected_result, header_index| {
+        for (
+            0..@sizeOf(elf.Elf64_Phdr),
+            expected_result,
+        ) |offset, expected| {
+            const true_offset = @sizeOf(elf.Elf64_Ehdr) +
+                (@sizeOf(elf.Elf64_Phdr) * header_index) +
+                offset;
+
+            const copy = try allocator.dupe(u8, bytes);
+            defer allocator.free(copy);
+            copy[true_offset] = 0xAF;
+
+            var loader: BuiltinProgram = .{};
+            var result = Elf.parse(allocator, copy, &loader, .{});
+            defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
+
+            if (expected) |err| {
+                try expectError(err, result);
+            } else {
+                try std.testing.expect(!std.meta.isError(result));
+            }
         }
     }
 }
