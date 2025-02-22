@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 
-const Epoch = sig.core.Epoch;
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
 
