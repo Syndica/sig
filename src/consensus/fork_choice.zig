@@ -183,30 +183,38 @@ pub const ForkChoice = struct {
     /// `deepest_slot` properties up the tree hierarchy.
     ///
     /// ### Before Adding a New Leaf
-    /// ```
-    ///         Root (A)
-    ///        /     \
-    ///    Child (B)  Child (C)
-    ///    /            \
-    /// Leaf (D)      Leaf (E)
-    /// ```
     ///
-    /// ### After Adding a New Leaf (F) as Child of (C)
-    /// ```
-    ///         Root (A)
-    ///        /     \
-    ///    Child (B)  Child (C)
-    ///    /            /    \
-    /// Leaf (D)   Leaf (E) Leaf (F)
     ///
-    /// ### Or After Adding an Existing Leaf (E) as Child of (B)
-    /// ```
-    ///         Root (A)
-    ///        /     \
-    ///    Child (B)  Child (C)
-    ///       /    \
-    /// Leaf (D)   Leaf (E)
-    /// ```
+    /// (0)
+    /// ├── (1)
+    /// │   └── (3)
+    /// |
+    /// └── (2)
+    ///     └── (4)
+    ///
+    ///
+    /// ### After Adding a New Leaf (5) as Child of (2)
+    ///
+    ///
+    /// (0)
+    /// ├── (1)
+    /// │   └── (3)
+    /// |
+    /// └── (2)
+    ///     └── (4)
+    ///     └── (5)
+    ///
+    ///
+    /// ### Or After Adding an Existing Leaf (3) as Child of (2)
+    ///
+    ///
+    /// (0)
+    /// ├── (1)
+    /// │   └── (3)
+    /// |   └── (4)
+    /// |
+    /// └── (2)
+    ///
     pub fn addNewLeafSlot(
         self: *ForkChoice,
         slot_hash_key: SlotAndHash,
@@ -347,23 +355,24 @@ pub const ForkChoice = struct {
     ///
     /// # Example:
     ///
-    /// **Before Root Change (`A` is root):**
-    /// ```
-    ///        (A) <- Current root
-    ///       /   \
-    ///     (B)   (C)
-    ///    /   \
-    ///  (D)   (E)
-    /// ```
+    /// **Before Root Change (`0` is root):**
     ///
-    /// **After `setTreeRoot(new_root=B)`:**
-    /// ```
-    ///        (B) <- New root
-    ///       /   \
-    ///     (D)   (E)
-    /// ```
     ///
-    /// - Nodes `{ A, C }` are **removed**.
+    /// (0) <- Current root
+    /// ├── (1)
+    /// │   ├── (3)
+    /// │   └── (4)
+    /// └── (2)
+    ///
+    ///
+    /// **After `setTreeRoot(new_root=1)`:**
+    ///
+    /// (1) <- New root
+    /// ├── (3)
+    /// └── (4)
+    ///
+    ///
+    /// - Nodes `{ 0, 2 }` are **removed**.
     pub fn setTreeRoot(self: *ForkChoice, new_root: *const SlotAndHash) !void {
         // Remove everything reachable from old root but not new root
         var remove_set = try self.subtreeDiff(&self.tree_root, new_root);
@@ -483,26 +492,61 @@ pub const ForkChoice = struct {
     /// the ancestors of the new slot.
     ///
     /// ## Before and After Example:
-    /// ```
-    ///          -- Root (A, Best = B) --
-    ///            /         |          \
-    ///     (B, Best=B)  (C, Best=G)  (D, Best=D)
-    ///                    /     \
-    ///             (E, Best=G)  (F, Best=F)
-    ///                /    \
-    ///       (G, Best=G)  (H, Best=H)
     ///
-    /// Adding a new leaf (I) as a child of (E) which update the best slot of E (and C) to (I)
     ///
-    ///          -- Root (A, Best = B) --
-    ///            /         |          \
-    ///     (B, Best=B)  (C, Best=I*)  (D, Best=D)
-    ///                    /     \
-    ///             (E, Best=I*)  (F, Best=F)
-    ///              /     |    \
-    ///   (G, Best=G) (I, Best=I) (H, Best=H)
+    /// (0)
+    /// ├── best_slot: (4)
+    /// ├── deepest_slot: (6)
+    /// └── (1)
+    ///     ├── best_slot: (4)
+    ///     ├── deepest_slot: (6)
+    ///     ├── (2)
+    ///     │   ├── best_slot: (4)
+    ///     │   ├── deepest_slot: (4)
+    ///     │   └── (4)
+    ///     │       ├── best_slot: (4)
+    ///     │       ├── deepest_slot: (4)
+    ///     └── (3)
+    ///         ├── best_slot: (6)
+    ///         ├── deepest_slot: (6)
+    ///         └── (5)
+    ///             ├── best_slot: (6)
+    ///             ├── deepest_slot: (6)
+    ///             └── (6)
+    ///                 ├── best_slot: (6)
+    ///                 ├── deepest_slot: (6)
     ///
-    /// ```
+    ///
+    /// Adding a new leaf (10) as a child of (4) which update the best slot of (2), (1) and (0) to (10)
+    ///
+    ///
+    /// (0)
+    /// ├── best_slot: (10)
+    /// ├── deepest_slot: (10)
+    /// └── (1)
+    ///     ├── best_slot: (10)
+    ///     ├── deepest_slot: (10)
+    ///     ├── (2)
+    ///     │   ├── best_slot: (10)
+    ///     │   ├── deepest_slot: (10)
+    ///     │   ├── stake_voted_subtree: 0
+    ///     │   └── (4)
+    ///     │       ├── best_slot: (10)
+    ///     │       ├── deepest_slot: (10)
+    ///     │       ├── stake_voted_subtree: 0
+    ///     │       └── (10) ---------------------------new leaf 10 added as child of 4
+    ///     │           ├── best_slot: (10)
+    ///     │           ├── deepest_slot: (10)
+    ///     └── (3)
+    ///         ├── best_slot: (6)
+    ///         ├── deepest_slot: (6)
+    ///         └── (5)
+    ///             ├── best_slot: (6)
+    ///             ├── deepest_slot: (6)
+    ///             └── (6)
+    ///                 ├── best_slot: (6)
+    ///                 ├── deepest_slot: (6)
+    ///
     ///
     /// For propagating the deepest slot, the function:
     ///
@@ -513,22 +557,32 @@ pub const ForkChoice = struct {
     ///
     /// ## Before and After Example:
     ///
-    /// **Before insertion of `D`:**
+    /// **Before insertion of `3`:**
     ///
-    /// ```
-    ///     (A: depth=2, deepest=C)
-    ///    /       \
-    ///  (B)      (C: depth=1, deepest=C) # Note: tie are broken by weight and slot number.
-    /// ```
+    /// (0)
+    /// ├── deepest_slot: (2)
+    /// ├── depth: 2
+    /// ├── (1)
+    /// |     # Note: tie are broken by weight and slot number.
+    /// └── (2)
+    ///     ├── deepest_slot: (2)
+    ///     ├── depth: 1
     ///
-    /// **After inserting `D` under `C`:**
     ///
-    /// ```
-    ///     (A: depth=3, deepest=D)  <- Updated
-    ///    /       \
-    ///  (B)      (C: depth=2, deepest=D)  <- Updated
-    ///           /
-    ///         (D: depth=1)  <- New deepest slot
+    /// **After inserting `3` under `2`:**
+    ///
+    ///
+    /// (0)
+    /// ├── deepest_slot: (3)  <- Updated
+    /// ├── depth: 2           <- Updated
+    /// |
+    /// ├── (1)
+    /// └── (2)
+    ///     ├── deepest_slot: (3)  <- Updated
+    ///     ├── depth: 2           <- Updated
+    ///     └── (3)
+    ///         ├── deepest_slot: (3)  <- New deepest slot
+    ///         ├── depth: 1
     ///
     fn propagateNewLeaf(
         self: *ForkChoice,
@@ -692,15 +746,18 @@ pub const ForkChoice = struct {
     ///
     /// For example, given the following tree:
     ///
-    ///           A = root1
-    ///          / \
-    /// root2 = B   C
-    ///        / \   \
-    ///       D   E   F
-    ///          / \
-    ///         G   H
     ///
-    /// subtreeDiff (root1, root2) = {A, C, F}
+    /// (0) = root1
+    /// ├── (1) = root2
+    /// │   ├── (3)
+    /// │   └── (4)
+    /// │       ├── (6)
+    /// │       └── (7)
+    /// └── (2)
+    ///     └── (5)
+    ///
+    ///
+    /// subtreeDiff(root1, root2) = {0, 2, 5}
     fn subtreeDiff(
         self: *ForkChoice,
         root1: *const SlotAndHash,
@@ -857,15 +914,15 @@ pub const ForkChoice = struct {
                 // Child forks that are not candidates still contribute to the weight
                 // of the subtree rooted at `slot_hash_key`. For instance:
                 //
-                //     Build fork structure:
-                //           slot 0
-                //             |
-                //           slot 1
-                //           /    \
-                //     slot 2     |
-                //         |     slot 3 (34%)
-                // slot 4 (66%)
-
+                // Build fork structure:
+                //
+                //
+                // (0)
+                // └── (1)
+                //     ├── (2)
+                //     │   └── (4)  <- 66%
+                //     └── (3)      <- 34%
+                //
                 //     If slot 4 is a duplicate slot, so no longer qualifies as a candidate until
                 //     the slot is confirmed, the weight of votes on slot 4 should still count towards
                 //     slot 2, otherwise we might pick slot 3 as the heaviest fork to build blocks on
@@ -1606,11 +1663,12 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
 
 test "HeaviestSubtreeForkChoice.isBestChild" {
     const tree = [_]TreeNode{
-        //         slot 0
-        //            |
-        //          slot 4
-        //         /      \
-        //   slot 10     slot 9
+        //
+        // (0)
+        // └── (4)
+        //     ├── (10)
+        //     └── (9)
+        //
         .{
             SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
             SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
@@ -1641,11 +1699,13 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
         !(try fork_choice.isBestChild(&.{ .slot = 10, .hash = Hash.ZEROES })),
     );
     // Add new leaf 8, which is better than 9, as both have weight 0
-    //           slot 0
-    //             |
-    //            slot 4
-    //         /    \    \
-    //   slot 10   lot 9  slot 10
+    //
+    // (0)
+    // └── (4)
+    //     ├── (10)
+    //     ├── (9)
+    //     └── (8)
+    //
     try fork_choice.addNewLeafSlot(
         .{ .slot = 8, .hash = Hash.ZEROES },
         .{ .slot = 4, .hash = Hash.ZEROES },
@@ -1839,16 +1899,14 @@ pub fn forkChoiceForTest(
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
 
 const fork_tuples = [_]TreeNode{
-    //      slot 0
-    //        |
-    //      slot 1
-    //      /    \
-    // slot 2    |
-    //    |    slot 3
-    // slot 4    |
-    //         slot 5
-    //           |
-    //         slot 6
+    // (0)
+    // └── (1)
+    //     ├── (2)
+    //     │   └── (4)
+    //     └── (3)
+    //         └── (5)
+    //             └── (6)
+    //
     // slot 1 is a child of slot 0
     .{
         SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
@@ -1882,19 +1940,13 @@ const fork_tuples = [_]TreeNode{
 };
 
 const linear_fork_tuples = [_]TreeNode{
-    // slot 0
-    //    |
-    //  slot 1
-    //    |
-    //  slot 2
-    //    |
-    //  slot 3
-    //    |
-    //  slot 4
-    //    |
-    //  slot 5
-    //    |
-    //  slot 6
+    // (0)
+    // └── (1)
+    //     └── (2)
+    //         └── (3)
+    //             └── (4)
+    //                 └── (5)
+    //                     └── (6)
     .{
         SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
         SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
@@ -1939,18 +1991,19 @@ pub fn setupDuplicateForks() !struct {
     duplicate_leaves_descended_from_5: []SlotAndHash,
     duplicate_leaves_descended_from_6: []SlotAndHash,
 } {
-    //              slot 0
-    //                |
-    //              slot 1
-    //              /       \
-    //         slot 2        |
-    //            |          slot 3
-    //         slot 4               \
-    //         /    \                slot 5
-    // slot 10      slot 10        /     |     \
-    //                      slot 6   slot 10   slot 10
-    //                     /      \
-    //                slot 10   slot 10
+    // (0)
+    // └── (1)
+    //     ├── (2)
+    //     │   └── (4)
+    //     │       ├── (10)
+    //     │       └── (10)
+    //     └── (3)
+    //         └── (5)
+    //             ├── (6)
+    //             │   ├── (10)
+    //             │   └── (10)
+    //             ├── (10)
+    //             └── (10)
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
     // Build fork structure
