@@ -340,7 +340,11 @@ pub const Elf = struct {
                     const buf_offset_start = section_addr -| lowest_addr;
                     @memcpy(ro_section[buf_offset_start..][0..slice.len], slice);
                 }
-                break :ro .{ .owned = .{ .offset = lowest_addr, .data = ro_section } };
+                const addr_offset = if (lowest_addr >= memory.RODATA_START)
+                    lowest_addr
+                else
+                    lowest_addr +| memory.RODATA_START;
+                break :ro .{ .owned = .{ .offset = addr_offset, .data = ro_section } };
             };
 
             return ro_section;
@@ -368,11 +372,9 @@ pub const Elf = struct {
             );
             const instructions = try self.getInstructions(headers);
             for (instructions, 0..) |inst, i| {
-                if (inst.opcode == .call_imm and
-                    inst.imm != ~@as(u32, 0) and
-                    !(version.enableStaticSyscalls() and inst.src == .r0))
-                {
-                    const target_pc = @as(i64, @intCast(i)) +| @as(i32, @bitCast(inst.imm)) +| 1;
+                const immediate: i64 = @as(i32, @bitCast(inst.imm));
+                if (inst.opcode == .call_imm and immediate != -1) {
+                    const target_pc = @as(i64, @intCast(i)) +| immediate +| 1;
                     if (target_pc < 0 or target_pc >= instructions.len)
                         return error.RelativeJumpOutOfBounds;
 
@@ -389,15 +391,17 @@ pub const Elf = struct {
                         name,
                         @intCast(target_pc),
                     );
-                    // offset into the instruction where the immediate is stored
-                    const offset = (i *| 8) +| 4;
-                    const slice = text_bytes[offset..][0..4];
-                    std.mem.writeInt(u32, slice, @intCast(key), .little);
+
+                    if (!version.enableStaticSyscalls()) {
+                        // offset into the instruction where the immediate is stored
+                        const offset = (i *| 8) +| 4;
+                        const slice = try safeSlice(text_bytes, offset, 4);
+                        std.mem.writeInt(u32, slice[0..4], @intCast(key), .little);
+                    }
                 }
             }
 
             var phdr: ?elf.Elf64_Phdr = null;
-
             for (self.relocations_table) |reloc| {
                 var r_offset = reloc.r_offset;
 
@@ -1122,4 +1126,80 @@ test "strict header corrupt program header" {
             }
         }
     }
+}
+
+test "elf load" {
+    const allocator = std.testing.allocator;
+    const input_file = try std.fs.cwd().openFile(
+        sig.ELF_DATA_DIR ++ "relative_call_sbpfv0.so",
+        .{},
+    );
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    var loader: BuiltinProgram = .{};
+    var parsed = try Elf.parse(allocator, bytes, &loader, .{});
+    defer parsed.deinit(allocator);
+}
+
+fn newSection(
+    sh_addr: elf.Elf64_Addr,
+    sh_size: elf.Elf64_Xword,
+    sh_name: elf.Elf64_Word,
+) elf.Elf64_Shdr {
+    return .{
+        .sh_name = sh_name,
+        .sh_addr = sh_addr,
+        .sh_size = sh_size,
+        .sh_offset = std.math.sub(
+            u64,
+            sh_addr,
+            memory.RODATA_START,
+        ) catch sh_addr,
+        .sh_flags = 0,
+        .sh_link = 0,
+        .sh_info = 0,
+        .sh_addralign = 0,
+        .sh_entsize = 0,
+        .sh_type = 0,
+    };
+}
+
+test "owned ro sections with sh offset" {
+    const allocator = std.testing.allocator;
+    const config: Config = .{
+        .reject_broken_elfs = false,
+    };
+    const bytes: [512]u8 = .{0} ** 512;
+
+    var rodata = newSection(20, 10, 6);
+    rodata.sh_offset = 30;
+    const headers: Elf.Headers = .{
+        .bytes = &bytes,
+        .header = undefined, // unused in our test
+        .phdrs = &.{},
+        .shdrs = &.{
+            newSection(10, 10, 0),
+            rodata,
+        },
+    };
+
+    const data: Elf.Data = .{
+        .strtab = ".text\x00" ++ ".rodata",
+        .relocations_table = &.{},
+        .dynamic_table = .{0} ** elf.DT_NUM,
+        .symbol_table = &.{},
+    };
+
+    const result = try data.parseRoSections(
+        headers,
+        config,
+        .v0,
+        allocator,
+    );
+    defer result.deinit(allocator);
+
+    const owned = result.owned;
+    try expectEqual(memory.RODATA_START + 10, owned.offset);
+    try expectEqual(20, owned.data.len);
 }

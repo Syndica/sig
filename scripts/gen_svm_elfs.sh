@@ -22,11 +22,13 @@ V0_FILES=(reloc_64_64
           data_section 
           syscall_reloc_64_32
           struct_func_pointer
-          hash_collision)
+          hash_collision
+          relative_call)
           
 EXCLUDE_V3=(bss_section data_section 
             syscall_reloc_64_32
-            hash_collision)
+            hash_collision
+            relative_call)
 
 for ZIG_FILE in data/test-elfs/*.zig; do
     BASE_NAME=$(basename "$ZIG_FILE" .zig)
