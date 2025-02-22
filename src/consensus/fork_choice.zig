@@ -287,7 +287,7 @@ pub const ForkChoice = struct {
 
     pub fn heaviestSlot(
         self: *const ForkChoice,
-        slot_hash_key: SlotAndHash,
+        slot_hash_key: SlotAndHash, //TODO change this to reference
     ) ?SlotAndHash {
         if (self.fork_infos.get(slot_hash_key)) |fork_info| {
             return fork_info.heaviest_subtree_slot;
@@ -1304,6 +1304,138 @@ test "HeaviestSubtreeForkChoice.setTreeRoot" {
         const exists = i != 0;
         try std.testing.expectEqual(exists, fork_choice.fork_infos.contains(slot_hash));
     }
+}
+
+// [Agave] https://github.com/anza-xyz/agave/blob/4f9ad7a42b14ed681fb6412c104b3df5c310d50f/core/src/consensus/heaviest_subtree_fork_choice.rs#L1918
+test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
+    // Staring fork choice:
+    // (0)
+    // ├── best_slot: (4)
+    // ├── deepest_slot: (6)
+    // ├── stake_voted_subtree: 0
+    // └── (1)
+    //     ├── best_slot: (4)
+    //     ├── deepest_slot: (6)
+    //     ├── stake_voted_subtree: 0
+    //     ├── (2)
+    //     │   ├── best_slot: (4)
+    //     │   ├── deepest_slot: (4)
+    //     │   ├── stake_voted_subtree: 0
+    //     │   └── (4)
+    //     │       ├── best_slot: (4)
+    //     │       ├── deepest_slot: (4)
+    //     │       └── stake_voted_subtree: 0
+    //     └── (3)
+    //         ├── best_slot: (6)
+    //         ├── deepest_slot: (6)
+    //         ├── stake_voted_subtree: 0
+    //         └── (5)
+    //             ├── best_slot: (6)
+    //             ├── deepest_slot: (6)
+    //             ├── stake_voted_subtree: 0
+    //             └── (6)
+    //                 ├── best_slot: (6)
+    //                 ├── deepest_slot: (6)
+    //                 └── stake_voted_subtree: 0
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    // Add a leaf 10 as child of leaf 4, it should be the best and deepest choice
+    // (0)
+    // ├── best_slot: (10)
+    // ├── deepest_slot: (10)
+    // ├── stake_voted_subtree: 0
+    // └── (1)
+    //     ├── best_slot: (10)
+    //     ├── deepest_slot: (10)
+    //     ├── stake_voted_subtree: 0
+    //     ├── (2)
+    //     │   ├── best_slot: (10)
+    //     │   ├── deepest_slot: (10)
+    //     │   ├── stake_voted_subtree: 0
+    //     │   └── (4)
+    //     │       ├── best_slot: (10)
+    //     │       ├── deepest_slot: (10)
+    //     │       ├── stake_voted_subtree: 0
+    //     │       └── (10) ---------------------------new leaf 10 added as child of 4
+    //     │           ├── best_slot: (10)
+    //     │           ├── deepest_slot: (10)
+    //     │           └── stake_voted_subtree: 0
+    //     └── (3)
+    //         ├── best_slot: (6)
+    //         ├── deepest_slot: (6)
+    //         ├── stake_voted_subtree: 0
+    //         └── (5)
+    //             ├── best_slot: (6)
+    //             ├── deepest_slot: (6)
+    //             ├── stake_voted_subtree: 0
+    //             └── (6)
+    //                 ├── best_slot: (6)
+    //                 ├── deepest_slot: (6)
+    //                 └── stake_voted_subtree: 0
+    try fork_choice.addNewLeafSlot(
+        .{ .slot = 10, .hash = Hash.ZEROES },
+        .{ .slot = 4, .hash = Hash.ZEROES },
+    );
+
+    // New leaf 10, should be the best and deepest choice for all ancestors
+    var ancestors_of_10 = fork_choice.ancestorIterator(
+        SlotAndHash{ .slot = 10, .hash = Hash.ZEROES },
+    );
+    while (ancestors_of_10.next()) |item| {
+        try std.testing.expectEqual(10, fork_choice.heaviestSlot(item).?.slot);
+        try std.testing.expectEqual(10, fork_choice.deepestSlot(&item).?.slot);
+    }
+    // Add a smaller leaf 9 as child of leaf 4, it should be the best and deepest choice
+    // (0)
+    // ├── best_slot: (9)
+    // ├── deepest_slot: (9)
+    // ├── stake_voted_subtree: 0
+    // └── (1)
+    //     ├── best_slot: (9)
+    //     ├── deepest_slot: (9)
+    //     ├── stake_voted_subtree: 0
+    //     ├── (2)
+    //     │   ├── best_slot: (9)
+    //     │   ├── deepest_slot: (9)
+    //     │   ├── stake_voted_subtree: 0
+    //     │   └── (4)
+    //     │       ├── best_slot: (9)
+    //     │       ├── deepest_slot: (9)
+    //     │       ├── stake_voted_subtree: 0
+    //     │       ├── (9) ---------------------------new leaf 9 added as child of 4
+    //     │       │   ├── best_slot: (9)
+    //     │       │   ├── deepest_slot: (9)
+    //     │       │   └── stake_voted_subtree: 0
+    //     │       └── (10)
+    //     │           ├── best_slot: (10)
+    //     │           ├── deepest_slot: (10)
+    //     │           └── stake_voted_subtree: 0
+    //     └── (3)
+    //         ├── best_slot: (6)
+    //         ├── deepest_slot: (6)
+    //         ├── stake_voted_subtree: 0
+    //         └── (5)
+    //             ├── best_slot: (6)
+    //             ├── deepest_slot: (6)
+    //             ├── stake_voted_subtree: 0
+    //             └── (6)
+    //                 ├── best_slot: (6)
+    //                 ├── deepest_slot: (6)
+    //                 └── stake_voted_subtree: 0
+    try fork_choice.addNewLeafSlot(
+        .{ .slot = 9, .hash = Hash.ZEROES },
+        .{ .slot = 4, .hash = Hash.ZEROES },
+    );
+    // New leaf 9, should be the best and deepest choice for all ancestors
+    var ancestors_of_9 = fork_choice.ancestorIterator(
+        SlotAndHash{ .slot = 10, .hash = Hash.ZEROES },
+    );
+    while (ancestors_of_9.next()) |item| {
+        try std.testing.expectEqual(9, fork_choice.heaviestSlot(item).?.slot);
+        try std.testing.expectEqual(9, fork_choice.deepestSlot(&item).?.slot);
+    }
+    // TODO complete test when vote related functions are implemented
 }
 
 test "HeaviestSubtreeForkChoice.bestOverallSlot" {
