@@ -62,9 +62,10 @@ pub const Elf = struct {
             };
         }
 
-        fn shdrSlice(self: Headers, index: u32) ![]const u8 {
+        pub fn shdrSlice(self: Headers, index: u32) ![]const u8 {
             if (index >= self.shdrs.len) return error.OutOfBounds;
             const shdr = self.shdrs[index];
+            if (shdr.sh_type == elf.SHT_NOBITS) return &.{};
             const sh_offset = shdr.sh_offset;
             const sh_size = shdr.sh_size;
             return try safeSlice(self.bytes, sh_offset, sh_size);
@@ -90,6 +91,13 @@ pub const Elf = struct {
                 if (phdr.p_type == p_type) return @intCast(i);
             }
             return null;
+        }
+
+        fn inRangeOfShdr(self: Headers, index: usize, addr: usize) bool {
+            const shdr = self.shdrs[index];
+            const sh_offset = shdr.sh_offset;
+            const sh_size = shdr.sh_size;
+            return addr >= sh_offset and addr < sh_offset + sh_size;
         }
     };
 
@@ -124,29 +132,36 @@ pub const Elf = struct {
         fn parseDynamic(headers: Headers) !?DynamicTable {
             var output_table: DynamicTable = .{0} ** elf.DT_NUM;
 
-            const dynamic_table = if (headers.getPhdrIndexByType(elf.PT_DYNAMIC)) |index| dt: {
-                const slice = try headers.phdrSlice(index);
-                if (slice.len % @sizeOf(elf.Elf64_Dyn) != 0) return error.InvalidSize;
-                break :dt std.mem.bytesAsSlice(elf.Elf64_Dyn, slice);
-            } else for (headers.shdrs, 0..) |shdr, i| {
-                // if PT_DYNAMIC doesn't exist or is invalid, fallback to parsing
-                // SHT_DYNAMIC
-                if (shdr.sh_type == elf.SHT_DYNAMIC) {
-                    break std.mem.bytesAsSlice(
-                        elf.Elf64_Dyn,
-                        try headers.shdrSlice(@intCast(i)),
-                    );
+            var dynamic_table: ?[]align(1) const elf.Elf64_Dyn = null;
+
+            if (headers.getPhdrIndexByType(elf.PT_DYNAMIC)) |index| phdr: {
+                // If anything errors, we need to skip this strategy and try parsing the SHT_DYNAMIC
+                const slice = headers.phdrSlice(index) catch break :phdr;
+                if (slice.len % @sizeOf(elf.Elf64_Dyn) != 0) break :phdr;
+                dynamic_table = std.mem.bytesAsSlice(elf.Elf64_Dyn, slice);
+            }
+
+            if (dynamic_table == null) {
+                for (headers.shdrs, 0..) |shdr, i| {
+                    // if PT_DYNAMIC doesn't exist or is invalid, fallback to parsing SHT_DYNAMIC
+                    if (shdr.sh_type == elf.SHT_DYNAMIC) {
+                        dynamic_table = std.mem.bytesAsSlice(
+                            elf.Elf64_Dyn,
+                            try headers.shdrSlice(@intCast(i)),
+                        );
+                        break;
+                    }
                 }
             }
+
             // if neither PT_DYNAMIC nor SHT_DYNAMIC exist, this is a state file.
-            else return null;
+            if (dynamic_table == null) return null;
+            for (dynamic_table.?) |dyn| {
+                const d_tag: u64 = @bitCast(dyn.d_tag);
+                if (d_tag == elf.DT_NULL) break;
+                if (d_tag >= elf.DT_NUM) continue; // we don't parse any reversed tags
 
-            for (dynamic_table) |dyn| {
-                if (dyn.d_tag == elf.DT_NULL) break;
-                if (dyn.d_tag >= elf.DT_NUM) continue; // we don't parse any reversed tags
-                if (dyn.d_tag < 0) return error.InvalidDynamicTable;
-
-                output_table[@as(u64, @bitCast(dyn.d_tag))] = dyn.d_val;
+                output_table[d_tag] = dyn.d_val;
             }
 
             return output_table;
@@ -331,6 +346,227 @@ pub const Elf = struct {
             return ro_section;
         }
 
+        fn relocate(
+            self: Data,
+            headers: Headers,
+            bytes: []u8,
+            allocator: std.mem.Allocator,
+            loader: *BuiltinProgram,
+            function_registry: *Registry(u64),
+            version: sbpf.Version,
+            config: Config,
+        ) !void {
+            const text_section_index = self.getShdrIndexByName(headers, ".text") orelse
+                return error.ShdrNotFound;
+
+            // We don't use headers.shdrSlice() since we need to slice the mutable `bytes`.
+            const text_section = headers.shdrs[text_section_index];
+            const text_bytes: []u8 = try safeSlice(
+                bytes,
+                text_section.sh_offset,
+                text_section.sh_size,
+            );
+            const instructions = try self.getInstructions(headers);
+            for (instructions, 0..) |inst, i| {
+                if (inst.opcode == .call_imm and
+                    inst.imm != ~@as(u32, 0) and
+                    !(version.enableStaticSyscalls() and inst.src == .r0))
+                {
+                    const target_pc = @as(i64, @intCast(i)) +| @as(i32, @bitCast(inst.imm)) +| 1;
+                    if (target_pc < 0 or target_pc >= instructions.len)
+                        return error.RelativeJumpOutOfBounds;
+
+                    const name = if (config.enable_symbol_and_section_labels)
+                        try std.fmt.allocPrint(allocator, "function_{d}", .{target_pc})
+                    else
+                        &.{};
+                    defer allocator.free(name);
+
+                    const key = try function_registry.registerHashedLegacy(
+                        allocator,
+                        loader,
+                        !version.enableStaticSyscalls(),
+                        name,
+                        @intCast(target_pc),
+                    );
+                    // offset into the instruction where the immediate is stored
+                    const offset = (i *| 8) +| 4;
+                    const slice = text_bytes[offset..][0..4];
+                    std.mem.writeInt(u32, slice, @intCast(key), .little);
+                }
+            }
+
+            var phdr: ?elf.Elf64_Phdr = null;
+
+            for (self.relocations_table) |reloc| {
+                var r_offset = reloc.r_offset;
+
+                if (version.enableElfVaddr()) {
+                    const found = if (phdr) |header| found: {
+                        break :found inRangeOfPhdrVm(header, r_offset);
+                    } else false;
+                    if (!found) {
+                        phdr = for (headers.phdrs) |header| {
+                            if (inRangeOfPhdrVm(header, r_offset)) {
+                                break header;
+                            }
+                        } else null;
+                    }
+                    const header = phdr orelse return error.ValueOutOfBounds;
+                    r_offset = r_offset -| header.p_vaddr +| header.p_offset;
+                }
+
+                switch (@as(elf.R_X86_64, @enumFromInt(reloc.r_type()))) {
+                    .@"64" => {
+                        // if the relocation is addressing an instruction inside of the
+                        // text section, we'll need to offset it by the offset of the immediate
+                        // field into the instruction.
+                        const in_text_section = headers.inRangeOfShdr(
+                            text_section_index,
+                            r_offset,
+                        ) or version == .v0;
+                        const imm_offset = if (in_text_section) r_offset +| 4 else r_offset;
+
+                        const addr_slice = try safeSlice(bytes, imm_offset, 4);
+                        const ref_addr = std.mem.readInt(u32, addr_slice[0..4], .little);
+                        const symbol = self.symbol_table[reloc.r_sym()];
+                        var addr = symbol.st_value +| ref_addr;
+
+                        if (addr < memory.RODATA_START) {
+                            addr +|= memory.RODATA_START;
+                        }
+
+                        if (in_text_section or version == .v0) {
+                            {
+                                const imm_low_offset = imm_offset;
+                                const imm_slice = try safeSlice(bytes, imm_low_offset, 4);
+                                std.mem.writeInt(u32, imm_slice[0..4], @truncate(addr), .little);
+                            }
+
+                            {
+                                const imm_high_offset = imm_offset +| 8;
+                                const imm_slice = try safeSlice(bytes, imm_high_offset, 4);
+                                std.mem.writeInt(
+                                    u32,
+                                    imm_slice[0..4],
+                                    @truncate(addr >> 32),
+                                    .little,
+                                );
+                            }
+                        } else {
+                            const imm_slice = try safeSlice(bytes, imm_offset, 8);
+                            std.mem.writeInt(u64, imm_slice[0..8], addr, .little);
+                        }
+                    },
+                    .RELATIVE => {
+                        const imm_offset = r_offset +| 4;
+
+                        // is the relocation targetting inside of the text section
+                        if (headers.inRangeOfShdr(text_section_index, imm_offset)) {
+                            // the target is a lddw instruction which takes up two instruction slots
+
+                            const va_low = val: {
+                                const imm_slice = try safeSlice(bytes, imm_offset, 4);
+                                break :val std.mem.readInt(u32, imm_slice[0..4], .little);
+                            };
+
+                            const va_high = val: {
+                                const imm_high_offset = r_offset +| 12;
+                                const imm_slice = try safeSlice(bytes, imm_high_offset, 4);
+                                break :val std.mem.readInt(u32, imm_slice[0..4], .little);
+                            };
+
+                            var ref_addr = (@as(u64, va_high) << 32) | va_low;
+                            if (ref_addr == 0) return error.InvalidVirtualAddress;
+
+                            if (ref_addr < memory.RODATA_START) {
+                                ref_addr +|= memory.RODATA_START;
+                            }
+
+                            {
+                                const imm_slice = try safeSlice(bytes, imm_offset, 4);
+                                std.mem.writeInt(
+                                    u32,
+                                    imm_slice[0..4],
+                                    @truncate(ref_addr),
+                                    .little,
+                                );
+                            }
+
+                            {
+                                const imm_high_offset = r_offset +| 12;
+                                const imm_slice = try safeSlice(bytes, imm_high_offset, 4);
+                                std.mem.writeInt(
+                                    u32,
+                                    imm_slice[0..4],
+                                    @intCast(ref_addr >> 32),
+                                    .little,
+                                );
+                            }
+                        } else {
+                            const address: u64 = switch (version) {
+                                .v0 => addr: {
+                                    const addr_slice = try safeSlice(bytes, imm_offset, 4);
+                                    const address = std.mem.readInt(u32, addr_slice[0..4], .little);
+                                    break :addr memory.RODATA_START +| address;
+                                },
+                                else => addr: {
+                                    const addr_slice = try safeSlice(
+                                        bytes,
+                                        r_offset,
+                                        @sizeOf(u64),
+                                    );
+                                    var address = std.mem.readInt(u64, addr_slice[0..8], .little);
+                                    if (address < memory.RODATA_START) {
+                                        address +|= memory.RODATA_START;
+                                    }
+                                    break :addr address;
+                                },
+                            };
+                            const addr_slice = try safeSlice(bytes, r_offset, @sizeOf(u64));
+                            std.mem.writeInt(u64, addr_slice[0..8], address, .little);
+                        }
+                    },
+                    .@"32" => {
+                        // This relocation handles resolving calls to symbols
+                        // Hash the symbol name with Murmur and relocate the instruction's imm field.
+                        const imm_offset = r_offset +| 4;
+                        if (reloc.r_sym() >= self.symbol_table.len) return error.UnknownSymbol;
+                        const symbol = self.symbol_table[reloc.r_sym()];
+
+                        const dynstr_index = self.getShdrIndexByName(headers, ".dynstr") orelse
+                            return error.NoDynStrSection;
+                        const dynstr = try headers.shdrSlice(dynstr_index);
+                        const symbol_name = std.mem.sliceTo(dynstr[symbol.st_name..], 0);
+
+                        // If the symbol is defined, this is a bpf-to-bpf call.
+                        if (symbol.st_type() == elf.STT_FUNC and symbol.st_value != 0) {
+                            const target_pc = (symbol.st_value -| text_section.sh_addr) / 8;
+                            const key = try function_registry.registerHashedLegacy(
+                                allocator,
+                                loader,
+                                !version.enableStaticSyscalls(),
+                                symbol_name,
+                                @intCast(target_pc),
+                            );
+                            const slice = try safeSlice(bytes, imm_offset, 4);
+                            std.mem.writeInt(u32, slice[0..4], @intCast(key), .little);
+                        } else {
+                            const hash = sbpf.hashSymbolName(symbol_name);
+                            if (config.reject_broken_elfs and
+                                loader.functions.lookupKey(hash) == null)
+                            {
+                                return error.UnresolvedSymbol;
+                            }
+                            const slice = try safeSlice(bytes, imm_offset, 4);
+                            std.mem.writeInt(u32, slice[0..4], hash, .little);
+                        }
+                    },
+                    else => return error.UnknownRelocation,
+                }
+            }
+        }
+
         /// Returns the string for a given index into the string table.
         fn getString(self: Data, off: u32) [:0]const u8 {
             assert(off < self.strtab.len);
@@ -346,6 +582,16 @@ pub const Elf = struct {
                 }
             }
             return null;
+        }
+
+        fn getInstructions(self: Data, headers: Headers) ![]align(1) const sbpf.Instruction {
+            const text_section_index = self.getShdrIndexByName(headers, ".text").?;
+            const text_bytes: []const u8 = try headers.shdrSlice(text_section_index);
+            const instruction_count = text_bytes.len / 8;
+            return std.mem.bytesAsSlice(
+                sbpf.Instruction,
+                text_bytes[0 .. instruction_count * @sizeOf(sbpf.Instruction)],
+            );
         }
 
         pub fn getShdrByName(self: Data, headers: Headers, name: []const u8) ?elf.Elf64_Shdr {
@@ -549,27 +795,43 @@ pub const Elf = struct {
         const offset = headers.header.e_entry -| text_section.sh_addr;
         const entry_pc = try std.math.divExact(u64, offset, 8);
 
+        var function_registry: Registry(u64) = .{};
+        errdefer function_registry.deinit(allocator);
+        try data.relocate(
+            headers,
+            bytes,
+            allocator,
+            loader,
+            &function_registry,
+            sbpf_version,
+            config,
+        );
+
         var self: Elf = .{
             .bytes = bytes,
             .headers = headers,
             .data = data,
             .entry_pc = entry_pc,
             .version = sbpf_version,
-            .function_registry = .{},
+            .function_registry = function_registry,
             .config = config,
             .ro_section = try data.parseRoSections(headers, config, sbpf_version, allocator),
         };
         errdefer self.deinit(allocator);
 
+        if (!sbpf_version.enableStaticSyscalls()) {
+            _ = self.function_registry.map.remove(sbpf.hashSymbolName("entrypoint"));
+        }
+
         _ = try self.function_registry.registerHashedLegacy(
             allocator,
+            loader,
             !sbpf_version.enableStaticSyscalls(),
             "entrypoint",
             entry_pc,
         );
 
         try self.validate();
-        try self.relocate(allocator, loader);
 
         return self;
     }
@@ -648,9 +910,6 @@ pub const Elf = struct {
         if (!self.inRangeOfShdrVaddr(text_section_index, entrypoint)) {
             return error.EntrypointOutsideTextSection;
         }
-        const text_section_slice = try self.headers.shdrSlice(text_section_index);
-        if (text_section_slice.len % @sizeOf(sbpf.Instruction) != 0)
-            return error.InvalidTextSectionLength;
 
         if (self.version.enableElfVaddr() and
             self.config.optimize_rodata != true)
@@ -659,236 +918,17 @@ pub const Elf = struct {
         }
     }
 
-    fn relocate(
-        self: *Elf,
-        allocator: std.mem.Allocator,
-        loader: *BuiltinProgram,
-    ) !void {
-        const config = self.config;
-        const version = self.version;
-        const text_section_index = self.getShdrIndexByName(".text") orelse
-            return error.ShdrNotFound;
-        const text_section = self.headers.shdrs[text_section_index];
-
-        // fixup PC-relative call instructions
-        const text_bytes: []u8 = try safeSlice(
-            self.bytes,
-            text_section.sh_offset,
-            text_section.sh_size,
-        );
-        const instructions = self.getInstructions();
-        for (instructions, 0..) |inst, i| {
-            if (inst.opcode == .call_imm and
-                inst.imm != ~@as(u32, 0) and
-                !(version.enableStaticSyscalls() and inst.src == .r0))
-            {
-                const target_pc = @as(i64, @intCast(i)) +| @as(i32, @bitCast(inst.imm)) +| 1;
-                if (target_pc < 0 or target_pc >= instructions.len)
-                    return error.RelativeJumpOutOfBounds;
-                const key = try self.function_registry.registerHashedLegacy(
-                    allocator,
-                    !version.enableStaticSyscalls(),
-                    &.{},
-                    @intCast(target_pc),
-                );
-                // offset into the instruction where the immediate is stored
-                const offset = (i *| 8) +| 4;
-                const slice = text_bytes[offset..][0..4];
-                std.mem.writeInt(u32, slice, @intCast(key), .little);
-            }
-        }
-
-        var phdr: ?elf.Elf64_Phdr = null;
-
-        for (self.data.relocations_table) |reloc| {
-            var r_offset = reloc.r_offset;
-
-            if (version.enableElfVaddr()) {
-                const found = if (phdr) |header| found: {
-                    break :found inRangeOfPhdrVm(header, r_offset);
-                } else false;
-                if (!found) {
-                    phdr = for (self.headers.phdrs) |header| {
-                        if (inRangeOfPhdrVm(header, r_offset)) {
-                            break header;
-                        }
-                    } else null;
-                }
-                const header = phdr orelse return error.ValueOutOfBounds;
-                r_offset = r_offset -| header.p_vaddr +| header.p_offset;
-            }
-
-            switch (@as(elf.R_X86_64, @enumFromInt(reloc.r_type()))) {
-                .@"64" => {
-                    // if the relocation is addressing an instruction inside of the
-                    // text section, we'll need to offset it by the offset of the immediate
-                    // field into the instruction.
-                    const in_text_section = self.inRangeOfShdr(
-                        text_section_index,
-                        r_offset,
-                    ) or version == .v0;
-                    const imm_offset = if (in_text_section) r_offset +| 4 else r_offset;
-
-                    const addr_slice = try safeSlice(self.bytes, imm_offset, 4);
-                    const ref_addr = std.mem.readInt(u32, addr_slice[0..4], .little);
-                    const symbol = self.data.symbol_table[reloc.r_sym()];
-                    var addr = symbol.st_value +| ref_addr;
-
-                    if (addr < memory.RODATA_START) {
-                        addr +|= memory.RODATA_START;
-                    }
-
-                    if (in_text_section or version == .v0) {
-                        {
-                            const imm_low_offset = imm_offset;
-                            const imm_slice = try safeSlice(self.bytes, imm_low_offset, 4);
-                            std.mem.writeInt(u32, imm_slice[0..4], @truncate(addr), .little);
-                        }
-
-                        {
-                            const imm_high_offset = imm_offset +| 8;
-                            const imm_slice = try safeSlice(self.bytes, imm_high_offset, 4);
-                            std.mem.writeInt(u32, imm_slice[0..4], @intCast(addr >> 32), .little);
-                        }
-                    } else {
-                        const imm_slice = try safeSlice(self.bytes, imm_offset, 8);
-                        std.mem.writeInt(u64, imm_slice[0..8], addr, .little);
-                    }
-                },
-                .RELATIVE => {
-                    const imm_offset = r_offset +| 4;
-
-                    // is the relocation targetting inside of the text section
-                    if (self.inRangeOfShdr(text_section_index, imm_offset)) {
-                        // the target is a lddw instruction which takes up two instruction slots
-
-                        const va_low = val: {
-                            const imm_slice = try safeSlice(self.bytes, imm_offset, 4);
-                            break :val std.mem.readInt(u32, imm_slice[0..4], .little);
-                        };
-
-                        const va_high = val: {
-                            const imm_high_offset = r_offset +| 12;
-                            const imm_slice = try safeSlice(self.bytes, imm_high_offset, 4);
-                            break :val std.mem.readInt(u32, imm_slice[0..4], .little);
-                        };
-
-                        var ref_addr = (@as(u64, va_high) << 32) | va_low;
-                        if (ref_addr == 0) return error.InvalidVirtualAddress;
-
-                        if (ref_addr < memory.RODATA_START) {
-                            ref_addr +|= memory.RODATA_START;
-                        }
-
-                        {
-                            const imm_slice = try safeSlice(self.bytes, imm_offset, 4);
-                            std.mem.writeInt(
-                                u32,
-                                imm_slice[0..4],
-                                @truncate(ref_addr),
-                                .little,
-                            );
-                        }
-
-                        {
-                            const imm_high_offset = r_offset +| 12;
-                            const imm_slice = try safeSlice(self.bytes, imm_high_offset, 4);
-                            std.mem.writeInt(
-                                u32,
-                                imm_slice[0..4],
-                                @intCast(ref_addr >> 32),
-                                .little,
-                            );
-                        }
-                    } else {
-                        const address: u64 = switch (version) {
-                            .v0 => addr: {
-                                const addr_slice = try safeSlice(self.bytes, imm_offset, 4);
-                                const address = std.mem.readInt(u32, addr_slice[0..4], .little);
-                                break :addr memory.RODATA_START +| address;
-                            },
-                            else => addr: {
-                                const addr_slice = try safeSlice(
-                                    self.bytes,
-                                    r_offset,
-                                    @sizeOf(u64),
-                                );
-                                var address = std.mem.readInt(u64, addr_slice[0..8], .little);
-                                if (address < memory.RODATA_START) {
-                                    address +|= memory.RODATA_START;
-                                }
-                                break :addr address;
-                            },
-                        };
-                        const addr_slice = try safeSlice(self.bytes, r_offset, @sizeOf(u64));
-                        std.mem.writeInt(u64, addr_slice[0..8], address, .little);
-                    }
-                },
-                .@"32" => {
-                    // This relocation handles resolving calls to symbols
-                    // Hash the symbol name with Murmur and relocate the instruction's imm field.
-                    const imm_offset = r_offset +| 4;
-                    if (reloc.r_sym() >= self.data.symbol_table.len) return error.UnknownSymbol;
-                    const symbol = self.data.symbol_table[reloc.r_sym()];
-
-                    const dynstr_index = self.getShdrIndexByName(".dynstr") orelse
-                        return error.NoDynStrSection;
-                    const dynstr = try self.headers.shdrSlice(dynstr_index);
-                    const symbol_name = std.mem.sliceTo(dynstr[symbol.st_name..], 0);
-
-                    // If the symbol is defined, this is a bpf-to-bpf call.
-                    if (symbol.st_type() == elf.STT_FUNC and symbol.st_value != 0) {
-                        const target_pc = (symbol.st_value -| text_section.sh_addr) / 8;
-                        const key = try self.function_registry.registerHashedLegacy(
-                            allocator,
-                            !version.enableStaticSyscalls(),
-                            symbol_name,
-                            @intCast(target_pc),
-                        );
-                        const slice = try safeSlice(self.bytes, imm_offset, 4);
-                        std.mem.writeInt(u32, slice[0..4], @intCast(key), .little);
-                    } else {
-                        const hash = sbpf.hashSymbolName(symbol_name);
-                        if (config.reject_broken_elfs and
-                            loader.functions.lookupKey(hash) == null)
-                        {
-                            return error.UnresolvedSymbol;
-                        }
-                        const slice = try safeSlice(self.bytes, imm_offset, 4);
-                        std.mem.writeInt(u32, slice[0..4], hash, .little);
-                    }
-                },
-                else => return error.UnknownRelocation,
-            }
-        }
-    }
-
     pub fn deinit(self: *Elf, allocator: std.mem.Allocator) void {
         self.function_registry.deinit(allocator);
         self.ro_section.deinit(allocator);
     }
 
-    /// The function is guarnteed to succeed, since `parse` already checks that
-    /// the `.text` section exists and it's sized correctly.
-    pub fn getInstructions(self: Elf) []align(1) const sbpf.Instruction {
-        const text_section_index = self.getShdrIndexByName(".text").?;
-        const text_bytes: []const u8 = self.headers.shdrSlice(text_section_index) catch unreachable;
-        return std.mem.bytesAsSlice(sbpf.Instruction, text_bytes);
-    }
-
-    fn getShdrIndexByName(self: Elf, name: []const u8) ?u32 {
+    pub fn getShdrIndexByName(self: Elf, name: []const u8) ?u32 {
         return self.data.getShdrIndexByName(self.headers, name);
     }
 
     pub fn getShdrByName(self: Elf, name: []const u8) ?elf.Elf64_Shdr {
         return self.data.getShdrByName(self.headers, name);
-    }
-
-    fn inRangeOfShdr(self: *const Elf, index: usize, addr: usize) bool {
-        const shdr = self.headers.shdrs[index];
-        const sh_offset = shdr.sh_offset;
-        const sh_size = shdr.sh_size;
-        return addr >= sh_offset and addr < sh_offset + sh_size;
     }
 
     fn inRangeOfShdrVaddr(self: *const Elf, index: usize, addr: usize) bool {
@@ -909,6 +949,12 @@ pub const Elf = struct {
         const end = std.math.add(usize, start, len) catch return error.OutOfBounds;
         if (end > base.len) return error.OutOfBounds;
         return base[start..][0..len];
+    }
+
+    /// The function is guarnteed to succeed, since `parse` already checks that
+    /// the `.text` section exists and it's sized correctly.
+    pub fn getInstructions(self: *const Elf) []align(1) const sbpf.Instruction {
+        return self.data.getInstructions(self.headers) catch unreachable;
     }
 };
 

@@ -1901,14 +1901,14 @@ test "pqr" {
         var registry: lib.Registry(u64) = .{};
         defer registry.deinit(allocator);
 
+        var loader: BuiltinProgram = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
+            &loader,
             &registry,
             config,
         );
-
-        var loader: BuiltinProgram = .{};
         const map = try MemoryMap.init(&.{}, .v2);
 
         var vm = try Vm.init(
@@ -1949,16 +1949,16 @@ test "pqr divide by zero" {
         var registry: lib.Registry(u64) = .{};
         defer registry.deinit(allocator);
 
+        var loader: BuiltinProgram = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
+            &loader,
             &registry,
             config,
         );
 
-        var loader: BuiltinProgram = .{};
         const map = try MemoryMap.init(&.{}, .v3);
-
         var vm = try Vm.init(
             allocator,
             &executable,
