@@ -588,6 +588,27 @@ pub fn Registry(T: type) type {
             }
             self.map.deinit(allocator);
         }
+
+        test "symbol collision" {
+            const allocator = std.testing.allocator;
+            var registry: Registry(u64) = .{};
+            defer registry.deinit(allocator);
+
+            _ = try registry.registerHashed(
+                allocator,
+                "foo",
+                0,
+            );
+
+            try std.testing.expectError(
+                error.SymbolHashCollision,
+                registry.registerHashed(
+                    allocator,
+                    "gmyionqhgxitzddvxfwubqhpomupciyvbeczintxxtfdsfhiyxcnzyowtgnrnvvd",
+                    4,
+                ),
+            );
+        }
     };
 }
 
