@@ -49,24 +49,8 @@ pub const BorrowedAccount = struct {
         self.account_write_guard.release();
     }
 
-    pub fn getLamports(self: BorrowedAccount) u64 {
-        return self.account.lamports;
-    }
-
     pub fn getData(self: BorrowedAccount) []const u8 {
         return self.account.data;
-    }
-
-    pub fn isExecutable(self: BorrowedAccount) bool {
-        return self.account.executable;
-    }
-
-    pub fn getOwner(self: BorrowedAccount) Pubkey {
-        return self.account.owner;
-    }
-
-    pub fn getRentEpoch(self: BorrowedAccount) Epoch {
-        return self.account.rent_epoch;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1068
@@ -86,10 +70,11 @@ pub const BorrowedAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
     pub fn checkDataIsMutable(self: BorrowedAccount) InstructionError!void {
-        if (self.isExecutable()) return InstructionError.ExecutableDataModified;
+        if (self.account.executable) return InstructionError.ExecutableDataModified;
         if (!self.isWritable()) return InstructionError.ReadonlyDataModified;
         if (!self.isOwnedByCurrentProgram()) return InstructionError.ExternalAccountDataModified;
     }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1095
     pub fn checkCanSetDataLength(
         self: BorrowedAccount,
@@ -125,6 +110,8 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
+    /// `state` must implement member function `pub fn serializedSize(state: T) usize`\
+    /// `state` must support bincode serialization
     pub fn serializeIntoAccountData(
         self: *BorrowedAccount,
         state: anytype,
@@ -166,7 +153,7 @@ pub const BorrowedAccount = struct {
     pub fn setOwner(self: *BorrowedAccount, pubkey: Pubkey) InstructionError!void {
         if (!self.isOwnedByCurrentProgram()) return InstructionError.ModifiedProgramId;
         if (!self.isWritable()) return InstructionError.ModifiedProgramId;
-        if (self.isExecutable()) return InstructionError.ModifiedProgramId;
+        if (self.account.executable) return InstructionError.ModifiedProgramId;
         if (!self.account.isZeroed()) return InstructionError.ModifiedProgramId;
         self.account.owner = pubkey;
     }

@@ -90,7 +90,7 @@ pub fn createInstructionContext(
     return .{
         .tc = tc,
         .program_id = program.ID,
-        .program_index = @truncate(program_index),
+        .program_index = @intCast(program_index),
         .instruction = try bincode.writeAlloc(allocator, instruction, .{}),
         .accounts = try accounts.toOwnedSlice(),
     };

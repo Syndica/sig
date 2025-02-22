@@ -32,13 +32,11 @@ pub const Rent = struct {
     pub const ID =
         Pubkey.parseBase58String("SysvarRent111111111111111111111111111111111") catch unreachable;
 
-    pub fn default() Rent {
-        return .{
-            .lamports_per_byte_year = DEFAULT_LAMPORTS_PER_BYTE_YEAR,
-            .exemption_threshold = DEFAULT_EXEMPTION_THRESHOLD,
-            .burn_percent = DEFAULT_BURN_PERCENT,
-        };
-    }
+    pub const DEFAULT: Rent = .{
+        .lamports_per_byte_year = DEFAULT_LAMPORTS_PER_BYTE_YEAR,
+        .exemption_threshold = DEFAULT_EXEMPTION_THRESHOLD,
+        .burn_percent = DEFAULT_BURN_PERCENT,
+    };
 
     pub fn minimumBalance(self: Rent, data_len: usize) u64 {
         const bytes: u64 = @intCast(data_len);
