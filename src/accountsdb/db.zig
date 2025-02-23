@@ -14,9 +14,7 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Blake3 = std.crypto.hash.Blake3;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const AccountsCache = sig.accounts_db.cache.AccountsCache;
 const StatusCache = sig.accounts_db.StatusCache;
-
 const AccountFile = sig.accounts_db.accounts_file.AccountFile;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const FileId = sig.accounts_db.accounts_file.FileId;
@@ -33,6 +31,8 @@ const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
+const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 const PubkeyShardCalculator = sig.accounts_db.index.PubkeyShardCalculator;
 const ShardedPubkeyRefMap = sig.accounts_db.index.ShardedPubkeyRefMap;
 
@@ -86,9 +86,7 @@ pub const AccountsDB = struct {
     gossip_view: ?GossipView,
 
     // some static data
-
     number_of_index_shards: usize,
-    lru_size: ?usize,
 
     // internal structures & data
 
@@ -99,14 +97,13 @@ pub const AccountsDB = struct {
     /// This is tracked per-slot for purge/flush
     unrooted_accounts: RwMux(SlotPubkeyAccounts),
 
-    /// pubkey->account LRU maps
-    maybe_accounts_cache_rw: ?RwMux(AccountsCache),
-
     /// NOTE: see accountsdb/readme.md for more details on how these are used
     file_map: RwMux(FileMap),
     /// `file_map_fd_rw` is used to ensure files in the file_map are not closed while its held as a read-lock.
     /// NOTE: see accountsdb/readme.md for more details on how these are used
     file_map_fd_rw: std.Thread.RwLock,
+
+    buffer_pool: BufferPool,
 
     /// Tracks how many accounts (which we have stored) are dead for a specific slot.
     /// Used during clean to queue an AccountFile for shrink if it contains
@@ -170,8 +167,8 @@ pub const AccountsDB = struct {
         gossip_view: ?GossipView,
         index_allocation: AccountIndex.AllocatorConfig.Tag,
         number_of_index_shards: usize,
-        /// Limit of cached accounts. Use null to disable accounts caching.
-        lru_size: ?usize,
+        /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
+        buffer_pool_frames: u32 = 2 * 1024 * 1024,
     };
 
     pub fn init(params: InitParams) !Self {
@@ -188,13 +185,6 @@ pub const AccountsDB = struct {
         );
         errdefer account_index.deinit();
 
-        // init accounts cache
-        var maybe_accounts_cache = blk: {
-            const lru_size = params.lru_size orelse break :blk null;
-            break :blk try AccountsCache.init(params.allocator, globalRegistry(), lru_size);
-        };
-        errdefer if (maybe_accounts_cache) |*accounts_cache| accounts_cache.deinit();
-
         const metrics = try AccountsDBMetrics.init();
 
         // NOTE: we need the accounts directory to exist to create new account files correctly
@@ -202,6 +192,9 @@ pub const AccountsDB = struct {
             error.PathAlreadyExists => {},
             else => |e| return e,
         };
+
+        const buffer_pool = try BufferPool.init(params.allocator, params.buffer_pool_frames);
+        errdefer buffer_pool.deinit(params.allocator);
 
         return .{
             .allocator = params.allocator,
@@ -212,13 +205,12 @@ pub const AccountsDB = struct {
             .gossip_view = params.gossip_view,
 
             .number_of_index_shards = params.number_of_index_shards,
-            .lru_size = params.lru_size,
 
             .account_index = account_index,
             .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(params.allocator)),
-            .maybe_accounts_cache_rw = if (maybe_accounts_cache) |cache| RwMux(AccountsCache).init(cache) else null,
             .file_map = RwMux(FileMap).init(.{}),
             .file_map_fd_rw = .{},
+            .buffer_pool = buffer_pool,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(params.allocator)),
 
             .largest_file_id = FileId.fromInt(0),
@@ -234,12 +226,7 @@ pub const AccountsDB = struct {
 
     pub fn deinit(self: *Self) void {
         self.account_index.deinit();
-
-        if (self.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-            const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-            defer accounts_cache_lg.unlock();
-            accounts_cache.deinit();
-        }
+        self.buffer_pool.deinit(self.allocator);
 
         {
             const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.writeWithLock();
@@ -256,6 +243,7 @@ pub const AccountsDB = struct {
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
+            for (file_map.values()) |v| v.deinit();
             file_map.deinit(self.allocator);
         }
         {
@@ -373,7 +361,7 @@ pub const AccountsDB = struct {
                     self.logger.err().logf("Failed to open accounts/{s}: {s}", .{ file_name_bounded.constSlice(), @errorName(err) });
                     return err;
                 };
-                defer accounts_file.close();
+                errdefer accounts_file.close();
 
                 break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
                     self.logger.err().logf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });
@@ -486,7 +474,6 @@ pub const AccountsDB = struct {
                 .geyser_writer = parent.geyser_writer,
                 .number_of_index_shards = parent.number_of_index_shards,
 
-                .lru_size = 0, // we dont use the cache for loading
                 .logger = .noop, // dont spam the logs with init information (we set it after)
                 .gossip_view = null, // loading threads would never need to generate a snapshot, therefore it doesn't need a view into gossip.
                 .index_allocation = .ram, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
@@ -519,12 +506,7 @@ pub const AccountsDB = struct {
             file_map.deinit(per_thread_allocator);
 
             loading_thread.account_index.deinitLoadingThread();
-
-            if (loading_thread.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-                const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-                defer accounts_cache_lg.unlock();
-                accounts_cache.deinit();
-            }
+            loading_thread.buffer_pool.deinit(per_thread_allocator);
         }
     }
 
@@ -601,7 +583,7 @@ pub const AccountsDB = struct {
         }
         defer {
             if (geyser_slot_storage) |storage| {
-                storage.deinit();
+                storage.deinit(self.allocator);
                 self.allocator.destroy(storage);
             }
         }
@@ -623,7 +605,7 @@ pub const AccountsDB = struct {
                     });
                     return err;
                 };
-                defer accounts_file.close();
+                errdefer accounts_file.close();
 
                 break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
                     self.logger.err().logf("failed to *open* AccountsFile {s}: {s}\n", .{
@@ -633,17 +615,21 @@ pub const AccountsDB = struct {
                     return err;
                 };
             };
-            errdefer accounts_file.deinit();
+            var accounts_file_moved_to_filemap = false;
+            defer if (!accounts_file_moved_to_filemap) accounts_file.deinit();
 
             // index the account file
             var slot_references = std.ArrayListUnmanaged(AccountRef).initBuffer(
                 references_buf[n_accounts_total..],
             );
             indexAndValidateAccountFile(
+                self.allocator,
+                &self.buffer_pool,
                 &accounts_file,
                 self.account_index.pubkey_ref_map.shard_calculator,
                 shard_counts,
                 &slot_references,
+                // ! we collect the accounts and pubkeys into geyser storage here
                 geyser_slot_storage,
             ) catch |err| {
                 if (err == ValidateAccountFileError.OutOfReferenceMemory) {
@@ -661,6 +647,10 @@ pub const AccountsDB = struct {
             if (n_accounts_this_slot == 0) {
                 continue;
             }
+            const file_id = file_info.id;
+            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
+            accounts_file_moved_to_filemap = true;
+
             // track slice of references per slot
             n_accounts_total += n_accounts_this_slot;
             slot_reference_map.putAssumeCapacityNoClobber(
@@ -674,7 +664,7 @@ pub const AccountsDB = struct {
                 const geyser_writer = self.geyser_writer.?; // SAFE: will always be set if geyser_is_enabled
 
                 // ! reset memory for the next slot
-                defer geyser_storage.reset();
+                defer geyser_storage.reset(self.allocator);
 
                 const data_versioned: sig.geyser.core.VersionedAccountPayload = .{
                     .AccountPayloadV1 = .{
@@ -686,8 +676,6 @@ pub const AccountsDB = struct {
                 try geyser_writer.writePayloadToPipe(data_versioned);
             }
 
-            const file_id = file_info.id;
-            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
             self.largest_file_id = FileId.max(self.largest_file_id, file_id);
             _ = self.largest_rooted_slot.fetchMax(slot, .release);
             self.largest_flushed_slot.store(self.largest_rooted_slot.load(.acquire), .release);
@@ -1193,17 +1181,26 @@ pub const AccountsDB = struct {
                     // hashes aren't always stored correctly in snapshots
                     if (account_hash.eql(Hash.ZEROES)) {
                         const account, var lock_guard = try self.getAccountFromRefWithReadLock(max_slot_ref);
-                        defer lock_guard.unlock();
+                        defer {
+                            lock_guard.unlock();
+                            switch (account) {
+                                .file => |in_file_account| in_file_account.deinit(self.allocator),
+                                .unrooted_map => {},
+                            }
+                        }
 
                         account_hash = switch (account) {
-                            .file => |in_file_account| sig.core.account.hashAccount(
-                                in_file_account.lamports().*,
-                                in_file_account.data,
-                                &in_file_account.owner().data,
-                                in_file_account.executable().*,
-                                in_file_account.rent_epoch().*,
-                                &in_file_account.pubkey().data,
-                            ),
+                            .file => |in_file_account| blk: {
+                                var iter = in_file_account.data.iterator();
+                                break :blk sig.core.account.hashAccount(
+                                    in_file_account.lamports().*,
+                                    &iter,
+                                    &in_file_account.owner().data,
+                                    in_file_account.executable().*,
+                                    in_file_account.rent_epoch().*,
+                                    &in_file_account.pubkey().data,
+                                );
+                            },
                             .unrooted_map => |unrooted_account| unrooted_account.hash(&key),
                         };
                     }
@@ -1467,7 +1464,7 @@ pub const AccountsDB = struct {
         }
 
         const file, const file_id = try self.createAccountFile(size, slot);
-        defer file.close();
+        errdefer file.close();
 
         const offsets = try self.allocator.alloc(u64, accounts.len);
         defer self.allocator.free(offsets);
@@ -1542,7 +1539,7 @@ pub const AccountsDB = struct {
 
             // free slices
             for (accounts) |account| {
-                self.allocator.free(account.data);
+                account.data.deinit(self.allocator);
             }
             self.allocator.free(accounts);
             self.allocator.free(pubkeys);
@@ -1601,8 +1598,9 @@ pub const AccountsDB = struct {
                 break :blk file_map.get(file_id).?;
             };
 
-            var account_iter = account_file.iterator();
-            while (account_iter.next()) |account| {
+            var account_iter = account_file.iterator(self.allocator, &self.buffer_pool);
+            while (try account_iter.nextNoData()) |account| {
+                defer account.deinit(self.allocator);
                 const pubkey = account.pubkey().*;
 
                 // check if already cleaned
@@ -1846,8 +1844,10 @@ pub const AccountsDB = struct {
 
             var accounts_alive_size: u64 = 0;
             var accounts_dead_size: u64 = 0;
-            var account_iter = shrink_account_file.iterator();
-            while (account_iter.next()) |*account_in_file| {
+            var account_iter = shrink_account_file.iterator(self.allocator, &self.buffer_pool);
+            while (try account_iter.nextNoData()) |*account_in_file| {
+                defer account_in_file.deinit(self.allocator);
+
                 const pubkey = account_in_file.pubkey();
                 // account is dead if it is not in the index; dead accounts
                 // are removed from the index during cleaning
@@ -1881,16 +1881,17 @@ pub const AccountsDB = struct {
                 accounts_alive_size,
                 slot,
             );
-            defer new_file.close();
+            // don't close file if it ends up in file_map
+            var new_file_in_map = false;
+            defer if (!new_file_in_map) new_file.close();
 
             var file_size: usize = 0;
             account_iter.reset();
             for (is_alive_flags.items) |is_alive| {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
-                const account = account_iter.next().?;
-                if (is_alive) {
-                    file_size += account.getSizeInFile();
-                }
+                const account = (try account_iter.nextNoData()).?;
+                defer account.deinit(self.allocator);
+                if (is_alive) file_size += account.getSizeInFile();
             }
 
             var account_file_buf = std.ArrayList(u8).init(self.allocator);
@@ -1904,7 +1905,8 @@ pub const AccountsDB = struct {
             var offset: usize = 0;
             for (is_alive_flags.items) |is_alive| {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
-                const account = account_iter.next().?;
+                const account = (try account_iter.next()).?;
+                defer account.deinit(self.allocator);
                 if (is_alive) {
                     try account_file_buf.resize(account.getSizeInFile());
                     offsets.appendAssumeCapacity(offset);
@@ -1927,6 +1929,7 @@ pub const AccountsDB = struct {
                 new_account_file.number_of_accounts = accounts_alive_count;
 
                 file_map.putAssumeCapacityNoClobber(new_file_id, new_account_file);
+                new_file_in_map = true;
             }
 
             // update the references
@@ -1937,7 +1940,8 @@ pub const AccountsDB = struct {
             var offset_index: u64 = 0;
             for (is_alive_flags.items) |is_alive| {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
-                const account = account_iter.next().?;
+                const account = (try account_iter.nextNoData()).?;
+                defer account.deinit(self.allocator);
                 if (is_alive) {
                     // find the slot in the reference list
                     const pubkey = account.pubkey();
@@ -2061,34 +2065,14 @@ pub const AccountsDB = struct {
     pub fn getAccountFromRef(self: *Self, account_ref: *const AccountRef) !Account {
         switch (account_ref.location) {
             .File => |ref_info| {
-                const maybe_cached_account = blk: {
-                    const accounts_cache_rw = &(self.maybe_accounts_cache_rw orelse break :blk null);
+                const account = try self.getAccountInFile(
+                    self.allocator,
+                    ref_info.file_id,
+                    ref_info.offset,
+                );
+                errdefer account.deinit(self.allocator);
 
-                    const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-                    defer accounts_cache_lg.unlock();
-
-                    break :blk accounts_cache.get(account_ref.pubkey, account_ref.slot);
-                };
-
-                if (maybe_cached_account) |cached_account| {
-                    const account = try cached_account.account.clone(self.allocator);
-                    cached_account.releaseOrDestroy(self.allocator);
-                    return account;
-                } else {
-                    const account = try self.getAccountInFile(
-                        self.allocator,
-                        ref_info.file_id,
-                        ref_info.offset,
-                    );
-
-                    if (self.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-                        const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-                        defer accounts_cache_lg.unlock();
-                        try accounts_cache.put(account_ref.pubkey, account_ref.slot, account);
-                    }
-
-                    return account;
-                }
+                return account;
             },
             .UnrootedMap => |ref_info| {
                 const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.readWithLock();
@@ -2097,7 +2081,7 @@ pub const AccountsDB = struct {
                 _, const accounts = unrooted_accounts.get(account_ref.slot) orelse return error.SlotNotFound;
                 const account = accounts[ref_info.index];
 
-                return account.clone(self.allocator);
+                return try account.cloneOwned(self.allocator);
             },
         }
     }
@@ -2124,6 +2108,8 @@ pub const AccountsDB = struct {
         switch (account_ref.location) {
             .File => |ref_info| {
                 const account = try self.getAccountInFileAndLock(
+                    self.allocator,
+                    &self.buffer_pool,
                     ref_info.file_id,
                     ref_info.offset,
                 );
@@ -2156,9 +2142,15 @@ pub const AccountsDB = struct {
         file_id: FileId,
         offset: usize,
     ) (GetAccountInFileError || std.mem.Allocator.Error)!Account {
-        const account_in_file = try self.getAccountInFileAndLock(file_id, offset);
+        const account_in_file = try self.getAccountInFileAndLock(
+            self.allocator,
+            &self.buffer_pool,
+            file_id,
+            offset,
+        );
+        defer account_in_file.deinit(account_allocator);
         defer self.file_map_fd_rw.unlockShared();
-        return try account_in_file.toOwnedAccount(account_allocator);
+        return try account_in_file.dupeCachedAccount(account_allocator);
     }
 
     /// Gets an account given an file_id and offset value.
@@ -2167,12 +2159,19 @@ pub const AccountsDB = struct {
     /// when done with the account.
     pub fn getAccountInFileAndLock(
         self: *Self,
+        metadata_allocator: std.mem.Allocator,
+        buffer_pool: *BufferPool,
         file_id: FileId,
         offset: usize,
     ) GetAccountInFileError!AccountInFile {
         self.file_map_fd_rw.lockShared();
         errdefer self.file_map_fd_rw.unlockShared();
-        return try self.getAccountInFileAssumeLock(file_id, offset);
+        return try self.getAccountInFileAssumeLock(
+            metadata_allocator,
+            buffer_pool,
+            file_id,
+            offset,
+        );
     }
 
     /// Gets an account given a file_id and an offset value.
@@ -2180,6 +2179,8 @@ pub const AccountsDB = struct {
     /// locked for reading (shared).
     pub fn getAccountInFileAssumeLock(
         self: *Self,
+        metadata_allocator: std.mem.Allocator,
+        buffer_pool: *BufferPool,
         file_id: FileId,
         offset: usize,
     ) GetAccountInFileError!AccountInFile {
@@ -2188,7 +2189,11 @@ pub const AccountsDB = struct {
             defer file_map_lg.unlock();
             break :blk file_map.get(file_id) orelse return error.FileIdNotFound;
         };
-        return account_file.readAccount(offset) catch error.InvalidOffset;
+        return account_file.readAccount(
+            metadata_allocator,
+            buffer_pool,
+            offset,
+        ) catch error.InvalidOffset;
     }
 
     pub fn getAccountHashAndLamportsFromRef(
@@ -2207,12 +2212,14 @@ pub const AccountsDB = struct {
                 };
 
                 const result = account_file.getAccountHashAndLamports(
+                    self.allocator,
+                    &self.buffer_pool,
                     ref_info.offset,
                 ) catch return error.InvalidOffset;
 
                 return .{
-                    result.hash.*,
-                    result.lamports.*,
+                    result.hash,
+                    result.lamports,
                 };
             },
             // we dont use this method for cache
@@ -2265,13 +2272,21 @@ pub const AccountsDB = struct {
     ) GetTypeFromAccountError!T {
         const account, var lock_guard = try self.getAccountWithReadLock(pubkey);
         // NOTE: bincode will copy heap memory so its safe to unlock at the end of the function
-        defer lock_guard.unlock();
+        defer {
+            switch (account) {
+                .file => |file| file.deinit(allocator),
+                .unrooted_map => {},
+            }
+            lock_guard.unlock();
+        }
 
-        const file_data: []const u8 = switch (account) {
+        const file_data: AccountDataHandle = switch (account) {
             .file => |in_file_account| in_file_account.data,
             .unrooted_map => |unrooted_map_account| unrooted_map_account.data,
         };
-        const t = sig.bincode.readFromSlice(allocator, T, file_data, .{}) catch {
+
+        var iter = file_data.iterator();
+        const t = sig.bincode.read(allocator, T, iter.reader(), .{}) catch {
             return error.DeserializationError;
         };
         return t;
@@ -2301,6 +2316,8 @@ pub const AccountsDB = struct {
         var references = std.ArrayListUnmanaged(AccountRef).initBuffer(reference_buf);
 
         try indexAndValidateAccountFile(
+            self.allocator,
+            &self.buffer_pool,
             account_file,
             self.account_index.pubkey_ref_map.shard_calculator,
             shard_counts,
@@ -2326,13 +2343,18 @@ pub const AccountsDB = struct {
             // we update the bank hash stats while locking the file map to avoid
             // reading accounts from the file map and getting inaccurate/stale
             // bank hash stats.
-            var account_iter = account_file.iterator();
-            while (account_iter.next()) |account_in_file| {
+            var account_iter = account_file.iterator(
+                self.allocator,
+                &self.buffer_pool,
+            );
+            while (try account_iter.next()) |account_in_file| {
+                defer account_in_file.deinit(self.allocator);
+
                 const bhs, var bhs_lg = try self.getOrInitBankHashStats(account_file.slot);
                 defer bhs_lg.unlock();
                 bhs.update(.{
                     .lamports = account_in_file.lamports().*,
-                    .data_len = account_in_file.data.len,
+                    .data_len = account_in_file.data.len(),
                     .executable = account_in_file.executable().*,
                 });
             }
@@ -2395,13 +2417,13 @@ pub const AccountsDB = struct {
 
             for (accounts_duped, accounts, 0..) |*account, original, i| {
                 errdefer for (accounts_duped[0..i]) |prev| prev.deinit(self.allocator);
-                account.* = try original.clone(self.allocator);
+                account.* = try original.cloneOwned(self.allocator);
 
                 const bhs, var bhs_lg = try self.getOrInitBankHashStats(slot);
                 defer bhs_lg.unlock();
                 bhs.update(.{
                     .lamports = account.lamports,
-                    .data_len = account.data.len,
+                    .data_len = account.data.len(),
                     .executable = account.executable,
                 });
             }
@@ -3086,6 +3108,7 @@ pub const GeyserTmpStorage = struct {
     pub const Error = error{
         OutOfGeyserFBAMemory,
         OutOfGeyserArrayMemory,
+        OutOfMemory, // feels odd adding this, but unfamiliar with geyser - sebastian
     };
 
     pub fn init(allocator: std.mem.Allocator, n_accounts_estimate: usize) !Self {
@@ -3095,21 +3118,29 @@ pub const GeyserTmpStorage = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(
+        self: *Self,
+        allocator: std.mem.Allocator,
+    ) void {
+        for (self.accounts.items) |account| account.deinit(allocator);
         self.accounts.deinit();
         self.pubkeys.deinit();
     }
 
-    pub fn reset(self: *Self) void {
+    pub fn reset(
+        self: *Self,
+        allocator: std.mem.Allocator,
+    ) void {
+        for (self.accounts.items) |account| account.deinit(allocator);
         self.accounts.clearRetainingCapacity();
         self.pubkeys.clearRetainingCapacity();
     }
 
-    pub fn cloneAndTrack(self: *Self, account_in_file: AccountInFile) Error!void {
-        // NOTE: this works because we mmap the account files - this will not work once we remove mmaps
-        const account = account_in_file.toAccount();
-
+    pub fn cloneAndTrack(self: *Self, allocator: std.mem.Allocator, account_in_file: AccountInFile) Error!void {
+        const account = try account_in_file.dupeCachedAccount(allocator);
+        errdefer account.deinit(allocator);
         self.accounts.append(account) catch return Error.OutOfGeyserArrayMemory;
+        errdefer _ = self.accounts.pop();
         self.pubkeys.append(account_in_file.pubkey().*) catch return Error.OutOfGeyserArrayMemory;
     }
 };
@@ -3119,9 +3150,11 @@ pub const ValidateAccountFileError = error{
     InvalidAccountFileLength,
     OutOfMemory,
     OutOfReferenceMemory,
-} || AccountInFile.ValidateError || GeyserTmpStorage.Error;
+} || AccountInFile.ValidateError || GeyserTmpStorage.Error || BufferPool.ReadError;
 
 pub fn indexAndValidateAccountFile(
+    allocator: std.mem.Allocator,
+    buffer_pool: *BufferPool,
     accounts_file: *AccountFile,
     shard_calculator: PubkeyShardCalculator,
     shard_counts: []usize,
@@ -3136,11 +3169,20 @@ pub fn indexAndValidateAccountFile(
     }
 
     while (true) {
-        const account = accounts_file.readAccount(offset) catch break;
+        const account = accounts_file.readAccount(
+            allocator,
+            buffer_pool,
+            offset,
+        ) catch |err| switch (err) {
+            error.EOF => break,
+            else => |e| return e,
+        };
+        defer account.deinit(allocator);
+
         try account.validate();
 
         if (geyser_storage) |storage| {
-            try storage.cloneAndTrack(account);
+            try storage.cloneAndTrack(allocator, account);
         }
 
         if (account_refs.capacity == account_refs.items.len) {
@@ -3202,8 +3244,12 @@ pub fn writeSnapshotTarWithFields(
         std.debug.assert(account_file.length == file_info.length);
 
         try snapgen.writeAccountFileHeader(archive_writer_counted, file_slot, file_info);
-        try archive_writer_counted.writeAll(account_file.memory);
-        try snapgen.writeAccountFilePadding(archive_writer_counted, account_file.memory.len);
+
+        try account_file.file.seekTo(0);
+        var fifo = std.fifo.LinearFifo(u8, .{ .Static = std.mem.page_size }).init();
+        try fifo.pump(account_file.file.reader(), archive_writer_counted);
+
+        try snapgen.writeAccountFilePadding(archive_writer_counted, account_file.file_size);
     }
 
     try archive_writer_counted.writeAll(&sig.utils.tar.sentinel_blocks);
@@ -3332,7 +3378,6 @@ test "testWriteSnapshot" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
-        .lru_size = 10_000,
     });
     defer accounts_db.deinit();
 
@@ -3361,22 +3406,43 @@ pub fn findAndUnpackTestSnapshots(
 ) !SnapshotFiles {
     comptime std.debug.assert(builtin.is_test); // should only be used in tests
     const allocator = std.testing.allocator;
-
     var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer test_data_dir.close();
+    return try findAndUnpackSnapshotFilePair(allocator, n_threads, output_dir, test_data_dir);
+}
 
-    const snapshot_files = try SnapshotFiles.find(allocator, test_data_dir);
+pub fn findAndUnpackSnapshotFilePair(
+    allocator: std.mem.Allocator,
+    n_threads: usize,
+    dst_dir: std.fs.Dir,
+    /// Must be iterable.
+    src_dir: std.fs.Dir,
+) !SnapshotFiles {
+    const snapshot_files = try SnapshotFiles.find(allocator, src_dir);
+    try unpackSnapshotFilePair(allocator, n_threads, dst_dir, src_dir, snapshot_files);
+    return snapshot_files;
+}
 
+/// Unpacks the identified snapshot files in `src_dir` into `dst_dir`.
+pub fn unpackSnapshotFilePair(
+    allocator: std.mem.Allocator,
+    n_threads: usize,
+    dst_dir: std.fs.Dir,
+    src_dir: std.fs.Dir,
+    /// `= try SnapshotFiles.find(allocator, src_dir)`
+    snapshot_files: SnapshotFiles,
+) !void {
     {
-        const full_name_bounded = snapshot_files.full.snapshotArchiveName();
+        const full = snapshot_files.full;
+        const full_name_bounded = full.snapshotArchiveName();
         const full_name = full_name_bounded.constSlice();
-        const full_archive_file = try test_data_dir.openFile(full_name, .{});
+        const full_archive_file = try src_dir.openFile(full_name, .{});
         defer full_archive_file.close();
         try parallelUnpackZstdTarBall(
             allocator,
             .noop,
             full_archive_file,
-            output_dir,
+            dst_dir,
             n_threads,
             true,
         );
@@ -3385,19 +3451,17 @@ pub fn findAndUnpackTestSnapshots(
     if (snapshot_files.incremental()) |inc| {
         const inc_name_bounded = inc.snapshotArchiveName();
         const inc_name = inc_name_bounded.constSlice();
-        const inc_archive_file = try test_data_dir.openFile(inc_name, .{});
+        const inc_archive_file = try src_dir.openFile(inc_name, .{});
         defer inc_archive_file.close();
         try parallelUnpackZstdTarBall(
             allocator,
             .noop,
             inc_archive_file,
-            output_dir,
+            dst_dir,
             n_threads,
             false,
         );
     }
-
-    return snapshot_files;
 }
 
 fn loadTestAccountsDB(
@@ -3431,7 +3495,6 @@ fn loadTestAccountsDB(
         .gossip_view = null,
         .index_allocation = if (use_disk) .disk else .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     errdefer accounts_db.deinit();
 
@@ -3506,7 +3569,6 @@ test "geyser stream on load" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -3534,7 +3596,7 @@ test "write and read an account" {
     const pubkey = Pubkey.initRandom(prng.random());
     var data = [_]u8{ 1, 2, 3 };
     const test_account = Account{
-        .data = &data,
+        .data = AccountDataHandle.initAllocated(&data),
         .executable = false,
         .lamports = 100,
         .owner = Pubkey.ZEROES,
@@ -3662,19 +3724,16 @@ test "load clock sysvar" {
         .leader_schedule_epoch = 1,
         .unix_timestamp = 1733350255,
     };
-    try std.testing.expectEqual(expected_clock, try accounts_db.getTypeFromAccount(allocator, sysvars.Clock, &sysvars.IDS.clock));
+
+    const found_clock = try accounts_db.getTypeFromAccount(allocator, sysvars.Clock, &sysvars.IDS.clock);
+
+    try std.testing.expectEqual(expected_clock, found_clock);
 }
 
 test "load other sysvars" {
     var gpa_state: std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 64 }) = .{};
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
-    // const allocator = std.testing.allocator;
-    const panic_allocator = sig.utils.allocators.failing.allocator(.{
-        .alloc = .panics,
-        .resize = .panics,
-        .free = .panics,
-    });
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -3688,9 +3747,9 @@ test "load other sysvars" {
     }
 
     const SlotAndHash = sig.core.hash.SlotAndHash;
-    _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
-    _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.Rent, &sysvars.IDS.rent);
-    _ = try accounts_db.getTypeFromAccount(panic_allocator, SlotAndHash, &sysvars.IDS.slot_hashes);
+    _ = try accounts_db.getTypeFromAccount(allocator, sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
+    _ = try accounts_db.getTypeFromAccount(allocator, sysvars.Rent, &sysvars.IDS.rent);
+    _ = try accounts_db.getTypeFromAccount(allocator, SlotAndHash, &sysvars.IDS.slot_hashes);
 
     const stake_history = try accounts_db.getTypeFromAccount(allocator, sysvars.StakeHistory, &sysvars.IDS.stake_history);
     defer sig.bincode.free(allocator, stake_history);
@@ -3699,13 +3758,16 @@ test "load other sysvars" {
     defer sig.bincode.free(allocator, slot_history);
 
     // // not always included in local snapshot
-    // _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
-    // _ = try accounts_db.getTypeFromAccount(panic_allocator, sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
+    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
+    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
 }
 
 test "flushing slots works" {
     const allocator = std.testing.allocator;
     const logger: Logger = .noop;
+
+    var bp = try BufferPool.init(allocator, 100);
+    defer bp.deinit(allocator);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -3719,7 +3781,6 @@ test "flushing slots works" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -3758,7 +3819,10 @@ test "flushing slots works" {
     const file_id = file_map.keys()[0];
 
     const account_file = file_map.getPtr(file_id).?;
-    account_file.number_of_accounts = try account_file.validate();
+    account_file.number_of_accounts = try account_file.validate(
+        allocator,
+        &bp,
+    );
 
     try std.testing.expect(account_file.number_of_accounts == n_accounts);
     try std.testing.expect(unclean_account_files.items.len == 1);
@@ -3781,7 +3845,6 @@ test "purge accounts in cache works" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -3849,7 +3912,6 @@ test "clean to shrink account file works with zero-lamports" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -3936,7 +3998,6 @@ test "clean to shrink account file works" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -4015,7 +4076,6 @@ test "full clean account file works" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -4111,7 +4171,6 @@ test "shrink account file works" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -4188,7 +4247,7 @@ test "shrink account file works" {
             const account_file = file_map.get(file_id).?;
             if (account_file.slot == slot) break file_id;
         } else return error.NoSlotFile;
-        break :blk file_map.get(slot_file_id).?.memory.len;
+        break :blk file_map.get(slot_file_id).?.length;
     };
 
     // full memory block
@@ -4232,7 +4291,7 @@ test "shrink account file works" {
         };
 
         const new_account_file = file_map2.get(new_slot_file_id).?;
-        const post_shrink_size = new_account_file.memory.len;
+        const post_shrink_size = new_account_file.length;
         try std.testing.expect(post_shrink_size < pre_shrink_size);
     }
 
@@ -4287,7 +4346,6 @@ test "generate snapshot & update gossip snapshot hashes" {
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -4452,7 +4510,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .gossip_view = null,
                 .index_allocation = if (bench_args.use_disk) .disk else .ram,
                 .number_of_index_shards = 32,
-                .lru_size = null,
             });
             defer accounts_db.deinit();
 
@@ -4503,7 +4560,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .gossip_view = null,
                 .index_allocation = if (bench_args.use_disk) .disk else .ram,
                 .number_of_index_shards = 32,
-                .lru_size = null,
             });
             defer fastload_accounts_db.deinit();
 
@@ -4542,8 +4598,6 @@ pub const BenchmarkAccountsDB = struct {
         /// the number of accounts to prepopulate the index with as a multiple of n_accounts
         /// ie, if n_accounts = 100 and n_accounts_multiple = 10, then the index will have 10x100=1000 accounts prepopulated
         n_accounts_multiple: usize = 0,
-        /// how many accounts the accounts_cache can hold. Null to disable cache.
-        lru_size: ?usize = null,
         /// the name of the benchmark
         name: []const u8 = "",
     };
@@ -4584,16 +4638,14 @@ pub const BenchmarkAccountsDB = struct {
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .ram,
-        //     .lru_size = 1_000,
-        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=1_000)",
+        //     .name = "100k accounts (1_slot - ram index - disk accounts)",
         // },
         // BenchArgs{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .ram,
-        //     .lru_size = 10_000,
-        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=10_000)",
+        //     .name = "100k accounts (1_slot - ram index - disk accounts)",
         // },
 
         // BenchArgs{
@@ -4601,8 +4653,7 @@ pub const BenchmarkAccountsDB = struct {
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .ram,
-        //     .lru_size = 100_000,
-        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=100_000)",
+        //     .name = "100k accounts (1_slot - ram index - disk accounts)",
         // },
 
         // // test accounts in ram
@@ -4716,7 +4767,6 @@ pub const BenchmarkAccountsDB = struct {
             .gossip_view = null,
             .index_allocation = bench_args.index,
             .number_of_index_shards = 32,
-            .lru_size = bench_args.lru_size,
         });
         defer accounts_db.deinit();
 
@@ -4777,7 +4827,10 @@ pub const BenchmarkAccountsDB = struct {
                 },
                 .disk => {
                     var account_files = try ArrayList(AccountFile).initCapacity(allocator, slot_list_len);
-                    defer account_files.deinit();
+                    defer {
+                        // don't deinit each account_file here - they are taken by putAccountFile
+                        account_files.deinit();
+                    }
 
                     for (0..(slot_list_len + bench_args.n_accounts_multiple)) |s| {
                         var size: usize = 0;
@@ -4796,7 +4849,7 @@ pub const BenchmarkAccountsDB = struct {
 
                         var account_file = blk: {
                             var file = try disk_dir.dir.createFile(filepath, .{ .read = true });
-                            defer file.close();
+                            errdefer file.close();
 
                             // resize the file
                             const file_size = (try file.stat()).size;
@@ -4812,7 +4865,7 @@ pub const BenchmarkAccountsDB = struct {
                             var offset: usize = 0;
                             for (0..n_accounts) |i| {
                                 const account = try Account.initRandom(allocator, random, i % 1_000);
-                                defer allocator.free(account.data);
+                                defer account.deinit(allocator);
                                 var pubkey = pubkeys[i % n_accounts];
                                 offset += account.writeToBuf(&pubkey, buf[offset..]);
                             }
@@ -4821,7 +4874,6 @@ pub const BenchmarkAccountsDB = struct {
 
                             break :blk try AccountFile.init(file, .{ .id = FileId.fromInt(@intCast(s)), .length = offset }, s);
                         };
-                        errdefer account_file.deinit();
 
                         if (s < bench_args.n_accounts_multiple) {
                             try accounts_db.putAccountFile(&account_file, n_accounts);
@@ -4860,14 +4912,6 @@ pub const BenchmarkAccountsDB = struct {
             }
         }
 
-        // reset cache hits/misses
-        if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-            const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-            defer accounts_cache_lg.unlock();
-            accounts_cache.maybe_metrics.?.cache_hits.reset();
-            accounts_cache.maybe_metrics.?.cache_misses.reset();
-        }
-
         var timer = try sig.time.Timer.start();
 
         const do_read_count = n_accounts;
@@ -4876,29 +4920,11 @@ pub const BenchmarkAccountsDB = struct {
             const pubkey_idx = indexer.sample();
             const account = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
             defer account.deinit(allocator);
-            if (account.data.len != (pubkey_idx % 1_000)) {
-                std.debug.panic("account data len dnm {}: {} != {}", .{ pubkey_idx, account.data.len, (pubkey_idx % 1_000) });
+            if (account.data.len() != (pubkey_idx % 1_000)) {
+                std.debug.panic("account data len dnm {}: {} != {}", .{ pubkey_idx, account.data.len(), (pubkey_idx % 1_000) });
             }
         }
         const read_time = timer.read();
-
-        if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-            const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-            defer accounts_cache_lg.unlock();
-
-            const cache_hits = accounts_cache.maybe_metrics.?.cache_hits.get();
-            const cache_misses = accounts_cache.maybe_metrics.?.cache_misses.get();
-
-            std.debug.print(
-                "cache hits/misses : {: >7}/{: <7} ({d:.2}%) - total cache accesses: {}\n",
-                .{
-                    cache_hits,
-                    cache_misses,
-                    @as(f32, @floatFromInt(cache_hits * 100)) / @as(f32, @floatFromInt(cache_hits + cache_misses)),
-                    cache_hits + cache_misses,
-                },
-            );
-        }
 
         return .{
             .read_time = units.convertDuration(read_time),

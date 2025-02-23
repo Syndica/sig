@@ -41,6 +41,13 @@ pub const Executable = struct {
 
     /// Takes ownership of the `Elf`.
     pub fn fromElf(elf: Elf) !Executable {
+        const text_section_addr = elf.getShdrByName(".text").?.sh_addr;
+        const text_vaddr = if (elf.version.enableElfVaddr() and
+            text_section_addr >= memory.RODATA_START)
+            text_section_addr
+        else
+            text_section_addr +| memory.RODATA_START;
+
         return .{
             .bytes = elf.bytes,
             .ro_section = elf.ro_section,
@@ -48,7 +55,7 @@ pub const Executable = struct {
             .version = elf.version,
             .entry_pc = elf.entry_pc,
             .from_elf = true,
-            .text_vaddr = elf.getShdrByName(".text").?.sh_addr +| memory.PROGRAM_START,
+            .text_vaddr = text_vaddr,
             .function_registry = elf.function_registry,
             .config = elf.config,
         };
@@ -74,7 +81,7 @@ pub const Executable = struct {
         registry: *Registry(u64),
         config: Config,
     ) !Executable {
-        const version = config.minimum_version;
+        const version = config.maximum_version;
 
         const entry_pc = if (registry.lookupName("entrypoint")) |entry_pc|
             entry_pc.value
@@ -95,12 +102,16 @@ pub const Executable = struct {
             .config = config,
             .function_registry = registry.*,
             .entry_pc = entry_pc,
-            .ro_section = .{ .borrowed = .{ .offset = 0, .start = 0, .end = 0 } },
+            .ro_section = .{ .borrowed = .{
+                .offset = memory.RODATA_START,
+                .start = 0,
+                .end = source.len,
+            } },
             .from_elf = false,
             .text_vaddr = if (version.enableLowerBytecodeVaddr())
                 memory.BYTECODE_START
             else
-                memory.PROGRAM_START,
+                memory.RODATA_START,
         };
     }
 
@@ -123,7 +134,7 @@ pub const Executable = struct {
             .owned => |o| .{ o.offset, o.data },
             .borrowed => |b| .{ b.offset, self.bytes[b.start..b.end] },
         };
-        return memory.Region.init(.constant, ro_data, memory.PROGRAM_START +| offset);
+        return memory.Region.init(.constant, ro_data, offset);
     }
 };
 
@@ -157,7 +168,7 @@ pub const Assembler = struct {
         source: []const u8,
         config: Config,
     ) !struct { Registry(u64), []const sbpf.Instruction } {
-        const version = config.minimum_version;
+        const version = config.maximum_version;
         var assembler: Assembler = .{ .source = source };
         const statements = try assembler.tokenize(allocator);
         defer {
@@ -170,10 +181,11 @@ pub const Assembler = struct {
             allocator.free(statements);
         }
 
-        var labels: std.StringHashMapUnmanaged(u64) = .{};
+        var labels: std.StringHashMapUnmanaged(u32) = .{};
         defer labels.deinit(allocator);
 
         var function_registry: Registry(u64) = .{};
+        errdefer function_registry.deinit(allocator);
 
         try labels.put(allocator, "entrypoint", 0);
         var inst_ptr: u32 = 0;
@@ -208,6 +220,10 @@ pub const Assembler = struct {
                 .instruction => |inst| {
                     const name = inst.name;
                     const operands = inst.operands;
+
+                    if (sbpf.Instruction.disallowed.get(name)) |since| {
+                        if (version.gte(since)) return error.UnknownInstruction;
+                    }
 
                     const bind = sbpf.Instruction.map.get(name) orelse
                         std.debug.panic("invalid instruction: {s}", .{name});
@@ -265,13 +281,16 @@ pub const Assembler = struct {
                                 };
                             }
                         },
-                        .jump_unconditional => .{
-                            .opcode = @enumFromInt(bind.opc),
-                            .dst = .r0,
-                            .src = .r0,
-                            .off = @intCast(operands[0].integer),
-                            .imm = 0,
-                        },
+                        .jump_unconditional => if (operands[0] == .label)
+                            @panic("TODO: jump_unconditional label")
+                        else
+                            .{
+                                .opcode = @enumFromInt(bind.opc),
+                                .dst = .r0,
+                                .src = .r0,
+                                .off = @intCast(operands[0].integer),
+                                .imm = 0,
+                            },
                         .load_dw_imm => .{
                             .opcode = .ld_dw_imm,
                             .dst = operands[0].register,
@@ -280,21 +299,30 @@ pub const Assembler = struct {
                             .imm = @truncate(@as(u64, @bitCast(operands[1].integer))),
                         },
                         .load_reg => .{
-                            .opcode = @enumFromInt(bind.opc),
+                            .opcode = if (version.moveMemoryInstructionClasses())
+                                @enumFromInt(bind.secondary)
+                            else
+                                @enumFromInt(bind.opc),
                             .dst = operands[0].register,
                             .src = operands[1].memory.base,
                             .off = operands[1].memory.offset,
                             .imm = 0,
                         },
                         .store_reg => .{
-                            .opcode = @enumFromInt(bind.opc),
+                            .opcode = if (version.moveMemoryInstructionClasses())
+                                @enumFromInt(bind.secondary)
+                            else
+                                @enumFromInt(bind.opc),
                             .dst = operands[0].memory.base,
                             .src = operands[1].register,
                             .off = operands[0].memory.offset,
                             .imm = 0,
                         },
                         .store_imm => .{
-                            .opcode = @enumFromInt(bind.opc),
+                            .opcode = if (version.moveMemoryInstructionClasses())
+                                @enumFromInt(bind.secondary)
+                            else
+                                @enumFromInt(bind.opc),
                             .dst = operands[0].memory.base,
                             .src = .r0,
                             .off = operands[0].memory.offset,
@@ -311,17 +339,24 @@ pub const Assembler = struct {
                             const is_label = operands[0] == .label;
                             if (is_label) {
                                 const label = operands[0].label;
-                                const target_pc = labels.get(label) orelse
+                                var target_pc: i64 = labels.get(label) orelse
                                     std.debug.panic("label not found: {s}", .{label});
+                                if (version.enableStaticSyscalls()) {
+                                    target_pc = target_pc - inst_ptr - 1;
+                                }
                                 break :inst .{
                                     .opcode = @enumFromInt(bind.opc),
                                     .dst = .r0,
                                     .src = .r1,
                                     .off = 0,
-                                    .imm = @intCast(target_pc),
+                                    .imm = @bitCast(@as(i32, @intCast(target_pc))),
                                 };
                             } else {
                                 const offset = operands[0].integer;
+                                const instr_imm = if (version.enableStaticSyscalls())
+                                    offset
+                                else
+                                    offset + inst_ptr + 1;
                                 const target_pc: u32 = @intCast(offset + inst_ptr + 1);
                                 const label = try std.fmt.allocPrint(
                                     allocator,
@@ -340,7 +375,7 @@ pub const Assembler = struct {
                                     .dst = .r0,
                                     .src = .r1,
                                     .off = 0,
-                                    .imm = target_pc,
+                                    .imm = @intCast(instr_imm),
                                 };
                             }
                         },
@@ -472,7 +507,7 @@ pub fn Registry(T: type) type {
         const Self = @This();
 
         /// Duplicates `name` to free later.
-        fn register(
+        pub fn register(
             self: *Self,
             allocator: std.mem.Allocator,
             key: u64,
@@ -550,7 +585,9 @@ pub const BuiltinProgram = struct {
 pub const Config = struct {
     optimize_rodata: bool = true,
     reject_broken_elfs: bool = false,
-    minimum_version: sbpf.Version = .v3,
+    enable_symbol_and_section_labels: bool = false,
+    minimum_version: sbpf.Version = .v0,
+    maximum_version: sbpf.Version = .v3,
     stack_frame_size: u64 = 4096,
     max_call_depth: u64 = 64,
 

@@ -1,10 +1,10 @@
 {
-	"position": 4,
-	"label": "Contributing",
-	"collapsible": true,
-	"collapsed": true,
-	"className": "red",
-	"customProps": {
-		"description": "How to contribute to this project"
-	}
+  "position": 5,
+  "label": "Contributing",
+  "collapsible": true,
+  "collapsed": true,
+  "className": "red",
+  "customProps": {
+    "description": "Tools to use throughout the repository"
+  }
 }

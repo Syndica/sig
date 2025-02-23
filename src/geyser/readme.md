@@ -5,47 +5,42 @@ its only used to stream accounts from a snapshot while loading/valdiating a snap
 
 The main code is located in `/src/geyser/`.
 
-`lib.zig` and contains a few key structs:
+`lib.zig` contains a few key structs:
 - `GeyserWriter`: used to write new accounts
 - `GeyserReader`: used to read new accounts
 
-both use linux pipes to stream data. this involves
+Linux pipes are used to stream data. this involves
 opening a file-based pipe using the `mkfifo` syscall which is then
-written to like any other file. the key method used to setup
+written to like any other file. The key method used to setup
 the pipes is `openPipe` in `src/geyser/core.zig`.
 
-## cli commands
+## Usage
 
-while running, grafana stats will be available. the main binary code is in
-`src/geyser/main.zig`
-
-### benchmarking
-
-we also have benchmarking to measure the throughput of geyser. you can run it using
+The main binary code is in `src/geyser/main.zig` and can be used to
+read accounts during account validation using:
 
 ```bash
 zig build -Doptimize=ReleaseSafe
-./zig-out/bin/benchmark geyser
+
+# run the snapshot validator with geyser enabled
+./zig-out/bin/sig snapshot-validate --enable-geyser &
+
+# run the geyser reader which dumps the accounts to a csv file
+./zig-out/bin/geyser csv
+
 ```
 
-you can also benchmark an dummy reader
+Metrics are also available to understand how fast data is being written/read which can
+be viewed from the grafana dashboard (see `metrics` information for more details).
+
+## Csv File Dumping
+
+After downloading a snapshots, you can dump the accounts to a csv using the
+`csv` geyser command:
 
 ```bash
 # in terminal 1 -- read the snapshot accounts to geyser
-./zig-out/bin/sig snapshot-validate -g data/genesis-files/testnet_genesis.bin --enable-geyser -a 250 -t 2
-
-# in terminal 2 -- benchmark how fast you can read
-./zig-out/bin/geyser benchmark
-```
-
-### dump a snapshot to csv
-
-after downloading a snapshots, you can dump the accounts to a csv using the
-csv geyser command, for example:
-
-```bash
-# in terminal 1 -- read the snapshot accounts to geyser
-./zig-out/bin/sig snapshot-validate -g data/genesis-files/testnet_genesis.bin --enable-geyser -a 250 -t 2
+./zig-out/bin/sig snapshot-validate -n testnet --enable-geyser
 
 # in terminal 2 -- dump accounts to a csv (validator/accounts.csv)
 ./zig-out/bin/geyser csv
@@ -53,32 +48,71 @@ csv geyser command, for example:
 ./zig-out/bin/geyser csv -o dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH
 ```
 
+## Benchmarks
+
+We also have benchmarking to measure the throughput of geyser. you can run it using
+
+```bash
+zig build -Doptimize=ReleaseSafe
+./zig-out/bin/benchmark geyser
+```
+
+*Note*: due to output formatting, geyser results are off by default to turn them on
+you will need to change the logger to use `debug` level.
+
+```zig
+var std_logger = sig.trace.DirectPrintLogger.init(
+    allocator,
+  -  .info,
+  +  .debug,
+);
+```
+
+You can also benchmark an dummy reader with production data:
+
+```bash
+# run the snapshot validator with geyser enabled
+./zig-out/bin/sig snapshot-validate --enable-geyser &
+
+# benchmark how fast you can read (data is read and discarded)
+./zig-out/bin/geyser benchmark
+```
+
 ## Architecture
 
-### how data is written/read
+### How Data is Read/Written
 
-currently, data is serialized and written through the pipe using `bincode`
+Currently, data is serialized and written through the pipe using `bincode` as it is simple and efficient
+encoding format in the repo (future work can use faster encoding schemes if its required).
 
-data is organized to be written as `[size, serialized_data]`
+Data is organized to be written as `[size, serialized_data]`
+where `size` is the full length of the `serialized_data`.
 
-where `size` is the full length of the `serialized_data`
-
-this allows for more efficient buffered reads where you can read the first 8 bytes in
+This allows for more efficient buffered reads where you can read the first 8 bytes in
 the pipe, cast to a u64, allocate a buffer of that size and then read the rest of
-the data associated with that payload.
+the data associated with that payload:
 
-the key struct used is `AccountPayload` which uses a versioned system to support different payload types (`VersionedAccountPayload`) while also being backwards compatibility.
+```zig
+/// reads a payload from the pipe and returns the total bytes read with the data
+pub fn readPayload(self: *GeyserReader) !struct { u64, VersionedAccountPayload } {
+    const len = try self.readType(u64, 8);
+    const versioned_payload = try self.readType(VersionedAccountPayload, len);
+    return .{ 8 + len, versioned_payload };
+}
+```
 
-### GeyserWriter
+The key struct used is `AccountPayload` which uses a versioned system to support
+different payload types (`VersionedAccountPayload`) while also being backwards compatibility.
 
-![](/docs/docusaurus/static/img/2024-08-07-17-27-36.png)
+### Geyser Writer
 
 #### IO Thread
 
-the writer uses a separate thread to write to the pipe due to expensive i/o operations.
+The GeyserWriter uses a separate thread to write to the pipe due to expensive i/o operations.
 to spawn this thread, use the `spawnIOLoop` method.
 
-it loops, draining the channel for payloads with type (`[]u8`) and then writes the bufs to the pipe and then frees the payload using the `RecycleFBA`
+it loops, draining the channel for payloads with type (`[]u8`) and then writes the bufs to the
+pipe and then frees the payload using the `RecycleFBA`.
 
 #### RecycleFBA
 
@@ -102,7 +136,7 @@ records field.
 
 when free is called, we find the buffer in the records and set the record's `is_free = true`.
 
-#### usage
+#### Usage
 
 ```zig
 // setup writer

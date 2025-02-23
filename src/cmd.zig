@@ -680,6 +680,23 @@ pub fn main() !void {
                             },
                         },
                     },
+                    &cli.Command{
+                        .name = "mock-rpc-server",
+                        .description = .{
+                            .one_line = "Run a mock RPC server.",
+                        },
+                        .options = gossip_options_base ++
+                            gossip_options_node ++
+                            accounts_db_options_base ++
+                            accounts_db_options_download ++
+                            &[_]*cli.Option{&force_new_snapshot_download_option} ++
+                            accounts_db_options_index,
+                        .target = .{
+                            .action = .{
+                                .exec = mockRpcServer,
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -1254,6 +1271,77 @@ pub fn testTransactionSenderService() !void {
     transaction_sender_handle.join();
 }
 
+fn mockRpcServer() !void {
+    const logger: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
+
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(current_config.accounts_db.snapshot_dir, .{
+        .iterate = true,
+    });
+    defer snapshot_dir.close();
+
+    const snap_files = try sig.accounts_db.db.findAndUnpackSnapshotFilePair(
+        gpa_allocator,
+        std.Thread.getCpuCount() catch 1,
+        snapshot_dir,
+        snapshot_dir,
+    );
+
+    const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
+    var latest_snapshot_gen_info = sig.sync.RwMux(?SnapshotGenerationInfo).init(blk: {
+        const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
+            gpa_allocator,
+            logger.unscoped(),
+            snapshot_dir,
+            snap_files,
+        );
+        defer all_snap_fields.deinit(gpa_allocator);
+
+        break :blk .{
+            .full = .{
+                .slot = snap_files.full.slot,
+                .hash = snap_files.full.hash,
+                .capitalization = all_snap_fields.full.bank_fields.capitalization,
+            },
+            .inc = inc: {
+                const inc = all_snap_fields.incremental orelse break :inc null;
+                // if the incremental snapshot field is not null, these shouldn't be either
+                const inc_info = snap_files.incremental_info.?;
+                const inc_persist = inc.bank_extra.snapshot_persistence.?;
+                break :inc .{
+                    .slot = inc_info.slot,
+                    .hash = inc_info.hash,
+                    .capitalization = inc_persist.incremental_capitalization,
+                };
+            },
+        };
+    });
+
+    var server_ctx = try sig.rpc.server.Context.init(.{
+        .allocator = gpa_allocator,
+        .logger = logger,
+
+        .snapshot_dir = snapshot_dir,
+        .latest_snapshot_gen_info = &latest_snapshot_gen_info,
+
+        .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
+        .socket_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
+    // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
+    // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
+    defer if (maybe_liou != null) maybe_liou.?.deinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    try sig.rpc.server.serve(
+        &exit,
+        &server_ctx,
+        if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
+    );
+}
+
 /// State that typically needs to be initialized at the start of the app,
 /// and deinitialized only when the app exits.
 const AppBase = struct {
@@ -1472,15 +1560,18 @@ fn loadSnapshot(
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = logger.unscoped(),
+        // where we read the snapshot from
         .snapshot_dir = snapshot_dir,
         .geyser_writer = options.geyser_writer,
+        // gossip information for propogating snapshot info
         .gossip_view = if (options.gossip_service) |service|
             try AccountsDB.GossipView.fromService(service)
         else
             null,
+        // to use disk or ram for the index
         .index_allocation = if (current_config.accounts_db.use_disk_index) .disk else .ram,
+        // number of shards for the index
         .number_of_index_shards = current_config.accounts_db.number_of_index_shards,
-        .lru_size = 10_000,
     });
     errdefer accounts_db.deinit();
 
