@@ -5,10 +5,6 @@ pub const ed25519 = @import("ed25519.zig");
 pub const secp256k1 = @import("secp256k1.zig");
 pub const secp256r1 = @import("secp256r1.zig");
 
-const Ed25519 = std.crypto.sign.Ed25519;
-const Keccak256 = std.crypto.hash.sha3.Keccak256;
-const Secp256k1 = std.crypto.ecc.Secp256k1;
-
 const Pubkey = sig.core.Pubkey;
 
 pub const ed25519Verify = ed25519.verify;

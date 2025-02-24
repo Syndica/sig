@@ -3,7 +3,6 @@ const sig = @import("../../../sig.zig");
 const precompile_programs = sig.runtime.program.precompile_programs;
 
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
-const getInstructionValue = precompile_programs.getInstructionValue;
 const getInstructionData = precompile_programs.getInstructionData;
 
 const Keccak256 = std.crypto.hash.sha3.Keccak256;
@@ -21,7 +20,8 @@ pub const SECP256K1_SIGNATURE_OFFSETS_START = 1;
 pub const SECP256K1_SIGNATURE_SERIALIZED_SIZE = 64;
 
 comptime {
-    std.debug.assert(SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE == @bitSizeOf(Secp256k1SignatureOffsets) / 8);
+    std.debug.assert(SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE ==
+        @bitSizeOf(Secp256k1SignatureOffsets) / 8);
 }
 
 pub const Secp256k1SignatureOffsets = packed struct {
@@ -65,7 +65,9 @@ pub fn verify(
     for (0..n_signatures) |i| {
         const offset = SECP256K1_SIGNATURE_OFFSETS_START +
             i * SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
-        const sig_offsets: *const Secp256k1SignatureOffsets = @alignCast(@ptrCast(data.ptr + offset));
+        const sig_offsets: *const Secp256k1SignatureOffsets = @alignCast(
+            @ptrCast(data.ptr + offset),
+        );
 
         const signature_slice = try getInstructionData(
             SECP256K1_SIGNATURE_SERIALIZED_SIZE + 1, // + recovery_id
@@ -78,7 +80,9 @@ pub fn verify(
         const recovery_id = signature_slice[SECP256K1_SIGNATURE_SERIALIZED_SIZE];
         // https://docs.rs/libsecp256k1/0.6.0/src/libsecp256k1/lib.rs.html#674-680
         if (recovery_id > 4) return error.InvalidRecoveryId;
-        const signature: *const Ecdsa.Signature = @ptrCast(signature_slice[0..SECP256K1_SIGNATURE_SERIALIZED_SIZE]);
+        const signature: *const Ecdsa.Signature = @ptrCast(
+            signature_slice[0..SECP256K1_SIGNATURE_SERIALIZED_SIZE],
+        );
 
         const eth_address = try getInstructionData(
             SECP256K1_PUBKEY_SERIALIZED_SIZE,
@@ -103,7 +107,7 @@ pub fn verify(
             std.debug.assert(Keccak256.digest_length == 32);
         }
 
-        const msg_scalar = Secp256k1.scalar.Scalar.fromBytes(msg_hash, .little) catch @panic("handle this");
+        const msg_scalar = Secp256k1.scalar.Scalar.fromBytes(msg_hash, .little) catch unreachable;
 
         const pubkey = try recoverPubkey(&msg_scalar, signature, recovery_id);
         const recovered_eth_address = constructEthPubkey(pubkey);
@@ -124,6 +128,8 @@ fn recoverPubkey(
 
     if (std.mem.allEqual(u8, &signature.r, 0)) return error.InvalidSignature;
     if (std.mem.allEqual(u8, &signature.s, 0)) return error.InvalidSignature;
+
+    _ = Field;
 
     // I think zig std doesn't quite support the necessary operations
     @panic("TODO");

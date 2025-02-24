@@ -8,9 +8,6 @@ const getInstructionData = precompile_programs.getInstructionData;
 
 const Ed25519 = std.crypto.sign.Ed25519;
 
-const Pubkey = sig.core.Pubkey;
-const InstructionContext = sig.runtime.InstructionContext;
-
 pub const ED25519_DATA_START = ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE +
     ED25519_SIGNATURE_OFFSETS_START;
 pub const ED25519_PUBKEY_SERIALIZED_SIZE = 32;
@@ -143,7 +140,10 @@ fn test_case(
     num_signatures: u16,
     offsets: Ed25519SignatureOffsets,
 ) (PrecompileProgramError || error{OutOfMemory})!void {
-    var instruction_data = try std.ArrayListAligned(u8, 2).initCapacity(allocator, ED25519_DATA_START);
+    var instruction_data = try std.ArrayListAligned(u8, 2).initCapacity(
+        allocator,
+        ED25519_DATA_START,
+    );
     defer instruction_data.deinit();
 
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&num_signatures));
@@ -155,7 +155,10 @@ fn test_case(
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L279
 test "ed25519 invalid offsets" {
     const allocator = std.testing.allocator;
-    var instruction_data = try std.ArrayListAligned(u8, 2).initCapacity(allocator, ED25519_DATA_START);
+    var instruction_data = try std.ArrayListAligned(u8, 2).initCapacity(
+        allocator,
+        ED25519_DATA_START,
+    );
     defer instruction_data.deinit();
 
     const offsets = Ed25519SignatureOffsets{};
