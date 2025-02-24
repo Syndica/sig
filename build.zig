@@ -381,8 +381,17 @@ fn defaultTargetDetectM3() ?std.Target.Query {
 }
 
 const ssh = struct {
-    /// SSH into the host and call `zig targets` to determine the compilation target
-    /// for that machine.
+    /// SSH into the host and call `zig targets` to determine the compilation
+    /// target for that machine.
+    ///
+    /// This means the build script needs to spawn another process to run a
+    /// system installed SSH binary. This is a temporary hack to get a remote
+    /// target. This will stop working if build.zig is sandboxed.
+    /// > See more: https://github.com/ziglang/zig/issues/14286
+    ///
+    /// Do not depend on this function for any critical build processes. This
+    /// should only be used for optional ease-of-use features that are disabled
+    /// by default.
     fn getHostTarget(b: *Build, remote_host: []const u8) !Build.ResolvedTarget {
         const run_result = try std.process.Child.run(.{
             .allocator = b.allocator,
