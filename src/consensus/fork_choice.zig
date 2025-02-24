@@ -85,6 +85,8 @@ pub const ForkInfo = struct {
         self.latest_duplicate_ancestor = null;
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L140
+    ///
     /// Updates the fork info with a newly valid ancestor.
     /// If the latest invalid ancestor is less than or equal to the newly valid ancestor,
     /// it clears the latest invalid ancestor.
@@ -109,6 +111,8 @@ pub const ForkInfo = struct {
         }
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L157
+    ///
     /// Updates the fork info with a newly invalid ancestor.
     /// Asserts that the fork is not duplicate confirmed.
     /// If the newly invalid ancestor is greater than the current latest invalid ancestor,
@@ -174,6 +178,8 @@ pub const ForkChoice = struct {
         self.latest_votes.deinit();
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L452
+    ///
     /// This function inserts a new `SlotAndHash` into the tree and ensures that the tree's properties
     /// (such as `heaviest_slot`, `deepest_slot`, and parent-child relationships) are correctly updated.
     ///
@@ -346,6 +352,8 @@ pub const ForkChoice = struct {
         return null;
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L358
+    ///
     /// Updates the root of the tree, removing unreachable nodes.
     ///
     /// # Description:
@@ -413,6 +421,7 @@ pub const ForkChoice = struct {
         return null;
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1358
     pub fn markForkValidCandidate(
         self: *ForkChoice,
         valid_slot_hash_key: *const SlotAndHash,
@@ -452,6 +461,7 @@ pub const ForkChoice = struct {
         return newly_duplicate_confirmed_ancestors;
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1330
     pub fn markForkInvalidCandidate(
         self: *ForkChoice,
         invalid_slot_hash_key: *const SlotAndHash,
@@ -487,6 +497,8 @@ pub const ForkChoice = struct {
         }
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L736
+    ///
     /// Updates the fork tree's metadata for ancestors when a new slot (slot_hash_key) is added.
     /// Specifically, it propagates updates about the heaviest slot and deepest slot upwards through
     /// the ancestors of the new slot.
@@ -635,6 +647,8 @@ pub const ForkChoice = struct {
         }
     }
 
+    /// Analogous to [is_best_child] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L499
+    ///
     /// Returns true if the given `maybe_heaviest_child` is the heaviest among the children
     /// of the parent. Breaks ties by slot # (lower is heavier).
     fn isHeaviestChild(
@@ -670,7 +684,9 @@ pub const ForkChoice = struct {
         return true;
     }
 
-    /// Checks if `deepest_child` is the deepest among its siblings.
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L528
+    ///
+    ///  Checks if `deepest_child` is the deepest among its siblings.
     ///
     /// - A node is the deepest if no sibling has:
     ///   1. A greater height.
@@ -742,6 +758,8 @@ pub const ForkChoice = struct {
         return fork_info.isCandidate();
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/tree_diff.rs#L12
+    ///
     /// Find all nodes reachable from `root1`, excluding subtree at `root2`
     ///
     /// For example, given the following tree:
@@ -788,6 +806,7 @@ pub const ForkChoice = struct {
         return reachable_set;
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1088
     fn processUpdateOperations(
         self: *ForkChoice,
         update_operations: *UpdateOperations,
@@ -814,6 +833,7 @@ pub const ForkChoice = struct {
         }
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L780
     fn insertAggregateOperations(
         self: *ForkChoice,
         update_operations: *UpdateOperations,
@@ -826,6 +846,7 @@ pub const ForkChoice = struct {
         );
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L793
     fn doInsertAggregateOperationsAcrossAncestors(
         self: *ForkChoice,
         update_operations: *UpdateOperations,
@@ -847,6 +868,8 @@ pub const ForkChoice = struct {
         }
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L950
+    ///
     /// Mark that `valid_slot` on the fork starting at `fork_to_modify_key` has been marked
     /// valid. Note we don't need the hash for `valid_slot` because slot number uniquely
     /// identifies a node on a single fork.
@@ -867,6 +890,8 @@ pub const ForkChoice = struct {
         }
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L962
+    ///
     /// Mark that `invalid_slot` on the fork starting at `fork_to_modify_key` has been marked
     /// invalid. Note we don't need the hash for `invalid_slot` because slot number uniquely
     /// identifies a node on a single fork.
@@ -882,6 +907,8 @@ pub const ForkChoice = struct {
         }
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L850
+    ///
     /// Aggregates stake and height information for the subtree rooted at `slot_hash_key`.
     /// Updates the fork info with the aggregated values.
     fn aggregateSlot(self: *ForkChoice, slot_hash_key: SlotAndHash) void {
@@ -986,6 +1013,8 @@ pub const ForkChoice = struct {
         fork_info.deepest_slot = deepest_slot_hash_key;
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1105
+    ///
     /// Adds `stake` to the stake voted at and stake voted subtree for the fork identified by `slot_hash_key`.
     fn addSlotStake(
         self: *ForkChoice,
@@ -1000,6 +1029,8 @@ pub const ForkChoice = struct {
         }
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1112
+    ///
     /// Subtracts `stake` from the stake voted at and stake voted subtree for the fork identified by `slot_hash_key`.
     fn subtractSlotStake(
         self: *ForkChoice,
@@ -1039,6 +1070,7 @@ pub const ForkChoice = struct {
     }
 };
 
+/// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1390
 const AncestorIterator = struct {
     current_slot_hash_key: SlotAndHash,
     fork_infos: *const std.AutoHashMap(SlotAndHash, ForkInfo),
@@ -1062,6 +1094,7 @@ const AncestorIterator = struct {
     }
 };
 
+/// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L814
 fn doInsertAggregateOperation(
     update_operations: *UpdateOperations,
     modify_fork_validity: ?UpdateOperation,
