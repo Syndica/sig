@@ -1138,6 +1138,7 @@ fn doInsertAggregateOperation(
 }
 const test_allocator = std.testing.allocator;
 
+// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L3281
 test "HeaviestSubtreeForkChoice.subtreeDiff" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -1279,6 +1280,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
     }
 }
 
+// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1534
 test "HeaviestSubtreeForkChoice.ancestorIterator" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -1383,6 +1385,7 @@ test "HeaviestSubtreeForkChoice.ancestorIterator" {
     }
 }
 
+// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1685
 test "HeaviestSubtreeForkChoice.setTreeRoot" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -1528,6 +1531,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
     // TODO complete test when vote related functions are implemented
 }
 
+// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1863
 test "HeaviestSubtreeForkChoice.heaviestOverallSlot" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -1537,6 +1541,7 @@ test "HeaviestSubtreeForkChoice.heaviestOverallSlot" {
     );
 }
 
+// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L2078
 test "HeaviestSubtreeForkChoice.aggregateSlot" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -1694,6 +1699,7 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
     }
 }
 
+// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L3012
 test "HeaviestSubtreeForkChoice.isHeaviestChild" {
     const tree = [_]TreeNode{
         //
@@ -1755,6 +1761,7 @@ test "HeaviestSubtreeForkChoice.isHeaviestChild" {
     // TODO complete test when vote related functions are implemented
 }
 
+// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1871
 test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
@@ -1810,6 +1817,7 @@ test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
     try std.testing.expectEqual(child, fork_choice.heaviestOverallSlot());
 }
 
+// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L3624
 test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
     var fork_choice = try forkChoiceForTest(test_allocator, linear_fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -1879,6 +1887,7 @@ test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
     }
 }
 
+// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L3752
 test "HeaviestSubtreeForkChoice.markForkValidandidate_mark_valid_then_ancestor_invalid" {
     var fork_choice = try forkChoiceForTest(test_allocator, linear_fork_tuples[0..]);
     defer fork_choice.deinit();
