@@ -12,6 +12,8 @@ const AccountsDB = sig.accounts_db.AccountsDB;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
 
+const N_RANDOM_THREADS = 8;
+
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
     slot: u64,
@@ -134,11 +136,17 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         break :blk tracked_accounts;
     });
     var map_alive = std.atomic.Value(bool).init(true);
+
+    var threads: [N_RANDOM_THREADS]std.Thread = undefined;
+    var spawned_threads: u8 = 0;
+
     defer {
         map_alive.store(false, .seq_cst);
         const tracked_accounts, var tracked_accounts_lg = tracked_accounts_rw.writeWithLock();
         defer tracked_accounts_lg.unlock();
         tracked_accounts.deinit();
+
+        for (threads[0..spawned_threads]) |thread| thread.join();
     }
 
     var random_bank_fields = try BankFields.initRandom(allocator, random, 1 << 8);
@@ -153,15 +161,26 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var pubkeys_this_slot = std.AutoHashMap(Pubkey, void).init(allocator);
     defer pubkeys_this_slot.deinit();
 
-    for (0..8) |i| {
-        _ = try std.Thread.spawn(.{}, readRandomAccountThread, .{
-            &accounts_db,
-            &tracked_accounts_rw,
-            seed + i,
-            &map_alive,
-            i,
-        });
-        std.debug.print("started random read thread {}\n", .{i});
+    {
+        errdefer {
+            for (threads[0..spawned_threads]) |thread| thread.detach();
+            spawned_threads = 0;
+        }
+
+        for (&threads) |*thread| {
+            defer spawned_threads += 1;
+
+            thread.* = try std.Thread.spawn(.{}, readRandomAccountThread, .{
+                &accounts_db,
+                &tracked_accounts_rw,
+                seed + spawned_threads,
+                &map_alive,
+                spawned_threads,
+            });
+            std.debug.print("started random read thread {}\n", .{spawned_threads});
+        }
+
+        std.debug.assert(spawned_threads == N_RANDOM_THREADS);
     }
 
     // get/put a bunch of accounts
