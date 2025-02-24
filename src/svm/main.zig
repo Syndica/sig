@@ -21,6 +21,9 @@ pub fn main() !void {
     else
         std.heap.c_allocator;
 
+    var std_logger = sig.trace.DirectPrintLogger.init(allocator, .debug);
+    const logger = std_logger.logger();
+
     var input_path: ?[]const u8 = null;
     var assemble: bool = false;
     var version: sbpf.Version = .v3;
@@ -106,7 +109,14 @@ pub fn main() !void {
         memory.Region.init(.mutable, &.{}, memory.INPUT_START),
     }, executable.version);
 
-    var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
+    var vm = try Vm.init(
+        allocator,
+        &executable,
+        m,
+        &loader,
+        logger,
+        stack_memory.len,
+    );
     defer vm.deinit();
     const result = try vm.run();
 
