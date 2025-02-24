@@ -28,7 +28,6 @@ if [[ $code == 58 ]]; then
     docker-compose up -d
 elif [[ $code == 0 ]]; then
     # 0 means there was a change and rebuild, so restart sig
-    echo restarting sig
     systemctl restart sig
     cd /home/sig/sig/metrics
     docker-compose restart
