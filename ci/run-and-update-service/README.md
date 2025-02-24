@@ -1,4 +1,4 @@
-Install sig as a long running service on a linux system, and periodically have it self-update based on the latest code in main and restart. This exists to maintain CI test environments.
+Install sig as a long running service on a linux system, and periodically have it self-update based on the latest code in the configured branch and restart. This exists to maintain CI test environments.
 
 ## Install
 
@@ -16,3 +16,11 @@ sudo make start        # start sig and the timer to periodically update sig
 ```bash
 sudo make uninstall
 ```
+
+
+## Configuration
+
+These options may be configured in /etc/sig.conf
+
+- CLI_ARGS: The command line options that will be passed to sig. Default: '--log-file /home/sig/sig/logs/sig.log'
+- BRANCH: The branch that will be checked periodically and rebuilt when it changes. Default: main
