@@ -9,6 +9,7 @@ install: create_user install_config
 	install -Dm644 sig-update.service "$(prefix)/$(systemd)/system/sig-update.service"
 	install -Dm644 sig-update.timer   "$(prefix)/$(systemd)/system/sig-update.timer"
 	sudo -u sig git clone https://github.com/Syndica/sig.git /home/sig/sig
+	sudo -u sig mkdir /home/sig/sig/logs
 	systemctl daemon-reload
 
 create_user:
