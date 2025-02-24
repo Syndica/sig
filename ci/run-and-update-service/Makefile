@@ -3,9 +3,6 @@ bin := bin
 systemd := lib/systemd
 branch := main
 
-build: 
-	zig build -Doptimize=ReleaseSafe -Dno-run sig
-
 install: create_user install_config
 	install -Dm755 sig-update         "$(prefix)/$(bin)/sig-update"
 	install -Dm644 sig.service        "$(prefix)/$(systemd)/system/sig.service"
