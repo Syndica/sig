@@ -1,6 +1,7 @@
 pub const active_set = @import("active_set.zig");
 pub const data = @import("data.zig");
 pub const dump_service = @import("dump_service.zig");
+pub const map = @import("map.zig");
 pub const message = @import("message.zig");
 pub const ping_pong = @import("ping_pong.zig");
 pub const pull_request = @import("pull_request.zig");

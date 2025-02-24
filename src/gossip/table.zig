@@ -10,6 +10,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const GossipTableShards = sig.gossip.shards.GossipTableShards;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipData = sig.gossip.data.GossipData;
+const GossipMap = sig.gossip.map.GossipMap;
 const GossipVersionedData = sig.gossip.data.GossipVersionedData;
 const GossipKey = sig.gossip.data.GossipKey;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
@@ -46,7 +47,7 @@ pub fn AutoArrayHashSet(comptime T: type) type {
 ///
 /// Analogous to [Crds](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L68)
 pub const GossipTable = struct {
-    store: AutoArrayHashMap(GossipKey, GossipVersionedData),
+    store: GossipMap,
 
     // special types tracked with their index
     contact_infos: AutoArrayHashSet(usize),
@@ -83,7 +84,7 @@ pub const GossipTable = struct {
 
     pub fn init(allocator: std.mem.Allocator, gossip_data_allocator: std.mem.Allocator) !Self {
         return Self{
-            .store = AutoArrayHashMap(GossipKey, GossipVersionedData).init(allocator),
+            .store = .{},
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
@@ -123,10 +124,9 @@ pub const GossipTable = struct {
 
         var store_iter = self.store.iterator();
         while (store_iter.next()) |entry| {
-            // ! note how we use the data allocator to free the data
-            entry.value_ptr.value.data.deinit(self.gossip_data_allocator);
+            entry.getGossipData().deinit(self.gossip_data_allocator);
         }
-        self.store.deinit();
+        self.store.deinit(self.allocator);
     }
 
     pub const InsertResult = union(enum) {
@@ -155,8 +155,8 @@ pub const GossipTable = struct {
         };
 
         const label = value.label();
-        const result = try self.store.getOrPut(label);
-        const entry_index = result.index;
+        const result = try self.store.getOrPut(self.allocator, label);
+        const entry_index = result.entry.index;
         const origin = value.id();
 
         // entry doesnt exist
@@ -204,7 +204,7 @@ pub const GossipTable = struct {
                 try self.pubkey_to_values.put(origin, indexs);
             }
 
-            result.value_ptr.* = versioned_value;
+            result.entry.setVersionedData(versioned_value);
 
             self.cursor += 1;
 
@@ -212,8 +212,8 @@ pub const GossipTable = struct {
             return .InsertedNewEntry;
 
             // should overwrite existing entry
-        } else if (versioned_value.overwrites(result.value_ptr)) {
-            const old_entry = result.value_ptr.*;
+        } else if (versioned_value.overwrites(&result.entry.getVersionedData())) {
+            const old_entry = result.entry.metadata_ptr.*;
 
             switch (value.data) {
                 .ContactInfo => |*info| {
@@ -261,19 +261,20 @@ pub const GossipTable = struct {
 
             // As long as the pubkey does not change, self.records
             // does not need to be updated.
-            std.debug.assert(old_entry.value.id().equals(&origin));
+            std.debug.assert(result.entry.getGossipData().id().equals(&origin));
 
             try self.purged.insert(old_entry.value_hash, now);
 
-            result.value_ptr.* = versioned_value;
+            const overwritten_data = result.entry.getGossipData();
+            result.entry.setVersionedData(versioned_value);
             self.cursor += 1;
 
             // overwrite existing entry
-            return .{ .OverwroteExistingEntry = old_entry.value.data };
+            return .{ .OverwroteExistingEntry = overwritten_data };
 
             // do nothing
         } else {
-            const old_entry = result.value_ptr.*;
+            const old_entry = result.entry.metadata_ptr.*;
 
             if (old_entry.value_hash.order(&versioned_value.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
@@ -343,7 +344,7 @@ pub const GossipTable = struct {
         // used when purging old values.
         inline for (labels) |contact_info_label| {
             if (self.store.getEntry(contact_info_label)) |entry| {
-                entry.value_ptr.timestamp_on_insertion = now;
+                entry.metadata_ptr.timestamp_on_insertion = now;
                 updated_contact_info = true;
             }
         }
@@ -353,8 +354,7 @@ pub const GossipTable = struct {
         if (self.pubkey_to_values.getEntry(pubkey)) |entry| {
             const pubkey_indexs = entry.value_ptr;
             for (pubkey_indexs.keys()) |index| {
-                const value = &self.store.values()[index];
-                value.timestamp_on_insertion = now;
+                self.store.metadata.items[index].timestamp_on_insertion = now;
             }
         }
     }
@@ -401,12 +401,11 @@ pub const GossipTable = struct {
     fn genericGetEntriesWithCursor(
         allocator: ?std.mem.Allocator,
         hashmap: anytype,
-        store: AutoArrayHashMap(GossipKey, GossipVersionedData),
+        store: GossipMap,
         buf: []GossipVersionedData,
         caller_cursor: *usize,
     ) error{OutOfMemory}![]GossipVersionedData {
         const cursor_indexs = hashmap.keys();
-        const store_values = store.values();
 
         var index: usize = 0;
         for (cursor_indexs) |cursor_index| {
@@ -415,7 +414,7 @@ pub const GossipTable = struct {
             }
 
             const entry_index = hashmap.get(cursor_index).?;
-            const entry = store_values[entry_index];
+            const entry = store.getByIndex(entry_index);
             buf[index] = if (allocator == null) entry else try entry.clone(allocator.?);
             index += 1;
 
@@ -512,7 +511,7 @@ pub const GossipTable = struct {
         minimum_insertion_timestamp: u64,
     ) ContactInfoIterator {
         return .{
-            .values = self.store.values(),
+            .map = &self.store,
             .converted_contact_infos = &self.converted_contact_infos,
             .indices = self.contact_infos.iterator().keys,
             .count = self.contact_infos.count(),
@@ -521,7 +520,7 @@ pub const GossipTable = struct {
     }
 
     pub const ContactInfoIterator = struct {
-        values: []const GossipVersionedData,
+        map: *const GossipMap,
         converted_contact_infos: *const AutoArrayHashMap(Pubkey, ContactInfo),
         indices: [*]usize,
         count: usize,
@@ -532,13 +531,16 @@ pub const GossipTable = struct {
             while (self.index_cursor < self.count) {
                 const index = self.indices[self.index_cursor];
                 self.index_cursor += 1;
-                const value = &self.values[index];
-                if (value.timestamp_on_insertion >= self.minimum_insertion_timestamp) {
-                    return switch (value.value.data) {
-                        .LegacyContactInfo => |*lci| self.converted_contact_infos.getPtr(lci.id).?,
-                        .ContactInfo => |*ci| ci,
+                const metadata = self.map.metadata.items[index];
+                if (metadata.timestamp_on_insertion >= self.minimum_insertion_timestamp) {
+                    switch (self.map.tagOfIndex(index)) {
+                        .ContactInfo => return self.map.getTypedPtr(.ContactInfo, index),
+                        .LegacyContactInfo => {
+                            const legacy_info = self.map.getTypedPtr(.LegacyContactInfo, index);
+                            return self.converted_contact_infos.getPtr(legacy_info.id).?;
+                        },
                         else => unreachable,
-                    };
+                    }
                 }
             }
             return null;
@@ -598,10 +600,10 @@ pub const GossipTable = struct {
         if (maybe_entry == null) return error.LabelNotFound;
 
         const entry = maybe_entry.?;
-        const versioned_value = entry.value_ptr;
-        const entry_index = self.entries.get(versioned_value.cursor_on_insertion).?;
-        const hash = versioned_value.value_hash;
-        const origin = versioned_value.value.id();
+        var gossip_data = entry.getGossipData();
+        const entry_index = self.entries.get(entry.metadata_ptr.cursor_on_insertion).?;
+        const hash = entry.metadata_ptr.value_hash;
+        const origin = gossip_data.id();
 
         const entry_indexs = self.pubkey_to_values.getEntry(origin).?.value_ptr;
         {
@@ -626,16 +628,17 @@ pub const GossipTable = struct {
         try self.purged.insert(hash, now);
         self.shards.remove(entry_index, &hash);
 
-        const cursor_on_insertion = versioned_value.cursor_on_insertion;
+        const cursor_on_insertion = entry.metadata_ptr.cursor_on_insertion;
 
-        switch (versioned_value.value.data) {
+        switch (entry.tag()) {
             .ContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(entry_index);
                 std.debug.assert(did_remove);
             },
-            .LegacyContactInfo => |lci| {
+            .LegacyContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(entry_index);
                 std.debug.assert(did_remove);
+                const lci = self.store.getTypedPtr(.LegacyContactInfo, entry_index);
                 var contact_info = self.converted_contact_infos.fetchSwapRemove(lci.id).?.value;
                 contact_info.deinit();
             },
@@ -659,61 +662,74 @@ pub const GossipTable = struct {
             std.debug.assert(did_remove);
         }
 
-        // free memory while versioned_value still points to the correct data
-        versioned_value.value.data.deinit(self.gossip_data_allocator);
+        // free memory while gossip_data still points to the correct data
+        gossip_data.deinit(self.gossip_data_allocator);
 
         // remove from store
-        // this operation replaces the data pointed to by versioned_value to
+        // this operation replaces the data pointed to by gossip_data to
         // either the last element of the store, or undefined if the store is empty
         {
             const did_remove = self.store.swapRemove(label);
             std.debug.assert(did_remove);
         }
 
-        // account for the swap with the last element
+        self.accountForSwapRemove(entry_index);
+    }
+
+    /// Called during remove to account for the swap that occurs when an item is
+    /// swapRemoved from the map. The last item from the map is moved into that
+    /// location, so the indices pointing to that item need to be updated to
+    /// point to its new index.
+    ///
+    /// This is separated into a different function to isolate the state to
+    /// avoid mistakes. The new entry must be acquired from map using the
+    /// existing index. The prior entry does not point to the correct item.
+    fn accountForSwapRemove(self: *GossipTable, entry_index: usize) void {
         const table_len = self.len();
         // if (index == table_len) then it was already the last
         // element so we dont need to do anything
-        if (entry_index < table_len) {
-            // versioned data now points to the element which was swapped in and needs updating
-            const new_index_cursor = versioned_value.cursor_on_insertion;
-            const new_index_origin = versioned_value.value.id();
+        std.debug.assert(entry_index <= table_len);
+        if (entry_index == table_len) return;
 
-            // update shards
-            self.shards.remove(table_len, &versioned_value.value_hash);
-            // wont fail because we just removed a value in line above
-            self.shards.insert(entry_index, &versioned_value.value_hash) catch unreachable;
+        // replace data with newly swapped value
+        const entry = self.store.getEntryByIndex(entry_index);
+        const new_index_cursor = entry.metadata_ptr.cursor_on_insertion;
+        const new_index_origin = entry.getGossipData().id();
 
-            // these also should not fail since there are no allocations - just changing the value
-            switch (versioned_value.value.data) {
-                .ContactInfo => {
-                    const did_remove = self.contact_infos.swapRemove(table_len);
-                    std.debug.assert(did_remove);
-                    self.contact_infos.put(entry_index, {}) catch unreachable;
-                },
-                .LegacyContactInfo => {
-                    const did_remove = self.contact_infos.swapRemove(table_len);
-                    std.debug.assert(did_remove);
-                    self.contact_infos.put(entry_index, {}) catch unreachable;
-                },
-                .Vote => {
-                    self.votes.put(new_index_cursor, entry_index) catch unreachable;
-                },
-                .EpochSlots => {
-                    self.epoch_slots.put(new_index_cursor, entry_index) catch unreachable;
-                },
-                .DuplicateShred => {
-                    self.duplicate_shreds.put(new_index_cursor, entry_index) catch unreachable;
-                },
-                else => {},
-            }
-            self.entries.put(new_index_cursor, entry_index) catch unreachable;
+        // update shards
+        self.shards.remove(table_len, &entry.metadata_ptr.value_hash);
+        // wont fail because we just removed a value in line above
+        self.shards.insert(entry_index, &entry.metadata_ptr.value_hash) catch unreachable;
 
-            const new_entry_indexs = self.pubkey_to_values.getEntry(new_index_origin).?.value_ptr;
-            const did_remove = new_entry_indexs.swapRemove(table_len);
-            std.debug.assert(did_remove);
-            new_entry_indexs.put(entry_index, {}) catch unreachable;
+        // these also should not fail since there are no allocations - just changing the value
+        switch (entry.tag()) {
+            .ContactInfo => {
+                const did_remove = self.contact_infos.swapRemove(table_len);
+                std.debug.assert(did_remove);
+                self.contact_infos.put(entry_index, {}) catch unreachable;
+            },
+            .LegacyContactInfo => {
+                const did_remove = self.contact_infos.swapRemove(table_len);
+                std.debug.assert(did_remove);
+                self.contact_infos.put(entry_index, {}) catch unreachable;
+            },
+            .Vote => {
+                self.votes.put(new_index_cursor, entry_index) catch unreachable;
+            },
+            .EpochSlots => {
+                self.epoch_slots.put(new_index_cursor, entry_index) catch unreachable;
+            },
+            .DuplicateShred => {
+                self.duplicate_shreds.put(new_index_cursor, entry_index) catch unreachable;
+            },
+            else => {},
         }
+        self.entries.put(new_index_cursor, entry_index) catch unreachable;
+
+        const new_entry_indexs = self.pubkey_to_values.getEntry(new_index_origin).?.value_ptr;
+        const did_remove = new_entry_indexs.swapRemove(table_len);
+        std.debug.assert(did_remove);
+        new_entry_indexs.put(entry_index, {}) catch unreachable;
     }
 
     /// Trim when over 90% of max capacity
@@ -749,7 +765,10 @@ pub const GossipTable = struct {
         }
 
         for (labels_to_remove.items) |label| {
-            self.remove(label, now) catch unreachable;
+            self.remove(label, now) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => unreachable,
+            };
         }
 
         return drop_pubkeys.len;
@@ -807,7 +826,7 @@ pub const GossipTable = struct {
             const count = entry_indexs.count();
 
             for (entry_indexs.iterator().keys[0..count]) |entry_index| {
-                const versioned_value = self.store.values()[entry_index];
+                const versioned_value = self.store.getByIndex(entry_index);
                 const value_timestamp = @min(
                     versioned_value.value.wallclock(),
                     versioned_value.timestamp_on_insertion,
@@ -827,13 +846,18 @@ pub const GossipTable = struct {
     ) !?ContactInfo {
         const contact_indexs = self.contact_infos.keys();
         for (contact_indexs) |index| {
-            const entry: GossipVersionedData = self.store.values()[index];
-            switch (entry.value.data) {
-                .ContactInfo => |ci| if (ci.getSocket(.gossip)) |addr| {
-                    if (addr.eql(&gossip_addr)) return try ci.clone();
+            switch (self.store.tagOfIndex(index)) {
+                .ContactInfo => {
+                    const ci = self.store.getTypedPtr(.ContactInfo, index);
+                    if (ci.getSocket(.gossip)) |addr| {
+                        if (addr.eql(&gossip_addr)) return try ci.clone();
+                    }
                 },
-                .LegacyContactInfo => |lci| if (lci.gossip.eql(&gossip_addr)) {
-                    return try lci.toContactInfo(self.allocator);
+                .LegacyContactInfo => {
+                    const lci = self.store.getTypedPtr(.LegacyContactInfo, index);
+                    if (lci.gossip.eql(&gossip_addr)) {
+                        return try lci.toContactInfo(self.allocator);
+                    }
                 },
                 else => continue,
             }
