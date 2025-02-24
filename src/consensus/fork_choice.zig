@@ -55,6 +55,7 @@ pub const ForkInfo = struct {
     // Heaviest slot in the subtree rooted at this slot, does not
     // have to be a direct child in `children`. This is the slot whose subtree
     // is the heaviest.
+    // Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L103C5-L103C14)
     heaviest_subtree_slot: SlotAndHash,
     // Deepest slot in the subtree rooted at this slot. This is the slot
     // with the greatest tree height. This metric does not discriminate invalid
@@ -293,12 +294,14 @@ pub const ForkChoice = struct {
         return null;
     }
 
+    /// Analogous to [best_overall_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L305)
     pub fn heaviestOverallSlot(self: *const ForkChoice) SlotAndHash {
         return self.heaviestSlot(self.tree_root) orelse {
             @panic("Root must exist in tree");
         };
     }
 
+    /// Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L293)
     pub fn heaviestSlot(
         self: *const ForkChoice,
         slot_hash_key: SlotAndHash, //TODO change this to reference
