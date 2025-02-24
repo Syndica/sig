@@ -19,16 +19,19 @@ const Clock = sig.runtime.sysvar.Clock;
 
 const VoteProgramInstruction = vote_program.Instruction;
 
+/// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L357
 pub const BlockTimestamp = struct {
     slot: Slot,
     timestamp: i64,
 };
 
+/// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L85
 pub const Lockout = struct {
     slot: Slot,
     confirmation_count: u32,
 };
 
+/// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L135
 pub const LandedVote = struct {
     // Latency is the difference in slot number between the slot that was voted on (lockout.slot) and the slot in
     // which the vote that added this Lockout landed.  For votes which were cast before versions of the validator
@@ -37,6 +40,7 @@ pub const LandedVote = struct {
     lockout: Lockout,
 };
 
+/// Analogous tuple [(Pubkey, Epoch, Epoch)] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L444.
 pub const PriorVote = struct {
     /// authorized voter at the time of the vote.
     key: Pubkey,
@@ -46,12 +50,15 @@ pub const PriorVote = struct {
     end: Epoch,
 };
 
+/// Analogous tuple [(Epoch, u64, u64)] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L448
 pub const EpochCredit = struct {
     epoch: Epoch,
     credits: u64,
     prev_credits: u64,
 };
 
+/// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L422
+///
 /// Must support `bincode` and `serializedSize` methods for writing to the account data.
 pub const VoteState = struct {
     /// the node that votes in this account
@@ -159,6 +166,7 @@ pub fn execute(
 }
 
 //// [agave] https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884
+///
 /// Initialize the vote_state for a vote account
 /// Assumes that the account is being init as part of a account creation or balance transfer and
 /// that the transaction must be signed by the staker's keys
