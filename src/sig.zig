@@ -13,6 +13,7 @@ pub const net = @import("net/lib.zig");
 pub const prometheus = @import("prometheus/lib.zig");
 pub const rand = @import("rand/rand.zig");
 pub const rpc = @import("rpc/lib.zig");
+pub const runtime = @import("runtime/lib.zig");
 pub const shred_network = @import("shred_network/lib.zig");
 pub const svm = @import("svm/lib.zig");
 pub const sync = @import("sync/lib.zig");

@@ -61,9 +61,20 @@ if __name__ == "__main__":
     for src_path, docs_path in get_markdown_files(src_path, exclude_dirs, code_docs_path):
         # copy the file to the docs/code directory
         with open(src_path, "r") as f:
+            src_lines = f.readlines()
+
+            # check for exclusion
+            should_exclude = False
+            for line in src_lines:
+                if line == "docs: exclude\n":
+                    print("excluding file: ", src_path)
+                    should_exclude = True
+                    break
+            if should_exclude: continue
+
             with open(docs_path, "w") as docs_file:
                 # fix image paths for docusaurus
-                for line in f:
+                for line in src_lines:
                     if "/docs/docusaurus/static/img" in line:
                         line = line.replace("/docs/docusaurus/static/img", "/img")
                     docs_file.write(line)
