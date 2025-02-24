@@ -1,0 +1,67 @@
+---
+sidebar_position: 0
+title: Build
+---
+
+## Dependencies
+
+The only dependency for this project is:
+
+- Zig 0.13.0: [Binary Releases](https://ziglang.org/download/)
+
+## Build Commands
+
+To build all binaries in the project, you can use the following commands:
+
+```bash
+# debug mode
+zig build
+```
+
+or
+
+```bash
+# for proudction
+zig build -Doptimize=ReleaseSafe
+```
+
+Then run the binary you want to use:
+
+```bash
+./zig-out/bin/sig --help
+```
+
+These commands can also be done in one line:
+
+```bash
+zig build -Doptimize=ReleaseSafe sig -- --help
+```
+
+## Binaries
+
+The project includes the following binaries:
+- `sig` - the main validator binary for the project
+- `test` - the test binary for the project
+- `fuzz` - the fuzzing binary for the project
+- `benchmark` - the benchmarking binary for the project
+- `geyser` - the binary for the geyser related functions
+
+The exact build commands for each binary can be found in the `build.zig` file.
+
+## Tips
+
+To reduce build times you can specify the binary you want to build (the other binaries will not be
+built):
+
+```bash
+zig build test
+```
+
+If you prefer to only build the binary (and not run it) you can use the `-Dno-run` option:
+
+```bash
+zig build -Dno-run fuzz
+# ./zig-out/bin/fuzz exists
+```
+
+See the `build.zig` file for more build options.

@@ -52,18 +52,24 @@ pub const Version = enum(u32) {
     pub fn disableLDDW(version: Version) bool {
         return version.gte(.v2);
     }
+    pub fn moveMemoryInstructionClasses(version: Version) bool {
+        return version.gte(.v2);
+    }
     /// ... SIMD-0173
     pub fn enableLe(version: Version) bool {
         return version == .v0;
     }
 
     /// Enable SIMD-0178: SBPF Static Syscalls
-    ///
     /// Enable SIMD-0179: SBPF stricter verification constraints
     pub fn enableStaticSyscalls(version: Version) bool {
         return version.gte(.v3);
     }
     /// Enable SIMD-0189: SBPF stricter ELF headers
+    pub fn enableStricterElfHeaders(version: Version) bool {
+        return version.gte(.v3);
+    }
+    /// ... SIMD-0189
     pub fn enableLowerBytecodeVaddr(version: Version) bool {
         return version.gte(.v3);
     }
@@ -79,7 +85,7 @@ pub const Version = enum(u32) {
         return version != .v0;
     }
 
-    fn gte(version: Version, other: Version) bool {
+    pub fn gte(version: Version, other: Version) bool {
         return @intFromEnum(version) >= @intFromEnum(other);
     }
 };
@@ -118,6 +124,11 @@ pub const Instruction = packed struct(u64) {
         st_w_reg = stx | mem | w,
         /// bpf opcode: `stxdw [dst + off], src` /// `(dst + offset) as u64 = src`.
         st_dw_reg = stx | mem | dw,
+
+        /// BPF opcode: `ldxw dst, [src + off]` /// `dst = (src + off) as u32`.
+        ld_4b_reg = alu32 | x | @"4b",
+        /// BPF opcode: `stxw [dst + off], src` /// `(dst + offset) as u32 = src`.
+        st_4b_reg = alu64 | x | @"4b",
 
         /// bpf opcode: `add32 dst, imm` /// `dst += imm`.
         add32_imm = alu32 | k | add,
@@ -343,6 +354,7 @@ pub const Instruction = packed struct(u64) {
 
         /// bpf opcode: `exit` /// `return r0`. /// valid only until sbpfv3
         exit = jmp | exit_code,
+        @"return" = jmp | x | exit_code,
         _,
 
         pub fn isReg(opcode: OpCode) bool {
@@ -372,6 +384,7 @@ pub const Instruction = packed struct(u64) {
     const Entry = struct {
         inst: InstructionType,
         opc: u8,
+        secondary: u8 = 0,
     };
 
     const InstructionType = union(enum) {
@@ -391,6 +404,33 @@ pub const Instruction = packed struct(u64) {
         endian: u32,
         no_operand,
     };
+
+    /// Denotes at which version the instruction isn't allowed anymore.
+    ///
+    /// Example usage:
+    /// ```zig
+    /// const result = disallowed.get(inst) orelse ...;
+    /// if (current_version.gte(result)) @panic("not allowed")
+    /// ```
+    pub const disallowed = std.StaticStringMap(Version).initComptime(&.{
+        .{ "neg32", .v2 },
+        .{ "neg64", .v2 },
+        .{ "neg", .v2 },
+
+        .{ "mul32", .v2 },
+        .{ "mul64", .v2 },
+        .{ "mul", .v2 },
+
+        .{ "div32", .v2 },
+        .{ "div64", .v2 },
+        .{ "div", .v2 },
+
+        .{ "le32", .v2 },
+        .{ "le64", .v2 },
+        .{ "le16", .v2 },
+
+        .{ "lddw", .v2 },
+    });
 
     pub const map = std.StaticStringMap(Entry).initComptime(&.{
         // zig fmt: off
@@ -490,20 +530,20 @@ pub const Instruction = packed struct(u64) {
         .{ "jslt" , .{ .inst = .jump_conditional, .opc = jslt |  jmp  } },
         .{ "jsle" , .{ .inst = .jump_conditional, .opc = jsle |  jmp  } },
 
-        .{ "ldxb"  , .{ .inst = .load_reg,         .opc = mem | ldx | b   } },
-        .{ "ldxh"  , .{ .inst = .load_reg,         .opc = mem | ldx | h   } },
-        .{ "ldxw"  , .{ .inst = .load_reg,         .opc = mem | ldx | w   } },
-        .{ "ldxdw" , .{ .inst = .load_reg,         .opc = mem | ldx | dw  } },
+        .{ "ldxb" , .{ .inst = .load_reg, .opc = mem | ldx | b, .secondary = alu32 | x | @"1b" } },
+        .{ "ldxh" , .{ .inst = .load_reg, .opc = mem | ldx | h, .secondary = alu32 | x | @"2b" } },
+        .{ "ldxw" , .{ .inst = .load_reg, .opc = mem | ldx | w, .secondary = alu32 | x | @"4b" } },
+        .{ "ldxdw", .{ .inst = .load_reg, .opc = mem | ldx | dw,.secondary = alu32 | x | @"8b" } },
 
-        .{ "stb"  , .{ .inst = .store_imm,        .opc = mem | st | b   } },
-        .{ "sth"  , .{ .inst = .store_imm,        .opc = mem | st | h   } },
-        .{ "stw"  , .{ .inst = .store_imm,        .opc = mem | st | w   } },
-        .{ "stdw" , .{ .inst = .store_imm,        .opc = mem | st | dw  } },
+        .{ "stb" , .{ .inst = .store_imm, .opc = mem | st | b,  .secondary = alu64 | k | @"1b" } },
+        .{ "sth" , .{ .inst = .store_imm, .opc = mem | st | h,  .secondary = alu64 | k | @"2b" } },
+        .{ "stw" , .{ .inst = .store_imm, .opc = mem | st | w,  .secondary = alu64 | k | @"4b" } },
+        .{ "stdw", .{ .inst = .store_imm, .opc = mem | st | dw, .secondary = alu64 | k | @"8b" } },
 
-        .{ "stxb"  , .{ .inst = .store_reg,        .opc = mem | stx | b   } },
-        .{ "stxh"  , .{ .inst = .store_reg,        .opc = mem | stx | h   } },
-        .{ "stxw"  , .{ .inst = .store_reg,        .opc = mem | stx | w   } },
-        .{ "stxdw" , .{ .inst = .store_reg,        .opc = mem | stx | dw  } },
+        .{ "stxb" , .{ .inst = .store_reg, .opc = mem | stx | b, .secondary = alu64 | x | @"1b" } },
+        .{ "stxh" , .{ .inst = .store_reg, .opc = mem | stx | h, .secondary = alu64 | x | @"2b" } },
+        .{ "stxw" , .{ .inst = .store_reg, .opc = mem | stx | w, .secondary = alu64 | x | @"4b" } },
+        .{ "stxdw", .{ .inst = .store_reg, .opc = mem | stx | dw,.secondary = alu64 | x | @"8b" } },
 
         .{ "be16", .{ .inst = .{.endian = 16 }, .opc = alu32 | x | end } },
         .{ "be32", .{ .inst = .{.endian = 32 }, .opc = alu32 | x | end } },
@@ -514,6 +554,7 @@ pub const Instruction = packed struct(u64) {
         .{ "le64", .{ .inst = .{.endian = 64 }, .opc = alu32 | k | end } },
 
         .{ "exit"  , .{ .inst = .no_operand,       .opc = jmp | exit_code } },
+        .{ "return", .{ .inst = .no_operand,       .opc = jmp | x | exit_code } },
         .{ "lddw"  , .{ .inst = .load_dw_imm,      .opc = ld  | imm | dw  } },
         .{ "call"  , .{ .inst = .call_imm,         .opc = jmp | call      } },
         .{ "callx" , .{ .inst = .call_reg,         .opc = jmp | call | x  } },

@@ -4,19 +4,23 @@ title: Style Guide
 ---
 
 ### Identifiers
+
 To the extent that it is reasonable, we defer to the conventions established by the [Zig Style Guide](https://ziglang.org/documentation/master/#Style-Guide).
 
 #### Constants
+
 Non-function, constant declarations should be written in snake case with all letters uppercased (SCREAMING_SNAKE_CASE).
 This includes constants which are intended to initialize an instance of a user type (ie which could be used as a decl literal).
 
 #### Leading Underscores & Private Fields
+
 Usage of leading underscores in identifiers, i.e (`_foo` or `__bar`) is discouraged unless it's in the correct contex.
 Valid usages of such an identifier would be for a psuedo-private field, which is unrecommened for users to touch.
 For private fields, there should be a docstring attached explaining that it's a private field. Before creating a private
 field, it should be considered whether it needs to be a field in the first place. There should be few usages of them.
 
 #### Interfaces & Interface State
+
 There are two main guidelines to keep in mind when naming interfaces and interface state:
 - An instance of an interface should be named after the interface, unless the specific instance in question is expected to possess certain behaviours not prescribed by the intreface itself.
   - As an example, a generic instance of the `std.Random` interface should be named `random` - and for `std.mem.Allocator`, `allocator`.
@@ -27,6 +31,7 @@ There are two main guidelines to keep in mind when naming interfaces and interfa
   - As another example, an instance of `std.heap.GeneralPurposeAllocator(config)` should be called `gpa_state`, `std.heap.ArenaAllocator` `arena_state`, and so on.
 
 ### Container Type Ordering
+
 Container types should be declared with the following ordering:
 
 - Fields first
@@ -35,6 +40,7 @@ Container types should be declared with the following ordering:
 - All other functions, keeping the most relevant for the reader at the top
 
 #### Method Parameters
+
 The first parameter of a method should be named `self`. The type should be the name of the struct.
 For example:
 
@@ -52,11 +58,13 @@ If the type name is not available (for example in anonymous structs), define `co
 and use that as the type.
 
 ### Files as Structs
+
 We prohibit usage of files as instantiable struct types in the codebase.
 
 ### Imports
 
 #### Sig Dependencies
+
 By convention, all internal dependencies should be defined as aliases of fully qualified paths from the root module.
 For example, within 'src/gossip/message.zig' we should import types from 'src/gossip/data.zig' in the following manner:
 ```zig
@@ -66,6 +74,7 @@ const GossipData = sig.gossip.data.GossipData;
 ```
 
 #### Grouping
+
 Group import statements and alias definitions into the following categories, separated by a newline:
 
 1. @import statements
@@ -104,6 +113,7 @@ const Packet = sig.net.Packet;
 ```
 
 ### Optional Values
+
 - Optional values should be prepended with `maybe_` and unwrapping should follow the `if (maybe_x) |x| {}` format
 - For example:
 
@@ -116,6 +126,7 @@ fn do_something(maybe_foo: ?Foo) void {
 ```
 
 ### Function Signatures
+
 - If passing an `Allocator` as a parameter, it should be the first parameter of the function
 - If the number of possible errors which a function can return is reasonably small, then the error types should be
 explicit instead of using `anyerror` and the `!` operator
@@ -123,9 +134,11 @@ explicit instead of using `anyerror` and the `!` operator
 - If a parameter is not modified, then it should be `const` (eg, `fn get(*const Self)`)
 
 ### Slices
+
 - When converting an array from a slice, the syntax `&buf` should be used instead of `buf[0..]`
 
 ### Writing Tests
+
 - When writing tests the naming convention is: `test "{path to file}: {test name}"`
   - For example, in `src/gossip/data.zig` a test is defined as `test "gossip.data: test label() and id() methods"`
 
@@ -138,6 +151,7 @@ explicit instead of using `anyerror` and the `!` operator
 - Run `python remove_unused.py src/` from the top-level directory to remove unused imports
 
 ### Metrics
+
 It's common for a single context to deal with multiple prometheus metrics. In that case, it may be useful to group them together in their own struct. Any metrics structs following this pattern must end their names with the word `Metrics`. If practical, `Registry.initStruct` or `Registry.initFields` is recommended for the struct's initialization.
 
 The name of the struct should be prefixed with a name describing the scope where it is used, as in `GossipMetrics`. The prefix may be omitted if the context is already obvious, and the following are true about the metrics struct:

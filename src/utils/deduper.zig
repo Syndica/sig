@@ -171,7 +171,7 @@ fn testDedupSeeded(
     try std.testing.expectEqual(num_dups, num_dups);
     try std.testing.expectEqual(
         popcount,
-        deduper.masked_count.load(.unordered),
+        deduper.masked_count.load(.monotonic),
     );
     try std.testing.expect(deduper.falsePositiveRate() < false_positive_rate);
     try std.testing.expect(
