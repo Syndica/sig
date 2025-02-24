@@ -23,11 +23,7 @@
         - [x] executeCreateAccountWithSeed
             - [x] basic unit tests
             - [ ] advanced unit tests
-<<<<<<< HEAD
-        - [x] executeAdvanceNonceAccount 
-=======
         - [x] executeAdvanceNonceAccount
->>>>>>> main
             - [x] basic unit tests
             - [ ] advanced unit tests
         - [x] executeWithdrawNonceAccount
@@ -53,10 +49,6 @@
             - [ ] advanced unit tests
         - [x] executeUpgradeNonceAccount
             - [x] basic unit tests
-<<<<<<< HEAD
-            - [ ] advanced unit tests
-=======
             - [ ] advanced unit tests
 
 docs: exclude
->>>>>>> main
