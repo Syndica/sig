@@ -79,6 +79,84 @@ pub const Vm = struct {
         const inst = instructions[pc];
         const opcode = inst.opcode;
 
+        if (version.moveMemoryInstructionClasses()) {
+            switch (opcode) {
+                // reserved opcodes
+                .mul32_imm,
+                .mod32_imm,
+                .div32_imm,
+                => return error.UnknownInstruction,
+
+                inline
+                // LD_1B_REG
+                .mul32_reg,
+                // LD_2B_REG
+                .div32_reg,
+                // LD_4B_REG
+                .ld_4b_reg,
+                // LD_8B_REG
+                .mod32_reg,
+                => |tag| {
+                    const T = switch (tag) {
+                        .mul32_reg => u8,
+                        .div32_reg => u16,
+                        .ld_4b_reg => u32,
+                        .mod32_reg => u64,
+                        else => unreachable,
+                    };
+                    const base_address: i64 = @bitCast(registers.get(inst.src));
+                    const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
+                    registers.set(inst.dst, try self.load(T, vm_addr));
+                },
+
+                inline
+                // ST_1B_IMM
+                .mul64_imm,
+                // ST_2B_IMM
+                .div64_imm,
+                // ST_4B_IMM
+                .neg64,
+                // ST_8B_IMM
+                .mod64_imm,
+                => |tag| {
+                    const T = switch (tag) {
+                        .mul64_imm => u8,
+                        .div64_imm => u16,
+                        .neg64 => u32,
+                        .mod64_imm => u64,
+                        else => unreachable,
+                    };
+                    const base_address: i64 = @bitCast(registers.get(inst.dst));
+                    const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
+                    try self.store(T, vm_addr, @truncate(@as(u64, inst.imm)));
+                },
+
+                inline
+                // ST_1B_REG
+                .mul64_reg,
+                // ST_2B_REG
+                .div64_reg,
+                // ST_4B_REG
+                .st_4b_reg,
+                // ST_8B_REG
+                .mod64_reg,
+                => |tag| {
+                    const T = switch (tag) {
+                        .mul64_reg => u8,
+                        .div64_reg => u16,
+                        .st_4b_reg => u32,
+                        .mod64_reg => u64,
+                        else => unreachable,
+                    };
+                    const base_address: i64 = @bitCast(registers.get(inst.dst));
+                    const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
+                    try self.store(T, vm_addr, @truncate(registers.get(inst.src)));
+                },
+
+                else => {},
+            }
+        }
+
         switch (opcode) {
             // alu operations
             .add64_reg,
@@ -132,7 +210,19 @@ pub const Vm = struct {
             .rsh64_imm,
             .rsh32_reg,
             .rsh32_imm,
-            => {
+            => cont: {
+                if (version.moveMemoryInstructionClasses()) {
+                    // instructions handled above
+                    switch (@intFromEnum(opcode) & 0xF0) {
+                        Instruction.mod,
+                        Instruction.neg,
+                        Instruction.mul,
+                        Instruction.div,
+                        => break :cont,
+                        else => {},
+                    }
+                }
+
                 const lhs_large = registers.get(inst.dst);
                 const rhs_large = if (opcode.isReg())
                     registers.get(inst.src)
@@ -156,10 +246,10 @@ pub const Vm = struct {
                     Instruction.xor    => lhs ^ rhs,
                     Instruction.@"or"  => lhs | rhs,
                     Instruction.@"and" => lhs & rhs,
-                    Instruction.mod    => try std.math.mod(u64, lhs, rhs),
                     Instruction.lsh    => lhs << @truncate(rhs),
                     Instruction.rsh    => lhs >> @truncate(rhs),
                     Instruction.mov    => rhs,
+                    Instruction.mod => try std.math.mod(u64, lhs, rhs),
                     // zig fmt: on
                     Instruction.mul => value: {
                         if (opcode.is64()) break :value lhs *% rhs;
@@ -413,37 +503,52 @@ pub const Vm = struct {
 
                 const predicate: bool = switch (opcode) {
                     // zig fmt: off
-                .ja => true,
-                .jeq_imm,  .jeq_reg  => lhs == rhs,
-                .jne_imm,  .jne_reg  => lhs != rhs,
-                .jge_imm,  .jge_reg  => lhs >= rhs,
-                .jgt_imm,  .jgt_reg  => lhs >  rhs,
-                .jle_imm,  .jle_reg  => lhs <= rhs,
-                .jlt_imm,  .jlt_reg  => lhs <  rhs,
-                .jset_imm, .jset_reg => lhs &  rhs != 0,
-                .jsge_imm, .jsge_reg => lhs_signed >= rhs_signed,
-                .jsgt_imm, .jsgt_reg => lhs_signed >  rhs_signed,
-                .jsle_imm, .jsle_reg => lhs_signed <= rhs_signed,
-                .jslt_imm, .jslt_reg => lhs_signed <  rhs_signed,
-                // zig fmt: on
+                    .ja => true,
+                    .jeq_imm,  .jeq_reg  => lhs == rhs,
+                    .jne_imm,  .jne_reg  => lhs != rhs,
+                    .jge_imm,  .jge_reg  => lhs >= rhs,
+                    .jgt_imm,  .jgt_reg  => lhs >  rhs,
+                    .jle_imm,  .jle_reg  => lhs <= rhs,
+                    .jlt_imm,  .jlt_reg  => lhs <  rhs,
+                    .jset_imm, .jset_reg => lhs &  rhs != 0,
+                    .jsge_imm, .jsge_reg => lhs_signed >= rhs_signed,
+                    .jsgt_imm, .jsgt_reg => lhs_signed >  rhs_signed,
+                    .jsle_imm, .jsle_reg => lhs_signed <= rhs_signed,
+                    .jslt_imm, .jslt_reg => lhs_signed <  rhs_signed,
+                    // zig fmt: on
                     else => unreachable,
                 };
                 if (predicate) next_pc = target_pc;
             },
 
             // calling
-            .exit => {
-                if (self.depth == 0) {
-                    return false;
+            .exit,
+            .@"return",
+            => {
+                if (opcode == .exit and version.enableStaticSyscalls()) {
+                    // SBPFv3 SYSCALL instruction
+                    if (self.loader.functions.lookupKey(inst.imm)) |entry| {
+                        try entry.value(self);
+                    } else {
+                        @panic("TODO: detect invalid syscall in verifier");
+                    }
+                } else {
+                    if (opcode == .@"return" and !version.enableStaticSyscalls()) {
+                        return error.UnknownInstruction;
+                    }
+
+                    if (self.depth == 0) {
+                        return false;
+                    }
+                    self.depth -= 1;
+                    const frame = self.call_frames.pop();
+                    self.registers.set(.r10, frame.fp);
+                    @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
+                    if (!version.enableDynamicStackFrames()) {
+                        registers.getPtr(.r10).* -= self.executable.config.stack_frame_size;
+                    }
+                    next_pc = frame.return_pc;
                 }
-                self.depth -= 1;
-                const frame = self.call_frames.pop();
-                self.registers.set(.r10, frame.fp);
-                @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
-                if (!version.enableDynamicStackFrames()) {
-                    registers.getPtr(.r10).* -= self.executable.config.stack_frame_size;
-                }
-                next_pc = frame.return_pc;
             },
             .call_imm => {
                 var resolved = false;
@@ -451,6 +556,7 @@ pub const Vm = struct {
                     .{ inst.src == .r0, inst.src != .r0 }
                 else
                     .{ true, true };
+
                 if (external) {
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
                         resolved = true;
@@ -458,8 +564,13 @@ pub const Vm = struct {
                         try builtin_fn(self);
                     }
                 }
+
                 if (internal and !resolved) {
-                    if (self.executable.function_registry.lookupKey(inst.imm)) |entry| {
+                    const target_pc: i64 = if (version.enableStaticSyscalls())
+                        @as(i64, @intCast(pc)) +| @as(i32, @bitCast(inst.imm)) +| 1
+                    else
+                        inst.imm;
+                    if (self.executable.function_registry.lookupKey(@bitCast(target_pc))) |entry| {
                         resolved = true;
                         try self.pushCallFrame();
                         next_pc = entry.value;
@@ -489,6 +600,12 @@ pub const Vm = struct {
                 registers.set(inst.dst, value);
                 next_pc += 1;
             },
+
+            // handled above
+            .ld_4b_reg,
+            .st_4b_reg,
+            => if (!version.moveMemoryInstructionClasses()) return error.UnknownInstruction,
+
             else => return error.UnknownInstruction,
         }
 

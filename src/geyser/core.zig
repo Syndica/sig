@@ -362,7 +362,7 @@ pub const GeyserReader = struct {
     }
 
     /// reads a payload from the pipe and returns the total bytes read with the data
-    pub fn readPayload(self: *Self) !struct { u64, VersionedAccountPayload } {
+    pub fn readPayload(self: *GeyserReader) !struct { u64, VersionedAccountPayload } {
         const len = try self.readType(u64, 8);
         const versioned_payload = try self.readType(VersionedAccountPayload, len);
         self.metrics.total_payloads.inc();

@@ -19,10 +19,9 @@ echo "=> Cleaning up"
 rm -rf kcov-output 
 mkdir kcov-output 
 
-
 if [ -z "$1" ]; then
     echo "=> Building Sig" 
-    zig build
+    zig build test -Dno-run
     test_bin="./zig-out/bin/test"
 else
     test_bin="$1"
@@ -30,9 +29,7 @@ fi
 
 echo "=> Running kcov on tests" 
 kcov \
-    --collect-only \
     --include-pattern=src/ \
     --exclude-pattern=$HOME/.cache \
     kcov-output \
     $test_bin 
-kcov --merge kcov-merged kcov-output/

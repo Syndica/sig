@@ -10,6 +10,8 @@ const IoUring = std.os.linux.IoUring;
 
 const LOGGER_SCOPE = "rpc.server.linux_io_uring";
 
+const HTTP_VERSION: std.http.Version = .@"HTTP/1.0";
+
 pub const LinuxIoUring = struct {
     io_uring: IoUring,
 
@@ -60,7 +62,7 @@ pub const LinuxIoUring = struct {
 
         const timeout_sqe = try getSqeRetry(&self.io_uring);
         timeout_sqe.prep_timeout(&timeout_ts, 1, 0);
-        timeout_sqe.user_data = 1;
+        timeout_sqe.user_data = @bitCast(Entry.TIMEOUT);
 
         _ = try self.io_uring.submit_and_wait(1);
 
@@ -69,9 +71,6 @@ pub const LinuxIoUring = struct {
         const cqes_pending = pending_cqes_buf[0..pending_cqes_count];
 
         for (cqes_pending) |raw_cqe| {
-            // NOTE(ink): this is kind of hacky, should try refactoring this to use DOD-like indexes instead of pointers,
-            // that way we can allocate special static indexes instead of this.
-            if (raw_cqe.user_data == timeout_sqe.user_data) continue;
             const our_cqe = OurCqe.fromCqe(raw_cqe);
             try consumeOurCqe(self, server_ctx, our_cqe);
         }
@@ -109,44 +108,50 @@ fn consumeOurCqe(
     const entry = cqe.user_data;
     errdefer entry.deinit(server_ctx.allocator);
 
-    const entry_data: *EntryData = entry.ptr orelse {
-        // `accept_multishot` cqe
+    const entry_data: *EntryData = switch (entry.tag) {
+        _ => entry.ptr,
+        .timeout => return,
+        .accept => {
+            // `accept_multishot` cqe
 
-        // we may need to re-submit the `accept_multishot` sqe.
-        const accept_cancelled = cqe.flags & std.os.linux.IORING_CQE_F_MORE == 0;
-        if (accept_cancelled) try prepMultishotAccept(&liou.io_uring, server_ctx.tcp);
+            // we may need to re-submit the `accept_multishot` sqe.
+            const accept_cancelled = cqe.flags & std.os.linux.IORING_CQE_F_MORE == 0;
+            if (accept_cancelled) {
+                try prepMultishotAccept(&liou.io_uring, server_ctx.tcp);
+            }
 
-        switch (try connection.handleAcceptResult(cqe.err())) {
-            .success => {},
-            // just quickly exit; if we need to re-issue, that's already handled above
-            .intr,
-            .again,
-            .conn_aborted,
-            .proto_fail,
-            => return,
-        }
+            switch (try connection.handleAcceptResult(cqe.err())) {
+                .success => {},
+                // just quickly exit; if we need to re-issue, that's already handled above
+                .intr,
+                .again,
+                .conn_aborted,
+                .proto_fail,
+                => return,
+            }
 
-        const stream: std.net.Stream = .{ .handle = cqe.res };
-        errdefer stream.close();
+            const stream: std.net.Stream = .{ .handle = cqe.res };
+            errdefer stream.close();
 
-        server_ctx.wait_group.start();
-        errdefer server_ctx.wait_group.finish();
+            server_ctx.wait_group.start();
+            errdefer server_ctx.wait_group.finish();
 
-        const buffer = try server_ctx.allocator.alloc(u8, server_ctx.read_buffer_size);
-        errdefer server_ctx.allocator.free(buffer);
+            const buffer = try server_ctx.allocator.alloc(u8, server_ctx.read_buffer_size);
+            errdefer server_ctx.allocator.free(buffer);
 
-        const data_ptr = try server_ctx.allocator.create(EntryData);
-        errdefer server_ctx.allocator.destroy(data_ptr);
-        data_ptr.* = .{
-            .buffer = buffer,
-            .stream = stream,
-            .state = EntryState.INIT,
-        };
+            const data_ptr = try server_ctx.allocator.create(EntryData);
+            errdefer server_ctx.allocator.destroy(data_ptr);
+            data_ptr.* = .{
+                .buffer = buffer,
+                .stream = stream,
+                .state = EntryState.INIT,
+            };
 
-        const sqe = try getSqeRetry(&liou.io_uring);
-        sqe.prep_recv(stream.handle, buffer, 0);
-        sqe.user_data = @bitCast(Entry{ .ptr = data_ptr });
-        return;
+            const sqe = try getSqeRetry(&liou.io_uring);
+            sqe.prep_recv(stream.handle, buffer, 0);
+            sqe.user_data = @bitCast(Entry{ .ptr = data_ptr });
+            return;
+        },
     };
     errdefer server_ctx.wait_group.finish();
 
@@ -361,7 +366,7 @@ fn consumeOurCqe(
             },
         },
 
-        .send_no_body => |*snb| {
+        .send_static_string => |*sss| {
             switch (try connection.handleSendResult(cqe.err())) {
                 .success => {},
                 .again => std.debug.panic(eagain_panic_msg, .{}),
@@ -374,12 +379,12 @@ fn consumeOurCqe(
                 },
             }
             const sent_len: usize = @intCast(cqe.res);
-            snb.end_index += sent_len;
+            sss.end_index += sent_len;
 
-            if (snb.end_index < snb.head.len) {
-                try snb.prepSend(entry, &liou.io_uring);
+            if (sss.end_index < sss.data.len) {
+                try sss.prepSend(entry, &liou.io_uring);
                 return;
-            } else std.debug.assert(snb.end_index == snb.head.len);
+            } else std.debug.assert(sss.end_index == sss.data.len);
 
             entry.deinit(server_ctx.allocator);
             server_ctx.wait_group.finish();
@@ -405,7 +410,7 @@ fn handleRecvBody(
 ) HandleRecvBodyError!void {
     const logger = server_ctx.logger.withScope(LOGGER_SCOPE);
 
-    const entry_data = entry.ptr.?;
+    const entry_data = entry.ptr;
     std.debug.assert(body == &entry_data.state.recv_body);
 
     if (!body.head_info.method.requestHasBody()) {
@@ -420,12 +425,11 @@ fn handleRecvBody(
     switch (body.head_info.method) {
         .POST => {
             entry_data.state = .{
-                .send_no_body = EntryState.SendNoBody.initHttStatus(
-                    .@"HTTP/1.0",
+                .send_static_string = EntryState.SendStaticString.initHttpStatusNoBody(
                     .service_unavailable,
                 ),
             };
-            const snb = &entry_data.state.send_no_body;
+            const snb = &entry_data.state.send_static_string;
             try snb.prepSend(entry, &liou.io_uring);
             return;
         },
@@ -488,19 +492,31 @@ fn handleRecvBody(
                 }
                 return;
             },
-            .unrecognized => {},
+            .health => {
+                entry_data.state = .{
+                    .send_static_string = EntryState.SendStaticString.initHttpStatusString(
+                        .ok,
+                        "unknown",
+                    ),
+                };
+                const snb = &entry_data.state.send_static_string;
+                try snb.prepSend(entry, &liou.io_uring);
+                return;
+            },
+
+            .genesis_file => {},
+            .not_found => {},
         },
 
         else => {},
     }
 
     entry_data.state = .{
-        .send_no_body = EntryState.SendNoBody.initHttStatus(
-            .@"HTTP/1.0",
+        .send_static_string = EntryState.SendStaticString.initHttpStatusNoBody(
             .not_found,
         ),
     };
-    const snb = &entry_data.state.send_no_body;
+    const snb = &entry_data.state.send_static_string;
     try snb.prepSend(entry, &liou.io_uring);
     return;
 }
@@ -531,14 +547,26 @@ const OurCqe = extern struct {
     }
 };
 
-const Entry = packed struct(u64) {
-    /// If null, this is an `accept` entry.
-    ptr: ?*EntryData,
+const Entry = packed union {
+    /// Only valid if `tag` is an unnamed tag.
+    ptr: *EntryData,
+    tag: enum(u64) {
+        //! Unnamed values correspond to the `ptr` field.
 
-    const ACCEPT: Entry = .{ .ptr = null };
+        accept = 0,
+        timeout = 1,
+
+        _,
+    },
+
+    const ACCEPT: Entry = .{ .tag = .accept };
+    const TIMEOUT: Entry = .{ .tag = .timeout };
 
     fn deinit(self: Entry, allocator: std.mem.Allocator) void {
-        const ptr = self.ptr orelse return;
+        const ptr = switch (self.tag) {
+            .accept, .timeout => return,
+            _ => self.ptr,
+        };
         ptr.deinit(allocator);
         allocator.destroy(ptr);
     }
@@ -561,7 +589,7 @@ const EntryState = union(enum) {
     recv_body: RecvBody,
     send_file_head: SendFileHead,
     send_file_body: SendFileBody,
-    send_no_body: SendNoBody,
+    send_static_string: SendStaticString,
 
     const INIT: EntryState = .{
         .recv_head = .{
@@ -576,7 +604,7 @@ const EntryState = union(enum) {
             .recv_body => {},
             .send_file_head => |*sfh| sfh.deinit(),
             .send_file_body => |*sfb| sfb.deinit(),
-            .send_no_body => {},
+            .send_static_string => {},
         }
     }
 
@@ -589,7 +617,7 @@ const EntryState = union(enum) {
             entry: Entry,
             io_uring: *IoUring,
         ) GetSqeRetryError!void {
-            const entry_ptr = entry.ptr.?;
+            const entry_ptr = entry.ptr;
             std.debug.assert(self == &entry_ptr.state.recv_head);
 
             const usable_buffer = entry_ptr.buffer[self.end..];
@@ -652,7 +680,7 @@ const EntryState = union(enum) {
             /// There is still more head data to send.
             sending_more,
         } {
-            const entry_data = entry.ptr.?;
+            const entry_data = entry.ptr;
             std.debug.assert(self == &entry_data.state.send_file_head);
 
             const rendered_len = blk: {
@@ -665,7 +693,7 @@ const EntryState = union(enum) {
 
                 const status: std.http.Status = .ok;
                 writer.print("{[version]s} {[status]d}{[space]s}{[phrase]s}\r\n", .{
-                    .version = @tagName(std.http.Version.@"HTTP/1.0"),
+                    .version = @tagName(HTTP_VERSION),
                     .status = @intFromEnum(status),
                     .space = if (status.phrase() != null) " " else "",
                     .phrase = if (status.phrase()) |str| str else "",
@@ -712,7 +740,7 @@ const EntryState = union(enum) {
             entry: Entry,
             io_uring: *IoUring,
         ) GetSqeRetryError!void {
-            const entry_ptr = entry.ptr.?;
+            const entry_ptr = entry.ptr;
             std.debug.assert(self == &entry_ptr.state.send_file_body);
             std.debug.assert(self.which == .to_pipe);
 
@@ -732,7 +760,7 @@ const EntryState = union(enum) {
             entry: Entry,
             io_uring: *IoUring,
         ) GetSqeRetryError!void {
-            const entry_ptr = entry.ptr.?;
+            const entry_ptr = entry.ptr;
             std.debug.assert(self == &entry_ptr.state.send_file_body);
             std.debug.assert(self.which == .to_socket);
 
@@ -750,40 +778,56 @@ const EntryState = union(enum) {
         }
     };
 
-    const SendNoBody = struct {
+    const SendStaticString = struct {
         /// Should be a statically-lived string.
-        head: []const u8,
+        data: []const u8,
         end_index: usize,
 
-        fn initString(comptime str: []const u8) SendNoBody {
+        fn initRawString(comptime str: []const u8) SendStaticString {
             return .{
-                .head = str,
+                .data = str,
                 .end_index = 0,
             };
         }
 
-        fn initHttStatus(
-            comptime version: std.http.Version,
+        fn initHttpStatusNoBody(
             comptime status: std.http.Status,
-        ) SendNoBody {
-            const head = comptime std.fmt.comptimePrint("{s} {d}{s}\r\n\r\n", .{
-                @tagName(version),
+        ) SendStaticString {
+            return initRawString(statusLineStr(status) ++ "\r\n");
+        }
+
+        fn initHttpStatusString(
+            comptime status: std.http.Status,
+            comptime body: []const u8,
+        ) SendStaticString {
+            const str = comptime "" ++
+                statusLineStr(status) ++
+                std.fmt.comptimePrint("Content-Length: {d}\r\n", .{body.len}) ++
+                "\r\n" ++
+                body;
+            return initRawString(str);
+        }
+
+        inline fn statusLineStr(
+            comptime status: std.http.Status,
+        ) []const u8 {
+            comptime return std.fmt.comptimePrint("{s} {d}{s}\r\n", .{
+                @tagName(HTTP_VERSION),
                 @intFromEnum(status),
                 if (status.phrase()) |phrase| " " ++ phrase else "",
             });
-            return initString(head);
         }
 
         fn prepSend(
-            self: *const SendNoBody,
+            self: *const SendStaticString,
             entry: Entry,
             io_uring: *IoUring,
         ) GetSqeRetryError!void {
-            const entry_ptr = entry.ptr.?;
-            std.debug.assert(self == &entry_ptr.state.send_no_body);
+            const entry_ptr = entry.ptr;
+            std.debug.assert(self == &entry_ptr.state.send_static_string);
 
             const sqe = try getSqeRetry(io_uring);
-            sqe.prep_send(entry_ptr.stream.handle, self.head[self.end_index..], 0);
+            sqe.prep_send(entry_ptr.stream.handle, self.data[self.end_index..], 0);
             sqe.user_data = @bitCast(entry);
         }
     };

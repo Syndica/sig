@@ -486,14 +486,16 @@ pub fn getOrDownloadAndUnpackSnapshot(
         };
     }
 
-    const snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_path, .{
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_path, .{
         .iterate = true,
     });
+    defer snapshot_dir.close();
 
     // download a new snapshot if required
     const snapshot_exists = blk: {
-        _ = SnapshotFiles.find(allocator, snapshot_dir) catch {
-            break :blk false;
+        _ = SnapshotFiles.find(allocator, snapshot_dir) catch |err| switch (err) {
+            error.NoFullSnapshotFileInfoFound => break :blk false,
+            else => |e| return e,
         };
         break :blk true;
     };
@@ -588,7 +590,10 @@ pub fn getOrDownloadAndUnpackSnapshot(
             timer.reset();
             logger.info().logf("unpacking {s}...", .{incremental_snapshot.snapshotArchiveName().constSlice()});
 
-            const archive_file = try snapshot_dir.openFile(incremental_snapshot.snapshotArchiveName().constSlice(), .{});
+            const archive_file = try snapshot_dir.openFile(
+                incremental_snapshot.snapshotArchiveName().constSlice(),
+                .{},
+            );
             defer archive_file.close();
 
             try parallelUnpackZstdTarBall(

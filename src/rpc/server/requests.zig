@@ -17,6 +17,20 @@ pub const MAX_REQUEST_BODY_SIZE: usize = 50 * 1024; // 50 KiB
 
 const LOGGER_SCOPE = "rpc.server.requests";
 
+pub const ContentType = enum(u8) {
+    @"application/json",
+};
+
+pub const TargetBoundedStr = std.BoundedArray(u8, MAX_TARGET_LEN);
+pub const MAX_TARGET_LEN: usize = blk: {
+    const SnapSpec = IncrementalSnapshotFileInfo.SnapshotArchiveNameFmtSpec;
+    break :blk "/".len + SnapSpec.fmtLenValue(.{
+        .base_slot = std.math.maxInt(sig.core.Slot),
+        .slot = std.math.maxInt(sig.core.Slot),
+        .hash = sig.core.Hash.base58String(.{ .data = .{255} ** sig.core.Hash.SIZE }).constSlice(),
+    });
+};
+
 /// All of the relevant information from a request head parsed into a narrow
 /// format that is comprised of bounded data and can be copied by value.
 pub const HeadInfo = struct {
@@ -69,26 +83,17 @@ pub const HeadInfo = struct {
     }
 };
 
-pub const ContentType = enum(u8) {
-    @"application/json",
-};
-
-pub const MAX_TARGET_LEN: usize = blk: {
-    const SnapSpec = IncrementalSnapshotFileInfo.SnapshotArchiveNameFmtSpec;
-    break :blk "/".len + SnapSpec.fmtLenValue(.{
-        .base_slot = std.math.maxInt(sig.core.Slot),
-        .slot = std.math.maxInt(sig.core.Slot),
-        .hash = sig.core.Hash.base58String(.{ .data = .{255} ** sig.core.Hash.SIZE }).constSlice(),
-    });
-};
-pub const TargetBoundedStr = std.BoundedArray(u8, MAX_TARGET_LEN);
-
 pub const GetRequestTargetResolved = union(enum) {
-    unrecognized,
     full_snapshot: struct { FullSnapshotFileInfo, SnapshotReadLock },
     inc_snapshot: struct { IncrementalSnapshotFileInfo, SnapshotReadLock },
 
-    // TODO: also handle the snapshot archive aliases & other routes
+    /// https://github.com/Syndica/sig/issues/558
+    health,
+
+    /// https://github.com/Syndica/sig/issues/557
+    genesis_file,
+
+    not_found,
 
     pub const SnapshotReadLock = sig.sync.RwMux(?SnapshotGenerationInfo).RLockGuard;
 };
@@ -96,31 +101,29 @@ pub const GetRequestTargetResolved = union(enum) {
 /// Resolve a `GET` request target.
 pub fn getRequestTargetResolve(
     unscoped_logger: sig.trace.Logger,
-    target: []const u8,
+    path: []const u8,
     latest_snapshot_gen_info_rw: *sig.sync.RwMux(?SnapshotGenerationInfo),
 ) GetRequestTargetResolved {
     const logger = unscoped_logger.withScope(LOGGER_SCOPE);
 
-    if (!std.mem.startsWith(u8, target, "/")) return .unrecognized;
-    const path = target[1..];
+    if (!std.mem.startsWith(u8, path, "/")) return .not_found;
+    const target = path[1..];
 
     const is_snapshot_archive_like =
-        !std.meta.isError(FullSnapshotFileInfo.parseFileNameTarZst(path)) or
-        !std.meta.isError(IncrementalSnapshotFileInfo.parseFileNameTarZst(path));
+        !std.meta.isError(FullSnapshotFileInfo.parseFileNameTarZst(target)) or
+        !std.meta.isError(IncrementalSnapshotFileInfo.parseFileNameTarZst(target));
 
-    if (is_snapshot_archive_like) {
-        // we hold the lock for the entirety of this process in order to prevent
-        // the snapshot generation process from deleting the associated snapshot.
+    if (is_snapshot_archive_like) check_snapshots: {
         const maybe_latest_snapshot_gen_info, //
         var latest_snapshot_info_lg //
         = latest_snapshot_gen_info_rw.readWithLock();
-        errdefer latest_snapshot_info_lg.unlock();
+        defer latest_snapshot_info_lg.unlock();
 
-        const full_info: ?FullSnapshotFileInfo, //
+        const full_info: FullSnapshotFileInfo, //
         const inc_info: ?IncrementalSnapshotFileInfo //
         = blk: {
             const latest_snapshot_gen_info = maybe_latest_snapshot_gen_info.* orelse
-                break :blk .{ null, null };
+                break :check_snapshots;
             const latest_full = latest_snapshot_gen_info.full;
             const full_info: FullSnapshotFileInfo = .{
                 .slot = latest_full.slot,
@@ -137,30 +140,41 @@ pub fn getRequestTargetResolve(
         };
 
         logger.debug().logf("Available full: {?s}", .{
-            if (full_info) |info| info.snapshotArchiveName().constSlice() else null,
+            full_info.snapshotArchiveName().constSlice(),
         });
         logger.debug().logf("Available inc: {?s}", .{
             if (inc_info) |info| info.snapshotArchiveName().constSlice() else null,
         });
 
-        if (full_info) |full| {
-            const full_archive_name_bounded = full.snapshotArchiveName();
-            const full_archive_name = full_archive_name_bounded.constSlice();
-            if (std.mem.eql(u8, path, full_archive_name)) {
-                return .{ .full_snapshot = .{ full, latest_snapshot_info_lg } };
-            }
+        const full_archive_name_bounded = full_info.snapshotArchiveName();
+        const full_archive_name = full_archive_name_bounded.constSlice();
+        if (std.mem.eql(u8, target, full_archive_name)) {
+            // acquire another lock on the rwmux, since the first one we got is going to unlock after we return.
+            const latest_snapshot_info_lg_again = latest_snapshot_gen_info_rw.read();
+            return .{
+                .full_snapshot = .{
+                    full_info,
+                    latest_snapshot_info_lg_again,
+                },
+            };
         }
 
         if (inc_info) |inc| {
             const inc_archive_name_bounded = inc.snapshotArchiveName();
             const inc_archive_name = inc_archive_name_bounded.constSlice();
-            if (std.mem.eql(u8, path, inc_archive_name)) {
-                return .{ .inc_snapshot = .{ inc, latest_snapshot_info_lg } };
+            if (std.mem.eql(u8, target, inc_archive_name)) {
+                // acquire another lock on the rwmux, since the first one we got is going to unlock after we return.
+                const latest_snapshot_info_lg_again = latest_snapshot_gen_info_rw.read();
+                return .{ .inc_snapshot = .{ inc, latest_snapshot_info_lg_again } };
             }
         }
     }
 
-    return .unrecognized;
+    if (std.mem.eql(u8, target, "health")) {
+        return .health;
+    }
+
+    return .not_found;
 }
 
 pub fn methodFmt(method: std.http.Method) MethodFmt {

@@ -68,6 +68,8 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
                     .content_length = archive_len,
                     .respond_options = .{},
                 });
+                // flush the headers, so that if this is a head request, we can mock the response without doing unnecessary work
+                try response.flush();
 
                 if (!response.elide_body) {
                     // use a length which is still a multiple of 2, greater than the send_buffer length,
@@ -97,17 +99,30 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
                 try response.end();
                 return;
             },
-            .unrecognized => {},
+            .health => {
+                try request.respond("unknown", .{
+                    .status = .ok,
+                    .keep_alive = false,
+                });
+                return;
+            },
+
+            .genesis_file => {},
+
+            .not_found => {},
         },
         .POST => {
             logger.err().logf("{} tried to invoke our RPC", .{conn_address});
-            return try request.respond("RPCs are not yet implemented", .{
+            try request.respond("RPCs are not yet implemented", .{
                 .status = .service_unavailable,
                 .keep_alive = false,
             });
+            return;
         },
         else => {},
     }
+
+    // fallthrough to 404 Not Found
 
     logger.err().logf(
         "{} made an unrecognized request '{} {s}'",

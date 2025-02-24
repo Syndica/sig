@@ -4,7 +4,7 @@ const sbpf = @import("sbpf.zig");
 /// Virtual address of the bytecode region (in SBPFv3)
 pub const BYTECODE_START: u64 = 0x000000000;
 /// Virtual address of the readonly data region (also contains the bytecode until SBPFv3)
-pub const PROGRAM_START: u64 = 0x100000000;
+pub const RODATA_START: u64 = 0x100000000;
 /// Virtual address of the stack region
 pub const STACK_START: u64 = 0x200000000;
 /// Virtual address of the heap region
@@ -109,7 +109,7 @@ pub const Region = struct {
 
         const host_slice = try self.getSlice(state);
         const begin_offset = vm_addr -| self.vm_addr_start;
-        if (begin_offset + len <= host_slice.len) {
+        if (try std.math.add(u64, begin_offset, len) <= host_slice.len) {
             return host_slice[begin_offset..][0..len];
         }
 
@@ -166,21 +166,21 @@ test "aligned vmap" {
     var stack_mem: [4]u8 = .{0xDD} ** 4;
 
     const m = try MemoryMap.init(&.{
-        Region.init(.mutable, &program_mem, PROGRAM_START),
+        Region.init(.mutable, &program_mem, RODATA_START),
         Region.init(.constant, &stack_mem, STACK_START),
     }, .v0);
 
     try expectEqual(
         program_mem[0..1],
-        try m.vmap(.constant, PROGRAM_START, 1),
+        try m.vmap(.constant, RODATA_START, 1),
     );
     try expectEqual(
         program_mem[0..3],
-        try m.vmap(.constant, PROGRAM_START, 3),
+        try m.vmap(.constant, RODATA_START, 3),
     );
     try expectError(
         error.VirtualAccessTooLong,
-        m.vmap(.constant, PROGRAM_START, 5),
+        m.vmap(.constant, RODATA_START, 5),
     );
 
     try expectError(
@@ -202,25 +202,25 @@ test "aligned region" {
     var stack_mem: [4]u8 = .{0xDD} ** 4;
 
     const m = try MemoryMap.init(&.{
-        Region.init(.mutable, &program_mem, PROGRAM_START),
+        Region.init(.mutable, &program_mem, RODATA_START),
         Region.init(.constant, &stack_mem, STACK_START),
     }, .v0);
 
     try expectError(
         error.AccessNotMapped,
-        m.region(PROGRAM_START - 1),
+        m.region(RODATA_START - 1),
     );
     try expectEqual(
         &program_mem,
-        (try m.region(PROGRAM_START)).getSlice(.constant),
+        (try m.region(RODATA_START)).getSlice(.constant),
     );
     try expectEqual(
         &program_mem,
-        (try m.region(PROGRAM_START + 3)).getSlice(.constant),
+        (try m.region(RODATA_START + 3)).getSlice(.constant),
     );
     try expectError(
         error.AccessNotMapped,
-        m.region(PROGRAM_START + 4),
+        m.region(RODATA_START + 4),
     );
 
     try expectError(
@@ -249,7 +249,7 @@ test "invalid memory region" {
         error.InvalidMemoryRegion,
         MemoryMap.init(&.{
             Region.init(.constant, &stack_mem, STACK_START),
-            Region.init(.mutable, &program_mem, PROGRAM_START),
+            Region.init(.mutable, &program_mem, RODATA_START),
         }, .v0),
     );
 }

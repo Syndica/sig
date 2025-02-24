@@ -14,9 +14,7 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Blake3 = std.crypto.hash.Blake3;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const AccountsCache = sig.accounts_db.cache.AccountsCache;
 const StatusCache = sig.accounts_db.StatusCache;
-
 const AccountFile = sig.accounts_db.accounts_file.AccountFile;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const FileId = sig.accounts_db.accounts_file.FileId;
@@ -88,9 +86,7 @@ pub const AccountsDB = struct {
     gossip_view: ?GossipView,
 
     // some static data
-
     number_of_index_shards: usize,
-    lru_size: ?usize,
 
     // internal structures & data
 
@@ -100,9 +96,6 @@ pub const AccountsDB = struct {
     /// per-slot map containing a list of pubkeys and accounts.
     /// This is tracked per-slot for purge/flush
     unrooted_accounts: RwMux(SlotPubkeyAccounts),
-
-    /// pubkey->account LRU maps
-    maybe_accounts_cache_rw: ?RwMux(AccountsCache),
 
     /// NOTE: see accountsdb/readme.md for more details on how these are used
     file_map: RwMux(FileMap),
@@ -176,8 +169,6 @@ pub const AccountsDB = struct {
         number_of_index_shards: usize,
         /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
         buffer_pool_frames: u32 = 2 * 1024 * 1024,
-        /// Limit of cached accounts. Use null to disable accounts caching.
-        lru_size: ?usize,
     };
 
     pub fn init(params: InitParams) !Self {
@@ -193,13 +184,6 @@ pub const AccountsDB = struct {
             params.number_of_index_shards,
         );
         errdefer account_index.deinit();
-
-        // init accounts cache
-        var maybe_accounts_cache = blk: {
-            const lru_size = params.lru_size orelse break :blk null;
-            break :blk try AccountsCache.init(params.allocator, globalRegistry(), lru_size);
-        };
-        errdefer if (maybe_accounts_cache) |*accounts_cache| accounts_cache.deinit();
 
         const metrics = try AccountsDBMetrics.init();
 
@@ -221,11 +205,9 @@ pub const AccountsDB = struct {
             .gossip_view = params.gossip_view,
 
             .number_of_index_shards = params.number_of_index_shards,
-            .lru_size = params.lru_size,
 
             .account_index = account_index,
             .unrooted_accounts = RwMux(SlotPubkeyAccounts).init(SlotPubkeyAccounts.init(params.allocator)),
-            .maybe_accounts_cache_rw = if (maybe_accounts_cache) |cache| RwMux(AccountsCache).init(cache) else null,
             .file_map = RwMux(FileMap).init(.{}),
             .file_map_fd_rw = .{},
             .buffer_pool = buffer_pool,
@@ -245,12 +227,6 @@ pub const AccountsDB = struct {
     pub fn deinit(self: *Self) void {
         self.account_index.deinit();
         self.buffer_pool.deinit(self.allocator);
-
-        if (self.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-            const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-            defer accounts_cache_lg.unlock();
-            accounts_cache.deinit();
-        }
 
         {
             const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.writeWithLock();
@@ -498,7 +474,6 @@ pub const AccountsDB = struct {
                 .geyser_writer = parent.geyser_writer,
                 .number_of_index_shards = parent.number_of_index_shards,
 
-                .lru_size = 0, // we dont use the cache for loading
                 .logger = .noop, // dont spam the logs with init information (we set it after)
                 .gossip_view = null, // loading threads would never need to generate a snapshot, therefore it doesn't need a view into gossip.
                 .index_allocation = .ram, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
@@ -531,12 +506,6 @@ pub const AccountsDB = struct {
             file_map.deinit(per_thread_allocator);
 
             loading_thread.account_index.deinitLoadingThread();
-
-            if (loading_thread.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-                const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-                defer accounts_cache_lg.unlock();
-                accounts_cache.deinit();
-            }
             loading_thread.buffer_pool.deinit(per_thread_allocator);
         }
     }
@@ -660,6 +629,7 @@ pub const AccountsDB = struct {
                 self.account_index.pubkey_ref_map.shard_calculator,
                 shard_counts,
                 &slot_references,
+                // ! we collect the accounts and pubkeys into geyser storage here
                 geyser_slot_storage,
             ) catch |err| {
                 if (err == ValidateAccountFileError.OutOfReferenceMemory) {
@@ -2095,35 +2065,14 @@ pub const AccountsDB = struct {
     pub fn getAccountFromRef(self: *Self, account_ref: *const AccountRef) !Account {
         switch (account_ref.location) {
             .File => |ref_info| {
-                const maybe_cached_account = blk: {
-                    const accounts_cache_rw = &(self.maybe_accounts_cache_rw orelse break :blk null);
+                const account = try self.getAccountInFile(
+                    self.allocator,
+                    ref_info.file_id,
+                    ref_info.offset,
+                );
+                errdefer account.deinit(self.allocator);
 
-                    const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-                    defer accounts_cache_lg.unlock();
-
-                    break :blk accounts_cache.get(account_ref.pubkey, account_ref.slot);
-                };
-
-                if (maybe_cached_account) |cached_account| {
-                    const account = try cached_account.account.cloneOwned(self.allocator);
-                    cached_account.releaseOrDestroy(self.allocator);
-                    return account;
-                } else {
-                    const account = try self.getAccountInFile(
-                        self.allocator,
-                        ref_info.file_id,
-                        ref_info.offset,
-                    );
-                    errdefer account.deinit(self.allocator);
-
-                    if (self.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-                        const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-                        defer accounts_cache_lg.unlock();
-                        try accounts_cache.put(account_ref.pubkey, account_ref.slot, account);
-                    }
-
-                    return account;
-                }
+                return account;
             },
             .UnrootedMap => |ref_info| {
                 const unrooted_accounts, var unrooted_accounts_lg = self.unrooted_accounts.readWithLock();
@@ -3429,7 +3378,6 @@ test "testWriteSnapshot" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
-        .lru_size = 10_000,
     });
     defer accounts_db.deinit();
 
@@ -3458,22 +3406,43 @@ pub fn findAndUnpackTestSnapshots(
 ) !SnapshotFiles {
     comptime std.debug.assert(builtin.is_test); // should only be used in tests
     const allocator = std.testing.allocator;
-
     var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer test_data_dir.close();
+    return try findAndUnpackSnapshotFilePair(allocator, n_threads, output_dir, test_data_dir);
+}
 
-    const snapshot_files = try SnapshotFiles.find(allocator, test_data_dir);
+pub fn findAndUnpackSnapshotFilePair(
+    allocator: std.mem.Allocator,
+    n_threads: usize,
+    dst_dir: std.fs.Dir,
+    /// Must be iterable.
+    src_dir: std.fs.Dir,
+) !SnapshotFiles {
+    const snapshot_files = try SnapshotFiles.find(allocator, src_dir);
+    try unpackSnapshotFilePair(allocator, n_threads, dst_dir, src_dir, snapshot_files);
+    return snapshot_files;
+}
 
+/// Unpacks the identified snapshot files in `src_dir` into `dst_dir`.
+pub fn unpackSnapshotFilePair(
+    allocator: std.mem.Allocator,
+    n_threads: usize,
+    dst_dir: std.fs.Dir,
+    src_dir: std.fs.Dir,
+    /// `= try SnapshotFiles.find(allocator, src_dir)`
+    snapshot_files: SnapshotFiles,
+) !void {
     {
-        const full_name_bounded = snapshot_files.full.snapshotArchiveName();
+        const full = snapshot_files.full;
+        const full_name_bounded = full.snapshotArchiveName();
         const full_name = full_name_bounded.constSlice();
-        const full_archive_file = try test_data_dir.openFile(full_name, .{});
+        const full_archive_file = try src_dir.openFile(full_name, .{});
         defer full_archive_file.close();
         try parallelUnpackZstdTarBall(
             allocator,
             .noop,
             full_archive_file,
-            output_dir,
+            dst_dir,
             n_threads,
             true,
         );
@@ -3482,19 +3451,17 @@ pub fn findAndUnpackTestSnapshots(
     if (snapshot_files.incremental()) |inc| {
         const inc_name_bounded = inc.snapshotArchiveName();
         const inc_name = inc_name_bounded.constSlice();
-        const inc_archive_file = try test_data_dir.openFile(inc_name, .{});
+        const inc_archive_file = try src_dir.openFile(inc_name, .{});
         defer inc_archive_file.close();
         try parallelUnpackZstdTarBall(
             allocator,
             .noop,
             inc_archive_file,
-            output_dir,
+            dst_dir,
             n_threads,
             false,
         );
     }
-
-    return snapshot_files;
 }
 
 fn loadTestAccountsDB(
@@ -3528,7 +3495,6 @@ fn loadTestAccountsDB(
         .gossip_view = null,
         .index_allocation = if (use_disk) .disk else .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     errdefer accounts_db.deinit();
 
@@ -3603,7 +3569,6 @@ test "geyser stream on load" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -3816,7 +3781,6 @@ test "flushing slots works" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -3881,7 +3845,6 @@ test "purge accounts in cache works" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -3949,7 +3912,6 @@ test "clean to shrink account file works with zero-lamports" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -4036,7 +3998,6 @@ test "clean to shrink account file works" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -4115,7 +4076,6 @@ test "full clean account file works" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -4211,7 +4171,6 @@ test "shrink account file works" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -4387,7 +4346,6 @@ test "generate snapshot & update gossip snapshot hashes" {
         .geyser_writer = null,
         .index_allocation = .ram,
         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
-        .lru_size = null,
     });
     defer accounts_db.deinit();
 
@@ -4552,7 +4510,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .gossip_view = null,
                 .index_allocation = if (bench_args.use_disk) .disk else .ram,
                 .number_of_index_shards = 32,
-                .lru_size = null,
             });
             defer accounts_db.deinit();
 
@@ -4603,7 +4560,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .gossip_view = null,
                 .index_allocation = if (bench_args.use_disk) .disk else .ram,
                 .number_of_index_shards = 32,
-                .lru_size = null,
             });
             defer fastload_accounts_db.deinit();
 
@@ -4642,8 +4598,6 @@ pub const BenchmarkAccountsDB = struct {
         /// the number of accounts to prepopulate the index with as a multiple of n_accounts
         /// ie, if n_accounts = 100 and n_accounts_multiple = 10, then the index will have 10x100=1000 accounts prepopulated
         n_accounts_multiple: usize = 0,
-        /// how many accounts the accounts_cache can hold. Null to disable cache.
-        lru_size: ?usize = null,
         /// the name of the benchmark
         name: []const u8 = "",
     };
@@ -4684,16 +4638,14 @@ pub const BenchmarkAccountsDB = struct {
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .ram,
-        //     .lru_size = 1_000,
-        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=1_000)",
+        //     .name = "100k accounts (1_slot - ram index - disk accounts)",
         // },
         // BenchArgs{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .ram,
-        //     .lru_size = 10_000,
-        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=10_000)",
+        //     .name = "100k accounts (1_slot - ram index - disk accounts)",
         // },
 
         // BenchArgs{
@@ -4701,8 +4653,7 @@ pub const BenchmarkAccountsDB = struct {
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .ram,
-        //     .lru_size = 100_000,
-        //     .name = "100k accounts (1_slot - ram index - disk accounts - lru_size=100_000)",
+        //     .name = "100k accounts (1_slot - ram index - disk accounts)",
         // },
 
         // // test accounts in ram
@@ -4816,7 +4767,6 @@ pub const BenchmarkAccountsDB = struct {
             .gossip_view = null,
             .index_allocation = bench_args.index,
             .number_of_index_shards = 32,
-            .lru_size = bench_args.lru_size,
         });
         defer accounts_db.deinit();
 
@@ -4962,14 +4912,6 @@ pub const BenchmarkAccountsDB = struct {
             }
         }
 
-        // reset cache hits/misses
-        if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-            const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-            defer accounts_cache_lg.unlock();
-            accounts_cache.maybe_metrics.?.cache_hits.reset();
-            accounts_cache.maybe_metrics.?.cache_misses.reset();
-        }
-
         var timer = try sig.time.Timer.start();
 
         const do_read_count = n_accounts;
@@ -4983,24 +4925,6 @@ pub const BenchmarkAccountsDB = struct {
             }
         }
         const read_time = timer.read();
-
-        if (accounts_db.maybe_accounts_cache_rw) |*accounts_cache_rw| {
-            const accounts_cache, var accounts_cache_lg = accounts_cache_rw.writeWithLock();
-            defer accounts_cache_lg.unlock();
-
-            const cache_hits = accounts_cache.maybe_metrics.?.cache_hits.get();
-            const cache_misses = accounts_cache.maybe_metrics.?.cache_misses.get();
-
-            std.debug.print(
-                "cache hits/misses : {: >7}/{: <7} ({d:.2}%) - total cache accesses: {}\n",
-                .{
-                    cache_hits,
-                    cache_misses,
-                    @as(f32, @floatFromInt(cache_hits * 100)) / @as(f32, @floatFromInt(cache_hits + cache_misses)),
-                    cache_hits + cache_misses,
-                },
-            );
-        }
 
         return .{
             .read_time = units.convertDuration(read_time),
