@@ -5,7 +5,7 @@ const vote_program = sig.runtime.program.vote_program;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
-const VoteState = vote_program.VoteState;
+const VoteState = vote_program.state.VoteState;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -36,6 +36,7 @@ pub fn execute(
             args.authorized_withdrawer,
             args.commission,
         ),
+        else => @panic("TODO: Unsupported instruction"),
     };
 }
 
