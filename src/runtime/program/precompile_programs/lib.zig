@@ -15,7 +15,7 @@ pub const ed25519Verify = ed25519.verify;
 pub const secp256k1Verify = secp256k1.verify;
 pub const secp256r1Verify = secp256r1.verify;
 
-pub const COMPUTE_UNITS = 1; // does this consume compute units?
+pub const COMPUTE_UNITS = 0; // does this consume compute units?
 
 // TODO: should be moved to global features file
 pub const SECP256R1_FEATURE_ID =
@@ -82,6 +82,7 @@ pub const Precompile = struct {
 // parsed internally
 pub const PrecompileProgramInstruction = []const u8;
 
+// custom errors
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/precompile-error/src/lib.rs#L6
 pub const PrecompileProgramError = error{
     InvalidPublicKey,
@@ -97,7 +98,7 @@ pub fn getInstructionValue(
     all_instruction_datas: []const []const u8,
     instruction_idx: u16,
     offset: usize,
-) error{ InvalidSignature, InvalidDataOffsets }!*const T {
+) error{InvalidDataOffsets}!*const T {
     // aligncast potentially dangerous?
     return @alignCast(@ptrCast(try getInstructionData(
         @sizeOf(T),

@@ -11,8 +11,8 @@ const Ed25519 = std.crypto.sign.Ed25519;
 const Pubkey = sig.core.Pubkey;
 const InstructionContext = sig.runtime.InstructionContext;
 
-pub const ED25519_DATA_START = (ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE +
-    ED25519_SIGNATURE_OFFSETS_START);
+pub const ED25519_DATA_START = ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE +
+    ED25519_SIGNATURE_OFFSETS_START;
 pub const ED25519_PUBKEY_SERIALIZED_SIZE = 32;
 pub const ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE = 14;
 pub const ED25519_SIGNATURE_OFFSETS_START = 2;
@@ -152,6 +152,7 @@ fn test_case(
     return try verify(instruction_data.items, &.{&(.{0} ** 100)});
 }
 
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L279
 test "ed25519 invalid offsets" {
     const allocator = std.testing.allocator;
     var instruction_data = try std.ArrayListAligned(u8, 2).initCapacity(allocator, ED25519_DATA_START);
@@ -289,19 +290,5 @@ test "ed25519 signature offset" {
         );
     }
 }
-// // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L411
-// test "ed25519" {
-//     const keypair = try Ed25519.KeyPair.create(null);
 
-//     var instruction = try newInstruction(std.testing.allocator, keypair, "hello");
-
-//     const mint_keypair = try Ed25519.KeyPair.create(null);
-
-//     const feature_set = sig.runtime.FeatureSet.EMPTY; // should be all enabled to match agave, but doesn't mattter
-// const Transaction = sig.core.transaction.Transaction;
-
-//     var tx = Transaction {
-//         .signatures =
-//     }
-
-// }
+// TODO: should we implement https://github.com/anza-xyz/agave/pull/1876/ ?
