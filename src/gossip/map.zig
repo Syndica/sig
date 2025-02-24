@@ -15,6 +15,24 @@ const GossipVersionedData = gossip.data.GossipVersionedData;
 
 const assert = std.debug.assert;
 
+/// Hashmap specialized for storing GossipVersionedValue.
+///
+/// The aim of this implementation is to reduce memory usage by storing
+/// GossipData in SplitUnionList, which densely packs a tagged union in multiple
+/// lists instead of one sparse list. For more information about how this saves
+/// space, see the documentation for SplitUnionList. This optimization reduces
+/// the size of the gossip table by a factor of about 5.
+///
+/// Since the gossip table actually stores GossipVersionedValue and not
+/// GossipData, the extra data in GossipVersionedValue also needs to be stored
+/// somewhere. This is the purpose of the metadata field.
+///
+/// The `key_to_index` field is an array hashmap keyed by GossipKey, and it
+/// points to the locations where you can find the respective GossipData and
+/// Metadata in gossip_data and metadata fields. It points to the GossipData by
+/// setting the SplitUnionList.Index to the hashmap value. It points to the
+/// Metadata with its index. Each hashmap entry's index is the same as the index
+/// of the item in the metadata list.
 pub const GossipMap = struct {
     key_to_index: KeyToIndex = .{},
     gossip_data: SplitUnionList(GossipData) = SplitUnionList(GossipData).init(),
