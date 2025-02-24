@@ -909,7 +909,7 @@ test "Window realigns" {
 
 test "CircBuf" {
     const IntCircBuf = CircBuf(i32, 3);
-    var cb = IntCircBuf.init();
+    var cb = IntCircBuf.DEFAULT;
 
     try std.testing.expect(cb.is_empty);
     try std.testing.expect(cb.last() == null);
