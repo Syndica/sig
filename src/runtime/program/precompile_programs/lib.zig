@@ -115,7 +115,7 @@ pub fn getInstructionData(
     all_instruction_datas: []const []const u8,
     instruction_idx: u16,
     offset: usize,
-) error{ InvalidSignature, InvalidDataOffsets }![]const u8 {
+) error{InvalidDataOffsets}![]const u8 {
     const data: []const u8 = if (instruction_idx == std.math.maxInt(u16))
         current_instruction_data
     else data: {
@@ -123,6 +123,6 @@ pub fn getInstructionData(
         break :data all_instruction_datas[instruction_idx];
     };
 
-    if (offset + len > data.len) return error.InvalidSignature;
+    if (offset + len > data.len) return error.InvalidDataOffsets;
     return data[offset..][0..len];
 }

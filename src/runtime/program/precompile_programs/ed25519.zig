@@ -91,6 +91,7 @@ pub fn verify(
     }
 }
 
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L35
 pub fn newInstruction(
     allocator: std.mem.Allocator,
     keypair: Ed25519.KeyPair,
@@ -136,6 +137,7 @@ pub fn newInstruction(
     };
 }
 
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L258
 fn test_case(
     allocator: std.mem.Allocator,
     num_signatures: u16,
@@ -147,7 +149,7 @@ fn test_case(
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&num_signatures));
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&offsets));
 
-    return try verify(instruction_data.items, &.{});
+    return try verify(instruction_data.items, &.{&(.{0} ** 100)});
 }
 
 test "ed25519 invalid offsets" {
@@ -155,15 +157,7 @@ test "ed25519 invalid offsets" {
     var instruction_data = try std.ArrayListAligned(u8, 2).initCapacity(allocator, ED25519_DATA_START);
     defer instruction_data.deinit();
 
-    const offsets = Ed25519SignatureOffsets{
-        .signature_offset = 0,
-        .signature_instruction_idx = 0,
-        .pubkey_offset = 0,
-        .pubkey_instruction_idx = 0,
-        .message_data_offset = 0,
-        .message_data_size = 0,
-        .message_instruction_idx = 0,
-    };
+    const offsets = Ed25519SignatureOffsets{};
 
     // Set up instruction data with invalid size
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&1));
@@ -202,3 +196,112 @@ test "ed25519 invalid offsets" {
         error.InvalidDataOffsets,
     );
 }
+
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L326
+test "ed25519 message data offsets" {
+    {
+        const offsets = Ed25519SignatureOffsets{
+            .message_data_offset = 99,
+            .message_data_size = 1,
+        };
+        try std.testing.expectEqual(
+            test_case(std.testing.allocator, 1, offsets),
+            error.InvalidSignature,
+        );
+    }
+
+    {
+        const offsets = Ed25519SignatureOffsets{
+            .message_data_offset = 100,
+            .message_data_size = 1,
+        };
+        try std.testing.expectEqual(
+            test_case(std.testing.allocator, 1, offsets),
+            error.InvalidDataOffsets,
+        );
+    }
+
+    {
+        const offsets = Ed25519SignatureOffsets{
+            .message_data_offset = 100,
+            .message_data_size = 1000,
+        };
+        try std.testing.expectEqual(
+            test_case(std.testing.allocator, 1, offsets),
+            error.InvalidDataOffsets,
+        );
+    }
+
+    {
+        const offsets = Ed25519SignatureOffsets{
+            .message_data_offset = std.math.maxInt(u16),
+            .message_data_size = std.math.maxInt(u16),
+        };
+        try std.testing.expectEqual(
+            test_case(std.testing.allocator, 1, offsets),
+            error.InvalidDataOffsets,
+        );
+    }
+}
+
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L369
+test "ed25519 pubkey offset" {
+    {
+        const offsets = Ed25519SignatureOffsets{
+            .pubkey_offset = std.math.maxInt(u16),
+        };
+        try std.testing.expectEqual(
+            test_case(std.testing.allocator, 1, offsets),
+            error.InvalidDataOffsets,
+        );
+    }
+
+    {
+        const offsets = Ed25519SignatureOffsets{
+            .pubkey_offset = 100 - ED25519_PUBKEY_SERIALIZED_SIZE + 1,
+        };
+        try std.testing.expectEqual(
+            test_case(std.testing.allocator, 1, offsets),
+            error.InvalidDataOffsets,
+        );
+    }
+}
+
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L389-L390
+test "ed25519 signature offset" {
+    {
+        const offsets = Ed25519SignatureOffsets{
+            .signature_offset = std.math.maxInt(u16),
+        };
+        try std.testing.expectEqual(
+            test_case(std.testing.allocator, 1, offsets),
+            error.InvalidDataOffsets,
+        );
+    }
+
+    {
+        const offsets = Ed25519SignatureOffsets{
+            .signature_offset = 100 - ED25519_SIGNATURE_SERIALIZED_SIZE + 1,
+        };
+        try std.testing.expectEqual(
+            test_case(std.testing.allocator, 1, offsets),
+            error.InvalidDataOffsets,
+        );
+    }
+}
+// // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L411
+// test "ed25519" {
+//     const keypair = try Ed25519.KeyPair.create(null);
+
+//     var instruction = try newInstruction(std.testing.allocator, keypair, "hello");
+
+//     const mint_keypair = try Ed25519.KeyPair.create(null);
+
+//     const feature_set = sig.runtime.FeatureSet.EMPTY; // should be all enabled to match agave, but doesn't mattter
+// const Transaction = sig.core.transaction.Transaction;
+
+//     var tx = Transaction {
+//         .signatures =
+//     }
+
+// }
