@@ -10,7 +10,7 @@ pub const SlotAndHash = struct {
     slot: Slot,
     hash: Hash,
 
-    pub fn order(a: *const SlotAndHash, b: *const SlotAndHash) std.math.Order {
+    pub fn order(a: SlotAndHash, b: SlotAndHash) std.math.Order {
         if (a.slot == b.slot and a.hash.order(&b.hash) == .eq) {
             return .eq;
         } else if (a.slot < b.slot or a.slot == b.slot and (a.hash.order(&b.hash) == .lt)) {
@@ -22,7 +22,7 @@ pub const SlotAndHash = struct {
         }
     }
 
-    pub fn equals(a: *const SlotAndHash, b: *const SlotAndHash) bool {
+    pub fn equals(a: SlotAndHash, b: SlotAndHash) bool {
         return order(a, b) == .eq;
     }
 };

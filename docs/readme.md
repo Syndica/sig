@@ -38,3 +38,7 @@ to ensure that the markdown is formatted correctly, we use the following
 conventions:
 - '#' for headers which will correspond to the title and sidebar name in docusaurus
 - all images need to point to /docs/docusaurus/static/img/
+
+## exclusion
+
+to exclude a markdown file, insert a line with "docs: exclude\n" anywhere in the file.
