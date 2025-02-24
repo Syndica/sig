@@ -45,31 +45,31 @@ pub const ForkWeight = u64;
 /// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
 pub const ForkInfo = struct {
     logger: ScopedLogger(@typeName(ForkInfo)),
-    // Amount of stake that has voted for exactly this slot
+    /// Amount of stake that has voted for exactly this slot
     stake_for_slot: ForkWeight,
-    // Amount of stake that has voted for this slot and the subtree
-    // rooted at this slot
+    /// Amount of stake that has voted for this slot and the subtree
+    /// rooted at this slot
     stake_for_subtree: ForkWeight,
-    // Tree height for the subtree rooted at this slot
+    /// Tree height for the subtree rooted at this slot
     height: usize,
-    // Heaviest slot in the subtree rooted at this slot, does not
-    // have to be a direct child in `children`. This is the slot whose subtree
-    // is the heaviest.
-    // Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L103C5-L103C14)
+    /// Heaviest slot in the subtree rooted at this slot, does not
+    /// have to be a direct child in `children`. This is the slot whose subtree
+    /// is the heaviest.
+    /// Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L103C5-L103C14)
     heaviest_subtree_slot: SlotAndHash,
-    // Deepest slot in the subtree rooted at this slot. This is the slot
-    // with the greatest tree height. This metric does not discriminate invalid
-    // forks, unlike `heaviest_slot`
+    /// Deepest slot in the subtree rooted at this slot. This is the slot
+    /// with the greatest tree height. This metric does not discriminate invalid
+    /// forks, unlike `heaviest_slot`
     deepest_slot: SlotAndHash,
     parent: ?SlotAndHash,
     children: SortedMap(SlotAndHash, void),
-    // The latest ancestor of this node that has been marked invalid by being a duplicate.
-    // If the slot itself is a duplicate, this is set to the slot itself.
+    /// The latest ancestor of this node that has been marked invalid by being a duplicate.
+    /// If the slot itself is a duplicate, this is set to the slot itself.
     latest_duplicate_ancestor: ?Slot,
-    // Set to true if this slot or a child node was duplicate confirmed.
-    // Indicates whether this slot have been confirmed as the valid fork in the presence of duplicate slots.
-    // It means that the network has reached consensus that this fork is the valid one,
-    // and all competing forks for the same slot are invalid.
+    /// Set to true if this slot or a child node was duplicate confirmed.
+    /// Indicates whether this slot have been confirmed as the valid fork in the presence of duplicate slots.
+    /// It means that the network has reached consensus that this fork is the valid one,
+    /// and all competing forks for the same slot are invalid.
     is_duplicate_confirmed: bool,
 
     fn deinit(self: *ForkInfo) void {
