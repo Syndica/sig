@@ -1,13 +1,7 @@
 ---
-slug: /
-sidebar_position: 1
-title: Intro to Sig
-description: Documentation for Syndica's read-optimized Solana validator client.
+sidebar_position: 2
+title: Motivation
 ---
-
-Sig is a reads-optimized Solana validator client written in Zig. Read the [announcement blog post](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/) for more information on the goals of this project.
-
-## Motivation
 
 Sig's Goals:
 - Performance → improved RPS (Reads-Per-Second)
@@ -35,11 +29,9 @@ Client diversity will bolster Solana's fault tolerance to maintain uninterrupted
 Sig is written with a focus on readability and simplicity to ensure a modular and
 contributor-friendly implementation of the protocol to grow the core developer ecosystem.
 
-## 🤔 Why Zig?
+## Why Zig?
 
-Zig's definition:
-
-`Zig is a general-purpose programming language and toolchain for maintaining robust, optimal, and reusable software.`
+> Zig is a general-purpose programming language and toolchain for maintaining robust, optimal, and reusable software.
 
 1. **Optimized performance**: Zig provides control over how your program runs at a low level, similar to languages like C. It allows fine-grained control over aspects such as memory management and system calls, which can lead to improved performance.
 
@@ -52,24 +44,3 @@ Zig's definition:
 5. **Integration with C**: Zig has excellent interoperation with C. You can directly include C libraries and headers in a Zig program, which can save time when using existing C libraries.
 
 6. **Custom allocators**: Zig allows you to define custom memory allocation strategies for different parts of your program. This provides the flexibility to optimize memory usage for specific use cases or workloads.
-
-## 📚 Learn More
-
-[Zig](https://ziglang.org/)
-
-- [Official Documentation](https://ziglang.org/documentation/0.11.0/)
-- [Ziglearn Book](https://ziglearn.org/)
-- [Ziglings Exercises](https://github.com/ratfactor/ziglings)
-
-[Solana](https://solana.com/)
-
-- [Validator Anatomy](https://docs.solana.com/validator/anatomy)
-- [RPC API](https://docs.solana.com/api)
-- [Code](https://github.com/solana-labs/solana)
-
-
-[Sig](https://syndica.io/sig)
-
-- [Introduction](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/)
-- [Gossip Deep Dive](https://blog.syndica.io/sig-engineering-1-gossip-protocol/)
-- [Progress on AccountsDB & more](https://blog.syndica.io/sig-engineering-part-2-accountsdb-more/)

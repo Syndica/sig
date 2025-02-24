@@ -5,8 +5,12 @@ import os
 # e.g., [("accountsdb", "src/accountsdb/readme.md")]
 def get_markdown_files(
     src_path: str,
-    exclude_dirs: list[str]
+    exclude_dirs: list[str],
+    # the path to the docusaurus docs directory
+    docs_dir_path: str,
 ):
+    code_dir_path = os.path.join(docs_dir_path, "code")
+
     # iterate over all files in sig repo
     doc_files = []
     for root, dirs, files in os.walk(src_path):
@@ -23,13 +27,20 @@ def get_markdown_files(
         for file in files:
             if file.endswith(".md"):
                 dir_name = os.path.basename(root)
-                if dir_name == "":
+                if dir_name == "" or dir_name == "." or dir_name == "..":
                     # this is the root readme.md -- we dont include
                     # it in the docs for now
                     continue
+
+                docs_path = os.path.join(code_dir_path, dir_name + ".md")
+                if dir_name == "metrics" :
+                    docs_path = os.path.join(docs_dir_path, "usage/metrics.md")
+
                 doc_files.append([
-                    dir_name,
-                    os.path.join(root, file)
+                    # src/ path
+                    os.path.join(root, file),
+                    # docs/ path
+                    docs_path
                 ])
 
     return doc_files
@@ -39,7 +50,7 @@ if __name__ == "__main__":
     # point to the source sig/ repo
     # (should be run from the docs/ directory)
     src_path = "../"
-    code_docs_path = "docusaurus/docs/code"
+    code_docs_path = "docusaurus/docs"
 
     # dirs which not to search
     exclude_dirs = [
@@ -47,13 +58,23 @@ if __name__ == "__main__":
         src_path + "data", # this should only include data
     ]
 
-    for name, path in get_markdown_files(src_path, exclude_dirs):
+    for src_path, docs_path in get_markdown_files(src_path, exclude_dirs, code_docs_path):
         # copy the file to the docs/code directory
-        new_path = os.path.join(code_docs_path, name + ".md")
-        with open(path, "r") as f:
-            with open(new_path, "w") as nf:
+        with open(src_path, "r") as f:
+            src_lines = f.readlines()
+
+            # check for exclusion
+            should_exclude = False
+            for line in src_lines:
+                if line == "docs: exclude\n":
+                    print("excluding file: ", src_path)
+                    should_exclude = True
+                    break
+            if should_exclude: continue
+
+            with open(docs_path, "w") as docs_file:
                 # fix image paths for docusaurus
-                for line in f:
+                for line in src_lines:
                     if "/docs/docusaurus/static/img" in line:
                         line = line.replace("/docs/docusaurus/static/img", "/img")
-                    nf.write(line)
+                    docs_file.write(line)

@@ -1,13 +1,22 @@
-# TODO: Last written for 31b6111c
+# Runtime
+
+The main code can be found in `src/runtime`
+
+*note:* Last written for 31b6111c
 
 # Current Status Overview
-Currently, the `system_program` has been implemented along with basic test cases. For now, it is probably best to comence the implementation of other native programs rather than focusing on rigorous testing of the `system_program`. A [Github issue](https://github.com/Syndica/sig/issues/528) has been opened to address the need for additional system program unit testing. 
+
+Currently, the `system_program` has been implemented along with basic test cases. For now, it is probably best to comence the implementation of other native programs rather than focusing on rigorous testing of the `system_program`. A [Github issue](https://github.com/Syndica/sig/issues/528) has been opened to address the need for additional system program unit testing.
 
 The current plan moving forward is to reveiw and merge [system program and related context PR](https://github.com/Syndica/sig/pull/518) and begin the implementation of both the vote (@dadepo) and bpf loader (@yewman) programs. Once the vote and bpf loader programs are implemented, we will consider re-prioritising the implementation of the transaction processing pipeline over more program implementations in order to facilitate @dadepo's work on consensus which may require producing a set of 'state' changes for a given sequence of vote transactions.
 
 # Current Scope
 
+<<<<<<< HEAD
 Currently, this document is scoped to the logic contained within the [`execute_loaded_transaction`](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L717) method in Agave. Among other things, this includes: 
+=======
+Currently, this document is scoped to the logic contained within the [`execute_loaded_transaction`](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L717) method in Agave. Among other things, this includes:
+>>>>>>> main
 - [Initialise TransactionContext](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L753)
 - [Initialise InvokeContext](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L782)
 - [Execute Transaction](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/svm/src/transaction_processor.rs#L798)
@@ -77,11 +86,19 @@ Currently, this document is scoped to the logic contained within the [`execute_l
 - It returns a `PubkeyError` on failure which is set as a custom error in the `TransactionContext` when failure occures during program execution
 - We may consider moving this logic to `src/core/pubkey.zig`
 
+<<<<<<< HEAD
 ## SysvarCache 
 - `SysvarCache` provides the runtime with access to sysvars during program execution
 - Currently its implementation is trivial, and only serves to facilitate an equivalent implementation of Agave's [get_sysvar_with_account_check](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/sysvar_cache.rs#L229) module
 
 ## Tmp Utils 
+=======
+## SysvarCache
+- `SysvarCache` provides the runtime with access to sysvars during program execution
+- Currently its implementation is trivial, and only serves to facilitate an equivalent implementation of Agave's [get_sysvar_with_account_check](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/sysvar_cache.rs#L229) module
+
+## Tmp Utils
+>>>>>>> main
 - `tmp_utils` currently only redefines the `hashv` method which is currently defined in `src/ledger/shred.zig`
 - Rather than import from this location, the current approach was chosen to emphasize the need to extract this method to an appropriate module
 - The extraction is not performed as part of the current PR to simplify review, keeping `refactor` and `feature` implementations separate

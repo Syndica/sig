@@ -4,12 +4,6 @@ const sysvar = sig.runtime.sysvar;
 
 /// `SysvarCache` provides the runtime with access to sysvars during program execution
 ///
-/// TODO:
-///     - Evaluate storing as raw bytes or as object representations
-///     - Why is SlotHistory not included?
-///
-/// `SysvarCache` provides the runtime with access to sysvars during program execution
-///
 /// TODO:\
 /// - Evaluate storing as raw bytes or as object representations\
 /// - Why is SlotHistory not included?\

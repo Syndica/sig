@@ -52,6 +52,9 @@ pub fn build(b: *Build) void {
     const zstd_dep = b.dependency("zstd", dep_opts);
     const zstd_mod = zstd_dep.module("zstd");
 
+    const poseidon_dep = b.dependency("poseidon", dep_opts);
+    const poseidon_mod = poseidon_dep.module("poseidon");
+
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
 
@@ -78,6 +81,8 @@ pub fn build(b: *Build) void {
     sig_mod.addImport("base58", base58_mod);
     sig_mod.addImport("zig-cli", zig_cli_mod);
     sig_mod.addImport("zstd", zstd_mod);
+    sig_mod.addImport("poseidon", poseidon_mod);
+
     switch (blockstore_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -146,6 +151,7 @@ pub fn build(b: *Build) void {
     unit_tests_exe.root_module.addImport("base58", base58_mod);
     unit_tests_exe.root_module.addImport("zig-network", zig_network_mod);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
+    unit_tests_exe.root_module.addImport("poseidon", poseidon_mod);
     switch (blockstore_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},

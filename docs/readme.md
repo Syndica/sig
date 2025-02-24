@@ -25,7 +25,9 @@ python generate.py
 to check to see if all changes are up to date, run:
 
 ```bash
-python check.py
+python docs/check.py ./ # from the src/ directory
+# or
+python check.py ../ # from the src/docs directory
 ```
 
 *note:* this command is run during the CI/CD pipeline to ensure that the docs are up to date.
@@ -36,3 +38,7 @@ to ensure that the markdown is formatted correctly, we use the following
 conventions:
 - '#' for headers which will correspond to the title and sidebar name in docusaurus
 - all images need to point to /docs/docusaurus/static/img/
+
+## exclusion
+
+to exclude a markdown file, insert a line with "docs: exclude\n" anywhere in the file.
