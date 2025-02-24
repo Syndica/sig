@@ -9,4 +9,5 @@ pub const ID =
 pub const COMPUTE_UNITS = 2_100;
 
 pub const Instruction = @import("instruction.zig").Instruction;
+pub const VoteState = @import("state.zig").VoteState;
 pub const execute = @import("execute.zig").execute;
