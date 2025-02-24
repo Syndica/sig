@@ -9,7 +9,6 @@ pub const genesis_config = @import("genesis_config.zig");
 pub const index = @import("index.zig");
 pub const snapshots = @import("snapshots.zig");
 pub const swiss_map = @import("swiss_map.zig");
-pub const sysvars = @import("sysvars.zig");
 
 pub const AccountsDB = db.AccountsDB;
 pub const FullAndIncrementalManifest = snapshots.FullAndIncrementalManifest;

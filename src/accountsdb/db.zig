@@ -5,7 +5,7 @@ const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const zstd = @import("zstd");
 
-const sysvars = sig.accounts_db.sysvars;
+const sysvar = sig.runtime.sysvar;
 const snapgen = sig.accounts_db.snapshots.generate;
 
 const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
@@ -2292,11 +2292,11 @@ pub const AccountsDB = struct {
         return t;
     }
 
-    pub fn getSlotHistory(self: *Self, allocator: std.mem.Allocator) !sysvars.SlotHistory {
+    pub fn getSlotHistory(self: *Self, allocator: std.mem.Allocator) !sysvar.SlotHistory {
         return try self.getTypeFromAccount(
             allocator,
-            sysvars.SlotHistory,
-            &sysvars.IDS.slot_history,
+            sysvar.SlotHistory,
+            &sysvar.SlotHistory.ID,
         );
     }
 
@@ -3717,17 +3717,17 @@ test "load clock sysvar" {
 
     const full = full_inc_manifest.full;
     const inc = full_inc_manifest.incremental;
-    const expected_clock: sysvars.Clock = .{
+    const expected_clock: sysvar.Clock = .{
         .slot = (inc orelse full).bank_fields.slot,
         .epoch_start_timestamp = 1733349736,
         .epoch = (inc orelse full).bank_fields.epoch,
         .leader_schedule_epoch = 1,
         .unix_timestamp = 1733350255,
     };
-
-    const found_clock = try accounts_db.getTypeFromAccount(allocator, sysvars.Clock, &sysvars.IDS.clock);
-
-    try std.testing.expectEqual(expected_clock, found_clock);
+    try std.testing.expectEqual(
+        expected_clock,
+        try accounts_db.getTypeFromAccount(allocator, sysvar.Clock, &sysvar.Clock.ID),
+    );
 }
 
 test "load other sysvars" {
@@ -3747,19 +3747,19 @@ test "load other sysvars" {
     }
 
     const SlotAndHash = sig.core.hash.SlotAndHash;
-    _ = try accounts_db.getTypeFromAccount(allocator, sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
-    _ = try accounts_db.getTypeFromAccount(allocator, sysvars.Rent, &sysvars.IDS.rent);
-    _ = try accounts_db.getTypeFromAccount(allocator, SlotAndHash, &sysvars.IDS.slot_hashes);
+    _ = try accounts_db.getTypeFromAccount(allocator, sysvar.EpochSchedule, &sysvar.EpochSchedule.ID);
+    _ = try accounts_db.getTypeFromAccount(allocator, sysvar.Rent, &sysvar.Rent.ID);
+    _ = try accounts_db.getTypeFromAccount(allocator, SlotAndHash, &sysvar.SlotHashes.ID);
 
-    const stake_history = try accounts_db.getTypeFromAccount(allocator, sysvars.StakeHistory, &sysvars.IDS.stake_history);
+    const stake_history = try accounts_db.getTypeFromAccount(allocator, sysvar.StakeHistory, &sysvar.StakeHistory.ID);
     defer sig.bincode.free(allocator, stake_history);
 
-    const slot_history = try accounts_db.getTypeFromAccount(allocator, sysvars.SlotHistory, &sysvars.IDS.slot_history);
+    const slot_history = try accounts_db.getTypeFromAccount(allocator, sysvar.SlotHistory, &sysvar.SlotHistory.ID);
     defer sig.bincode.free(allocator, slot_history);
 
     // // not always included in local snapshot
-    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
-    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
+    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.LastRestartSlot, &sysvars.LastRestartSlot.ID);
+    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.EpochRewards, &sysvars.EpochRewards.ID);
 }
 
 test "flushing slots works" {

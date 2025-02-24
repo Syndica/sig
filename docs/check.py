@@ -19,13 +19,23 @@ if __name__ == "__main__":
     for src_path, docs_path in g.get_markdown_files(args.src_dir, exclude_dirs, doc_dir_path):
         # check to see if the files are the same !
         with open(src_path, "r") as src_f:
-            with open(docs_path, "r") as docs_f:
-                src_lines = src_f.readlines()
-                # fix image paths for docusaurus
-                for i in range(0, len(src_lines)):
-                    if "/docs/docusaurus/static/img" in src_lines[i]:
-                        src_lines[i] = src_lines[i].replace("/docs/docusaurus/static/img", "/img")
+            src_lines = src_f.readlines()
 
+            # check for exclusion
+            should_exclude = False
+            for line in src_lines:
+                if line == "docs: exclude\n":
+                    print("excluding file: ", src_path)
+                    should_exclude = True
+                    break
+            if should_exclude: continue
+
+            # fix image paths for docusaurus
+            for i in range(0, len(src_lines)):
+                if "/docs/docusaurus/static/img" in src_lines[i]:
+                    src_lines[i] = src_lines[i].replace("/docs/docusaurus/static/img", "/img")
+
+            with open(docs_path, "r") as docs_f:
                 docs_lines = docs_f.readlines()
                 if src_lines != docs_lines:
                     print("Docs folder is not up to date, run generate.py")
