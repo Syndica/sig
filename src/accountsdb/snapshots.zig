@@ -1714,13 +1714,8 @@ pub const AccountsDbFields = struct {
         try bincode.write(writer, data.slot, params);
         try bincode.write(writer, data.bank_hash_info, params);
 
-        if (data.rooted_slot_hashes.len != 0 or data.rooted_slots.len != 0) {
-            try bincode.write(writer, data.rooted_slots, params);
-        }
-
-        if (data.rooted_slot_hashes.len != 0) {
-            try bincode.write(writer, data.rooted_slot_hashes, params);
-        }
+        try bincode.write(writer, data.rooted_slots, params);
+        try bincode.write(writer, data.rooted_slot_hashes, params);
     }
 
     fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
