@@ -91,54 +91,6 @@ pub const GossipMap = struct {
         };
     }
 
-    pub const Entry = struct {
-        key_ptr: *GossipKey,
-        metadata_ptr: *Metadata,
-        gossip_data_entry: SplitUnionList(GossipData).Entry,
-        index: usize,
-
-        pub fn tag(self: Entry) GossipDataTag {
-            return self.gossip_data_entry.index.tag;
-        }
-
-        pub fn getVersionedData(self: Entry) GossipVersionedData {
-            return .{
-                .value = .{
-                    .signature = self.metadata_ptr.signature,
-                    .data = self.getGossipData(),
-                },
-                .value_hash = self.metadata_ptr.value_hash,
-                .timestamp_on_insertion = self.metadata_ptr.timestamp_on_insertion,
-                .cursor_on_insertion = self.metadata_ptr.cursor_on_insertion,
-            };
-        }
-
-        pub fn setVersionedData(self: Entry, versioned: GossipVersionedData) void {
-            self.metadata_ptr.* = .{
-                .signature = versioned.value.signature,
-                .value_hash = versioned.value_hash,
-                .timestamp_on_insertion = versioned.timestamp_on_insertion,
-                .cursor_on_insertion = versioned.cursor_on_insertion,
-            };
-            self.setGossipData(versioned.value.data);
-        }
-
-        pub fn getGossipData(self: Entry) GossipData {
-            return self.gossip_data_entry.read();
-        }
-
-        pub fn setGossipData(self: Entry, gossip_data: GossipData) void {
-            return self.gossip_data_entry.write(gossip_data);
-        }
-
-        pub fn getTypedPtr(
-            self: *const Entry,
-            comptime gossip_tag: GossipDataTag,
-        ) *const gossip_tag.Value() {
-            return &@field(self.gossip_data_entry.items(.data)[self.index], @tagName(gossip_tag));
-        }
-    };
-
     pub fn keys(self: *const GossipMap) []GossipKey {
         return self.key_to_index.keys();
     }
@@ -243,6 +195,54 @@ pub const GossipMap = struct {
             } else null;
         }
     };
+};
+
+pub const Entry = struct {
+    key_ptr: *GossipKey,
+    metadata_ptr: *GossipMap.Metadata,
+    gossip_data_entry: SplitUnionList(GossipData).Entry,
+    index: usize,
+
+    pub fn tag(self: Entry) GossipDataTag {
+        return self.gossip_data_entry.index.tag;
+    }
+
+    pub fn getVersionedData(self: Entry) GossipVersionedData {
+        return .{
+            .value = .{
+                .signature = self.metadata_ptr.signature,
+                .data = self.getGossipData(),
+            },
+            .value_hash = self.metadata_ptr.value_hash,
+            .timestamp_on_insertion = self.metadata_ptr.timestamp_on_insertion,
+            .cursor_on_insertion = self.metadata_ptr.cursor_on_insertion,
+        };
+    }
+
+    pub fn setVersionedData(self: Entry, versioned: GossipVersionedData) void {
+        self.metadata_ptr.* = .{
+            .signature = versioned.value.signature,
+            .value_hash = versioned.value_hash,
+            .timestamp_on_insertion = versioned.timestamp_on_insertion,
+            .cursor_on_insertion = versioned.cursor_on_insertion,
+        };
+        self.setGossipData(versioned.value.data);
+    }
+
+    pub fn getGossipData(self: Entry) GossipData {
+        return self.gossip_data_entry.read();
+    }
+
+    pub fn setGossipData(self: Entry, gossip_data: GossipData) void {
+        return self.gossip_data_entry.write(gossip_data);
+    }
+
+    pub fn getTypedPtr(
+        self: *const Entry,
+        comptime gossip_tag: GossipDataTag,
+    ) *const gossip_tag.Value() {
+        return &@field(self.gossip_data_entry.items(.data)[self.index], @tagName(gossip_tag));
+    }
 };
 
 test "put and get" {
