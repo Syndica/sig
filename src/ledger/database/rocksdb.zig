@@ -2,7 +2,6 @@ const std = @import("std");
 const rocks = @import("rocksdb");
 const sig = @import("../../sig.zig");
 const database = @import("lib.zig");
-const build_options = @import("build-options");
 
 const Allocator = std.mem.Allocator;
 
@@ -351,7 +350,7 @@ fn callRocks(logger: ScopedLogger(LOG_SCOPE), comptime func: anytype, args: anyt
 }
 
 comptime {
-    if (build_options.blockstore_db == .rocksdb) {
+    if (sig.build_options.blockstore_db == .rocksdb) {
         _ = &database.interface.testDatabase(RocksDB);
     }
 }

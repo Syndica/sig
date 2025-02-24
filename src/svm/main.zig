@@ -23,12 +23,19 @@ pub fn main() !void {
 
     var input_path: ?[]const u8 = null;
     var assemble: bool = false;
+    var version: sbpf.Version = .v3;
 
     var args = try std.process.argsWithAllocator(allocator);
     _ = args.next();
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "-a")) {
             assemble = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-v")) {
+            const version_string = args.next() orelse fail("provide SBPF version", .{});
+            version = std.meta.stringToEnum(sbpf.Version, version_string) orelse
+                fail("invalid SBPF version", .{});
             continue;
         }
 
@@ -52,12 +59,15 @@ pub fn main() !void {
     defer loader.deinit(allocator);
 
     inline for (.{
-        .{ "sol_log_", syscalls.log },
+        .{ "log", syscalls.log },
         .{ "sol_log_64_", syscalls.log64 },
         .{ "sol_log_pubkey", syscalls.logPubkey },
         .{ "sol_log_compute_units_", syscalls.logComputeUnits },
         .{ "sol_memset_", syscalls.memset },
         .{ "sol_memcpy_", syscalls.memcpy },
+        .{ "sol_memcmp_", syscalls.memcmp },
+        .{ "sol_poseidon", syscalls.poseidon },
+        .{ "sol_panic_", syscalls.panic },
         .{ "abort", syscalls.abort },
     }) |entry| {
         const name, const function = entry;
@@ -69,7 +79,8 @@ pub fn main() !void {
     }
 
     const config: Config = .{
-        .minimum_version = if (assemble) .v2 else .v1,
+        .maximum_version = version,
+        .enable_symbol_and_section_labels = true,
     };
     var executable = if (assemble)
         try Executable.fromAsm(allocator, bytes, config)

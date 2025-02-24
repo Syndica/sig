@@ -36,7 +36,7 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
         /// try expectEqual("foo-255".len, boundedLenValue("{[a]s}-{[b]d}", .{ .a = "foo", .b = 255 }));
         /// ```
         pub inline fn fmtLenValue(comptime args_value: anytype) usize {
-            comptime return fmtLen(fmt_str, @TypeOf(args_value));
+            comptime return fmtLen(@TypeOf(args_value));
         }
 
         pub fn BoundedArray(comptime Args: type) type {

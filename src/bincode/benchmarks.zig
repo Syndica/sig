@@ -24,7 +24,7 @@ pub const BenchmarkEntry = struct {
         const actual_struct = try sig.bincode.readFromSlice(
             allocator,
             Entry,
-            &test_entry.bincode_serialized_bytes,
+            &test_entry.as_bytes,
             .{},
         );
         defer actual_struct.deinit(allocator);
