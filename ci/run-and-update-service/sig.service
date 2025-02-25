@@ -4,6 +4,7 @@ After=network.target
 
 [Service]
 EnvironmentFile=/etc/sig.conf
+WorkingDirectory=/home/sig/sig
 ExecStart=/home/sig/sig/zig-out/bin/sig $CLI_ARGS
 Restart=always
 User=sig
