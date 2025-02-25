@@ -83,12 +83,13 @@ pub fn main() !void {
 
     const config: Config = .{
         .maximum_version = version,
-        .enable_symbol_and_section_labels = true,
+        .enable_symbol_and_section_labels = false,
+        .optimize_rodata = false,
     };
     var executable = if (assemble)
         try Executable.fromAsm(allocator, bytes, config)
     else exec: {
-        const elf = try Elf.parse(allocator, bytes, &loader, config);
+        var elf = try Elf.parse(allocator, bytes, &loader, config);
         errdefer elf.deinit(allocator);
         break :exec try Executable.fromElf(elf);
     };
