@@ -45,11 +45,12 @@ pub fn verify(
     all_instruction_datas: []const []const u8,
 ) PrecompileProgramError!void {
     const data = current_instruction_data;
-    const n_signatures = data[0];
     if (data.len < ED25519_DATA_START) {
-        if (data.len == 2 and n_signatures == 0) return;
+        if (data.len == 2 and data[0] == 0) return;
         return error.InvalidInstructionDataSize;
     }
+
+    const n_signatures = data[0];
     if (n_signatures == 0) return error.InvalidInstructionDataSize;
 
     const expected_data_size: u64 = ED25519_SIGNATURE_OFFSETS_START +

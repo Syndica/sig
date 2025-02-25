@@ -60,6 +60,7 @@ pub fn verifyPrecompiles(
                 instruction_datas = buf;
                 break :blk buf;
             };
+
             try precompile.function(instruction.data, datas);
         }
     }
@@ -159,15 +160,20 @@ test "verify ed25519" {
     );
     defer std.testing.allocator.free(ed25519_instruction.data);
 
-    const ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
+    const ed25519_tx: sig.core.Transaction = .{
         .msg = .{
             .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
             .instructions = &.{
                 .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
             },
+            .signature_count = 1,
+            .readonly_signed_count = 1,
+            .readonly_unsigned_count = 0,
+            .recent_blockhash = sig.core.Hash.ZEROES,
         },
         .version = .legacy,
-    });
+        .signatures = &.{},
+    };
 
     try verifyPrecompiles(std.testing.allocator, ed25519_tx, sig.runtime.FeatureSet.EMPTY);
 }
