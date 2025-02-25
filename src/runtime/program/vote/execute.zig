@@ -23,6 +23,15 @@ pub fn execute(
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/vote/src/vote_processor.rs#L55C40-L55C45
     try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
 
+    var vote_account = try ic.borrowInstructionAccount(
+        vote_instruction.IntializeAccount.accountIndex(.account),
+    );
+    defer vote_account.release();
+
+    if (!vote_account.account.owner.equals(&vote_program.ID)) {
+        return InstructionError.InvalidAccountOwner;
+    }
+
     const instruction = try ic.deserializeInstruction(allocator, VoteProgramInstruction);
     defer sig.bincode.free(allocator, instruction);
 
@@ -30,6 +39,7 @@ pub fn execute(
         .initialize_account => |args| try executeIntializeAccount(
             allocator,
             ic,
+            &vote_account,
             args.node_pubkey,
             args.authorized_voter,
             args.authorized_withdrawer,
@@ -46,6 +56,7 @@ pub fn execute(
 fn executeIntializeAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
     node_pubkey: Pubkey,
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
@@ -66,11 +77,6 @@ fn executeIntializeAccount(
         Clock,
         vote_instruction.IntializeAccount.accountIndex(.clock_sysvar),
     );
-
-    var vote_account = try ic.borrowInstructionAccount(
-        vote_instruction.IntializeAccount.accountIndex(.account),
-    );
-    defer vote_account.release();
 
     // Apply all the checks to the account data.
     const min_balance = rent.minimumBalance(vote_account.getData().len);
@@ -99,7 +105,7 @@ fn executeIntializeAccount(
         authorized_voter,
         authorized_withdrawer,
         commission,
-        &vote_account,
+        vote_account,
         clock,
     );
 }
