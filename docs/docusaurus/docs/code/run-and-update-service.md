@@ -27,6 +27,6 @@ These options may be configured in /etc/sig.conf
 
 ## Design
 
-The service is installed directly to the system using make. A new user called `sig` is added to the system and is used to build and run the sig binary.
+The service is installed to the system in `/usr/local` using make. A new user called `sig` is added to the system and is used to build and run the sig binary.
 
 The service is orchestrated using systemd with two services and one timer. `sig-update.timer` periodically runs the `sig-update` binary as root. This script de-escalates to the sig user to check if there are new commits on `BRANCH`, and if so, it builds a new sig binary. Then as root, it restarts `sig.service` and starts sig's metrics with docker-compose. `sig.service` runs the sig binary that was build in the sig user's home folder (as the sig user), passing the configured `CLI_ARGS`.
