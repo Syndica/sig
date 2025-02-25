@@ -7,6 +7,7 @@ const native_cpi = sig.runtime.program.native_cpi;
 const program = sig.runtime.program;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const sysvar = sig.runtime.sysvar;
+const svm = sig.svm;
 const system_program = sig.runtime.program.system_program;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
 
@@ -50,9 +51,106 @@ pub fn execute(
         return InstructionError.IncorrectProgramId;
     }
 
-    // TODO: Invoke the program
-    //     - Load ProgramCacheEntry from transaction program cache
-    //     - Execute the program if the ProgramCacheEntry contains a loaded executable
+    // TODO: The following program invocation is simplified. The final implementation will depending on our approach
+    // to program caching and other features.
+
+    //
+    // Start Program Deployment
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L115
+    //
+
+    // Setup environment
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L127-L132
+    var environment = svm.BuiltinProgram{};
+    defer environment.deinit();
+    environment.functions.registerHashed(allocator, "sol_log_", svm.syscalls.log);
+
+    // Parse ELF and create executable
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L136-L144
+    const elf = try svm.Elf.parse(allocator, program_account.account.data, &environment); // TODO: Add config to environment
+    defer elf.deinit();
+    var executable = try svm.Executable.fromElf(elf);
+    defer executable.deinit();
+
+    // Executable verification
+    // This logic is implemented during ELF parsing and executable creation TODO: @Rexicon226 to confirm please
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L147-L151
+
+    // Program caching
+    // Program caching is not implemented yet.
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L153-L176
+
+    //
+    // End Program Deployment
+    //
+
+    // Load program from cache
+    // Program caching is not implemented yet. (This load is subsituted by the deployment stage above)
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L461-L475
+
+    //
+    // Start Program Execution
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1557
+    //
+
+    // Serialize parameters
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
+
+    // Save account addresses
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1597
+
+    const execution_result = blk: {
+        const initial_compute_available = ic.tc.compute_meter;
+
+        // TODO: Create VM
+        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1615-L1623
+        const PAGE_SIZE: u64 = 32 * 1024;
+
+        const stack_size = executable.config.stackSize();
+        const heap_size = ic.tc.compute_budget.heap_size;
+        const heap_cost =
+            ((heap_size +| (PAGE_SIZE - 1)) / PAGE_SIZE - 1) * ic.tc.compute_budget.heap_cost;
+
+        // TODO: Replace with mem pool similar to agave?
+        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L306-L307
+        var stack = try allocator.alloc(u8, stack_size);
+        defer allocator.free(stack);
+        var heap = try allocator.alloc(u8, heap_size);
+        defer allocator.free(heap);
+
+        // TODO: Create memory map
+        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L256-L280
+        const memory_mapping = createMemoryMapping(
+            executable,
+            stack,
+            heap,
+            regions,
+        );
+
+        // TODO: Set syscall context
+        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L280-L285
+
+        // Create VM
+        var vm = try svm.Vm.init(
+            allocator,
+            executable,
+            memory_map,
+            &environment,
+            .noop,
+            stack_size,
+        );
+
+        // TODO: Execute VM
+        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1625-L1638
+
+        // TODO: Log return data
+        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1646-L1651
+
+        // TODO: Handle result
+        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1651-L1725
+
+        break :blk null;
+    };
 }
 
 pub fn executeBpfLoaderV3ProgramInstruction(

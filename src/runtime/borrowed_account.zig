@@ -75,10 +75,11 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
-    pub fn checkDataIsMutable(self: BorrowedAccount) InstructionError!void {
+    pub fn checkDataIsMutable(self: BorrowedAccount) ?InstructionError {
         if (self.account.executable) return InstructionError.ExecutableDataModified;
         if (!self.isWritable()) return InstructionError.ReadonlyDataModified;
         if (!self.isOwnedByCurrentProgram()) return InstructionError.ExternalAccountDataModified;
+        return null;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1095
@@ -188,7 +189,7 @@ pub const BorrowedAccount = struct {
         new_length: usize,
     ) InstructionError!void {
         try self.checkCanSetDataLength(tc, new_length);
-        try self.checkDataIsMutable();
+        if (self.checkDataIsMutable()) |err| return err;
         if (self.getData().len == new_length) return;
         const old_length_signed: i64 = @intCast(self.getData().len);
         const new_length_signed: i64 = @intCast(new_length);

@@ -99,6 +99,15 @@ pub const Region = struct {
         };
     }
 
+    /// Get the underlying host slice as constant data.
+    ///
+    /// Use this over `getSlice` when we do not need to mutate the memory.
+    pub fn getConstSlice(self: Region) []const u8 {
+        return switch (self.host_memory) {
+            inline .constant, .mutable => |ptr| ptr,
+        };
+    }
+
     fn translate(
         self: Region,
         comptime state: MemoryState,
