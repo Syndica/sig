@@ -123,12 +123,12 @@ pub const ChannelPrintLogger = struct {
         max_level: Level = Level.debug,
         allocator: std.mem.Allocator,
         /// Maximum memory that logger can use.
-        max_buffer: ?u64 = null,
+        max_buffer: u64,
         write_stderr: bool = true,
     };
 
     pub fn init(config: Config, maybe_writer: anytype) !*Self {
-        const max_buffer = config.max_buffer orelse return error.MaxBufferNotSet;
+        const max_buffer = config.max_buffer;
         const recycle_fba = try config.allocator.create(RecycleFBA(.{}));
         recycle_fba.* = try RecycleFBA(.{}).init(.{
             .records_allocator = config.allocator,
@@ -185,7 +185,7 @@ pub const ChannelPrintLogger = struct {
                     defer std.debug.unlockStdErr();
                     stderr_writer.writeAll(message) catch {};
                 }
-                if (maybe_writer) |writer| {
+                if (sig.utils.types.toOptional(maybe_writer)) |writer| {
                     writer.writeAll(message) catch {};
                 }
             }
@@ -418,4 +418,22 @@ test "test_logger" {
     const logger = test_logger.logger();
 
     logger.log(.info, "Logging with log");
+}
+
+test "channel logger" {
+    var buf: [256]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+
+    const logger = try ChannelPrintLogger.init(.{
+        .allocator = std.testing.allocator,
+        .write_stderr = false,
+        .max_buffer = 512,
+    }, stream.writer());
+
+    logger.logger().log(.info, "hello world");
+    std.time.sleep(10 * std.time.ns_per_ms);
+    logger.deinit();
+
+    const actual = stream.getWritten();
+    try std.testing.expectEqualSlices(u8, "level=info message=\"hello world\"", actual[0..32]);
 }
