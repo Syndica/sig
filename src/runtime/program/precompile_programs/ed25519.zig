@@ -94,6 +94,8 @@ pub fn newInstruction(
     keypair: Ed25519.KeyPair,
     message: []const u8,
 ) !sig.core.Instruction {
+    std.debug.assert(message.len < std.math.maxInt(u16));
+
     const signature = try keypair.sign(message, null);
 
     const num_signatures: u8 = 1;
@@ -107,24 +109,24 @@ pub fn newInstruction(
         .pubkey_offset = pubkey_offset,
         .pubkey_instruction_idx = std.math.maxInt(u16),
         .message_data_offset = message_data_offset,
-        .message_data_size = message.len,
+        .message_data_size = @intCast(message.len),
         .message_instruction_idx = std.math.maxInt(u16),
     };
 
-    const instruction_data = try std.ArrayListAligned(u8, 2).initCapacity(
+    var instruction_data = try std.ArrayList(u8).initCapacity(
         allocator,
         message_data_offset + message.len,
     );
     errdefer instruction_data.deinit();
 
     // add 2nd byte for padding, so that offset structure is aligned
-    instruction_data.appendSliceAssumeCapacity(.{ num_signatures, 0 });
+    instruction_data.appendSliceAssumeCapacity(&.{ num_signatures, 0 });
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&offsets));
-    std.debug.assert(instruction_data.len == pubkey_offset);
-    instruction_data.appendSliceAssumeCapacity(keypair.public_key.toBytes());
-    std.debug.assert(instruction_data.len == signature_offset);
-    instruction_data.appendSliceAssumeCapacity(signature.toBytes());
-    std.debug.assert(instruction_data.len == message_data_offset);
+    std.debug.assert(instruction_data.items.len == pubkey_offset);
+    instruction_data.appendSliceAssumeCapacity(&keypair.public_key.toBytes());
+    std.debug.assert(instruction_data.items.len == signature_offset);
+    instruction_data.appendSliceAssumeCapacity(&signature.toBytes());
+    std.debug.assert(instruction_data.items.len == message_data_offset);
     instruction_data.appendSliceAssumeCapacity(message);
 
     return .{

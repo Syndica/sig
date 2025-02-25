@@ -6,6 +6,7 @@ pub const secp256k1 = @import("secp256k1.zig");
 pub const secp256r1 = @import("secp256r1.zig");
 
 const Pubkey = sig.core.Pubkey;
+const Ed25519 = std.crypto.sign.Ed25519;
 
 pub const ed25519Verify = ed25519.verify;
 pub const secp256k1Verify = secp256k1.verify;
@@ -122,4 +123,51 @@ pub fn getInstructionData(
 
     if (offset + len > data.len) return error.InvalidDataOffsets;
     return data[offset..][0..len];
+}
+
+test "verify ed25519" {
+    try verifyPrecompiles(
+        std.testing.allocator,
+        sig.core.Transaction.EMPTY,
+        sig.runtime.FeatureSet.EMPTY,
+    );
+
+    const bad_ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
+        .msg = .{
+            .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
+            .instructions = &.{
+                .{
+                    .program_index = 0,
+                    .account_indexes = &.{0},
+                    .data = "hello",
+                },
+            },
+        },
+        .version = .legacy,
+    });
+
+    try std.testing.expectError(
+        error.InvalidInstructionDataSize,
+        verifyPrecompiles(std.testing.allocator, bad_ed25519_tx, sig.runtime.FeatureSet.EMPTY),
+    );
+
+    const keypair = try Ed25519.KeyPair.create(null);
+    const ed25519_instruction = try ed25519.newInstruction(
+        std.testing.allocator,
+        keypair,
+        "hello!",
+    );
+    defer std.testing.allocator.free(ed25519_instruction.data);
+
+    const ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
+        .msg = .{
+            .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
+            .instructions = &.{
+                .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
+            },
+        },
+        .version = .legacy,
+    });
+
+    try verifyPrecompiles(std.testing.allocator, ed25519_tx, sig.runtime.FeatureSet.EMPTY);
 }
