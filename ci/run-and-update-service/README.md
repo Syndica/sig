@@ -29,4 +29,18 @@ These options may be configured in /etc/sig.conf
 
 The service is installed to the system in `/usr/local` using make. A new user called `sig` is added to the system and is used to build and run the sig binary.
 
-The service is orchestrated using systemd with two services and one timer. `sig-update.timer` periodically runs the `sig-update` binary as root. This script de-escalates to the sig user to check if there are new commits on `BRANCH`, and if so, it builds a new sig binary. Then as root, it restarts `sig.service` and starts sig's metrics with docker-compose. As the sig user, `sig.service` runs the sig binary that was built in the sig user's home folder, passing the configured `CLI_ARGS`.
+The service is orchestrated by systemd, using two services and one timer.
+
+> *Note:* **Systemd** is the most common init system for linux. It can run processes, daemons, and schedules. A *service* is a short- or long-running process that's run by systemd, and a *timer* is used to start services on a schedule, similar to a cron job.
+
+Call graph: `sig-update.timer` -> `sig-update.service` -> `sig-update` -> `sig.service` -> `sig`
+
+`sig-update.timer` periodically runs the `sig-update` binary as root on a schedule. This script de-escalates to the sig user to check if there are new commits on `BRANCH`, and if so, it builds a new sig binary. Then as root, it restarts `sig.service` and starts sig's metrics with docker-compose. As the sig user, `sig.service` runs the sig binary that was built in the sig user's home folder, passing the configured `CLI_ARGS`.
+
+### Config
+
+The configuration file `/etc/sig.conf` is used by both systemd and the `sig-update` binary. systemd reads the file when running `sig.service` in order to pass the correct `CLI_ARGS` to sig. `sig-update` reads the file when it's checking the `BRANCH` for new commits, and when setting the `SLACK_WEBHOOK_URL` for sig's metrics.
+
+## Root privileges
+
+All of the systemd units are system-level units, with some root privileges, because we want the service to start reliably when the system boots. If these three units were instead user-level units, they would only run after the user logs in. Automating startup on boot would require additional system-level units to log in the user, which would increase the complexity. Minimal root privileges were integrated into the existing units to keep this both simple and reliable.
