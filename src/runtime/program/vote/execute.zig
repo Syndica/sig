@@ -2,18 +2,17 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const vote_program = sig.runtime.program.vote_program;
+const vote_instruction = vote_program.vote_instruction;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
-const VoteState = vote_program.VoteState;
-
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
-
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 
-const VoteProgramInstruction = vote_program.Instruction;
+const VoteState = vote_program.VoteState;
+const VoteProgramInstruction = vote_instruction.Instruction;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
 pub fn execute(
@@ -60,16 +59,16 @@ fn executeIntializeAccount(
 
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
-        VoteProgramInstruction.InitializeAccountIndex.RentSysvar.index(),
+        vote_instruction.IntializeAccount.accountIndex(.rent_sysvar),
     );
 
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
-        VoteProgramInstruction.InitializeAccountIndex.ClockSysvar.index(),
+        vote_instruction.IntializeAccount.accountIndex(.clock_sysvar),
     );
 
     var vote_account = try ic.borrowInstructionAccount(
-        VoteProgramInstruction.InitializeAccountIndex.Account.index(),
+        vote_instruction.IntializeAccount.accountIndex(.account),
     );
     defer vote_account.release();
 
@@ -90,7 +89,7 @@ fn executeIntializeAccount(
     }
 
     var authority = try ic.borrowInstructionAccount(
-        VoteProgramInstruction.InitializeAccountIndex.Signer.index(),
+        vote_instruction.IntializeAccount.accountIndex(.signer),
     );
     defer authority.release();
 
