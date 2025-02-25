@@ -48,7 +48,7 @@ pub fn execute(
     };
 }
 
-//// [agave] https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884
+//// [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/vote/src/vote_processor.rs#L68-L76
 ///
 /// Initialize the vote_state for a vote account
 /// Assumes that the account is being init as part of a account creation or balance transfer and
