@@ -52,8 +52,8 @@ pub fn verify(
     }
     if (n_signatures == 0) return error.InvalidInstructionDataSize;
 
-    const expected_data_size = ED25519_SIGNATURE_OFFSETS_START +
-        n_signatures * ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
+    const expected_data_size: u64 = ED25519_SIGNATURE_OFFSETS_START +
+        @as(u64, n_signatures) * ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
     if (data.len < expected_data_size) return error.InvalidInstructionDataSize;
 
     // firedancer seems to assume natural alignment in this loop? Our data should be aligned.
