@@ -5,15 +5,21 @@ const bincode = sig.bincode;
 
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
+const Transaction = sig.core.Transaction;
 
 const TransactionContext = sig.runtime.TransactionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 
-pub const InstructionAccountInfo = struct {
+pub const InstructionContextProgramMeta = struct {
     pubkey: Pubkey,
+    index_in_transaction: u16,
+};
+
+pub const InstructionContextAccountMeta = struct {
+    pubkey: Pubkey,
+    index_in_transaction: u16,
     is_signer: bool,
     is_writable: bool,
-    index_in_transaction: u16,
 };
 
 /// `InstructionContext` holds all information required to execute a program instruction; excluding an allocator
@@ -28,32 +34,60 @@ pub const InstructionContext = struct {
     /// The transaction context associated with this instruction execution
     tc: *TransactionContext,
 
-    /// The program id of the currently executing instruction
-    program_id: Pubkey,
+    /// The instruction context which invoked this instruction execution
+    parent: ?*const InstructionContext,
 
-    /// The index of the currently executing program in the transaction
-    program_index: u16,
+    /// The sum of lamports of all accounts associated with this instruction
+    total_account_lamports: u128,
+
+    // The meta data of the program associated with this instruction
+    program_meta: InstructionContextProgramMeta,
+
+    /// The metadata of accounts associated with this instruction
+    account_metas: std.BoundedArray(InstructionContextAccountMeta, Transaction.MAX_ACCOUNTS),
 
     /// Serialized instruction data
-    instruction: []const u8,
+    serialized_instruction: []const u8,
 
-    /// The accounts associated with this instruction and their metadata
-    accounts: []const InstructionAccountInfo,
+    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L523
+    pub fn getAccountMetaIndex(
+        self: *const InstructionContext,
+        pubkey: Pubkey,
+    ) ?u16 {
+        for (self.account_metas.slice(), 0..) |account_meta, index| {
+            if (account_meta.pubkey.equals(&pubkey)) return @intCast(index);
+        }
+        return null;
+    }
+
+    // Gets the account meta at a given index returning null if the index is out of bounds
+    pub fn getAccountMetaAtIndex(
+        self: *const InstructionContext,
+        index: u16,
+    ) ?*const InstructionContextAccountMeta {
+        if (index >= self.account_metas.len) return null;
+        return &self.account_metas.buffer[index];
+    }
 
     /// Return if the account at a given index is a signer with bounds checking
     pub fn isIndexSigner(
         self: *const InstructionContext,
         index: u16,
-    ) error{NotEnoughAccountKeys}!bool {
-        if (index >= self.accounts.len) return InstructionError.NotEnoughAccountKeys;
-        return self.accounts[index].is_signer;
+    ) InstructionError!bool {
+        const instruction_accout_meta = self.getAccountMetaAtIndex(index) orelse
+            return InstructionError.NotEnoughAccountKeys;
+        return instruction_accout_meta.is_signer;
     }
 
     /// Replaces Agave's approach to checking if a pubkey is a signer which is to precompute a
     /// hashmap of signers to parse during instruction execution
-    pub fn isPubkeySigner(self: *const InstructionContext, pubkey: Pubkey) bool {
-        for (self.accounts) |account|
-            if (account.pubkey.equals(&pubkey) and account.is_signer) return true;
+    pub fn isPubkeySigner(
+        self: *const InstructionContext,
+        pubkey: Pubkey,
+    ) bool {
+        for (self.account_metas.slice()) |account_meta| {
+            if (account_meta.pubkey.equals(&pubkey) and account_meta.is_signer) return true;
+        }
         return false;
     }
 
@@ -62,9 +96,9 @@ pub const InstructionContext = struct {
         self: *const InstructionContext,
         allocator: std.mem.Allocator,
         comptime T: type,
-    ) error{InvalidInstructionData}!T {
+    ) InstructionError!T {
         // TODO: Does bincode have limits on the size of the data it can deserialize?
-        return bincode.readFromSlice(allocator, T, self.instruction, .{}) catch {
+        return bincode.readFromSlice(allocator, T, self.serialized_instruction, .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
     }
@@ -72,22 +106,30 @@ pub const InstructionContext = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L493
     pub fn checkNumberOfAccounts(
         self: *const InstructionContext,
-        minimum_accounts: usize,
-    ) error{NotEnoughAccountKeys}!void {
-        if (self.accounts.len < minimum_accounts) return InstructionError.NotEnoughAccountKeys;
+        minimum_accounts: u16,
+    ) InstructionError!void {
+        if (self.account_metas.len < minimum_accounts)
+            return InstructionError.NotEnoughAccountKeys;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L619
-    pub fn borrowProgramAccount(self: *const InstructionContext) InstructionError!BorrowedAccount {
-        if (self.program_index >= self.tc.accounts.len) return InstructionError.MissingAccount;
-        const account, const account_write_guard =
-            try self.tc.accounts[self.program_index].writeWithLock();
+    pub fn borrowProgramAccount(
+        self: *const InstructionContext,
+        index_in_transaction: u16,
+    ) InstructionError!BorrowedAccount {
+        const txn_account = self.tc.getAccountAtIndex(index_in_transaction) orelse
+            return InstructionError.MissingAccount;
+
+        const account, const account_write_guard = txn_account.writeWithLock() orelse
+            return InstructionError.AccountBorrowFailed;
+
         return .{
-            .pubkey = self.program_id,
+            .pubkey = self.program_meta.pubkey,
             .account = account,
             .account_write_guard = account_write_guard,
             .borrow_context = .{
-                .program_id = self.program_id,
+                .program_pubkey = self.program_meta.pubkey,
+                .is_signer = false,
                 .is_writable = false,
             },
         };
@@ -96,22 +138,25 @@ pub const InstructionContext = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L647
     pub fn borrowInstructionAccount(
         self: *const InstructionContext,
-        index: usize,
+        index: u16,
     ) InstructionError!BorrowedAccount {
-        if (index >= self.accounts.len) return InstructionError.NotEnoughAccountKeys;
-        const index_in_transaction = self.accounts[index].index_in_transaction;
+        const instr_account_meta = self.getAccountMetaAtIndex(index) orelse
+            return InstructionError.NotEnoughAccountKeys;
 
-        if (index_in_transaction >= self.tc.accounts.len) return InstructionError.MissingAccount;
-        const account, const account_write_guard =
-            try self.tc.accounts[index_in_transaction].writeWithLock();
+        const txn_account = self.tc.getAccountAtIndex(instr_account_meta.index_in_transaction) orelse
+            return InstructionError.MissingAccount;
+
+        const account, const account_write_guard = txn_account.writeWithLock() orelse
+            return InstructionError.AccountBorrowFailed;
 
         return .{
-            .pubkey = self.accounts[index].pubkey,
+            .pubkey = instr_account_meta.pubkey,
             .account = account,
             .account_write_guard = account_write_guard,
             .borrow_context = .{
-                .program_id = self.program_id,
-                .is_writable = self.accounts[index].is_writable,
+                .program_pubkey = self.program_meta.pubkey,
+                .is_signer = instr_account_meta.is_signer,
+                .is_writable = instr_account_meta.is_writable,
             },
         };
     }
@@ -120,14 +165,15 @@ pub const InstructionContext = struct {
     pub fn getSysvarWithAccountCheck(
         self: *const InstructionContext,
         comptime T: type,
-        index: usize,
+        index: u16,
     ) InstructionError!T {
-        if (index >= self.accounts.len) return InstructionError.NotEnoughAccountKeys;
-        const actual = self.accounts[index].pubkey;
-        if (!T.ID.equals(&actual)) return InstructionError.InvalidArgument;
-        return if (self.tc.sysvar_cache.get(T)) |value|
-            value
-        else
+        const instruction_account_meta = self.getAccountMetaAtIndex(index) orelse
+            return InstructionError.NotEnoughAccountKeys;
+
+        if (!T.ID.equals(&instruction_account_meta.pubkey))
+            return InstructionError.InvalidArgument;
+
+        return self.tc.sysvar_cache.get(T) orelse
             InstructionError.UnsupportedSysvar;
     }
 };
