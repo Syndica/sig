@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 const precompile_programs = sig.runtime.program.precompile_programs;
 
@@ -57,12 +58,11 @@ pub fn verify(
         @as(u64, n_signatures) * ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
     if (data.len < expected_data_size) return error.InvalidInstructionDataSize;
 
-    // firedancer seems to assume natural alignment in this loop? Our data should be aligned.
     for (0..n_signatures) |i| {
         const offset = ED25519_SIGNATURE_OFFSETS_START +
             i * ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
 
-        const sig_offsets: *const Ed25519SignatureOffsets = @alignCast(@ptrCast(data.ptr + offset));
+        const sig_offsets: *align(1) const Ed25519SignatureOffsets = @ptrCast(data.ptr + offset);
 
         const signature = try getInstructionValue(
             Ed25519.Signature,
@@ -95,6 +95,7 @@ pub fn newInstruction(
     keypair: Ed25519.KeyPair,
     message: []const u8,
 ) !sig.core.Instruction {
+    std.debug.assert(builtin.is_test);
     std.debug.assert(message.len < std.math.maxInt(u16));
 
     const signature = try keypair.sign(message, null);
@@ -104,7 +105,7 @@ pub fn newInstruction(
     const signature_offset = pubkey_offset + ED25519_PUBKEY_SERIALIZED_SIZE;
     const message_data_offset = signature_offset + ED25519_SIGNATURE_SERIALIZED_SIZE;
 
-    const offsets = Ed25519SignatureOffsets{
+    const offsets: Ed25519SignatureOffsets = .{
         .signature_offset = signature_offset,
         .signature_instruction_idx = std.math.maxInt(u16),
         .pubkey_offset = pubkey_offset,
@@ -138,21 +139,17 @@ pub fn newInstruction(
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L258
-fn test_case(
-    allocator: std.mem.Allocator,
+fn testCase(
     num_signatures: u16,
     offsets: Ed25519SignatureOffsets,
-) (PrecompileProgramError || error{OutOfMemory})!void {
-    var instruction_data = try std.ArrayListAligned(u8, 2).initCapacity(
-        allocator,
-        ED25519_DATA_START,
-    );
-    defer instruction_data.deinit();
+) PrecompileProgramError!void {
+    std.debug.assert(builtin.is_test);
 
-    instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&num_signatures));
-    instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&offsets));
+    var instruction_data: [ED25519_DATA_START]u8 align(2) = undefined;
+    @memcpy(instruction_data[0..2], std.mem.asBytes(&num_signatures));
+    @memcpy(instruction_data[2..], std.mem.asBytes(&offsets));
 
-    return try verify(instruction_data.items, &.{&(.{0} ** 100)});
+    return try verify(&instruction_data, &.{&(.{0} ** 100)});
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L279
@@ -164,7 +161,7 @@ test "ed25519 invalid offsets" {
     );
     defer instruction_data.deinit();
 
-    const offsets = Ed25519SignatureOffsets{};
+    const offsets: Ed25519SignatureOffsets = .{};
 
     // Set up instruction data with invalid size
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&1));
@@ -177,29 +174,29 @@ test "ed25519 invalid offsets" {
     );
 
     // invalid signature instruction index
-    const invalid_signature_offsets = Ed25519SignatureOffsets{
+    const invalid_signature_offsets: Ed25519SignatureOffsets = .{
         .signature_instruction_idx = 1,
     };
     try std.testing.expectEqual(
-        test_case(allocator, 1, invalid_signature_offsets),
+        testCase(1, invalid_signature_offsets),
         error.InvalidDataOffsets,
     );
 
     // invalid message instruction index
-    const invalid_message_offsets = Ed25519SignatureOffsets{
+    const invalid_message_offsets: Ed25519SignatureOffsets = .{
         .message_instruction_idx = 1,
     };
     try std.testing.expectEqual(
-        test_case(allocator, 1, invalid_message_offsets),
+        testCase(1, invalid_message_offsets),
         error.InvalidDataOffsets,
     );
 
     // invalid public key instruction index
-    const invalid_pubkey_offsets = Ed25519SignatureOffsets{
+    const invalid_pubkey_offsets: Ed25519SignatureOffsets = .{
         .pubkey_instruction_idx = 1,
     };
     try std.testing.expectEqual(
-        test_case(allocator, 1, invalid_pubkey_offsets),
+        testCase(1, invalid_pubkey_offsets),
         error.InvalidDataOffsets,
     );
 }
@@ -207,45 +204,45 @@ test "ed25519 invalid offsets" {
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L326
 test "ed25519 message data offsets" {
     {
-        const offsets = Ed25519SignatureOffsets{
+        const offsets: Ed25519SignatureOffsets = .{
             .message_data_offset = 99,
             .message_data_size = 1,
         };
         try std.testing.expectEqual(
-            test_case(std.testing.allocator, 1, offsets),
+            testCase(1, offsets),
             error.InvalidSignature,
         );
     }
 
     {
-        const offsets = Ed25519SignatureOffsets{
+        const offsets: Ed25519SignatureOffsets = .{
             .message_data_offset = 100,
             .message_data_size = 1,
         };
         try std.testing.expectEqual(
-            test_case(std.testing.allocator, 1, offsets),
+            testCase(1, offsets),
             error.InvalidDataOffsets,
         );
     }
 
     {
-        const offsets = Ed25519SignatureOffsets{
+        const offsets: Ed25519SignatureOffsets = .{
             .message_data_offset = 100,
             .message_data_size = 1000,
         };
         try std.testing.expectEqual(
-            test_case(std.testing.allocator, 1, offsets),
+            testCase(1, offsets),
             error.InvalidDataOffsets,
         );
     }
 
     {
-        const offsets = Ed25519SignatureOffsets{
+        const offsets: Ed25519SignatureOffsets = .{
             .message_data_offset = std.math.maxInt(u16),
             .message_data_size = std.math.maxInt(u16),
         };
         try std.testing.expectEqual(
-            test_case(std.testing.allocator, 1, offsets),
+            testCase(1, offsets),
             error.InvalidDataOffsets,
         );
     }
@@ -254,21 +251,21 @@ test "ed25519 message data offsets" {
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L369
 test "ed25519 pubkey offset" {
     {
-        const offsets = Ed25519SignatureOffsets{
+        const offsets: Ed25519SignatureOffsets = .{
             .pubkey_offset = std.math.maxInt(u16),
         };
         try std.testing.expectEqual(
-            test_case(std.testing.allocator, 1, offsets),
+            testCase(1, offsets),
             error.InvalidDataOffsets,
         );
     }
 
     {
-        const offsets = Ed25519SignatureOffsets{
+        const offsets: Ed25519SignatureOffsets = .{
             .pubkey_offset = 100 - ED25519_PUBKEY_SERIALIZED_SIZE + 1,
         };
         try std.testing.expectEqual(
-            test_case(std.testing.allocator, 1, offsets),
+            testCase(1, offsets),
             error.InvalidDataOffsets,
         );
     }
@@ -277,21 +274,21 @@ test "ed25519 pubkey offset" {
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L389-L390
 test "ed25519 signature offset" {
     {
-        const offsets = Ed25519SignatureOffsets{
+        const offsets: Ed25519SignatureOffsets = .{
             .signature_offset = std.math.maxInt(u16),
         };
         try std.testing.expectEqual(
-            test_case(std.testing.allocator, 1, offsets),
+            testCase(1, offsets),
             error.InvalidDataOffsets,
         );
     }
 
     {
-        const offsets = Ed25519SignatureOffsets{
+        const offsets: Ed25519SignatureOffsets = .{
             .signature_offset = 100 - ED25519_SIGNATURE_SERIALIZED_SIZE + 1,
         };
         try std.testing.expectEqual(
-            test_case(std.testing.allocator, 1, offsets),
+            testCase(1, offsets),
             error.InvalidDataOffsets,
         );
     }

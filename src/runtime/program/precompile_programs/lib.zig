@@ -56,7 +56,7 @@ pub fn verifyPrecompiles(
 
             const datas = instruction_datas orelse blk: {
                 const buf = try allocator.alloc([]const u8, transaction.msg.instructions.len);
-                for (0.., transaction.msg.instructions) |i, instr| buf[i] = instr.data;
+                for (transaction.msg.instructions, 0..) |instr, i| buf[i] = instr.data;
                 instruction_datas = buf;
                 break :blk buf;
             };
@@ -77,9 +77,6 @@ pub const Precompile = struct {
     required_feature: ?Pubkey,
 };
 
-// parsed internally
-pub const PrecompileProgramInstruction = []const u8;
-
 // custom errors
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/precompile-error/src/lib.rs#L6
 pub const PrecompileProgramError = error{
@@ -96,15 +93,14 @@ pub fn getInstructionValue(
     all_instruction_datas: []const []const u8,
     instruction_idx: u16,
     offset: usize,
-) error{InvalidDataOffsets}!*const T {
-    // aligncast potentially dangerous?
-    return @alignCast(@ptrCast(try getInstructionData(
+) error{InvalidDataOffsets}!*align(1) const T {
+    return @ptrCast(try getInstructionData(
         @sizeOf(T),
         current_instruction_data,
         all_instruction_datas,
         instruction_idx,
         offset,
-    )));
+    ));
 }
 
 // https://github.com/firedancer-io/firedancer/blob/af74882ffb2c24783a82718dbc5111a94e1b5f6f/src/flamenco/runtime/program/fd_precompiles.c#L74
