@@ -8,9 +8,10 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
 const CircBuf = sig.utils.collections.CircBuf;
-const MAX_ITEMS = sig.utils.collections.MAX_ITEMS;
 
 const Clock = sig.runtime.sysvar.Clock;
+
+pub const MAX_PRIOR_VOTERS: usize = 32;
 
 /// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L357
 pub const BlockTimestamp = struct {
@@ -76,7 +77,7 @@ pub const VoteState = struct {
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
     /// the top of the range is exclusive
-    prior_voters: CircBuf(PriorVote, MAX_ITEMS),
+    prior_voters: CircBuf(PriorVote, MAX_PRIOR_VOTERS),
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
@@ -107,7 +108,7 @@ pub const VoteState = struct {
             .commission = commission,
             .votes = std.ArrayList(LandedVote).init(allocator),
             .root_slot = null,
-            .prior_voters = CircBuf(PriorVote, MAX_ITEMS).DEFAULT,
+            .prior_voters = CircBuf(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };
