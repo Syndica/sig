@@ -118,6 +118,7 @@ pub fn verify(
     }
 }
 // https://docs.rs/libsecp256k1/0.6.0/src/libsecp256k1/lib.rs.html#764-770
+// https://github.com/firedancer-io/firedancer/blob/341bba05a3a7ca18d3d550d6b58c1b6a9207184f/src/ballet/secp256k1/fd_secp256k1.c#L7
 fn recoverPubkey(
     message: *const Message,
     signature: *const Ecdsa.Signature,
@@ -146,7 +147,7 @@ fn constructEthPubkey(
     pubkey: Ecdsa.PublicKey,
 ) [SECP256K1_PUBKEY_SERIALIZED_SIZE]u8 {
     var pubkey_hash: [Keccak256.digest_length]u8 = undefined;
-    const full_pubkey_bytes = pubkey.toUncompressedSec1();
-    Keccak256.hash(full_pubkey_bytes[1..], &pubkey_hash, .{});
+    const serialised_pubkey = pubkey.toUncompressedSec1();
+    Keccak256.hash(serialised_pubkey[1..], &pubkey_hash, .{});
     return pubkey_hash[12..32].*;
 }
