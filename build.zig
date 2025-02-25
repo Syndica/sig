@@ -86,9 +86,6 @@ pub fn build(b: *Build) !void {
     const zig_network_dep = b.dependency("zig-network", dep_opts);
     const zig_network_mod = zig_network_dep.module("network");
 
-    const zig_cli_dep = b.dependency("zig-cli", dep_opts);
-    const zig_cli_mod = zig_cli_dep.module("zig-cli");
-
     const httpz_dep = b.dependency("httpz", dep_opts);
     const httpz_mod = httpz_dep.module("httpz");
 
@@ -136,6 +133,12 @@ pub fn build(b: *Build) !void {
         .hashmap => {},
     }
 
+    const cli_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+    });
+
     // main executable
     const sig_exe = b.addExecutable(.{
         .name = "sig",
@@ -155,6 +158,7 @@ pub fn build(b: *Build) !void {
     sig_exe.linkLibC();
     sig_exe.root_module.addOptions("build-options", build_options);
 
+    sig_exe.root_module.addImport("cli", cli_mod);
     sig_exe.root_module.addImport("xev", xev_mod);
     sig_exe.root_module.addImport("base58", base58_mod);
     sig_exe.root_module.addImport("httpz", httpz_mod);
@@ -270,7 +274,7 @@ pub fn build(b: *Build) !void {
     install_step.dependOn(&geyser_reader_exe.step);
 
     geyser_reader_exe.root_module.addImport("sig", sig_mod);
-    geyser_reader_exe.root_module.addImport("zig-cli", zig_cli_mod);
+    geyser_reader_exe.root_module.addImport("cli", cli_mod);
     try addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
 
     const vm_exe = b.addExecutable(.{

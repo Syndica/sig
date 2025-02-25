@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("sig");
-const cli = @import("zig-cli");
+const cli = @import("cli");
 
 const servePrometheus = sig.prometheus.servePrometheus;
 const globalRegistry = sig.prometheus.globalRegistry;
@@ -15,116 +15,145 @@ pub const Config = struct {
     owner_accounts: []const []const u8 = &.{},
     accounts: []const []const u8 = &.{},
 };
+const Cmd = struct {
+    subcmd: union(enum) {
+        benchmark: Benchmark,
+        csv: Csv,
+    },
 
-var default_config = Config{};
-const config = &default_config;
-
-pub fn main() !void {
-    var csv_buf_len_option = cli.Option{
-        .long_name = "csv-buf-len",
-        .help = "size of the csv buffer",
-        .value_ref = cli.mkRef(&config.csv_buf_len),
-        .required = false,
-        .value_name = "csv_buf_len",
-    };
-
-    var accounts_option = cli.Option{
-        .long_name = "accounts",
-        .short_alias = 'a',
-        .help = "list of accounts to filter to csv",
-        .value_ref = cli.mkRef(&config.accounts),
-        .required = false,
-        .value_name = "accounts",
-    };
-
-    var owner_accounts_option = cli.Option{
-        .long_name = "owner-accounts",
-        .short_alias = 'o',
-        .help = "list of owner accounts to filter to csv",
-        .value_ref = cli.mkRef(&config.owner_accounts),
-        .required = false,
-        .value_name = "owner_accounts",
-    };
-
-    var geyser_bincode_buf_len_option = cli.Option{
-        .long_name = "geyser-bincode-buf-len",
-        .help = "size of the bincode buffer",
-        .value_ref = cli.mkRef(&config.geyser_bincode_buf_len),
-        .required = false,
-        .value_name = "geyser_bincode_buf_len",
-    };
-
-    var geyser_io_buf_len_option = cli.Option{
-        .long_name = "geyser-io-buf-len",
-        .help = "size of the io buffer",
-        .value_ref = cli.mkRef(&config.geyser_io_buf_len),
-        .required = false,
-        .value_name = "geyser_io_buf_len",
-    };
-
-    var pipe_path_option = cli.Option{
-        .long_name = "geyser-pipe-path",
-        .help = "path to the geyser pipe",
-        .value_ref = cli.mkRef(&config.pipe_path),
-        .required = false,
-        .value_name = "geyser_pipe_path",
-    };
-
-    var measure_rate_option = cli.Option{
-        .long_name = "measure-rate",
-        .help = "rate at which to measure reads",
-        .value_ref = cli.mkRef(&config.measure_rate_secs),
-        .required = false,
-        .value_name = "measure_rate_secs",
-    };
-
-    const cli_app = cli.App{ .version = "0.0.19", .author = "Syndica & Contributors", .command = .{
-        .name = "geyser",
-        .description = .{ .one_line = "read from a geyser stream" },
-        .target = .{
-            .subcommands = &.{
-                &cli.Command{
-                    .name = "benchmark",
-                    .description = .{ .one_line = "benchmarks reads from a geyser pipe" },
-                    .target = .{ .action = .{ .exec = benchmark } },
-                    .options = &.{
-                        &pipe_path_option,
-                        &measure_rate_option,
-                    },
-                },
-                &cli.Command{
-                    .name = "csv",
-                    .description = .{ .one_line = "dumps accounts into a csv" },
-                    .target = .{ .action = .{ .exec = csvDump } },
-                    .options = &.{
-                        &pipe_path_option,
-                        &geyser_bincode_buf_len_option,
-                        &geyser_io_buf_len_option,
-                        &owner_accounts_option,
-                        &accounts_option,
-                        &csv_buf_len_option,
-                    },
-                },
+    const cmd_info: cli.CommandInfo(@This()) = .{
+        .help = .{
+            .short = "read from a geyser stream",
+            .long = null,
+        },
+        .sub = .{
+            .subcmd = .{
+                .benchmark = Benchmark.cmd_info,
+                .csv = Csv.cmd_info,
             },
         },
-    } };
+    };
 
-    try cli.run(&cli_app, std.heap.c_allocator);
+    const pipe_path_option: cli.OptionInfo([]const u8) = .{
+        .name_override = "geyser-pipe-path",
+        .alias = .none,
+        .default_value = sig.VALIDATOR_DIR ++ "geyser.pipe",
+        .config = .string,
+        .help = "path to the geyser pipe",
+    };
+
+    const Benchmark = struct {
+        pipe_path: []const u8,
+        measure_rate_secs: u64,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "benchmarks reads from a geyser pipe",
+                .long = null,
+            },
+            .sub = .{
+                .pipe_path = pipe_path_option,
+                .measure_rate_secs = .{
+                    .name_override = "measure-rate",
+                    .alias = .none,
+                    .default_value = 5,
+                    .config = {},
+                    .help = "rate at which to measure reads/s",
+                },
+            },
+        };
+    };
+
+    const Csv = struct {
+        pipe_path: []const u8,
+        geyser_bincode_buf_len: u64,
+        geyser_io_buf_len: u64,
+        csv_buf_len: u64,
+        owner_accounts: []const []const u8,
+        accounts: []const []const u8,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "dumps accounts into a csv",
+                .long = null,
+            },
+            .sub = .{
+                .pipe_path = pipe_path_option,
+                .geyser_bincode_buf_len = .{
+                    .name_override = null,
+                    .alias = .none,
+                    .default_value = 1 << 29,
+                    .config = {},
+                    .help = "size of the bincode buffer",
+                },
+                .geyser_io_buf_len = .{
+                    .name_override = null,
+                    .alias = .none,
+                    .default_value = 1 << 29,
+                    .config = {},
+                    .help = "size of the io buffer",
+                },
+                .csv_buf_len = .{
+                    .name_override = null,
+                    .alias = .none,
+                    .default_value = 1 << 32,
+                    .config = {},
+                    .help = "size of the csv buffer",
+                },
+                .owner_accounts = .{
+                    .name_override = "owner-account",
+                    .alias = .o,
+                    .default_value = &.{},
+                    .config = .string,
+                    .help = "list of owner accounts to filter to csv",
+                },
+                .accounts = .{
+                    .name_override = "account",
+                    .alias = .a,
+                    .default_value = &.{},
+                    .config = .string,
+                    .help = "list of accounts to filter to csv",
+                },
+            },
+        };
+    };
+};
+
+pub fn main() !void {
+    var gpa_state: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa_state.deinit();
+    const gpa = if (builtin.mode == .Debug) gpa_state.allocator() else std.heap.c_allocator;
+
+    const argv = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, argv);
+
+    const parser = cli.Parser(Cmd, Cmd.cmd_info);
+    const cmd = try parser.parse(
+        gpa,
+        "geyser",
+        std.io.tty.detectConfig(std.io.getStdOut()),
+        std.io.getStdOut().writer(),
+        argv[1..],
+    ) orelse return;
+    defer parser.free(gpa, cmd);
+
+    switch (cmd.subcmd) {
+        .benchmark => |params| try benchmark(params),
+        .csv => |params| try csvDump(gpa, params),
+    }
 }
 
 pub fn getOwnerFilters(
     allocator: std.mem.Allocator,
-) !?std.AutoArrayHashMap(sig.core.Pubkey, void) {
-    const owner_accounts_str = config.owner_accounts;
-    if (owner_accounts_str.len == 0) {
-        return null;
-    }
+    owner_accounts: []const []const u8,
+) !std.AutoArrayHashMapUnmanaged(sig.core.Pubkey, void) {
+    if (owner_accounts.len == 0) return .{};
 
-    var owner_pubkeys = std.AutoArrayHashMap(sig.core.Pubkey, void).init(allocator);
-    errdefer owner_pubkeys.deinit();
+    var owner_pubkeys: std.AutoArrayHashMapUnmanaged(sig.core.Pubkey, void) = .{};
+    errdefer owner_pubkeys.deinit(allocator);
 
-    try owner_pubkeys.ensureTotalCapacity(owner_accounts_str.len);
-    for (owner_accounts_str) |owner_str| {
+    try owner_pubkeys.ensureTotalCapacity(allocator, owner_accounts.len);
+    for (owner_accounts) |owner_str| {
         const owner_pubkey = try sig.core.Pubkey.parseBase58String(owner_str);
         owner_pubkeys.putAssumeCapacity(owner_pubkey, {});
     }
@@ -134,17 +163,15 @@ pub fn getOwnerFilters(
 
 pub fn getAccountFilters(
     allocator: std.mem.Allocator,
-) !?std.AutoArrayHashMap(sig.core.Pubkey, void) {
-    const accounts_str = config.accounts;
-    if (accounts_str.len == 0) {
-        return null;
-    }
+    accounts: []const []const u8,
+) !std.AutoArrayHashMapUnmanaged(sig.core.Pubkey, void) {
+    if (accounts.len == 0) return .{};
 
-    var account_pubkeys = std.AutoArrayHashMap(sig.core.Pubkey, void).init(allocator);
-    errdefer account_pubkeys.deinit();
+    var account_pubkeys: std.AutoArrayHashMapUnmanaged(sig.core.Pubkey, void) = .{};
+    errdefer account_pubkeys.deinit(allocator);
+    try account_pubkeys.ensureTotalCapacity(allocator, accounts.len);
 
-    try account_pubkeys.ensureTotalCapacity(@intCast(accounts_str.len));
-    for (accounts_str) |account_str| {
+    for (accounts) |account_str| {
         const account_pubkey = try sig.core.Pubkey.parseBase58String(account_str);
         account_pubkeys.putAssumeCapacity(account_pubkey, {});
     }
@@ -152,14 +179,7 @@ pub fn getAccountFilters(
     return account_pubkeys;
 }
 
-pub fn csvDump() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = if (builtin.mode == .Debug)
-        gpa.allocator()
-    else
-        std.heap.c_allocator;
-    defer _ = gpa.deinit();
-
+pub fn csvDump(allocator: std.mem.Allocator, config: Cmd.Csv) !void {
     var std_logger = try sig.trace.ChannelPrintLogger.init(.{
         .allocator = std.heap.c_allocator,
         .max_level = sig.trace.Level.debug,
@@ -178,22 +198,14 @@ pub fn csvDump() !void {
     logger.info().logf("using pipe path: {s}", .{pipe_path});
 
     // owner filters
-    var maybe_owner_pubkeys = try getOwnerFilters(allocator);
-    defer if (maybe_owner_pubkeys) |*owners| owners.deinit();
-    if (maybe_owner_pubkeys) |owner_pubkeys| {
-        logger.info().logf("owner filters: {s}", .{owner_pubkeys.keys()});
-    } else {
-        logger.info().log("owner filters: none");
-    }
+    var owner_pubkeys = try getOwnerFilters(allocator, config.owner_accounts);
+    defer owner_pubkeys.deinit(allocator);
+    logger.info().logf("owner filters: {s}", .{owner_pubkeys.keys()});
 
     // account filters
-    var maybe_account_pubkeys = try getAccountFilters(allocator);
-    defer if (maybe_account_pubkeys) |*accounts| accounts.deinit();
-    if (maybe_account_pubkeys) |account_pubkeys| {
-        logger.info().logf("account filters: {s}", .{account_pubkeys.keys()});
-    } else {
-        logger.info().log("account filters: none");
-    }
+    var account_pubkeys = try getAccountFilters(allocator, config.accounts);
+    defer account_pubkeys.deinit(allocator);
+    logger.info().logf("account filters: {s}", .{account_pubkeys.keys()});
 
     // csv file to dump to
     const dump_csv_path = sig.VALIDATOR_DIR ++ "accounts.csv";
@@ -258,16 +270,8 @@ pub fn csvDump() !void {
         var fmt_count: u64 = 0;
         for (account_payload.accounts, account_payload.pubkeys) |account, pubkey| {
             // only dump accounts that match the filters
-            if (maybe_owner_pubkeys) |owners| {
-                if (!owners.contains(account.owner)) {
-                    continue;
-                }
-            }
-            if (maybe_account_pubkeys) |accounts| {
-                if (!accounts.contains(pubkey)) {
-                    continue;
-                }
-            }
+            if (!owner_pubkeys.contains(account.owner)) continue;
+            if (!account_pubkeys.contains(pubkey)) continue;
             fmt_count += 120 + 5 * account.data.len();
         }
 
@@ -277,16 +281,8 @@ pub fn csvDump() !void {
         // write the rows
         for (account_payload.accounts, account_payload.pubkeys) |account, pubkey| {
             // only dump accounts that match the filters
-            if (maybe_owner_pubkeys) |owners| {
-                if (!owners.contains(account.owner)) {
-                    continue;
-                }
-            }
-            if (maybe_account_pubkeys) |accounts| {
-                if (!accounts.contains(pubkey)) {
-                    continue;
-                }
-            }
+            if (!owner_pubkeys.contains(account.owner)) continue;
+            if (!account_pubkeys.contains(pubkey)) continue;
 
             // build the csv row
             const x = try std.fmt.bufPrint(
@@ -346,7 +342,7 @@ pub fn csvDumpIOWriter(
 
 /// NOTE: this is different from the other benchmarks because it reads from a stream
 /// without writing. This allows us to benchmark any type of data from the pipe.
-pub fn benchmark() !void {
+pub fn benchmark(config: Cmd.Benchmark) !void {
     const allocator = std.heap.c_allocator;
     var std_logger = try sig.trace.ChannelPrintLogger.init(.{
         .allocator = allocator,
