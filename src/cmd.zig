@@ -728,7 +728,8 @@ pub fn main() !void {
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    const logger = try spawnLogger(gpa_allocator, current_config);
+    const maybe_file, const logger = try spawnLogger(gpa_allocator, current_config);
+    defer if (maybe_file) |file| file.close();
     defer logger.deinit();
 
     const keypair = try sig.identity.getOrInit(gpa_allocator, logger);
@@ -1369,6 +1370,7 @@ fn mockRpcServer() !void {
 const AppBase = struct {
     allocator: std.mem.Allocator,
     logger: ScopedLogger,
+    log_file: ?std.fs.File,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
 
@@ -1382,7 +1384,9 @@ const AppBase = struct {
     closed: bool,
 
     fn init(allocator: std.mem.Allocator, cmd_config: config.Cmd) !AppBase {
-        const logger = (try spawnLogger(allocator, cmd_config)).withScope(LOG_SCOPE);
+        const maybe_file, const plain_logger = try spawnLogger(allocator, cmd_config);
+        errdefer if (maybe_file) |file| file.close();
+        const logger = plain_logger.withScope(LOG_SCOPE);
         errdefer logger.deinit();
 
         const metrics_registry = globalRegistry();
@@ -1417,6 +1421,7 @@ const AppBase = struct {
         return .{
             .allocator = allocator,
             .logger = logger,
+            .log_file = maybe_file,
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
             .my_keypair = my_keypair,
@@ -1440,6 +1445,7 @@ const AppBase = struct {
         self.allocator.free(self.entrypoints);
         self.metrics_thread.detach();
         self.logger.deinit();
+        if (self.log_file) |file| file.close();
     }
 };
 
@@ -1483,18 +1489,27 @@ fn startGossip(
     return service;
 }
 
-fn spawnLogger(allocator: std.mem.Allocator, cmd_config: config.Cmd) !Logger {
-    const writer = if (cmd_config.log_file) |path| blk: {
-        const file = try std.fs.cwd().createFile(path, .{});
-        break :blk file.writer();
-    } else null;
+fn spawnLogger(
+    allocator: std.mem.Allocator,
+    cmd_config: config.Cmd,
+) !struct { ?std.fs.File, Logger } {
+    const file, const writer = if (cmd_config.log_file) |path| blk: {
+        const file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |e| switch (e) {
+            error.FileNotFound => try std.fs.cwd().createFile(path, .{}),
+            else => return e,
+        };
+        try file.seekFromEnd(0);
+        break :blk .{ file, file.writer() };
+    } else .{ null, null };
+
     var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = cmd_config.log_level,
         .max_buffer = 1 << 20,
         .write_stderr = cmd_config.tee_logs or cmd_config.log_file == null,
     }, writer);
-    return std_logger.logger();
+
+    return .{ file, std_logger.logger() };
 }
 
 const LoadedSnapshot = struct {
