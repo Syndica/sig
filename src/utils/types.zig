@@ -84,7 +84,10 @@ pub fn ReturnType(comptime FnPtr: type) type {
 /// constructs like `if (maybe_x) |x|`
 ///
 /// The value itself remains unchanged. This is only for type casting.
-pub fn toOptional(x: anytype) if (@typeInfo(@TypeOf(x)) == .Optional) @TypeOf(x) else ?@TypeOf(x) {
+pub fn toOptional(x: anytype) switch (@typeInfo(@TypeOf(x))) {
+    .Optional, .Null => @TypeOf(x),
+    else => ?@TypeOf(x),
+} {
     return x;
 }
 
