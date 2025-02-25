@@ -173,3 +173,56 @@ test "bytesAreCurvePoint" {
         try std.testing.expect(!bytesAreCurvePoint(off_curve));
     }
 }
+
+/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L633
+pub fn findProgramAddress(seeds: []const []const u8, program_id: Pubkey) PubkeyError!struct { Pubkey, u8 } {
+    var bump_seed = [_]u8{std.math.maxInt(u8)};
+    for (0..std.math.maxInt(u8)) |_| {
+        defer bump_seed[0] -= 1;
+        const derived_key = createProgramAddress(seeds, &bump_seed, program_id) catch |err| {
+            switch (err) {
+                PubkeyError.InvalidSeeds => continue,
+                else => return err,
+            }
+        };
+        return .{ derived_key, bump_seed[0] };
+    }
+    // TODO: Is this the correct error to return here?
+    return PubkeyError.InvalidSeeds;
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L721
+pub fn createProgramAddress(seeds: []const []const u8, bump_seed: []const u8, program_id: Pubkey) PubkeyError!Pubkey {
+    if (seeds.len + 1 > MAX_SEEDS) return PubkeyError.MaxSeedLenExceeded;
+    for (seeds) |seed| if (seed.len > MAX_SEED_LEN) return PubkeyError.MaxSeedLenExceeded;
+    if (bump_seed.len > MAX_SEED_LEN) return PubkeyError.MaxSeedLenExceeded;
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    for (seeds) |seed| hasher.update(seed);
+    hasher.update(bump_seed);
+    hasher.update(&program_id.data);
+    hasher.update(PDA_MARKER);
+    const hash = hasher.finalResult();
+
+    if (bytesAreCurvePoint(&hash)) return PubkeyError.InvalidSeeds;
+
+    return .{ .data = hash };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L289-L290
+pub fn bytesAreCurvePoint(_: []const u8) bool {
+    // TODO: Implement
+    return false;
+}
+
+test "findProgramAddress" {
+    var prng = std.Random.DefaultPrng.init(5083);
+    for (0..1_000) |_| {
+        const program_id = Pubkey.initRandom(prng.random());
+        const derived_key, const bump_seed = try findProgramAddress(&.{ "Lil'", "Bits" }, program_id);
+        try std.testing.expectEqual(
+            derived_key,
+            createProgramAddress(&.{ "Lil'", "Bits" }, &.{bump_seed}, program_id),
+        );
+    }
+}

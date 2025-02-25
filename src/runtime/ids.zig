@@ -19,13 +19,6 @@ pub const SYSVAR_REWARDS_ID =
 
 pub const ADDRESS_LOOKUP_TABLE_PROGRAM_ID =
     Pubkey.parseBase58String("AddressLookupTab1e1111111111111111111111111") catch unreachable;
-// Deprecated
-pub const BPF_LOADER_V1_PROGRAM_ID =
-    Pubkey.parseBase58String("BPFLoader1111111111111111111111111111111111") catch unreachable;
-pub const BPF_LOADER_V2_PROGRAM_ID =
-    Pubkey.parseBase58String("BPFLoader2111111111111111111111111111111111") catch unreachable;
-pub const BPF_LOADER_V3_PROGRAM_ID =
-    Pubkey.parseBase58String("BPFLoaderUpgradeab1e11111111111111111111111") catch unreachable;
 pub const COMPUTE_BUDGET_PROGRAM_ID =
     Pubkey.parseBase58String("ComputeBudget111111111111111111111111111111") catch unreachable;
 pub const CONFIG_PROGRAM_ID =
