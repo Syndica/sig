@@ -17,10 +17,10 @@ sudo make start        # start sig and the timer to periodically update sig
 sudo make uninstall
 ```
 
-
 ## Configuration
 
 These options may be configured in /etc/sig.conf
 
 - CLI_ARGS: The command line options that will be passed to sig. Default: '--log-file /home/sig/sig/logs/sig.log'
-- BRANCH: The branch that will be checked periodically and rebuilt when it changes. Default: main
+- BRANCH: The branch that will be checked periodically and rebuilt when it changes. Default: 'main'
+- SLACK_WEBHOOK_URL (optional): Enable slack web hooks. Only used if set to non-empty. Default: ''

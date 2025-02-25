@@ -16,6 +16,10 @@ sudo -iu sig bash <<'EOF' | tee /dev/null
     git checkout remotes/origin/$BRANCH
     echo building sig
     zig build -Doptimize=ReleaseSafe -Dno-run sig
+
+    if ! [ -z "$SLACK_WEBHOOK_URL" ]; then
+        echo "SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL" > /home/sig/sig/metrics/.env
+    fi
 EOF
 code=$?
 
@@ -30,7 +34,9 @@ elif [[ $code == 0 ]]; then
     # 0 means there was a change and rebuild, so restart sig
     systemctl restart sig
     cd /home/sig/sig/metrics
-    docker-compose restart
+    docker-compose down
+    docker-compose pull
+    docker-compose up -d
 else
     # other codes indicate error and should be propagated
     exit $code
