@@ -14,11 +14,12 @@ pub const transaction_context = @import("transaction_context.zig");
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
 pub const FeatureSet = feature_set.FeatureSet;
 pub const InstructionContext = instruction_context.InstructionContext;
-pub const InstructionAccountInfo = instruction_context.InstructionAccountInfo;
+pub const InstructionContextAccountMeta = instruction_context.InstructionContextAccountMeta;
+pub const InstructionContextProgramMeta = instruction_context.InstructionContextProgramMeta;
 pub const LogCollector = log_collector.LogCollector;
 pub const SysvarCache = sysvar_cache.SysvarCache;
 pub const TransactionContext = transaction_context.TransactionContext;
-pub const TransactionAccount = transaction_context.TransactionAccount;
+pub const TransactionContextAccount = transaction_context.TransactionContextAccount;
 
 // TODO: move to accounts db
 pub const AccountSharedData = @import("account_shared_data.zig").AccountSharedData;
@@ -27,4 +28,5 @@ pub const AccountSharedData = @import("account_shared_data.zig").AccountSharedDa
 pub const MAX_INSTRUCTION_ACCOUNTS: usize = 256;
 
 /// TODO: Why do I need to define this here for the tests to run?
+pub const bpf_loader_program_execute = @import("program/bpf_loader_program/execute.zig");
 pub const system_program_execute = @import("program/system_program/execute.zig");
