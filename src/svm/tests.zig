@@ -43,7 +43,14 @@ fn testAsmWithMemory(
     }, .v0);
 
     var loader: BuiltinProgram = .{};
-    var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
+    var vm = try Vm.init(
+        allocator,
+        &executable,
+        m,
+        &loader,
+        .noop,
+        stack_memory.len,
+    );
     defer vm.deinit();
 
     const result = vm.run();
@@ -1904,7 +1911,14 @@ test "pqr" {
         var loader: BuiltinProgram = .{};
         const map = try MemoryMap.init(&.{}, .v2);
 
-        var vm = try Vm.init(allocator, &executable, map, &loader, 0);
+        var vm = try Vm.init(
+            allocator,
+            &executable,
+            map,
+            &loader,
+            .noop,
+            0,
+        );
         defer vm.deinit();
 
         const unsigned_expected: u64 = expected;
@@ -1945,7 +1959,14 @@ test "pqr divide by zero" {
         var loader: BuiltinProgram = .{};
         const map = try MemoryMap.init(&.{}, .v3);
 
-        var vm = try Vm.init(allocator, &executable, map, &loader, 0);
+        var vm = try Vm.init(
+            allocator,
+            &executable,
+            map,
+            &loader,
+            .noop,
+            0,
+        );
         defer vm.deinit();
 
         try expectEqual(error.DivisionByZero, vm.run());
@@ -2167,7 +2188,14 @@ pub fn testElfWithSyscalls(
         Region.init(.mutable, &.{}, memory.INPUT_START),
     }, .v0);
 
-    var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
+    var vm = try Vm.init(
+        allocator,
+        &executable,
+        m,
+        &loader,
+        .noop,
+        stack_memory.len,
+    );
     defer vm.deinit();
 
     const result = vm.run();
