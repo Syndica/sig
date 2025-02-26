@@ -7,7 +7,7 @@ const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
-const CircBuf = sig.utils.collections.CircBuf;
+const RingBuffer = sig.utils.collections.RingBuffer;
 
 const Clock = sig.runtime.sysvar.Clock;
 
@@ -77,7 +77,7 @@ pub const VoteState = struct {
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
     /// the top of the range is exclusive
-    prior_voters: CircBuf(PriorVote, MAX_PRIOR_VOTERS),
+    prior_voters: RingBuffer(PriorVote, MAX_PRIOR_VOTERS),
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
@@ -108,7 +108,7 @@ pub const VoteState = struct {
             .commission = commission,
             .votes = std.ArrayList(LandedVote).init(allocator),
             .root_slot = null,
-            .prior_voters = CircBuf(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };

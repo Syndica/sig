@@ -601,10 +601,11 @@ pub fn Window(T: type) type {
     };
 }
 
-/// `CircBuf` is a fixed-size circular buffer (ring buffer) implementation.
+/// Analogous to [CircBuf](https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/vote-interface/src/state/vote_state_0_23_5.rs#L44)
+/// `RingBuffer` is a fixed-size circular buffer (ring buffer) implementation.
 /// It stores a fixed number of elements of type `I` and overwrites the oldest elements
 /// when the buffer is full.
-pub fn CircBuf(comptime I: type, comptime Size: usize) type {
+pub fn RingBuffer(comptime I: type, comptime Size: usize) type {
     return struct {
         buf: [Size]I,
         idx: usize,
@@ -905,9 +906,9 @@ test "Window realigns" {
     }
 }
 
-test "CircBuf" {
-    const IntCircBuf = CircBuf(i32, 3);
-    var cb = IntCircBuf.DEFAULT;
+test "RingBuffer" {
+    const IntRingBuffer = RingBuffer(i32, 3);
+    var cb = IntRingBuffer.DEFAULT;
 
     try std.testing.expect(cb.is_empty);
     try std.testing.expect(cb.last() == null);
