@@ -95,7 +95,7 @@ pub fn newInstruction(
     keypair: Ed25519.KeyPair,
     message: []const u8,
 ) !sig.core.Instruction {
-    std.debug.assert(builtin.is_test);
+    if (!builtin.is_test) @compileError("newInstruction is only for use in tests");
     std.debug.assert(message.len < std.math.maxInt(u16));
 
     const signature = try keypair.sign(message, null);
@@ -143,7 +143,7 @@ fn testCase(
     num_signatures: u16,
     offsets: Ed25519SignatureOffsets,
 ) PrecompileProgramError!void {
-    std.debug.assert(builtin.is_test);
+    if (!builtin.is_test) @compileError("testCase is only for use in tests");
 
     var instruction_data: [ED25519_DATA_START]u8 align(2) = undefined;
     @memcpy(instruction_data[0..2], std.mem.asBytes(&num_signatures));
