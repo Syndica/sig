@@ -36,14 +36,28 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
     defer server_ctx.allocator.free(buffer);
 
     var http_server = std.http.Server.init(conn, buffer);
-    var request = try http_server.receiveHead();
+    var request = http_server.receiveHead() catch |err| {
+        logger.err().field("conn", conn.address).logf("Receive head error: {s}", .{@errorName(err)});
+        return;
+    };
+    const head_info = requests.HeadInfo.parseFromStdHead(request.head) catch |err| {
+        switch (err) {
+            error.RequestTargetTooLong => logger.err().field("conn", conn.address).logf(
+                "Request target was too long: '{}'",
+                .{std.zig.fmtEscapes(request.head.target)},
+            ),
+            else => |e| logger.err().field("conn", conn.address)
+                .logf("Request error: {s}", .{@errorName(e)}),
+        }
+        return;
+    };
 
-    const conn_address = request.server.connection.address;
-    logger.info().logf("Responding to request from {}: {} {s}", .{
-        conn_address, requests.methodFmt(request.head.method), request.head.target,
-    });
+    logger.info().field("conn", conn.address).logf(
+        "Responding to request: {} {s}",
+        .{ requests.methodFmt(request.head.method), request.head.target },
+    );
 
-    switch (request.head.method) {
+    switch (head_info.method) {
         .HEAD, .GET => switch (requests.getRequestTargetResolve(
             logger.unscoped(),
             request.head.target,
@@ -98,6 +112,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
                 try response.end();
                 return;
             },
+
             .health => {
                 try request.respond("unknown", .{
                     .status = .ok,
@@ -106,12 +121,19 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
                 return;
             },
 
-            .genesis_file => {},
+            .genesis_file => {
+                logger.err().field("conn", conn.address).logf("Attempt to get our genesis file", .{});
+                try request.respond("Genesis file get is not yet implemented", .{
+                    .status = .service_unavailable,
+                    .keep_alive = false,
+                });
+                return;
+            },
 
             .not_found => {},
         },
         .POST => {
-            logger.err().logf("{} tried to invoke our RPC", .{conn_address});
+            logger.err().field("conn", conn.address).logf("Attempt to invoke our RPC service", .{});
             try request.respond("RPCs are not yet implemented", .{
                 .status = .service_unavailable,
                 .keep_alive = false,
@@ -123,9 +145,9 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
 
     // fallthrough to 404 Not Found
 
-    logger.err().logf(
-        "{} made an unrecognized request '{} {s}'",
-        .{ conn_address, requests.methodFmt(request.head.method), request.head.target },
+    logger.err().field("conn", conn.address).logf(
+        "Unrecognized request '{} {s}'",
+        .{ requests.methodFmt(request.head.method), request.head.target },
     );
     try request.respond("", .{
         .status = .not_found,
