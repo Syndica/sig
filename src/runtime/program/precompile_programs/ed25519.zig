@@ -39,6 +39,7 @@ pub const Ed25519SignatureOffsets = extern struct {
     message_instruction_idx: u16 = 0,
 };
 
+// TODO: support verify_strict feature https://github.com/anza-xyz/agave/pull/1876/
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L88
 // https://github.com/firedancer-io/firedancer/blob/af74882ffb2c24783a82718dbc5111a94e1b5f6f/src/flamenco/runtime/program/fd_precompiles.c#L118
 pub fn verify(
@@ -293,5 +294,3 @@ test "ed25519 signature offset" {
         );
     }
 }
-
-// TODO: should we implement https://github.com/anza-xyz/agave/pull/1876/ ?

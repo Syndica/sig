@@ -12,7 +12,15 @@ pub const ed25519Verify = ed25519.verify;
 pub const secp256k1Verify = secp256k1.verify;
 pub const secp256r1Verify = secp256r1.verify;
 
-pub const COMPUTE_UNITS = 0; // does this consume compute units?
+/// https://github.com/anza-xyz/agave/blob/df063a8c6483ad1d2bbbba50ab0b7fd7290eb7f4/cost-model/src/block_cost_limits.rs#L15
+/// Cluster averaged compute unit to micro-sec conversion rate
+pub const COMPUTE_UNIT_TO_US_RATIO: u64 = 30;
+/// Number of compute units for one signature verification.
+pub const SIGNATURE_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 24;
+/// Number of compute units for one secp256k1 signature verification.
+pub const SECP256K1_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 223;
+/// Number of compute units for one ed25519 signature verification.
+pub const ED25519_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 76;
 
 // TODO: should be moved to global features file
 pub const SECP256R1_FEATURE_ID =
@@ -35,6 +43,34 @@ pub const PRECOMPILES = [_]Precompile{
         .required_feature = SECP256R1_FEATURE_ID,
     },
 };
+
+// https://github.com/anza-xyz/agave/blob/f9d4939d1d6ad2783efc8ec60db058809bb87f55/cost-model/src/cost_model.rs#L115
+pub fn verifyPrecompilesComputeCost(
+    transaction: sig.core.Transaction,
+    feature_set: sig.runtime.FeatureSet,
+) u64 {
+    _ = feature_set; // TODO: support verify_strict feature https://github.com/anza-xyz/agave/pull/1876/
+
+    var n_secp256k1_instruction_signatures: u64 = 0;
+    var n_ed25519_instruction_signatures: u64 = 0;
+
+    // https://github.com/anza-xyz/agave/blob/6ea38fce866595908486a01c7d6b7182988f3b2d/sdk/program/src/message/sanitized.rs#L385
+    for (transaction.msg.instructions) |instruction| {
+        if (instruction.data.len == 0) continue;
+
+        const program_id = transaction.msg.account_keys[instruction.program_index];
+        if (program_id.equals(sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID)) {
+            n_secp256k1_instruction_signatures +|= instruction.data[0];
+        }
+        if (program_id.equals(sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID)) {
+            n_ed25519_instruction_signatures +|= instruction.data[0];
+        }
+    }
+
+    return transaction.msg.signature_count.len *| SIGNATURE_COST +|
+        n_secp256k1_instruction_signatures *| SECP256K1_VERIFY_COST +|
+        n_ed25519_instruction_signatures *| ED25519_VERIFY_COST;
+}
 
 pub fn verifyPrecompiles(
     allocator: std.mem.Allocator,
@@ -118,7 +154,7 @@ pub fn getInstructionData(
         break :data all_instruction_datas[instruction_idx];
     };
 
-    if (offset + len > data.len) return error.InvalidDataOffsets;
+    if (offset +| len > data.len) return error.InvalidDataOffsets;
     return data[offset..][0..len];
 }
 
