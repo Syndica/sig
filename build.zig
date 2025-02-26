@@ -232,6 +232,7 @@ pub fn build(b: *Build) !void {
 
     b.installArtifact(benchmark_exe);
 
+    benchmark_exe.root_module.addImport("xev", xev_mod);
     benchmark_exe.root_module.addImport("base58", base58_mod);
     benchmark_exe.root_module.addImport("zig-network", zig_network_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
