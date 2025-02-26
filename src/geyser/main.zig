@@ -161,7 +161,7 @@ pub fn csvDump() !void {
         .allocator = std.heap.c_allocator,
         .max_level = sig.trace.Level.debug,
         .max_buffer = 1 << 20,
-    });
+    }, null);
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
@@ -348,7 +348,7 @@ pub fn benchmark() !void {
         .allocator = allocator,
         .max_level = .debug,
         .max_buffer = 1 << 15,
-    });
+    }, null);
     defer std_logger.deinit();
     const logger = std_logger.logger();
 
