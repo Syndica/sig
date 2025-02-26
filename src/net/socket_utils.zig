@@ -420,7 +420,14 @@ const PerThread = struct {
 };
 
 // TODO: Evaluate when XevThread socket backend is beneficial.
-const SocketBackend = PerThread;
+const SocketBackend = switch (builtin.os.tag) {
+    // BSD doesn't have a blocking `sendto`, which means that if our
+    // send_channel gets ovesatured we end up either dropping packets
+    // through NOBUFS. Using an event loop allows us to block and throttle
+    // the throughput, ensuring that no packets are lost.
+    .macos => XevThread,
+    else => PerThread,
+};
 
 pub const SocketThread = struct {
     allocator: Allocator,
