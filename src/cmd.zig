@@ -2,7 +2,7 @@ const builtin = @import("builtin");
 const cli = @import("zig-cli");
 const sig = @import("sig.zig");
 const std = @import("std");
-const config = @import("cmd/config.zig");
+const config = @import("config.zig");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
