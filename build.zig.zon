@@ -43,5 +43,9 @@
             .url = "git+https://github.com/Rexicon226/zig-poseidon#82e41845bfc689192359639fef5bb89c452388b2",
             .hash = "12208f0d8388111308c919d73c24e9a595c3f2b5f83edf2cebf10598f8439fe33843",
         },
+        .secp256k1 = .{
+            .url = "git+https://github.com/Sobeston/secp256k1-zig#5fafb6a6fa6f9032314cd232e3cec1c2e80bf510",
+            .hash = "1220fdb0e6c6852902cc54d384cf5a4fc5902901b312906b732f2eb5c8748d0b8b39",
+        },
     },
 }
