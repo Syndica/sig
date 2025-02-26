@@ -9,6 +9,7 @@ ExecStart=/home/sig/sig/zig-out/bin/sig $CLI_ARGS
 Restart=always
 User=sig
 Group=sig
+LimitNOFILE=infinity
 
 [Install]
 WantedBy=multi-user.target
