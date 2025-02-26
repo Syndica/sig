@@ -6,7 +6,7 @@ const gossip_fuzz_service = sig.gossip.fuzz_service;
 const gossip_fuzz_table = sig.gossip.fuzz_table;
 const accountsdb_snapshot_fuzz = sig.accounts_db.fuzz_snapshot;
 const ledger_fuzz = sig.ledger.fuzz_ledger;
-const StandardErrLogger = sig.trace.ChannelPrintLogger;
+const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
 
 const spawnMetrics = sig.prometheus.spawnMetrics;
@@ -30,11 +30,11 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var std_logger = try StandardErrLogger.init(.{
+    var std_logger = try ChannelPrintLogger.init(.{
         .allocator = std.heap.c_allocator,
         .max_level = Level.debug,
         .max_buffer = 1 << 20,
-    });
+    }, null);
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
