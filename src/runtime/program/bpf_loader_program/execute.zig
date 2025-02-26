@@ -68,7 +68,7 @@ pub fn execute(
     // Parse ELF and create executable
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L136-L144
     const elf = try svm.Elf.parse(allocator, program_account.account.data, &environment); // TODO: Add config to environment
-    defer elf.deinit();
+    errdefer elf.deinit();
     var executable = try svm.Executable.fromElf(elf);
     defer executable.deinit();
 
@@ -108,8 +108,8 @@ pub fn execute(
 
         const stack_size = executable.config.stackSize();
         const heap_size = ic.tc.compute_budget.heap_size;
-        const heap_cost =
-            ((heap_size +| (PAGE_SIZE - 1)) / PAGE_SIZE - 1) * ic.tc.compute_budget.heap_cost;
+        const cost = std.mem.alignBackward(u64, heap_size -| 1, PAGE_SIZE) / PAGE_SIZE;
+        const heap_cost = cost * ic.tc.compute_budget.heap_cost;
 
         // TODO: Replace with mem pool similar to agave?
         // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L306-L307
