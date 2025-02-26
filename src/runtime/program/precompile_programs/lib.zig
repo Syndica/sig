@@ -49,7 +49,8 @@ pub fn verifyPrecompilesComputeCost(
     transaction: sig.core.Transaction,
     feature_set: sig.runtime.FeatureSet,
 ) u64 {
-    _ = feature_set; // TODO: support verify_strict feature https://github.com/anza-xyz/agave/pull/1876/
+    // TODO: support verify_strict feature https://github.com/anza-xyz/agave/pull/1876/
+    _ = feature_set;
 
     var n_secp256k1_instruction_signatures: u64 = 0;
     var n_ed25519_instruction_signatures: u64 = 0;
@@ -59,15 +60,15 @@ pub fn verifyPrecompilesComputeCost(
         if (instruction.data.len == 0) continue;
 
         const program_id = transaction.msg.account_keys[instruction.program_index];
-        if (program_id.equals(sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID)) {
+        if (program_id.equals(&sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID)) {
             n_secp256k1_instruction_signatures +|= instruction.data[0];
         }
-        if (program_id.equals(sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID)) {
+        if (program_id.equals(&sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID)) {
             n_ed25519_instruction_signatures +|= instruction.data[0];
         }
     }
 
-    return transaction.msg.signature_count.len *| SIGNATURE_COST +|
+    return transaction.msg.signature_count *| SIGNATURE_COST +|
         n_secp256k1_instruction_signatures *| SECP256K1_VERIFY_COST +|
         n_ed25519_instruction_signatures *| ED25519_VERIFY_COST;
 }
