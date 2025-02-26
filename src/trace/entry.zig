@@ -14,8 +14,11 @@ pub fn Entry(comptime Fields: type, comptime scope: ?[]const u8) type {
         logger: ScopedLogger(scope),
         level: Level,
         fields: Fields,
-
         const Self = @This();
+
+        pub fn Field(comptime name: [:0]const u8, comptime FieldType: type) type {
+            return Entry(FieldsPlus(name, FieldType), scope);
+        }
 
         /// Add a field to the log message.
         pub fn field(
