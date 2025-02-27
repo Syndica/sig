@@ -62,45 +62,24 @@ fn executeIntializeAccount(
     authorized_withdrawer: Pubkey,
     commission: u8,
 ) InstructionError!void {
-    // node must agree to accept this vote account
-    if (!ic.isPubkeySigner(node_pubkey)) {
-        try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
-        return InstructionError.MissingRequiredSignature;
-    }
-
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
         vote_instruction.IntializeAccount.accountIndex(.rent_sysvar),
     );
+
+    const min_balance = rent.minimumBalance(vote_account.getData().len);
+    if (vote_account.account.lamports < min_balance) {
+        return InstructionError.InsufficientFunds;
+    }
 
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
         vote_instruction.IntializeAccount.accountIndex(.clock_sysvar),
     );
 
-    // Apply all the checks to the account data.
-    const min_balance = rent.minimumBalance(vote_account.getData().len);
-    if (vote_account.account.lamports < min_balance) {
-        return InstructionError.InsufficientFunds;
-    }
-
-    if (vote_account.getData().len != VoteState.sizeOf()) {
-        return InstructionError.InvalidAccountData;
-    }
-
-    const versioned = try vote_account.deserializeFromAccountData(allocator, VoteState);
-
-    if (!versioned.isUninitialized()) {
-        return (InstructionError.AccountAlreadyInitialized);
-    }
-
-    var authority = try ic.borrowInstructionAccount(
-        vote_instruction.IntializeAccount.accountIndex(.signer),
-    );
-    defer authority.release();
-
     try intializeAccount(
         allocator,
+        ic,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
@@ -112,6 +91,7 @@ fn executeIntializeAccount(
 
 fn intializeAccount(
     allocator: std.mem.Allocator,
+    ic: *InstructionContext,
     node_pubkey: Pubkey,
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
@@ -119,6 +99,22 @@ fn intializeAccount(
     vote_account: *BorrowedAccount,
     clock: Clock,
 ) InstructionError!void {
+    if (vote_account.getData().len != VoteState.sizeOf()) {
+        return InstructionError.InvalidAccountData;
+    }
+
+    const versioned = try vote_account.deserializeFromAccountData(allocator, VoteState);
+
+    if (!versioned.isUninitialized()) {
+        return (InstructionError.AccountAlreadyInitialized);
+    }
+
+    // node must agree to accept this vote account
+    if (!ic.isPubkeySigner(node_pubkey)) {
+        try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
+        return InstructionError.MissingRequiredSignature;
+    }
+
     const vote_state = try VoteState.init(
         allocator,
         node_pubkey,
