@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const vote_program = sig.runtime.program.vote_program;
+const vote_instruction = vote_program.vote_instruction;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -9,11 +10,10 @@ const VoteState = vote_program.state.VoteState;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
-
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 
-const VoteProgramInstruction = vote_program.Instruction;
+const VoteProgramInstruction = vote_instruction.Instruction;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
 pub fn execute(
@@ -24,6 +24,15 @@ pub fn execute(
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/vote/src/vote_processor.rs#L55C40-L55C45
     try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
 
+    var vote_account = try ic.borrowInstructionAccount(
+        vote_instruction.IntializeAccount.accountIndex(.account),
+    );
+    defer vote_account.release();
+
+    if (!vote_account.account.owner.equals(&vote_program.ID)) {
+        return InstructionError.InvalidAccountOwner;
+    }
+
     const instruction = try ic.deserializeInstruction(allocator, VoteProgramInstruction);
     defer sig.bincode.free(allocator, instruction);
 
@@ -31,6 +40,7 @@ pub fn execute(
         .initialize_account => |args| try executeIntializeAccount(
             allocator,
             ic,
+            &vote_account,
             args.node_pubkey,
             args.authorized_voter,
             args.authorized_withdrawer,
@@ -40,7 +50,7 @@ pub fn execute(
     };
 }
 
-//// [agave] https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884
+//// [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/vote/src/vote_processor.rs#L68-L76
 ///
 /// Initialize the vote_state for a vote account
 /// Assumes that the account is being init as part of a account creation or balance transfer and
@@ -48,66 +58,42 @@ pub fn execute(
 fn executeIntializeAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
     node_pubkey: Pubkey,
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
     commission: u8,
 ) InstructionError!void {
-    // node must agree to accept this vote account
-    if (!ic.isPubkeySigner(node_pubkey)) {
-        try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
-        return InstructionError.MissingRequiredSignature;
-    }
-
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
-        VoteProgramInstruction.InitializeAccountIndex.RentSysvar.index(),
+        vote_instruction.IntializeAccount.accountIndex(.rent_sysvar),
     );
 
-    const clock = try ic.getSysvarWithAccountCheck(
-        Clock,
-        VoteProgramInstruction.InitializeAccountIndex.ClockSysvar.index(),
-    );
-
-    var vote_account = try ic.borrowInstructionAccount(
-        VoteProgramInstruction.InitializeAccountIndex.Account.index(),
-    );
-    defer vote_account.release();
-
-    // Apply all the checks to the account data.
     const min_balance = rent.minimumBalance(vote_account.getData().len);
     if (vote_account.account.lamports < min_balance) {
         return InstructionError.InsufficientFunds;
     }
 
-    if (vote_account.getData().len != VoteState.sizeOf()) {
-        return InstructionError.InvalidAccountData;
-    }
-
-    const versioned = try vote_account.deserializeFromAccountData(allocator, VoteState);
-
-    if (!versioned.isUninitialized()) {
-        return (InstructionError.AccountAlreadyInitialized);
-    }
-
-    var authority = try ic.borrowInstructionAccount(
-        VoteProgramInstruction.InitializeAccountIndex.Signer.index(),
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        vote_instruction.IntializeAccount.accountIndex(.clock_sysvar),
     );
-    defer authority.release();
 
     try intializeAccount(
         allocator,
+        ic,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
-        &vote_account,
+        vote_account,
         clock,
     );
 }
 
 fn intializeAccount(
     allocator: std.mem.Allocator,
+    ic: *InstructionContext,
     node_pubkey: Pubkey,
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
@@ -115,6 +101,22 @@ fn intializeAccount(
     vote_account: *BorrowedAccount,
     clock: Clock,
 ) InstructionError!void {
+    if (vote_account.getData().len != VoteState.sizeOf()) {
+        return InstructionError.InvalidAccountData;
+    }
+
+    const deserialized_state = try vote_account.deserializeFromAccountData(allocator, VoteState);
+
+    if (!deserialized_state.isUninitialized()) {
+        return (InstructionError.AccountAlreadyInitialized);
+    }
+
+    // node must agree to accept this vote account
+    if (!ic.isPubkeySigner(node_pubkey)) {
+        try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
+        return InstructionError.MissingRequiredSignature;
+    }
+
     const vote_state = try VoteState.init(
         allocator,
         node_pubkey,
