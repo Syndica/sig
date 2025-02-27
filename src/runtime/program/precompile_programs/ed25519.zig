@@ -4,8 +4,6 @@ const sig = @import("../../../sig.zig");
 const precompile_programs = sig.runtime.program.precompile_programs;
 
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
-const getInstructionValue = precompile_programs.getInstructionValue;
-const getInstructionData = precompile_programs.getInstructionData;
 
 const Ed25519 = std.crypto.sign.Ed25519;
 
@@ -39,7 +37,6 @@ pub const Ed25519SignatureOffsets = extern struct {
     message_instruction_idx: u16 = 0,
 };
 
-// TODO: support verify_strict feature https://github.com/anza-xyz/agave/pull/1876/
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L88
 // https://github.com/firedancer-io/firedancer/blob/af74882ffb2c24783a82718dbc5111a94e1b5f6f/src/flamenco/runtime/program/fd_precompiles.c#L118
 pub fn verify(
@@ -88,6 +85,41 @@ pub fn verify(
         );
         signature.verify(msg, pubkey.*) catch return error.InvalidSignature;
     }
+}
+
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L163
+pub fn getInstructionData(
+    len: usize,
+    current_instruction_data: []const u8,
+    all_instruction_datas: []const []const u8,
+    instruction_idx: u16,
+    offset: u16,
+) error{InvalidDataOffsets}![]const u8 {
+    const instruction: []const u8 = if (instruction_idx == std.math.maxInt(u16))
+        current_instruction_data
+    else blk: {
+        if (instruction_idx >= all_instruction_datas.len) return error.InvalidDataOffsets;
+        break :blk all_instruction_datas[instruction_idx];
+    };
+
+    if (offset +| len > instruction.len) return error.InvalidDataOffsets;
+    return instruction[offset..][0..len];
+}
+
+fn getInstructionValue(
+    T: type,
+    current_instruction_data: []const u8,
+    all_instruction_datas: []const []const u8,
+    instruction_idx: u16,
+    offset: u16,
+) error{ InvalidDataOffsets, InvalidSignature }!*align(1) const T {
+    return @ptrCast(try getInstructionData(
+        @sizeOf(T),
+        current_instruction_data,
+        all_instruction_datas,
+        instruction_idx,
+        offset,
+    ));
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L35
@@ -209,9 +241,9 @@ test "ed25519 message data offsets" {
             .message_data_offset = 99,
             .message_data_size = 1,
         };
-        try std.testing.expectEqual(
-            testCase(1, offsets),
+        try std.testing.expectError(
             error.InvalidSignature,
+            testCase(1, offsets),
         );
     }
 
@@ -220,9 +252,9 @@ test "ed25519 message data offsets" {
             .message_data_offset = 100,
             .message_data_size = 1,
         };
-        try std.testing.expectEqual(
-            testCase(1, offsets),
+        try std.testing.expectError(
             error.InvalidDataOffsets,
+            testCase(1, offsets),
         );
     }
 
@@ -231,9 +263,9 @@ test "ed25519 message data offsets" {
             .message_data_offset = 100,
             .message_data_size = 1000,
         };
-        try std.testing.expectEqual(
-            testCase(1, offsets),
+        try std.testing.expectError(
             error.InvalidDataOffsets,
+            testCase(1, offsets),
         );
     }
 
@@ -242,9 +274,9 @@ test "ed25519 message data offsets" {
             .message_data_offset = std.math.maxInt(u16),
             .message_data_size = std.math.maxInt(u16),
         };
-        try std.testing.expectEqual(
-            testCase(1, offsets),
+        try std.testing.expectError(
             error.InvalidDataOffsets,
+            testCase(1, offsets),
         );
     }
 }
@@ -294,3 +326,5 @@ test "ed25519 signature offset" {
         );
     }
 }
+
+// TODO: should we implement https://github.com/anza-xyz/agave/pull/1876/ ?
