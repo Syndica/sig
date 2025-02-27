@@ -12,7 +12,6 @@ pub const COMPUTE_UNITS = 2_100;
 
 pub const vote_instruction = @import("instruction.zig");
 
-
 pub const VoteAuthorize = state.VoteAuthorize;
 pub const VoteAuthorizeWithSeedArgs = state.VoteAuthorizeWithSeedArgs;
 pub const VoteAuthorizeCheckedWithSeedArgs = state.VoteAuthorizeCheckedWithSeedArgs;

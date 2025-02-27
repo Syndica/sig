@@ -4,7 +4,8 @@ const sig = @import("../../../sig.zig");
 const Pubkey = sig.core.Pubkey;
 const VoteAuthorize = sig.runtime.program.vote_program.VoteAuthorize;
 const VoteAuthorizeWithSeedArgs = sig.runtime.program.vote_program.VoteAuthorizeWithSeedArgs;
-const VoteAuthorizeCheckedWithSeedArgs = sig.runtime.program.vote_program.VoteAuthorizeCheckedWithSeedArgs;
+const VoteAuthorizeCheckedWithSeedArgs =
+    sig.runtime.program.vote_program.VoteAuthorizeCheckedWithSeedArgs;
 
 pub const IntializeAccount = struct {
     node_pubkey: Pubkey,
