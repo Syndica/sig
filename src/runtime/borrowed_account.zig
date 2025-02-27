@@ -75,10 +75,11 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
-    pub fn checkDataIsMutable(self: BorrowedAccount) InstructionError!void {
+    pub fn checkDataIsMutable(self: BorrowedAccount) ?InstructionError {
         if (self.account.executable) return InstructionError.ExecutableDataModified;
         if (!self.isWritable()) return InstructionError.ReadonlyDataModified;
         if (!self.isOwnedByCurrentProgram()) return InstructionError.ExternalAccountDataModified;
+        return null;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1095
@@ -86,7 +87,7 @@ pub const BorrowedAccount = struct {
         self: BorrowedAccount,
         etc: *TransactionContext,
         length: usize,
-    ) InstructionError!void {
+    ) ?InstructionError {
         const old_length = self.getData().len;
 
         if (length != old_length and !self.isOwnedByCurrentProgram())
@@ -102,6 +103,8 @@ pub const BorrowedAccount = struct {
 
         if (new_accounts_resize_delta > MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION)
             return InstructionError.MaxAccountsDataAllocationsExceeded;
+
+        return null;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L825
@@ -161,7 +164,7 @@ pub const BorrowedAccount = struct {
         self: *BorrowedAccount,
         state: anytype,
     ) InstructionError!void {
-        try self.checkDataIsMutable();
+        if (self.checkDataIsMutable()) |err| return err;
 
         const serialized_size = try state.serializedSize();
         if (serialized_size > self.account.data.len)
@@ -176,7 +179,7 @@ pub const BorrowedAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L823
     pub fn getDataMutable(self: BorrowedAccount) InstructionError![]u8 {
-        try self.checkDataIsMutable();
+        if (self.checkDataIsMutable()) |err| return err;
         return self.account.data;
     }
 
@@ -187,8 +190,8 @@ pub const BorrowedAccount = struct {
         tc: *TransactionContext,
         new_length: usize,
     ) InstructionError!void {
-        try self.checkCanSetDataLength(tc, new_length);
-        try self.checkDataIsMutable();
+        if (self.checkCanSetDataLength(tc, new_length)) |err| return err;
+        if (self.checkDataIsMutable()) |err| return err;
         if (self.getData().len == new_length) return;
         const old_length_signed: i64 = @intCast(self.getData().len);
         const new_length_signed: i64 = @intCast(new_length);

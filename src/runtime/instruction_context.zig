@@ -20,6 +20,7 @@ pub const InstructionContextAccountMeta = struct {
     index_in_transaction: u16,
     is_signer: bool,
     is_writable: bool,
+    is_duplicate: bool,
 };
 
 /// `InstructionContext` holds all information required to execute a program instruction; excluding an allocator
@@ -48,6 +49,10 @@ pub const InstructionContext = struct {
 
     /// Serialized instruction data
     serialized_instruction: []const u8,
+
+    pub fn deinit(self: *InstructionContext, allocator: std.mem.Allocator) void {
+        allocator.free(self.serialized_instruction);
+    }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L523
     pub fn getAccountMetaIndex(

@@ -41,6 +41,7 @@ const TransactionContextParams = struct {
 const InstructionContextAccountMetaParams = struct {
     is_signer: bool = false,
     is_writable: bool = false,
+    is_duplicate: bool = false,
     index_in_transaction: u16 = 0,
 };
 
@@ -71,15 +72,14 @@ pub fn createTransactionContext(
 }
 
 pub fn createInstructionContext(
-    allocator: std.mem.Allocator,
     tc: *TransactionContext,
-    program: anytype,
-    instruction: anytype,
+    program_id: Pubkey,
+    serialized_instruction: []const u8,
     accounts_params: []const InstructionContextAccountMetaParams,
 ) !InstructionContext {
     const program_index = blk: {
         for (tc.accounts, 0..) |account, index|
-            if (account.pubkey.equals(&program.ID))
+            if (account.pubkey.equals(&program_id))
                 break :blk index;
         return error.CoulfNotFindProgramAccount;
     };
@@ -92,6 +92,7 @@ pub fn createInstructionContext(
             .pubkey = tc.accounts[account_params.index_in_transaction].pubkey,
             .is_signer = account_params.is_signer,
             .is_writable = account_params.is_writable,
+            .is_duplicate = account_params.is_duplicate,
             .index_in_transaction = account_params.index_in_transaction,
         });
     }
@@ -101,11 +102,11 @@ pub fn createInstructionContext(
         .parent = null,
         .total_account_lamports = sumAccountLamports(tc, account_metas),
         .program_meta = .{
-            .pubkey = program.ID,
+            .pubkey = program_id,
             .index_in_transaction = @intCast(program_index),
         },
         .account_metas = account_metas,
-        .serialized_instruction = try bincode.writeAlloc(allocator, instruction, .{}),
+        .serialized_instruction = serialized_instruction,
     };
 }
 
@@ -123,14 +124,22 @@ pub fn expectProgramExecuteResult(
     );
     defer transaction_context.deinit(allocator);
 
-    var instruction_context = try createInstructionContext(
-        allocator,
-        &transaction_context,
-        program,
-        instruction,
-        instruction_accounts_params,
-    );
-    defer allocator.free(instruction_context.serialized_instruction);
+    var instruction_context = blk: {
+        const serialized_instruction = try bincode.writeAlloc(
+            allocator,
+            instruction,
+            .{},
+        );
+        errdefer allocator.free(serialized_instruction);
+
+        break :blk try createInstructionContext(
+            &transaction_context,
+            program.ID,
+            serialized_instruction,
+            instruction_accounts_params,
+        );
+    };
+    defer instruction_context.deinit(allocator);
 
     try program.execute(allocator, &instruction_context);
 
@@ -138,11 +147,7 @@ pub fn expectProgramExecuteResult(
         allocator,
         expected_transaction_context_params,
     );
-    defer {
-        for (expected_transaction_context.accounts) |account|
-            allocator.free(account.account.data);
-        allocator.free(expected_transaction_context.accounts);
-    }
+    defer expected_transaction_context.deinit(allocator);
 
     try expectTransactionContextEqual(expected_transaction_context, transaction_context);
 }
