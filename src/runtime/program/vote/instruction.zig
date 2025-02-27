@@ -14,7 +14,7 @@ pub const IntializeAccount = struct {
     /// The rest is distributed to delegators based on their stake weight.
     commission: u8,
 
-    const AccountIndex = enum(u8) {
+    pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Uninitialized vote account
         account = 0,
         /// `[]` Rent sysvar
@@ -24,10 +24,6 @@ pub const IntializeAccount = struct {
         /// `[SIGNER]` New validator identity (node_pubkey)
         signer = 3,
     };
-
-    pub fn accountIndex(index: AccountIndex) u8 {
-        return @intFromEnum(index);
-    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26

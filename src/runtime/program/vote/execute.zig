@@ -24,7 +24,7 @@ pub fn execute(
     try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
 
     var vote_account = try ic.borrowInstructionAccount(
-        vote_instruction.IntializeAccount.accountIndex(.account),
+        @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.account),
     );
     defer vote_account.release();
 
@@ -64,7 +64,7 @@ fn executeIntializeAccount(
 ) InstructionError!void {
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
-        vote_instruction.IntializeAccount.accountIndex(.rent_sysvar),
+        @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.rent_sysvar),
     );
 
     const min_balance = rent.minimumBalance(vote_account.getData().len);
@@ -74,7 +74,7 @@ fn executeIntializeAccount(
 
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
-        vote_instruction.IntializeAccount.accountIndex(.clock_sysvar),
+        @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.clock_sysvar),
     );
 
     try intializeAccount(
