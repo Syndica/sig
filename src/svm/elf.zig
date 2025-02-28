@@ -862,6 +862,24 @@ pub const Elf = struct {
         return self;
     }
 
+    const SectionAttributes = packed struct(u64) {
+        write: bool = false,
+        alloc: bool = false,
+        execinstr: bool = false,
+        _3: u1 = 0,
+        merge: bool = false,
+        strings: bool = false,
+        info_link: bool = false,
+        link_order: bool = false,
+        os_nonconforming: bool = false,
+        group: bool = false,
+        tls: bool = false,
+        _11: u19 = 0,
+        ordered: bool = false,
+        exclude: bool = false,
+        _32: u32 = 0,
+    };
+
     /// Validates the Elf. Returns errors for issues encountered.
     fn validate(self: *Elf) !void {
         const header = self.headers.header;
@@ -911,10 +929,8 @@ pub const Elf = struct {
             if (std.mem.startsWith(u8, name, ".data") and
                 !std.mem.startsWith(u8, name, ".data.rel"))
             {
-                // TODO: use a packed struct here, this is ugly
-                if (shdr.sh_flags & (elf.SHF_ALLOC | elf.SHF_WRITE) ==
-                    elf.SHF_ALLOC | elf.SHF_WRITE)
-                {
+                const flags: SectionAttributes = @bitCast(shdr.sh_flags);
+                if (flags.alloc or flags.write) {
                     return error.WritableSectionsNotSupported;
                 }
             }
@@ -1219,4 +1235,28 @@ test "owned ro sections with sh offset" {
     const owned = result.owned;
     try expectEqual(memory.RODATA_START + 10, owned.offset);
     try expectEqual(20, owned.data.len);
+}
+
+test "SHT_DYNAMIC fallback" {
+    const allocator = std.testing.allocator;
+    const input_file = try std.fs.cwd().openFile(
+        sig.ELF_DATA_DIR ++ "struct_func_pointer_sbpfv0.so",
+        .{},
+    );
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    // we set the p_type of the PT_DYNAMIC header to PT_NULL, in order for the
+    // parsing to skip past it and fallback to the SHT_DYNAMIC section. For this
+    // specific input, the p_type is 232 bytes from the start.
+    @as(*align(1) u32, @ptrCast(bytes[232..][0..4])).* = elf.PT_NULL;
+
+    var loader: BuiltinProgram = .{};
+    var parsed = try Elf.parse(
+        allocator,
+        bytes,
+        &loader,
+        .{ .maximum_version = .v0 },
+    );
+    defer parsed.deinit(allocator);
 }
