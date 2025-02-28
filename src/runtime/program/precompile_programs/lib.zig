@@ -45,6 +45,7 @@ pub const PRECOMPILES = [_]Precompile{
 };
 
 // https://github.com/anza-xyz/agave/blob/f9d4939d1d6ad2783efc8ec60db058809bb87f55/cost-model/src/cost_model.rs#L115
+// https://github.com/anza-xyz/agave/blob/6ea38fce866595908486a01c7d6b7182988f3b2d/sdk/program/src/message/sanitized.rs#L378
 pub fn verifyPrecompilesComputeCost(
     transaction: sig.core.Transaction,
     feature_set: sig.runtime.FeatureSet,
@@ -209,4 +210,36 @@ test "verify ed25519" {
     };
 
     try verifyPrecompiles(std.testing.allocator, ed25519_tx, sig.runtime.FeatureSet.EMPTY);
+}
+
+test "verify cost" {
+    const keypair = try Ed25519.KeyPair.create(null);
+    const ed25519_instruction = try ed25519.newInstruction(
+        std.testing.allocator,
+        keypair,
+        "hello!",
+    );
+    defer std.testing.allocator.free(ed25519_instruction.data);
+
+    const ed25519_tx: sig.core.Transaction = .{
+        .msg = .{
+            .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
+            .instructions = &.{
+                .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
+            },
+            .signature_count = 1,
+            .readonly_signed_count = 1,
+            .readonly_unsigned_count = 0,
+            .recent_blockhash = sig.core.Hash.ZEROES,
+        },
+        .version = .legacy,
+        .signatures = &.{},
+    };
+
+    const expected_cost = 1 *| SIGNATURE_COST +| 1 *| ED25519_VERIFY_COST;
+    // cross-checked with agave (FeatureSet::default())
+    try std.testing.expectEqual(3000, expected_cost);
+
+    const compute_units = verifyPrecompilesComputeCost(ed25519_tx, sig.runtime.FeatureSet.EMPTY);
+    try std.testing.expectEqual(expected_cost, compute_units);
 }
