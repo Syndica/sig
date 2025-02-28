@@ -207,6 +207,7 @@ const XevThread = struct {
             .cancelled => unreachable, // only observable in onSend/onRecv callback.
         }
 
+        const addr = node.data.packet.addr;
         switch (st.direction) {
             .sender => {
                 node.data.packet = st.channel.tryReceive() orelse return;
@@ -215,11 +216,9 @@ const XevThread = struct {
                     loop,
                     &node.data.udp_completion,
                     &node.data.udp_state,
-                    blk: { // Convert network.EndPoint to std.net.Address
-                        const addr = node.data.packet.addr;
-                        var buf = std.BoundedArray(u8, 256){};
-                        try buf.writer().print("{}", .{addr.address});
-                        break :blk try std.net.Address.parseIp(buf.slice(), addr.port);
+                    switch (addr.address) {
+                        .ipv4 => |ipv4| std.net.Address.initIp4(ipv4.value, addr.port),
+                        .ipv6 => @panic("TODO: ipv6 support"),
                     },
                     .{ .slice = node.data.packet.data[0..node.data.packet.size] },
                     List.Node,
@@ -420,7 +419,14 @@ const PerThread = struct {
 };
 
 // TODO: Evaluate when XevThread socket backend is beneficial.
-const SocketBackend = PerThread;
+const SocketBackend = switch (builtin.os.tag) {
+    // BSD doesn't have a blocking `sendto`, which means that if our
+    // send_channel gets ovesatured we end up either dropping packets
+    // through NOBUFS. Using an event loop allows us to block and throttle
+    // the throughput, ensuring that no packets are lost.
+    .macos => XevThread,
+    else => PerThread,
+};
 
 pub const SocketThread = struct {
     allocator: Allocator,
