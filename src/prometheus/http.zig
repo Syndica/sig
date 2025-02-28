@@ -1,19 +1,10 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 const Registry = @import("registry.zig").Registry;
 const globalRegistry = @import("registry.zig").globalRegistry;
 const DEFAULT_BUCKETS = @import("histogram.zig").DEFAULT_BUCKETS;
-
-/// Initializes the global registry. Returns error if registry was already initialized.
-/// Spawns a thread to serve the metrics over http on the given port.
-pub fn spawnMetrics(
-    gpa_allocator: std.mem.Allocator,
-    port: u16,
-) !std.Thread {
-    const registry = globalRegistry();
-    return std.Thread.spawn(.{}, servePrometheus, .{ gpa_allocator, registry, port });
-}
 
 pub fn servePrometheus(
     allocator: std.mem.Allocator,
@@ -97,9 +88,6 @@ pub fn main() !void {
         }.run,
         .{},
     );
-    try servePrometheus(
-        alloc,
-        globalRegistry(),
-        12345,
-    );
+
+    try servePrometheus(alloc, globalRegistry(), 12345);
 }
