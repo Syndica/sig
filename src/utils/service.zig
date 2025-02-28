@@ -185,14 +185,15 @@ pub fn runService(
 
         // identify result
         if (result) |_| num_oks += 1 else |_| num_errors += 1;
-        const handler, const num_events, const event_name, const level_logger = if (result) |_|
-            .{ config.return_handler, num_oks, "return", logger.info() }
+        const handler, const num_events, const event_name, const level_logger, const trace //
+        = if (result) |_|
+            .{ config.return_handler, num_oks, "return", logger.info(), null }
         else |_|
-            .{ config.error_handler, num_errors, "error", logger.warn() };
+            .{ config.error_handler, num_errors, "error", logger.warn(), @errorReturnTrace() };
 
         // handle result
         if (handler.log_return) {
-            level_logger.logf("{s} has {s}ed: {any}", .{ name, event_name, result });
+            level_logger.logf("{s} has {s}ed: {any} {?}", .{ name, event_name, result, trace });
         }
         if (handler.max_iterations) |max| if (num_events >= max) {
             if (handler.set_exit_on_completion) {
