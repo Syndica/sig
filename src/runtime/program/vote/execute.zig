@@ -25,7 +25,7 @@ pub fn execute(
     try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
 
     var vote_account = try ic.borrowInstructionAccount(
-        vote_instruction.IntializeAccount.accountIndex(.account),
+        @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.account),
     );
     defer vote_account.release();
 
@@ -66,7 +66,7 @@ fn executeIntializeAccount(
 ) InstructionError!void {
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
-        vote_instruction.IntializeAccount.accountIndex(.rent_sysvar),
+        @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.rent_sysvar),
     );
 
     const min_balance = rent.minimumBalance(vote_account.getData().len);
@@ -76,7 +76,7 @@ fn executeIntializeAccount(
 
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
-        vote_instruction.IntializeAccount.accountIndex(.clock_sysvar),
+        @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.clock_sysvar),
     );
 
     try intializeAccount(
@@ -91,6 +91,11 @@ fn executeIntializeAccount(
     );
 }
 
+/// Agave https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884-L903
+///
+/// Note: Versioned state is not implemented for creating new vote account, as current check in Agaave implementation
+/// here https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/programs/vote/src/vote_state/mod.rs#L890-L892
+/// suggests creating only current version is supported.
 fn intializeAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
