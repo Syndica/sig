@@ -12,7 +12,7 @@ pub const Instruction = struct {
     /// Accounts that the command references
     account_metas: []const InstructionAccountMeta,
     /// Binary encoding of the program instruction and its arguments
-    serialized: []const u8,
+    data: []const u8,
 };
 
 pub const InstructionAccountMeta = struct {

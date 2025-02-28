@@ -124,7 +124,7 @@ fn executeCreateAccount(
         lamports,
         space,
         owner,
-        ic.accounts[1].pubkey,
+        ic.account_metas.buffer[1].pubkey,
     );
 }
 
@@ -171,7 +171,7 @@ fn executeCreateAccountWithSeed(
     try ic.checkNumberOfAccounts(2);
     try checkSeedAddress(
         ic,
-        ic.accounts[1].pubkey,
+        ic.account_metas.buffer[1].pubkey,
         base,
         owner,
         seed,
@@ -339,8 +339,8 @@ fn executeTransferWithSeed(
     const from_base_index = 1;
     const to_index = 2;
 
-    const from_base_pubkey = ic.accounts[from_base_index].pubkey;
-    const from_pubkey = ic.accounts[from_index].pubkey;
+    const from_base_pubkey = ic.account_metas.buffer[from_base_index].pubkey;
+    const from_pubkey = ic.account_metas.buffer[from_index].pubkey;
 
     if (!try ic.isIndexSigner(from_base_index)) {
         try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
@@ -483,7 +483,7 @@ fn transfer(
     if (!try ic.isIndexSigner(from_index)) {
         try ic.tc.log(
             "Transfer: `from` account {} must sign",
-            .{ic.accounts[from_index].pubkey},
+            .{ic.account_metas.buffer[from_index].pubkey},
         );
         return InstructionError.MissingRequiredSignature;
     }

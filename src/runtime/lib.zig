@@ -14,17 +14,12 @@ pub const transaction_context = @import("transaction_context.zig");
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
 pub const FeatureSet = feature_set.FeatureSet;
 pub const InstructionContext = instruction_context.InstructionContext;
-pub const InstructionAccountInfo = instruction_context.InstructionAccountInfo;
+pub const InstructionContextAccountMeta = instruction_context.InstructionContextAccountMeta;
+pub const InstructionContextProgramMeta = instruction_context.InstructionContextProgramMeta;
 pub const LogCollector = log_collector.LogCollector;
 pub const SysvarCache = sysvar_cache.SysvarCache;
 pub const TransactionContext = transaction_context.TransactionContext;
-pub const TransactionAccount = transaction_context.TransactionAccount;
+pub const TransactionContextAccount = transaction_context.TransactionContextAccount;
 
 // TODO: move to accounts db
 pub const AccountSharedData = @import("account_shared_data.zig").AccountSharedData;
-
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/serialization.rs#L26
-pub const MAX_INSTRUCTION_ACCOUNTS: usize = 256;
-
-/// TODO: Why do I need to define this here for the tests to run?
-pub const system_program_execute = @import("program/system_program/execute.zig");

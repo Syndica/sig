@@ -2,13 +2,14 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
+const sysvar = sig.runtime.sysvar;
 
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const TransactionContext = sig.runtime.TransactionContext;
-const WLockGuard = sig.runtime.TransactionAccount.WLockGuard;
+const WLockGuard = sig.runtime.TransactionContextAccount.WLockGuard;
 
 const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
     sig.runtime.program.system_program.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
@@ -40,11 +41,12 @@ pub const BorrowedAccount = struct {
     account_write_guard: WLockGuard,
     /// the context under which the account was borrowed
     borrow_context: struct {
-        program_id: Pubkey,
+        program_pubkey: Pubkey,
+        is_signer: bool,
         is_writable: bool,
     },
 
-    pub fn release(self: *BorrowedAccount) void {
+    pub fn release(self: BorrowedAccount) void {
         self.account_write_guard.release();
     }
 
@@ -54,7 +56,12 @@ pub const BorrowedAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1068
     pub fn isOwnedByCurrentProgram(self: BorrowedAccount) bool {
-        return self.account.owner.equals(&self.borrow_context.program_id);
+        return self.account.owner.equals(&self.borrow_context.program_pubkey);
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1042
+    pub fn isSigner(self: BorrowedAccount) bool {
+        return self.borrow_context.is_signer;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1168
@@ -68,10 +75,11 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
-    pub fn checkDataIsMutable(self: BorrowedAccount) InstructionError!void {
+    pub fn checkDataIsMutable(self: BorrowedAccount) ?InstructionError {
         if (self.account.executable) return InstructionError.ExecutableDataModified;
         if (!self.isWritable()) return InstructionError.ReadonlyDataModified;
         if (!self.isOwnedByCurrentProgram()) return InstructionError.ExternalAccountDataModified;
+        return null;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1095
@@ -79,7 +87,7 @@ pub const BorrowedAccount = struct {
         self: BorrowedAccount,
         etc: *TransactionContext,
         length: usize,
-    ) InstructionError!void {
+    ) ?InstructionError {
         const old_length = self.getData().len;
 
         if (length != old_length and !self.isOwnedByCurrentProgram())
@@ -88,73 +96,15 @@ pub const BorrowedAccount = struct {
         if (length > MAX_PERMITTED_DATA_LENGTH)
             return InstructionError.InvalidRealloc;
 
-        // Safe since length and old_length <= MAX_PERMITTED_DATA_LENGTH
-        const resize_delta: i64 = @intCast(length -| old_length);
+        const length_signed: i64 = @intCast(length);
+        const old_length_signed: i64 = @intCast(old_length);
+        const resize_delta = length_signed -| old_length_signed;
         const new_accounts_resize_delta = etc.accounts_resize_delta +| resize_delta;
 
         if (new_accounts_resize_delta > MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION)
             return InstructionError.MaxAccountsDataAllocationsExceeded;
-    }
 
-    /// Deserialize the account data into a type `T`.
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L968
-    pub fn deserializeFromAccountData(
-        self: BorrowedAccount,
-        allocator: std.mem.Allocator,
-        comptime T: type,
-    ) error{InvalidAccountData}!T {
-        return bincode.readFromSlice(allocator, T, self.account.data, .{}) catch {
-            return InstructionError.InvalidAccountData;
-        };
-    }
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
-    /// `state` must implement member function `pub fn serializedSize(state: T) usize`\
-    /// `state` must support bincode serialization
-    pub fn serializeIntoAccountData(
-        self: *BorrowedAccount,
-        state: anytype,
-    ) InstructionError!void {
-        try self.checkDataIsMutable();
-
-        const serialized_size = try state.serializedSize();
-        if (serialized_size > self.account.data.len)
-            return InstructionError.AccountDataTooSmall;
-
-        const written = bincode.writeToSlice(self.account.data, state, .{}) catch
-            return InstructionError.GenericError;
-
-        if (written.len != serialized_size)
-            return InstructionError.GenericError;
-    }
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L885
-    pub fn setDataLength(
-        self: *BorrowedAccount,
-        allocator: std.mem.Allocator,
-        tc: *TransactionContext,
-        new_length: usize,
-    ) InstructionError!void {
-        try self.checkCanSetDataLength(tc, new_length);
-        try self.checkDataIsMutable();
-        if (self.getData().len == new_length) return;
-        const old_length_signed: i64 = @intCast(self.getData().len);
-        const new_length_signed: i64 = @intCast(new_length);
-        tc.accounts_resize_delta +|= new_length_signed -| old_length_signed;
-        self.account.resize(allocator, new_length) catch |err| {
-            // TODO: confirm if this is the correct approach
-            tc.custom_error = @intFromError(err);
-            return InstructionError.Custom;
-        };
-    }
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L742
-    pub fn setOwner(self: *BorrowedAccount, pubkey: Pubkey) InstructionError!void {
-        if (!self.isOwnedByCurrentProgram()) return InstructionError.ModifiedProgramId;
-        if (!self.isWritable()) return InstructionError.ModifiedProgramId;
-        if (self.account.executable) return InstructionError.ModifiedProgramId;
-        if (!self.account.isZeroed()) return InstructionError.ModifiedProgramId;
-        self.account.owner = pubkey;
+        return null;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L800
@@ -183,5 +133,67 @@ pub const BorrowedAccount = struct {
         ) catch {
             return InstructionError.ArithmeticOverflow;
         };
+    }
+
+    /// Deserialize the account data into a type `T`\
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L968
+    pub fn deserializeFromAccountData(
+        self: BorrowedAccount,
+        allocator: std.mem.Allocator,
+        comptime T: type,
+    ) error{InvalidAccountData}!T {
+        return bincode.readFromSlice(allocator, T, self.account.data, .{}) catch {
+            return InstructionError.InvalidAccountData;
+        };
+    }
+
+    /// Serialize the state into the account data.\
+    /// `state` must implement `pub fn serializedSize(state: T) usize`\
+    /// `state` must support bincode serialization\
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
+    pub fn serializeIntoAccountData(
+        self: *BorrowedAccount,
+        state: anytype,
+    ) InstructionError!void {
+        if (self.checkDataIsMutable()) |err| return err;
+
+        const serialized_size = try state.serializedSize();
+        if (serialized_size > self.account.data.len)
+            return InstructionError.AccountDataTooSmall;
+
+        const written = bincode.writeToSlice(self.account.data, state, .{}) catch
+            return InstructionError.GenericError;
+
+        if (written.len != serialized_size)
+            return InstructionError.GenericError;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L885
+    pub fn setDataLength(
+        self: *BorrowedAccount,
+        allocator: std.mem.Allocator,
+        tc: *TransactionContext,
+        new_length: usize,
+    ) InstructionError!void {
+        if (self.checkCanSetDataLength(tc, new_length)) |err| return err;
+        if (self.checkDataIsMutable()) |err| return err;
+        if (self.getData().len == new_length) return;
+        const old_length_signed: i64 = @intCast(self.getData().len);
+        const new_length_signed: i64 = @intCast(new_length);
+        tc.accounts_resize_delta +|= new_length_signed -| old_length_signed;
+        self.account.resize(allocator, new_length) catch |err| {
+            // TODO: confirm if this is the correct approach
+            tc.custom_error = @intFromError(err);
+            return InstructionError.Custom;
+        };
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L742
+    pub fn setOwner(self: *BorrowedAccount, pubkey: Pubkey) InstructionError!void {
+        if (!self.isOwnedByCurrentProgram()) return InstructionError.ModifiedProgramId;
+        if (!self.isWritable()) return InstructionError.ModifiedProgramId;
+        if (self.account.executable) return InstructionError.ModifiedProgramId;
+        if (!self.account.isZeroed()) return InstructionError.ModifiedProgramId;
+        self.account.owner = pubkey;
     }
 };
