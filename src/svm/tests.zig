@@ -2174,7 +2174,7 @@ pub fn testElfWithSyscalls(
     var executable = exec: {
         const elf = try Elf.parse(allocator, bytes, &loader, config);
         errdefer elf.deinit(allocator);
-        break :exec try Executable.fromElf(elf);
+        break :exec Executable.fromElf(elf);
     };
     defer executable.deinit(allocator);
 

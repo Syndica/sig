@@ -40,7 +40,7 @@ pub const Executable = struct {
     };
 
     /// Takes ownership of the `Elf`.
-    pub fn fromElf(elf: Elf) !Executable {
+    pub fn fromElf(elf: Elf) Executable {
         const text_section_addr = elf.getShdrByName(".text").?.sh_addr;
         const text_vaddr = if (elf.version.enableElfVaddr() and
             text_section_addr >= memory.RODATA_START)
