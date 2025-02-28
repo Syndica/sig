@@ -16,7 +16,6 @@ const ReedSolomon = ledger.reed_solomon.ReedSolomon;
 const Shred = ledger.shred.Shred;
 const Signature = sig.core.Signature;
 
-const checkedSub = sig.utils.math.checkedSub;
 const makeMerkleTree = ledger.shred.makeMerkleTree;
 const makeMerkleProof = ledger.shred.makeMerkleProof;
 
@@ -152,7 +151,7 @@ fn getRecoveryMetadata(shreds: []const Shred) !RecoveryMetadata {
             const position = code_shred.custom.erasure_code_index;
             var common_header = code_shred.common;
             var code_header = code_shred.custom;
-            common_header.index = try checkedSub(common_header.index, position);
+            common_header.index = try std.math.sub(u32, common_header.index, position);
             code_header.erasure_code_index = 0;
             break .{
                 .common_header = common_header,

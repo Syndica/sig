@@ -12,9 +12,6 @@ const Packet = sig.net.Packet;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
-const checkedAdd = sig.utils.math.checkedAdd;
-const checkedSub = sig.utils.math.checkedSub;
-
 pub const MAX_SHREDS_PER_SLOT: usize = code_shred_constants.max_per_slot + data_shred_constants.max_per_slot;
 
 pub const DATA_SHREDS_PER_FEC_BLOCK: usize = 32;
@@ -241,30 +238,33 @@ pub const CodeShred = struct {
     pub fn erasureShardIndex(self: *const Self) !usize {
         // Assert that the last shred index in the erasure set does not
         // overshoot MAX_{DATA,CODE}_SHREDS_PER_SLOT.
-        if (try checkedAdd(
+        if (try std.math.add(
+            u32,
             self.common.erasure_set_index,
-            try checkedSub(@as(u32, @intCast(self.custom.num_data_shreds)), 1),
+            try std.math.sub(u32, @intCast(self.custom.num_data_shreds), 1),
         ) >= data_shred_constants.max_per_slot) {
             return error.InvalidErasureShardIndex;
         }
-        if (try checkedAdd(
+        if (try std.math.add(
+            u32,
             try self.firstCodeIndex(),
-            try checkedSub(@as(u32, @intCast(self.custom.num_code_shreds)), 1),
+            try std.math.sub(u32, self.custom.num_code_shreds, 1),
         ) >= code_shred_constants.max_per_slot) {
             return error.InvalidErasureShardIndex;
         }
-        const num_data_shreds: usize = @intCast(self.custom.num_data_shreds);
-        const num_code_shreds: usize = @intCast(self.custom.num_code_shreds);
-        const position: usize = @intCast(self.custom.erasure_code_index);
-        const erasure_set_size = try checkedAdd(num_data_shreds, num_code_shreds);
-        const index = try checkedAdd(position, num_data_shreds);
+        const num_data_shreds: u64 = self.custom.num_data_shreds;
+        const num_code_shreds: u64 = self.custom.num_code_shreds;
+        const position: u64 = self.custom.erasure_code_index;
+        const erasure_set_size = try std.math.add(u64, num_data_shreds, num_code_shreds);
+        const index = try std.math.add(u64, position, num_data_shreds);
         return if (index < erasure_set_size) index else error.InvalidErasureShardIndex;
     }
 
     pub fn firstCodeIndex(self: *const Self) !u32 {
-        return sig.utils.math.checkedSub(
+        return std.math.sub(
+            u32,
             self.common.index,
-            @as(u32, @intCast(self.custom.erasure_code_index)),
+            self.custom.erasure_code_index,
         );
     }
 
@@ -368,11 +368,19 @@ pub const DataShred = struct {
         if (self.custom.parent_slot_offset == 0 and slot != 0) {
             return error.InvalidParentSlotOffset;
         }
-        return checkedSub(slot, self.custom.parent_slot_offset) catch error.InvalidParentSlotOffset;
+        return std.math.sub(
+            u64,
+            slot,
+            self.custom.parent_slot_offset,
+        ) catch error.InvalidParentSlotOffset;
     }
 
     pub fn erasureShardIndex(self: *const Self) !usize {
-        return @intCast(try checkedSub(self.common.index, self.common.erasure_set_index));
+        return try std.math.sub(
+            u32,
+            self.common.index,
+            self.common.erasure_set_index,
+        );
     }
 
     pub fn dataComplete(self: Self) bool {
@@ -426,7 +434,7 @@ fn generic_shred(shred_type: ShredType) type {
                 return error.InvalidPayloadSize;
             }
             const owned_payload = try allocator.alloc(u8, constants.payload_size);
-	    errdefer allocator.free(owned_payload);
+            errdefer allocator.free(owned_payload);
 
             // TODO: It would be nice to find a way to get the payload in here without coping the entire thing.
             // The challenge is that the input payload is owned by the original packet list which was read
@@ -769,7 +777,8 @@ fn retransmitterSignatureOffset(variant: ShredVariant) !usize {
 
 fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
     std.debug.assert(variant.chained or !variant.resigned);
-    return checkedSub(
+    return std.math.sub(
+        usize,
         constants.payload_size,
         constants.headers_size +
             (if (variant.chained) SIZE_OF_MERKLE_ROOT else 0) +
@@ -783,7 +792,7 @@ fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
 fn codeIndex(shred: []const u8) ?usize {
     const num_data_shreds: usize = @intCast(getInt(u16, shred, 83) orelse return null);
     const position: usize = @intCast(getInt(u16, shred, 87) orelse return null);
-    return checkedAdd(num_data_shreds, position) catch null;
+    return std.math.add(u64, num_data_shreds, position) catch null;
 }
 
 /// Shred index in the erasure batch
@@ -791,8 +800,8 @@ fn codeIndex(shred: []const u8) ?usize {
 fn dataIndex(shred: []const u8) ?usize {
     const erasure_set_index = getInt(u32, shred, 79) orelse return null;
     const layout_index = layout.getIndex(shred) orelse return null;
-    const index = checkedSub(layout_index, erasure_set_index) catch return null;
-    return @intCast(index);
+    const index = std.math.sub(u32, layout_index, erasure_set_index) catch return null;
+    return index;
 }
 
 const MerkleProofEntry = [merkle_proof_entry_size]u8;
