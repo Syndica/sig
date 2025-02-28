@@ -79,6 +79,7 @@ const XevThread = struct {
 
         // Create a node for the SocketThread
         const node = try st.allocator.create(List.Node);
+        defer st.allocator.destroy(node);
         node.* = .{
             .data = .{
                 .allocator = st.allocator,
