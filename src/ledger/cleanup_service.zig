@@ -89,14 +89,18 @@ pub fn cleanBlockstore(
     purge_interval: u64,
 ) !Slot {
     const logger = logger_.withScope(LOG_SCOPE);
+
     // // TODO: add back when max_root is implemented with consensus
     // const root = blockstore_reader.max_root.load(.acquire);
-    // if (root - last_purge_slot <= purge_interval) return last_purge_slot;
-    _ = last_purge_slot;
-    _ = purge_interval;
 
-    // NOTE: this will clean everything past the lowest slot in the blockstore
-    const root: Slot = try blockstore_reader.lowestSlot();
+    // hack to get a conservative estimate of a recent slot that is almost definitely rooted
+    const root = if (try blockstore_reader.highestSlot()) |highest|
+        highest -| 100
+    else
+        try blockstore_reader.lowestSlot();
+
+    if (root - last_purge_slot <= purge_interval) return last_purge_slot;
+
     const result = try findSlotsToClean(blockstore_reader, root, max_ledger_shreds);
     logger.info().logf("findSlotsToClean result: {any}", .{result});
 
