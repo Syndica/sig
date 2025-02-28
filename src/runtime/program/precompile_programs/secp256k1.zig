@@ -9,9 +9,6 @@ const PrecompileProgramError = precompile_programs.PrecompileProgramError;
 const Keccak256 = std.crypto.hash.sha3.Keccak256;
 const Secp256k1 = std.crypto.ecc.Secp256k1;
 const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(Secp256k1, Keccak256);
-const Scalar = Secp256k1.scalar.Scalar;
-const Message = Scalar;
-const Field = Secp256k1.Fe;
 
 pub const SECP256K1_DATA_START = SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE +
     SECP256K1_SIGNATURE_OFFSETS_START;
@@ -169,7 +166,9 @@ fn recoverSecp256k1Pubkey(
         libsecp256k1.SECP256K1_EC_UNCOMPRESSED,
     ) == 0) return error.InvalidSignature;
 
-    return Ecdsa.PublicKey.fromSec1(serialized_pubkey[1..]) catch return error.InvalidSignature;
+    // note: firedancer chops off the first byte, which happens to be the recovery id, however
+    // fromSec1 expects it to be there.
+    return Ecdsa.PublicKey.fromSec1(&serialized_pubkey) catch return error.InvalidSignature;
 }
 
 /// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L903
@@ -188,21 +187,132 @@ fn constructEthPubkey(
     return pubkey_hash[12..32].*;
 }
 
+fn signRecoverable(
+    private_key: *const Ecdsa.SecretKey,
+    message_hash: *const [Keccak256.digest_length]u8,
+) !.{ u2, Ecdsa.Signature } {
+    if (!builtin.is_test) @compileError("signRecoverable is only for use in tests");
+
+    // note: this uses malloc
+    const context = libsecp256k1.secp256k1_context_create(
+        libsecp256k1.SECP256K1_CONTEXT_NONE,
+    ) orelse return error.InvalidSignature;
+    defer libsecp256k1.secp256k1_context_destroy(context);
+
+    var recoverable_signature: libsecp256k1.secp256k1_ecdsa_recoverable_signature = undefined;
+    if (libsecp256k1.secp256k1_ecdsa_sign_recoverable(
+        context,
+        &recoverable_signature,
+        &message_hash,
+        &private_key,
+        null,
+        null,
+    ) == 0) return error.InvalidSignature;
+
+    var signature: [64]u8 = undefined;
+    var _recovery_id: c_int = undefined;
+
+    if (libsecp256k1.secp256k1_ecdsa_recoverable_signature_serialize_compact(
+        context,
+        &signature,
+        &_recovery_id,
+        &recoverable_signature,
+    ) == 0) return error.InvalidSignature;
+
+    std.debug.assert(_recovery_id <= 3);
+    const recovery_id: u2 = @intCast(_recovery_id);
+
+    return .{ recovery_id, Ecdsa.Signature.fromBytes(signature) };
+}
+
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L842
 fn newSecp256k1Instruction(
+    allocator: std.mem.Allocator,
     keypair: *const Ecdsa.KeyPair,
     message: []const u8,
 ) !sig.core.Instruction {
+    if (!builtin.is_test) @compileError("newSecp256k1Instruction is only for use in tests");
+    std.debug.assert(message.len < std.math.maxInt(u16));
+
     const eth_pubkey = constructEthPubkey(&keypair.public_key);
 
     var message_hash: [Keccak256.digest_length]u8 = undefined;
     Keccak256.hash(message, &message_hash, .{});
 
-    _ = eth_pubkey;
+    // note: this uses malloc
+    const context = libsecp256k1.secp256k1_context_create(
+        libsecp256k1.SECP256K1_CONTEXT_NONE,
+    ) orelse return error.InvalidSignature;
+    defer libsecp256k1.secp256k1_context_destroy(context);
 
-    @panic("TODO");
+    var recoverable_signature: libsecp256k1.secp256k1_ecdsa_recoverable_signature = undefined;
+    const seckey = keypair.secret_key.toBytes();
+
+    if (libsecp256k1.secp256k1_ecdsa_sign_recoverable(
+        context,
+        &recoverable_signature,
+        &message_hash,
+        &seckey,
+        null,
+        null,
+    ) == 0) return error.InvalidSignature;
+
+    var signature: [64]u8 = undefined;
+    var _recovery_id: c_int = undefined;
+
+    if (libsecp256k1.secp256k1_ecdsa_recoverable_signature_serialize_compact(
+        context,
+        &signature,
+        &_recovery_id,
+        &recoverable_signature,
+    ) == 0) return error.InvalidSignature;
+
+    std.debug.assert(_recovery_id <= 3);
+    const recovery_id: u2 = @intCast(_recovery_id);
+
+    const instruction_data_len = SECP256K1_DATA_START +| eth_pubkey.len +| 64 +| message.len +| 1;
+
+    const instruction_data = try allocator.alloc(u8, instruction_data_len);
+    errdefer allocator.free(instruction_data);
+    @memset(instruction_data, 0);
+
+    const eth_address_offset = SECP256K1_DATA_START;
+    @memcpy(instruction_data[eth_address_offset..][0..eth_pubkey.len], &eth_pubkey);
+
+    const signature_offset = eth_address_offset +| eth_pubkey.len;
+    @memcpy(instruction_data[signature_offset..][0..64], &signature);
+
+    instruction_data[signature_offset +| 64] = recovery_id;
+
+    const message_data_offset = signature_offset +| 64 +| 1;
+    @memcpy(instruction_data[message_data_offset..], message);
+
+    const num_signatures = 1;
+    instruction_data[0] = num_signatures;
+
+    const offsets: Secp256k1SignatureOffsets = .{
+        .signature_offset = signature_offset,
+        .signature_instruction_idx = 0,
+        .eth_address_offset = eth_address_offset,
+        .eth_address_instruction_idx = 0,
+        .message_data_offset = message_data_offset,
+        .message_data_size = @intCast(message.len),
+        .message_instruction_idx = 0,
+    };
+
+    @memcpy(
+        instruction_data[1..SECP256K1_DATA_START],
+        std.mem.asBytes(&offsets)[0 .. @bitSizeOf(Secp256k1SignatureOffsets) / 8],
+    );
+
+    return .{
+        .program_id = sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID,
+        .accounts = &.{},
+        .data = instruction_data,
+    };
 }
 
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1046
 fn testCase(
     num_signatures: u8,
     offsets: Secp256k1SignatureOffsets,
@@ -211,11 +321,15 @@ fn testCase(
 
     var instruction_data: [SECP256K1_DATA_START]u8 align(2) = undefined;
     instruction_data[0] = num_signatures;
-    @memcpy(instruction_data[1..], std.mem.asBytes(&offsets)[0 .. @bitSizeOf(Secp256k1SignatureOffsets) / 8]);
+    @memcpy(
+        instruction_data[1..],
+        std.mem.asBytes(&offsets)[0 .. @bitSizeOf(Secp256k1SignatureOffsets) / 8],
+    );
 
     return try verify(&instruction_data, &.{&(.{0} ** 100)});
 }
 
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1059
 test "secp256k1 invalid offsets" {
     {
         var instruction_data: [SECP256K1_DATA_START]u8 align(2) = undefined;
@@ -247,6 +361,7 @@ test "secp256k1 invalid offsets" {
     );
 }
 
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1104
 test "secp256k1 message data offsets" {
     try std.testing.expectError(
         error.InvalidSignature,
@@ -281,6 +396,7 @@ test "secp256k1 message data offsets" {
     );
 }
 
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1104
 test "secp256k1 eth offset" {
     try std.testing.expectError(
         error.InvalidSignature,
@@ -296,6 +412,7 @@ test "secp256k1 eth offset" {
     );
 }
 
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1168
 test "secp256k1 signature offset" {
     try std.testing.expectError(
         error.InvalidSignature,
@@ -311,6 +428,7 @@ test "secp256k1 signature offset" {
     );
 }
 
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1189
 test "secp256k1 count is zero but sig data exists" {
     var instruction_data: [SECP256K1_DATA_START]u8 align(2) = undefined;
     instruction_data[0] = 0; // n_signatures
@@ -327,9 +445,45 @@ test "secp256k1 count is zero but sig data exists" {
     );
 }
 
-// test "secp256k1" {
-//     const keypair = try Ecdsa.KeyPair.create(null);
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1206
+test "secp256k1" {
+    const allocator = std.testing.allocator;
 
-//     const instruction = try newSecp256k1Instruction(&keypair, "hello");
-//     _ = instruction;
-// }
+    const keypair = try Ecdsa.KeyPair.create(null);
+
+    const instruction = try newSecp256k1Instruction(allocator, &keypair, "hello");
+    defer allocator.free(instruction.data);
+
+    try verify(instruction.data, &.{instruction.data});
+
+    {
+        // instruction.data is const, working around that
+        const instruction_data = try allocator.dupe(u8, instruction.data);
+        defer allocator.free(instruction_data);
+
+        // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1229
+        // agave uses unseeded random in this test for some reason, let's not do that.
+        for (instruction_data) |*byte| {
+            const old = byte.*;
+            byte.* +%= 12;
+            if (verify(instruction_data, &.{instruction_data})) |_| {
+                try std.testing.expect(false); // should error
+            } else |err| {
+                _ = err catch {};
+            }
+            byte.* = old;
+        }
+    }
+}
+
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1244
+test "secp256 malleability" {
+    const allocator = std.testing.allocator;
+
+    const keypair = try Ecdsa.KeyPair.create(null);
+    const eth_address = constructEthPubkey(&keypair.public_key);
+    const message = "hello";
+
+    var message_hash: [Keccak256.digest_length]u8 = undefined;
+    Keccak256.hash(message, &message_hash, .{});
+}
