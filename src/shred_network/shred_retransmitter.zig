@@ -1,32 +1,33 @@
 const std = @import("std");
 const net = @import("zig-network");
 const sig = @import("../sig.zig");
+const shred_network = @import("lib.zig");
 
 const socket_utils = sig.net.socket_utils;
 
-const Random = std.rand.Random;
-const UdpSocket = net.Socket;
-const EndPoint = net.EndPoint;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicU64 = std.atomic.Value(u64);
+const EndPoint = net.EndPoint;
+const Random = std.rand.Random;
+const UdpSocket = net.Socket;
 
-const Packet = sig.net.Packet;
-const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
-const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
+const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
+const Duration = sig.time.Duration;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
-const Duration = sig.time.Duration;
-const TurbineTree = sig.shred_network.turbine_tree.TurbineTree;
-const TurbineTreeCache = sig.shred_network.turbine_tree.TurbineTreeCache;
-const Channel = sig.sync.Channel;
-const ShredId = sig.ledger.shred.ShredId;
-const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
-const BankFields = sig.accounts_db.snapshots.BankFields;
-const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
-const ShredDeduper = sig.shred_network.shred_deduper.ShredDeduper;
+const Packet = sig.net.Packet;
+const Pubkey = sig.core.Pubkey;
+const RwMux = sig.sync.RwMux;
+const EpochContextManager = sig.adapter.EpochContextManager;
+const ShredId = sig.ledger.shred.ShredId;
+const Slot = sig.core.Slot;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
+
+const ShredDeduper = shred_network.shred_deduper.ShredDeduper;
+const TurbineTree = shred_network.turbine_tree.TurbineTree;
+const TurbineTreeCache = shred_network.turbine_tree.TurbineTreeCache;
 
 const globalRegistry = sig.prometheus.globalRegistry;
 
@@ -37,17 +38,16 @@ const DEDUPER_RESET_CYCLE: Duration = Duration.fromSecs(5 * 60);
 const DEDUPER_NUM_BITS: u64 = 637_534_199;
 
 /// Retransmit Service
-/// The retransmit service receives verified shreds from the shred collector and retransmits them to the network.
+/// The retransmit service receives verified shreds from the shred network and retransmits them to the network.
 /// The retransmit service is broken down into two main components:
-/// 1. receiveShreds: runs on a single thread and receives shreds from the shred collector, deduplicates them, and then packages them
+/// 1. receiveShreds: runs on a single thread and receives shreds from the shred network, deduplicates them, and then packages them
 ///    into RetransmitShredInfo's which are sent to a channel for further processing.
 /// 2. retransmitShreds: runs on N threads and receives RetransmitShredInfo's from the channel, computes the children to retransmit to
 ///    and then constructs and sends packets to the network.
 pub fn runShredRetransmitter(params: struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
-    bank_fields: *const BankFields,
-    leader_schedule_cache: *LeaderScheduleCache,
+    epoch_context_mgr: *EpochContextManager,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     receiver: *Channel(Packet),
     maybe_num_retransmit_threads: ?usize,
@@ -87,8 +87,7 @@ pub fn runShredRetransmitter(params: struct {
         .{
             params.allocator,
             params.my_contact_info,
-            params.bank_fields,
-            params.leader_schedule_cache,
+            params.epoch_context_mgr,
             params.receiver,
             &receive_to_retransmit_channel,
             params.gossip_table_rw,
@@ -114,16 +113,14 @@ pub fn runShredRetransmitter(params: struct {
         ));
     }
 
-    try thread_handles.append(try std.Thread.spawn(
-        .{},
-        socket_utils.sendSocket,
-        .{
-            retransmit_socket,
-            &retransmit_to_socket_channel,
-            params.logger,
-            .{ .unordered = params.exit },
-        },
-    ));
+    const sender_thread = try socket_utils.SocketThread.spawnSender(
+        params.allocator,
+        params.logger,
+        retransmit_socket,
+        &retransmit_to_socket_channel,
+        .{ .unordered = params.exit },
+    );
+    defer sender_thread.join();
 
     for (thread_handles.items) |thread| thread.join();
 }
@@ -133,8 +130,7 @@ pub fn runShredRetransmitter(params: struct {
 fn receiveShreds(
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
-    bank_fields: *const BankFields,
-    leader_schedule_cache: *LeaderScheduleCache,
+    epoch_context_mgr: *EpochContextManager,
     receiver: *Channel(Packet),
     sender: *Channel(RetransmitShredInfo),
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
@@ -155,9 +151,11 @@ fn receiveShreds(
     defer deduper.deinit();
 
     var shreds = std.ArrayList(Packet).init(allocator);
+    var receive_shreds_timer = try sig.time.Timer.start();
 
-    while (!exit.load(.acquire)) {
-        var receive_shreds_timer = try sig.time.Timer.start();
+    while (true) {
+        receiver.waitToReceive(.{ .unordered = exit }) catch break;
+        receive_shreds_timer.reset();
 
         const receiver_len = receiver.len();
         if (receiver_len == 0) continue;
@@ -193,9 +191,8 @@ fn receiveShreds(
                 allocator,
                 grouped_shreds,
                 my_contact_info,
-                bank_fields,
+                epoch_context_mgr,
                 gossip_table_rw,
-                leader_schedule_cache,
                 &turbine_tree_cache,
                 sender,
                 metrics,
@@ -253,9 +250,8 @@ fn createAndSendRetransmitInfo(
     allocator: std.mem.Allocator,
     shreds: std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)),
     my_contact_info: ThreadSafeContactInfo,
-    bank: *const BankFields,
+    epoch_context_mgr: *EpochContextManager,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
-    leader_schedule_cache: *LeaderScheduleCache,
     turbine_tree_cache: *TurbineTreeCache,
     retransmit_shred_sender: *Channel(RetransmitShredInfo),
     metrics: *RetransmitServiceMetrics,
@@ -263,14 +259,12 @@ fn createAndSendRetransmitInfo(
 ) !void {
     var create_and_send_retransmit_info_timer = try sig.time.Timer.start();
     for (shreds.keys(), shreds.values()) |slot, slot_shreds| {
-        const epoch, _ = bank.epoch_schedule.getEpochAndSlotIndex(slot);
+        const epoch, const slot_index = epoch_context_mgr.schedule.getEpochAndSlotIndex(slot);
+        const epoch_context = epoch_context_mgr.get(epoch) orelse continue;
+        defer epoch_context_mgr.release(epoch_context);
 
         var get_slot_leader_timer = try sig.time.Timer.start();
-        const slot_leader = if (leader_schedule_cache.slotLeader(slot)) |leader| leader else blk: {
-            try leader_schedule_cache.put(epoch, try bank.leaderSchedule(allocator));
-            break :blk leader_schedule_cache.slotLeader(slot) orelse
-                @panic("failed to get slot leader");
-        };
+        const slot_leader = epoch_context.leader_schedule[slot_index];
         metrics.get_slot_leader_nanos.observe(get_slot_leader_timer.read().asNanos());
 
         var get_turbine_tree_timer = try sig.time.Timer.start();
@@ -280,7 +274,7 @@ fn createAndSendRetransmitInfo(
                 allocator,
                 my_contact_info,
                 gossip_table_rw,
-                try bank.getStakedNodes(allocator, epoch),
+                &epoch_context.staked_nodes,
                 overwrite_stake_for_testing,
             );
             try turbine_tree_cache.put(epoch, turbine_tree);
@@ -329,6 +323,8 @@ fn retransmitShreds(
     while (!exit.load(.acquire)) {
         var retransmit_shred_timer = try sig.time.Timer.start();
 
+        // NOTE: multiple `retransmitShreds` run concurrently so we can't use
+        // `receiver.waitToReceive()` here as it only supports one caller thread.
         const retransmit_info: RetransmitShredInfo = receiver.tryReceive() orelse continue;
         defer retransmit_info.turbine_tree.releaseUnsafe();
 

@@ -3,15 +3,17 @@
 const std = @import("std");
 const zstd = @import("zstd");
 const sig = @import("../sig.zig");
-const base58 = @import("base58-zig");
+const base58 = @import("base58");
 
 const bincode = sig.bincode;
 
 const Account = sig.core.account.Account;
 const Epoch = sig.core.time.Epoch;
 const Hash = sig.core.hash.Hash;
+const InstructionError = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
+const SlotAndHash = sig.core.hash.SlotAndHash;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
@@ -20,7 +22,7 @@ const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
 const Inflation = sig.accounts_db.genesis_config.Inflation;
 const Rent = sig.accounts_db.genesis_config.Rent;
 const UnixTimestamp = sig.accounts_db.genesis_config.UnixTimestamp;
-const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
 
 const Logger = sig.trace.Logger;
 
@@ -279,7 +281,7 @@ pub const VoteAccount = struct {
         vote_account: VoteAccount,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!VoteAccount {
-        const account = try vote_account.account.clone(allocator);
+        const account = try vote_account.account.cloneOwned(allocator);
         errdefer account.deinit(allocator);
         return .{
             .account = account,
@@ -296,10 +298,12 @@ pub const VoteAccount = struct {
             .resize = .assert,
             .free = .assert,
         });
-        const vote_state = bincode.readFromSlice(
+
+        var data_iter = self.account.data.iterator();
+        const vote_state = bincode.read(
             assert_alloc,
             VoteState,
-            self.account.data,
+            data_iter.reader(),
             .{},
         );
         self.vote_state = vote_state;
@@ -348,7 +352,7 @@ test "deserialize VoteState.node_pubkey" {
         90, 174, 158, 6, 199, 179, 134, 194, 112, 248, 166, 232, 144, 253, 128, 249, 67, 118,
     } ++ .{0} ** 1586 ++ .{ 31, 0, 0, 0, 0, 0, 0, 0, 1 } ++ .{0} ** 24;
     const vote_state = try bincode.readFromSlice(undefined, VoteState, &bytes, .{});
-    const expected_pubkey = try Pubkey.fromString("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
+    const expected_pubkey = try Pubkey.parseBase58String("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
     try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
 }
 
@@ -1579,17 +1583,6 @@ pub const BankHashStats = struct {
     }
 };
 
-pub const SlotAndHash = struct {
-    slot: Slot,
-    hash: Hash,
-
-    pub fn equals(a: *const SlotAndHash, b: *const SlotAndHash) bool {
-        if (a.slot != b.slot) return false;
-        if (!a.hash.eql(b.hash)) return false;
-        return true;
-    }
-};
-
 /// Analogous to [AccountsDbFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L77)
 pub const AccountsDbFields = struct {
     file_map: FileMap,
@@ -1721,13 +1714,8 @@ pub const AccountsDbFields = struct {
         try bincode.write(writer, data.slot, params);
         try bincode.write(writer, data.bank_hash_info, params);
 
-        if (data.rooted_slot_hashes.len != 0 or data.rooted_slots.len != 0) {
-            try bincode.write(writer, data.rooted_slots, params);
-        }
-
-        if (data.rooted_slot_hashes.len != 0) {
-            try bincode.write(writer, data.rooted_slot_hashes, params);
-        }
+        try bincode.write(writer, data.rooted_slots, params);
+        try bincode.write(writer, data.rooted_slot_hashes, params);
     }
 
     fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
@@ -1803,188 +1791,6 @@ pub const Manifest = struct {
     ) !Manifest {
         return try bincode.read(allocator, Manifest, reader, .{});
     }
-};
-
-/// Analogous to [InstructionError](https://github.com/anza-xyz/agave/blob/25ec30452c7d74e2aeb00f2fa35876de9ce718c6/sdk/program/src/instruction.rs#L36)
-pub const InstructionError = union(enum) {
-    /// Deprecated! Use CustomError instead!
-    /// The program instruction returned an error
-    GenericError,
-
-    /// The arguments provided to a program were invalid
-    InvalidArgument,
-
-    /// An instruction's data contents were invalid
-    InvalidInstructionData,
-
-    /// An account's data contents was invalid
-    InvalidAccountData,
-
-    /// An account's data was too small
-    AccountDataTooSmall,
-
-    /// An account's balance was too small to complete the instruction
-    InsufficientFunds,
-
-    /// The account did not have the expected program id
-    IncorrectProgramId,
-
-    /// A signature was required but not found
-    MissingRequiredSignature,
-
-    /// An initialize instruction was sent to an account that has already been initialized.
-    AccountAlreadyInitialized,
-
-    /// An attempt to operate on an account that hasn't been initialized.
-    UninitializedAccount,
-
-    /// Program's instruction lamport balance does not equal the balance after the instruction
-    UnbalancedInstruction,
-
-    /// Program illegally modified an account's program id
-    ModifiedProgramId,
-
-    /// Program spent the lamports of an account that doesn't belong to it
-    ExternalAccountLamportSpend,
-
-    /// Program modified the data of an account that doesn't belong to it
-    ExternalAccountDataModified,
-
-    /// Read-only account's lamports modified
-    ReadonlyLamportChange,
-
-    /// Read-only account's data was modified
-    ReadonlyDataModified,
-
-    /// An account was referenced more than once in a single instruction
-    // Deprecated, instructions can now contain duplicate accounts
-    DuplicateAccountIndex,
-
-    /// Executable bit on account changed, but shouldn't have
-    ExecutableModified,
-
-    /// Rent_epoch account changed, but shouldn't have
-    RentEpochModified,
-
-    /// The instruction expected additional account keys
-    NotEnoughAccountKeys,
-
-    /// Program other than the account's owner changed the size of the account data
-    AccountDataSizeChanged,
-
-    /// The instruction expected an executable account
-    AccountNotExecutable,
-
-    /// Failed to borrow a reference to account data, already borrowed
-    AccountBorrowFailed,
-
-    /// Account data has an outstanding reference after a program's execution
-    AccountBorrowOutstanding,
-
-    /// The same account was multiply passed to an on-chain program's entrypoint, but the program
-    /// modified them differently.  A program can only modify one instance of the account because
-    /// the runtime cannot determine which changes to pick or how to merge them if both are modified
-    DuplicateAccountOutOfSync,
-
-    /// Allows on-chain programs to implement program-specific error types and see them returned
-    /// by the Solana runtime. A program-specific error may be any type that is represented as
-    /// or serialized to a u32 integer.
-    Custom: u32,
-
-    /// The return value from the program was invalid.  Valid errors are either a defined builtin
-    /// error value or a user-defined error in the lower 32 bits.
-    InvalidError,
-
-    /// Executable account's data was modified
-    ExecutableDataModified,
-
-    /// Executable account's lamports modified
-    ExecutableLamportChange,
-
-    /// Executable accounts must be rent exempt
-    ExecutableAccountNotRentExempt,
-
-    /// Unsupported program id
-    UnsupportedProgramId,
-
-    /// Cross-program invocation call depth too deep
-    CallDepth,
-
-    /// An account required by the instruction is missing
-    MissingAccount,
-
-    /// Cross-program invocation reentrancy not allowed for this instruction
-    ReentrancyNotAllowed,
-
-    /// Length of the seed is too long for address generation
-    MaxSeedLengthExceeded,
-
-    /// Provided seeds do not result in a valid address
-    InvalidSeeds,
-
-    /// Failed to reallocate account data of this length
-    InvalidRealloc,
-
-    /// Computational budget exceeded
-    ComputationalBudgetExceeded,
-
-    /// Cross-program invocation with unauthorized signer or writable account
-    PrivilegeEscalation,
-
-    /// Failed to create program execution environment
-    ProgramEnvironmentSetupFailure,
-
-    /// Program failed to complete
-    ProgramFailedToComplete,
-
-    /// Program failed to compile
-    ProgramFailedToCompile,
-
-    /// Account is immutable
-    Immutable,
-
-    /// Incorrect authority provided
-    IncorrectAuthority,
-
-    /// Failed to serialize or deserialize account data
-    ///
-    /// Warning: This error should never be emitted by the runtime.
-    ///
-    /// This error includes strings from the underlying 3rd party Borsh crate
-    /// which can be dangerous because the error strings could change across
-    /// Borsh versions. Only programs can use this error because they are
-    /// consistent across Solana software versions.
-    ///
-    BorshIoError: []const u8,
-
-    /// An account does not have enough lamports to be rent-exempt
-    AccountNotRentExempt,
-
-    /// Invalid account owner
-    InvalidAccountOwner,
-
-    /// Program arithmetic overflowed
-    ArithmeticOverflow,
-
-    /// Unsupported sysvar
-    UnsupportedSysvar,
-
-    /// Illegal account owner
-    IllegalOwner,
-
-    /// Accounts data allocations exceeded the maximum allowed per transaction
-    MaxAccountsDataAllocationsExceeded,
-
-    /// Max accounts exceeded
-    MaxAccountsExceeded,
-
-    /// Max instruction trace length exceeded
-    MaxInstructionTraceLengthExceeded,
-
-    /// Builtin programs must consume compute units
-    BuiltinProgramsMustConsumeComputeUnits,
-    // Note: For any new error added here an equivalent ProgramError and its
-    // conversions must also be added
 };
 
 /// Analogous to [TransactionError](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/transaction/error.rs#L14)
@@ -2198,7 +2004,7 @@ pub const StatusCache = struct {
             return error.SlotHistoryMismatch;
         }
         for (slots_seen.keys()) |slot| {
-            if (slot_history.check(slot) != .Found) {
+            if (slot_history.check(slot) != .found) {
                 return error.SlotNotFoundInHistory;
             }
         }
@@ -2206,7 +2012,7 @@ pub const StatusCache = struct {
         var slots_checked: u32 = 0;
         var slot = slot_history.newest();
         while (slot >= slot_history.oldest() and slots_checked != MAX_CACHE_ENTRIES) {
-            if (slot_history.check(slot) == .Found) {
+            if (slot_history.check(slot) == .found) {
                 slots_checked += 1;
                 if (!slots_seen.contains(slot)) {
                     return error.SlotNotFoundInStatusCache;
@@ -2225,11 +2031,11 @@ pub const FullSnapshotFileInfo = struct {
     slot: Slot,
     hash: Hash,
 
-    const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("snapshot-{[slot]d}-{[hash]s}.tar.zst");
+    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("snapshot-{[slot]d}-{[hash]s}.tar.zst");
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .hash = "1" ** Hash.BASE58_MAX_SIZE,
     });
 
     pub fn snapshotArchiveName(self: FullSnapshotFileInfo) SnapshotArchiveNameStr {
@@ -2311,11 +2117,10 @@ pub const FullSnapshotFileInfo = struct {
                 return error.MissingHash;
             }
 
-            const str_max_len = Hash.base58_max_encoded_size;
-            const end_max = @max(filename.len, start + str_max_len + 1);
+            const str_max_len = Hash.BASE58_MAX_SIZE;
+            const end_max = @min(filename.len, start + str_max_len + 1);
             const filename_truncated = filename[0..end_max];
-            // TODO: accessing it this way is dirty, the base58 API should be improved
-            const alphabet = &base58.Alphabet.DEFAULT.encode;
+            const alphabet = std.mem.asBytes(&base58.Table.BITCOIN.alphabet);
             const end = std.mem.indexOfNonePos(u8, filename_truncated, start + 1, alphabet) orelse
                 filename_truncated.len;
 
@@ -2352,12 +2157,12 @@ pub const IncrementalSnapshotFileInfo = struct {
         };
     }
 
-    const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst");
+    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst");
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .base_slot = std.math.maxInt(Slot),
         .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .hash = "1" ** Hash.BASE58_MAX_SIZE,
     });
 
     pub fn snapshotArchiveName(self: IncrementalSnapshotFileInfo) SnapshotArchiveNameStr {
@@ -2468,11 +2273,10 @@ pub const IncrementalSnapshotFileInfo = struct {
                 return error.MissingHash;
             }
 
-            const str_max_len = Hash.base58_max_encoded_size;
-            const end_max = @max(filename.len, start + str_max_len + 1);
+            const str_max_len = Hash.BASE58_MAX_SIZE;
+            const end_max = @min(filename.len, start + str_max_len + 1);
             const filename_truncated = filename[0..end_max];
-            // TODO: accessing it this way is dirty, the base58 API should be improved
-            const alphabet = &base58.Alphabet.DEFAULT.encode;
+            const alphabet = std.mem.asBytes(&base58.Table.BITCOIN.alphabet);
             const end = std.mem.indexOfNonePos(u8, filename_truncated, start + 1, alphabet) orelse
                 filename_truncated.len;
 
@@ -2498,15 +2302,16 @@ pub const SnapshotFiles = struct {
     full: FullSnapshotFileInfo,
     incremental_info: ?SlotAndHash,
 
-    pub fn incremental(snapshot_files: SnapshotFiles) ?IncrementalSnapshotFileInfo {
-        const inc_info = snapshot_files.incremental_info orelse return null;
+    pub fn incremental(self: SnapshotFiles) ?IncrementalSnapshotFileInfo {
+        const inc_info = self.incremental_info orelse return null;
         return .{
-            .base_slot = snapshot_files.full.slot,
+            .base_slot = self.full.slot,
             .slot = inc_info.slot,
             .hash = inc_info.hash,
         };
     }
 
+    /// Asserts that `if (maybe_incremental_info) |inc| inc.base_slot == full_info.slot`.
     pub fn fromFileInfos(
         full_info: FullSnapshotFileInfo,
         maybe_incremental_info: ?IncrementalSnapshotFileInfo,

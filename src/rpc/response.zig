@@ -68,4 +68,8 @@ pub const Error = struct {
     pub fn dataAsString(self: *const Error, allocator: std.mem.Allocator) ![]const u8 {
         return std.json.stringifyAlloc(allocator, self.data.?, .{});
     }
+
+    pub fn eql(self: Error, other: Error) bool {
+        return self.code == other.code and std.mem.eql(u8, self.message, other.message);
+    }
 };

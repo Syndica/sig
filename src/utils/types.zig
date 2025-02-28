@@ -82,6 +82,42 @@ pub fn ErrorReturn(function: anytype) type {
     return @typeInfo(ReturnType(@TypeOf(function))).ErrorUnion.error_set;
 }
 
+/// Casts the item's type into an optional if it is not optional. Otherwise the
+/// type in unchanged.
+///
+/// Useful for ensuring an anytype item is an optional and can be used in
+/// constructs like `if (maybe_x) |x|`
+///
+/// The value itself remains unchanged. This is only for type casting.
+pub fn toOptional(x: anytype) switch (@typeInfo(@TypeOf(x))) {
+    .Optional, .Null => @TypeOf(x),
+    else => ?@TypeOf(x),
+} {
+    return x;
+}
+
+/// Same as std.EnumFieldStruct, except every field may be a different type
+pub fn EnumStruct(comptime E: type, comptime Data: fn (E) type) type {
+    @setEvalBranchQuota(@typeInfo(E).Enum.fields.len);
+    var struct_fields: [@typeInfo(E).Enum.fields.len]std.builtin.Type.StructField = undefined;
+    for (&struct_fields, @typeInfo(E).Enum.fields) |*struct_field, enum_field| {
+        const T = Data(@field(E, enum_field.name));
+        struct_field.* = .{
+            .name = enum_field.name,
+            .type = T,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = @alignOf(T),
+        };
+    }
+    return @Type(.{ .Struct = .{
+        .layout = .auto,
+        .fields = &struct_fields,
+        .decls = &.{},
+        .is_tuple = false,
+    } });
+}
+
 pub const AllocManagement = enum {
     managed,
     unmanaged,
@@ -329,8 +365,8 @@ pub fn eql(a: anytype, b: @TypeOf(a)) bool {
 /// - treats Allocators as equal
 /// - uses an `eql` method if defined for the type
 /// - compares only the `items` field in ArrayLists
-pub fn eqlCustom(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
-    var config = config_;
+pub fn eqlCustom(a: anytype, b: @TypeOf(a), comptime config_: EqlConfig) bool {
+    comptime var config = config_;
     const T: type = @TypeOf(a);
 
     // custom handlers for specific types -- TODO: ideally these would be part of EqlConfig
@@ -434,7 +470,7 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
 }
 
 /// copy of `std.mem.eql` except it uses `eql` (above) instead of `==`
-fn sliceEql(comptime T: type, a: []const T, b: []const T, config: EqlConfig) bool {
+fn sliceEql(comptime T: type, a: []const T, b: []const T, comptime config: EqlConfig) bool {
     if (@sizeOf(T) == 0) return true;
 
     if (!@inComptime() and

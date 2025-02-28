@@ -1,12 +1,12 @@
 const std = @import("std");
 const sig = @import("sig.zig");
-const config = @import("./cmd/config.zig");
 
 const accountsdb_fuzz = sig.accounts_db.fuzz;
 const gossip_fuzz_service = sig.gossip.fuzz_service;
 const gossip_fuzz_table = sig.gossip.fuzz_table;
 const accountsdb_snapshot_fuzz = sig.accounts_db.fuzz_snapshot;
-const StandardErrLogger = sig.trace.ChannelPrintLogger;
+const ledger_fuzz = sig.ledger.fuzz_ledger;
+const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
 
 const spawnMetrics = sig.prometheus.spawnMetrics;
@@ -22,6 +22,7 @@ pub const FuzzFilter = enum {
     gossip_service,
     gossip_table,
     allocators,
+    ledger,
 };
 
 pub fn main() !void {
@@ -29,11 +30,11 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var std_logger = try StandardErrLogger.init(.{
+    var std_logger = try ChannelPrintLogger.init(.{
         .allocator = std.heap.c_allocator,
         .max_level = Level.debug,
         .max_buffer = 1 << 20,
-    });
+    }, null);
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
@@ -41,12 +42,14 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
-    logger.info().logf("metrics port: {d}", .{config.current.metrics_port});
+    const metrics_port: u16 = 12345;
+
+    logger.info().logf("metrics port: {d}", .{metrics_port});
     const metrics_thread = try spawnMetrics(
         // TODO: use the GPA here, the server is just leaking because we're losing the handle
         // to it and never deiniting.
         std.heap.c_allocator,
-        config.current.metrics_port,
+        metrics_port,
     );
     metrics_thread.detach();
 
@@ -86,6 +89,7 @@ pub fn main() !void {
         .snapshot => try accountsdb_snapshot_fuzz.run(&cli_args),
         .gossip_service => try gossip_fuzz_service.run(seed, &cli_args),
         .gossip_table => try gossip_fuzz_table.run(seed, &cli_args),
+        .ledger => try ledger_fuzz.run(seed, &cli_args),
         .allocators => try sig.utils.allocators.runFuzzer(seed, &cli_args),
     }
 }

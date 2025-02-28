@@ -5,5 +5,16 @@ datasources:
     type: prometheus
     url: http://prometheus:9090
     isDefault: true
-    access: proxy
     editable: true
+
+  - name: Loki
+    type: loki
+    url: http://loki:3100
+    basicAuth: false
+    isDefault: false
+    version: 1
+    editable: false
+
+  - name: Pyroscope
+    type: grafana-pyroscope-datasource
+    url: http://pyroscope:4040

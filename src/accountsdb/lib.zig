@@ -1,7 +1,6 @@
 pub const accounts_file = @import("accounts_file.zig");
 pub const bank = @import("bank.zig");
 pub const buffer_pool = @import("buffer_pool.zig");
-pub const cache = @import("cache.zig");
 pub const db = @import("db.zig");
 pub const download = @import("download.zig");
 pub const fuzz = @import("fuzz.zig");
@@ -10,7 +9,6 @@ pub const genesis_config = @import("genesis_config.zig");
 pub const index = @import("index.zig");
 pub const snapshots = @import("snapshots.zig");
 pub const swiss_map = @import("swiss_map.zig");
-pub const sysvars = @import("sysvars.zig");
 
 pub const AccountsDB = db.AccountsDB;
 pub const FullAndIncrementalManifest = snapshots.FullAndIncrementalManifest;

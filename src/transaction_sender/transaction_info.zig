@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
-const Transaction = sig.core.transaction.Transaction;
+const Transaction = sig.core.Transaction;
 const Instant = sig.time.Instant;
 const Duration = sig.time.Duration;
 

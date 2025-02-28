@@ -1,5 +1,4 @@
 const std = @import("std");
-const base58 = @import("base58-zig");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 

@@ -1,6 +1,4 @@
 const std = @import("std");
-const network = @import("zig-network");
-const base58 = @import("base58-zig");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;

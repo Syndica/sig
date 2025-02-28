@@ -7,17 +7,11 @@ alerting:
         - targets: []
       scheme: http
       timeout: 10s
-      api_version: v1
+      api_version: v2
 scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets:
-          # sig general
-          - localhost:12345
-          - host.docker.internal:12345
-          # sig geyser
-          - localhost:12355
-          - host.docker.internal:12355
-          # node-exporter
-          - localhost:9100
-          - host.docker.internal:9100
+          - host.docker.internal:12345 # sig prometheus general
+          - host.docker.internal:12355 # sig prometheus geyser
+          - node-exporter:9100 # node exporter

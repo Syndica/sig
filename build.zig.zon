@@ -7,10 +7,6 @@
         "src",
     },
     .dependencies = .{
-        .@"base58-zig" = .{
-            .url = "https://github.com/Syndica/base58-zig/archive/e1001fbe8b41eed36d81e37931ada66b784e51dc.tar.gz",
-            .hash = "12206e5050a03cd9dcb896781de0cf541081488006532675371653f61d00c1f27433",
-        },
         .@"zig-network" = .{
             .url = "https://github.com/ikskuh/zig-network/archive/d4506cd1950de8a6e6d3f28aed68a0b4f64e0b44.tar.gz",
             .hash = "122080b2675fa7fdd7410af5f62942dec99e0ea766827c8c6506e6672b575fb0a50e",
@@ -19,25 +15,17 @@
             .url = "https://github.com/sam701/zig-cli/archive/8c7a798c0f7fa0358d7ab41106fc872fca4cd995.tar.gz",
             .hash = "1220c008492d9460c3be2b209600a948181e6efb3bf0d79a1633def499632e708f4b",
         },
-        .httpz = .{
-            .url = "https://github.com/karlseguin/http.zig/archive/79dad0f0cc652830cd8e49bf3e73aa77155ad4b2.tar.gz",
-            .hash = "1220b8a918dfcee4fc8326ec337776e2ffd3029511c35f6b96d10aa7be98ca2faf99",
-        },
         .zstd = .{
             .url = "git+https://github.com/Syndica/zstd.zig#5095f011c1183aa67d696172795440d6a33732c9",
             .hash = "122030ebe280b73693963a67ed656226a67b7f00a0a05665155da00c9fcdee90de88",
         },
-        .curl = .{
-            .url = "https://github.com/jiacai2050/zig-curl/archive/8a3f45798a80a5de4c11c6fa44dab8785c421d27.tar.gz",
-            .hash = "1220f70ac854b59315a8512861e039648d677feb4f9677bd873d6b9b7074a5906485",
-        },
         .rocksdb = .{
-            .url = "https://github.com/Syndica/rocksdb-zig/archive/6d4230e131183cccb730a7248bd4ca30c559b8bd.tar.gz",
-            .hash = "12207766d25ba350d6e2f2153fc74a2b3ff204224e1c08adf211cd9e400075033898",
+            .url = "https://github.com/Syndica/rocksdb-zig/archive/cf966c0c6bb6205a08bb2006f399719542e4e770.tar.gz",
+            .hash = "1220d25e3ef18526cb6c980b441f05dc96330bedd88a512dcb3aed775a981ce3707d",
         },
         .lsquic = .{
-            .url = "https://github.com/Syndica/lsquic/archive/7c34f2472f390482dffada7a65b8231f6b5b3a3b.tar.gz",
-            .hash = "1220ff572d14b18d9774a298db0b8aeb046800039ccc8e10646992b074e26ea4c38a",
+            .url = "https://github.com/Syndica/lsquic/archive/ed6ced0cbc6447f7135a32db491e398debdf8af7.tar.gz",
+            .hash = "12207247a06ac1e7f4ddd6f0fbca4bcdcdf78655432a07928a96c8ec456bdfca71e3",
         },
         .xev = .{
             .url = "https://github.com/mitchellh/libxev/archive/b8d1d93e5c899b27abbaa7df23b496c3e6a178c7.tar.gz",
@@ -46,6 +34,14 @@
         .prettytable = .{
             .url = "https://github.com/dying-will-bullet/prettytable-zig/archive/46b6ad9b5970def35fa43c9613cd244f28862fa9.tar.gz",
             .hash = "122098d444c9c7112c66481e7655bb5389829c67e04b280a029200545e1971187443",
+        },
+        .base58 = .{
+            .url = "git+https://github.com/Syndica/base58-zig#e6337e7eb3dc7ca77cad4c3b2fe4a34357bd50ea",
+            .hash = "122092353c0b494c2a4968c10a527dc90d6e89eaac48637fda1a0af3efd948bf4ee3",
+        },
+        .poseidon = .{
+            .url = "git+https://github.com/Rexicon226/zig-poseidon#82e41845bfc689192359639fef5bb89c452388b2",
+            .hash = "12208f0d8388111308c919d73c24e9a595c3f2b5f83edf2cebf10598f8439fe33843",
         },
     },
 }

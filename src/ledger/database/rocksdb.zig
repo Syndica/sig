@@ -2,7 +2,6 @@ const std = @import("std");
 const rocks = @import("rocksdb");
 const sig = @import("../../sig.zig");
 const database = @import("lib.zig");
-const build_options = @import("build-options");
 
 const Allocator = std.mem.Allocator;
 
@@ -29,10 +28,13 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 
         const Self = @This();
 
-        pub fn open(allocator: Allocator, logger_: Logger, path: []const u8) Error!Self {
+        const OpenError = Error || std.posix.MakeDirError || std.fs.Dir.StatFileError;
+
+        pub fn open(allocator: Allocator, logger_: Logger, path: []const u8) OpenError!Self {
             const logger = logger_.withScope(LOG_SCOPE);
             logger.info().log("Initializing RocksDB");
             const owned_path = try std.fmt.allocPrintZ(allocator, "{s}/rocksdb", .{path});
+            try std.fs.cwd().makePath(owned_path);
 
             // allocate cf descriptions
             const column_family_descriptions = try allocator
@@ -348,7 +350,7 @@ fn callRocks(logger: ScopedLogger(LOG_SCOPE), comptime func: anytype, args: anyt
 }
 
 comptime {
-    if (build_options.blockstore_db == .rocksdb) {
+    if (sig.build_options.blockstore_db == .rocksdb) {
         _ = &database.interface.testDatabase(RocksDB);
     }
 }

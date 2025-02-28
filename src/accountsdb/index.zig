@@ -88,6 +88,7 @@ pub const AccountIndex = struct {
         number_of_shards: usize,
     ) !Self {
         const logger = logger_.withScope(LOG_SCOPE);
+
         const reference_allocator: ReferenceAllocator = switch (allocator_config) {
             .ram => |ram| blk: {
                 logger.info().logf("using ram memory for account index", .{});
@@ -96,12 +97,26 @@ pub const AccountIndex = struct {
             .disk => |disk| blk: {
                 var index_dir = try disk.accountsdb_dir.makeOpenPath("index", .{});
                 errdefer index_dir.close();
+
+                logger.info().logf(
+                    "using disk memory (@{s}) for account index",
+                    .{sig.utils.fmt.tryRealPath(index_dir, ".")},
+                );
+
                 const disk_allocator = try allocator.create(DiskMemoryAllocator);
-                disk_allocator.* = .{ .dir = index_dir, .logger = logger.withScope(@typeName(DiskMemoryAllocator)) };
-                logger.info().logf("using disk memory (@{s}) for account index", .{sig.utils.fmt.tryRealPath(index_dir, ".")});
-                break :blk .{ .disk = .{ .dma = disk_allocator, .ptr_allocator = allocator } };
+                errdefer allocator.destroy(disk_allocator);
+                disk_allocator.* = .{
+                    .dir = index_dir,
+                    .logger = logger.withScope(@typeName(DiskMemoryAllocator)),
+                };
+
+                break :blk .{ .disk = .{
+                    .dma = disk_allocator,
+                    .ptr_allocator = allocator,
+                } };
             },
         };
+        errdefer reference_allocator.deinit();
 
         const reference_manager = try sig.utils.allocators.RecycleBuffer(
             AccountRef,
@@ -111,6 +126,7 @@ pub const AccountIndex = struct {
             .memory_allocator = reference_allocator.get(),
             .records_allocator = allocator,
         });
+        errdefer reference_manager.destroy();
 
         return .{
             .allocator = allocator,
@@ -131,8 +147,7 @@ pub const AccountIndex = struct {
             slot_reference_map.deinit();
         }
 
-        self.reference_manager.deinit();
-        self.allocator.destroy(self.reference_manager);
+        self.reference_manager.destroy();
         self.reference_allocator.deinit();
     }
 
@@ -311,7 +326,7 @@ pub const AccountIndex = struct {
         // manager must be empty
         std.debug.assert(self.reference_manager.capacity == 0);
 
-        self.logger.info().log("loading state from disk...");
+        self.logger.info().log("running account_index.loadFromDisk");
         const reference_file = try dir.openFile("index.bin", .{});
         const size = (try reference_file.stat()).size;
         const index_memory = try std.posix.mmap(
@@ -353,7 +368,10 @@ pub const AccountIndex = struct {
             reference_memory,
             .{},
         );
-        try self.reference_manager.memory.append(references);
+        try self.reference_manager.memory.append(
+            self.reference_manager.memory_allocator,
+            references,
+        );
         self.reference_manager.capacity += references.len;
 
         // update the pointers of the references
@@ -367,7 +385,7 @@ pub const AccountIndex = struct {
         // load the records
         self.logger.info().log("loading manager records");
         const records = try sig.bincode.readFromSlice(
-            self.reference_manager.records.allocator,
+            self.reference_manager.records_allocator,
             @TypeOf(self.reference_manager.records),
             records_memory,
             .{},
@@ -730,11 +748,12 @@ pub const ReferenceAllocator = union(Tag) {
         };
     }
 
-    pub fn deinit(self: *ReferenceAllocator) void {
-        switch (self.*) {
-            .disk => {
-                self.disk.dma.dir.close();
-                self.disk.ptr_allocator.destroy(self.disk.dma);
+    pub fn deinit(self: ReferenceAllocator) void {
+        switch (self) {
+            .disk => |disk| {
+                var dir = disk.dma.dir;
+                dir.close();
+                disk.ptr_allocator.destroy(disk.dma);
             },
             .ram => {},
         }

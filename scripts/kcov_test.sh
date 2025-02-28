@@ -13,21 +13,23 @@
 #   export PATH=$PATH:/path/to/kcov/build/src
 #   ```
 
-set -euxo pipefail
+set -exo pipefail
 
 echo "=> Cleaning up" 
 rm -rf kcov-output 
 mkdir kcov-output 
 
-echo "=> Building Sig" 
-zig build 
+if [ -z "$1" ]; then
+    echo "=> Building Sig" 
+    zig build test -Dno-run
+    test_bin="./zig-out/bin/test"
+else
+    test_bin="$1"
+fi
 
 echo "=> Running kcov on tests" 
 kcov \
     --include-pattern=src/ \
     --exclude-pattern=$HOME/.cache \
     kcov-output \
-    ./zig-out/bin/test
-
-echo "=> Opening kcov-output/index.html" 
-open kcov-output/index.html || echo "=> Failed to open kcov-output/index.html"
+    $test_bin 

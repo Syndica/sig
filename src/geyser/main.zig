@@ -120,9 +120,9 @@ pub fn getOwnerFilters(
     var owner_pubkeys = std.AutoArrayHashMap(sig.core.Pubkey, void).init(allocator);
     errdefer owner_pubkeys.deinit();
 
-    try owner_pubkeys.ensureTotalCapacity(@intCast(owner_accounts_str.len));
+    try owner_pubkeys.ensureTotalCapacity(owner_accounts_str.len);
     for (owner_accounts_str) |owner_str| {
-        const owner_pubkey = try sig.core.Pubkey.fromString(owner_str);
+        const owner_pubkey = try sig.core.Pubkey.parseBase58String(owner_str);
         owner_pubkeys.putAssumeCapacity(owner_pubkey, {});
     }
 
@@ -142,7 +142,7 @@ pub fn getAccountFilters(
 
     try account_pubkeys.ensureTotalCapacity(@intCast(accounts_str.len));
     for (accounts_str) |account_str| {
-        const account_pubkey = try sig.core.Pubkey.fromString(account_str);
+        const account_pubkey = try sig.core.Pubkey.parseBase58String(account_str);
         account_pubkeys.putAssumeCapacity(account_pubkey, {});
     }
 
@@ -161,7 +161,7 @@ pub fn csvDump() !void {
         .allocator = std.heap.c_allocator,
         .max_level = sig.trace.Level.debug,
         .max_buffer = 1 << 20,
-    });
+    }, null);
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
@@ -264,7 +264,7 @@ pub fn csvDump() !void {
                     continue;
                 }
             }
-            fmt_count += 120 + 5 * account.data.len;
+            fmt_count += 120 + 5 * account.data.len();
         }
 
         const csv_string = try recycle_fba.allocator().alloc(u8, fmt_count);
@@ -311,7 +311,9 @@ pub fn csvDumpIOWriter(
     var timer = try sig.time.Timer.start();
     errdefer exit.store(true, .monotonic);
 
-    while (!exit.load(.monotonic)) {
+    while (true) {
+        io_channel.waitToReceive(.{ .unordered = exit }) catch break;
+
         while (io_channel.tryReceive()) |csv_row| {
             // write to file
             try csv_file.writeAll(csv_row);
@@ -346,7 +348,7 @@ pub fn benchmark() !void {
         .allocator = allocator,
         .max_level = .debug,
         .max_buffer = 1 << 15,
-    });
+    }, null);
     defer std_logger.deinit();
     const logger = std_logger.logger();
 
@@ -354,15 +356,22 @@ pub fn benchmark() !void {
     logger.info().logf("using pipe path: {s}", .{pipe_path});
 
     var exit = std.atomic.Value(bool).init(false);
-    try sig.geyser.core.streamReader(
+
+    var reader = try sig.geyser.GeyserReader.init(
         allocator,
-        logger,
-        &exit,
         pipe_path,
-        sig.time.Duration.fromSecs(config.measure_rate_secs),
+        &exit,
         .{
             .io_buf_len = 1 << 30,
             .bincode_buf_len = 1 << 30,
         },
+    );
+    defer reader.deinit();
+
+    try sig.geyser.core.streamReader(
+        &reader,
+        logger,
+        &exit,
+        sig.time.Duration.fromSecs(config.measure_rate_secs),
     );
 }

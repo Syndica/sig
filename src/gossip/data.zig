@@ -18,7 +18,7 @@ const Pubkey = sig.core.Pubkey;
 const IpAddr = sig.net.IpAddr;
 const ClientVersion = sig.version.ClientVersion;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
-const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
+const SlotAndHash = sig.core.hash.SlotAndHash;
 
 const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
@@ -100,7 +100,7 @@ pub const SignedGossipData = struct {
             error.NonCanonical => unreachable,
         };
         return .{
-            .signature = Signature.init(signature.toBytes()),
+            .signature = .{ .data = signature.toBytes() },
             .data = data,
         };
     }
@@ -176,7 +176,7 @@ pub const GossipKey = union(GossipDataTag) {
     RestartHeaviestFork: Pubkey,
 };
 
-const GossipDataTag = enum(u32) {
+pub const GossipDataTag = enum(u32) {
     LegacyContactInfo,
     Vote,
     LowestSlot,
@@ -191,6 +191,25 @@ const GossipDataTag = enum(u32) {
     ContactInfo,
     RestartLastVotedForkSlots,
     RestartHeaviestFork,
+
+    pub fn Value(self: GossipDataTag) type {
+        return switch (self) {
+            .LegacyContactInfo => LegacyContactInfo,
+            .Vote => struct { u8, Vote },
+            .LowestSlot => struct { u8, LowestSlot },
+            .LegacySnapshotHashes => LegacySnapshotHashes,
+            .AccountsHashes => AccountsHashes,
+            .EpochSlots => struct { u8, EpochSlots },
+            .LegacyVersion => LegacyVersion,
+            .Version => Version,
+            .NodeInstance => NodeInstance,
+            .DuplicateShred => struct { u16, DuplicateShred },
+            .SnapshotHashes => SnapshotHashes,
+            .ContactInfo => ContactInfo,
+            .RestartLastVotedForkSlots => RestartLastVotedForkSlots,
+            .RestartHeaviestFork => RestartHeaviestFork,
+        };
+    }
 };
 
 /// Analogous to [CrdsData](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L85)
@@ -593,7 +612,7 @@ pub const Vote = struct {
 
     pub fn sanitize(self: *const Vote) !void {
         try sanitizeWallclock(self.wallclock);
-        try self.transaction.sanitize();
+        try self.transaction.validate();
     }
 };
 
@@ -1141,7 +1160,7 @@ pub const SnapshotHashes = struct {
         pub fn deinit(self: *const IncrementalSnapshotsList, allocator: std.mem.Allocator) void {
             switch (self.*) {
                 .single => {},
-                .multiple => |list| allocator.free(list),
+                .multiple => |list| if (list.len > 0) allocator.free(list),
             }
         }
 
@@ -1255,7 +1274,13 @@ pub const ContactInfo = struct {
                 .ipv6 => SocketAddr.initIpv6(addr.asV6(), port),
             };
             socket.sanitize() catch continue;
-            self.cache[@intFromEnum(socket_entry.key)] = socket;
+
+            const cache_index = @intFromEnum(socket_entry.key);
+            if (cache_index >= SOCKET_CACHE_SIZE) {
+                // warn
+                continue;
+            }
+            self.cache[cache_index] = socket;
         }
     }
 
@@ -1733,7 +1758,9 @@ test "contact info bincode serialize matches rust bincode" {
 
     // Build identical Sig contact info
     var sig_contact_info = ContactInfo{
-        .pubkey = Pubkey.fromString("4NftWecdfGcYZMJahnAAX5Cw1PLGLZhYFB19wL6AkXqW") catch unreachable,
+        .pubkey = Pubkey.parseBase58String(
+            "4NftWecdfGcYZMJahnAAX5Cw1PLGLZhYFB19wL6AkXqW",
+        ) catch unreachable,
         .wallclock = 1721060646885,
         .outset = 1721060141617172,
         .shred_version = 0,
@@ -1913,7 +1940,7 @@ test "RestartHeaviestFork serialization matches rust" {
     var rust_bytes = [_]u8{ 82, 182, 93, 119, 193, 123, 4, 235, 68, 64, 82, 233, 51, 34, 232, 123, 245, 237, 236, 142, 251, 1, 123, 124, 26, 40, 219, 84, 165, 116, 208, 63, 19, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 20, 0 };
 
     const x = RestartHeaviestFork{
-        .from = try Pubkey.fromString("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
+        .from = try Pubkey.parseBase58String("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
         .wallclock = 19,
         .last_slot = 12,
         .observed_stake = 11,
@@ -1939,7 +1966,7 @@ test "RestartLastVotedForkSlots serialization matches rust" {
     };
 
     const data = RestartLastVotedForkSlots{
-        .from = try Pubkey.fromString("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
+        .from = try Pubkey.parseBase58String("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
         .wallclock = 0,
         .last_voted_slot = 0,
         .last_voted_hash = Hash.ZEROES,

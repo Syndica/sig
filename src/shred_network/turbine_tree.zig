@@ -17,7 +17,6 @@ const GossipTable = sig.gossip.GossipTable;
 const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
 const AtomicUsize = std.atomic.Value(usize);
-const ThreadPool = sig.sync.ThreadPool;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 
@@ -369,28 +368,29 @@ pub const TurbineTree = struct {
     ) !std.ArrayList(Node) {
         var nodes = try std.ArrayList(Node).initCapacity(
             allocator,
-            gossip_peers.len + staked_nodes.count(),
+            gossip_peers.len + staked_nodes.count() + 1, // 1 for self
         );
         defer nodes.deinit();
 
         var pubkeys = std.AutoArrayHashMap(Pubkey, void).init(allocator);
         defer pubkeys.deinit();
 
-        // Add ourself to the list of nodes
-        if (use_stake_hack_for_testing) {
+        const my_stake = if (use_stake_hack_for_testing) blk: {
             var max_stake: u64 = 0;
             for (staked_nodes.values()) |stake| if (stake > max_stake) {
                 max_stake = stake;
             };
-            nodes.appendAssumeCapacity(
-                .{ .id = .{ .contact_info = my_contact_info }, .stake = @divFloor(max_stake, 2) },
-            );
-        } else {
-            try nodes.append(.{
-                .id = .{ .contact_info = my_contact_info },
-                .stake = if (staked_nodes.get(my_contact_info.pubkey)) |stake| stake else 0,
-            });
-        }
+            break :blk @divFloor(max_stake, 2);
+        } else if (staked_nodes.get(my_contact_info.pubkey)) |stake|
+            stake
+        else
+            0;
+
+        // Add ourself to the list of nodes
+        nodes.appendAssumeCapacity(.{
+            .id = .{ .contact_info = my_contact_info },
+            .stake = my_stake,
+        });
         try pubkeys.put(my_contact_info.pubkey, void{});
 
         // Add all TVU peers directly to the list of nodes
@@ -475,7 +475,7 @@ const TestEnvironment = struct {
         var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
         errdefer staked_nodes.deinit();
 
-        var gossip_table = try GossipTable.init(params.allocator);
+        var gossip_table = try GossipTable.init(params.allocator, params.allocator);
         errdefer gossip_table.deinit();
 
         // Add known nodes to the gossip table
@@ -491,7 +491,10 @@ const TestEnvironment = struct {
             );
             try contact_info.setSocket(.turbine_recv, SocketAddr.initRandom(params.random));
             _ = try gossip_table.insert(
-                SignedGossipData{ .signature = .{}, .data = .{ .ContactInfo = contact_info } },
+                .{
+                    .signature = sig.core.Signature.ZEROES,
+                    .data = .{ .ContactInfo = contact_info },
+                },
                 0,
             );
             if (i == 0) my_contact_info = ThreadSafeContactInfo.fromContactInfo(contact_info);
@@ -806,7 +809,9 @@ test "agave: get retransmit nodes round trip" {
 
 test "agave-equivalence: get seeeded rng" {
     {
-        const pubkey = try Pubkey.fromString("57fFnkGGWzfnhmQEqbCBtZoYnNh26QxFa3FXZJhLmA19");
+        const pubkey = try Pubkey.parseBase58String(
+            "57fFnkGGWzfnhmQEqbCBtZoYnNh26QxFa3FXZJhLmA19",
+        );
         const shred_id = ShredId{ .slot = 1_013, .index = 10, .shred_type = .data };
         var chacha = TurbineTree.getSeededRng(pubkey, shred_id);
         const rng = chacha.random();
@@ -815,7 +820,9 @@ test "agave-equivalence: get seeeded rng" {
         try std.testing.expectEqual(3913197096749217054, rng.int(u64));
     }
     {
-        const pubkey = try Pubkey.fromString("3qChSzvc79TAKbd7jM8uAGHzeNh6PTjvQR8WPFiftNUq");
+        const pubkey = try Pubkey.parseBase58String(
+            "3qChSzvc79TAKbd7jM8uAGHzeNh6PTjvQR8WPFiftNUq",
+        );
         const shred_id = ShredId{ .slot = 200_378, .index = 0, .shred_type = .data };
         var chacha = TurbineTree.getSeededRng(pubkey, shred_id);
         const rng = chacha.random();
@@ -842,10 +849,9 @@ pub fn makeTestCluster(params: struct {
     var stakes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
     errdefer stakes.deinit();
 
-    var gossip_table_tp = ThreadPool.init(.{});
     var gossip_table = try GossipTable.init(
         params.allocator,
-        &gossip_table_tp,
+        params.allocator,
     );
     errdefer gossip_table.deinit();
 

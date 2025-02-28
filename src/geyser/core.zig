@@ -153,7 +153,9 @@ pub const GeyserWriter = struct {
     }
 
     pub fn IOStreamLoop(self: *Self) !void {
-        while (!self.exit.load(.acquire)) {
+        while (true) {
+            self.io_channel.waitToReceive(.{ .unordered = self.exit }) catch break;
+
             while (self.io_channel.tryReceive()) |payload| {
                 _ = self.writeToPipe(payload) catch |err| {
                     if (err == WritePipeError.PipeBlockedWithExitSignaled) {
@@ -250,22 +252,25 @@ pub const GeyserWriter = struct {
     }
 };
 
-pub fn createGeyserWriterFromConfig(
+pub fn createGeyserWriter(
     allocator: std.mem.Allocator,
-    geyser_config: sig.cmd.config.GeyserConfig,
+    pipe_path: []const u8,
+    writer_fba_bytes: usize,
 ) !*GeyserWriter {
-    if (geyser_config.enable) return error.GeyserWriterIsDisabled;
-
     const exit = try allocator.create(Atomic(bool));
+    errdefer allocator.destroy(exit);
     exit.* = Atomic(bool).init(false);
 
     const geyser_writer = try allocator.create(GeyserWriter);
+    errdefer allocator.destroy(geyser_writer);
+
     geyser_writer.* = try GeyserWriter.init(
         allocator,
-        geyser_config.pipe_path,
+        pipe_path,
         exit,
-        geyser_config.writer_fba_bytes,
+        writer_fba_bytes,
     );
+    errdefer geyser_writer.deinit();
 
     // start the geyser writer
     try geyser_writer.spawnIOLoop();
@@ -357,7 +362,7 @@ pub const GeyserReader = struct {
     }
 
     /// reads a payload from the pipe and returns the total bytes read with the data
-    pub fn readPayload(self: *Self) !struct { u64, VersionedAccountPayload } {
+    pub fn readPayload(self: *GeyserReader) !struct { u64, VersionedAccountPayload } {
         const len = try self.readType(u64, 8);
         const versioned_payload = try self.readType(VersionedAccountPayload, len);
         self.metrics.total_payloads.inc();
@@ -474,16 +479,11 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
 }
 
 pub fn streamReader(
-    allocator: std.mem.Allocator,
+    reader: *GeyserReader,
     logger: sig.trace.Logger,
     exit: *std.atomic.Value(bool),
-    pipe_path: []const u8,
     measure_rate: ?sig.time.Duration,
-    allocator_config: ?GeyserReader.AllocatorConfig,
 ) !void {
-    var reader = try sig.geyser.GeyserReader.init(allocator, pipe_path, exit, allocator_config orelse .{});
-    defer reader.deinit();
-
     var bytes_read: usize = 0;
     var timer = try sig.time.Timer.start();
 
@@ -538,15 +538,13 @@ test "streaming accounts" {
         pubkeys[i] = Pubkey.initRandom(random);
     }
 
-    const exit = try allocator.create(std.atomic.Value(bool));
-    defer allocator.destroy(exit);
-    exit.* = std.atomic.Value(bool).init(false);
+    var exit = std.atomic.Value(bool).init(false);
 
     // setup writer
     var stream_writer = try GeyserWriter.init(
         allocator,
         sig.TEST_DATA_DIR ++ "stream_test.pipe",
-        exit,
+        &exit,
         1 << 18,
     );
     defer stream_writer.deinit();

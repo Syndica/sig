@@ -1,15 +1,9 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
-const httpz = @import("httpz");
-
-const bincode = sig.bincode;
-const assert = std.debug.assert;
-const testing = std.testing;
 
 const ShredVersion = sig.core.shred.ShredVersion;
 const SocketAddr = sig.net.SocketAddr;
-const Atomic = std.atomic.Value;
 const Logger = sig.trace.Logger;
 const IpAddr = sig.net.IpAddr;
 
@@ -21,28 +15,25 @@ const HEADER_LENGTH: usize = 4;
 /// comes from the snapshot, and ip echo is only used to validate it.
 pub fn getShredAndIPFromEchoServer(
     logger: Logger,
-    allocator: std.mem.Allocator,
-    socket_addresses: []SocketAddr,
+    socket_addresses: []const SocketAddr,
 ) !struct { shred_version: ?u16, ip: ?IpAddr } {
     var my_ip: ?IpAddr = null;
     var my_shred_version: ?u16 = null;
 
     for (socket_addresses) |socket_addr| {
-        if (requestIpEcho(allocator, socket_addr.toAddress(), .{})) |response| {
-            if (my_ip == null)
-                my_ip = response.address;
+        const response = requestIpEcho(socket_addr.toAddress(), .{}) catch continue;
+        my_ip = my_ip orelse response.address;
 
-            if (response.shred_version) |shred_version| {
-                logger.info().logf(
-                    "shred version: {} - from entrypoint ip echo: {s}",
-                    .{ shred_version.value, socket_addr.toString().constSlice() },
-                );
-                my_shred_version = shred_version.value;
-            }
+        if (response.shred_version) |shred_version| {
+            logger.info()
+                .field("shred_version", shred_version.value)
+                .field("ip", socket_addr.toString().constSlice())
+                .log("ip echo response");
+            my_shred_version = shred_version.value;
+        }
 
-            // fully break when we have both
-            if (my_shred_version != null and my_ip != null) break;
-        } else |_| {}
+        // fully break when we have both
+        if (my_shred_version != null and my_ip != null) break;
     }
 
     return .{
@@ -51,204 +42,295 @@ pub fn getShredAndIPFromEchoServer(
     };
 }
 
-const IpEchoServerMessage = struct {
-    tcp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
-    udp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
-
-    const Self = @This();
-
-    pub fn init(tcp_ports: []u16, udp_ports: []u16) Self {
-        assert(tcp_ports.len <= MAX_PORT_COUNT_PER_MSG and udp_ports.len <= MAX_PORT_COUNT_PER_MSG);
-        var self = Self{};
-
-        std.mem.copyForwards(u16, &self.tcp_ports, tcp_ports);
-        std.mem.copyForwards(u16, &self.udp_ports, udp_ports);
-
-        return self;
-    }
-};
-
-const IpEchoServerResponse = struct {
-    // Public IP address of request echoed back to the node.
-    address: IpAddr,
-    // Cluster shred-version of the node running the server.
-    shred_version: ?ShredVersion,
-
-    const Self = @This();
-
-    pub fn init(addr: IpAddr) Self {
-        return Self{
-            .address = addr,
-            .shred_version = ShredVersion{ .value = 0 },
-        };
-    }
-};
-
-pub const Server = struct {
-    allocator: std.mem.Allocator,
-    server: httpz.ServerCtx(void, void),
-    port: u16,
-    killed: Atomic(bool),
-
-    const Self = @This();
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        port: u16,
-    ) Self {
-        return Self{
-            .allocator = allocator,
-            .server = httpz.Server().init(allocator, .{ .port = port }) catch unreachable,
-            .port = port,
-            .killed = Atomic(bool).init(false),
-        };
-    }
-
-    pub fn deinit(
-        self: *Self,
-    ) void {
-        // self.kill();
-        self.server.deinit();
-    }
-
-    pub fn kill(
-        self: *Self,
-    ) void {
-        if (!self.killed.swap(true, .seq_cst)) {
-            self.server.stop();
-        }
-    }
-
-    pub fn listenAndServe(
-        self: *Self,
-    ) !std.Thread {
-        var router = self.server.router();
-        router.post("/", handleEchoRequest);
-        return self.server.listenInNewThread();
-    }
-};
-
-pub fn handleEchoRequest(req: *httpz.Request, res: *httpz.Response) !void {
-    std.debug.print("handling echo request\n", .{});
-
-    const body = req.body() orelse return try returnBadRequest(res);
-    var ip_echo_server_message = try std.json.parseFromSlice(IpEchoServerMessage, res.arena, body, .{});
-    defer ip_echo_server_message.deinit();
-
-    std.debug.print("ip echo server message received: {}\n", .{ip_echo_server_message});
-    // logger.debug().logf("ip echo server message: {any}", .{ip_echo_server_message.value});
-
-    // convert a u32 to Ipv4
-    const socket_addr = SocketAddr.fromIpV4Address(res.conn.address);
-
-    std.json.stringify(IpEchoServerResponse.init(IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, res.writer()) catch |err| {
-        // logger.err().logf("could not json stringify IpEchoServerResponse: {any}", .{err});
-        std.debug.print("could not json stringify ip echo server response message: {}\n", .{err});
-    };
-}
-
-pub fn returnBadRequest(
-    resp: *httpz.Response,
-) !void {
-    resp.status = 400;
-    resp.headers.add("content-type", "application/json");
-    resp.body =
-        \\ "{\"error\":\"bad request.\"}"
-    ;
-}
-
-pub fn returnNotFound(
-    resp: *httpz.Response,
-) !void {
-    resp.status = 404;
-}
-
 pub fn requestIpEcho(
-    allocator: std.mem.Allocator,
     addr: std.net.Address,
-    message: IpEchoServerMessage,
-) !IpEchoServerResponse {
+    message: IpEchoRequest,
+) !IpEchoResponse {
     // connect + send
     const conn = try std.net.tcpConnectToAddress(addr);
     defer conn.close();
     try conn.writeAll(&(.{0} ** HEADER_LENGTH));
-    try bincode.write(conn.writer(), message, .{});
+    try sig.bincode.write(conn.writer(), message, .{});
     try conn.writeAll("\n");
 
     // get response
     var buff: [32]u8 = undefined;
     const len = try conn.readAll(&buff);
-    var bufferStream = std.io.fixedBufferStream(buff[HEADER_LENGTH..len]);
-    return try bincode.read(allocator, IpEchoServerResponse, bufferStream.reader(), .{});
+    var fbs = std.io.fixedBufferStream(buff[HEADER_LENGTH..len]);
+    const assert_allocator = sig.utils.allocators.failing.allocator(.{
+        .alloc = .assert,
+        .resize = .assert,
+        .free = .assert,
+    });
+    return try sig.bincode.read(assert_allocator, IpEchoResponse, fbs.reader(), .{});
 }
 
-// TODO: FIX ME
-// test "net.echo: Server works" {
-//     const port: u16 = 34333;
+const IpEchoRequest = struct {
+    tcp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
+    udp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
+};
 
-//     var exit = Atomic(bool).init(false);
+const IpEchoResponse = struct {
+    /// Public IP address of request echoed back to the node.
+    address: IpAddr,
+    /// Cluster shred-version of the node running the server.
+    shred_version: ?ShredVersion,
+};
 
-//     var server = Server.init(testing.allocator, port, &exit);
-//     defer server.deinit();
+pub const Server = struct {
+    logger: Logger,
+    allocator: std.mem.Allocator,
+    tcp: std.net.Server,
+    thread_pool: *std.Thread.Pool,
 
-//     var server_thread_handle = try server.listenAndServe();
-//     if (builtin.os.tag == .linux) try server_thread_handle.setName("server_thread");
+    pub const InitError =
+        std.net.Address.ListenError ||
+        std.Thread.SpawnError ||
+        std.mem.Allocator.Error;
+    pub fn init(
+        allocator: std.mem.Allocator,
+        port: u16,
+        logger: Logger,
+    ) InitError!Server {
+        const our_ip = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
+        var tcp = try our_ip.listen(.{
+            .force_nonblocking = true,
+            .reuse_address = true,
+        });
+        errdefer tcp.deinit();
 
-//     var client = std.http.Client{ .allocator = testing.allocator };
-//     defer client.deinit();
+        const thread_pool = try allocator.create(std.Thread.Pool);
+        errdefer allocator.destroy(thread_pool);
+        try thread_pool.init(.{
+            .allocator = allocator,
+            .n_jobs = null,
+        });
+        errdefer thread_pool.deinit();
 
-//     var server_header_buff = [_]u8{0} ** 1024;
+        return .{
+            .logger = logger,
+            .allocator = allocator,
+            .tcp = tcp,
+            .thread_pool = thread_pool,
+        };
+    }
 
-//     // create request
-//     var req = try client.open(.POST, try std.Uri.parse("http://localhost:34333/"), .{
-//         .server_header_buffer = &server_header_buff,
-//         .headers = .{
-//             .content_type = .{ .override = "text/plain" },
-//             // .accept_encoding = .{ .override = "*/*" },
-//         },
-//         .extra_headers = &.{
-//             // .{
-//             //     .name = "connection",
-//             //     .value = "close",
-//             // },
-//         },
-//     });
-//     defer req.deinit();
+    pub fn deinit(self: *Server) void {
+        self.thread_pool.deinit(); // this will wait for all running jobs to complete
+        self.allocator.destroy(self.thread_pool);
+        self.tcp.stream.close();
+    }
 
-//     // req.transfer_encoding = .chunked;
+    pub fn spawnServe(self: *Server, exit: *std.atomic.Value(bool)) std.Thread.SpawnError!void {
+        const thread = try std.Thread.spawn(.{}, serve, .{ self, exit });
+        thread.detach();
+    }
 
-//     var tcp_ports = [4]u16{ 1000, 2000, 3000, 4000 };
-//     var udp_port = [4]u16{ 1000, 2000, 3000, 4000 };
-//     const ip_echo_server_msg = IpEchoServerMessage.init(&tcp_ports, &udp_port);
+    pub fn serve(self: *Server, exit: *std.atomic.Value(bool)) !void {
+        while (!exit.load(.acquire)) {
+            const conn = self.tcp.accept() catch |err| switch (err) {
+                error.WouldBlock => continue,
+                else => |e| return e,
+            };
+            errdefer conn.stream.close();
 
-//     // json stringify
-//     var buff = [_]u8{0} ** 128;
-//     var buffer = std.io.fixedBufferStream(&buff);
-//     try std.json.stringify(ip_echo_server_msg, .{}, buffer.writer());
+            // TODO: unify this with the code for the RPC server
+            if (comptime builtin.target.isDarwin()) set_flags: {
+                const FlagsInt = @typeInfo(std.posix.O).Struct.backing_integer.?;
+                var flags_int: FlagsInt =
+                    @intCast(try std.posix.fcntl(conn.stream.handle, std.posix.F.GETFL, 0));
+                const flags: *std.posix.O =
+                    std.mem.bytesAsValue(std.posix.O, std.mem.asBytes(&flags_int));
+                if (flags.NONBLOCK == false and flags.CLOEXEC == true) break :set_flags;
+                flags.NONBLOCK = false;
+                flags.CLOEXEC = true;
+                _ = try std.posix.fcntl(conn.stream.handle, std.posix.F.SETFL, flags_int);
+            }
 
-//     // write body
-//     try req.send();
+            const hct = try ConnectionTask.create(
+                self.allocator,
+                conn,
+                self.logger,
+            );
+            errdefer hct.deinitAndDestroy();
 
-//     try req.writeAll(buffer.getWritten());
-//     try req.finish();
-//     try req.wait();
+            try self.thread_pool.spawn(ConnectionTask.handleNoError, .{hct});
+        }
+    }
+};
 
-//     if (req.response.status != .ok) {
-//         std.debug.print("req.response.status: {any}\n", .{req.response.status});
-//         return error.ResponseStatusNot200;
-//     }
+const ConnectionTask = struct {
+    allocator: std.mem.Allocator,
+    read_buffer: [4096]u8,
+    server: std.http.Server,
+    logger: Logger,
 
-//     // read body
-//     const body = try req.reader().readAllAlloc(testing.allocator, 819200);
-//     defer testing.allocator.free(body);
-//     // logger.field("body_length", body.len).field("body", body).debugf("received body", .{});
+    fn create(
+        allocator: std.mem.Allocator,
+        connection: std.net.Server.Connection,
+        logger: Logger,
+    ) std.mem.Allocator.Error!*ConnectionTask {
+        const hct = try allocator.create(ConnectionTask);
+        errdefer allocator.destroy(hct);
 
-//     // deserialize json into type
-//     var resp = try std.json.parseFromSlice(IpEchoServerResponse, testing.allocator, body, .{});
-//     defer resp.deinit();
+        hct.* = .{
+            .allocator = allocator,
+            .read_buffer = undefined,
+            .server = std.http.Server.init(connection, &hct.read_buffer),
+            .logger = logger,
+        };
+        return hct;
+    }
 
-//     try testing.expectEqual([4]u8{ 127, 0, 0, 1 }, resp.value.address.asV4());
-//     try testing.expectEqual(@as(u16, 0), resp.value.shred_version.?.value);
+    fn deinitAndDestroy(
+        self: *ConnectionTask,
+    ) void {
+        const allocator = self.allocator;
+        allocator.destroy(self);
+    }
 
-//     // server.kill();
-// }
+    fn handleNoError(hct: *ConnectionTask) void {
+        handle(hct) catch |err| {
+            if (@errorReturnTrace()) |st| {
+                std.log.err("{s}:\n{}", .{ @errorName(err), st });
+            } else {
+                std.log.err("{s}", .{@errorName(err)});
+            }
+        };
+    }
+
+    fn handle(hct: *ConnectionTask) !void {
+        defer hct.deinitAndDestroy();
+
+        var request = try hct.server.receiveHead();
+        const reader = sig.utils.io.narrowAnyReader(
+            try request.reader(),
+            std.http.Server.Request.ReadError,
+        );
+
+        if (request.head.method != .POST or
+            !std.mem.eql(u8, request.head.target, "/"))
+        {
+            try httpRespondError(&request, .not_found, "");
+            return;
+        }
+
+        hct.logger.debug().log("handling echo request");
+
+        var request_buf: [256]u8 = undefined;
+        const request_byte_count = try reader.readAll(&request_buf);
+        const request_bytes = request_buf[0..request_byte_count];
+
+        const ip_echo_request_result = std.json.parseFromSlice(
+            IpEchoRequest,
+            hct.allocator,
+            request_bytes,
+            .{ .allocate = .alloc_if_needed },
+        ) catch |err| return switch (err) {
+            error.OutOfMemory => try httpRespondError(&request, .insufficient_storage, ""),
+            else => try httpRespondError(&request, .bad_request, ""),
+        };
+        const ip_echo_request = ip_echo_request_result.value;
+        _ = ip_echo_request;
+        ip_echo_request_result.deinit();
+
+        const socket_addr = SocketAddr.fromIpV4Address(request.server.connection.address);
+        const ip_echo_response: IpEchoResponse = .{
+            .address = .{ .ipv4 = socket_addr.V4.ip },
+            .shred_version = .{ .value = 0 }, // TODO: correct shred version needs to be propagated here
+        };
+
+        const content_len = blk: {
+            var counter = std.io.countingWriter(std.io.null_writer);
+            try std.json.stringify(ip_echo_response, .{}, counter.writer());
+            break :blk counter.bytes_written;
+        };
+
+        var send_buffer: [4096]u8 = undefined;
+        var response = request.respondStreaming(.{
+            .send_buffer = &send_buffer,
+            .content_length = content_len,
+            .respond_options = .{
+                .version = .@"HTTP/1.0",
+                .status = .ok,
+                .keep_alive = false,
+            },
+        });
+        const writer = sig.utils.io.narrowAnyWriter(
+            response.writer(),
+            std.http.Server.Response.WriteError,
+        );
+        try std.json.stringify(ip_echo_response, .{}, writer);
+        try response.end();
+    }
+};
+
+fn httpRespondError(
+    request: *std.http.Server.Request,
+    status: std.http.Status,
+    content: []const u8,
+) !void {
+    std.debug.assert( //
+        status.class() == .client_error or
+        status.class() == .server_error //
+    );
+    try request.respond(content, .{
+        .version = .@"HTTP/1.0",
+        .status = status,
+        .keep_alive = false,
+    });
+}
+
+test "net.echo: Server works" {
+    const port: u16 = 34333;
+
+    var server = try Server.init(std.testing.allocator, port, .noop);
+    defer server.deinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    defer exit.store(true, .release);
+    try server.spawnServe(&exit);
+
+    var client: std.http.Client = .{ .allocator = std.testing.allocator };
+    defer client.deinit();
+
+    var server_header_buff: [4096]u8 = undefined;
+
+    // create request
+    var request = try client.open(.POST, try std.Uri.parse("http://127.0.0.1:34333/"), .{
+        .server_header_buffer = &server_header_buff,
+        .version = .@"HTTP/1.0",
+        .keep_alive = false,
+    });
+    defer request.deinit();
+
+    const ip_echo_request: IpEchoRequest = .{
+        .tcp_ports = .{ 1000, 2000, 3000, 4000 },
+        .udp_ports = .{ 1000, 2000, 3000, 4000 },
+    };
+    const request_bytes = try std.json.stringifyAlloc(
+        std.testing.allocator,
+        ip_echo_request,
+        .{},
+    );
+    defer std.testing.allocator.free(request_bytes);
+
+    request.transfer_encoding = .{ .content_length = request_bytes.len };
+    try request.send();
+    try request.writeAll(request_bytes);
+    try request.finish();
+    try request.wait();
+
+    try std.testing.expectEqual(.ok, request.response.status);
+
+    // read body
+    const body = try request.reader().readAllAlloc(std.testing.allocator, 819_200);
+    defer std.testing.allocator.free(body);
+
+    // deserialize json into type
+    const resp = try std.json.parseFromSlice(IpEchoResponse, std.testing.allocator, body, .{});
+    defer resp.deinit();
+
+    try std.testing.expectEqual([4]u8{ 127, 0, 0, 1 }, resp.value.address.asV4());
+    try std.testing.expectEqual(ShredVersion{ .value = 0 }, resp.value.shred_version);
+}
