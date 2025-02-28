@@ -15,16 +15,16 @@ const ScopedLogger = sig.trace.log.ScopedLogger;
 const Response = rpc.response.Response;
 
 pub const Client = struct {
-    fetcher: HttpFetcher,
+    fetcher: HttpPostFetcher,
 
-    pub const Options = HttpFetcher.Options;
+    pub const Options = HttpPostFetcher.Options;
 
     pub fn init(
         allocator: Allocator,
         cluster_type: ClusterType,
-        options: HttpFetcher.Options,
+        options: HttpPostFetcher.Options,
     ) Allocator.Error!Client {
-        return .{ .fetcher = try HttpFetcher.init(allocator, rpcUrl(cluster_type), options) };
+        return .{ .fetcher = try HttpPostFetcher.init(allocator, rpcUrl(cluster_type), options) };
     }
 
     pub fn deinit(self: *Client) void {
@@ -46,7 +46,11 @@ pub const Client = struct {
         allocator: Allocator,
         request: anytype,
     ) !Response(@TypeOf(request)) {
-        return try fetchRpc(allocator, &self.fetcher, HttpFetcher.fetchWithRetries, request);
+        const request_json = try rpc.request.serialize(allocator, request);
+        defer allocator.free(request_json);
+        const response_json = try self.fetcher.fetchWithRetries(allocator, request_json);
+        defer allocator.free(response_json);
+        return try Response(@TypeOf(request)).fromJson(allocator, response_json);
     }
 };
 
@@ -60,23 +64,7 @@ pub fn rpcUrl(cluster_type: ClusterType) []const u8 {
     };
 }
 
-/// Fetch the response for an RPC request with an arbitrary fetcher implementation.
-pub fn fetchRpc(
-    allocator: Allocator,
-    fetch_context: anytype,
-    /// type: fn (@TypeOf(fetcher), Allocator, []const u8) ![]const u8
-    fetchFunction: anytype,
-    /// Instance of a struct defined in `rpc.methods`
-    request: anytype,
-) !Response(@TypeOf(request)) {
-    const request_json = try rpc.request.serialize(allocator, request);
-    defer allocator.free(request_json);
-    const response_json = try fetchFunction(fetch_context, allocator, request_json);
-    defer allocator.free(response_json);
-    return try Response(@TypeOf(request)).fromJson(allocator, response_json);
-}
-
-pub const HttpFetcher = struct {
+pub const HttpPostFetcher = struct {
     http_client: std.http.Client,
     base_url: []const u8,
     logger: Logger,
@@ -87,12 +75,14 @@ pub const HttpFetcher = struct {
         logger: Logger = .noop,
     };
 
-    const Self = @This();
-
     pub const Error = error{HttpRequestFailed} ||
         ErrorReturn(std.http.Client.fetch) || Allocator.Error;
 
-    pub fn init(allocator: Allocator, base_url: []const u8, options: Options) Allocator.Error!Self {
+    pub fn init(
+        allocator: Allocator,
+        base_url: []const u8,
+        options: Options,
+    ) Allocator.Error!HttpPostFetcher {
         return .{
             .base_url = try allocator.dupe(u8, base_url),
             .http_client = std.http.Client{ .allocator = allocator },
@@ -101,7 +91,7 @@ pub const HttpFetcher = struct {
         };
     }
 
-    pub fn deinit(self: *HttpFetcher) void {
+    pub fn deinit(self: *HttpPostFetcher) void {
         self.http_client.allocator.free(self.base_url);
         self.http_client.deinit();
     }
@@ -110,7 +100,7 @@ pub const HttpFetcher = struct {
     /// If the request fails, it will be retried up to `max_retries` times,
     /// If the response fails to parse, an error will be returned.
     pub fn fetchWithRetries(
-        self: *Self,
+        self: *HttpPostFetcher,
         allocator: std.mem.Allocator,
         request: []const u8,
     ) Error![]const u8 {
@@ -148,7 +138,7 @@ pub const HttpFetcher = struct {
     }
 
     pub fn fetchOnce(
-        self: *Self,
+        self: *HttpPostFetcher,
         request_payload: []const u8,
         response_payload: *std.ArrayList(u8),
     ) ErrorReturn(std.http.Client.fetch)!std.http.Client.FetchResult {
@@ -169,7 +159,7 @@ pub const HttpFetcher = struct {
         });
     }
 
-    fn restartHttpClient(self: *Self) void {
+    fn restartHttpClient(self: *HttpPostFetcher) void {
         self.http_client.deinit();
         self.http_client = std.http.Client{ .allocator = self.http_client.allocator };
     }
