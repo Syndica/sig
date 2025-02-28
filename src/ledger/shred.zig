@@ -426,6 +426,7 @@ fn generic_shred(shred_type: ShredType) type {
                 return error.InvalidPayloadSize;
             }
             const owned_payload = try allocator.alloc(u8, constants.payload_size);
+	    errdefer allocator.free(owned_payload);
 
             // TODO: It would be nice to find a way to get the payload in here without coping the entire thing.
             // The challenge is that the input payload is owned by the original packet list which was read
