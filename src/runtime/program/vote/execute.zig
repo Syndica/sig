@@ -6,12 +6,13 @@ const vote_instruction = vote_program.vote_instruction;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
+const VoteState = vote_program.state.VoteState;
+
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 
-const VoteState = vote_program.VoteState;
 const VoteProgramInstruction = vote_instruction.Instruction;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
@@ -45,6 +46,7 @@ pub fn execute(
             args.authorized_withdrawer,
             args.commission,
         ),
+        else => @panic("TODO: Unsupported instruction"),
     };
 }
 
