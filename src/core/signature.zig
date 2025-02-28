@@ -61,6 +61,7 @@ pub const Signature = struct {
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
     pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
+
     pub fn base58String(self: Signature) Base58String {
         return BASE58_ENDEC.encodeArray(SIZE, self.data);
     }
@@ -77,5 +78,17 @@ pub const Signature = struct {
 
     pub fn jsonStringify(self: Signature, writer: anytype) @TypeOf(writer.*).Error!void {
         try writer.print("\"{s}\"", .{self.base58String().slice()});
+    }
+
+    pub fn jsonParse(
+        allocator: std.mem.Allocator,
+        source: anytype,
+        options: std.json.ParseOptions,
+    ) !Signature {
+        const value = try std.json.Value.jsonParse(allocator, source, options);
+        return if (value == .string)
+            parseBase58String(value.string) catch return error.InvalidNumber
+        else
+            error.UnexpectedToken;
     }
 };

@@ -13,6 +13,12 @@ pub const Context = struct {
     apiVersion: []const u8,
 };
 
+/// Used to configure several RPC method requests
+pub const CommitmentSlotConfig = struct {
+    commitment: ?Commitment = null,
+    minContextSlot: ?sig.core.Slot = null,
+};
+
 pub const AccountInfo = struct {
     context: Context,
     value: ?Value,
@@ -42,6 +48,7 @@ pub const BlockCommitment = struct {
 // TODO: Blocks
 // TODO: BlocksWithLimit
 
+// TODO field types
 pub const RpcContactInfo = struct {
     /// Pubkey of the node as a base-58 string
     pubkey: []const u8,
@@ -151,19 +158,3 @@ pub const RpcVersionInfo = struct {
 };
 
 pub const Signature = []const u8;
-
-pub const GetVoteAccountsResponse = struct {
-    current: []const VoteAccount,
-    delinquent: []const VoteAccount,
-};
-
-pub const VoteAccount = struct {
-    votePubkey: sig.core.Pubkey,
-    nodePubkey: sig.core.Pubkey,
-    activatedStake: u64,
-    epochVoteAccount: bool,
-    commission: u8,
-    lastVote: u64,
-    epochCredits: []const [3]u64,
-    rootSlot: u64,
-};
