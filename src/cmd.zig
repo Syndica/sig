@@ -28,7 +28,7 @@ const GeyserWriter = sig.geyser.GeyserWriter;
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
-const spawnMetrics = sig.prometheus.spawnMetrics;
+const servePrometheus = sig.prometheus.servePrometheus;
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
 const createGeyserWriter = sig.geyser.core.createGeyserWriter;
 
@@ -857,7 +857,7 @@ fn validator() !void {
         &blockstore_db,
         lowest_cleanup_slot,
         current_config.max_shreds,
-        &app_base.exit,
+        app_base.exit,
     });
     defer cleanup_service_handle.join();
 
@@ -901,7 +901,7 @@ fn validator() !void {
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
-        .{ &rpc_epoch_ctx_service, &app_base.exit },
+        .{ &rpc_epoch_ctx_service, app_base.exit },
     );
 
     const turbine_config = current_config.turbine;
@@ -915,7 +915,7 @@ fn validator() !void {
             .registry = app_base.metrics_registry,
             .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
-            .exit = &app_base.exit,
+            .exit = app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
             .epoch_context_mgr = &epoch_context_manager,
@@ -975,7 +975,7 @@ fn shredNetwork() !void {
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
-        .{ &rpc_epoch_ctx_service, &app_base.exit },
+        .{ &rpc_epoch_ctx_service, app_base.exit },
     );
 
     // blockstore
@@ -1017,7 +1017,7 @@ fn shredNetwork() !void {
         &blockstore_db,
         lowest_cleanup_slot,
         current_config.max_shreds,
-        &app_base.exit,
+        app_base.exit,
     });
     defer cleanup_service_handle.join();
 
@@ -1033,7 +1033,7 @@ fn shredNetwork() !void {
         .registry = app_base.metrics_registry,
         .random = prng.random(),
         .my_keypair = &app_base.my_keypair,
-        .exit = &app_base.exit,
+        .exit = app_base.exit,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
         .epoch_context_mgr = &epoch_context_manager,
@@ -1261,7 +1261,7 @@ pub fn testTransactionSenderService() !void {
         transaction_channel,
         &gossip_service.gossip_table_rw,
         genesis_config.epoch_schedule,
-        &app_base.exit,
+        app_base.exit,
     );
     const transaction_sender_handle = try std.Thread.spawn(
         .{},
@@ -1280,7 +1280,7 @@ pub fn testTransactionSenderService() !void {
         allocator,
         transaction_channel,
         rpc_client,
-        &app_base.exit,
+        app_base.exit,
         app_base.logger.unscoped(),
     );
     // send and confirm mock transactions
@@ -1380,7 +1380,7 @@ const AppBase = struct {
     my_ip: IpAddr,
     my_port: u16,
 
-    exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    exit: *std.atomic.Value(bool),
     closed: bool,
 
     fn init(allocator: std.mem.Allocator, cmd_config: config.Cmd) !AppBase {
@@ -1389,8 +1389,14 @@ const AppBase = struct {
         const logger = plain_logger.withScope(LOG_SCOPE);
         errdefer logger.deinit();
 
+        const exit = try std.heap.c_allocator.create(std.atomic.Value(bool));
+        errdefer allocator.destroy(exit);
+        exit.* = std.atomic.Value(bool).init(false);
+
         const metrics_registry = globalRegistry();
-        const metrics_thread = try spawnMetrics(allocator, cmd_config.metrics_port);
+        const metrics_thread = try sig.utils.service_manager.spawnService( //
+            plain_logger, exit, "metrics endpoint", .{}, //
+            servePrometheus, .{ allocator, metrics_registry, cmd_config.metrics_port });
         errdefer metrics_thread.detach();
 
         const my_keypair = try sig.identity.getOrInit(allocator, logger.unscoped());
@@ -1429,6 +1435,7 @@ const AppBase = struct {
             .shred_version = my_shred_version,
             .my_ip = my_ip,
             .my_port = my_port,
+            .exit = exit,
             .closed = false,
         };
     }
@@ -1446,6 +1453,7 @@ const AppBase = struct {
         self.metrics_thread.detach();
         self.logger.deinit();
         if (self.log_file) |file| file.close();
+        self.allocator.destroy(self.exit);
     }
 };
 
