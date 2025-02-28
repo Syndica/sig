@@ -9,20 +9,19 @@ const bincode = sig.bincode;
 
 const Account = sig.core.account.Account;
 const Epoch = sig.core.time.Epoch;
+const EpochSchedule = sig.core.EpochSchedule;
 const Hash = sig.core.hash.Hash;
 const InstructionError = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
 
-const FileId = sig.accounts_db.accounts_file.FileId;
-
-const EpochSchedule = sig.core.EpochSchedule;
 const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
+const FileId = sig.accounts_db.accounts_file.FileId;
 const Inflation = sig.accounts_db.genesis_config.Inflation;
 const Rent = sig.accounts_db.genesis_config.Rent;
 const UnixTimestamp = sig.accounts_db.genesis_config.UnixTimestamp;
-const SlotHistory = sig.runtime.sysvar.SlotHistory;
 
 const Logger = sig.trace.Logger;
 
