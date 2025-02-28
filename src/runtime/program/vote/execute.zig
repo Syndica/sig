@@ -90,6 +90,10 @@ fn executeIntializeAccount(
 }
 
 /// Agave https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884-L903
+///
+/// Note: Versioned state is not implemented for creating new vote account, as current check in Agaave implementation
+/// here https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/programs/vote/src/vote_state/mod.rs#L890-L892
+/// suggests creating only current version is supported.
 fn intializeAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,

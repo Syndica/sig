@@ -54,8 +54,8 @@ pub const EpochCredit = struct {
 /// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L422
 ///
 /// Must support `bincode` and `serializedSize` methods for writing to the account data.
-/// Versioned state is not implemented, as current check in Agaave implementation here https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/programs/vote/src/vote_state/mod.rs#L890-L892
-/// suggests only current version is supported.
+///
+/// TODO Add versioned state for instructions that operates on existing vote accounts.
 pub const VoteState = struct {
     /// the node that votes in this account
     node_pubkey: Pubkey,
