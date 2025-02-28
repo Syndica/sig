@@ -2171,11 +2171,8 @@ pub fn testElfWithSyscalls(
         );
     }
 
-    var executable = exec: {
-        const elf = try Elf.parse(allocator, bytes, &loader, config);
-        errdefer elf.deinit(allocator);
-        break :exec try Executable.fromElf(elf);
-    };
+    const elf = try Elf.parse(allocator, bytes, &loader, config);
+    var executable = Executable.fromElf(elf);
     defer executable.deinit(allocator);
 
     const stack_memory = try allocator.alloc(u8, config.stackSize());
