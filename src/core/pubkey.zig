@@ -62,7 +62,7 @@ pub const Pubkey = extern struct {
     }
 
     pub fn jsonStringify(self: Pubkey, write_stream: anytype) !void {
-        try write_stream.write(self.base58String());
+        try write_stream.write(self.base58String().slice());
     }
 
     pub fn jsonParse(

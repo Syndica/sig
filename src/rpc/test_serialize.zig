@@ -1,27 +1,16 @@
 const std = @import("std");
-const base58 = @import("base58-zig");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 
-const types = rpc.types;
 const methods = rpc.methods;
 
-const Allocator = std.mem.Allocator;
-
-const ClusterType = sig.accounts_db.genesis_config.ClusterType;
-const Logger = sig.trace.log.Logger;
-const ScopedLogger = sig.trace.log.ScopedLogger;
-
-const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
-const Transaction = sig.core.transaction.Transaction;
 
 const GetAccountInfo = methods.GetAccountInfo;
 const GetBalance = methods.GetBalance;
 const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockHeight = methods.GetBlockHeight;
-const GetClusterNodes = methods.GetClusterNodes;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetLatestBlockhash = methods.GetLatestBlockhash;

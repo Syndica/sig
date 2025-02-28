@@ -166,6 +166,7 @@ files_excluded_from_line_length_check = [
     "src/accountsdb/download.zig",
     "src/ledger/reader.zig",
     "src/rpc/client.zig",
+    "src/rpc/test_serialize.zig",
     "src/accountsdb/index.zig",
     "src/ledger/cleanup_service.zig",
     "src/ledger/reed_solomon.zig",

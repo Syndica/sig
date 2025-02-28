@@ -1,6 +1,5 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const rpc = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 

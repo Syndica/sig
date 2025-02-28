@@ -2,15 +2,11 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 
-const types = rpc.types;
-const methods = rpc.methods;
-
 const Allocator = std.mem.Allocator;
 
 const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const ErrorReturn = sig.utils.types.ErrorReturn;
 const Logger = sig.trace.log.Logger;
-const ScopedLogger = sig.trace.log.ScopedLogger;
 
 const Response = rpc.response.Response;
 
