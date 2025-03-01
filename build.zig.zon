@@ -20,8 +20,8 @@
             .hash = "122030ebe280b73693963a67ed656226a67b7f00a0a05665155da00c9fcdee90de88",
         },
         .rocksdb = .{
-            .url = "https://github.com/Syndica/rocksdb-zig/archive/cf966c0c6bb6205a08bb2006f399719542e4e770.tar.gz",
-            .hash = "1220d25e3ef18526cb6c980b441f05dc96330bedd88a512dcb3aed775a981ce3707d",
+            .url = "https://github.com/Syndica/rocksdb-zig/archive/cd747a88e66539e37585cccacb5ae311be2ad527.tar.gz",
+            .hash = "1220d917ac77a71426253d31e6c2b6db40494aa4e18c7284dfca9dc1eed5c7864274",
         },
         .lsquic = .{
             .url = "https://github.com/Syndica/lsquic/archive/ed6ced0cbc6447f7135a32db491e398debdf8af7.tar.gz",

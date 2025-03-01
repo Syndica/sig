@@ -329,6 +329,14 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
+        pub fn flush(self: *Self, comptime cf: ColumnFamily) error{RocksDBFlush}!void {
+            try callRocks(
+                self.logger,
+                rocks.DB.flush,
+                .{ &self.db, self.cf_handles[cf.find(column_families)] },
+            );
+        }
+
         const Error = error{
             RocksDBOpen,
             RocksDBPut,
@@ -337,6 +345,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             RocksDBDeleteFilesInRange,
             RocksDBIterator,
             RocksDBWrite,
+            RocksDBFlush,
         } || Allocator.Error;
     };
 }
