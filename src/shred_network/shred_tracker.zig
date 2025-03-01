@@ -347,6 +347,7 @@ test "trivial happy path" {
     defer msr.deinit();
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
     var tracker = try BasicShredTracker.init(13579, .noop, &registry);
 
     _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
@@ -366,6 +367,7 @@ test "1 registered shred is identified" {
     defer msr.deinit();
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
     var tracker = try BasicShredTracker.init(13579, .noop, &registry);
     try tracker.registerShred(13579, 123, 13578, false, Instant.UNIX_EPOCH);
 

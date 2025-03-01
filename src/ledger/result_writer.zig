@@ -321,6 +321,7 @@ test "setRoots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -349,6 +350,7 @@ test "scanAndFixRoots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -391,6 +393,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -463,6 +466,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();

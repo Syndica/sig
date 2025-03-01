@@ -1390,6 +1390,7 @@ test "merkle root metas coding" {
     defer state.deinit();
     const allocator = state.allocator();
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
     const metrics = try registry.initStruct(BlockstoreInsertionMetrics);
 
     const slot = 1;

@@ -1545,6 +1545,7 @@ test "getLatestOptimisticSlots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -1616,6 +1617,7 @@ test "getFirstDuplicateProof" {
 
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_STATE_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
     try sig.ledger.tests.freshDir(path);
@@ -1656,6 +1658,7 @@ test "isDead" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -1692,6 +1695,7 @@ test "getBlockHeight" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -1721,6 +1725,7 @@ test "getRootedBlockTime" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -1760,6 +1765,7 @@ test "slotMetaIterator" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -1822,6 +1828,7 @@ test "rootedSlotIterator" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -1858,6 +1865,7 @@ test "slotRangeConnected" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -1919,6 +1927,7 @@ test "highestSlot" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -1978,6 +1987,7 @@ test "lowestSlot" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -2024,6 +2034,7 @@ test "isShredDuplicate" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -2076,6 +2087,7 @@ test "findMissingDataIndexes" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -2144,6 +2156,7 @@ test "getCodeShred" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -2227,6 +2240,7 @@ test "getDataShred" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();

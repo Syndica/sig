@@ -402,6 +402,7 @@ const TestDB = ledger.tests.TestDB;
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
     const logger = .noop;
 
     var db = try TestDB.init(@src());
@@ -475,6 +476,7 @@ test "purgeSlots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();

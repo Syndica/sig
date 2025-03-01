@@ -568,6 +568,7 @@ pub const RepairPeerProvider = struct {
 test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
     var prng = std.rand.DefaultPrng.init(4328095);
     const random = prng.random();
     const TestLogger = sig.trace.DirectPrintLogger;
@@ -681,6 +682,7 @@ test "RepairPeerProvider selects correct peers" {
     // init test subject
     var gossip_mux = RwMux(GossipTable).init(gossip);
     var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
     var peers = try RepairPeerProvider.init(
         allocator,
         random,
