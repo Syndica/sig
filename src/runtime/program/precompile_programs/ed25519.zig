@@ -129,7 +129,7 @@ pub fn newInstruction(
     message: []const u8,
 ) !sig.core.Instruction {
     if (!builtin.is_test) @compileError("newInstruction is only for use in tests");
-    std.debug.assert(message.len < std.math.maxInt(u16));
+    std.debug.assert(message.len <= std.math.maxInt(u16));
 
     const signature = try keypair.sign(message, null);
 

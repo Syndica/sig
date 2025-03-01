@@ -37,6 +37,10 @@ pub const Secp256k1SignatureOffsets = packed struct {
     message_data_size: u16 = 0,
     /// Within the transaction, the index of the instruction whose instruction data contains the message.
     message_instruction_idx: u8 = 0,
+
+    fn asBytes(self: *const Secp256k1SignatureOffsets) []const u8 {
+        return std.mem.asBytes(self)[0 .. @bitSizeOf(Secp256k1SignatureOffsets) / 8];
+    }
 };
 
 // https://github.com/firedancer-io/firedancer/blob/af74882ffb2c24783a82718dbc5111a94e1b5f6f/src/flamenco/runtime/program/fd_precompiles.c#L227
@@ -190,7 +194,7 @@ fn constructEthPubkey(
 fn signRecoverable(
     private_key: *const Ecdsa.SecretKey,
     message_hash: *const [Keccak256.digest_length]u8,
-) !.{ u2, Ecdsa.Signature } {
+) !struct { u2, Ecdsa.Signature } {
     if (!builtin.is_test) @compileError("signRecoverable is only for use in tests");
 
     // note: this uses malloc
@@ -203,8 +207,8 @@ fn signRecoverable(
     if (libsecp256k1.secp256k1_ecdsa_sign_recoverable(
         context,
         &recoverable_signature,
-        &message_hash,
-        &private_key,
+        message_hash,
+        &private_key.toBytes(),
         null,
         null,
     ) == 0) return error.InvalidSignature;
@@ -232,43 +236,15 @@ fn newSecp256k1Instruction(
     message: []const u8,
 ) !sig.core.Instruction {
     if (!builtin.is_test) @compileError("newSecp256k1Instruction is only for use in tests");
-    std.debug.assert(message.len < std.math.maxInt(u16));
+    std.debug.assert(message.len <= std.math.maxInt(u16));
 
     const eth_pubkey = constructEthPubkey(&keypair.public_key);
 
     var message_hash: [Keccak256.digest_length]u8 = undefined;
     Keccak256.hash(message, &message_hash, .{});
 
-    // note: this uses malloc
-    const context = libsecp256k1.secp256k1_context_create(
-        libsecp256k1.SECP256K1_CONTEXT_NONE,
-    ) orelse return error.InvalidSignature;
-    defer libsecp256k1.secp256k1_context_destroy(context);
-
-    var recoverable_signature: libsecp256k1.secp256k1_ecdsa_recoverable_signature = undefined;
-    const seckey = keypair.secret_key.toBytes();
-
-    if (libsecp256k1.secp256k1_ecdsa_sign_recoverable(
-        context,
-        &recoverable_signature,
-        &message_hash,
-        &seckey,
-        null,
-        null,
-    ) == 0) return error.InvalidSignature;
-
-    var signature: [64]u8 = undefined;
-    var _recovery_id: c_int = undefined;
-
-    if (libsecp256k1.secp256k1_ecdsa_recoverable_signature_serialize_compact(
-        context,
-        &signature,
-        &_recovery_id,
-        &recoverable_signature,
-    ) == 0) return error.InvalidSignature;
-
-    std.debug.assert(_recovery_id <= 3);
-    const recovery_id: u2 = @intCast(_recovery_id);
+    const recovery_id, const signature = try signRecoverable(&keypair.secret_key, &message_hash);
+    const signature_bytes = signature.toBytes();
 
     const instruction_data_len = SECP256K1_DATA_START +| eth_pubkey.len +| 64 +| message.len +| 1;
 
@@ -280,7 +256,7 @@ fn newSecp256k1Instruction(
     @memcpy(instruction_data[eth_address_offset..][0..eth_pubkey.len], &eth_pubkey);
 
     const signature_offset = eth_address_offset +| eth_pubkey.len;
-    @memcpy(instruction_data[signature_offset..][0..64], &signature);
+    @memcpy(instruction_data[signature_offset..][0..64], &signature_bytes);
 
     instruction_data[signature_offset +| 64] = recovery_id;
 
@@ -300,10 +276,7 @@ fn newSecp256k1Instruction(
         .message_instruction_idx = 0,
     };
 
-    @memcpy(
-        instruction_data[1..SECP256K1_DATA_START],
-        std.mem.asBytes(&offsets)[0 .. @bitSizeOf(Secp256k1SignatureOffsets) / 8],
-    );
+    @memcpy(instruction_data[1..SECP256K1_DATA_START], offsets.asBytes());
 
     return .{
         .program_id = sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID,
@@ -321,10 +294,7 @@ fn testCase(
 
     var instruction_data: [SECP256K1_DATA_START]u8 align(2) = undefined;
     instruction_data[0] = num_signatures;
-    @memcpy(
-        instruction_data[1..],
-        std.mem.asBytes(&offsets)[0 .. @bitSizeOf(Secp256k1SignatureOffsets) / 8],
-    );
+    @memcpy(instruction_data[1..], offsets.asBytes());
 
     return try verify(&instruction_data, &.{&(.{0} ** 100)});
 }
@@ -476,6 +446,133 @@ test "secp256k1" {
     }
 }
 
+// values cross-referenced from agave using test:
+//
+// #[test]
+// fn test_flipped_signature() {
+//     let message = b"hello";
+//     let message_hash = {
+//         let mut hasher = keccak::Hasher::default();
+//         hasher.hash(message);
+//         hasher.result()
+//     };
+//     let secp_message = libsecp256k1::Message::parse(&message_hash.0);
+//     // generated from zig using seed
+//     let secret_key = libsecp256k1::SecretKey::parse(&[
+//         0x7E, 0xA8, 0xC2, 0xB3, 0xB0, 0x7E, 0x61, 0x80, //
+//         0x69, 0x08, 0x31, 0xF9, 0x4D, 0x89, 0x7E, 0x7C, //
+//         0xA5, 0x95, 0xD0, 0x6C, 0x10, 0x27, 0x09, 0x96, //
+//         0xC0, 0x2A, 0x1C, 0x0A, 0x62, 0x46, 0x0E, 0xD4, //
+//     ])
+//     .unwrap();
+//     let public_key = libsecp256k1::PublicKey::from_secret_key(&secret_key);
+//     let eth_address = construct_eth_pubkey(&public_key);
+//     let (signature, recovery_id) = libsecp256k1::sign(&secp_message, &secret_key);
+//     let mut alt_signature = signature;
+//     alt_signature.s = -alt_signature.s;
+//     let alt_recovery_id = libsecp256k1::RecoveryId::parse(recovery_id.serialize() ^ 1).unwrap();
+
+//     println!("secret_key: {:x?}", &secret_key.serialize());
+//     println!("public_key: {:x?}", &public_key.serialize());
+//     println!("eth_address: {:x?}", &eth_address);
+//     println!("signature: {:x?}", &signature.serialize());
+//     println!("recovery_id: {}", recovery_id.serialize());
+//     println!("alt_signature: {:x?}", &alt_signature.serialize());
+//     println!("alt_recovery_id: {}", alt_recovery_id.serialize());
+// }
+test "flipped signature" {
+    const seed: [32]u8 = .{ 50, 83 } ++ .{0} ** 30;
+
+    const keypair = try Ecdsa.KeyPair.create(seed);
+    const eth_address = constructEthPubkey(&keypair.public_key);
+
+    const message = "hello";
+    var message_hash: [Keccak256.digest_length]u8 = undefined;
+    Keccak256.hash(message, &message_hash, .{});
+
+    const recovery_id, const signature = try signRecoverable(&keypair.secret_key, &message_hash);
+
+    var alt_signature = signature;
+    alt_signature.s = try Secp256k1.scalar.neg(alt_signature.s, .big);
+    const alt_recovery_id = recovery_id ^ 1;
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0x7e, 0xa8, 0xc2, 0xb3, 0xb0, 0x7e, 0x61, 0x80,
+            0x69, 0x08, 0x31, 0xf9, 0x4d, 0x89, 0x7e, 0x7c,
+            0xa5, 0x95, 0xd0, 0x6c, 0x10, 0x27, 0x09, 0x96,
+            0xc0, 0x2a, 0x1c, 0x0a, 0x62, 0x46, 0x0e, 0xd4,
+        },
+        &keypair.secret_key.toBytes(),
+    );
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            // #define SECP256K1_TAG_PUBKEY_UNCOMPRESSED 0x04
+            // pub const TAG_PUBKEY_FULL: u8 = 0x04;
+            0x04,
+            //
+            0xa8, 0xdf, 0x8e, 0x38, 0xeb, 0x29, 0x31, 0xbc, //
+            0xcf, 0x2a, 0x84, 0xa9, 0xb7, 0xf0, 0x1e, 0x68,
+            0x8a, 0x09, 0x7a, 0xf3, 0x71, 0x16, 0xac, 0xd5,
+            0xd5, 0xb2, 0x9f, 0xcc, 0x6c, 0xb3, 0x23, 0x2c,
+            0x21, 0x27, 0xee, 0xb7, 0xa5, 0x20, 0x4b, 0xf5,
+            0xee, 0xb3, 0x1e, 0x9c, 0x5d, 0xf8, 0x5a, 0x33,
+            0x3e, 0x0e, 0x8b, 0x6f, 0x83, 0x6a, 0xc7, 0x7e,
+            0xf0, 0xef, 0x4e, 0x7b, 0x74, 0x45, 0xb1, 0xfd,
+        },
+        &keypair.public_key.toUncompressedSec1(),
+    );
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0x90, 0xd9, 0x04, 0xf1,
+            0x62, 0x02, 0x67, 0xef,
+            0x67, 0xd8, 0xf5, 0xb7,
+            0x52, 0xa6, 0xaa, 0x4d,
+            0x01, 0xa9, 0x28, 0xe8,
+        },
+        &eth_address,
+    );
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0xbf, 0xc8, 0xb5, 0x43, 0x37, 0xb1, 0x2e, 0xcd,
+            0x78, 0x79, 0x2c, 0x83, 0x7c, 0xc7, 0x54, 0x49,
+            0x55, 0x7f, 0x45, 0x2f, 0x3c, 0x8e, 0x57, 0x74,
+            0xb8, 0x32, 0xe0, 0x92, 0x4b, 0xf4, 0xa3, 0x33,
+            0x6d, 0x7c, 0xcf, 0xff, 0x90, 0x8f, 0x8c, 0xd3,
+            0x11, 0x45, 0x5d, 0xb8, 0x45, 0xd4, 0xdc, 0xfc,
+            0xa1, 0x15, 0x05, 0x1f, 0x56, 0x7b, 0xc5, 0x66,
+            0xc4, 0xb5, 0x82, 0x5e, 0x49, 0x7a, 0x26, 0xa5,
+        },
+        &signature.toBytes(),
+    );
+
+    try std.testing.expectEqual(0, recovery_id);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0xbf, 0xc8, 0xb5, 0x43, 0x37, 0xb1, 0x2e, 0xcd,
+            0x78, 0x79, 0x2c, 0x83, 0x7c, 0xc7, 0x54, 0x49,
+            0x55, 0x7f, 0x45, 0x2f, 0x3c, 0x8e, 0x57, 0x74,
+            0xb8, 0x32, 0xe0, 0x92, 0x4b, 0xf4, 0xa3, 0x33,
+            0x92, 0x83, 0x30, 0x00, 0x6f, 0x70, 0x73, 0x2c,
+            0xee, 0xba, 0xa2, 0x47, 0xba, 0x2b, 0x23, 0x2,
+            0x19, 0x99, 0xd7, 0xc7, 0x58, 0xcc, 0xda, 0xd4,
+            0xfb, 0x1c, 0xdc, 0x2e, 0x86, 0xbc, 0x1a, 0x9c,
+        },
+        &alt_signature.toBytes(),
+    );
+
+    try std.testing.expectEqual(1, alt_recovery_id);
+}
+
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1244
 test "secp256 malleability" {
     const allocator = std.testing.allocator;
@@ -486,4 +583,61 @@ test "secp256 malleability" {
 
     var message_hash: [Keccak256.digest_length]u8 = undefined;
     Keccak256.hash(message, &message_hash, .{});
+
+    const recovery_id, const signature = try signRecoverable(&keypair.secret_key, &message_hash);
+
+    // Flip the S value in the signature to make a different but valid signature.
+    var alt_signature = signature;
+    alt_signature.s = try Secp256k1.scalar.neg(alt_signature.s, .big);
+    const alt_recovery_id = recovery_id ^ 1;
+
+    var data = std.ArrayList(u8).init(allocator);
+    defer data.deinit();
+    var both_offsets: [2]Secp256k1SignatureOffsets = undefined;
+
+    const pairs: [2]struct { Ecdsa.Signature, u2 } = .{
+        .{ signature, recovery_id },
+        .{ alt_signature, alt_recovery_id },
+    };
+
+    // Verify both signatures of the same message.
+    for (pairs, 0..) |pair, i| {
+        const signature_offset = data.items.len;
+
+        try data.appendSlice(&pair[0].toBytes());
+        try data.append(pair[1]);
+
+        const eth_address_offset = data.items.len;
+        try data.appendSlice(&eth_address);
+
+        const message_data_offset = data.items.len;
+        try data.appendSlice(message);
+
+        const data_start = 1 + SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE * 2;
+
+        const offsets: Secp256k1SignatureOffsets = .{
+            .signature_offset = @intCast(signature_offset + data_start),
+            .signature_instruction_idx = 0,
+            .eth_address_offset = @intCast(eth_address_offset + data_start),
+            .eth_address_instruction_idx = 0,
+            .message_data_offset = @intCast(message_data_offset + data_start),
+            .message_data_size = @intCast(message.len),
+            .message_instruction_idx = 0,
+        };
+
+        both_offsets[i] = offsets;
+    }
+
+    var instruction_data = std.ArrayList(u8).init(allocator);
+    defer instruction_data.deinit();
+
+    try instruction_data.append(2); // n_signatures
+
+    for (both_offsets) |offset| {
+        try instruction_data.appendSlice(offset.asBytes());
+    }
+
+    try instruction_data.appendSlice(data.items);
+
+    try verify(instruction_data.items, &.{instruction_data.items});
 }
